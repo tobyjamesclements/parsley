@@ -50,12 +50,45 @@ In `parsley-kafka`, the vector clock is a `KafkaVectorClock` — a map from `Top
 
 ### Installation
 
-Parsley is not yet published to Maven Central. Clone the repository and install to your local Maven cache:
+Parsley is published to [GitHub Packages](https://github.com/tobyjamesclements?tab=packages&repo_name=parsley). GitHub Packages requires authentication even for public repositories — you need a GitHub account and a [personal access token](https://github.com/settings/tokens) with the `read:packages` scope.
 
-```bash
-git clone https://github.com/tobyjamesclements/parsley.git
-cd parsley
-mvn install -DskipTests
+**1. Add credentials to `~/.m2/settings.xml`**
+
+```xml
+<settings>
+  <servers>
+    <server>
+      <id>github-parsley</id>
+      <username>YOUR_GITHUB_USERNAME</username>
+      <password>YOUR_PAT</password>
+    </server>
+  </servers>
+</settings>
+```
+
+**2. Add the repository to your project**
+
+Maven — add to `pom.xml`:
+```xml
+<repositories>
+  <repository>
+    <id>github-parsley</id>
+    <url>https://maven.pkg.github.com/tobyjamesclements/parsley</url>
+  </repository>
+</repositories>
+```
+
+Gradle — add to `build.gradle.kts` (credentials can also be set via `~/.gradle/gradle.properties` as `gpr.user` / `gpr.key`):
+```kotlin
+repositories {
+    maven {
+        url = uri("https://maven.pkg.github.com/tobyjamesclements/parsley")
+        credentials {
+            username = providers.gradleProperty("gpr.user").orElse(System.getenv("GITHUB_ACTOR")).get()
+            password = providers.gradleProperty("gpr.key").orElse(System.getenv("GITHUB_TOKEN")).get()
+        }
+    }
+}
 ```
 
 ### Dependencies
@@ -83,11 +116,23 @@ mvn install -DskipTests
 
 **Gradle:**
 ```kotlin
-implementation("io.parsley:parsley-kafka:0.1.0-SNAPSHOT")
-implementation("io.parsley:parsley-crypto-jdk-aes:0.1.0-SNAPSHOT")  // optional
+dependencies {
+    implementation("io.parsley:parsley-kafka:0.1.0-SNAPSHOT")
+    implementation("io.parsley:parsley-crypto-jdk-aes:0.1.0-SNAPSHOT")  // optional
+}
 ```
 
 `parsley-kafka` brings in `kafka-streams` and `kafka-clients` transitively. Java 25 is required (the project compiles with `--release 25`).
+
+### Local build (alternative)
+
+To build from source and install to the local Maven cache:
+
+```bash
+git clone https://github.com/tobyjamesclements/parsley.git
+cd parsley
+mvn install -DskipTests
+```
 
 ### Usage
 
@@ -285,20 +330,17 @@ These types live in `parsley-kafka`. They are the Kafka-specific implementation 
 
 ```java
 // io.parsley.kafka
-public final class KafkaVectorClock implements VectorClock {
+public record KafkaVectorClock(Map<TopicPartition, Long> positions) implements VectorClock {
     public static KafkaVectorClock empty();
-    public KafkaVectorClock(Map<TopicPartition, Long> positions);
-    public Map<TopicPartition, Long> positions();
     public KafkaVectorClock advance(TopicPartition tp, long offset);
 
     @Override public boolean satisfiedBy(VectorClock frontier);
     @Override public VectorClock merge(VectorClock other);
     @Override public boolean equals(Object obj);
-    @Override public int hashCode();
 }
 ```
 
-The Kafka-specific `VectorClock` — a map from `TopicPartition` to highest observed offset. `positions()` is a concrete method not present on the `VectorClock` interface; cast to `KafkaVectorClock` when partition-level inspection is needed. `advance(tp, offset)` returns a new clock with that partition advanced to `max(current, offset)`.
+The Kafka-specific `VectorClock` — a map from `TopicPartition` to highest observed offset. `positions()` is the record component accessor — not present on the `VectorClock` interface; cast to `KafkaVectorClock` when partition-level inspection is needed. `advance(tp, offset)` returns a new clock with that partition advanced to `max(current, offset)`.
 
 ### KafkaVectorClockSerialiser
 
