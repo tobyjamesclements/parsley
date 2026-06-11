@@ -1,0 +1,69 @@
+<!DOCTYPE html>
+<html lang="en">
+<body>
+<p>Parsley is a Java library for <strong>causal consistency</strong> in Kafka Streams topologies.
+It ensures that every consumer processes messages in the correct causal order, even when
+records originate from multiple upstream producers and flow through multiple Kafka topics.</p>
+
+<h2>Core concepts</h2>
+<dl>
+  <dt><strong>Vector clock</strong></dt>
+  <dd>A snapshot of causal progress: a map from each Kafka partition to the highest offset
+  the holder has observed from that partition. A consumer's <em>frontier</em> is its current
+  vector clock.</dd>
+
+  <dt><strong>Causal ordering</strong></dt>
+  <dd>A message is causally ready when the consumer's frontier dominates the vector clock
+  embedded in the message header &mdash; meaning the consumer has already processed every message
+  that happened-before this one.</dd>
+
+  <dt><strong>Causal buffer</strong></dt>
+  <dd>Records whose clock dependencies are not yet satisfied are held in a per-consumer
+  in-memory buffer and released as soon as the frontier catches up. If the frontier never
+  advances far enough, a configurable {@link io.parsley.BufferingPolicy} decides whether to
+  forward, drop, or dead-letter the record.</dd>
+
+  <dt><strong>Fence token</strong></dt>
+  <dd>An opaque, URL-safe string that encodes a vector clock. Producers embed a fence token
+  in each outgoing message; receiving consumers decode it and wait until their frontier
+  dominates it before proceeding. Fence tokens allow causal ordering to be enforced
+  <em>across service boundaries</em> (e.g. as an HTTP header or message attribute).</dd>
+</dl>
+
+<h2>Module overview</h2>
+<table>
+  <thead><tr><th>Module</th><th>Purpose</th></tr></thead>
+  <tbody>
+    <tr><td>{@link io.parsley}</td><td>Core abstractions: vector clocks, fence tokens, buffer policies, SPI interfaces.</td></tr>
+    <tr><td>{@link io.parsley.buffer}</td><td>Kafka-backed causal buffer and violation-handling API.</td></tr>
+    <tr><td>{@link io.parsley.streams}</td><td>Kafka Streams integration: causal consumer, producer, and processor.</td></tr>
+    <tr><td>{@link io.parsley.serialisation}</td><td>Default compact-binary vector clock serialiser (auto-registered via ServiceLoader).</td></tr>
+    <tr><td>{@link io.parsley.crypto.jdk}</td><td>Default AES-256-GCM fence token encryption (auto-registered via ServiceLoader).</td></tr>
+  </tbody>
+</table>
+
+<h2>Typical usage</h2>
+<pre>{@code
+// Consume with causal ordering
+CausalConsumer<String, Order> consumer = CausalConsumer.create(
+    List.of("orders"),
+    BufferingPolicy.ignore(BufferLimit.ofDuration(Duration.ofSeconds(30))),
+    consumerConfig,
+    streamsConfig
+);
+while (running) {
+    List<ConsumerRecord<String, Order>> records = consumer.poll(Duration.ofMillis(100));
+    for (var record : records) {
+        process(record);
+    }
+    // Obtain the current frontier as a fence token for cross-service use
+    String encoded = consumer.fenceToken().encode();
+}
+
+// Produce with causal annotation
+CausalProducer<String, Event> producer = CausalProducer.create(producerConfig);
+FenceToken token = FenceToken.decode(encodedTokenFromRequest);
+producer.send(new ProducerRecord<>("events", key, event), token);
+}</pre>
+</body>
+</html>
