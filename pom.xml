@@ -103,7 +103,7 @@
                     <configuration>
                         <encoding>UTF-8</encoding>
                         <doclint>none</doclint>
-                        <overview>${project.basedir}/src/main/javadoc/overview.html</overview>
+                        <overview>${project.basedir}/overview.html</overview>
                         <excludePackageNames>io.parsley.internal:io.parsley.streams.internal</excludePackageNames>
                     </configuration>
                 </plugin>

@@ -29,7 +29,7 @@ jobs:
       - name: Build Javadoc site
         run: mvn package javadoc:aggregate --no-transfer-progress -DskipTests
       - uses: actions/configure-pages@v4
-      - uses: actions/upload-pages-artifact@v3
+      - uses: actions/upload-pages-artifact@v4
         with:
           path: target/reports/apidocs
       - uses: actions/deploy-pages@v4
