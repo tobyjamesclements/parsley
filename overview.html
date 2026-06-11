@@ -1,9 +1,10 @@
 <!DOCTYPE html>
 <html lang="en">
 <body>
-<p>Parsley is a Java library for <strong>causal consistency</strong> in Kafka Streams topologies.
+<p>Parsley is a Java library for <strong>causal consistency</strong> in distributed messaging systems.
 It ensures that every consumer processes messages in the correct causal order, even when
-records originate from multiple upstream producers and flow through multiple Kafka topics.</p>
+records originate from multiple upstream producers and channels. Parsley ships with a Kafka Streams
+implementation but aims to support other messaging technologies over time.</p>
 
 <h2>Core concepts</h2>
 <dl>
