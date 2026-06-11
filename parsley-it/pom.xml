@@ -30,11 +30,6 @@
         </dependency>
         <dependency>
             <groupId>io.parsley</groupId>
-            <artifactId>parsley-buffer</artifactId>
-            <scope>test</scope>
-        </dependency>
-        <dependency>
-            <groupId>io.parsley</groupId>
             <artifactId>parsley-streams</artifactId>
             <scope>test</scope>
         </dependency>

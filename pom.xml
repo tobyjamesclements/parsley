@@ -13,7 +13,6 @@
         <module>parsley-core</module>
         <module>parsley-crypto-jdk</module>
         <module>parsley-serialisation</module>
-        <module>parsley-buffer</module>
         <module>parsley-streams</module>
         <module>parsley-it</module>
     </modules>
@@ -29,11 +28,6 @@
             <dependency>
                 <groupId>io.parsley</groupId>
                 <artifactId>parsley-core</artifactId>
-                <version>${project.version}</version>
-            </dependency>
-            <dependency>
-                <groupId>io.parsley</groupId>
-                <artifactId>parsley-buffer</artifactId>
                 <version>${project.version}</version>
             </dependency>
             <dependency>

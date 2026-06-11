@@ -35,8 +35,7 @@ records originate from multiple upstream producers and flow through multiple Kaf
   <thead><tr><th>Module</th><th>Purpose</th></tr></thead>
   <tbody>
     <tr><td>{@link io.parsley}</td><td>Core abstractions: vector clocks, fence tokens, buffer policies, SPI interfaces.</td></tr>
-    <tr><td>{@link io.parsley.buffer}</td><td>Kafka-backed causal buffer and violation-handling API.</td></tr>
-    <tr><td>{@link io.parsley.streams}</td><td>Kafka Streams integration: causal consumer, producer, and processor.</td></tr>
+    <tr><td>{@link io.parsley.streams}</td><td>Kafka Streams integration: causal consumer, producer, processor, and causal buffer with violation-handling API.</td></tr>
     <tr><td>{@link io.parsley.serialisation}</td><td>Default compact-binary vector clock serialiser (auto-registered via ServiceLoader).</td></tr>
     <tr><td>{@link io.parsley.crypto.jdk}</td><td>Default AES-256-GCM fence token encryption (auto-registered via ServiceLoader).</td></tr>
   </tbody>

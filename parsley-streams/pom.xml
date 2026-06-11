@@ -18,12 +18,22 @@
             <artifactId>parsley-core</artifactId>
         </dependency>
         <dependency>
-            <groupId>io.parsley</groupId>
-            <artifactId>parsley-buffer</artifactId>
+            <groupId>org.apache.kafka</groupId>
+            <artifactId>kafka-clients</artifactId>
         </dependency>
         <dependency>
             <groupId>org.apache.kafka</groupId>
             <artifactId>kafka-streams</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.junit.jupiter</groupId>
+            <artifactId>junit-jupiter</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>io.parsley</groupId>
+            <artifactId>parsley-serialisation</artifactId>
+            <scope>test</scope>
         </dependency>
     </dependencies>
 

@@ -19,7 +19,6 @@
 module io.parsley {
     exports io.parsley;
     exports io.parsley.internal to io.parsley.serialisation,
-                                   io.parsley.buffer,
                                    io.parsley.streams;
     uses io.parsley.FenceTokenEncryption;
     uses io.parsley.VectorClockSerialiser;
