@@ -9,6 +9,7 @@ import io.parsley.serialisation.DefaultVectorClockSerialiser;
 import io.parsley.streams.CausalProcessorSupplier;
 import org.apache.kafka.common.header.internals.RecordHeader;
 import org.apache.kafka.common.header.internals.RecordHeaders;
+import org.apache.kafka.common.serialization.Serde;
 import org.apache.kafka.common.serialization.Serdes;
 import org.apache.kafka.streams.StreamsBuilder;
 import org.apache.kafka.streams.StreamsConfig;
@@ -16,7 +17,6 @@ import org.apache.kafka.streams.TestInputTopic;
 import org.apache.kafka.streams.TestOutputTopic;
 import org.apache.kafka.streams.TopologyTestDriver;
 import org.apache.kafka.streams.kstream.Consumed;
-import org.apache.kafka.streams.kstream.KStream;
 import org.apache.kafka.streams.kstream.Produced;
 import org.apache.kafka.streams.test.TestRecord;
 import org.junit.jupiter.api.AfterEach;
@@ -40,6 +40,7 @@ class CausalOrderingEndToEndTest {
     Path tempDir;
 
     private static final DefaultVectorClockSerialiser SERIALISER = new DefaultVectorClockSerialiser();
+    private static final Serde<String> STRING_SERDE = Serdes.String();
     private static final String INPUT = "input";
     private static final String OUTPUT = "output";
     private static final String CLOCK_HEADER = "parsley-vector-clock";
@@ -49,24 +50,29 @@ class CausalOrderingEndToEndTest {
     private TestOutputTopic<String, String> output;
     private final List<CausalViolationReason> violations = new ArrayList<>();
 
-    @BeforeEach
-    void setUp() {
+    private TopologyTestDriver buildDriver(String stateDir, String appId) {
         StreamsBuilder builder = new StreamsBuilder();
         CausalProcessorSupplier<String, String> supplier = new CausalProcessorSupplier<>(
                 BufferingPolicy.ignore(BufferLimit.ofDuration(Duration.ofSeconds(30))),
-                (rec, reason) -> violations.add(reason),
+                (_, reason) -> violations.add(reason),
                 SERIALISER);
-        KStream<String, String> stream = builder.stream(INPUT, Consumed.with(Serdes.String(), Serdes.String()));
-        stream.process(supplier).to(OUTPUT, Produced.with(Serdes.String(), Serdes.String()));
-
+        builder.stream(INPUT, Consumed.with(STRING_SERDE, STRING_SERDE))
+               .process(supplier)
+               .to(OUTPUT, Produced.with(STRING_SERDE, STRING_SERDE));
         Properties props = new Properties();
-        props.put(StreamsConfig.APPLICATION_ID_CONFIG, "it-" + UUID.randomUUID());
+        props.put(StreamsConfig.APPLICATION_ID_CONFIG, appId);
         props.put(StreamsConfig.BOOTSTRAP_SERVERS_CONFIG, "dummy:1234");
-        props.put(StreamsConfig.STATE_DIR_CONFIG, tempDir.resolve(UUID.randomUUID().toString()).toString());
+        props.put(StreamsConfig.STATE_DIR_CONFIG, stateDir);
+        return new TopologyTestDriver(builder.build(), props);
+    }
 
-        driver = new TopologyTestDriver(builder.build(), props);
-        input = driver.createInputTopic(INPUT, Serdes.String().serializer(), Serdes.String().serializer());
-        output = driver.createOutputTopic(OUTPUT, Serdes.String().deserializer(), Serdes.String().deserializer());
+    @BeforeEach
+    void setUp() {
+        driver = buildDriver(
+                tempDir.resolve(UUID.randomUUID().toString()).toString(),
+                "it-" + UUID.randomUUID());
+        input  = driver.createInputTopic(INPUT,  STRING_SERDE.serializer(),   STRING_SERDE.serializer());
+        output = driver.createOutputTopic(OUTPUT, STRING_SERDE.deserializer(), STRING_SERDE.deserializer());
     }
 
     @AfterEach
@@ -144,11 +150,11 @@ class CausalOrderingEndToEndTest {
                 BufferingPolicy.ignore(BufferLimit.ofDuration(Duration.ofSeconds(30))),
                 (rec, reason) -> violations.add(reason),
                 SERIALISER);
-        builder.stream(topicX, Consumed.with(Serdes.String(), Serdes.String()))
-                .merge(builder.stream(topicY, Consumed.with(Serdes.String(), Serdes.String())))
-                .merge(builder.stream(topicZ, Consumed.with(Serdes.String(), Serdes.String())))
+        builder.stream(topicX, Consumed.with(STRING_SERDE, STRING_SERDE))
+                .merge(builder.stream(topicY, Consumed.with(STRING_SERDE, STRING_SERDE)))
+                .merge(builder.stream(topicZ, Consumed.with(STRING_SERDE, STRING_SERDE)))
                 .process(supplier)
-                .to(OUTPUT, Produced.with(Serdes.String(), Serdes.String()));
+                .to(OUTPUT, Produced.with(STRING_SERDE, STRING_SERDE));
 
         Properties props = new Properties();
         props.put(StreamsConfig.APPLICATION_ID_CONFIG, "cascade-" + UUID.randomUUID());
@@ -156,10 +162,10 @@ class CausalOrderingEndToEndTest {
         props.put(StreamsConfig.STATE_DIR_CONFIG, tempDir.resolve(UUID.randomUUID().toString()).toString());
 
         try (TopologyTestDriver cascadeDriver = new TopologyTestDriver(builder.build(), props)) {
-            TestInputTopic<String, String> inX = cascadeDriver.createInputTopic(topicX, Serdes.String().serializer(), Serdes.String().serializer());
-            TestInputTopic<String, String> inY = cascadeDriver.createInputTopic(topicY, Serdes.String().serializer(), Serdes.String().serializer());
-            TestInputTopic<String, String> inZ = cascadeDriver.createInputTopic(topicZ, Serdes.String().serializer(), Serdes.String().serializer());
-            TestOutputTopic<String, String> out = cascadeDriver.createOutputTopic(OUTPUT, Serdes.String().deserializer(), Serdes.String().deserializer());
+            TestInputTopic<String, String> inX = cascadeDriver.createInputTopic(topicX, STRING_SERDE.serializer(), STRING_SERDE.serializer());
+            TestInputTopic<String, String> inY = cascadeDriver.createInputTopic(topicY, STRING_SERDE.serializer(), STRING_SERDE.serializer());
+            TestInputTopic<String, String> inZ = cascadeDriver.createInputTopic(topicZ, STRING_SERDE.serializer(), STRING_SERDE.serializer());
+            TestOutputTopic<String, String> out = cascadeDriver.createOutputTopic(OUTPUT, STRING_SERDE.deserializer(), STRING_SERDE.deserializer());
 
             // R_X needs frontier to have seen topic-y/0 at offset 0
             inX.pipeInput(new TestRecord<>("R_X", "v", clockHeaders(clock(Map.of(new Partition(topicY, 0), 0L)))));
@@ -191,10 +197,10 @@ class CausalOrderingEndToEndTest {
                 BufferingPolicy.ignore(BufferLimit.ofDuration(Duration.ofSeconds(30))),
                 (rec, reason) -> violations.add(reason),
                 SERIALISER);
-        builder.stream(inputA, Consumed.with(Serdes.String(), Serdes.String()))
-                .merge(builder.stream(inputB, Consumed.with(Serdes.String(), Serdes.String())))
+        builder.stream(inputA, Consumed.with(STRING_SERDE, STRING_SERDE))
+                .merge(builder.stream(inputB, Consumed.with(STRING_SERDE, STRING_SERDE)))
                 .process(supplier)
-                .to(OUTPUT, Produced.with(Serdes.String(), Serdes.String()));
+                .to(OUTPUT, Produced.with(STRING_SERDE, STRING_SERDE));
 
         Properties props = new Properties();
         props.put(StreamsConfig.APPLICATION_ID_CONFIG, "mp-" + UUID.randomUUID());
@@ -203,11 +209,11 @@ class CausalOrderingEndToEndTest {
 
         try (TopologyTestDriver mpDriver = new TopologyTestDriver(builder.build(), props)) {
             TestInputTopic<String, String> topicA = mpDriver.createInputTopic(
-                    inputA, Serdes.String().serializer(), Serdes.String().serializer());
+                    inputA, STRING_SERDE.serializer(), STRING_SERDE.serializer());
             TestInputTopic<String, String> topicB = mpDriver.createInputTopic(
-                    inputB, Serdes.String().serializer(), Serdes.String().serializer());
+                    inputB, STRING_SERDE.serializer(), STRING_SERDE.serializer());
             TestOutputTopic<String, String> mpOutput = mpDriver.createOutputTopic(
-                    OUTPUT, Serdes.String().deserializer(), Serdes.String().deserializer());
+                    OUTPUT, STRING_SERDE.deserializer(), STRING_SERDE.deserializer());
 
             // B needs Partition(inputA, 0) at offset 0; frontier is empty so it's buffered
             topicB.pipeInput(new TestRecord<>("B", "v", clockHeaders(clock(Map.of(new Partition(inputA, 0), 0L)))));

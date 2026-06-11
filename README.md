@@ -44,6 +44,116 @@ A genuine violation occurs when a message arrives with a missing or structurally
 
 ---
 
+## Getting Started
+
+### Installation
+
+Parsley is not yet published to Maven Central. Clone the repository and install to your local Maven cache:
+
+```bash
+git clone https://github.com/tobyjamesclements/parsley.git
+cd parsley
+mvn install -DskipTests
+```
+
+### Dependencies
+
+`parsley-streams` is the only required module. The other two are optional default implementations of the `VectorClockSerialiser` and `FenceTokenEncryption` SPIs respectively, loaded automatically via `ServiceLoader`. Omit either and provide your own SPI implementation in its place.
+
+**Maven:**
+```xml
+<!-- Required: Kafka Streams integration -->
+<dependency>
+    <groupId>io.parsley</groupId>
+    <artifactId>parsley-streams</artifactId>
+    <version>0.1.0-SNAPSHOT</version>
+</dependency>
+
+<!-- Optional default: implements VectorClockSerialiser SPI -->
+<dependency>
+    <groupId>io.parsley</groupId>
+    <artifactId>parsley-serialisation</artifactId>
+    <version>0.1.0-SNAPSHOT</version>
+</dependency>
+
+<!-- Optional default: implements FenceTokenEncryption SPI -->
+<dependency>
+    <groupId>io.parsley</groupId>
+    <artifactId>parsley-crypto-jdk</artifactId>
+    <version>0.1.0-SNAPSHOT</version>
+</dependency>
+```
+
+**Gradle:**
+```kotlin
+implementation("io.parsley:parsley-streams:0.1.0-SNAPSHOT")
+implementation("io.parsley:parsley-serialisation:0.1.0-SNAPSHOT")
+implementation("io.parsley:parsley-crypto-jdk:0.1.0-SNAPSHOT")
+```
+
+`parsley-streams` brings in `kafka-streams` and `kafka-clients` transitively. Java 25 is required (the project compiles with `--release 25`).
+
+### Usage
+
+#### Consuming with causal ordering
+
+Use `CausalConsumer` when you want a drop-in replacement for a plain Kafka consumer that enforces causal consistency automatically:
+
+```java
+CausalConsumer<String, String> consumer = CausalConsumer.create(
+    List.of("prices", "orders"),
+    BufferingPolicy.deadLetter(
+        BufferLimit.ofDuration(Duration.ofSeconds(30)), "parsley-dead-letter"),
+    Map.of(
+        ConsumerConfig.BOOTSTRAP_SERVERS_CONFIG, "localhost:9092",
+        ConsumerConfig.GROUP_ID_CONFIG,          "my-consumer-group"),
+    Map.of(
+        StreamsConfig.APPLICATION_ID_CONFIG, "my-causal-app"));
+
+while (running) {
+    ConsumerRecords<String, String> records = consumer.poll(Duration.ofMillis(100));
+    for (ConsumerRecord<String, String> record : records) {
+        process(record);
+    }
+}
+consumer.close();
+```
+
+#### Producing with causal context
+
+Obtain a `FenceToken` from the consumer after polling and pass it to every produce call. The token encodes the consumer's causal position and is attached as a message header for downstream processors to evaluate:
+
+```java
+CausalProducer<String, String> producer = CausalProducer.create(
+    Map.of(ProducerConfig.BOOTSTRAP_SERVERS_CONFIG, "localhost:9092"));
+
+FenceToken token = consumer.fenceToken();
+producer.send(new ProducerRecord<>("output-topic", key, value), token);
+```
+
+#### Integrating into an existing Kafka Streams topology
+
+Use `CausalProcessorSupplier` directly when building a custom topology with `StreamsBuilder`:
+
+```java
+CausalProcessorSupplier<String, String> supplier = new CausalProcessorSupplier<>(
+    BufferingPolicy.ignore(BufferLimit.ofDuration(Duration.ofSeconds(30))),
+    (record, reason) -> log.warn("Causal violation on {}: {}", record.topic(), reason),
+    new DefaultVectorClockSerialiser());
+
+StreamsBuilder builder = new StreamsBuilder();
+builder.stream(List.of("prices", "orders"), Consumed.with(Serdes.String(), Serdes.String()))
+       .process(supplier)
+       .to("output-topic", Produced.with(Serdes.String(), Serdes.String()));
+
+KafkaStreams streams = new KafkaStreams(builder.build(), streamsConfig);
+streams.start();
+```
+
+State store registration, frontier persistence, and buffer lifecycle are all handled by `CausalProcessorSupplier` — no additional configuration is required.
+
+---
+
 ## Kafka Streams Integration
 
 Parsley is a Kafka Streams-native library. The integration point between the two libraries is `CausalProcessorSupplier`, which implements Kafka Streams' `ProcessorSupplier` interface. When passed to `KStream.process()`, Kafka Streams calls `get()` to obtain a `CausalProcessor` instance and `stores()` to register the frontier and buffer state stores automatically. Parsley inherits all of Streams' processor lifecycle guarantees — state store restoration on restart, context injection, punctuator scheduling — without reimplementing any of it.
@@ -362,7 +472,11 @@ The core module has no Kafka dependency — it contains only interfaces and SPI 
 
 ## Dependencies
 
-`io.parsley` has no external dependencies. `io.parsley.streams` requires `kafka-streams` on the classpath; `kafka-clients` is pulled in transitively. Default implementation modules use only JDK APIs.
+`io.parsley` (the core module) has no external dependencies — it contains only interfaces and SPI definitions. `io.parsley.streams` requires `kafka-streams`; `kafka-clients` is pulled in transitively.
+
+The serialisation and encryption modules (`parsley-serialisation`, `parsley-crypto-jdk`) use only JDK APIs and are discovered automatically at runtime via `ServiceLoader`. Applications that provide their own SPI implementations can omit them.
+
+See [Getting Started](#getting-started) for Maven and Gradle coordinates.
 
 ---
 

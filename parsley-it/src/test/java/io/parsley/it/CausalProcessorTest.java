@@ -10,6 +10,7 @@ import io.parsley.serialisation.DefaultVectorClockSerialiser;
 import io.parsley.streams.CausalProcessorSupplier;
 import org.apache.kafka.common.header.internals.RecordHeader;
 import org.apache.kafka.common.header.internals.RecordHeaders;
+import org.apache.kafka.common.serialization.Serde;
 import org.apache.kafka.common.serialization.Serdes;
 import org.apache.kafka.streams.StreamsBuilder;
 import org.apache.kafka.streams.StreamsConfig;
@@ -47,6 +48,7 @@ class CausalProcessorTest {
     Path tempDir;
 
     private static final DefaultVectorClockSerialiser SERIALISER = new DefaultVectorClockSerialiser();
+    private static final Serde<String> STRING_SERDE = Serdes.String();
     private static final String INPUT = "input";
     private static final String OUTPUT = "output";
     private static final String CLOCK_HEADER = "parsley-vector-clock";
@@ -59,8 +61,8 @@ class CausalProcessorTest {
     @BeforeEach
     void setUp() {
         driver = buildDriver(BufferingPolicy.ignore(BufferLimit.ofDuration(Duration.ofSeconds(30))));
-        input = driver.createInputTopic(INPUT, Serdes.String().serializer(), Serdes.String().serializer());
-        output = driver.createOutputTopic(OUTPUT, Serdes.String().deserializer(), Serdes.String().deserializer());
+        input = driver.createInputTopic(INPUT, STRING_SERDE.serializer(), STRING_SERDE.serializer());
+        output = driver.createOutputTopic(OUTPUT, STRING_SERDE.deserializer(), STRING_SERDE.deserializer());
     }
 
     @AfterEach
@@ -131,8 +133,8 @@ class CausalProcessorTest {
         driver.close();
         violations.clear();
         driver = buildDriver(BufferingPolicy.drop(BufferLimit.ofDuration(Duration.ofSeconds(30))));
-        input = driver.createInputTopic(INPUT, Serdes.String().serializer(), Serdes.String().serializer());
-        output = driver.createOutputTopic(OUTPUT, Serdes.String().deserializer(), Serdes.String().deserializer());
+        input = driver.createInputTopic(INPUT, STRING_SERDE.serializer(), STRING_SERDE.serializer());
+        output = driver.createOutputTopic(OUTPUT, STRING_SERDE.deserializer(), STRING_SERDE.deserializer());
 
         Partition p = new Partition(INPUT, 0);
         input.pipeInput(new TestRecord<>("k", "v", clockHeaders(new ImmutableVectorClock(Map.of(p, 99L)))));
@@ -162,9 +164,9 @@ class CausalProcessorTest {
 
         try (TopologyTestDriver dlDriver = buildDriverWithDeadLetter(policy, deadLetterList::add)) {
             TestInputTopic<String, String> dlInput = dlDriver.createInputTopic(
-                    INPUT, Serdes.String().serializer(), Serdes.String().serializer());
+                    INPUT, STRING_SERDE.serializer(), STRING_SERDE.serializer());
             TestOutputTopic<String, String> dlOutput = dlDriver.createOutputTopic(
-                    OUTPUT, Serdes.String().deserializer(), Serdes.String().deserializer());
+                    OUTPUT, STRING_SERDE.deserializer(), STRING_SERDE.deserializer());
 
             Partition p = new Partition(INPUT, 0);
             dlInput.pipeInput(new TestRecord<>("k", "v", clockHeaders(new ImmutableVectorClock(Map.of(p, 99L)))));
@@ -205,8 +207,8 @@ class CausalProcessorTest {
         driver.close();
         violations.clear();
         driver = buildDriver(BufferingPolicy.ignore(BufferLimit.ofSize(1)));
-        input = driver.createInputTopic(INPUT, Serdes.String().serializer(), Serdes.String().serializer());
-        output = driver.createOutputTopic(OUTPUT, Serdes.String().deserializer(), Serdes.String().deserializer());
+        input = driver.createInputTopic(INPUT, STRING_SERDE.serializer(), STRING_SERDE.serializer());
+        output = driver.createOutputTopic(OUTPUT, STRING_SERDE.deserializer(), STRING_SERDE.deserializer());
 
         Partition p = new Partition(INPUT, 0);
         input.pipeInput(new TestRecord<>("A", "v", clockHeaders(new ImmutableVectorClock(Map.of(p, 99L)))));
@@ -248,8 +250,8 @@ class CausalProcessorTest {
                 policy,
                 (rec, reason) -> violations.add(reason),
                 SERIALISER);
-        KStream<String, String> stream = builder.stream(INPUT, Consumed.with(Serdes.String(), Serdes.String()));
-        stream.process(supplier).to(OUTPUT, Produced.with(Serdes.String(), Serdes.String()));
+        KStream<String, String> stream = builder.stream(INPUT, Consumed.with(STRING_SERDE, STRING_SERDE));
+        stream.process(supplier).to(OUTPUT, Produced.with(STRING_SERDE, STRING_SERDE));
 
         Properties props = new Properties();
         props.put(StreamsConfig.APPLICATION_ID_CONFIG, "test-" + UUID.randomUUID());
@@ -267,8 +269,8 @@ class CausalProcessorTest {
                 (rec, reason) -> violations.add(reason),
                 SERIALISER,
                 deadLetterSink);
-        KStream<String, String> stream = builder.stream(INPUT, Consumed.with(Serdes.String(), Serdes.String()));
-        stream.process(supplier).to(OUTPUT, Produced.with(Serdes.String(), Serdes.String()));
+        KStream<String, String> stream = builder.stream(INPUT, Consumed.with(STRING_SERDE, STRING_SERDE));
+        stream.process(supplier).to(OUTPUT, Produced.with(STRING_SERDE, STRING_SERDE));
 
         Properties props = new Properties();
         props.put(StreamsConfig.APPLICATION_ID_CONFIG, "test-dl-" + UUID.randomUUID());
