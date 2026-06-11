@@ -13,7 +13,7 @@ import java.util.ServiceLoader;
  * into a {@link VectorClock} and waits until its own frontier dominates that clock.
  *
  * <h2>Usage</h2>
- * <p>On the producer side — after a {@link io.parsley.streams.CausalConsumer} or {@link io.parsley.streams.CausalProducer}
+ * <p>On the producer side — after a {@code io.parsley.streams.CausalConsumer} or {@code io.parsley.streams.CausalProducer}
  * has processed messages — obtain a token from the current frontier:
  * <pre>{@code
  * FenceToken token = consumer.fenceToken();

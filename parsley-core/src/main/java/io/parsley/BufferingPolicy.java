@@ -46,7 +46,7 @@ public sealed interface BufferingPolicy
      * {@link CausalViolationReason#LIMIT_REACHED} violation. The record is not forwarded
      * on the primary stream.
      *
-     * <p>When using this policy with {@link io.parsley.streams.CausalProcessorSupplier}, use
+     * <p>When using this policy with {@code io.parsley.streams.CausalProcessorSupplier}, use
      * the 4-argument constructor that accepts a dead-letter sink.
      *
      * @param limit the limit that triggers eviction
