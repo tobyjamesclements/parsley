@@ -472,24 +472,6 @@ The no-arg constructor (used by `ServiceLoader`) generates a **fresh, random 256
 
 ---
 
-## Kafka Streams Integration
-
-Parsley is a Kafka Streams-native library. The integration point is `CausalProcessorSupplier`, which implements `ProcessorSupplier`. When passed to `KStream.process()`, Kafka Streams manages the full processor lifecycle:
-
-```
-Kafka Streams                        Parsley
-──────────────────────────────────────────────────────
-KStream.process()            →       CausalProcessorSupplier.get()
-StoreBuilder registration    →       CausalProcessorSupplier.stores()
-Processor.init()             →       CausalProcessor.init(ProcessorContext)
-Processor.process()          →       CausalProcessor.process(Record)
-Processor.close()            →       CausalProcessor.close()
-```
-
-Parsley inherits all Streams guarantees — changelog-backed state store restoration on restart, rebalance handling, transactional forwarding — without reimplementing any of it.
-
----
-
 ## Prerequisites
 
 `CausalProcessor` only provides a benefit when records arrive from multiple partitions concurrently. This arises when:
@@ -508,63 +490,6 @@ The recommended approach: co-partition causally related topics so that causally 
 If co-partitioning is impossible, a single instance must be assigned all partitions, limiting throughput to what one processor can handle.
 
 **Parsley does not detect or enforce co-partitioning.** A misconfigured topology will not fail at startup — it will silently evaluate causal dependencies against an incomplete partition set and produce incorrect results.
-
----
-
-## Scope
-
-### The guarantee is per-protocol, not per-topology
-
-Parsley enforces causal consistency across any set of topologies that honour the vector clock protocol. Participants opt in by using `CausalProducer` and `CausalConsumer`; those that don't are outside the contract.
-
-### What Parsley does not do
-
-- Linearisable reads
-- Cross-cluster causal consistency without a coordination layer
-- Causal consistency for producers that bypass `CausalProducer`
-- Conflict resolution for concurrent writes — causal ordering only
-- Co-partitioning detection or enforcement
-
----
-
-## Internal Architecture
-
-```
-CausalProducer.send(record, fenceToken)
-    → extracts VectorClock from fenceToken
-    → serialises clock to bytes (KafkaVectorClockSerialiser)
-    → attaches as parsley-vector-clock header
-    → produces directly to target Kafka topic
-
-target topic
-    → CausalProcessor (Kafka Streams, via CausalProcessorSupplier)
-        → advances KafkaVectorClock frontier (persisted in state store)
-        → deserialises parsley-vector-clock header
-        → if recordClock.satisfiedBy(frontier): forward immediately
-        → else: add to CausalBuffer
-        → on punctuator: drain buffer, evict expired records per BufferingPolicy
-        → forwards ready records downstream
-
-CausalConsumer.poll()
-    → reads from internal ready topic (output of CausalProcessor)
-    → surfaces to application as ConsumerRecords
-```
-
----
-
-## Module Structure
-
-| Java module | Maven artifact | Contents |
-|---|---|---|
-| `io.parsley` | `parsley-core` | `VectorClock`, `FenceToken`, `BufferingPolicy`, `BufferLimit`, `CausalViolationReason`, `ParsleyMetrics`, `VectorClockSerialiser` SPI, `FenceTokenEncryption` SPI |
-| `io.parsley.kafka` | `parsley-kafka` | `KafkaVectorClock`, `CausalConsumer`, `CausalProducer`, `CausalProcessorSupplier`, `CausalStreams` |
-| `io.parsley.kafka.buffer` | `parsley-kafka` | `CausalBuffer`, `CausalViolationHandler`, `CausalViolationException`, default buffer implementations |
-| `io.parsley.kafka.internal` | `parsley-kafka` | `KafkaVectorClockSerialiser` (ServiceLoader-registered), `CausalProcessor` (internal) |
-| `io.parsley.crypto.jdk.aes` | `parsley-crypto-jdk-aes` | `JdkFenceTokenEncryption` (ServiceLoader-registered, AES-256-GCM) |
-
-`parsley-core` has no external dependencies. `parsley-kafka` requires `kafka-streams` (pulls in `kafka-clients` transitively). `parsley-crypto-jdk-aes` requires only the JDK.
-
----
 
 ## Design Decisions
 
