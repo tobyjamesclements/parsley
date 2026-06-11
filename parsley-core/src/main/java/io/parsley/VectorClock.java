@@ -1,56 +1,37 @@
 package io.parsley;
 
-import java.util.Map;
-
 /**
- * A snapshot of causal progress across a set of Kafka partitions.
+ * An opaque snapshot of causal progress.
  *
- * <p>A {@code VectorClock} maps each {@link Partition} to the highest message offset the holder
- * has observed from that partition. A service that has consumed messages up to these offsets is
- * said to be causally "caught up" with this clock.
+ * <p>A {@code VectorClock} encodes the set of causal events a service has observed. The
+ * concrete representation — e.g. Kafka topic-partition offsets — is defined by the broker
+ * module; {@code parsley-core} treats it as opaque.
  *
- * <p>Clocks are compared using {@link #dominates} / {@link #dominatedBy}: clock A <em>dominates</em>
- * clock B when A has seen at least everything B has seen (i.e. A is at least as causally advanced).
- * This is the predicate used to decide whether a buffered record's dependencies are satisfied.
+ * <p>Use {@link #satisfiedBy} to test whether a frontier clock has seen everything this clock
+ * requires, and {@link #merge} to compute the causal union of two clocks.
  */
 public interface VectorClock {
 
     /**
-     * Returns the offset map: for each partition, the highest observed offset.
+     * Returns {@code true} if {@code frontier} has observed at least everything this clock
+     * requires.
      *
-     * @return an unmodifiable (or effectively unmodifiable) view of the clock positions
+     * <p>This is the core predicate used by the causal buffer: a buffered record is released
+     * when its embedded clock is satisfied by the consumer's current frontier.
+     *
+     * @param frontier the current causal frontier to test against; must not be {@code null}
+     * @return {@code true} if the frontier has caught up with this clock's requirements
      */
-    Map<Partition, Long> positions();
+    boolean satisfiedBy(VectorClock frontier);
 
     /**
-     * Returns {@code true} if this clock is at least as causally advanced as {@code other}.
+     * Returns a new clock that is the causal union of this and {@code other}.
      *
-     * <p>Formally: for every partition in {@code other}, this clock's offset for that partition
-     * must be greater than or equal to {@code other}'s offset. Partitions absent from this clock
-     * are treated as offset {@code -1}.
+     * <p>The resulting clock dominates both operands: it has observed at least everything
+     * either operand has observed.
      *
-     * @param other the clock to compare against
-     * @return {@code true} if this clock dominates (or equals) {@code other}
+     * @param other the clock to merge with; must not be {@code null}
+     * @return a new {@code VectorClock} that is the causal union
      */
-    default boolean dominates(VectorClock other) {
-        for (Map.Entry<Partition, Long> entry : other.positions().entrySet()) {
-            if (positions().getOrDefault(entry.getKey(), -1L) < entry.getValue()) {
-                return false;
-            }
-        }
-        return true;
-    }
-
-    /**
-     * Returns {@code true} if {@code other} dominates this clock.
-     *
-     * <p>Convenience inverse of {@link #dominates}: {@code a.dominatedBy(b)} is equivalent to
-     * {@code b.dominates(a)}.
-     *
-     * @param other the clock to compare against
-     * @return {@code true} if {@code other} is at least as causally advanced as this clock
-     */
-    default boolean dominatedBy(VectorClock other) {
-        return other.dominates(this);
-    }
+    VectorClock merge(VectorClock other);
 }

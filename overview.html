@@ -8,9 +8,9 @@ records originate from multiple upstream producers and flow through multiple Kaf
 <h2>Core concepts</h2>
 <dl>
   <dt><strong>Vector clock</strong></dt>
-  <dd>A snapshot of causal progress: a map from each Kafka partition to the highest offset
-  the holder has observed from that partition. A consumer's <em>frontier</em> is its current
-  vector clock.</dd>
+  <dd>A snapshot of causal progress. The Kafka implementation maps each topic-partition to the
+  highest offset observed; other implementations may use different representations. A consumer's
+  <em>frontier</em> is its current vector clock.</dd>
 
   <dt><strong>Causal ordering</strong></dt>
   <dd>A message is causally ready when the consumer's frontier dominates the vector clock
@@ -35,9 +35,8 @@ records originate from multiple upstream producers and flow through multiple Kaf
   <thead><tr><th>Module</th><th>Purpose</th></tr></thead>
   <tbody>
     <tr><td>{@link io.parsley}</td><td>Core abstractions: vector clocks, fence tokens, buffer policies, SPI interfaces.</td></tr>
-    <tr><td>{@link io.parsley.streams}</td><td>Kafka Streams integration: causal consumer, producer, processor, and causal buffer with violation-handling API.</td></tr>
-    <tr><td>{@link io.parsley.serialisation}</td><td>Default compact-binary vector clock serialiser (auto-registered via ServiceLoader).</td></tr>
-    <tr><td>{@link io.parsley.crypto.jdk}</td><td>Default AES-256-GCM fence token encryption (auto-registered via ServiceLoader).</td></tr>
+    <tr><td>{@link io.parsley.kafka}</td><td>Kafka Streams integration: causal consumer, producer, processor, causal buffer, and {@code KafkaVectorClock} with bundled serialiser (auto-registered via ServiceLoader).</td></tr>
+    <tr><td>{@link io.parsley.crypto.jdk.aes}</td><td>Default AES-256-GCM fence token encryption (auto-registered via ServiceLoader).</td></tr>
   </tbody>
 </table>
 
@@ -51,10 +50,8 @@ CausalConsumer<String, Order> consumer = CausalConsumer.create(
     streamsConfig
 );
 while (running) {
-    List<ConsumerRecord<String, Order>> records = consumer.poll(Duration.ofMillis(100));
-    for (var record : records) {
-        process(record);
-    }
+    ConsumerRecords<String, Order> records = consumer.poll(Duration.ofMillis(100));
+    records.forEach(record -> process(record));
     // Obtain the current frontier as a fence token for cross-service use
     String encoded = consumer.fenceToken().encode();
 }

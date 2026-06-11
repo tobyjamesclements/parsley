@@ -1,10 +1,9 @@
 package io.parsley.it.broker;
 
 import io.parsley.FenceToken;
-import io.parsley.Partition;
-import io.parsley.internal.ImmutableVectorClock;
-import io.parsley.serialisation.DefaultVectorClockSerialiser;
-import io.parsley.streams.CausalProducer;
+import io.parsley.kafka.KafkaVectorClock;
+import io.parsley.kafka.CausalProducer;
+import io.parsley.kafka.internal.KafkaVectorClockSerialiser;
 import org.apache.kafka.clients.admin.AdminClient;
 import org.apache.kafka.clients.admin.NewTopic;
 import org.apache.kafka.clients.consumer.ConsumerConfig;
@@ -13,6 +12,7 @@ import org.apache.kafka.clients.consumer.KafkaConsumer;
 import org.apache.kafka.clients.producer.ProducerConfig;
 import org.apache.kafka.clients.producer.ProducerRecord;
 import org.apache.kafka.clients.producer.RecordMetadata;
+import org.apache.kafka.common.TopicPartition;
 import org.apache.kafka.common.header.Header;
 import org.apache.kafka.common.serialization.StringDeserializer;
 import org.apache.kafka.common.serialization.StringSerializer;
@@ -41,7 +41,7 @@ class CausalProducerIT {
     static final KafkaContainer KAFKA =
             new KafkaContainer(DockerImageName.parse("apache/kafka:3.7.0"));
 
-    private static final DefaultVectorClockSerialiser SERIALISER = new DefaultVectorClockSerialiser();
+    private static final KafkaVectorClockSerialiser SERIALISER = new KafkaVectorClockSerialiser();
 
     private String newTopic() throws Exception {
         String topic = "prod-it-" + UUID.randomUUID().toString().substring(0, 8);
@@ -80,8 +80,8 @@ class CausalProducerIT {
     @Test
     void producerInjectsVectorClockHeader() throws Exception {
         String topic = newTopic();
-        Partition p = new Partition(topic, 0);
-        ImmutableVectorClock clock = new ImmutableVectorClock(Map.of(p, 5L));
+        TopicPartition p = new TopicPartition(topic, 0);
+        KafkaVectorClock clock = new KafkaVectorClock(Map.of(p, 5L));
         FenceToken token = FenceToken.of(clock);
 
         CausalProducer<String, String> producer = CausalProducer.create(producerConfig());
@@ -94,13 +94,13 @@ class CausalProducerIT {
         ConsumerRecord<String, String> raw = consumeRaw(topic, 1).get(0);
         Header header = raw.headers().lastHeader("parsley-vector-clock");
         assertNotNull(header, "parsley-vector-clock header must be present");
-        assertEquals(clock.positions(), SERIALISER.deserialise(header.value()).positions());
+        assertEquals(clock, SERIALISER.deserialise(header.value()));
     }
 
     @Test
     void producerPreservesKeyAndValue() throws Exception {
         String topic = newTopic();
-        FenceToken token = FenceToken.of(ImmutableVectorClock.empty());
+        FenceToken token = FenceToken.of(KafkaVectorClock.empty());
 
         CausalProducer<String, String> producer = CausalProducer.create(producerConfig());
         try {
@@ -123,7 +123,7 @@ class CausalProducerIT {
         CausalProducer<String, String> producer = CausalProducer.create(producerConfig());
         try {
             producer.send(new ProducerRecord<>(topic, "cb-key", "cb-value"),
-                    FenceToken.of(ImmutableVectorClock.empty()),
+                    FenceToken.of(KafkaVectorClock.empty()),
                     (meta, ex) -> {
                         if (ex == null) {
                             metaRef.set(meta);
@@ -142,7 +142,7 @@ class CausalProducerIT {
     @Test
     void emptyFenceTokenProducesEmptyClockHeader() throws Exception {
         String topic = newTopic();
-        FenceToken token = FenceToken.of(ImmutableVectorClock.empty());
+        FenceToken token = FenceToken.of(KafkaVectorClock.empty());
 
         CausalProducer<String, String> producer = CausalProducer.create(producerConfig());
         try {
@@ -154,6 +154,6 @@ class CausalProducerIT {
         ConsumerRecord<String, String> raw = consumeRaw(topic, 1).get(0);
         Header header = raw.headers().lastHeader("parsley-vector-clock");
         assertNotNull(header);
-        assertTrue(SERIALISER.deserialise(header.value()).positions().isEmpty());
+        assertTrue(((KafkaVectorClock) SERIALISER.deserialise(header.value())).positions().isEmpty());
     }
 }

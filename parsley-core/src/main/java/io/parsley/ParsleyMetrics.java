@@ -8,30 +8,24 @@ import java.time.Duration;
  * <p>Implement this interface and supply it to the consumer or processor to receive
  * callbacks for key lifecycle events. A no-op implementation is available via {@link #noop()}.
  *
- * <pre>{@code
- * ParsleyMetrics metrics = new MicrometerParsleyMetrics(meterRegistry);
- * CausalConsumer<String, String> consumer = CausalConsumer.create(
- *         topics, policy, consumerConfig, streamsConfig);
- * }</pre>
+ * <p>No public wiring exists yet. Once integrated with {@code CausalConsumer} or
+ * {@code CausalProcessorSupplier}, implementations receive callbacks for each buffer event.
  */
 public interface ParsleyMetrics {
 
     /**
      * Called when a record is added to the causal buffer because its dependencies are not
      * yet satisfied.
-     *
-     * @param partition the partition the buffered record originated from
      */
-    void onMessageBuffered(Partition partition);
+    void onMessageBuffered();
 
     /**
      * Called when a buffered record is released (drained) because its causal dependencies
      * have been satisfied by the advancing frontier.
      *
-     * @param partition      the partition the released record originated from
      * @param bufferDuration the time the record spent in the buffer
      */
-    void onMessageReleased(Partition partition, Duration bufferDuration);
+    void onMessageReleased(Duration bufferDuration);
 
     /**
      * Called when a causal violation is reported (i.e. a record is forwarded, dropped, or
@@ -56,8 +50,8 @@ public interface ParsleyMetrics {
      */
     static ParsleyMetrics noop() {
         return new ParsleyMetrics() {
-            @Override public void onMessageBuffered(Partition partition) {}
-            @Override public void onMessageReleased(Partition partition, Duration bufferDuration) {}
+            @Override public void onMessageBuffered() {}
+            @Override public void onMessageReleased(Duration bufferDuration) {}
             @Override public void onViolation(CausalViolationReason reason) {}
             @Override public void onFrontierAdvanced(VectorClock frontier) {}
         };

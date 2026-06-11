@@ -12,23 +12,4 @@
 
     <artifactId>parsley-core</artifactId>
 
-    <dependencies>
-        <dependency>
-            <groupId>org.junit.jupiter</groupId>
-            <artifactId>junit-jupiter</artifactId>
-            <scope>test</scope>
-        </dependency>
-    </dependencies>
-
-    <build>
-        <plugins>
-            <plugin>
-                <groupId>org.apache.maven.plugins</groupId>
-                <artifactId>maven-surefire-plugin</artifactId>
-                <configuration>
-                    <argLine>--add-opens io.parsley/io.parsley=ALL-UNNAMED --add-opens io.parsley/io.parsley.internal=ALL-UNNAMED --add-reads io.parsley=ALL-UNNAMED</argLine>
-                </configuration>
-            </plugin>
-        </plugins>
-    </build>
 </project>

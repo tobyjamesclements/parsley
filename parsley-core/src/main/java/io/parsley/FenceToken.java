@@ -10,26 +10,26 @@ import java.util.ServiceLoader;
  * <p>A fence token is a compact, encrypted string that can be passed across service boundaries
  * (e.g. as an HTTP header or message attribute) to assert <em>"the receiver must have caught up
  * to this causal state before proceeding."</em> The receiving service decodes the token back
- * into a {@link VectorClock} and waits until its own frontier dominates that clock.
+ * into a {@link VectorClock} and waits until the token's clock is satisfied by the frontier.
  *
  * <h2>Usage</h2>
- * <p>On the producer side — after a {@code io.parsley.streams.CausalConsumer} or {@code io.parsley.streams.CausalProducer}
+ * <p>On the producer side — after a {@code io.parsley.kafka.CausalConsumer} or {@code io.parsley.kafka.CausalProducer}
  * has processed messages — obtain a token from the current frontier:
  * <pre>{@code
  * FenceToken token = consumer.fenceToken();
  * String encoded = token.encode();           // safe to embed in HTTP headers, queue messages, etc.
  * }</pre>
  *
- * <p>On the consumer side — wait until the local frontier dominates the received token:
+ * <p>On the consumer side — wait until the token's clock is satisfied by the local frontier:
  * <pre>{@code
  * FenceToken token = FenceToken.decode(encoded);
- * // poll until consumer.frontier().dominates(token.vectorClock())
+ * // poll until token.vectorClock().satisfiedBy(consumer.frontier())
  * }</pre>
  *
  * <h2>Dependencies</h2>
  * <p>Requires {@link FenceTokenEncryption} and {@link VectorClockSerialiser} on the classpath,
- * registered via {@link ServiceLoader}. The defaults are {@code parsley-crypto-jdk} and
- * {@code parsley-serialisation} respectively.
+ * registered via {@link ServiceLoader}. The defaults are {@code parsley-crypto-jdk-aes} and
+ * {@code parsley-kafka} respectively.
  */
 public interface FenceToken {
 
@@ -81,11 +81,11 @@ public interface FenceToken {
         static final FenceTokenEncryption ENCRYPTION = ServiceLoader.load(FenceTokenEncryption.class)
                 .findFirst()
                 .orElseThrow(() -> new IllegalStateException(
-                        "No FenceTokenEncryption on classpath — add parsley-crypto-jdk"));
+                        "No FenceTokenEncryption on classpath — add parsley-crypto-jdk-aes"));
         static final VectorClockSerialiser SERIALISER = ServiceLoader.load(VectorClockSerialiser.class)
                 .findFirst()
                 .orElseThrow(() -> new IllegalStateException(
-                        "No VectorClockSerialiser on classpath — add parsley-serialisation"));
+                        "No VectorClockSerialiser on classpath — add parsley-kafka"));
 
         private Services() {}
     }

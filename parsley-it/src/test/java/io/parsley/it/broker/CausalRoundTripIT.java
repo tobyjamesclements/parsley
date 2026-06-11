@@ -3,15 +3,15 @@ package io.parsley.it.broker;
 import io.parsley.BufferLimit;
 import io.parsley.BufferingPolicy;
 import io.parsley.FenceToken;
-import io.parsley.Partition;
-import io.parsley.internal.ImmutableVectorClock;
-import io.parsley.streams.CausalConsumer;
-import io.parsley.streams.CausalProducer;
+import io.parsley.kafka.KafkaVectorClock;
+import io.parsley.kafka.CausalConsumer;
+import io.parsley.kafka.CausalProducer;
 import org.apache.kafka.clients.admin.AdminClient;
 import org.apache.kafka.clients.admin.NewTopic;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.apache.kafka.clients.producer.ProducerConfig;
 import org.apache.kafka.clients.producer.ProducerRecord;
+import org.apache.kafka.common.TopicPartition;
 import org.apache.kafka.common.serialization.Serdes;
 import org.apache.kafka.common.serialization.StringSerializer;
 import org.apache.kafka.streams.StreamsConfig;
@@ -72,7 +72,7 @@ class CausalRoundTripIT {
     @Test
     void wellOrderedRecordsDeliveredInOrder(@TempDir Path tempDir) throws Exception {
         String topic = newTopic();
-        FenceToken empty = FenceToken.of(ImmutableVectorClock.empty());
+        FenceToken empty = FenceToken.of(KafkaVectorClock.empty());
 
         CausalProducer<String, String> producer = CausalProducer.create(producerConfig());
         try {
@@ -101,9 +101,9 @@ class CausalRoundTripIT {
     @Test
     void causallyDependentRecordHeldUntilDependencySatisfied(@TempDir Path tempDir) throws Exception {
         String topic = newTopic();
-        FenceToken empty = FenceToken.of(ImmutableVectorClock.empty());
-        // R_dep's clock says: "only deliver me after Partition(topic,0) reaches offset 2"
-        FenceToken depToken = FenceToken.of(new ImmutableVectorClock(Map.of(new Partition(topic, 0), 2L)));
+        FenceToken empty = FenceToken.of(KafkaVectorClock.empty());
+        // R_dep's clock says: "only deliver me after TopicPartition(topic,0) reaches offset 2"
+        FenceToken depToken = FenceToken.of(new KafkaVectorClock(Map.of(new TopicPartition(topic, 0), 2L)));
 
         CausalProducer<String, String> producer = CausalProducer.create(producerConfig());
         try {
@@ -137,10 +137,10 @@ class CausalRoundTripIT {
     @Test
     void dropPolicyDropsUnresolvableRecordOnEviction(@TempDir Path tempDir) throws Exception {
         String topic = newTopic();
-        FenceToken empty = FenceToken.of(ImmutableVectorClock.empty());
+        FenceToken empty = FenceToken.of(KafkaVectorClock.empty());
         // Impossible dependency: requires offset 1_000_000 which will never exist
         FenceToken impossible = FenceToken.of(
-                new ImmutableVectorClock(Map.of(new Partition(topic, 0), 1_000_000L)));
+                new KafkaVectorClock(Map.of(new TopicPartition(topic, 0), 1_000_000L)));
 
         CausalProducer<String, String> producer = CausalProducer.create(producerConfig());
         try {

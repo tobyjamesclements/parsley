@@ -9,7 +9,7 @@ package io.parsley;
  * via a {@code provides} declaration in a {@code module-info.java} (module mode).
  *
  * <p>The default implementation shipped with Parsley is
- * {@code io.parsley.crypto.jdk.JdkFenceTokenEncryption} (AES-256-GCM, ephemeral per-JVM key).
+ * {@code io.parsley.crypto.jdk.aes.JdkFenceTokenEncryption} (AES-256-GCM, ephemeral per-JVM key).
  * Replace it when tokens must survive process restarts or cross JVM boundaries.
  */
 public interface FenceTokenEncryption {

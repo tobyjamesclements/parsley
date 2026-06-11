@@ -8,7 +8,8 @@ package io.parsley;
  * (classpath mode) or a {@code provides} declaration in {@code module-info.java} (module mode).
  *
  * <p>The default implementation is
- * {@code io.parsley.serialisation.DefaultVectorClockSerialiser} (compact binary format).
+ * {@code io.parsley.kafka.internal.KafkaVectorClockSerialiser} (compact binary format, bundled
+ * with {@code parsley-kafka}).
  * Replace it when interoperability with an existing serialisation scheme is required.
  */
 public interface VectorClockSerialiser {

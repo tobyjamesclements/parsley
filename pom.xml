@@ -11,9 +11,8 @@
 
     <modules>
         <module>parsley-core</module>
-        <module>parsley-crypto-jdk</module>
-        <module>parsley-serialisation</module>
-        <module>parsley-streams</module>
+        <module>parsley-crypto-jdk-aes</module>
+        <module>parsley-kafka</module>
         <module>parsley-it</module>
     </modules>
 
@@ -56,17 +55,12 @@
             </dependency>
             <dependency>
                 <groupId>io.parsley</groupId>
-                <artifactId>parsley-serialisation</artifactId>
+                <artifactId>parsley-kafka</artifactId>
                 <version>${project.version}</version>
             </dependency>
             <dependency>
                 <groupId>io.parsley</groupId>
-                <artifactId>parsley-streams</artifactId>
-                <version>${project.version}</version>
-            </dependency>
-            <dependency>
-                <groupId>io.parsley</groupId>
-                <artifactId>parsley-crypto-jdk</artifactId>
+                <artifactId>parsley-crypto-jdk-aes</artifactId>
                 <version>${project.version}</version>
             </dependency>
             <dependency>
@@ -104,7 +98,7 @@
                         <encoding>UTF-8</encoding>
                         <doclint>none</doclint>
                         <overview>${project.basedir}/overview.html</overview>
-                        <excludePackageNames>io.parsley.internal:io.parsley.streams.internal</excludePackageNames>
+                        <excludePackageNames>io.parsley.internal:io.parsley.kafka.internal</excludePackageNames>
                     </configuration>
                 </plugin>
             </plugins>

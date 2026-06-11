@@ -3,11 +3,11 @@ package io.parsley.it;
 import io.parsley.BufferLimit;
 import io.parsley.BufferingPolicy;
 import io.parsley.CausalViolationReason;
-import io.parsley.Partition;
 import io.parsley.VectorClock;
-import io.parsley.internal.ImmutableVectorClock;
-import io.parsley.serialisation.DefaultVectorClockSerialiser;
-import io.parsley.streams.CausalProcessorSupplier;
+import io.parsley.kafka.KafkaVectorClock;
+import io.parsley.kafka.CausalProcessorSupplier;
+import io.parsley.kafka.internal.KafkaVectorClockSerialiser;
+import org.apache.kafka.common.TopicPartition;
 import org.apache.kafka.common.header.internals.RecordHeader;
 import org.apache.kafka.common.header.internals.RecordHeaders;
 import org.apache.kafka.common.serialization.Serde;
@@ -47,7 +47,7 @@ class CausalProcessorTest {
     @TempDir
     Path tempDir;
 
-    private static final DefaultVectorClockSerialiser SERIALISER = new DefaultVectorClockSerialiser();
+    private static final KafkaVectorClockSerialiser SERIALISER = new KafkaVectorClockSerialiser();
     private static final Serde<String> STRING_SERDE = Serdes.String();
     private static final String INPUT = "input";
     private static final String OUTPUT = "output";
@@ -83,7 +83,7 @@ class CausalProcessorTest {
 
     @Test
     void satisfiedClockForwardedImmediately() {
-        input.pipeInput(new TestRecord<>("k", "v", clockHeaders(ImmutableVectorClock.empty())));
+        input.pipeInput(new TestRecord<>("k", "v", clockHeaders(KafkaVectorClock.empty())));
 
         assertEquals(1, output.getQueueSize());
         assertTrue(violations.isEmpty());
@@ -91,8 +91,8 @@ class CausalProcessorTest {
 
     @Test
     void unsatisfiedClockIsBufferedNotForwarded() {
-        Partition p = new Partition(INPUT, 0);
-        input.pipeInput(new TestRecord<>("k", "v", clockHeaders(new ImmutableVectorClock(Map.of(p, 5L)))));
+        TopicPartition p = new TopicPartition(INPUT, 0);
+        input.pipeInput(new TestRecord<>("k", "v", clockHeaders(new KafkaVectorClock(Map.of(p, 5L)))));
 
         assertEquals(0, output.getQueueSize());
         assertTrue(violations.isEmpty());
@@ -100,14 +100,14 @@ class CausalProcessorTest {
 
     @Test
     void bufferedRecordDrainedAfterFrontierAdvances() {
-        Partition p = new Partition(INPUT, 0);
+        TopicPartition p = new TopicPartition(INPUT, 0);
 
         // A needs frontier to have seen offset=1 from input-0; piped first so it gets offset=0
-        input.pipeInput(new TestRecord<>("A", "v1", clockHeaders(new ImmutableVectorClock(Map.of(p, 1L)))));
+        input.pipeInput(new TestRecord<>("A", "v1", clockHeaders(new KafkaVectorClock(Map.of(p, 1L)))));
         assertEquals(0, output.getQueueSize());
 
         // B has empty clock (always satisfied); gets offset=1, advances frontier to {input-0=1}, drains A
-        input.pipeInput(new TestRecord<>("B", "v2", clockHeaders(ImmutableVectorClock.empty())));
+        input.pipeInput(new TestRecord<>("B", "v2", clockHeaders(KafkaVectorClock.empty())));
 
         List<TestRecord<String, String>> records = output.readRecordsToList();
         assertEquals(2, records.size());
@@ -117,8 +117,8 @@ class CausalProcessorTest {
 
     @Test
     void ignorePolicyEvictsBufferedRecordsOnPunctuator() {
-        Partition p = new Partition(INPUT, 0);
-        input.pipeInput(new TestRecord<>("k", "v", clockHeaders(new ImmutableVectorClock(Map.of(p, 99L)))));
+        TopicPartition p = new TopicPartition(INPUT, 0);
+        input.pipeInput(new TestRecord<>("k", "v", clockHeaders(new KafkaVectorClock(Map.of(p, 99L)))));
         assertEquals(0, output.getQueueSize());
 
         driver.advanceWallClockTime(Duration.ofSeconds(31));
@@ -136,8 +136,8 @@ class CausalProcessorTest {
         input = driver.createInputTopic(INPUT, STRING_SERDE.serializer(), STRING_SERDE.serializer());
         output = driver.createOutputTopic(OUTPUT, STRING_SERDE.deserializer(), STRING_SERDE.deserializer());
 
-        Partition p = new Partition(INPUT, 0);
-        input.pipeInput(new TestRecord<>("k", "v", clockHeaders(new ImmutableVectorClock(Map.of(p, 99L)))));
+        TopicPartition p = new TopicPartition(INPUT, 0);
+        input.pipeInput(new TestRecord<>("k", "v", clockHeaders(new KafkaVectorClock(Map.of(p, 99L)))));
 
         driver.advanceWallClockTime(Duration.ofSeconds(31));
 
@@ -168,8 +168,8 @@ class CausalProcessorTest {
             TestOutputTopic<String, String> dlOutput = dlDriver.createOutputTopic(
                     OUTPUT, STRING_SERDE.deserializer(), STRING_SERDE.deserializer());
 
-            Partition p = new Partition(INPUT, 0);
-            dlInput.pipeInput(new TestRecord<>("k", "v", clockHeaders(new ImmutableVectorClock(Map.of(p, 99L)))));
+            TopicPartition p = new TopicPartition(INPUT, 0);
+            dlInput.pipeInput(new TestRecord<>("k", "v", clockHeaders(new KafkaVectorClock(Map.of(p, 99L)))));
             assertEquals(0, dlOutput.getQueueSize());
 
             dlDriver.advanceWallClockTime(Duration.ofSeconds(31));
@@ -210,9 +210,9 @@ class CausalProcessorTest {
         input = driver.createInputTopic(INPUT, STRING_SERDE.serializer(), STRING_SERDE.serializer());
         output = driver.createOutputTopic(OUTPUT, STRING_SERDE.deserializer(), STRING_SERDE.deserializer());
 
-        Partition p = new Partition(INPUT, 0);
-        input.pipeInput(new TestRecord<>("A", "v", clockHeaders(new ImmutableVectorClock(Map.of(p, 99L)))));
-        input.pipeInput(new TestRecord<>("B", "v", clockHeaders(new ImmutableVectorClock(Map.of(p, 99L)))));
+        TopicPartition p = new TopicPartition(INPUT, 0);
+        input.pipeInput(new TestRecord<>("A", "v", clockHeaders(new KafkaVectorClock(Map.of(p, 99L)))));
+        input.pipeInput(new TestRecord<>("B", "v", clockHeaders(new KafkaVectorClock(Map.of(p, 99L)))));
 
         assertEquals(2, output.getQueueSize(), "Each record must be evicted immediately when SizeLimit=1");
         assertEquals(2, violations.size());
@@ -233,13 +233,12 @@ class CausalProcessorTest {
 
     @Test
     void frontierPersistedToStateStoreAfterProcessing() {
-        Partition p = new Partition(INPUT, 0);
-        input.pipeInput(new TestRecord<>("k", "v", clockHeaders(ImmutableVectorClock.empty())));
+        TopicPartition p = new TopicPartition(INPUT, 0);
+        input.pipeInput(new TestRecord<>("k", "v", clockHeaders(KafkaVectorClock.empty())));
 
-        // Frontier store key is "f"; store name is "parsley-frontier"
         byte[] stored = driver.<String, byte[]>getKeyValueStore("parsley-frontier").get("f");
         assertNotNull(stored, "Frontier must be written to state store after processing");
-        VectorClock persisted = SERIALISER.deserialise(stored);
+        KafkaVectorClock persisted = (KafkaVectorClock) SERIALISER.deserialise(stored);
         assertEquals(1, persisted.positions().size());
         assertEquals(0L, persisted.positions().get(p));
     }
@@ -257,6 +256,7 @@ class CausalProcessorTest {
         props.put(StreamsConfig.APPLICATION_ID_CONFIG, "test-" + UUID.randomUUID());
         props.put(StreamsConfig.BOOTSTRAP_SERVERS_CONFIG, "dummy:1234");
         props.put(StreamsConfig.STATE_DIR_CONFIG, tempDir.resolve(UUID.randomUUID().toString()).toString());
+        props.put("processing.exception.handler.global.enabled", "true");
         return new TopologyTestDriver(builder.build(), props);
     }
 
@@ -276,10 +276,11 @@ class CausalProcessorTest {
         props.put(StreamsConfig.APPLICATION_ID_CONFIG, "test-dl-" + UUID.randomUUID());
         props.put(StreamsConfig.BOOTSTRAP_SERVERS_CONFIG, "dummy:1234");
         props.put(StreamsConfig.STATE_DIR_CONFIG, tempDir.resolve(UUID.randomUUID().toString()).toString());
+        props.put("processing.exception.handler.global.enabled", "true");
         return new TopologyTestDriver(builder.build(), props);
     }
 
-    private static RecordHeaders clockHeaders(ImmutableVectorClock clock) {
+    private static RecordHeaders clockHeaders(KafkaVectorClock clock) {
         RecordHeaders headers = new RecordHeaders();
         headers.add(new RecordHeader(CLOCK_HEADER, SERIALISER.serialise(clock)));
         return headers;

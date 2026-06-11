@@ -2,9 +2,9 @@ package io.parsley.it.broker;
 
 import io.parsley.BufferLimit;
 import io.parsley.BufferingPolicy;
-import io.parsley.internal.ImmutableVectorClock;
-import io.parsley.serialisation.DefaultVectorClockSerialiser;
-import io.parsley.streams.CausalConsumer;
+import io.parsley.kafka.KafkaVectorClock;
+import io.parsley.kafka.CausalConsumer;
+import io.parsley.kafka.internal.KafkaVectorClockSerialiser;
 import org.apache.kafka.clients.admin.AdminClient;
 import org.apache.kafka.clients.admin.NewTopic;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
@@ -43,7 +43,7 @@ class CausalConsumerIT {
     static final KafkaContainer KAFKA =
             new KafkaContainer(DockerImageName.parse("apache/kafka:3.7.0"));
 
-    private static final DefaultVectorClockSerialiser SERIALISER = new DefaultVectorClockSerialiser();
+    private static final KafkaVectorClockSerialiser SERIALISER = new KafkaVectorClockSerialiser();
 
     private String newTopic() throws Exception {
         String topic = "cons-it-" + UUID.randomUUID().toString().substring(0, 8);
@@ -73,7 +73,7 @@ class CausalConsumerIT {
         try (KafkaProducer<String, String> producer = new KafkaProducer<>(cfg)) {
             ProducerRecord<String, String> record = new ProducerRecord<>(topic, key, value);
             record.headers().add(new RecordHeader("parsley-vector-clock",
-                    SERIALISER.serialise(ImmutableVectorClock.empty())));
+                    SERIALISER.serialise(KafkaVectorClock.empty())));
             producer.send(record).get(10, TimeUnit.SECONDS);
         }
     }
@@ -110,7 +110,7 @@ class CausalConsumerIT {
             for (int i = 0; i < 5; i++) {
                 ProducerRecord<String, String> record = new ProducerRecord<>(topic, "k" + i, "v" + i);
                 record.headers().add(new RecordHeader("parsley-vector-clock",
-                        SERIALISER.serialise(ImmutableVectorClock.empty())));
+                        SERIALISER.serialise(KafkaVectorClock.empty())));
                 producer.send(record).get(10, TimeUnit.SECONDS);
             }
         }
@@ -140,10 +140,10 @@ class CausalConsumerIT {
 
             await().atMost(30, SECONDS).until(() -> {
                 consumer.poll(Duration.ofMillis(200));
-                return !consumer.frontier().positions().isEmpty();
+                return !((KafkaVectorClock) consumer.frontier()).positions().isEmpty();
             });
 
-            assertFalse(consumer.frontier().positions().isEmpty());
+            assertFalse(((KafkaVectorClock) consumer.frontier()).positions().isEmpty());
         }
     }
 
@@ -158,12 +158,10 @@ class CausalConsumerIT {
 
             await().atMost(30, SECONDS).until(() -> {
                 consumer.poll(Duration.ofMillis(200));
-                return !consumer.frontier().positions().isEmpty();
+                return !((KafkaVectorClock) consumer.frontier()).positions().isEmpty();
             });
 
-            assertEquals(
-                    consumer.frontier().positions(),
-                    consumer.fenceToken().vectorClock().positions());
+            assertEquals(consumer.frontier(), consumer.fenceToken().vectorClock());
         }
     }
 

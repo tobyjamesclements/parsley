@@ -3,13 +3,13 @@
  * and policies, SPI interfaces, and the observability hook.
  *
  * <p>This package is dependency-free. All Kafka-specific integration lives in the
- * {@code io.parsley.buffer} and {@code io.parsley.streams} packages.
+ * {@code io.parsley.kafka.buffer} and {@code io.parsley.kafka} packages.
  *
  * <h2>Key types</h2>
  * <ul>
- *   <li>{@link io.parsley.VectorClock} &mdash; causal progress snapshot; compare clocks with
- *       {@link io.parsley.VectorClock#dominates dominates} /
- *       {@link io.parsley.VectorClock#dominatedBy dominatedBy}</li>
+ *   <li>{@link io.parsley.VectorClock} &mdash; opaque causal progress snapshot; check readiness
+ *       with {@link io.parsley.VectorClock#satisfiedBy satisfiedBy} and combine clocks with
+ *       {@link io.parsley.VectorClock#merge merge}</li>
  *   <li>{@link io.parsley.FenceToken} &mdash; opaque cross-service ordering assertion</li>
  *   <li>{@link io.parsley.BufferingPolicy} &mdash; what to do when a buffer limit fires:
  *       {@link io.parsley.BufferingPolicy.Ignore Ignore},
