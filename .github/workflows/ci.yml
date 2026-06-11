@@ -27,7 +27,7 @@ jobs:
           java-version: '25'
           distribution: 'temurin'
           cache: 'maven'
-      - name: Install main modules
-        run: mvn install --no-transfer-progress -DskipTests -pl parsley-core,parsley-crypto-jdk,parsley-serialisation,parsley-streams
+      - name: Install modules
+        run: mvn install --no-transfer-progress -DskipTests
       - name: Run integration tests
         run: mvn test --no-transfer-progress -pl parsley-it
