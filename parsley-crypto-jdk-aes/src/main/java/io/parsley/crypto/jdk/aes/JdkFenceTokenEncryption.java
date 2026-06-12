@@ -23,7 +23,7 @@ import java.util.Base64;
  * <p>The no-arg constructor generates a fresh, cryptographically random 256-bit AES key
  * at instantiation time. The {@link java.util.ServiceLoader}-managed singleton (returned by
  * {@link #provider()}) therefore uses an <em>ephemeral, per-JVM key</em>: tokens encoded with
- * {@link io.parsley.FenceToken#of} are only decodable within the same JVM process.
+ * {@code io.parsley.core.FenceTokens#of} are only decodable within the same JVM process.
  *
  * <p>For scenarios where tokens must survive process restarts or cross JVM boundaries,
  * inject a persistent key via {@link #JdkFenceTokenEncryption(SecretKey)}.
@@ -47,7 +47,7 @@ public final class JdkFenceTokenEncryption implements FenceTokenEncryption {
      * Returns the shared singleton instance used by {@link java.util.ServiceLoader}.
      *
      * <p>This instance uses an ephemeral key generated at JVM startup. All
-     * {@link io.parsley.FenceToken#of} and {@link io.parsley.FenceToken#decode} calls within
+     * {@code io.parsley.core.FenceTokens#of} and {@code io.parsley.core.FenceTokens#decode} calls within
      * the same JVM share this key.
      *
      * @return the singleton {@code JdkFenceTokenEncryption}

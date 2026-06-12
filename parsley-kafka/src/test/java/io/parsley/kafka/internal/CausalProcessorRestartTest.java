@@ -3,27 +3,21 @@ package io.parsley.kafka.internal;
 import io.parsley.BufferLimit;
 import io.parsley.BufferingPolicy;
 import io.parsley.CausalViolationReason;
-import io.parsley.VectorClock;
+import io.parsley.ParsleyAttributes;
 import io.parsley.kafka.KafkaVectorClock;
-import io.parsley.kafka.buffer.CausalViolationHandler;
+import io.parsley.kafka.KafkaVectorClockSerialiser;
 import org.apache.kafka.common.TopicPartition;
 import org.apache.kafka.common.header.internals.RecordHeader;
 import org.apache.kafka.common.header.internals.RecordHeaders;
-import org.apache.kafka.streams.KeyValue;
-import org.apache.kafka.streams.processor.StateStoreContext;
 import org.apache.kafka.streams.processor.api.MockProcessorContext;
 import org.apache.kafka.streams.processor.api.Record;
-import org.apache.kafka.streams.state.KeyValueIterator;
-import org.apache.kafka.streams.state.KeyValueStore;
 import org.junit.jupiter.api.Test;
 
 import java.time.Duration;
 import java.util.ArrayList;
-import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
-import static io.parsley.kafka.internal.CausalProcessor.CLOCK_HEADER;
 import static io.parsley.kafka.internal.CausalProcessor.FRONTIER_KEY;
 import static io.parsley.kafka.internal.CausalProcessor.FRONTIER_STORE;
 import static org.junit.jupiter.api.Assertions.*;
@@ -102,39 +96,13 @@ class CausalProcessorRestartTest {
                 rec -> {});
     }
 
-    private static Record<String, String> record(String key, VectorClock clock) {
+    private static Record<String, String> record(String key, KafkaVectorClock clock) {
         RecordHeaders headers = new RecordHeaders();
-        headers.add(new RecordHeader(CLOCK_HEADER, SERIALISER.serialise(clock)));
+        headers.add(new RecordHeader(ParsleyAttributes.VECTOR_CLOCK, SERIALISER.serialise(clock)));
         return new Record<>(key, "v", 0L, headers);
     }
 
-    private static VectorClock noop() { return KafkaVectorClock.empty(); }
+    private static KafkaVectorClock noop() { return KafkaVectorClock.empty(); }
 
-    private static VectorClock clock(Map<TopicPartition, Long> positions) { return new KafkaVectorClock(positions); }
-
-    private static final class TestKeyValueStore implements KeyValueStore<String, byte[]> {
-        private final String name;
-        private final Map<String, byte[]> data = new HashMap<>();
-
-        TestKeyValueStore(String name) { this.name = name; }
-
-        @Override public String name() { return name; }
-        @Override public void init(StateStoreContext ctx, org.apache.kafka.streams.processor.StateStore root) {}
-        @Override public void flush() {}
-        @Override public void close() {}
-        @Override public boolean persistent() { return false; }
-        @Override public boolean isOpen() { return true; }
-
-        @Override public byte[] get(String key) { return data.get(key); }
-        @Override public void put(String key, byte[] value) { data.put(key, value); }
-        @Override public byte[] putIfAbsent(String key, byte[] value) { return data.putIfAbsent(key, value); }
-        @Override public void putAll(List<KeyValue<String, byte[]>> entries) { entries.forEach(e -> data.put(e.key, e.value)); }
-        @Override public byte[] delete(String key) { return data.remove(key); }
-
-        @Override public KeyValueIterator<String, byte[]> range(String from, String to) { throw new UnsupportedOperationException(); }
-        @Override public KeyValueIterator<String, byte[]> reverseRange(String from, String to) { throw new UnsupportedOperationException(); }
-        @Override public KeyValueIterator<String, byte[]> all() { throw new UnsupportedOperationException(); }
-        @Override public KeyValueIterator<String, byte[]> reverseAll() { throw new UnsupportedOperationException(); }
-        @Override public long approximateNumEntries() { return data.size(); }
-    }
+    private static KafkaVectorClock clock(Map<TopicPartition, Long> positions) { return new KafkaVectorClock(positions); }
 }

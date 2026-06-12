@@ -1,9 +1,10 @@
 package io.parsley.it.broker;
 
 import io.parsley.FenceToken;
+import io.parsley.core.FenceTokens;
 import io.parsley.kafka.KafkaVectorClock;
 import io.parsley.kafka.CausalProducer;
-import io.parsley.kafka.internal.KafkaVectorClockSerialiser;
+import io.parsley.kafka.KafkaVectorClockSerialiser;
 import org.apache.kafka.clients.admin.AdminClient;
 import org.apache.kafka.clients.admin.NewTopic;
 import org.apache.kafka.clients.consumer.ConsumerConfig;
@@ -82,7 +83,7 @@ class CausalProducerIT {
         String topic = newTopic();
         TopicPartition p = new TopicPartition(topic, 0);
         KafkaVectorClock clock = new KafkaVectorClock(Map.of(p, 5L));
-        FenceToken token = FenceToken.of(clock);
+        FenceToken<KafkaVectorClock> token = FenceTokens.of(clock);
 
         CausalProducer<String, String> producer = CausalProducer.create(producerConfig());
         try {
@@ -100,7 +101,7 @@ class CausalProducerIT {
     @Test
     void producerPreservesKeyAndValue() throws Exception {
         String topic = newTopic();
-        FenceToken token = FenceToken.of(KafkaVectorClock.empty());
+        FenceToken<KafkaVectorClock> token = FenceTokens.of(KafkaVectorClock.empty());
 
         CausalProducer<String, String> producer = CausalProducer.create(producerConfig());
         try {
@@ -123,7 +124,7 @@ class CausalProducerIT {
         CausalProducer<String, String> producer = CausalProducer.create(producerConfig());
         try {
             producer.send(new ProducerRecord<>(topic, "cb-key", "cb-value"),
-                    FenceToken.of(KafkaVectorClock.empty()),
+                    FenceTokens.of(KafkaVectorClock.empty()),
                     (meta, ex) -> {
                         if (ex == null) {
                             metaRef.set(meta);
@@ -142,7 +143,7 @@ class CausalProducerIT {
     @Test
     void emptyFenceTokenProducesEmptyClockHeader() throws Exception {
         String topic = newTopic();
-        FenceToken token = FenceToken.of(KafkaVectorClock.empty());
+        FenceToken<KafkaVectorClock> token = FenceTokens.of(KafkaVectorClock.empty());
 
         CausalProducer<String, String> producer = CausalProducer.create(producerConfig());
         try {

@@ -3,10 +3,9 @@ package io.parsley.it;
 import io.parsley.BufferLimit;
 import io.parsley.BufferingPolicy;
 import io.parsley.CausalViolationReason;
-import io.parsley.VectorClock;
 import io.parsley.kafka.KafkaVectorClock;
 import io.parsley.kafka.CausalProcessorSupplier;
-import io.parsley.kafka.internal.KafkaVectorClockSerialiser;
+import io.parsley.kafka.KafkaVectorClockSerialiser;
 import org.apache.kafka.common.TopicPartition;
 import org.apache.kafka.common.header.internals.RecordHeader;
 import org.apache.kafka.common.header.internals.RecordHeaders;
@@ -215,17 +214,17 @@ class CausalOrderingEndToEndTest {
         assertTrue(violations.isEmpty());
     }
 
-    private static RecordHeaders clockHeaders(VectorClock clock) {
+    private static RecordHeaders clockHeaders(KafkaVectorClock clock) {
         RecordHeaders headers = new RecordHeaders();
         headers.add(new RecordHeader(CLOCK_HEADER, SERIALISER.serialise(clock)));
         return headers;
     }
 
-    private static VectorClock noopClock() {
+    private static KafkaVectorClock noopClock() {
         return KafkaVectorClock.empty();
     }
 
-    private static VectorClock clock(Map<TopicPartition, Long> positions) {
+    private static KafkaVectorClock clock(Map<TopicPartition, Long> positions) {
         return new KafkaVectorClock(positions);
     }
 }

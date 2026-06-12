@@ -1,1 +1,1 @@
-io.parsley.kafka.internal.KafkaVectorClockSerialiser
+io.parsley.kafka.KafkaVectorClockSerialiser

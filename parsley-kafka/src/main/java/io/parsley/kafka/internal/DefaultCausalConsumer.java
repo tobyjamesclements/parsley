@@ -1,13 +1,14 @@
 package io.parsley.kafka.internal;
 
 import io.parsley.BufferingPolicy;
+import io.parsley.CausalViolationHandler;
 import io.parsley.FenceToken;
-import io.parsley.VectorClock;
 import io.parsley.VectorClockSerialiser;
-import io.parsley.kafka.KafkaVectorClock;
-import io.parsley.kafka.buffer.CausalViolationHandler;
+import io.parsley.core.FenceTokens;
+import io.parsley.core.ParsleyServices;
 import io.parsley.kafka.CausalConsumer;
 import io.parsley.kafka.CausalProcessorSupplier;
+import io.parsley.kafka.KafkaVectorClock;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.apache.kafka.clients.consumer.ConsumerRecords;
 import org.apache.kafka.common.TopicPartition;
@@ -23,7 +24,13 @@ import org.apache.kafka.streams.processor.api.Record;
 
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
-import java.util.*;
+import java.util.ArrayList;
+import java.util.Collection;
+import java.util.HashMap;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.Optional;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
@@ -34,18 +41,17 @@ public final class DefaultCausalConsumer<K, V> implements CausalConsumer<K, V> {
     private final LinkedBlockingQueue<ConsumerRecord<K, V>> readyQueue = new LinkedBlockingQueue<>();
     private final AtomicReference<KafkaVectorClock> frontierRef =
             new AtomicReference<>(KafkaVectorClock.empty());
-    private final VectorClockSerialiser serialiser;
+    private final VectorClockSerialiser<KafkaVectorClock> serialiser;
 
+    @SuppressWarnings("unchecked")
     public DefaultCausalConsumer(
             Collection<String> topics,
             BufferingPolicy policy,
             Map<String, Object> consumerConfig,
             Map<String, Object> streamsConfig) {
 
-        serialiser = ServiceLoader.load(VectorClockSerialiser.class)
-                .findFirst()
-                .orElseThrow(() -> new IllegalStateException(
-                        "No VectorClockSerialiser on classpath — add parsley-kafka"));
+        serialiser = (VectorClockSerialiser<KafkaVectorClock>)
+                ParsleyServices.global().resolve(VectorClockSerialiser.class);
 
         CausalProcessorSupplier<K, V> causalSupplier =
                 new CausalProcessorSupplier<>(policy, CausalViolationHandler.noop(), serialiser);
@@ -65,7 +71,7 @@ public final class DefaultCausalConsumer<K, V> implements CausalConsumer<K, V> {
         this.streams.start();
     }
 
-    private ProcessorSupplier<K, V, Void, Void> captureSupplier() {
+    ProcessorSupplier<K, V, Void, Void> captureSupplier() {
         return () -> new Processor<>() {
             private ProcessorContext<Void, Void> ctx;
 
@@ -94,7 +100,7 @@ public final class DefaultCausalConsumer<K, V> implements CausalConsumer<K, V> {
                         getStateStore(CausalProcessor.FRONTIER_STORE)
                         .get(CausalProcessor.FRONTIER_KEY);
                 if (frontierBytes != null) {
-                    frontierRef.set((KafkaVectorClock) serialiser.deserialise(frontierBytes));
+                    frontierRef.set(serialiser.deserialise(frontierBytes));
                 }
             }
         };
@@ -126,13 +132,13 @@ public final class DefaultCausalConsumer<K, V> implements CausalConsumer<K, V> {
     }
 
     @Override
-    public VectorClock frontier() {
+    public KafkaVectorClock frontier() {
         return frontierRef.get();
     }
 
     @Override
-    public FenceToken fenceToken() {
-        return FenceToken.of(frontierRef.get());
+    public FenceToken<KafkaVectorClock> fenceToken() {
+        return FenceTokens.of(frontierRef.get());
     }
 
     @Override
@@ -140,17 +146,17 @@ public final class DefaultCausalConsumer<K, V> implements CausalConsumer<K, V> {
         streams.close();
     }
 
-    private static String extractStringHeader(Record<?, ?> record, String name) {
+    static String extractStringHeader(Record<?, ?> record, String name) {
         Header h = record.headers().lastHeader(name);
         return h == null ? "" : new String(h.value(), StandardCharsets.UTF_8);
     }
 
-    private static int extractIntHeader(Record<?, ?> record, String name) {
+    static int extractIntHeader(Record<?, ?> record, String name) {
         Header h = record.headers().lastHeader(name);
         return h == null ? 0 : CausalProcessor.bytesToInt(h.value());
     }
 
-    private static long extractLongHeader(Record<?, ?> record, String name) {
+    static long extractLongHeader(Record<?, ?> record, String name) {
         Header h = record.headers().lastHeader(name);
         return h == null ? 0L : CausalProcessor.bytesToLong(h.value());
     }

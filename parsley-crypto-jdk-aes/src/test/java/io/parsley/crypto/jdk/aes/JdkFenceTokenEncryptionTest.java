@@ -61,7 +61,19 @@ class JdkFenceTokenEncryptionTest {
 
     @Test
     void providerReturnsSameSingletonInstance() {
+        assertNotNull(JdkFenceTokenEncryption.provider());
         assertSame(JdkFenceTokenEncryption.provider(), JdkFenceTokenEncryption.provider());
+    }
+
+    @Test
+    void noArgConstructorGeneratesA256BitKey() throws Exception {
+        // The class documents AES-256; pin the generated key size (surefire opens this
+        // package via --add-opens, so reflection on the private field is permitted).
+        JdkFenceTokenEncryption enc = new JdkFenceTokenEncryption();
+        var field = JdkFenceTokenEncryption.class.getDeclaredField("key");
+        field.setAccessible(true);
+        javax.crypto.SecretKey key = (javax.crypto.SecretKey) field.get(enc);
+        assertEquals(32, key.getEncoded().length, "expected a 256-bit AES key");
     }
 
     @Test

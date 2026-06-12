@@ -4,7 +4,7 @@ import io.parsley.BufferLimit;
 import io.parsley.BufferingPolicy;
 import io.parsley.kafka.KafkaVectorClock;
 import io.parsley.kafka.CausalConsumer;
-import io.parsley.kafka.internal.KafkaVectorClockSerialiser;
+import io.parsley.kafka.KafkaVectorClockSerialiser;
 import org.apache.kafka.clients.admin.AdminClient;
 import org.apache.kafka.clients.admin.NewTopic;
 import org.apache.kafka.clients.consumer.ConsumerRecord;

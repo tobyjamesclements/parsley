@@ -28,7 +28,7 @@ import java.util.Map;
  *         streamsConfig)) {
  *
  *     ConsumerRecords<String, Order> records = consumer.poll(Duration.ofMillis(200));
- *     FenceToken token = consumer.fenceToken(); // encode causal progress
+ *     FenceToken<KafkaVectorClock> token = consumer.fenceToken(); // encode causal progress
  * }
  * }</pre>
  *
@@ -56,9 +56,9 @@ public interface CausalConsumer<K, V> extends Closeable {
     /**
      * Returns the current causal frontier — the highest offset seen on each partition.
      *
-     * @return the current {@link VectorClock} frontier; never {@code null}
+     * @return the current {@link KafkaVectorClock} frontier; never {@code null}
      */
-    VectorClock frontier();
+    KafkaVectorClock frontier();
 
     /**
      * Returns a {@link FenceToken} encoding the current causal frontier.
@@ -68,7 +68,7 @@ public interface CausalConsumer<K, V> extends Closeable {
      *
      * @return a fence token representing the current frontier
      */
-    FenceToken fenceToken();
+    FenceToken<KafkaVectorClock> fenceToken();
 
     /**
      * Stops the consumer and releases all resources.
@@ -79,16 +79,24 @@ public interface CausalConsumer<K, V> extends Closeable {
     /**
      * Creates a new {@code CausalConsumer} over the given topics.
      *
+     * <p>{@link BufferingPolicy.DeadLetter DeadLetter} policies are not supported by this
+     * facade — there is no parameter for a dead-letter sink — and are rejected with
+     * {@link IllegalArgumentException}. To dead-letter evicted records, build a custom
+     * topology with {@link CausalProcessorSupplier}'s 4-argument constructor instead.
+     *
      * @param <K>            the record key type
      * @param <V>            the record value type
      * @param topics         the Kafka topics to subscribe to; must not be empty
-     * @param policy         the buffering policy governing how unordered records are handled
+     * @param policy         the buffering policy governing how unordered records are handled;
+     *                       must not be a {@code DeadLetter} policy
      * @param consumerConfig additional consumer configuration (overrides any defaults derived
      *                       from {@code streamsConfig})
      * @param streamsConfig  Kafka Streams configuration ({@code StreamsConfig} properties);
      *                       must include at minimum {@code application.id} and
      *                       {@code bootstrap.servers}
      * @return a new, running {@code CausalConsumer}
+     * @throws IllegalArgumentException if {@code policy} is a
+     *                                  {@link BufferingPolicy.DeadLetter DeadLetter} policy
      */
     static <K, V> CausalConsumer<K, V> create(
             Collection<String> topics,

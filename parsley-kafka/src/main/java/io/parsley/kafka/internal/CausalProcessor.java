@@ -1,8 +1,13 @@
 package io.parsley.kafka.internal;
 
-import io.parsley.*;
+import io.parsley.BufferingPolicy;
+import io.parsley.CausalHeader;
+import io.parsley.CausalRecord;
+import io.parsley.CausalViolationHandler;
+import io.parsley.ParsleyAttributes;
+import io.parsley.VectorClockSerialiser;
+import io.parsley.core.CausalEngine;
 import io.parsley.kafka.KafkaVectorClock;
-import io.parsley.kafka.buffer.CausalViolationHandler;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.apache.kafka.common.TopicPartition;
 import org.apache.kafka.common.header.Header;
@@ -14,13 +19,14 @@ import org.apache.kafka.streams.processor.PunctuationType;
 import org.apache.kafka.streams.processor.api.Processor;
 import org.apache.kafka.streams.processor.api.ProcessorContext;
 import org.apache.kafka.streams.processor.api.Record;
+import org.apache.kafka.streams.processor.api.RecordMetadata;
 import org.apache.kafka.streams.state.KeyValueStore;
 
 import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
-import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.function.Consumer;
 
@@ -28,28 +34,22 @@ public final class CausalProcessor<K, V> implements Processor<K, V, K, V> {
 
     public static final String FRONTIER_STORE = "parsley-frontier";
     public static final String FRONTIER_KEY = "f";
-    static final String CLOCK_HEADER = "parsley-vector-clock";
     static final String SOURCE_TOPIC_HEADER = "parsley-src-topic";
     static final String SOURCE_PARTITION_HEADER = "parsley-src-partition";
     static final String SOURCE_OFFSET_HEADER = "parsley-src-offset";
 
     private final BufferingPolicy policy;
     private final CausalViolationHandler violationHandler;
-    private final VectorClockSerialiser serialiser;
+    private final VectorClockSerialiser<KafkaVectorClock> serialiser;
     private final Consumer<ConsumerRecord<K, V>> deadLetterSink;
 
     private ProcessorContext<K, V> context;
     private KeyValueStore<String, byte[]> frontierStore;
-    private KafkaVectorClock frontier = KafkaVectorClock.empty();
-    private int sizeLimit = Integer.MAX_VALUE;
-
-    record Buffered<K, V>(ConsumerRecord<K, V> record, VectorClock clock, Instant bufferedAt,
-                          TopicPartition srcPartition, long srcOffset) {}
-    private final java.util.LinkedHashMap<Long, Buffered<K, V>> inMemory = new java.util.LinkedHashMap<>();
-    private long seq = 0;
+    private CausalEngine<K, V, KafkaVectorClock> engine;
 
     public CausalProcessor(BufferingPolicy policy, CausalViolationHandler violationHandler,
-                            VectorClockSerialiser serialiser, Consumer<ConsumerRecord<K, V>> deadLetterSink) {
+                           VectorClockSerialiser<KafkaVectorClock> serialiser,
+                           Consumer<ConsumerRecord<K, V>> deadLetterSink) {
         this.policy = policy;
         this.violationHandler = violationHandler;
         this.serialiser = serialiser;
@@ -61,158 +61,81 @@ public final class CausalProcessor<K, V> implements Processor<K, V, K, V> {
         this.context = context;
         this.frontierStore = context.getStateStore(FRONTIER_STORE);
 
+        KafkaVectorClock initialFrontier = KafkaVectorClock.empty();
         byte[] stored = frontierStore.get(FRONTIER_KEY);
         if (stored != null) {
-            frontier = (KafkaVectorClock) serialiser.deserialise(stored);
+            initialFrontier = serialiser.deserialise(stored);
         }
 
-        configureLimits(limitOf(policy));
+        Consumer<CausalRecord<K, V, KafkaVectorClock>> sink = deadLetterSink == null
+                ? null
+                : record -> deadLetterSink.accept(toConsumerRecord(record));
+
+        engine = new CausalEngine<>(policy, violationHandler, serialiser, initialFrontier, sink,
+                frontier -> frontierStore.put(FRONTIER_KEY, serialiser.serialise(frontier)));
+
+        engine.evictionInterval().ifPresent(interval ->
+                context.schedule(interval, PunctuationType.WALL_CLOCK_TIME,
+                        timestamp -> engine.evictNow().forEach(this::forward)));
     }
 
     @Override
     public void process(Record<K, V> record) {
-        Optional<org.apache.kafka.streams.processor.api.RecordMetadata> meta = context.recordMetadata();
-        String srcTopic = meta.map(org.apache.kafka.streams.processor.api.RecordMetadata::topic).orElse("");
-        int srcPartition = meta.map(org.apache.kafka.streams.processor.api.RecordMetadata::partition).orElse(0);
-        long srcOffset = meta.map(org.apache.kafka.streams.processor.api.RecordMetadata::offset).orElse(0L);
-        TopicPartition srcPart = new TopicPartition(srcTopic, srcPartition);
+        Optional<RecordMetadata> meta = context.recordMetadata();
+        String srcTopic = meta.map(RecordMetadata::topic).orElse("");
+        int srcPartition = meta.map(RecordMetadata::partition).orElse(0);
+        long srcOffset = meta.map(RecordMetadata::offset).orElse(0L);
 
-        Header clockHeader = record.headers().lastHeader(CLOCK_HEADER);
-        if (clockHeader == null) {
-            violationHandler.onViolation(toConsumerRecord(record, srcTopic, srcPartition, srcOffset),
-                    CausalViolationReason.MISSING_HEADER);
-            frontier = frontier.advance(srcPart, srcOffset);
-            persistFrontier();
-            forward(record, srcTopic, srcPartition, srcOffset);
-            drainBuffer();
-            return;
-        }
-
-        VectorClock recordClock;
-        try {
-            recordClock = serialiser.deserialise(clockHeader.value());
-        } catch (Exception e) {
-            violationHandler.onViolation(toConsumerRecord(record, srcTopic, srcPartition, srcOffset),
-                    CausalViolationReason.UNRESOLVABLE_CLOCK);
-            frontier = frontier.advance(srcPart, srcOffset);
-            persistFrontier();
-            forward(record, srcTopic, srcPartition, srcOffset);
-            drainBuffer();
-            return;
-        }
-
-        if (recordClock.satisfiedBy(frontier)) {
-            frontier = frontier.advance(srcPart, srcOffset);
-            persistFrontier();
-            forward(record, srcTopic, srcPartition, srcOffset);
-            drainBuffer();
-        } else {
-            inMemory.put(seq++, new Buffered<>(
-                    toConsumerRecord(record, srcTopic, srcPartition, srcOffset),
-                    recordClock, Instant.now(), srcPart, srcOffset));
-            if (inMemory.size() >= sizeLimit) {
-                evictBuffer();
-            }
-        }
+        engine.onRecord(toCausalRecord(record, srcTopic, srcPartition, srcOffset))
+                .forEach(this::forward);
     }
 
-    private void drainBuffer() {
-        boolean progress = true;
-        while (progress) {
-            progress = false;
-            for (var entry : new ArrayList<>(inMemory.entrySet())) {
-                Buffered<K, V> b = entry.getValue();
-                if (b.clock().satisfiedBy(frontier)) {
-                    frontier = frontier.advance(b.srcPartition(), b.srcOffset());
-                    persistFrontier();
-                    forwardConsumerRecord(b.record(), b.srcPartition(), b.srcOffset());
-                    inMemory.remove(entry.getKey());
-                    progress = true;
-                }
-            }
+    private CausalRecord<K, V, KafkaVectorClock> toCausalRecord(
+            Record<K, V> record, String topic, int partition, long offset) {
+        List<CausalHeader> headers = new ArrayList<>();
+        for (Header header : record.headers()) {
+            headers.add(new CausalHeader(header.key(), header.value()));
         }
+        Header clockHeader = record.headers().lastHeader(ParsleyAttributes.VECTOR_CLOCK);
+        TopicPartition tp = new TopicPartition(topic, partition);
+        return new CausalRecord<>(
+                record.key(), record.value(), record.timestamp(), headers,
+                clockHeader == null ? null : clockHeader.value(),
+                KafkaVectorClock.empty().advance(tp, offset),
+                topic + "-" + partition + "@" + offset);
     }
 
-    private void evictBuffer() {
-        if (inMemory.isEmpty()) return;
-        List<ConsumerRecord<K, V>> toForward = new ArrayList<>();
-        inMemory.values().forEach(b -> {
-            ConsumerRecord<K, V> cr = b.record();
-            switch (policy) {
-                case BufferingPolicy.Ignore ignore -> {
-                    violationHandler.onViolation(cr, CausalViolationReason.LIMIT_REACHED);
-                    toForward.add(cr);
-                }
-                case BufferingPolicy.Drop drop ->
-                        violationHandler.onViolation(cr, CausalViolationReason.LIMIT_REACHED);
-                case BufferingPolicy.DeadLetter dl -> {
-                    deadLetterSink.accept(cr);
-                    violationHandler.onViolation(cr, CausalViolationReason.LIMIT_REACHED);
-                }
-            }
-        });
-        inMemory.clear();
-        for (ConsumerRecord<K, V> cr : toForward) {
-            TopicPartition tp = new TopicPartition(cr.topic(), cr.partition());
-            frontier = frontier.advance(tp, cr.offset());
-            persistFrontier();
-            forwardConsumerRecord(cr, tp, cr.offset());
-        }
-    }
-
-    private void forward(Record<K, V> record, String topic, int partition, long offset) {
-        Headers enriched = new RecordHeaders(record.headers());
-        enriched.add(new RecordHeader(SOURCE_TOPIC_HEADER, topic.getBytes(StandardCharsets.UTF_8)));
-        enriched.add(new RecordHeader(SOURCE_PARTITION_HEADER, intToBytes(partition)));
-        enriched.add(new RecordHeader(SOURCE_OFFSET_HEADER, longToBytes(offset)));
+    private void forward(CausalRecord<K, V, KafkaVectorClock> record) {
+        Map.Entry<TopicPartition, Long> source = sourceOf(record);
+        Headers enriched = toHeaders(record);
+        enriched.add(new RecordHeader(SOURCE_TOPIC_HEADER,
+                source.getKey().topic().getBytes(StandardCharsets.UTF_8)));
+        enriched.add(new RecordHeader(SOURCE_PARTITION_HEADER, intToBytes(source.getKey().partition())));
+        enriched.add(new RecordHeader(SOURCE_OFFSET_HEADER, longToBytes(source.getValue())));
         context.forward(new Record<>(record.key(), record.value(), record.timestamp(), enriched));
     }
 
-    private void forwardConsumerRecord(ConsumerRecord<K, V> cr, TopicPartition srcPart, long srcOffset) {
-        Headers enriched = new RecordHeaders(cr.headers());
-        enriched.add(new RecordHeader(SOURCE_TOPIC_HEADER, srcPart.topic().getBytes(StandardCharsets.UTF_8)));
-        enriched.add(new RecordHeader(SOURCE_PARTITION_HEADER, intToBytes(srcPart.partition())));
-        enriched.add(new RecordHeader(SOURCE_OFFSET_HEADER, longToBytes(srcOffset)));
-        context.forward(new Record<>(cr.key(), cr.value(), cr.timestamp(), enriched));
-    }
-
-    private void persistFrontier() {
-        frontierStore.put(FRONTIER_KEY, serialiser.serialise(frontier));
-    }
-
-    private static BufferLimit limitOf(BufferingPolicy policy) {
-        return switch (policy) {
-            case BufferingPolicy.Ignore ig -> ig.limit();
-            case BufferingPolicy.Drop dp -> dp.limit();
-            case BufferingPolicy.DeadLetter de -> de.limit();
-        };
-    }
-
-    private void configureLimits(BufferLimit limit) {
-        switch (limit) {
-            case BufferLimit.DurationLimit dl ->
-                context.schedule(dl.duration(), PunctuationType.WALL_CLOCK_TIME, ts -> evictBuffer());
-            case BufferLimit.SizeLimit sl ->
-                sizeLimit = sl.messages();
-            case BufferLimit.FirstLimit fl -> {
-                for (BufferLimit inner : fl.limits()) configureLimits(inner);
-            }
-            case BufferLimit.BytesLimit ignored ->
-                throw new UnsupportedOperationException(
-                        "BytesLimit is not supported by CausalProcessor; use DurationLimit or SizeLimit");
-            case BufferLimit.FrontierAdvancementLimit ignored ->
-                throw new UnsupportedOperationException(
-                        "FrontierAdvancementLimit is not supported by CausalProcessor; use DurationLimit or SizeLimit");
-        }
-    }
-
-    private ConsumerRecord<K, V> toConsumerRecord(Record<K, V> record, String topic, int partition, long offset) {
+    private ConsumerRecord<K, V> toConsumerRecord(CausalRecord<K, V, KafkaVectorClock> record) {
+        Map.Entry<TopicPartition, Long> source = sourceOf(record);
         return new ConsumerRecord<>(
-                topic, partition, offset,
+                source.getKey().topic(), source.getKey().partition(), source.getValue(),
                 record.timestamp(), TimestampType.CREATE_TIME,
                 -1, -1,
                 record.key(), record.value(),
-                record.headers(), Optional.empty());
+                toHeaders(record), Optional.empty());
+    }
+
+    /** A record's position is a singleton clock at its own source coordinate. */
+    private static Map.Entry<TopicPartition, Long> sourceOf(CausalRecord<?, ?, KafkaVectorClock> record) {
+        return record.position().positions().entrySet().iterator().next();
+    }
+
+    private Headers toHeaders(CausalRecord<K, V, KafkaVectorClock> record) {
+        Headers headers = new RecordHeaders();
+        for (CausalHeader header : record.headers()) {
+            headers.add(new RecordHeader(header.key(), header.value()));
+        }
+        return headers;
     }
 
     static byte[] intToBytes(int v) {

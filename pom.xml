@@ -10,6 +10,7 @@
     <packaging>pom</packaging>
 
     <modules>
+        <module>parsley-api</module>
         <module>parsley-core</module>
         <module>parsley-crypto-jdk-aes</module>
         <module>parsley-kafka</module>
@@ -27,11 +28,18 @@
     <properties>
         <kafka.version>4.3.0</kafka.version>
         <maven.compiler.release>25</maven.compiler.release>
+        <pitest.version>1.25.4</pitest.version>
+        <pitest.junit5.version>1.2.3</pitest.junit5.version>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
     </properties>
 
     <dependencyManagement>
         <dependencies>
+            <dependency>
+                <groupId>io.parsley</groupId>
+                <artifactId>parsley-api</artifactId>
+                <version>${project.version}</version>
+            </dependency>
             <dependency>
                 <groupId>io.parsley</groupId>
                 <artifactId>parsley-core</artifactId>
@@ -72,6 +80,32 @@
         </dependencies>
     </dependencyManagement>
 
+    <profiles>
+        <!-- Mutation testing: mvn -Pmutation test
+             Reports land in each module's target/pit-reports/index.html.
+             parsley-it opts out (Testcontainers; PIT is per-module anyway). -->
+        <profile>
+            <id>mutation</id>
+            <build>
+                <plugins>
+                    <plugin>
+                        <groupId>org.pitest</groupId>
+                        <artifactId>pitest-maven</artifactId>
+                        <executions>
+                            <execution>
+                                <id>mutation-coverage</id>
+                                <phase>test</phase>
+                                <goals>
+                                    <goal>mutationCoverage</goal>
+                                </goals>
+                            </execution>
+                        </executions>
+                    </plugin>
+                </plugins>
+            </build>
+        </profile>
+    </profiles>
+
     <build>
         <pluginManagement>
             <plugins>
@@ -91,6 +125,26 @@
                     <version>3.4.1</version>
                 </plugin>
                 <plugin>
+                    <groupId>org.pitest</groupId>
+                    <artifactId>pitest-maven</artifactId>
+                    <version>${pitest.version}</version>
+                    <dependencies>
+                        <dependency>
+                            <groupId>org.pitest</groupId>
+                            <artifactId>pitest-junit5-plugin</artifactId>
+                            <version>${pitest.junit5.version}</version>
+                        </dependency>
+                    </dependencies>
+                    <configuration>
+                        <failWhenNoMutations>false</failWhenNoMutations>
+                        <timestampedReports>false</timestampedReports>
+                        <outputFormats>
+                            <outputFormat>HTML</outputFormat>
+                            <outputFormat>XML</outputFormat>
+                        </outputFormats>
+                    </configuration>
+                </plugin>
+                <plugin>
                     <groupId>org.apache.maven.plugins</groupId>
                     <artifactId>maven-javadoc-plugin</artifactId>
                     <version>3.11.2</version>
@@ -98,7 +152,7 @@
                         <encoding>UTF-8</encoding>
                         <doclint>none</doclint>
                         <overview>${project.basedir}/overview.html</overview>
-                        <excludePackageNames>io.parsley.internal:io.parsley.kafka.internal</excludePackageNames>
+                        <excludePackageNames>io.parsley.core.internal:io.parsley.core.internal.buffer:io.parsley.kafka.internal</excludePackageNames>
                     </configuration>
                 </plugin>
             </plugins>

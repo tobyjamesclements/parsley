@@ -1,24 +1,14 @@
 /**
- * Core abstractions for causal consistency.
+ * The Parsley engine: broker-neutral causal buffering, fence-token creation, and SPI
+ * resolution.
  *
- * <p>This module is dependency-free and defines:
- * <ul>
- *   <li>{@link io.parsley.VectorClock} &mdash; an opaque causal progress snapshot</li>
- *   <li>{@link io.parsley.FenceToken} &mdash; an opaque, cross-service causal ordering assertion</li>
- *   <li>{@link io.parsley.BufferLimit} and {@link io.parsley.BufferingPolicy} &mdash; when and how to
- *       handle records whose causal dependencies are not yet met</li>
- *   <li>{@link io.parsley.FenceTokenEncryption} and {@link io.parsley.VectorClockSerialiser} &mdash;
- *       SPI interfaces for pluggable encryption and serialisation</li>
- *   <li>{@link io.parsley.ParsleyMetrics} &mdash; observability hook for buffer and frontier events</li>
- * </ul>
- *
- * <p>Default SPI implementations are provided by the {@code io.parsley.crypto.jdk.aes} and
- * {@code io.parsley.kafka} modules and are discovered automatically via
- * {@link java.util.ServiceLoader}.
+ * <p>This module depends only on the {@code io.parsley} API module. Broker adapters
+ * (e.g. {@code parsley-kafka}) build on this engine; SPI implementors depend only on the
+ * API module.
  */
-module io.parsley {
-    exports io.parsley;
-    exports io.parsley.internal to io.parsley.kafka;
+module io.parsley.core {
+    requires transitive io.parsley;
+    exports io.parsley.core;
     uses io.parsley.FenceTokenEncryption;
     uses io.parsley.VectorClockSerialiser;
 }

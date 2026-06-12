@@ -21,7 +21,7 @@ import java.util.concurrent.Future;
  * <pre>{@code
  * CausalProducer<String, String> producer = CausalProducer.create(producerConfig);
  *
- * FenceToken token = consumer.fenceToken();   // causal snapshot from an upstream consumer
+ * FenceToken<KafkaVectorClock> token = consumer.fenceToken();   // causal snapshot from an upstream consumer
  * producer.send(new ProducerRecord<>("orders", key, value), token);
  * }</pre>
  *
@@ -38,7 +38,7 @@ public interface CausalProducer<K, V> {
      *               must not be {@code null}
      * @return a {@link Future} for the {@link RecordMetadata} of the sent record
      */
-    Future<RecordMetadata> send(ProducerRecord<K, V> record, FenceToken token);
+    Future<RecordMetadata> send(ProducerRecord<K, V> record, FenceToken<KafkaVectorClock> token);
 
     /**
      * Sends a record with the causal vector clock from {@code token} attached, invoking
@@ -50,7 +50,8 @@ public interface CausalProducer<K, V> {
      * @param callback the callback invoked on send completion or failure; may be {@code null}
      * @return a {@link Future} for the {@link RecordMetadata} of the sent record
      */
-    Future<RecordMetadata> send(ProducerRecord<K, V> record, FenceToken token, Callback callback);
+    Future<RecordMetadata> send(ProducerRecord<K, V> record, FenceToken<KafkaVectorClock> token,
+                                Callback callback);
 
     /**
      * Closes the underlying Kafka producer and releases all resources.

@@ -2,8 +2,8 @@ package io.parsley.kafka;
 
 import io.parsley.BufferLimit;
 import io.parsley.BufferingPolicy;
+import io.parsley.CausalViolationHandler;
 import io.parsley.VectorClockSerialiser;
-import io.parsley.kafka.buffer.CausalViolationHandler;
 import io.parsley.kafka.internal.CausalProcessor;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.apache.kafka.common.serialization.Serdes;
@@ -45,7 +45,7 @@ public final class CausalProcessorSupplier<K, V> implements ProcessorSupplier<K,
 
     private final BufferingPolicy policy;
     private final CausalViolationHandler violationHandler;
-    private final VectorClockSerialiser serialiser;
+    private final VectorClockSerialiser<KafkaVectorClock> serialiser;
     private final Consumer<ConsumerRecord<K, V>> deadLetterSink;
 
     /**
@@ -63,7 +63,7 @@ public final class CausalProcessorSupplier<K, V> implements ProcessorSupplier<K,
     public CausalProcessorSupplier(
             BufferingPolicy policy,
             CausalViolationHandler violationHandler,
-            VectorClockSerialiser serialiser) {
+            VectorClockSerialiser<KafkaVectorClock> serialiser) {
         if (policy instanceof BufferingPolicy.DeadLetter) {
             throw new IllegalArgumentException(
                     "DeadLetter policy requires a dead-letter sink — use the 4-argument constructor");
@@ -92,7 +92,7 @@ public final class CausalProcessorSupplier<K, V> implements ProcessorSupplier<K,
     public CausalProcessorSupplier(
             BufferingPolicy.DeadLetter policy,
             CausalViolationHandler violationHandler,
-            VectorClockSerialiser serialiser,
+            VectorClockSerialiser<KafkaVectorClock> serialiser,
             Consumer<ConsumerRecord<K, V>> deadLetterSink) {
         validateLimit(limitOf(policy));
         this.policy = policy;

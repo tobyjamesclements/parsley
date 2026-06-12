@@ -3,10 +3,9 @@ package io.parsley.it;
 import io.parsley.BufferLimit;
 import io.parsley.BufferingPolicy;
 import io.parsley.CausalViolationReason;
-import io.parsley.VectorClock;
 import io.parsley.kafka.KafkaVectorClock;
 import io.parsley.kafka.CausalProcessorSupplier;
-import io.parsley.kafka.internal.KafkaVectorClockSerialiser;
+import io.parsley.kafka.KafkaVectorClockSerialiser;
 import org.apache.kafka.common.TopicPartition;
 import org.apache.kafka.common.header.internals.RecordHeader;
 import org.apache.kafka.common.header.internals.RecordHeaders;
@@ -238,7 +237,7 @@ class CausalProcessorTest {
 
         byte[] stored = driver.<String, byte[]>getKeyValueStore("parsley-frontier").get("f");
         assertNotNull(stored, "Frontier must be written to state store after processing");
-        KafkaVectorClock persisted = (KafkaVectorClock) SERIALISER.deserialise(stored);
+        KafkaVectorClock persisted = SERIALISER.deserialise(stored);
         assertEquals(1, persisted.positions().size());
         assertEquals(0L, persisted.positions().get(p));
     }

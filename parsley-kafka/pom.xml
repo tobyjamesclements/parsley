@@ -15,6 +15,10 @@
     <dependencies>
         <dependency>
             <groupId>io.parsley</groupId>
+            <artifactId>parsley-api</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>io.parsley</groupId>
             <artifactId>parsley-core</artifactId>
         </dependency>
         <dependency>

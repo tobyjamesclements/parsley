@@ -3,6 +3,7 @@ package io.parsley.it.broker;
 import io.parsley.BufferLimit;
 import io.parsley.BufferingPolicy;
 import io.parsley.FenceToken;
+import io.parsley.core.FenceTokens;
 import io.parsley.kafka.KafkaVectorClock;
 import io.parsley.kafka.CausalConsumer;
 import io.parsley.kafka.CausalProducer;
@@ -43,9 +44,13 @@ class CausalRoundTripIT {
             new KafkaContainer(DockerImageName.parse("apache/kafka:3.7.0"));
 
     private String newTopic() throws Exception {
+        return newTopic(1);
+    }
+
+    private String newTopic(int partitions) throws Exception {
         String topic = "rt-it-" + UUID.randomUUID().toString().substring(0, 8);
         try (AdminClient admin = AdminClient.create(Map.of("bootstrap.servers", KAFKA.getBootstrapServers()))) {
-            admin.createTopics(List.of(new NewTopic(topic, 1, (short) 1))).all().get(30, TimeUnit.SECONDS);
+            admin.createTopics(List.of(new NewTopic(topic, partitions, (short) 1))).all().get(30, TimeUnit.SECONDS);
         }
         return topic;
     }
@@ -72,7 +77,7 @@ class CausalRoundTripIT {
     @Test
     void wellOrderedRecordsDeliveredInOrder(@TempDir Path tempDir) throws Exception {
         String topic = newTopic();
-        FenceToken empty = FenceToken.of(KafkaVectorClock.empty());
+        FenceToken<KafkaVectorClock> empty = FenceTokens.of(KafkaVectorClock.empty());
 
         CausalProducer<String, String> producer = CausalProducer.create(producerConfig());
         try {
@@ -101,9 +106,9 @@ class CausalRoundTripIT {
     @Test
     void causallyDependentRecordHeldUntilDependencySatisfied(@TempDir Path tempDir) throws Exception {
         String topic = newTopic();
-        FenceToken empty = FenceToken.of(KafkaVectorClock.empty());
+        FenceToken<KafkaVectorClock> empty = FenceTokens.of(KafkaVectorClock.empty());
         // R_dep's clock says: "only deliver me after TopicPartition(topic,0) reaches offset 2"
-        FenceToken depToken = FenceToken.of(new KafkaVectorClock(Map.of(new TopicPartition(topic, 0), 2L)));
+        FenceToken<KafkaVectorClock> depToken = FenceTokens.of(new KafkaVectorClock(Map.of(new TopicPartition(topic, 0), 2L)));
 
         CausalProducer<String, String> producer = CausalProducer.create(producerConfig());
         try {
@@ -135,11 +140,55 @@ class CausalRoundTripIT {
     }
 
     @Test
+    void coPartitionedCrossTopicDependencyHeldUntilSatisfied(@TempDir Path tempDir) throws Exception {
+        // The README's co-partitioning model: causally related records share the same
+        // partition NUMBER across topics, so one Streams task (and one frontier) sees
+        // partition N of every topic. Here B-0 depends on A-0; B-1 is independent.
+        String topicA = newTopic(2);
+        String topicB = newTopic(2);
+        FenceToken<KafkaVectorClock> empty = FenceTokens.of(KafkaVectorClock.empty());
+        FenceToken<KafkaVectorClock> dependsOnA0 = FenceTokens.of(
+                new KafkaVectorClock(Map.of(new TopicPartition(topicA, 0), 0L)));
+
+        CausalProducer<String, String> producer = CausalProducer.create(producerConfig());
+        try {
+            // Partition 0 of topic B: held until partition 0 of topic A reaches offset 0.
+            producer.send(new ProducerRecord<>(topicB, 0, "R_held", "held"), dependsOnA0)
+                    .get(10, TimeUnit.SECONDS);
+            // Partition 1 of topic B: no dependencies, independent of the other task.
+            producer.send(new ProducerRecord<>(topicB, 1, "R_independent", "ind"), empty)
+                    .get(10, TimeUnit.SECONDS);
+            // Partition 0 of topic A: the dependency trigger.
+            producer.send(new ProducerRecord<>(topicA, 0, "R_trigger", "trig"), empty)
+                    .get(10, TimeUnit.SECONDS);
+        } finally {
+            producer.close();
+        }
+
+        try (CausalConsumer<String, String> consumer = CausalConsumer.create(
+                List.of(topicA, topicB),
+                BufferingPolicy.ignore(BufferLimit.ofDuration(Duration.ofSeconds(30))),
+                Map.of(), streamsConfig(tempDir))) {
+
+            List<ConsumerRecord<String, String>> received = new ArrayList<>();
+            await().atMost(30, SECONDS).until(() -> {
+                consumer.poll(Duration.ofMillis(200)).forEach(received::add);
+                return received.size() >= 3;
+            });
+
+            List<String> keys = received.stream().map(ConsumerRecord::key).toList();
+            assertTrue(keys.containsAll(List.of("R_held", "R_independent", "R_trigger")), keys.toString());
+            assertTrue(keys.indexOf("R_trigger") < keys.indexOf("R_held"),
+                    "the dependent record must not be delivered before its trigger: " + keys);
+        }
+    }
+
+    @Test
     void dropPolicyDropsUnresolvableRecordOnEviction(@TempDir Path tempDir) throws Exception {
         String topic = newTopic();
-        FenceToken empty = FenceToken.of(KafkaVectorClock.empty());
+        FenceToken<KafkaVectorClock> empty = FenceTokens.of(KafkaVectorClock.empty());
         // Impossible dependency: requires offset 1_000_000 which will never exist
-        FenceToken impossible = FenceToken.of(
+        FenceToken<KafkaVectorClock> impossible = FenceTokens.of(
                 new KafkaVectorClock(Map.of(new TopicPartition(topic, 0), 1_000_000L)));
 
         CausalProducer<String, String> producer = CausalProducer.create(producerConfig());
