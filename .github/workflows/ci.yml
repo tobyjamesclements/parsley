@@ -15,7 +15,7 @@ jobs:
           distribution: 'temurin'
           cache: 'maven'
       - name: Run unit tests
-        run: mvn test --no-transfer-progress -pl parsley-api,parsley-core,parsley-crypto-jdk-aes,parsley-kafka
+        run: mvn test --no-transfer-progress -Dtest='!*IT'
 
   integration-tests:
     runs-on: ubuntu-latest
@@ -27,7 +27,5 @@ jobs:
           java-version: '25'
           distribution: 'temurin'
           cache: 'maven'
-      - name: Install modules
-        run: mvn install --no-transfer-progress -DskipTests
       - name: Run integration tests
-        run: mvn test --no-transfer-progress -pl parsley-it
+        run: mvn test --no-transfer-progress -Dtest='*IT'
