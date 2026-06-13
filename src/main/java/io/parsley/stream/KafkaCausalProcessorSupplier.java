@@ -2,7 +2,6 @@ package io.parsley.stream;
 
 import io.parsley.BufferingPolicy;
 import io.parsley.CausalViolationHandler;
-import io.parsley.internal.Attributes;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.apache.kafka.common.serialization.Serdes;
 import org.apache.kafka.streams.processor.api.Processor;
@@ -18,24 +17,26 @@ final class KafkaCausalProcessorSupplier<K, V> implements CausalProcessorSupplie
     private final BufferingPolicy policy;
     private final CausalViolationHandler violationHandler;
     private final Consumer<ConsumerRecord<K, V>> deadLetterSink;
+    private final String frontierStoreName;
 
     KafkaCausalProcessorSupplier(BufferingPolicy policy, CausalViolationHandler violationHandler,
-                                 Consumer<ConsumerRecord<K, V>> deadLetterSink) {
+                                 Consumer<ConsumerRecord<K, V>> deadLetterSink, String frontierStoreName) {
         this.policy = policy;
         this.violationHandler = violationHandler;
         this.deadLetterSink = deadLetterSink;
+        this.frontierStoreName = frontierStoreName;
     }
 
     @Override
     public Processor<K, V, K, V> get() {
-        return new CausalProcessor<>(policy, violationHandler, deadLetterSink);
+        return new CausalProcessor<>(policy, violationHandler, deadLetterSink, frontierStoreName);
     }
 
     @Override
     public Set<StoreBuilder<?>> stores() {
         StoreBuilder<KeyValueStore<String, byte[]>> frontierBuilder =
                 Stores.keyValueStoreBuilder(
-                        Stores.persistentKeyValueStore(Attributes.FRONTIER_STORE),
+                        Stores.persistentKeyValueStore(frontierStoreName),
                         Serdes.String(),
                         Serdes.ByteArray());
         return Set.of(frontierBuilder);

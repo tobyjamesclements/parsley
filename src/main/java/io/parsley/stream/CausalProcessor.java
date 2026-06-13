@@ -35,22 +35,24 @@ final class CausalProcessor<K, V> implements Processor<K, V, K, V> {
     private final BufferingPolicy policy;
     private final CausalViolationHandler violationHandler;
     private final Consumer<ConsumerRecord<K, V>> deadLetterSink;
+    private final String frontierStoreName;
 
     private ProcessorContext<K, V> context;
     private KeyValueStore<String, byte[]> frontierStore;
     private CausalEngine<K, V> engine;
 
     CausalProcessor(BufferingPolicy policy, CausalViolationHandler violationHandler,
-                    Consumer<ConsumerRecord<K, V>> deadLetterSink) {
+                    Consumer<ConsumerRecord<K, V>> deadLetterSink, String frontierStoreName) {
         this.policy = policy;
         this.violationHandler = violationHandler;
         this.deadLetterSink = deadLetterSink;
+        this.frontierStoreName = frontierStoreName;
     }
 
     @Override
     public void init(ProcessorContext<K, V> context) {
         this.context = context;
-        this.frontierStore = context.getStateStore(Attributes.FRONTIER_STORE);
+        this.frontierStore = context.getStateStore(frontierStoreName);
 
         VectorClock initialFrontier = VectorClock.empty();
         byte[] stored = frontierStore.get(Attributes.FRONTIER_KEY);
@@ -67,7 +69,7 @@ final class CausalProcessor<K, V> implements Processor<K, V, K, V> {
 
         engine.evictionInterval().ifPresent(interval ->
                 context.schedule(interval, PunctuationType.WALL_CLOCK_TIME,
-                        timestamp -> engine.evictNow().forEach(this::forward)));
+                        _ -> engine.evictNow().forEach(this::forward)));
     }
 
     @Override
