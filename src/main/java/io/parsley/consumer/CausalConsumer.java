@@ -1,0 +1,96 @@
+package io.parsley.consumer;
+
+import io.parsley.BufferingPolicy;
+import io.parsley.VectorClock;
+import org.apache.kafka.clients.consumer.ConsumerRecords;
+
+import java.io.Closeable;
+import java.time.Duration;
+import java.util.Collection;
+import java.util.Map;
+
+/**
+ * A high-level Kafka consumer that delivers records in causal order.
+ *
+ * <p>A {@code CausalConsumer} wraps a Kafka Streams topology to provide causal ordering across
+ * one or more topics. Records whose {@link VectorClock} dependencies are not yet satisfied by
+ * the current frontier are held in an internal buffer; once the frontier catches up, buffered
+ * records are released and returned in subsequent {@link #poll} calls.
+ *
+ * <h2>Usage</h2>
+ * <pre>{@code
+ * try (CausalConsumer<String, Order> consumer = CausalConsumer.create(
+ *         List.of("prices", "orders"),
+ *         BufferingPolicy.ignore(BufferLimit.ofDuration(Duration.ofSeconds(30))),
+ *         Map.of(),
+ *         streamsConfig)) {
+ *
+ *     ConsumerRecords<String, Order> records = consumer.poll(Duration.ofMillis(200));
+ *     VectorClock frontier = consumer.frontier(); // pass to a CausalProducer when producing
+ * }
+ * }</pre>
+ *
+ * @param <K> the record key type
+ * @param <V> the record value type
+ */
+public interface CausalConsumer<K, V> extends Closeable {
+
+    /**
+     * Polls for records whose causal dependencies are satisfied.
+     *
+     * <p>Records with unsatisfied dependencies remain buffered until the frontier catches up
+     * or the configured {@link io.parsley.BufferLimit} fires.
+     *
+     * @param timeout the maximum time to block waiting for records; must not be {@code null}
+     * @return records ready for processing; never {@code null}, may be empty
+     */
+    ConsumerRecords<K, V> poll(Duration timeout);
+
+    /**
+     * Returns the current causal frontier — the highest offset seen on each partition, i.e.
+     * everything this consumer has processed so far.
+     *
+     * <p>Pass this clock to {@link io.parsley.producer.CausalProducer#send} to propagate the
+     * consumer's causal position onto records it produces, or serialise it to hand downstream as a
+     * causal token (see {@link VectorClock} for the cross-service propagation pattern). To instead
+     * read the causal context of <em>one specific</em> consumed message — the upstream producer's
+     * clock — use {@link VectorClock#fromRecord(org.apache.kafka.clients.consumer.ConsumerRecord)}.
+     *
+     * @return the current {@link VectorClock} frontier; never {@code null}
+     */
+    VectorClock frontier();
+
+    /**
+     * Stops the consumer and releases all resources.
+     */
+    @Override
+    void close();
+
+    /**
+     * Creates a new, running {@code CausalConsumer} over the given topics.
+     *
+     * <p>{@link BufferingPolicy.DeadLetter DeadLetter} policies are not supported by this
+     * facade — there is no parameter for a dead-letter sink — and are rejected. To dead-letter
+     * evicted records, build a custom topology with
+     * {@link io.parsley.stream.CausalProcessorSupplier}'s dead-letter factory instead.
+     *
+     * @param <K>            the record key type
+     * @param <V>            the record value type
+     * @param topics         the Kafka topics to subscribe to; must not be empty
+     * @param policy         the buffering policy; must not be a {@code DeadLetter} policy
+     * @param consumerConfig additional consumer configuration (overrides defaults derived from
+     *                       {@code streamsConfig})
+     * @param streamsConfig  Kafka Streams configuration; must include at minimum
+     *                       {@code application.id} and {@code bootstrap.servers}
+     * @return a new, running {@code CausalConsumer}
+     * @throws IllegalArgumentException if {@code policy} is a
+     *                                  {@link BufferingPolicy.DeadLetter DeadLetter} policy
+     */
+    static <K, V> CausalConsumer<K, V> create(
+            Collection<String> topics,
+            BufferingPolicy policy,
+            Map<String, Object> consumerConfig,
+            Map<String, Object> streamsConfig) {
+        return new KafkaCausalConsumer<>(topics, policy, consumerConfig, streamsConfig);
+    }
+}

@@ -1,597 +1,127 @@
 # Parsley
 
-A library for causal consistency atop totally ordered messaging technologies — Kafka today; Kinesis and Pulsar planned.
+Causal consistency for Kafka — producers that encode a vector clock onto every message,
+consumers that deliver multiple topics in causal order, and Kafka Streams topologies built from
+causally consistent processors.
 
----
+A producer stamps each message with a **vector clock** (a snapshot of its causal state). A
+consumer keeps a **frontier** (its own vector clock) and holds back any message whose causal
+dependencies it has not yet observed, releasing it once the frontier catches up. The whole library
+is a single jar with three entry points — producer, consumer, and a Streams processor — over a
+shared vocabulary of value types.
 
-## What is Parsley?
+## The problem
 
-Parsley enforces causal message ordering across distributed services. Its abstractions — vector clocks, fence tokens, and buffering policies — are broker-agnostic, and the buffering engine itself is built entirely against those abstractions. The library ships with a complete adapter for Kafka Streams (`parsley-kafka`) and a JDK-only fence token encryption module (`parsley-crypto-jdk-aes`). Both can be replaced with alternative implementations of the same SPIs.
+A consumer reads a price from `prices-0` at offset 27 and, on that basis, produces an order to
+`orders`. A downstream consumer of `orders` processes that order while its own `prices` consumer is
+only at offset 24 — acting on an order whose causal premise it has not yet seen. This is a causal
+violation, and it happens under normal operation (consumer lag on one topic racing ahead of a write
+to another). Kafka's per-partition ordering does not prevent it; Parsley does.
 
-### Modules
+The guarantee is **causal consistency**: if A causally precedes B, every consumer observes A before
+B — stronger than eventual consistency, weaker than linearisability, with a predictable rather than
+load-dependent latency cost.
 
-| Module | Contents | Depends on |
-|---|---|---|
-| `parsley-api` | Every abstraction, value type, and SPI (`io.parsley`) | — |
-| `parsley-core` | The buffering engine, fence-token factory, and SPI resolution (`io.parsley.core`) | `parsley-api` |
-| `parsley-kafka` | The Kafka adapter: `KafkaVectorClock`, `KafkaVectorClockSerialiser`, `CausalConsumer`/`CausalProducer`/`CausalProcessorSupplier` | `parsley-api`, `parsley-core`, Kafka |
-| `parsley-crypto-jdk-aes` | AES-256-GCM `FenceTokenEncryption` implementation | `parsley-api` |
+## How it works
 
-Dependency direction is strict: broker adapters build on the engine (`kafka → core → api`), and SPI implementors depend **only** on `parsley-api`. Future broker adapters (`parsley-kinesis`, `parsley-pulsar`) slot in beside `parsley-kafka` without touching api or core.
+Every message carries the producer's vector clock as a header. When a message arrives, the consumer
+checks whether its frontier already satisfies that clock; if so it forwards immediately, otherwise
+it holds the message in a **causal buffer** until the frontier catches up. If the frontier never
+catches up, a configurable **buffering policy** forwards out-of-order, drops, or dead-letters the
+record.
 
----
+The consumer and the processor supplier run on Kafka Streams internally, inheriting its
+changelog-backed state stores, rebalance-safe restoration, and transactional forwarding. The
+frontier is persisted before each record is forwarded, so it survives restarts.
 
-## The Problem
+## Getting started
 
-Consider two topics: `price` and `order`. A consumer reads a price update from `price-0` at offset 27, and on the basis of that observation produces an order to `order`. A downstream consumer of `order` processes that order — but its consumer of `price` is only at offset 24. It is now acting on an order whose causal premise it has not yet observed.
-
-This is a causal violation. It occurs under normal operating conditions — it is simply consumer lag on one topic racing ahead of a write to another. Kafka's per-partition ordering guarantee does not prevent it.
-
-Parsley detects and prevents this class of violation transparently, without changes to application logic.
-
----
-
-## Consistency Model
-
-Parsley provides **causal consistency** — if event A causally precedes event B, every consumer observes A before B. This is stronger than eventual consistency but weaker than linearisability, and carries a predictable latency overhead rather than a load-dependent one.
-
----
-
-## How It Works
-
-### Core protocol
-
-Every message carries a **vector clock** header — a compact snapshot of the producer's causal state at the time of writing. The vector clock is derived from a **fence token** supplied explicitly by the application.
-
-A consumer maintains a **frontier**: its own current vector clock reflecting everything it has processed so far. When a message arrives, the consumer checks whether its frontier satisfies the message's clock — i.e. whether the consumer has already processed everything the message causally depends on. If yes, the message is forwarded immediately. If not, it is held in a **causal buffer** until the frontier catches up.
-
-If the frontier never advances far enough, a configurable **buffering policy** decides what to do: forward out-of-order, drop, or route to a dead-letter destination.
-
-### Kafka Streams implementation
-
-In `parsley-kafka`, the vector clock is a `KafkaVectorClock` — a map from `TopicPartition` to the highest observed offset on that partition. The frontier and buffer are maintained by the broker-neutral `CausalEngine` in `parsley-core`, driven by `CausalProcessor` — a thin Kafka Streams `Processor` binding that runs inside the normal Streams lifecycle and persists the frontier to a state store.
-
-`CausalConsumer` is a high-level facade that wires this processor up internally and exposes a `poll()`-based API. `CausalProcessorSupplier` exposes the same processor for applications building their own topologies. `CausalProducer` attaches the clock as a Kafka message header before producing.
-
----
-
-## Getting Started
-
-### Installation
-
-Parsley is published to [GitHub Packages](https://github.com/tobyjamesclements?tab=packages&repo_name=parsley). GitHub Packages requires authentication even for public repositories — you need a GitHub account and a [personal access token](https://github.com/settings/tokens) with the `read:packages` scope.
-
-**1. Add credentials to `~/.m2/settings.xml`**
+Parsley is published to [GitHub Packages](https://github.com/tobyjamesclements?tab=packages&repo_name=parsley),
+which requires a GitHub account and a [PAT](https://github.com/settings/tokens) with `read:packages`
+even for public repos. Add credentials to `~/.m2/settings.xml` (a `<server>` with id `github-parsley`),
+then declare the repository and dependency:
 
 ```xml
-<settings>
-  <servers>
-    <server>
-      <id>github-parsley</id>
-      <username>YOUR_GITHUB_USERNAME</username>
-      <password>YOUR_PAT</password>
-    </server>
-  </servers>
-</settings>
-```
+<repository>
+  <id>github-parsley</id>
+  <url>https://maven.pkg.github.com/tobyjamesclements/parsley</url>
+</repository>
 
-**2. Add the repository to your project**
-
-Maven — add to `pom.xml`:
-```xml
-<repositories>
-  <repository>
-    <id>github-parsley</id>
-    <url>https://maven.pkg.github.com/tobyjamesclements/parsley</url>
-  </repository>
-</repositories>
-```
-
-Gradle — add to `build.gradle.kts` (credentials can also be set via `~/.gradle/gradle.properties` as `gpr.user` / `gpr.key`):
-```kotlin
-repositories {
-    maven {
-        url = uri("https://maven.pkg.github.com/tobyjamesclements/parsley")
-        credentials {
-            username = providers.gradleProperty("gpr.user").orElse(System.getenv("GITHUB_ACTOR")).get()
-            password = providers.gradleProperty("gpr.key").orElse(System.getenv("GITHUB_TOKEN")).get()
-        }
-    }
-}
-```
-
-### Dependencies
-
-`parsley-kafka` is the only required module — it brings in `parsley-api` and `parsley-core` transitively. It bundles `KafkaVectorClockSerialiser` (the `VectorClockSerialiser` SPI implementation, auto-registered via `ServiceLoader`) alongside all Kafka Streams integration.
-
-`parsley-crypto-jdk-aes` is an optional module providing the default `FenceTokenEncryption` SPI implementation (AES-256-GCM using only JDK APIs, auto-registered via `ServiceLoader`). Omit it and supply your own `FenceTokenEncryption` SPI if you need persistent, cross-process, or KMS-backed encryption (see [JDK Encryption Implementation](#jdk-encryption-implementation)).
-
-**Maven:**
-```xml
-<!-- Required: Kafka Streams integration + bundled VectorClockSerialiser -->
 <dependency>
-    <groupId>io.parsley</groupId>
-    <artifactId>parsley-kafka</artifactId>
-    <version>0.1.0-SNAPSHOT</version>
-</dependency>
-
-<!-- Optional default: AES-256-GCM FenceToken encryption (ephemeral per-JVM key) -->
-<dependency>
-    <groupId>io.parsley</groupId>
-    <artifactId>parsley-crypto-jdk-aes</artifactId>
-    <version>0.1.0-SNAPSHOT</version>
+  <groupId>io.parsley</groupId>
+  <artifactId>parsley</artifactId>
+  <version>0.1.0-SNAPSHOT</version>
 </dependency>
 ```
 
-**Gradle:**
-```kotlin
-dependencies {
-    implementation("io.parsley:parsley-kafka:0.1.0-SNAPSHOT")
-    implementation("io.parsley:parsley-crypto-jdk-aes:0.1.0-SNAPSHOT")  // optional
-}
-```
+`parsley` pulls in `kafka-streams` and `kafka-clients` transitively. Java 25 is required
+(`--release 25`). Build from source with `mvn install`; the suite is verified with
+[PIT](https://pitest.org) via `mvn -Pmutation test` (report-only).
 
-`parsley-kafka` brings in `kafka-streams` and `kafka-clients` transitively. Java 25 is required (the project compiles with `--release 25`).
+## Usage
 
-### Local build (alternative)
-
-To build from source and install to the local Maven cache:
-
-```bash
-git clone https://github.com/tobyjamesclements/parsley.git
-cd parsley
-mvn install -DskipTests
-```
-
-### Mutation testing
-
-The test suite is verified with [PIT](https://pitest.org) mutation testing:
-
-```bash
-mvn -Pmutation test                      # all modules
-mvn -Pmutation test -pl parsley-core     # one module
-```
-
-Reports land in each module's `target/pit-reports/index.html`. The run is report-only
-(no threshold gating). Two caveats when reading the reports:
-
-- PIT is per-module, so a handful of `parsley-kafka` mutants survive that only the
-  cross-module integration tests in `parsley-it` can observe: the `KafkaStreams`
-  lifecycle calls (`start()`/`close()`) in `DefaultCausalConsumer` and the
-  interrupt-status restoration in `poll`. They are covered end-to-end, just not
-  where PIT can see.
-- `parsley-it` is excluded from mutation runs (Testcontainers-based broker tests
-  make mutant-by-mutant execution impractical).
-
-### Usage
-
-#### Consuming with causal ordering
-
-`CausalConsumer` is a drop-in replacement for a plain Kafka consumer that enforces causal consistency automatically:
+**Consume in causal order** — a drop-in replacement for a plain Kafka consumer:
 
 ```java
-CausalConsumer<String, String> consumer = CausalConsumer.create(
-    List.of("prices", "orders"),
-    BufferingPolicy.deadLetter(
-        BufferLimit.ofDuration(Duration.ofSeconds(30)), "parsley-dead-letter"),
-    Map.of(
-        ConsumerConfig.BOOTSTRAP_SERVERS_CONFIG, "localhost:9092",
-        ConsumerConfig.GROUP_ID_CONFIG,          "my-consumer-group"),
-    Map.of(
-        StreamsConfig.APPLICATION_ID_CONFIG, "my-causal-app"));
+try (CausalConsumer<String, String> consumer = CausalConsumer.create(
+        List.of("prices", "orders"),
+        BufferingPolicy.deadLetter(BufferLimit.ofDuration(Duration.ofSeconds(30)), "parsley-dead-letter"),
+        Map.of(ConsumerConfig.GROUP_ID_CONFIG, "my-group"),
+        Map.of(StreamsConfig.APPLICATION_ID_CONFIG,    "my-app",
+               StreamsConfig.BOOTSTRAP_SERVERS_CONFIG, "localhost:9092"))) {
 
-while (running) {
     ConsumerRecords<String, String> records = consumer.poll(Duration.ofMillis(100));
-    for (ConsumerRecord<String, String> record : records) {
-        process(record);
-    }
+    records.forEach(this::process);
 }
-consumer.close();
 ```
 
-#### Producing with causal context
-
-Obtain a `FenceToken` from the consumer after polling and pass it to every produce call. The token encodes the consumer's causal position and is attached as a message header for downstream processors to evaluate:
+**Produce with causal context** — pass the consumer's frontier; it is attached as a header:
 
 ```java
-CausalProducer<String, String> producer = CausalProducer.create(
-    Map.of(ProducerConfig.BOOTSTRAP_SERVERS_CONFIG, "localhost:9092"));
-
-FenceToken<KafkaVectorClock> token = consumer.fenceToken();
-producer.send(new ProducerRecord<>("output-topic", key, value), token);
+producer.send(new ProducerRecord<>("orders", key, value), consumer.frontier());
 ```
 
-#### Integrating into an existing Kafka Streams topology
-
-Use `CausalProcessorSupplier` directly when building a custom topology with `StreamsBuilder`:
+**Inside a Streams topology** — the frontier state store is registered automatically:
 
 ```java
-CausalProcessorSupplier<String, String> supplier = new CausalProcessorSupplier<>(
+CausalProcessorSupplier<String, String> supplier = CausalProcessorSupplier.create(
     BufferingPolicy.ignore(BufferLimit.ofDuration(Duration.ofSeconds(30))),
-    (record, reason) -> log.warn("Causal violation on {}: {}", record.topic(), reason),
-    new KafkaVectorClockSerialiser());
+    (record, reason) -> log.warn("Causal violation on {}: {}", record.topic(), reason));
 
-StreamsBuilder builder = new StreamsBuilder();
 builder.stream(List.of("prices", "orders"), Consumed.with(Serdes.String(), Serdes.String()))
        .process(supplier)
-       .to("output-topic", Produced.with(Serdes.String(), Serdes.String()));
-
-KafkaStreams streams = new KafkaStreams(builder.build(), streamsConfig);
-streams.start();
+       .to("output-topic");
 ```
 
-State store registration, frontier persistence, and buffer lifecycle are all handled by `CausalProcessorSupplier` — no additional configuration is required.
-
----
-
-## The Parsley API
-
-These types live in `parsley-api` (`io.parsley`). They have no Kafka or external dependency — they are the broker-agnostic protocol definitions. SPI implementors depend only on this module.
-
-### VectorClock
+**Propagate across services** — a vector clock is also a causal token you can hand another service
+(e.g. over HTTP) so it reads consistently elsewhere. Extract it from a consumed record, serialise,
+and apply *your own* encryption/transport (Parsley ships none); the receiver rebuilds it and gates
+its read:
 
 ```java
-public interface VectorClock<T extends VectorClock<T>> {
-    boolean satisfiedBy(T frontier);
-    T merge(T other);
-}
+VectorClock context = VectorClock.fromRecord(reply).orElseGet(consumer::frontier);
+send(myCipher.encrypt(context.toBytes()));                 // → HTTP, your transport
+// receiver: VectorClock.fromBytes(...).satisfiedBy(localFrontier)
 ```
 
-An opaque, self-typed snapshot of causal progress. `satisfiedBy(frontier)` returns `true` when `frontier` has observed everything this clock depends on — i.e. the receiver is ready to process a message carrying this clock. `merge(other)` returns the causal union: the earliest clock that dominates both this and `other`.
-
-The self type means a concrete clock only ever compares against clocks of its own kind — `KafkaVectorClock implements VectorClock<KafkaVectorClock>` — with no casts. The interface exposes no partition-level detail; broker modules define their own partition and position types (Kafka's `TopicPartition` → offset, a future Kinesis shard → sequence number). The `VectorClocks` helper class supplies the standard map-based `satisfied`/`merge`/`advance` algebra so a broker clock is a ~25-line record.
-
-### CausalRecord
-
-```java
-public record CausalRecord<K, V, T extends VectorClock<T>>(
-    K key, V value, long timestamp,
-    List<CausalHeader> headers,
-    byte[] encodedDependencies,   // raw bytes of the parsley-vector-clock attribute, or null
-    T position,                   // a clock at this record's own source coordinate
-    String source) { }            // e.g. "orders-3@27", for diagnostics
-```
-
-The broker-neutral message envelope the engine processes. Adapters convert their native record type (e.g. Kafka's `ConsumerRecord`) to and from `CausalRecord`.
-
-### FenceToken
-
-```java
-public interface FenceToken<T extends VectorClock<T>> {
-    String encode();
-    T vectorClock();
-}
-```
-
-An opaque, encrypted, URL-safe token encoding a `VectorClock`. Intended for cross-service causal propagation — e.g. embedding in HTTP response headers so a downstream service can assert "don't act on this until you have caught up to my causal state."
-
-Tokens are created and decoded by the `FenceTokens` factory in `parsley-core`: `FenceTokens.of(clock)` wraps a clock in a new token, `encode()` produces a URL-safe Base64 string (encrypted via the `FenceTokenEncryption` SPI), and `FenceTokens.decode(encoded)` reconstructs the token and recovers the clock via `vectorClock()`.
-
-### BufferLimit
-
-Controls when a buffered record is evicted.
-
-```java
-public sealed interface BufferLimit {
-    static BufferLimit ofDuration(Duration duration);
-    static BufferLimit ofSize(int messages);
-    static BufferLimit ofBytes(long bytes);
-    static BufferLimit ofFrontierAdvancement(long offsets);
-    static BufferLimit first(BufferLimit... limits);
-}
-```
-
-| Limit | Eviction trigger |
-|---|---|
-| `ofDuration(Duration)` | Wall clock time since the record was buffered |
-| `ofSize(int)` | Buffer reaches this many records (the whole buffer is evicted) |
-| `ofBytes(long)` | Buffer exceeds this many bytes *(not yet implemented)* |
-| `ofFrontierAdvancement(long)` | Frontier has advanced this many times *(not yet implemented)* |
-| `first(BufferLimit...)` | Whichever constituent limit fires first |
-
-### BufferingPolicy
-
-Defines what happens to a record when its `BufferLimit` fires.
-
-```java
-public sealed interface BufferingPolicy {
-    static BufferingPolicy ignore(BufferLimit limit);
-    static BufferingPolicy drop(BufferLimit limit);
-    static BufferingPolicy deadLetter(BufferLimit limit, String destination);
-}
-```
-
-| Policy | Behaviour on eviction |
-|---|---|
-| `ignore(limit)` | Forward out-of-causal-order, report `LIMIT_REACHED` violation |
-| `drop(limit)` | Discard silently, report `LIMIT_REACHED` violation |
-| `deadLetter(limit, destination)` | Route to the named destination (e.g. a Kafka topic), report `LIMIT_REACHED` violation |
-
-Every policy makes a genuine attempt at causal consistency before falling back. The dead-letter policy is recommended for production — timed-out records are recoverable and retain their vector clock headers for diagnostics.
-
-### VectorClockSerialiser SPI
-
-```java
-public interface VectorClockSerialiser<T extends VectorClock<T>> {
-    byte[] serialise(T clock);
-    T deserialise(byte[] bytes);
-}
-```
-
-Controls the binary wire format of vector clock attributes. Discovered via `ServiceLoader` and resolved by `ParsleyServices` (see [Selecting SPI implementations](#selecting-spi-implementations--parsleyproperties)). `parsley-kafka` registers `KafkaVectorClockSerialiser`. Replace it by registering an alternative in `META-INF/services/io.parsley.VectorClockSerialiser` and, if more than one is registered, selecting it in `parsley.properties`.
-
-### FenceTokenEncryption SPI
-
-```java
-public interface FenceTokenEncryption {
-    String encrypt(byte[] data);
-    byte[] decrypt(String encoded);
-}
-```
-
-Controls how fence tokens are encrypted and encoded. Discovered via `ServiceLoader`. The default implementation is `JdkFenceTokenEncryption`, in `parsley-crypto-jdk-aes`. See [JDK Encryption Implementation](#jdk-encryption-implementation) for key lifecycle details.
-
-### CausalBuffer SPI
-
-```java
-public interface CausalBuffer<K, V, T extends VectorClock<T>> {
-    void add(CausalRecord<K, V, T> record, T dependencies);
-    List<CausalRecord<K, V, T>> drain(T frontier);
-    List<CausalRecord<K, V, T>> evict(BufferLimit limit, CausalViolationHandler handler);
-    int size();
-}
-```
-
-The buffer abstraction underlying `BufferingPolicy`, broker-neutral and generic over the clock type. `drain(frontier)` returns and removes all records whose dependencies are satisfied by `frontier`. `evict(limit, handler)` forcibly removes records when a limit fires, invoking `handler` for each, and returns records to forward downstream (non-empty only for the `Ignore` policy — `Drop` and `DeadLetter` handle forwarding themselves).
-
-The three default implementations (returned by `io.parsley.core.CausalBuffers.create()`) cover all three `BufferingPolicy` variants. Implement this interface directly for custom buffering — bounded queues, persistent stores, priority ordering.
-
-### CausalViolationHandler
-
-```java
-@FunctionalInterface
-public interface CausalViolationHandler {
-    void onViolation(CausalRecord<?, ?, ?> record, CausalViolationReason reason);
-    static CausalViolationHandler throwing();
-    static CausalViolationHandler noop();
-}
-```
-
-Callback invoked when a causal violation is detected. `CausalViolationReason` has three values:
-
-| Reason | Cause |
-|---|---|
-| `MISSING_HEADER` | Record carried no `parsley-vector-clock` attribute (non-Parsley producer) |
-| `UNRESOLVABLE_CLOCK` | Attribute present but could not be deserialised |
-| `LIMIT_REACHED` | Record evicted because a `BufferLimit` fired |
-
-`throwing()` throws `CausalViolationException` on every violation. `noop()` silently ignores them. Lambda syntax is idiomatic for custom handlers.
-
-### ParsleyMetrics
-
-```java
-public interface ParsleyMetrics {
-    void onMessageBuffered();
-    void onMessageReleased(Duration bufferDuration);
-    void onViolation(CausalViolationReason reason);
-    void onFrontierAdvanced(VectorClock<?> frontier);
-    static ParsleyMetrics noop();
-}
-```
-
-Parsley emits no metrics or logs directly. Bind this interface to Micrometer, OpenTelemetry, or any observability framework already in use. `ParsleyMetrics.noop()` is a do-nothing default.
-
----
-
-## The Engine (`parsley-core`)
-
-These types live in `parsley-core` (`io.parsley.core`). They implement the causal protocol entirely against the API — no broker types appear anywhere in the module. Broker adapters drive the engine; application code mostly interacts with `FenceTokens`.
-
-### CausalEngine
-
-```java
-public final class CausalEngine<K, V, T extends VectorClock<T>> {
-    List<CausalRecord<K, V, T>> onRecord(CausalRecord<K, V, T> record); // records to forward, in order
-    List<CausalRecord<K, V, T>> evictNow();                            // duration-limit tick
-    T frontier();
-    Optional<Duration> evictionInterval();
-}
-```
-
-The buffering engine. An adapter feeds each incoming record to `onRecord` and forwards the returned records downstream, in order. The engine classifies the record (missing/unresolvable clock → violation; satisfied → forward; otherwise → buffer), advances the frontier, and cascades buffered releases as the frontier moves. A `FrontierListener` supplied at construction fires before each record is returned, so adapters can persist the frontier ahead of every forward.
-
-### FenceTokens
-
-```java
-public final class FenceTokens {
-    static <T extends VectorClock<T>> FenceToken<T> of(T clock);
-    static <T extends VectorClock<T>> FenceToken<T> decode(String encoded);
-    // explicit-service overloads also exist for tests and custom wiring
-}
-```
-
-Creates and decodes fence tokens using the SPI implementations resolved by `ParsleyServices`. Both factories share one `FenceTokenEncryption` instance per JVM, so tokens created and decoded in the same process always use the same key.
-
-### Selecting SPI implementations — `parsley.properties`
-
-SPI implementations are registered via `ServiceLoader` (a `META-INF/services` file or a module `provides` declaration) and resolved deterministically by `ParsleyServices`:
-
-1. If a `parsley.properties` file at the classpath root declares an implementation for the SPI, that one is used. Declaring a class that is not registered is an error.
-2. If nothing is declared and exactly one implementation is registered, it is used.
-3. If nothing is declared and zero or multiple implementations are registered, resolution fails fast with a message naming the candidates.
-
-```properties
-# parsley.properties — only needed when more than one provider is registered
-io.parsley.VectorClockSerialiser=com.example.MyCustomSerialiser
-io.parsley.FenceTokenEncryption=io.parsley.crypto.jdk.aes.JdkFenceTokenEncryption
-```
-
-The common case — one serialiser from your broker adapter, one encryption from `parsley-crypto-jdk-aes` — needs no configuration file at all.
-
----
-
-## Kafka Streams Implementation
-
-These types live in `parsley-kafka`. They are the Kafka-specific implementation of the core abstractions — not the abstractions themselves.
-
-### KafkaVectorClock
-
-```java
-// io.parsley.kafka
-public record KafkaVectorClock(Map<TopicPartition, Long> positions) implements VectorClock<KafkaVectorClock> {
-    public static KafkaVectorClock empty();
-    public KafkaVectorClock advance(TopicPartition tp, long offset);
-
-    @Override public boolean satisfiedBy(KafkaVectorClock frontier);
-    @Override public KafkaVectorClock merge(KafkaVectorClock other);
-}
-```
-
-The Kafka-specific `VectorClock` — a map from `TopicPartition` to highest observed offset, delegating its algebra to `VectorClocks`. `positions()` is the record component accessor — not present on the `VectorClock` interface, so partition-level inspection stays a Kafka-side concern. `advance(tp, offset)` returns a new clock with that partition advanced to `max(current, offset)`.
-
-### KafkaVectorClockSerialiser
-
-```java
-// io.parsley.kafka  (implements VectorClockSerialiser<KafkaVectorClock>, auto-registered via ServiceLoader)
-public final class KafkaVectorClockSerialiser implements VectorClockSerialiser<KafkaVectorClock> { ... }
-```
-
-Compact binary serialiser for `KafkaVectorClock`. Wire format: `[int count]` followed by `[short topicLen][byte[] topic UTF-8][int partition][long offset]` per entry. Registered in `META-INF/services/io.parsley.VectorClockSerialiser` — available automatically when `parsley-kafka` is on the classpath.
-
-Pass an instance explicitly when constructing `CausalProcessorSupplier`. Use the same instance on both producer and consumer sides to ensure wire-format compatibility.
-
-### CausalConsumer
-
-```java
-// io.parsley.kafka
-public interface CausalConsumer<K, V> extends Closeable {
-    static <K, V> CausalConsumer<K, V> create(
-        Collection<String> topics,
-        BufferingPolicy policy,
-        Map<String, Object> consumerConfig,
-        Map<String, Object> streamsConfig);
-
-    ConsumerRecords<K, V> poll(Duration timeout);
-    KafkaVectorClock frontier();
-    FenceToken<KafkaVectorClock> fenceToken();
-    void close();
-}
-```
-
-High-level Kafka consumer that delivers records in causal order. Backed internally by a Kafka Streams topology built around `CausalProcessorSupplier`. `frontier()` returns the current `KafkaVectorClock`. `fenceToken()` wraps the frontier in an encrypted token for propagation.
-
-### CausalProducer
-
-```java
-// io.parsley.kafka
-public interface CausalProducer<K, V> {
-    static <K, V> CausalProducer<K, V> create(Map<String, Object> config);
-    Future<RecordMetadata> send(ProducerRecord<K, V> record, FenceToken<KafkaVectorClock> token);
-    Future<RecordMetadata> send(ProducerRecord<K, V> record, FenceToken<KafkaVectorClock> token, Callback callback);
-    void close();
-}
-```
-
-Kafka producer that attaches the vector clock from `token` as a `parsley-vector-clock` message header before producing. The producer has no internal frontier — it is a transport for the application's causal claim. The token must come from a Parsley-aware source (typically `CausalConsumer.fenceToken()`).
-
-### CausalProcessorSupplier
-
-```java
-// io.parsley.kafka
-public final class CausalProcessorSupplier<K, V> implements ProcessorSupplier<K, V, K, V> {
-
-    public CausalProcessorSupplier(
-        BufferingPolicy policy,
-        CausalViolationHandler violationHandler,
-        VectorClockSerialiser<KafkaVectorClock> serialiser);
-
-    // For DeadLetter policy — routes evicted records to the dead-letter sink
-    public CausalProcessorSupplier(
-        BufferingPolicy.DeadLetter policy,
-        CausalViolationHandler violationHandler,
-        VectorClockSerialiser<KafkaVectorClock> serialiser,
-        Consumer<ConsumerRecord<K, V>> deadLetterSink);
-
-    @Override public Processor<K, V, K, V> get();
-    @Override public Set<StoreBuilder<?>> stores(); // frontier + buffer stores, registered automatically
-}
-```
-
-The integration point between Parsley and Kafka Streams. Pass to `KStream.process()` to insert causal evaluation into any topology. State stores (frontier persistence, buffer) are registered automatically via `stores()`.
-
-### CausalStreams
-
-```java
-// io.parsley.kafka
-public final class CausalStreams {
-    public static <K, V> KStream<K, V> process(KStream<K, V> stream, CausalProcessorSupplier<K, V> supplier);
-    public static <K, V> KStream<K, V> process(KStream<K, V> stream, CausalProcessorSupplier<K, V> supplier, Named named);
-}
-```
-
-Convenience wrapper applying a `CausalProcessorSupplier` to a `KStream` and returning the result for chaining:
-
-```java
-KStream<String, Order> causal = CausalStreams.process(
-    builder.stream(List.of("price", "order")),
-    new CausalProcessorSupplier<>(policy, violationHandler, serialiser),
-    Named.as("causal-processor"));
-
-causal.filter(...).mapValues(...).to("output-topic");
-```
-
----
-
-## JDK Encryption Implementation
-
-`parsley-crypto-jdk-aes` provides `JdkFenceTokenEncryption` — an AES-256-GCM implementation of the `FenceTokenEncryption` SPI using only `javax.crypto`. It is auto-registered via `ServiceLoader` and requires no configuration.
-
-### Key lifecycle
-
-The no-arg constructor (used by `ServiceLoader`) generates a **fresh, random 256-bit AES key per JVM process**. Tokens produced by `FenceTokens.of()` are therefore only decodable within the same JVM. This is appropriate for single-process causal propagation (e.g. one service instance decorating outgoing Kafka records with its frontier).
-
-**Cross-process and cross-service use** — if fence tokens need to survive process restarts or cross service boundaries (e.g. embedded in HTTP headers between two separate deployments), you have two options:
-
-1. Inject a persistent key: `new JdkFenceTokenEncryption(yourSecretKey)` and pass it to the explicit-service overloads of `FenceTokens.of`/`FenceTokens.decode` instead of relying on `ServiceLoader`.
-2. Provide a custom `FenceTokenEncryption` SPI implementation (e.g. backed by AWS KMS, Vault, or a shared keystore) and register it in `META-INF/services/io.parsley.FenceTokenEncryption`.
-
----
-
-## Prerequisites
-
-`CausalProcessor` only provides a benefit when records arrive from multiple partitions concurrently. This arises when:
-
-- The processor subscribes to **multiple topics** (each with its own partition stream)
-- One consumer instance is assigned **multiple partitions** (fewer instances than total partitions)
-
-If a processor is assigned exactly one partition from one topic, Kafka already guarantees total order within that partition. Parsley adds overhead for no benefit in that configuration.
-
-### Co-partitioning
-
-For `CausalProcessor` to evaluate causal dependencies correctly, it must be assigned all partitions in its causally related partition set. A processor that sees only a subset cannot determine whether a message's dependencies have been satisfied by messages it never received.
-
-The recommended approach: co-partition causally related topics so that causally related messages share the same partition key and are assigned to the same partition number across all topics. Each `CausalProcessor` instance handles partition N across all topics independently, preserving horizontal scalability.
-
-If co-partitioning is impossible, a single instance must be assigned all partitions, limiting throughput to what one processor can handle.
-
-**Parsley does not detect or enforce co-partitioning.** A misconfigured topology will not fail at startup — it will silently evaluate causal dependencies against an incomplete partition set and produce incorrect results.
-
-## Design Decisions
-
-**Why Kafka Streams internally?**
-Streams provides changelog-backed state stores, rebalance-safe state restoration, and transactional forwarding as primitives. Using `ProcessorSupplier` as the integration point means Parsley inherits all of these guarantees without reimplementing them.
-
-**Why is `VectorClock` opaque?**
-The interface exposes only `satisfiedBy()` and `merge()` — the two operations the buffer needs. Exposing `Map<TopicPartition, Long> positions()` on the interface would couple `parsley-api` to Kafka. `KafkaVectorClock` exposes `positions()` as a concrete method; a future Kinesis or Pulsar implementation can define its own partition and position types without the interface dictating them.
-
-**Why per-protocol rather than per-topology scope?**
-Causal consistency is a property of message provenance, not topology membership. A message carries its causal history in its header regardless of which topology produced it. Any processor consuming that message can evaluate the header regardless of which topology it belongs to.
-
-**Why SPI for encryption and serialisation?**
-Key management and wire format are application concerns. The SPI pattern keeps `parsley-api` and `parsley-core` free of opinions and free of broker dependencies, while default implementations cover the common case without forcing a choice.
-
-**Why is the FenceToken required on every send?**
-The producer has no consumption frontier of its own — it is a transport for the application's causal claim. Requiring the token explicitly on every send makes the causal dependency visible at the call site and prevents accidental omission.
-
-**Why does `JdkFenceTokenEncryption` use an ephemeral key by default?**
-The `ServiceLoader`-managed singleton generates a new AES-256 key on first load. This is the right default for the common case — a single service instance tagging its own outgoing records with its own frontier, then decoding tokens it produced itself. It also avoids key distribution complexity. Cross-service or cross-process use requires a persistent key; that is an application-level decision and is intentionally not baked into the default.
+## Operating notes
+
+A causal processor only helps when records arrive from multiple partitions concurrently — multiple
+topics, or multiple partitions on one instance. With a single partition from a single topic, Kafka
+already gives total order and Parsley only adds overhead.
+
+For dependencies to be evaluated correctly, an instance must be assigned **all** partitions in a
+causally related set. The recommended approach is to co-partition related topics so related messages
+share a partition number across topics, letting each instance own partition N everywhere. **Parsley
+does not detect or enforce co-partitioning** — a misconfigured topology evaluates against an
+incomplete partition set silently.
+
+## Design notes
+
+- **Kafka Streams internally.** Using `ProcessorSupplier` as the integration point inherits
+  changelog-backed state, rebalance-safe restoration, and transactional forwarding for free.
+- **Frontier on every produce.** The producer holds no frontier of its own; passing the clock at
+  each `send` makes the causal claim explicit at the call site.
+- **One concrete `VectorClock`.** Parsley targets Kafka only, so the clock is a single concrete
+  value type that owns its wire format — no broker-neutral, self-typed indirection the library would
+  never use.
