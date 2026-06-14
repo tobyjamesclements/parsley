@@ -59,7 +59,7 @@ record CausalRecord<K, V>(
         return new ConsumerRecord<>(
                 sourcePartition.topic(), sourcePartition.partition(), sourceOffset,
                 timestamp, TimestampType.CREATE_TIME,
-                -1, -1,
+                -1, -1,                  // serialized key/value sizes: unknown, the record is already deserialised
                 key, value,
                 toHeaders(), Optional.empty());
     }

@@ -12,6 +12,15 @@
     <name>Parsley</name>
     <description>Causal consistency for Kafka producers, consumers, and Streams via vector clocks.</description>
 
+    <repositories>
+        <!-- Confluent artifacts (Avro serdes, Schema Registry client) are not on Maven Central.
+             Used only by the test scope. -->
+        <repository>
+            <id>confluent</id>
+            <url>https://packages.confluent.io/maven/</url>
+        </repository>
+    </repositories>
+
     <distributionManagement>
         <repository>
             <id>github</id>
@@ -22,11 +31,28 @@
 
     <properties>
         <kafka.version>4.3.0</kafka.version>
+        <confluent.version>8.0.0</confluent.version>
+        <avro.version>1.11.4</avro.version>
         <maven.compiler.release>25</maven.compiler.release>
         <pitest.version>1.25.4</pitest.version>
         <pitest.junit5.version>1.2.3</pitest.junit5.version>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
     </properties>
+
+    <dependencyManagement>
+        <dependencies>
+            <!-- Align all transitive Jackson artifacts to one version. Avro 1.11.x pins
+                 jackson-core low (2.14.3) while newer test deps bring jackson-databind 2.21.x;
+                 the BOM keeps core/databind/annotations in lock-step so Avro schema parsing works. -->
+            <dependency>
+                <groupId>com.fasterxml.jackson</groupId>
+                <artifactId>jackson-bom</artifactId>
+                <version>2.21.2</version>
+                <type>pom</type>
+                <scope>import</scope>
+            </dependency>
+        </dependencies>
+    </dependencyManagement>
 
     <dependencies>
         <dependency>
@@ -50,6 +76,21 @@
             <groupId>org.apache.kafka</groupId>
             <artifactId>kafka-streams-test-utils</artifactId>
             <version>${kafka.version}</version>
+            <scope>test</scope>
+        </dependency>
+        <!-- Confluent Avro serdes + Schema Registry client (incl. MockSchemaRegistry). Pulls in
+             kafka-avro-serializer, kafka-schema-registry-client, and org.apache.avro:avro. -->
+        <dependency>
+            <groupId>io.confluent</groupId>
+            <artifactId>kafka-streams-avro-serde</artifactId>
+            <version>${confluent.version}</version>
+            <scope>test</scope>
+        </dependency>
+        <!-- Pinned explicitly so the generated SpecificRecord classes match the runtime Avro. -->
+        <dependency>
+            <groupId>org.apache.avro</groupId>
+            <artifactId>avro</artifactId>
+            <version>${avro.version}</version>
             <scope>test</scope>
         </dependency>
         <dependency>
@@ -115,6 +156,47 @@
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-compiler-plugin</artifactId>
                 <version>3.13.0</version>
+            </plugin>
+            <!-- Generates test-only SpecificRecord classes from src/test/avro/*.avsc. -->
+            <plugin>
+                <groupId>org.apache.avro</groupId>
+                <artifactId>avro-maven-plugin</artifactId>
+                <version>${avro.version}</version>
+                <executions>
+                    <execution>
+                        <id>generate-test-avro</id>
+                        <phase>generate-test-sources</phase>
+                        <goals>
+                            <goal>schema</goal>
+                        </goals>
+                        <configuration>
+                            <sourceDirectory>${project.basedir}/src/test/avro</sourceDirectory>
+                            <outputDirectory>${project.build.directory}/generated-test-sources/avro</outputDirectory>
+                        </configuration>
+                    </execution>
+                </executions>
+            </plugin>
+            <!-- avro-maven-plugin registers its output as a MAIN source root; register it as a
+                 TEST source root instead so the generated SpecificRecords compile test-only and
+                 never ship in the published jar. -->
+            <plugin>
+                <groupId>org.codehaus.mojo</groupId>
+                <artifactId>build-helper-maven-plugin</artifactId>
+                <version>3.6.0</version>
+                <executions>
+                    <execution>
+                        <id>add-test-avro-sources</id>
+                        <phase>generate-test-sources</phase>
+                        <goals>
+                            <goal>add-test-source</goal>
+                        </goals>
+                        <configuration>
+                            <sources>
+                                <source>${project.build.directory}/generated-test-sources/avro</source>
+                            </sources>
+                        </configuration>
+                    </execution>
+                </executions>
             </plugin>
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>

@@ -4,7 +4,7 @@
  *
  * <h2>Entry points (interfaces with static factories)</h2>
  * <ul>
- *   <li>{@link io.parsley.CausalProcessor} &mdash; {@code CausalProcessor.create(...)} wraps your own
+ *   <li>{@link io.parsley.CausalProcessorSupplier} &mdash; {@code CausalProcessorSupplier.create(...)} wraps your own
  *       Kafka Streams {@code Processor} so its state access and {@code forward}s run behind the causal
  *       guarantee; drop it into {@code stream(...).process(...)}</li>
  *   <li>{@link io.parsley.CausalConsumer} &mdash; {@code CausalConsumer.create(...)} delivers records
@@ -29,6 +29,8 @@
  *       {@link io.parsley.BufferLimit.FirstLimit FirstLimit}</li>
  *   <li>{@link io.parsley.ViolationHandler} &mdash; violation callback, handed a
  *       {@link io.parsley.Violation} carrying the causal gap</li>
+ *   <li>{@link io.parsley.FrontierListener} &mdash; frontier-advance callback, the public way to
+ *       observe causal progress out of a {@link io.parsley.CausalProcessorSupplier}</li>
  * </ul>
  */
 package io.parsley;

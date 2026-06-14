@@ -64,6 +64,11 @@ final class BufferedRecordCodec<K, V> {
             out.writeLong(record.timestamp());
             writeNullable(out, keyBytes);
             writeNullable(out, valueBytes);
+            // The dependency clock is written twice, on purpose: the raw header bytes
+            // (encodedDependencies) so the restored record re-forwards byte-identically to how it
+            // arrived, and the decoded clock (dependencies.toBytes()) so the engine can re-gate on
+            // restore without re-parsing the header. They are equal in content but kept distinct so
+            // neither responsibility depends on the other's encoding.
             writeNullable(out, record.encodedDependencies());
             writeNullable(out, dependencies.toBytes());
             out.writeInt(record.headers().size());

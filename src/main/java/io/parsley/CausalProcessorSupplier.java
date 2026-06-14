@@ -23,7 +23,7 @@ import java.util.function.Function;
  * };
  *
  * builder.stream(List.of("prices", "orders"), Consumed.with(Serdes.String(), orderSerde))
- *        .process(CausalProcessor.create(user, BufferingPolicy.deadLetter(limit, "parsley-dlq"), onViolation,
+ *        .process(CausalProcessorSupplier.create(user, BufferingPolicy.deadLetter(limit, "parsley-dlq"), onViolation,
  *                                deadLetterSink, Serdes.String(), orderSerde))
  *        .to("output-topic");
  * }</pre>
@@ -57,7 +57,7 @@ import java.util.function.Function;
  * the produced messages. Held records are persisted to a changelog-backed buffer store (serialised
  * with the serdes you supply, resolved per source topic) so they survive a restart.
  */
-public interface CausalProcessor<KIn, VIn, KOut, VOut> extends ProcessorSupplier<KIn, VIn, KOut, VOut> {
+public interface CausalProcessorSupplier<KIn, VIn, KOut, VOut> extends ProcessorSupplier<KIn, VIn, KOut, VOut> {
 
     /**
      * Decorates {@code userSupplier} for a {@link BufferingPolicy.ForwardUnsafe ForwardUnsafe} or
@@ -75,7 +75,7 @@ public interface CausalProcessor<KIn, VIn, KOut, VOut> extends ProcessorSupplier
      * @return a decorated supplier ready for {@code stream(...).process(...)}
      * @throws IllegalArgumentException if {@code policy} is a {@code DeadLetter} policy
      */
-    static <KIn, VIn, KOut, VOut> CausalProcessor<KIn, VIn, KOut, VOut> create(
+    static <KIn, VIn, KOut, VOut> CausalProcessorSupplier<KIn, VIn, KOut, VOut> create(
             ProcessorSupplier<KIn, VIn, KOut, VOut> userSupplier,
             BufferingPolicy policy,
             ViolationHandler onViolation,
@@ -102,7 +102,7 @@ public interface CausalProcessor<KIn, VIn, KOut, VOut> extends ProcessorSupplier
      * @return a decorated supplier ready for {@code stream(...).process(...)}
      * @throws IllegalArgumentException if {@code policy} is a {@code DeadLetter} policy
      */
-    static <KIn, VIn, KOut, VOut> CausalProcessor<KIn, VIn, KOut, VOut> create(
+    static <KIn, VIn, KOut, VOut> CausalProcessorSupplier<KIn, VIn, KOut, VOut> create(
             ProcessorSupplier<KIn, VIn, KOut, VOut> userSupplier,
             BufferingPolicy policy,
             ViolationHandler onViolation,
@@ -132,20 +132,55 @@ public interface CausalProcessor<KIn, VIn, KOut, VOut> extends ProcessorSupplier
      * @return a decorated supplier ready for {@code stream(...).process(...)}
      * @throws IllegalArgumentException if {@code policy} is a {@code DeadLetter} policy
      */
-    static <KIn, VIn, KOut, VOut> CausalProcessor<KIn, VIn, KOut, VOut> create(
+    static <KIn, VIn, KOut, VOut> CausalProcessorSupplier<KIn, VIn, KOut, VOut> create(
             ProcessorSupplier<KIn, VIn, KOut, VOut> userSupplier,
             BufferingPolicy policy,
             ViolationHandler onViolation,
             Function<String, Serde<KIn>> keySerdeByTopic,
             Function<String, Serde<VIn>> valueSerdeByTopic,
             String storeName) {
+        return create(userSupplier, policy, onViolation, keySerdeByTopic, valueSerdeByTopic, storeName,
+                FrontierListener.noop());
+    }
+
+    /**
+     * As {@link #create(ProcessorSupplier, BufferingPolicy, ViolationHandler, Function, Function, String)}
+     * but with a {@link FrontierListener} that observes every advance of this processor's causal
+     * frontier (and the restored frontier at startup). Use it to track causal progress without
+     * reaching into the processor's internal state stores — this is how {@link CausalConsumer}
+     * surfaces {@link CausalConsumer#frontier()}.
+     *
+     * @param userSupplier      the user's processor supplier
+     * @param policy            the buffering policy; must not be a {@code DeadLetter} policy
+     * @param onViolation       the rich violation callback
+     * @param keySerdeByTopic   resolves the key serde for a given source topic
+     * @param valueSerdeByTopic resolves the value serde for a given source topic
+     * @param storeName         the state-store namespace for this processor's frontier and buffer
+     * @param frontierListener  invoked with the new frontier after every advance, and once with the
+     *                          restored frontier at startup; must be thread-safe (see
+     *                          {@link FrontierListener})
+     * @param <KIn>             the input key type
+     * @param <VIn>             the input value type
+     * @param <KOut>            the forwarded key type
+     * @param <VOut>            the forwarded value type
+     * @return a decorated supplier ready for {@code stream(...).process(...)}
+     * @throws IllegalArgumentException if {@code policy} is a {@code DeadLetter} policy
+     */
+    static <KIn, VIn, KOut, VOut> CausalProcessorSupplier<KIn, VIn, KOut, VOut> create(
+            ProcessorSupplier<KIn, VIn, KOut, VOut> userSupplier,
+            BufferingPolicy policy,
+            ViolationHandler onViolation,
+            Function<String, Serde<KIn>> keySerdeByTopic,
+            Function<String, Serde<VIn>> valueSerdeByTopic,
+            String storeName,
+            FrontierListener frontierListener) {
         if (policy instanceof BufferingPolicy.DeadLetter) {
             throw new IllegalArgumentException(
                     "DeadLetter policy requires a dead-letter sink — use a create() overload with a sink");
         }
         return new ParsleyProcessorSupplier<>(
                 userSupplier, policy, onViolation, null, keySerdeByTopic, valueSerdeByTopic,
-                storeName + "-frontier", storeName + "-buffer");
+                storeName + "-frontier", storeName + "-buffer", frontierListener);
     }
 
     /**
@@ -164,7 +199,7 @@ public interface CausalProcessor<KIn, VIn, KOut, VOut> extends ProcessorSupplier
      * @param <VOut>         the forwarded value type
      * @return a decorated supplier ready for {@code stream(...).process(...)}
      */
-    static <KIn, VIn, KOut, VOut> CausalProcessor<KIn, VIn, KOut, VOut> create(
+    static <KIn, VIn, KOut, VOut> CausalProcessorSupplier<KIn, VIn, KOut, VOut> create(
             ProcessorSupplier<KIn, VIn, KOut, VOut> userSupplier,
             BufferingPolicy.DeadLetter policy,
             ViolationHandler onViolation,
@@ -191,7 +226,7 @@ public interface CausalProcessor<KIn, VIn, KOut, VOut> extends ProcessorSupplier
      * @param <VOut>            the forwarded value type
      * @return a decorated supplier ready for {@code stream(...).process(...)}
      */
-    static <KIn, VIn, KOut, VOut> CausalProcessor<KIn, VIn, KOut, VOut> create(
+    static <KIn, VIn, KOut, VOut> CausalProcessorSupplier<KIn, VIn, KOut, VOut> create(
             ProcessorSupplier<KIn, VIn, KOut, VOut> userSupplier,
             BufferingPolicy.DeadLetter policy,
             ViolationHandler onViolation,
@@ -221,7 +256,7 @@ public interface CausalProcessor<KIn, VIn, KOut, VOut> extends ProcessorSupplier
      * @param <VOut>            the forwarded value type
      * @return a decorated supplier ready for {@code stream(...).process(...)}
      */
-    static <KIn, VIn, KOut, VOut> CausalProcessor<KIn, VIn, KOut, VOut> create(
+    static <KIn, VIn, KOut, VOut> CausalProcessorSupplier<KIn, VIn, KOut, VOut> create(
             ProcessorSupplier<KIn, VIn, KOut, VOut> userSupplier,
             BufferingPolicy.DeadLetter policy,
             ViolationHandler onViolation,

@@ -21,6 +21,9 @@ final class CausalBuffer<K, V> {
     /** A buffered record together with its decoded dependency clock. */
     record Buffered<K, V>(CausalRecord<K, V> record, VectorClock dependencies) {}
 
+    // Keyed by a monotonic sequence rather than stored in a List so each entry has a stable unique
+    // id; the LinkedHashMap preserves insertion (causal arrival) order, which drain() and evictAll()
+    // rely on to release records in the order they were received.
     private final LinkedHashMap<Long, Buffered<K, V>> buffer = new LinkedHashMap<>();
     private long sequence = 0;
 

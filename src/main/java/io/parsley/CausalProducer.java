@@ -21,6 +21,12 @@ import java.util.concurrent.Future;
  * producer.send(new ProducerRecord<>("orders", key, value), consumer.frontier());
  * }</pre>
  *
+ * <h2>Thread safety</h2>
+ * A {@code CausalProducer} is thread-safe and a single instance can be shared across threads, like
+ * the {@code KafkaProducer} it wraps. {@link #send} builds a fresh record carrying the clock header
+ * and never mutates the {@link org.apache.kafka.clients.producer.ProducerRecord} passed in, so the
+ * caller's record may be reused.
+ *
  * @param <K> the record key type
  * @param <V> the record value type
  */

@@ -15,13 +15,13 @@ import java.util.function.Consumer;
 import java.util.function.Function;
 
 /**
- * The {@link CausalProcessor} returned by {@code CausalProcessor.create(...)}: it wraps the user's
+ * The {@link CausalProcessorSupplier} returned by {@code CausalProcessorSupplier.create(...)}: it wraps the user's
  * supplier in a {@link ParsleyProcessor} and {@linkplain #stores() unions} the user's
  * declared state stores with Parsley's internal frontier and buffer stores, so the DSL wires all of
  * them to the same processor node. The user never names Parsley's internal stores.
  */
 final class ParsleyProcessorSupplier<KIn, VIn, KOut, VOut>
-        implements CausalProcessor<KIn, VIn, KOut, VOut> {
+        implements CausalProcessorSupplier<KIn, VIn, KOut, VOut> {
 
     private final ProcessorSupplier<KIn, VIn, KOut, VOut> userSupplier;
     private final BufferingPolicy policy;
@@ -31,6 +31,7 @@ final class ParsleyProcessorSupplier<KIn, VIn, KOut, VOut>
     private final Function<String, Serde<VIn>> valueSerdeByTopic;
     private final String frontierStoreName;
     private final String bufferStoreName;
+    private final FrontierListener frontierListener;
 
     ParsleyProcessorSupplier(ProcessorSupplier<KIn, VIn, KOut, VOut> userSupplier,
                                       BufferingPolicy policy,
@@ -50,6 +51,19 @@ final class ParsleyProcessorSupplier<KIn, VIn, KOut, VOut>
                                       Function<String, Serde<VIn>> valueSerdeByTopic,
                                       String frontierStoreName,
                                       String bufferStoreName) {
+        this(userSupplier, policy, onViolation, deadLetterSink, keySerdeByTopic, valueSerdeByTopic,
+                frontierStoreName, bufferStoreName, FrontierListener.noop());
+    }
+
+    ParsleyProcessorSupplier(ProcessorSupplier<KIn, VIn, KOut, VOut> userSupplier,
+                                      BufferingPolicy policy,
+                                      ViolationHandler onViolation,
+                                      Consumer<ConsumerRecord<KIn, VIn>> deadLetterSink,
+                                      Function<String, Serde<KIn>> keySerdeByTopic,
+                                      Function<String, Serde<VIn>> valueSerdeByTopic,
+                                      String frontierStoreName,
+                                      String bufferStoreName,
+                                      FrontierListener frontierListener) {
         this.userSupplier = userSupplier;
         this.policy = policy;
         this.onViolation = onViolation;
@@ -58,6 +72,7 @@ final class ParsleyProcessorSupplier<KIn, VIn, KOut, VOut>
         this.valueSerdeByTopic = valueSerdeByTopic;
         this.frontierStoreName = frontierStoreName;
         this.bufferStoreName = bufferStoreName;
+        this.frontierListener = frontierListener;
     }
 
     @Override
@@ -65,7 +80,7 @@ final class ParsleyProcessorSupplier<KIn, VIn, KOut, VOut>
         return new ParsleyProcessor<>(
                 userSupplier.get(), policy, onViolation, deadLetterSink,
                 new BufferedRecordCodec<>(keySerdeByTopic, valueSerdeByTopic),
-                frontierStoreName, bufferStoreName);
+                frontierStoreName, bufferStoreName, frontierListener);
     }
 
     @Override

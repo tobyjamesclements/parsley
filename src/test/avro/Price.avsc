@@ -1,0 +1,9 @@
+{
+  "namespace": "io.parsley.avro",
+  "type": "record",
+  "name": "Price",
+  "fields": [
+    {"name": "symbol", "type": "string"},
+    {"name": "price", "type": "double"}
+  ]
+}

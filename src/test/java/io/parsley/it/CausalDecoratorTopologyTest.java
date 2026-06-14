@@ -3,10 +3,11 @@ package io.parsley.it;
 import io.parsley.BufferLimit;
 import io.parsley.BufferingPolicy;
 import io.parsley.CausalViolationReason;
+import io.parsley.FrontierListener;
 import io.parsley.VectorClock;
 import io.parsley.Violation;
 import io.parsley.ViolationHandler;
-import io.parsley.CausalProcessor;
+import io.parsley.CausalProcessorSupplier;
 import org.apache.kafka.common.TopicPartition;
 import org.apache.kafka.common.header.Headers;
 import org.apache.kafka.common.header.internals.RecordHeader;
@@ -49,7 +50,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * Exercises {@link CausalProcessor#create} — the decorating causal processor — through a real Kafka Streams
+ * Exercises {@link CausalProcessorSupplier#create} — the decorating causal processor — through a real Kafka Streams
  * topology using the {@link TopologyTestDriver} (no broker required).
  */
 class CausalDecoratorTopologyTest {
@@ -118,7 +119,7 @@ class CausalDecoratorTopologyTest {
     @Test
     void admittedRecordRunsDelegateAndStampsTheMergedClock() {
         Topology topology = topology(
-                CausalProcessor.create(upperCaser(), BufferingPolicy.forwardUnsafe(BufferLimit.ofSize(100)),
+                CausalProcessorSupplier.create(upperCaser(), BufferingPolicy.forwardUnsafe(BufferLimit.ofSize(100)),
                         onViolation, Serdes.String(), Serdes.String()),
                 List.of("in"));
 
@@ -142,7 +143,7 @@ class CausalDecoratorTopologyTest {
     @Test
     void heldRecordIsBufferedThenDrainedThroughDelegate() {
         Topology topology = topology(
-                CausalProcessor.create(upperCaser(), BufferingPolicy.forwardUnsafe(BufferLimit.ofSize(100)),
+                CausalProcessorSupplier.create(upperCaser(), BufferingPolicy.forwardUnsafe(BufferLimit.ofSize(100)),
                         onViolation, Serdes.String(), Serdes.String()),
                 List.of("prices", "orders"));
 
@@ -174,7 +175,7 @@ class CausalDecoratorTopologyTest {
     @Test
     void strictDropDoesNotInvokeDelegateAndReportsTheGap() {
         Topology topology = topology(
-                CausalProcessor.create(upperCaser(), BufferingPolicy.drop(BufferLimit.ofSize(1)),
+                CausalProcessorSupplier.create(upperCaser(), BufferingPolicy.drop(BufferLimit.ofSize(1)),
                         onViolation, Serdes.String(), Serdes.String()),
                 List.of("orders"));
 
@@ -204,7 +205,7 @@ class CausalDecoratorTopologyTest {
         BufferingPolicy.DeadLetter policy =
                 (BufferingPolicy.DeadLetter) BufferingPolicy.deadLetter(BufferLimit.ofSize(1), "dlq");
         Topology topology = topology(
-                CausalProcessor.create(upperCaser(), policy, onViolation,
+                CausalProcessorSupplier.create(upperCaser(), policy, onViolation,
                         cr -> deadLettered.add(cr.value()), Serdes.String(), Serdes.String()),
                 List.of("orders"));
 
@@ -228,7 +229,7 @@ class CausalDecoratorTopologyTest {
     @Test
     void forwardUnsafeRunsDelegateUnderLagAndFlagsTheViolation() {
         Topology topology = topology(
-                CausalProcessor.create(upperCaser(), BufferingPolicy.forwardUnsafe(BufferLimit.ofSize(1)),
+                CausalProcessorSupplier.create(upperCaser(), BufferingPolicy.forwardUnsafe(BufferLimit.ofSize(1)),
                         onViolation, Serdes.String(), Serdes.String()),
                 List.of("orders"));
 
@@ -271,7 +272,7 @@ class CausalDecoratorTopologyTest {
             }
         };
         Topology topology = topology(
-                CausalProcessor.create(user, BufferingPolicy.forwardUnsafe(BufferLimit.ofSize(100)),
+                CausalProcessorSupplier.create(user, BufferingPolicy.forwardUnsafe(BufferLimit.ofSize(100)),
                         onViolation, Serdes.String(), Serdes.String()),
                 List.of("in"));
 
@@ -311,7 +312,7 @@ class CausalDecoratorTopologyTest {
             }
         };
         Topology topology = topology(
-                CausalProcessor.create(user, BufferingPolicy.forwardUnsafe(BufferLimit.ofSize(100)),
+                CausalProcessorSupplier.create(user, BufferingPolicy.forwardUnsafe(BufferLimit.ofSize(100)),
                         onViolation, Serdes.String(), Serdes.String()),
                 List.of("in"));
 
@@ -363,7 +364,7 @@ class CausalDecoratorTopologyTest {
             }
         };
         Topology topology = topology(
-                CausalProcessor.create(user, BufferingPolicy.forwardUnsafe(BufferLimit.ofSize(100)),
+                CausalProcessorSupplier.create(user, BufferingPolicy.forwardUnsafe(BufferLimit.ofSize(100)),
                         onViolation, Serdes.String(), Serdes.String()),
                 List.of("in"));
 
@@ -390,7 +391,7 @@ class CausalDecoratorTopologyTest {
     void bufferSerdesAreResolvedAndInvokedWithTheSourceTopic() {
         SpyStringSerde valueSpy = new SpyStringSerde();
         Topology topology = topology(
-                CausalProcessor.create(upperCaser(), BufferingPolicy.forwardUnsafe(BufferLimit.ofSize(100)),
+                CausalProcessorSupplier.create(upperCaser(), BufferingPolicy.forwardUnsafe(BufferLimit.ofSize(100)),
                         onViolation, t -> Serdes.String(), t -> valueSpy),
                 List.of("prices", "orders"));
 
@@ -416,11 +417,11 @@ class CausalDecoratorTopologyTest {
         // namespaces are what make multiple decorators possible.
         StreamsBuilder builder = new StreamsBuilder();
         builder.stream("orders", Consumed.with(Serdes.String(), Serdes.String()))
-                .process(CausalProcessor.create(upperCaser(), BufferingPolicy.forwardUnsafe(BufferLimit.ofSize(100)),
+                .process(CausalProcessorSupplier.create(upperCaser(), BufferingPolicy.forwardUnsafe(BufferLimit.ofSize(100)),
                         onViolation, t -> Serdes.String(), t -> Serdes.String(), "orders"))
                 .to("orders-out", Produced.with(Serdes.String(), Serdes.String()));
         builder.stream("prices", Consumed.with(Serdes.String(), Serdes.String()))
-                .process(CausalProcessor.create(upperCaser(), BufferingPolicy.forwardUnsafe(BufferLimit.ofSize(100)),
+                .process(CausalProcessorSupplier.create(upperCaser(), BufferingPolicy.forwardUnsafe(BufferLimit.ofSize(100)),
                         onViolation, t -> Serdes.String(), t -> Serdes.String(), "prices"))
                 .to("prices-out", Produced.with(Serdes.String(), Serdes.String()));
 
@@ -443,6 +444,36 @@ class CausalDecoratorTopologyTest {
             // Each decorator persisted only its own branch's frontier under its own namespace.
             assertEquals(Map.of(ORDERS_0, 0L), frontierIn(driver, "orders-frontier").positions());
             assertEquals(Map.of(PRICES_0, 0L), frontierIn(driver, "prices-frontier").positions());
+        }
+    }
+
+    @Test
+    void frontierListenerPublishesRestoredThenAdvancingFrontiers() {
+        List<VectorClock> observed = new ArrayList<>();
+        FrontierListener listener = observed::add;
+        Topology topology = topology(
+                CausalProcessorSupplier.create(upperCaser(), BufferingPolicy.forwardUnsafe(BufferLimit.ofSize(100)),
+                        onViolation, t -> Serdes.String(), t -> Serdes.String(), "in", listener),
+                List.of("in"));
+
+        try (TopologyTestDriver driver = new TopologyTestDriver(topology, config(null))) {
+            TestInputTopic<String, String> in =
+                    driver.createInputTopic("in", new StringSerializer(), new StringSerializer());
+
+            // The processor publishes its restored frontier at init — empty on a cold start — so an
+            // observer's view is correct before the first record is admitted.
+            assertEquals(List.of(VectorClock.empty()), observed,
+                    "the restored frontier is published once at startup");
+
+            in.pipeInput(new TestRecord<>("k", "a", clockHeader(VectorClock.empty())));
+            in.pipeInput(new TestRecord<>("k", "b", clockHeader(VectorClock.empty())));
+
+            assertEquals(
+                    List.of(VectorClock.empty(),
+                            VectorClock.empty().advance(IN_0, 0),
+                            VectorClock.empty().advance(IN_0, 1)),
+                    observed,
+                    "every frontier advance is published, in admission order");
         }
     }
 
@@ -473,9 +504,10 @@ class CausalDecoratorTopologyTest {
     }
 
     /** A String serde that records the topic argument passed to its serializer/deserializer. */
-    @SuppressWarnings("unused")
     static final class SpyStringSerde implements Serde<String> {
         final List<String> serializeTopics = new ArrayList<>();
+        // Recorded for symmetry/debugging; no test asserts on it yet.
+        @SuppressWarnings("unused")
         final List<String> deserializeTopics = new ArrayList<>();
         private final Serde<String> delegate = Serdes.String();
 

@@ -106,6 +106,8 @@ public record VectorClock(Map<TopicPartition, Long> positions) {
         Map<TopicPartition, Long> gap = new HashMap<>();
         for (Map.Entry<TopicPartition, Long> entry : positions.entrySet()) {
             long required = entry.getValue();
+            // An absent partition counts as observed offset -1 (one before offset 0), so a partition
+            // the frontier has never seen yields a gap of required - (-1) = required + 1.
             long observed = frontier.positions.getOrDefault(entry.getKey(), -1L);
             if (observed < required) {
                 gap.put(entry.getKey(), required - observed);

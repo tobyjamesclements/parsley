@@ -42,24 +42,36 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
     private final BufferedRecordCodec<KIn, VIn> codec;
     private final String frontierStoreName;
     private final String bufferStoreName;
+    private final FrontierListener frontierListener;
 
-    /** Frontier snapshots captured per advanced record during a single engine call, for stamping. */
+    // All mutable state below is confined to the single Kafka Streams thread that owns this task:
+    // process() and any wall-clock punctuator run on that same thread, interleaved but never
+    // concurrently. So the un-synchronized fields here are safe without further guarding.
+
+    // The engine advances the frontier once per admitted record and fires the FrontierListener each
+    // time, in the same order as the records it returns; we record those frontier values here so each
+    // delivered record can be stamped with the frontier as of *its own* admission (not the batch end).
     private final List<VectorClock> snapshots = new ArrayList<>();
 
     private ProcessorContext<KOut, VOut> context;
     private KeyValueStore<String, byte[]> frontierStore;
     private KeyValueStore<String, byte[]> bufferStore;
     private CausalEngine<KIn, VIn> engine;
+    // Read live by the stamping proxy: the clock to stamp on forward, and the source coordinate to
+    // report from recordMetadata(), for the record currently being delivered. Written and read on the
+    // one task thread (see above); volatile is belt-and-suspenders against any future caller that
+    // might read them off-thread, not a fix for a real race.
     private volatile VectorClock stampClock = VectorClock.empty();
     private volatile RecordMetadata deliveryMetadata;
 
     ParsleyProcessor(Processor<KIn, VIn, KOut, VOut> delegate,
-                              BufferingPolicy policy,
-                              ViolationHandler onViolation,
-                              Consumer<ConsumerRecord<KIn, VIn>> deadLetterSink,
-                              BufferedRecordCodec<KIn, VIn> codec,
-                              String frontierStoreName,
-                              String bufferStoreName) {
+                     BufferingPolicy policy,
+                     ViolationHandler onViolation,
+                     Consumer<ConsumerRecord<KIn, VIn>> deadLetterSink,
+                     BufferedRecordCodec<KIn, VIn> codec,
+                     String frontierStoreName,
+                     String bufferStoreName,
+                     FrontierListener frontierListener) {
         this.delegate = delegate;
         this.policy = policy;
         this.onViolation = onViolation;
@@ -67,6 +79,7 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
         this.codec = codec;
         this.frontierStoreName = frontierStoreName;
         this.bufferStoreName = bufferStoreName;
+        this.frontierListener = frontierListener;
     }
 
     @Override
@@ -75,6 +88,7 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
         this.frontierStore = context.getStateStore(frontierStoreName);
         this.bufferStore = context.getStateStore(bufferStoreName);
 
+        // Restore the frontier persisted by a previous run (cold start → empty).
         VectorClock initialFrontier = VectorClock.empty();
         byte[] stored = frontierStore.get(Attributes.FRONTIER_KEY);
         if (stored != null) {
@@ -82,13 +96,25 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
         }
         this.stampClock = initialFrontier;
 
+        // Publish the restored frontier so an observer (e.g. a CausalConsumer) has a correct view
+        // before the first new record is admitted. This goes straight to the public listener, never
+        // through the engine's FrontierListener below, whose per-advance snapshot bookkeeping must
+        // stay in lock-step with the records the engine returns.
+        frontierListener.onFrontierAdvanced(initialFrontier);
+
+        // The user's dead-letter sink takes a ConsumerRecord; the engine deals in CausalRecord.
         Consumer<CausalRecord<KIn, VIn>> engineDeadLetter = deadLetterSink == null
                 ? null
                 : record -> deadLetterSink.accept(record.toConsumerRecord());
 
+        // Fires inside the engine *before* each advanced record is returned, so persisting here gives
+        // the persist-frontier-before-forward guarantee for free; we also capture the per-record
+        // frontier snapshot used for precise stamping in deliver().
         CausalEngine.FrontierListener listener = frontier -> {
             frontierStore.put(Attributes.FRONTIER_KEY, frontier.toBytes());
             snapshots.add(frontier);
+            // Publish only after persisting, preserving the persist-frontier-before-forward invariant.
+            frontierListener.onFrontierAdvanced(frontier);
         };
 
         BufferPersistence<KIn, VIn> persistence = new BufferPersistence<>() {
@@ -106,12 +132,17 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
         this.engine = new CausalEngine<>(policy, onViolation, initialFrontier,
                 engineDeadLetter, listener, persistence);
 
+        // Re-hydrate records that were still buffered when the previous run stopped.
         restoreHeldRecords();
 
+        // The delegate runs against the stamping proxy, never the raw context, so its forwards are
+        // clock-stamped and its recordMetadata() reflects the delivered record.
         ProcessorContext<KOut, VOut> stamping = new StampingProcessorContext<>(
                 context, () -> stampClock, () -> Optional.ofNullable(deliveryMetadata));
         delegate.init(stamping);
 
+        // Only a duration limit needs a timer; it drains records that have outstayed the limit through
+        // the same admit path as process().
         engine.evictionInterval().ifPresent(interval ->
                 context.schedule(interval, PunctuationType.WALL_CLOCK_TIME, timestamp -> deliver(evict())));
     }
@@ -146,13 +177,16 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
     private void deliver(List<CausalRecord<KIn, VIn>> admitted) {
         for (int i = 0; i < admitted.size(); i++) {
             CausalRecord<KIn, VIn> record = admitted.get(i);
+            // snapshots.get(i) is the frontier as of this record's admission — the clock its forwards
+            // should carry. A drained record's metadata differs from the trigger record Streams is
+            // currently processing, so we surface the drained record's own source coordinate.
             stampClock = snapshots.get(i);
-            // So delegate.process sees the delivered record's true origin, even after buffering.
             deliveryMetadata = new DeliveredRecordMetadata(
                     record.sourcePartition().topic(), record.sourcePartition().partition(), record.sourceOffset());
             delegate.process(rebuild(record));
         }
-        // Reset so a user punctuator's forwards stamp the live frontier and see the real metadata.
+        // Between deliveries (e.g. a user punctuator firing) stamp the live frontier and let
+        // recordMetadata() fall back to the real context.
         deliveryMetadata = null;
         stampClock = engine.frontier();
     }
@@ -167,6 +201,8 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
     }
 
     private CausalRecord<KIn, VIn> toCausalRecord(Record<KIn, VIn> record) {
+        // Capture the source coordinate now, at ingest, while recordMetadata() is still about this
+        // record — it is carried on the envelope so it survives buffering (see deliver()).
         Optional<RecordMetadata> meta = context.recordMetadata();
         String topic = meta.map(RecordMetadata::topic).orElse("");
         int partition = meta.map(RecordMetadata::partition).orElse(0);

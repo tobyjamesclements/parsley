@@ -13,7 +13,6 @@ import org.apache.kafka.streams.processor.api.ProcessorContext;
 import org.apache.kafka.streams.processor.api.ProcessorSupplier;
 import org.apache.kafka.streams.processor.api.Record;
 import org.apache.kafka.streams.processor.api.RecordMetadata;
-import org.apache.kafka.streams.state.KeyValueStore;
 
 import java.time.Duration;
 import java.util.ArrayList;
@@ -28,11 +27,12 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
 
 /**
- * Decorator over a Kafka Streams pipeline (built from {@link CausalProcessor#create}) exposing a
- * {@code poll()}-based consumer API. The causal ordering is performed by a {@link CausalProcessor#create}
+ * Decorator over a Kafka Streams pipeline (built from {@link CausalProcessorSupplier#create}) exposing a
+ * {@code poll()}-based consumer API. The causal ordering is performed by a {@link CausalProcessorSupplier#create}
  * node whose delegate is a non-forwarding capture processor: it reconstructs each causally ordered
  * record from {@code recordMetadata()} (correct even for records that were buffered and drained
- * later), enqueues it, and reads the frontier back from the processor's state store.
+ * later) and enqueues it. The frontier is observed through the processor's public
+ * {@link FrontierListener} hook rather than by reading its internal state store.
  *
  * <p>Because the capture never forwards, no clock stamping occurs and each delivered record retains
  * the upstream producer's clock header — so {@code VectorClock.fromRecord(consumed)} still yields the
@@ -41,7 +41,8 @@ import java.util.concurrent.atomic.AtomicReference;
 final class ParsleyConsumer<K, V> implements CausalConsumer<K, V> {
 
     private final KafkaStreams streams;
-    private final String frontierStoreName;
+    private final Serde<K> keySerde;
+    private final Serde<V> valueSerde;
     private final LinkedBlockingQueue<ConsumerRecord<K, V>> readyQueue = new LinkedBlockingQueue<>();
     private final AtomicReference<VectorClock> frontierRef = new AtomicReference<>(VectorClock.empty());
 
@@ -53,8 +54,6 @@ final class ParsleyConsumer<K, V> implements CausalConsumer<K, V> {
             Map<String, Object> streamsConfig,
             String storeName) {
 
-        this.frontierStoreName = storeName + "-frontier";
-
         Map<String, Object> merged = new HashMap<>();
         merged.put("processing.exception.handler.global.enabled", "true");
         merged.putAll(streamsConfig);
@@ -65,14 +64,25 @@ final class ParsleyConsumer<K, V> implements CausalConsumer<K, V> {
         Serde<K> keySerde = (Serde<K>) config.defaultKeySerde();
         @SuppressWarnings("unchecked")
         Serde<V> valueSerde = (Serde<V>) config.defaultValueSerde();
+        // We own these serdes (StreamsConfig instantiates a fresh, configured instance per call),
+        // so we hold and close them in close(). Serde extends Closeable.
+        this.keySerde = keySerde;
+        this.valueSerde = valueSerde;
 
         StreamsBuilder builder = new StreamsBuilder();
         builder.<K, V>stream(topics)
-                .process(CausalProcessor.create(captureSupplier(), policy, onViolation,
-                        topic -> keySerde, topic -> valueSerde, storeName));
+                .process(CausalProcessorSupplier.create(captureSupplier(), policy, onViolation,
+                        topic -> keySerde, topic -> valueSerde, storeName, this::onFrontierAdvanced));
 
         this.streams = new KafkaStreams(builder.build(), config);
         this.streams.start();
+    }
+
+    // Merge (rather than overwrite) so the frontier is correct across multiple partitions/tasks —
+    // each task publishes a frontier over only its own partitions — and across the restored frontier
+    // each task seeds at startup. Invoked from Streams threads; updateAndGet keeps it atomic.
+    private void onFrontierAdvanced(VectorClock frontier) {
+        frontierRef.updateAndGet(current -> current.merge(frontier));
     }
 
     ProcessorSupplier<K, V, Void, Void> captureSupplier() {
@@ -87,6 +97,10 @@ final class ParsleyConsumer<K, V> implements CausalConsumer<K, V> {
             @Override
             public void process(Record<K, V> record) {
                 RecordMetadata meta = ctx.recordMetadata().orElseThrow();
+                // Rebuild the consumer-facing record from the processor's record metadata, which
+                // names the record's true source coordinate even when it was buffered and drained
+                // later (not the Streams record currently being processed). The -1, -1 are the
+                // serialized key/value sizes — unknown here, as the record is already deserialised.
                 ConsumerRecord<K, V> cr = new ConsumerRecord<>(
                         meta.topic(), meta.partition(), meta.offset(),
                         record.timestamp(), TimestampType.CREATE_TIME,
@@ -95,13 +109,6 @@ final class ParsleyConsumer<K, V> implements CausalConsumer<K, V> {
                         record.headers(), Optional.empty());
 
                 readyQueue.add(cr);
-
-                byte[] frontierBytes = ctx.<KeyValueStore<String, byte[]>>
-                        getStateStore(frontierStoreName)
-                        .get(Attributes.FRONTIER_KEY);
-                if (frontierBytes != null) {
-                    frontierRef.set(VectorClock.fromBytes(frontierBytes));
-                }
             }
         };
     }
@@ -111,6 +118,9 @@ final class ParsleyConsumer<K, V> implements CausalConsumer<K, V> {
         Map<TopicPartition, List<ConsumerRecord<K, V>>> byPartition = new LinkedHashMap<>();
 
         try {
+            // Block up to the timeout for the first record, then drain whatever else is already
+            // queued without blocking again — so a poll returns a batch (like a real Kafka consumer)
+            // yet still wakes promptly on the first available record.
             ConsumerRecord<K, V> first = readyQueue.poll(timeout.toMillis(), TimeUnit.MILLISECONDS);
             if (first != null) {
                 accumulate(byPartition, first);
@@ -119,10 +129,11 @@ final class ParsleyConsumer<K, V> implements CausalConsumer<K, V> {
                 drained.forEach(r -> accumulate(byPartition, r));
             }
         } catch (InterruptedException e) {
+            // Restore the interrupt flag and return whatever we have; poll is not declared to throw.
             Thread.currentThread().interrupt();
         }
 
-        return new ConsumerRecords<>(byPartition);
+        return new ConsumerRecords<>(byPartition, Map.of());
     }
 
     private void accumulate(Map<TopicPartition, List<ConsumerRecord<K, V>>> map, ConsumerRecord<K, V> record) {
@@ -138,5 +149,9 @@ final class ParsleyConsumer<K, V> implements CausalConsumer<K, V> {
     @Override
     public void close() {
         streams.close();
+        // Close the serdes we manufactured from config; close() is a no-op for stateless serdes
+        // but releases resources for stateful ones (e.g. Schema Registry-backed).
+        keySerde.close();
+        valueSerde.close();
     }
 }

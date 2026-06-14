@@ -28,6 +28,18 @@ import java.util.Map;
  * }
  * }</pre>
  *
+ * <h2>Thread safety</h2>
+ * Like Kafka's own {@code Consumer}, {@link #poll} is intended to be driven by a <strong>single
+ * thread</strong>. Polling concurrently from several threads does not corrupt the consumer, but it
+ * splits the causally-ordered record stream across those threads — so each thread sees only a
+ * subset, defeating the ordering guarantee this consumer exists to provide. Unlike Kafka's consumer,
+ * this is not detected or rejected; it is simply the caller's responsibility.
+ *
+ * <p>{@link #frontier()} is safe to call from any thread, concurrently with {@code poll} and with the
+ * internal stream threads. {@link #close()} is safe to call from a thread other than the poller, but
+ * it does <em>not</em> interrupt a {@code poll} already blocked waiting for records — there is no
+ * {@code wakeup()}; the in-flight {@code poll} simply returns empty once its timeout elapses.
+ *
  * @param <K> the record key type
  * @param <V> the record value type
  */
@@ -117,7 +129,7 @@ public interface CausalConsumer<K, V> extends Closeable {
      *
      * <p>{@link BufferingPolicy.DeadLetter DeadLetter} policies are not supported by this facade —
      * there is no parameter for a dead-letter sink — and are rejected. To dead-letter evicted
-     * records, build a custom topology with {@link CausalProcessor#create}'s dead-letter overload
+     * records, build a custom topology with {@link CausalProcessorSupplier#create}'s dead-letter overload
      * instead.
      *
      * @param <K>            the record key type

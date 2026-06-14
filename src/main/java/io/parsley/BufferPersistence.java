@@ -31,8 +31,9 @@ interface BufferPersistence<K, V> {
     void onUnheld(CausalRecord<K, V> record);
 
     /**
-     * Returns a persistence that does nothing — used when buffer durability is not required (e.g.
-     * the legacy pass-through {@link CausalProcessor}).
+     * Returns a persistence that does nothing — used by the {@link CausalEngine} convenience
+     * constructor when buffer durability is not required (e.g. in unit tests that exercise the
+     * engine without a state store).
      *
      * @param <K> the record key type
      * @param <V> the record value type

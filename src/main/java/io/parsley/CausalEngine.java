@@ -87,6 +87,11 @@ final class CausalEngine<K, V> {
     List<CausalRecord<K, V>> onRecord(CausalRecord<K, V> record) {
         List<CausalRecord<K, V>> out = new ArrayList<>();
 
+        // A record we cannot gate (no clock header, or one we cannot decode) is admitted
+        // unconditionally rather than held forever: we report the violation, then advance the
+        // frontier and forward it exactly as for a satisfied record — so its offset still counts as
+        // observed and any records buffered behind it can drain. The required clock is reported as
+        // empty because there is no decodable dependency to measure the gap against.
         byte[] encoded = record.encodedDependencies();
         if (encoded == null) {
             violate(record, CausalViolationReason.MISSING_HEADER, VectorClock.empty());
@@ -187,6 +192,10 @@ final class CausalEngine<K, V> {
         return Optional.ofNullable(evictionInterval);
     }
 
+    // Releasing a record advances the frontier, which may in turn satisfy records still buffered
+    // behind it — so we drain in passes until a pass releases nothing. (A single pass is not enough:
+    // B may depend on A, and A's release is what unblocks B.) Each released record is forwarded in
+    // the same frontier-advancing-and-forwarding manner as a directly satisfied one.
     private void drainInto(List<CausalRecord<K, V>> out) {
         List<CausalRecord<K, V>> released = buffer.drain(frontier);
         while (!released.isEmpty()) {
