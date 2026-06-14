@@ -11,7 +11,7 @@ import java.util.Map;
  *
  * <p>A violation arises when a record cannot be delivered in strict causal order — it carried an
  * unresolvable clock, no clock attribute, or was evicted from the buffer because a
- * {@link BufferLimit} fired. Unlike {@link CausalViolationHandler}, this payload also carries the
+ * {@link BufferLimit} fired. The payload carries the
  * <em>causal gap</em>: what the frontier had observed ({@link #frontier}) versus what the record
  * required ({@link #required}), and the per-partition shortfall ({@link #gap}) — the difference
  * between a violation you can operate around (replay, compensate, alert) and one you can only find

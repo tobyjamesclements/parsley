@@ -1,9 +1,9 @@
 /**
  * The Kafka Streams integration: build topologies whose processors enforce causal ordering.
  *
- * <p>The public surface is {@link io.parsley.stream.CausalProcessorSupplier} (with its static
- * {@code create} factories) and the {@link io.parsley.stream.CausalStreams} helper. The
- * buffering engine, processor, and record envelope behind them are package-private
- * implementation details.
+ * <p>The public surface is {@link io.parsley.stream.Parsley} (with its static {@code causal}
+ * factories): wrap your own {@code Processor} so its state access and {@code forward}s run behind the
+ * causal guarantee. The buffering engine, decorating processor, stamping context, and record
+ * envelope behind it are package-private implementation details.
  */
 package io.parsley.stream;

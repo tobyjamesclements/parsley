@@ -16,8 +16,8 @@
  *       {@link io.parsley.BufferLimit.DurationLimit DurationLimit},
  *       {@link io.parsley.BufferLimit.SizeLimit SizeLimit},
  *       {@link io.parsley.BufferLimit.FirstLimit FirstLimit}</li>
- *   <li>{@link io.parsley.CausalViolationHandler} &mdash; violation callback</li>
- *   <li>{@link io.parsley.Metrics} &mdash; observability hook</li>
+ *   <li>{@link io.parsley.ViolationHandler} &mdash; violation callback, handed a
+ *       {@link io.parsley.Violation} carrying the causal gap</li>
  * </ul>
  */
 package io.parsley;

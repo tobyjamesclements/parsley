@@ -71,8 +71,8 @@ public interface CausalConsumer<K, V> extends Closeable {
      *
      * <p>{@link BufferingPolicy.DeadLetter DeadLetter} policies are not supported by this
      * facade — there is no parameter for a dead-letter sink — and are rejected. To dead-letter
-     * evicted records, build a custom topology with
-     * {@link io.parsley.stream.CausalProcessorSupplier}'s dead-letter factory instead.
+     * evicted records, build a custom topology with {@link io.parsley.stream.Parsley#causal}'s
+     * dead-letter overload instead.
      *
      * @param <K>            the record key type
      * @param <V>            the record value type

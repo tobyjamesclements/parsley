@@ -65,7 +65,7 @@ then declare the repository and dependency:
 ```java
 try (CausalConsumer<String, String> consumer = CausalConsumer.create(
         List.of("prices", "orders"),
-        BufferingPolicy.deadLetter(BufferLimit.ofDuration(Duration.ofSeconds(30)), "parsley-dead-letter"),
+        BufferingPolicy.forwardUnsafe(BufferLimit.ofDuration(Duration.ofSeconds(30))),
         Map.of(ConsumerConfig.GROUP_ID_CONFIG, "my-group"),
         Map.of(StreamsConfig.APPLICATION_ID_CONFIG,    "my-app",
                StreamsConfig.BOOTSTRAP_SERVERS_CONFIG, "localhost:9092"))) {
@@ -81,23 +81,11 @@ try (CausalConsumer<String, String> consumer = CausalConsumer.create(
 producer.send(new ProducerRecord<>("orders", key, value), consumer.frontier());
 ```
 
-**Inside a Streams topology** — the frontier state store is registered automatically:
-
-```java
-CausalProcessorSupplier<String, String> supplier = CausalProcessorSupplier.create(
-    BufferingPolicy.forwardUnsafe(BufferLimit.ofDuration(Duration.ofSeconds(30))),
-    (record, reason) -> log.warn("Causal violation on {}: {}", record.topic(), reason));
-
-builder.stream(List.of("prices", "orders"), Consumed.with(Serdes.String(), Serdes.String()))
-       .process(supplier)
-       .to("output-topic");
-```
-
-**Decorate your own processor** — write an ordinary Kafka Streams `Processor` and wrap its supplier
+**Inside a Streams topology** — write an ordinary Kafka Streams `Processor` and wrap its supplier
 in `Parsley.causal(...)`. Inside your `process()`, every state-store read/write and every `forward`
 is causally ordered and the outgoing record is stamped with the current vector clock — transparently,
 with no `CausalProducer` on egress (Streams sinks carry the stamped header out to the topic). You
-never see a vector clock, a frontier, or a buffer:
+never see a vector clock, a frontier, or a buffer; the required state stores are registered for you:
 
 ```java
 ProcessorSupplier<String, Order, String, Enriched> user = new ProcessorSupplier<>() {

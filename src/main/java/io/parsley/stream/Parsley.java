@@ -60,6 +60,9 @@ import java.util.function.Function;
  */
 public final class Parsley {
 
+    /** Default store-name namespace; yields {@code "parsley-frontier"} and {@code "parsley-buffer"}. */
+    private static final String DEFAULT_STORE_NAME = "parsley";
+
     private Parsley() {}
 
     /**
@@ -111,12 +114,44 @@ public final class Parsley {
             ViolationHandler onViolation,
             Function<String, Serde<KIn>> keySerdeByTopic,
             Function<String, Serde<VIn>> valueSerdeByTopic) {
+        return causal(userSupplier, policy, onViolation, keySerdeByTopic, valueSerdeByTopic, DEFAULT_STORE_NAME);
+    }
+
+    /**
+     * As {@link #causal(ProcessorSupplier, BufferingPolicy, ViolationHandler, Function, Function)}
+     * but with an explicit {@code storeName} namespace, so several causal processors can share one
+     * topology. The processor's frontier store is {@code storeName + "-frontier"} and its buffer
+     * store is {@code storeName + "-buffer"}; Kafka Streams requires these to be unique within a
+     * topology, and the names are persistent and changelog-backed, so keep {@code storeName} stable
+     * across restarts.
+     *
+     * @param userSupplier      the user's processor supplier
+     * @param policy            the buffering policy; must not be a {@code DeadLetter} policy
+     * @param onViolation       the rich violation callback
+     * @param keySerdeByTopic   resolves the key serde for a given source topic
+     * @param valueSerdeByTopic resolves the value serde for a given source topic
+     * @param storeName         the state-store namespace for this processor's frontier and buffer
+     * @param <KIn>             the input key type
+     * @param <VIn>             the input value type
+     * @param <KOut>            the forwarded key type
+     * @param <VOut>            the forwarded value type
+     * @return a decorated supplier ready for {@code stream(...).process(...)}
+     * @throws IllegalArgumentException if {@code policy} is a {@code DeadLetter} policy
+     */
+    public static <KIn, VIn, KOut, VOut> ProcessorSupplier<KIn, VIn, KOut, VOut> causal(
+            ProcessorSupplier<KIn, VIn, KOut, VOut> userSupplier,
+            BufferingPolicy policy,
+            ViolationHandler onViolation,
+            Function<String, Serde<KIn>> keySerdeByTopic,
+            Function<String, Serde<VIn>> valueSerdeByTopic,
+            String storeName) {
         if (policy instanceof BufferingPolicy.DeadLetter) {
             throw new IllegalArgumentException(
                     "DeadLetter policy requires a dead-letter sink — use a causal() overload with a sink");
         }
         return new DecoratingCausalProcessorSupplier<>(
-                userSupplier, policy, onViolation, null, keySerdeByTopic, valueSerdeByTopic);
+                userSupplier, policy, onViolation, null, keySerdeByTopic, valueSerdeByTopic,
+                storeName + "-frontier", storeName + "-buffer");
     }
 
     /**
@@ -169,7 +204,39 @@ public final class Parsley {
             Consumer<ConsumerRecord<KIn, VIn>> deadLetterSink,
             Function<String, Serde<KIn>> keySerdeByTopic,
             Function<String, Serde<VIn>> valueSerdeByTopic) {
+        return causal(userSupplier, policy, onViolation, deadLetterSink,
+                keySerdeByTopic, valueSerdeByTopic, DEFAULT_STORE_NAME);
+    }
+
+    /**
+     * As
+     * {@link #causal(ProcessorSupplier, BufferingPolicy.DeadLetter, ViolationHandler, Consumer, Function, Function)}
+     * but with an explicit {@code storeName} namespace (see the non-dead-letter named overload for
+     * the naming rules), so several causal processors can share one topology.
+     *
+     * @param userSupplier      the user's processor supplier
+     * @param policy            the dead-letter buffering policy
+     * @param onViolation       the rich violation callback
+     * @param deadLetterSink    the consumer that receives evicted records for dead-lettering
+     * @param keySerdeByTopic   resolves the key serde for a given source topic
+     * @param valueSerdeByTopic resolves the value serde for a given source topic
+     * @param storeName         the state-store namespace for this processor's frontier and buffer
+     * @param <KIn>             the input key type
+     * @param <VIn>             the input value type
+     * @param <KOut>            the forwarded key type
+     * @param <VOut>            the forwarded value type
+     * @return a decorated supplier ready for {@code stream(...).process(...)}
+     */
+    public static <KIn, VIn, KOut, VOut> ProcessorSupplier<KIn, VIn, KOut, VOut> causal(
+            ProcessorSupplier<KIn, VIn, KOut, VOut> userSupplier,
+            BufferingPolicy.DeadLetter policy,
+            ViolationHandler onViolation,
+            Consumer<ConsumerRecord<KIn, VIn>> deadLetterSink,
+            Function<String, Serde<KIn>> keySerdeByTopic,
+            Function<String, Serde<VIn>> valueSerdeByTopic,
+            String storeName) {
         return new DecoratingCausalProcessorSupplier<>(
-                userSupplier, policy, onViolation, deadLetterSink, keySerdeByTopic, valueSerdeByTopic);
+                userSupplier, policy, onViolation, deadLetterSink, keySerdeByTopic, valueSerdeByTopic,
+                storeName + "-frontier", storeName + "-buffer");
     }
 }

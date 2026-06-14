@@ -52,10 +52,14 @@ final class StampingProcessorContext<KOut, VOut> implements ProcessorContext<KOu
 
     private final ProcessorContext<KOut, VOut> delegate;
     private final Supplier<VectorClock> frontier;
+    private final Supplier<Optional<RecordMetadata>> deliveredMetadata;
 
-    StampingProcessorContext(ProcessorContext<KOut, VOut> delegate, Supplier<VectorClock> frontier) {
+    StampingProcessorContext(ProcessorContext<KOut, VOut> delegate,
+                             Supplier<VectorClock> frontier,
+                             Supplier<Optional<RecordMetadata>> deliveredMetadata) {
         this.delegate = delegate;
         this.frontier = frontier;
+        this.deliveredMetadata = deliveredMetadata;
     }
 
     @Override
@@ -93,7 +97,10 @@ final class StampingProcessorContext<KOut, VOut> implements ProcessorContext<KOu
 
     @Override
     public Optional<RecordMetadata> recordMetadata() {
-        return delegate.recordMetadata();
+        // While the decorator is delivering a (possibly buffered-then-drained) record, report that
+        // record's true source coordinate rather than the Streams record that triggered delivery.
+        Optional<RecordMetadata> delivered = deliveredMetadata.get();
+        return delivered.isPresent() ? delivered : delegate.recordMetadata();
     }
 
     @Override

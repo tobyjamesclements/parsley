@@ -26,13 +26,4 @@ public final class Attributes {
      * their causal dependencies are unmet, so they survive a restart.
      */
     public static final String BUFFER_STORE = "parsley-buffer";
-
-    /** Header stamped on forwarded records carrying the source topic. */
-    public static final String SOURCE_TOPIC = "parsley-src-topic";
-
-    /** Header stamped on forwarded records carrying the source partition. */
-    public static final String SOURCE_PARTITION = "parsley-src-partition";
-
-    /** Header stamped on forwarded records carrying the source offset. */
-    public static final String SOURCE_OFFSET = "parsley-src-offset";
 }

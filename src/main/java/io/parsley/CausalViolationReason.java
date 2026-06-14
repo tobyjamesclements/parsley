@@ -3,7 +3,7 @@ package io.parsley;
 /**
  * The reason a causal ordering violation was reported.
  *
- * <p>A violation is reported to the {@link CausalViolationHandler} whenever a record cannot
+ * <p>A violation is reported to the {@link ViolationHandler} whenever a record cannot
  * be delivered in strict causal order.
  *
  * <ul>

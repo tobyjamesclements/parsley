@@ -2,17 +2,14 @@ package io.parsley.stream;
 
 import io.parsley.BufferLimit;
 import io.parsley.BufferingPolicy;
-import io.parsley.CausalViolationHandler;
 import io.parsley.CausalViolationReason;
-import io.parsley.Metrics;
 import io.parsley.VectorClock;
+import io.parsley.Violation;
+import io.parsley.ViolationHandler;
 
 import java.time.Duration;
-import java.time.Instant;
 import java.util.ArrayList;
-import java.util.IdentityHashMap;
 import java.util.List;
-import java.util.Map;
 import java.util.Optional;
 import java.util.function.Consumer;
 
@@ -23,6 +20,12 @@ import java.util.function.Consumer;
  * records downstream, in order. The engine classifies each record (missing or unresolvable
  * dependency clock → violation; dependencies satisfied → forward; otherwise → buffer),
  * advances the causal frontier, and cascades releases from the buffer as the frontier moves.
+ *
+ * <p>The engine also owns policy-driven eviction: when a {@link BufferLimit} fires it surrenders the
+ * buffer and, per {@link BufferingPolicy}, forwards the evicted records out-of-order
+ * ({@link BufferingPolicy.ForwardUnsafe ForwardUnsafe}), discards them ({@link BufferingPolicy.Drop
+ * Drop}), or routes them to the dead-letter sink ({@link BufferingPolicy.DeadLetter DeadLetter}) —
+ * reporting a {@link Violation} (with the causal gap) for each.
  *
  * <p><strong>Frontier persistence ordering:</strong> the {@link FrontierListener} fires for
  * every frontier advancement <em>before</em> the corresponding record is returned for
@@ -44,50 +47,40 @@ final class CausalEngine<K, V> {
     }
 
     private final BufferingPolicy policy;
-    private final CausalViolationHandler violationHandler;
-    private final CausalBuffer<K, V> buffer;
+    private final ViolationHandler violationHandler;
+    private final Consumer<CausalRecord<K, V>> deadLetterSink;
+    private final CausalBuffer<K, V> buffer = new CausalBuffer<>();
     private final FrontierListener frontierListener;
     private final BufferPersistence<K, V> persistence;
-    private final Metrics metrics;
-    private final Map<CausalRecord<K, V>, Instant> bufferedAt = new IdentityHashMap<>();
 
     private VectorClock frontier;
     private int sizeLimit = Integer.MAX_VALUE;
     private Duration evictionInterval;
 
     CausalEngine(BufferingPolicy policy,
-                 CausalViolationHandler violationHandler,
+                 ViolationHandler violationHandler,
                  VectorClock initialFrontier,
                  Consumer<CausalRecord<K, V>> deadLetterSink,
                  FrontierListener frontierListener) {
         this(policy, violationHandler, initialFrontier, deadLetterSink, frontierListener,
-                BufferPersistence.noop(), Metrics.noop());
+                BufferPersistence.noop());
     }
 
     CausalEngine(BufferingPolicy policy,
-                 CausalViolationHandler violationHandler,
+                 ViolationHandler violationHandler,
                  VectorClock initialFrontier,
                  Consumer<CausalRecord<K, V>> deadLetterSink,
                  FrontierListener frontierListener,
-                 Metrics metrics) {
-        this(policy, violationHandler, initialFrontier, deadLetterSink, frontierListener,
-                BufferPersistence.noop(), metrics);
-    }
-
-    CausalEngine(BufferingPolicy policy,
-                 CausalViolationHandler violationHandler,
-                 VectorClock initialFrontier,
-                 Consumer<CausalRecord<K, V>> deadLetterSink,
-                 FrontierListener frontierListener,
-                 BufferPersistence<K, V> persistence,
-                 Metrics metrics) {
+                 BufferPersistence<K, V> persistence) {
+        if (policy instanceof BufferingPolicy.DeadLetter && deadLetterSink == null) {
+            throw new IllegalArgumentException("DeadLetter policy requires a dead-letter sink");
+        }
         this.policy = policy;
         this.violationHandler = violationHandler;
         this.frontier = initialFrontier;
+        this.deadLetterSink = deadLetterSink;
         this.frontierListener = frontierListener;
         this.persistence = persistence;
-        this.metrics = metrics;
-        this.buffer = createBuffer(policy, deadLetterSink);
         configureLimits(limitOf(policy));
     }
 
@@ -102,7 +95,7 @@ final class CausalEngine<K, V> {
 
         byte[] encoded = record.encodedDependencies();
         if (encoded == null) {
-            violate(record, CausalViolationReason.MISSING_HEADER);
+            violate(record, CausalViolationReason.MISSING_HEADER, VectorClock.empty());
             advanceFrontier(record);
             out.add(record);
             drainInto(out);
@@ -113,7 +106,7 @@ final class CausalEngine<K, V> {
         try {
             dependencies = VectorClock.fromBytes(encoded);
         } catch (Exception e) {
-            violate(record, CausalViolationReason.UNRESOLVABLE_CLOCK);
+            violate(record, CausalViolationReason.UNRESOLVABLE_CLOCK, VectorClock.empty());
             advanceFrontier(record);
             out.add(record);
             drainInto(out);
@@ -126,9 +119,7 @@ final class CausalEngine<K, V> {
             drainInto(out);
         } else {
             buffer.add(record, dependencies);
-            bufferedAt.put(record, Instant.now());
             persistence.onHeld(record, dependencies);
-            metrics.onMessageBuffered();
             if (buffer.size() >= sizeLimit) {
                 out.addAll(evictNow());
             }
@@ -146,27 +137,39 @@ final class CausalEngine<K, V> {
      */
     void restore(CausalRecord<K, V> record, VectorClock dependencies) {
         buffer.add(record, dependencies);
-        bufferedAt.put(record, Instant.now());
     }
 
     /**
      * Evicts the buffer because a limit fired (called by the engine itself for size limits,
-     * and periodically by the processor for duration limits).
+     * and periodically by the processor for duration limits). Reports a {@link Violation} per
+     * evicted record and applies the policy.
      *
      * @return records to forward downstream out-of-order; non-empty only for the
      *         {@link BufferingPolicy.ForwardUnsafe ForwardUnsafe} policy
      */
     List<CausalRecord<K, V>> evictNow() {
-        if (buffer.size() == 0) {
+        List<CausalBuffer.Buffered<K, V>> evicted = buffer.evictAll();
+        if (evicted.isEmpty()) {
             return List.of();
         }
-        List<CausalRecord<K, V>> toForward = buffer.evict(limitOf(policy), (record, reason) -> {
-            metrics.onViolation(reason);
-            violationHandler.onViolation(record, reason);
-        }, persistence::onUnheld);
-        bufferedAt.clear();
-        for (CausalRecord<K, V> record : toForward) {
-            advanceFrontier(record);
+        for (CausalBuffer.Buffered<K, V> entry : evicted) {
+            violate(entry.record(), CausalViolationReason.LIMIT_REACHED, entry.dependencies());
+            persistence.onUnheld(entry.record());
+        }
+        List<CausalRecord<K, V>> toForward = new ArrayList<>();
+        switch (policy) {
+            case BufferingPolicy.ForwardUnsafe forwardUnsafe -> {
+                for (CausalBuffer.Buffered<K, V> entry : evicted) {
+                    advanceFrontier(entry.record());
+                    toForward.add(entry.record());
+                }
+            }
+            case BufferingPolicy.Drop drop -> { /* discard the evicted records */ }
+            case BufferingPolicy.DeadLetter deadLetter -> {
+                for (CausalBuffer.Buffered<K, V> entry : evicted) {
+                    deadLetterSink.accept(entry.record());
+                }
+            }
         }
         return toForward;
     }
@@ -196,10 +199,6 @@ final class CausalEngine<K, V> {
             for (CausalRecord<K, V> record : released) {
                 advanceFrontier(record);
                 persistence.onUnheld(record);
-                Instant at = bufferedAt.remove(record);
-                if (at != null) {
-                    metrics.onMessageReleased(Duration.between(at, Instant.now()));
-                }
                 out.add(record);
             }
             released = buffer.drain(frontier);
@@ -209,24 +208,11 @@ final class CausalEngine<K, V> {
     private void advanceFrontier(CausalRecord<K, V> record) {
         frontier = frontier.advance(record.sourcePartition(), record.sourceOffset());
         frontierListener.frontierAdvanced(frontier);
-        metrics.onFrontierAdvanced(frontier);
     }
 
-    private void violate(CausalRecord<K, V> record, CausalViolationReason reason) {
-        metrics.onViolation(reason);
-        violationHandler.onViolation(record.toConsumerRecord(), reason);
-    }
-
-    private CausalBuffer<K, V> createBuffer(BufferingPolicy policy,
-                                            Consumer<CausalRecord<K, V>> deadLetterSink) {
-        if (policy instanceof BufferingPolicy.DeadLetter deadLetter) {
-            if (deadLetterSink == null) {
-                throw new IllegalArgumentException(
-                        "DeadLetter policy requires a dead-letter sink");
-            }
-            return CausalBuffers.create(deadLetter, deadLetterSink);
-        }
-        return CausalBuffers.create(policy);
+    private void violate(CausalRecord<K, V> record, CausalViolationReason reason, VectorClock required) {
+        violationHandler.onViolation(new Violation(
+                record.toConsumerRecord(), reason, frontier, required, required.missingAgainst(frontier)));
     }
 
     private static BufferLimit limitOf(BufferingPolicy policy) {

@@ -1,10 +1,7 @@
 package io.parsley.stream;
 
 import io.parsley.BufferingPolicy;
-import io.parsley.CausalViolationHandler;
-import io.parsley.Metrics;
 import io.parsley.VectorClock;
-import io.parsley.Violation;
 import io.parsley.ViolationHandler;
 import io.parsley.internal.Attributes;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
@@ -58,6 +55,7 @@ final class DecoratingCausalProcessor<KIn, VIn, KOut, VOut> implements Processor
     private KeyValueStore<String, byte[]> bufferStore;
     private CausalEngine<KIn, VIn> engine;
     private volatile VectorClock stampClock = VectorClock.empty();
+    private volatile RecordMetadata deliveryMetadata;
 
     DecoratingCausalProcessor(Processor<KIn, VIn, KOut, VOut> delegate,
                               BufferingPolicy policy,
@@ -109,12 +107,13 @@ final class DecoratingCausalProcessor<KIn, VIn, KOut, VOut> implements Processor
             }
         };
 
-        this.engine = new CausalEngine<>(policy, adaptViolation(), initialFrontier,
-                engineDeadLetter, listener, persistence, Metrics.noop());
+        this.engine = new CausalEngine<>(policy, onViolation, initialFrontier,
+                engineDeadLetter, listener, persistence);
 
         restoreHeldRecords();
 
-        ProcessorContext<KOut, VOut> stamping = new StampingProcessorContext<>(context, () -> stampClock);
+        ProcessorContext<KOut, VOut> stamping = new StampingProcessorContext<>(
+                context, () -> stampClock, () -> Optional.ofNullable(deliveryMetadata));
         delegate.init(stamping);
 
         engine.evictionInterval().ifPresent(interval ->
@@ -150,10 +149,15 @@ final class DecoratingCausalProcessor<KIn, VIn, KOut, VOut> implements Processor
      */
     private void deliver(List<CausalRecord<KIn, VIn>> admitted) {
         for (int i = 0; i < admitted.size(); i++) {
+            CausalRecord<KIn, VIn> record = admitted.get(i);
             stampClock = snapshots.get(i);
-            delegate.process(rebuild(admitted.get(i)));
+            // So delegate.process sees the delivered record's true origin, even after buffering.
+            deliveryMetadata = new DeliveredRecordMetadata(
+                    record.sourcePartition().topic(), record.sourcePartition().partition(), record.sourceOffset());
+            delegate.process(rebuild(record));
         }
-        // Reset to the live frontier so a user punctuator's forwards stamp the current frontier.
+        // Reset so a user punctuator's forwards stamp the live frontier and see the real metadata.
+        deliveryMetadata = null;
         stampClock = engine.frontier();
     }
 
@@ -164,15 +168,6 @@ final class DecoratingCausalProcessor<KIn, VIn, KOut, VOut> implements Processor
                 engine.restore(buffered.record(), buffered.dependencies());
             }
         }
-    }
-
-    private CausalViolationHandler adaptViolation() {
-        return (record, reason) -> {
-            VectorClock frontier = engine.frontier();
-            VectorClock required = VectorClock.fromRecord(record).orElse(VectorClock.empty());
-            onViolation.onViolation(
-                    new Violation(record, reason, frontier, required, required.missingAgainst(frontier)));
-        };
     }
 
     private CausalRecord<KIn, VIn> toCausalRecord(Record<KIn, VIn> record) {

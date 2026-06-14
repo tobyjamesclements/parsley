@@ -2,15 +2,17 @@ package io.parsley.stream;
 
 import io.parsley.BufferLimit;
 import io.parsley.BufferingPolicy;
-import io.parsley.CausalViolationHandler;
 import io.parsley.CausalViolationReason;
 import io.parsley.VectorClock;
+import io.parsley.Violation;
+import io.parsley.ViolationHandler;
 import org.apache.kafka.common.TopicPartition;
 import org.junit.jupiter.api.Test;
 
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -21,7 +23,7 @@ class CausalEngineTest {
     private static final TopicPartition ORDERS = new TopicPartition("orders", 0);
 
     private final List<CausalRecord<String, String>> forwarded = new ArrayList<>();
-    private final List<CausalViolationReason> violations = new ArrayList<>();
+    private final List<Violation> violations = new ArrayList<>();
     private final List<VectorClock> frontiers = new ArrayList<>();
 
     private CausalEngine<String, String> engine(BufferingPolicy policy) {
@@ -30,8 +32,11 @@ class CausalEngineTest {
 
     private CausalEngine<String, String> engine(BufferingPolicy policy,
                                                 java.util.function.Consumer<CausalRecord<String, String>> sink) {
-        CausalViolationHandler handler = (record, reason) -> violations.add(reason);
-        return new CausalEngine<>(policy, handler, VectorClock.empty(), sink, frontiers::add);
+        return new CausalEngine<>(policy, violations::add, VectorClock.empty(), sink, frontiers::add);
+    }
+
+    private List<CausalViolationReason> reasons() {
+        return violations.stream().map(Violation::reason).toList();
     }
 
     private static CausalRecord<String, String> rec(TopicPartition tp, long offset, VectorClock deps) {
@@ -68,6 +73,8 @@ class CausalEngineTest {
         assertEquals(2, forwarded.size());
         assertEquals(PRICES, forwarded.get(0).sourcePartition());
         assertEquals(ORDERS, forwarded.get(1).sourcePartition());
+        assertEquals(VectorClock.empty().advance(PRICES, 3).advance(ORDERS, 0), engine.frontier(),
+                "draining a buffered record must advance the frontier through it");
     }
 
     @Test
@@ -87,8 +94,7 @@ class CausalEngineTest {
         };
         CausalEngine<String, String> engine = new CausalEngine<>(
                 BufferingPolicy.forwardUnsafe(BufferLimit.ofSize(100)),
-                (record, reason) -> { }, VectorClock.empty(), null, frontiers::add,
-                persistence, io.parsley.Metrics.noop());
+                ViolationHandler.noop(), VectorClock.empty(), null, frontiers::add, persistence);
 
         CausalRecord<String, String> order = rec(ORDERS, 0, VectorClock.empty().advance(PRICES, 3));
         engine.onRecord(order);
@@ -114,8 +120,7 @@ class CausalEngineTest {
         };
         CausalEngine<String, String> engine = new CausalEngine<>(
                 BufferingPolicy.drop(BufferLimit.ofSize(1)),
-                (record, reason) -> { }, VectorClock.empty(), null, frontiers::add,
-                persistence, io.parsley.Metrics.noop());
+                ViolationHandler.noop(), VectorClock.empty(), null, frontiers::add, persistence);
 
         CausalRecord<String, String> order = rec(ORDERS, 0, VectorClock.empty().advance(PRICES, 99));
         engine.onRecord(order); // buffered then immediately evicted (dropped) by the size-1 limit
@@ -149,7 +154,9 @@ class CausalEngineTest {
         onRecord(engine, rec(PRICES, 0, null));
 
         assertEquals(1, forwarded.size());
-        assertEquals(List.of(CausalViolationReason.MISSING_HEADER), violations);
+        assertEquals(List.of(CausalViolationReason.MISSING_HEADER), reasons());
+        assertEquals(VectorClock.empty().advance(PRICES, 0), engine.frontier(),
+                "a forwarded missing-header record still advances the frontier");
     }
 
     @Test
@@ -161,7 +168,7 @@ class CausalEngineTest {
         onRecord(engine, garbage);
 
         assertEquals(1, forwarded.size());
-        assertEquals(List.of(CausalViolationReason.UNRESOLVABLE_CLOCK), violations);
+        assertEquals(List.of(CausalViolationReason.UNRESOLVABLE_CLOCK), reasons());
     }
 
     @Test
@@ -174,17 +181,24 @@ class CausalEngineTest {
         onRecord(engine, rec(ORDERS, 1, unmet)); // hits size 2 → evict both
 
         assertEquals(2, forwarded.size());
-        assertEquals(List.of(CausalViolationReason.LIMIT_REACHED, CausalViolationReason.LIMIT_REACHED), violations);
+        assertEquals(List.of(CausalViolationReason.LIMIT_REACHED, CausalViolationReason.LIMIT_REACHED), reasons());
+        assertEquals(VectorClock.empty().advance(ORDERS, 1), engine.frontier(),
+                "forwardUnsafe eviction advances the frontier through each evicted record");
     }
 
     @Test
-    void dropPolicyDiscardsOnEviction() {
+    void dropPolicyDiscardsOnEvictionAndReportsTheGap() {
         CausalEngine<String, String> engine = engine(BufferingPolicy.drop(BufferLimit.ofSize(1)));
 
         onRecord(engine, rec(ORDERS, 0, VectorClock.empty().advance(PRICES, 99)));
 
         assertTrue(forwarded.isEmpty(), "dropped records are never forwarded");
-        assertEquals(List.of(CausalViolationReason.LIMIT_REACHED), violations);
+        assertEquals(1, violations.size());
+        Violation violation = violations.get(0);
+        assertEquals(CausalViolationReason.LIMIT_REACHED, violation.reason());
+        assertEquals(VectorClock.empty(), violation.frontier());
+        assertEquals(VectorClock.empty().advance(PRICES, 99), violation.required());
+        assertEquals(Map.of(PRICES, 100L), violation.gap(), "required 99 vs observed -1 → gap 100");
     }
 
     @Test
@@ -197,7 +211,7 @@ class CausalEngineTest {
 
         assertTrue(forwarded.isEmpty());
         assertEquals(1, deadLettered.size());
-        assertEquals(List.of(CausalViolationReason.LIMIT_REACHED), violations);
+        assertEquals(List.of(CausalViolationReason.LIMIT_REACHED), reasons());
     }
 
     @Test

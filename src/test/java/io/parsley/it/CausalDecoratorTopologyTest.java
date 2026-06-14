@@ -410,7 +410,49 @@ class CausalDecoratorTopologyTest {
         }
     }
 
+    @Test
+    void twoDecoratorsWithDistinctStoreNamesCoexistAndKeepIsolatedFrontiers() {
+        // Two causal decorators in one topology. With the default storeName both would register
+        // "parsley-frontier"/"parsley-buffer" and Kafka Streams would reject the topology; distinct
+        // namespaces are what make multiple decorators possible.
+        StreamsBuilder builder = new StreamsBuilder();
+        builder.stream("orders", Consumed.with(Serdes.String(), Serdes.String()))
+                .process(Parsley.causal(upperCaser(), BufferingPolicy.forwardUnsafe(BufferLimit.ofSize(100)),
+                        onViolation, t -> Serdes.String(), t -> Serdes.String(), "orders"))
+                .to("orders-out", Produced.with(Serdes.String(), Serdes.String()));
+        builder.stream("prices", Consumed.with(Serdes.String(), Serdes.String()))
+                .process(Parsley.causal(upperCaser(), BufferingPolicy.forwardUnsafe(BufferLimit.ofSize(100)),
+                        onViolation, t -> Serdes.String(), t -> Serdes.String(), "prices"))
+                .to("prices-out", Produced.with(Serdes.String(), Serdes.String()));
+
+        try (TopologyTestDriver driver = new TopologyTestDriver(builder.build(), config(null))) {
+            TestInputTopic<String, String> orders =
+                    driver.createInputTopic("orders", new StringSerializer(), new StringSerializer());
+            TestInputTopic<String, String> prices =
+                    driver.createInputTopic("prices", new StringSerializer(), new StringSerializer());
+            TestOutputTopic<String, String> ordersOut =
+                    driver.createOutputTopic("orders-out", new StringDeserializer(), new StringDeserializer());
+            TestOutputTopic<String, String> pricesOut =
+                    driver.createOutputTopic("prices-out", new StringDeserializer(), new StringDeserializer());
+
+            orders.pipeInput(new TestRecord<>("k", "order", clockHeader(VectorClock.empty())));
+            prices.pipeInput(new TestRecord<>("k", "price", clockHeader(VectorClock.empty())));
+
+            assertEquals(List.of("ORDER"), ordersOut.readValuesToList());
+            assertEquals(List.of("PRICE"), pricesOut.readValuesToList());
+
+            // Each decorator persisted only its own branch's frontier under its own namespace.
+            assertEquals(Map.of(ORDERS_0, 0L), frontierIn(driver, "orders-frontier").positions());
+            assertEquals(Map.of(PRICES_0, 0L), frontierIn(driver, "prices-frontier").positions());
+        }
+    }
+
     // --- small utilities -----------------------------------------------------------------------
+
+    private static VectorClock frontierIn(TopologyTestDriver driver, String frontierStoreName) {
+        KeyValueStore<String, byte[]> store = driver.getKeyValueStore(frontierStoreName);
+        return VectorClock.fromBytes(store.get(Attributes.FRONTIER_KEY));
+    }
 
     private static int storeSize(KeyValueStore<String, byte[]> store) {
         int n = 0;

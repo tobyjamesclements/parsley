@@ -1,59 +1,76 @@
 package io.parsley.stream;
 
-import io.parsley.BufferLimit;
-import io.parsley.CausalViolationHandler;
 import io.parsley.VectorClock;
 
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
-import java.util.function.Consumer;
 
 /**
- * Buffers records whose causal dependencies are not yet satisfied.
+ * Holds records whose causal dependencies are not yet satisfied, in insertion order.
  *
- * <p>A buffer holds {@link CausalRecord}s until the frontier satisfies their dependency clocks
- * ({@link #drain}) or until a {@link BufferLimit} fires ({@link #evict}), at which point the
- * buffer's {@link io.parsley.BufferingPolicy} determines what happens to the evicted records.
+ * <p>This is a passive store: it {@linkplain #drain releases} records the frontier has caught up to
+ * and {@linkplain #evictAll surrenders} its whole contents when a limit fires. The policy-driven
+ * decision about what happens to evicted records (forward, drop, or dead-letter) and all violation
+ * reporting live in {@link CausalEngine}.
  *
  * @param <K> the record key type
  * @param <V> the record value type
  */
-interface CausalBuffer<K, V> {
+final class CausalBuffer<K, V> {
+
+    /** A buffered record together with its decoded dependency clock. */
+    record Buffered<K, V>(CausalRecord<K, V> record, VectorClock dependencies) {}
+
+    private final LinkedHashMap<Long, Buffered<K, V>> buffer = new LinkedHashMap<>();
+    private long sequence = 0;
 
     /**
-     * Adds a record to the buffer with its decoded dependency clock.
+     * Adds a record with its decoded dependency clock.
      *
      * @param record       the record to buffer
      * @param dependencies the record's decoded causal dependencies
      */
-    void add(CausalRecord<K, V> record, VectorClock dependencies);
+    void add(CausalRecord<K, V> record, VectorClock dependencies) {
+        buffer.put(sequence++, new Buffered<>(record, dependencies));
+    }
 
     /**
-     * Releases every buffered record whose dependencies are satisfied by {@code frontier},
-     * in buffer insertion order.
+     * Removes and returns every buffered record whose dependencies are satisfied by
+     * {@code frontier}, in insertion order.
      *
      * @param frontier the current causal frontier
      * @return the released records, in order; empty if none are releasable
      */
-    List<CausalRecord<K, V>> drain(VectorClock frontier);
+    List<CausalRecord<K, V>> drain(VectorClock frontier) {
+        List<CausalRecord<K, V>> released = new ArrayList<>();
+        buffer.entrySet().removeIf(entry -> {
+            if (entry.getValue().dependencies().satisfiedBy(frontier)) {
+                released.add(entry.getValue().record());
+                return true;
+            }
+            return false;
+        });
+        return released;
+    }
 
     /**
-     * Evicts the buffered records because {@code limit} fired, reporting a
-     * {@link io.parsley.CausalViolationReason#LIMIT_REACHED} violation per record and notifying
-     * {@code onRemoved} for <em>every</em> record that leaves the buffer (regardless of whether the
-     * policy forwards, drops, or dead-letters it).
+     * Removes and returns every buffered entry, in insertion order.
      *
-     * @param limit     the limit that fired
-     * @param handler   the violation callback
-     * @param onRemoved called once per record removed from the buffer, for buffer-persistence
-     * @return records the caller must forward downstream; empty for drop/dead-letter policies
+     * @return all buffered entries; empty if the buffer is empty
      */
-    List<CausalRecord<K, V>> evict(
-            BufferLimit limit, CausalViolationHandler handler, Consumer<CausalRecord<K, V>> onRemoved);
+    List<Buffered<K, V>> evictAll() {
+        List<Buffered<K, V>> all = new ArrayList<>(buffer.values());
+        buffer.clear();
+        return all;
+    }
 
     /**
      * Returns the number of records currently buffered.
      *
      * @return the buffer size
      */
-    int size();
+    int size() {
+        return buffer.size();
+    }
 }
