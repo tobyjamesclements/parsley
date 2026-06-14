@@ -2,7 +2,9 @@ package io.parsley.it;
 
 import io.parsley.BufferLimit;
 import io.parsley.BufferingPolicy;
+import io.parsley.CausalViolationReason;
 import io.parsley.VectorClock;
+import io.parsley.Violation;
 import io.parsley.CausalConsumer;
 import io.parsley.CausalProducer;
 import org.apache.kafka.clients.admin.Admin;
@@ -10,6 +12,7 @@ import org.apache.kafka.clients.admin.NewTopic;
 import org.apache.kafka.clients.consumer.ConsumerConfig;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.apache.kafka.clients.consumer.ConsumerRecords;
+import org.apache.kafka.clients.producer.KafkaProducer;
 import org.apache.kafka.clients.producer.ProducerConfig;
 import org.apache.kafka.clients.producer.ProducerRecord;
 import org.apache.kafka.common.TopicPartition;
@@ -29,6 +32,7 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
+import java.util.concurrent.CopyOnWriteArrayList;
 
 import static org.awaitility.Awaitility.await;
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -90,6 +94,47 @@ class CausalRoundTripIT {
                         VectorClock.fromRecord(received.get(i)),
                         "record " + i + " should carry its producer's clock");
             }
+        }
+    }
+
+    @Test
+    void fullFactoryHonoursTheViolationHandlerAndCustomStoreName() throws Exception {
+        String bootstrap = kafka.getBootstrapServers();
+        String topic = "no-clock-events";
+        createTopic(bootstrap, topic);
+
+        // The handler runs on the Streams thread, so capture must be thread-safe.
+        List<Violation> violations = new CopyOnWriteArrayList<>();
+
+        try (CausalConsumer<String, String> consumer = CausalConsumer.create(
+                List.of(topic),
+                BufferingPolicy.forwardUnsafe(BufferLimit.ofDuration(Duration.ofSeconds(5))),
+                violations::add,                                   // the override that was previously hidden
+                Map.of(ConsumerConfig.GROUP_ID_CONFIG, "rt-" + UUID.randomUUID()),
+                streamsConfig(bootstrap),
+                "custom-store")) {                                 // custom state-store namespace
+
+            // A plain producer sends a record with NO causal clock header → a MISSING_HEADER violation.
+            try (KafkaProducer<String, String> raw = new KafkaProducer<>(Map.of(
+                    ProducerConfig.BOOTSTRAP_SERVERS_CONFIG, bootstrap,
+                    ProducerConfig.KEY_SERIALIZER_CLASS_CONFIG, StringSerializer.class.getName(),
+                    ProducerConfig.VALUE_SERIALIZER_CLASS_CONFIG, StringSerializer.class.getName()))) {
+                raw.send(new ProducerRecord<>(topic, "k", "no-clock")).get();
+            }
+
+            // The record is still delivered (missing-header records are forwarded)...
+            List<ConsumerRecord<String, String>> received = new ArrayList<>();
+            await().atMost(Duration.ofSeconds(60)).until(() -> {
+                consumer.poll(Duration.ofMillis(500)).forEach(received::add);
+                return !received.isEmpty();
+            });
+            assertEquals(List.of("no-clock"), received.stream().map(ConsumerRecord::value).toList());
+
+            // ...and the user's violation handler — not a hidden no-op — was invoked, despite the
+            // custom store namespace driving the (custom-store-frontier) frontier store.
+            await().atMost(Duration.ofSeconds(10)).until(() -> !violations.isEmpty());
+            assertEquals(CausalViolationReason.MISSING_HEADER, violations.get(0).reason());
+            assertFalse(consumer.frontier().positions().isEmpty(), "frontier under the custom store name advanced");
         }
     }
 

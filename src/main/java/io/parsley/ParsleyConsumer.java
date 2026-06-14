@@ -41,14 +41,19 @@ import java.util.concurrent.atomic.AtomicReference;
 final class ParsleyConsumer<K, V> implements CausalConsumer<K, V> {
 
     private final KafkaStreams streams;
+    private final String frontierStoreName;
     private final LinkedBlockingQueue<ConsumerRecord<K, V>> readyQueue = new LinkedBlockingQueue<>();
     private final AtomicReference<VectorClock> frontierRef = new AtomicReference<>(VectorClock.empty());
 
     ParsleyConsumer(
             Collection<String> topics,
             BufferingPolicy policy,
+            ViolationHandler onViolation,
             Map<String, Object> consumerConfig,
-            Map<String, Object> streamsConfig) {
+            Map<String, Object> streamsConfig,
+            String storeName) {
+
+        this.frontierStoreName = storeName + "-frontier";
 
         Map<String, Object> merged = new HashMap<>();
         merged.put("processing.exception.handler.global.enabled", "true");
@@ -63,7 +68,8 @@ final class ParsleyConsumer<K, V> implements CausalConsumer<K, V> {
 
         StreamsBuilder builder = new StreamsBuilder();
         builder.<K, V>stream(topics)
-                .process(CausalProcessor.create(captureSupplier(), policy, ViolationHandler.noop(), keySerde, valueSerde));
+                .process(CausalProcessor.create(captureSupplier(), policy, onViolation,
+                        topic -> keySerde, topic -> valueSerde, storeName));
 
         this.streams = new KafkaStreams(builder.build(), config);
         this.streams.start();
@@ -91,7 +97,7 @@ final class ParsleyConsumer<K, V> implements CausalConsumer<K, V> {
                 readyQueue.add(cr);
 
                 byte[] frontierBytes = ctx.<KeyValueStore<String, byte[]>>
-                        getStateStore(Attributes.FRONTIER_STORE)
+                        getStateStore(frontierStoreName)
                         .get(Attributes.FRONTIER_KEY);
                 if (frontierBytes != null) {
                     frontierRef.set(VectorClock.fromBytes(frontierBytes));

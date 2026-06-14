@@ -65,12 +65,8 @@ public interface CausalConsumer<K, V> extends Closeable {
     void close();
 
     /**
-     * Creates a new, running {@code CausalConsumer} over the given topics.
-     *
-     * <p>{@link BufferingPolicy.DeadLetter DeadLetter} policies are not supported by this
-     * facade — there is no parameter for a dead-letter sink — and are rejected. To dead-letter
-     * evicted records, build a custom topology with {@link CausalProcessor#create}'s
-     * dead-letter overload instead.
+     * Creates a new, running {@code CausalConsumer}, defaulting the violation handler to
+     * {@link ViolationHandler#noop()} and the state-store namespace to {@code "parsley"}.
      *
      * @param <K>            the record key type
      * @param <V>            the record value type
@@ -89,6 +85,63 @@ public interface CausalConsumer<K, V> extends Closeable {
             BufferingPolicy policy,
             Map<String, Object> consumerConfig,
             Map<String, Object> streamsConfig) {
-        return new ParsleyConsumer<>(topics, policy, consumerConfig, streamsConfig);
+        return create(topics, policy, ViolationHandler.noop(), consumerConfig, streamsConfig);
+    }
+
+    /**
+     * Creates a new, running {@code CausalConsumer} with an explicit violation handler, defaulting
+     * the state-store namespace to {@code "parsley"}.
+     *
+     * @param <K>            the record key type
+     * @param <V>            the record value type
+     * @param topics         the Kafka topics to subscribe to; must not be empty
+     * @param policy         the buffering policy; must not be a {@code DeadLetter} policy
+     * @param onViolation    the callback invoked when a record cannot be delivered in causal order
+     * @param consumerConfig additional consumer configuration
+     * @param streamsConfig  Kafka Streams configuration ({@code application.id} + {@code bootstrap.servers})
+     * @return a new, running {@code CausalConsumer}
+     * @throws IllegalArgumentException if {@code policy} is a {@code DeadLetter} policy
+     */
+    static <K, V> CausalConsumer<K, V> create(
+            Collection<String> topics,
+            BufferingPolicy policy,
+            ViolationHandler onViolation,
+            Map<String, Object> consumerConfig,
+            Map<String, Object> streamsConfig) {
+        return create(topics, policy, onViolation, consumerConfig, streamsConfig, "parsley");
+    }
+
+    /**
+     * Creates a new, running {@code CausalConsumer} with full control over the violation handler and
+     * the state-store namespace.
+     *
+     * <p>{@link BufferingPolicy.DeadLetter DeadLetter} policies are not supported by this facade —
+     * there is no parameter for a dead-letter sink — and are rejected. To dead-letter evicted
+     * records, build a custom topology with {@link CausalProcessor#create}'s dead-letter overload
+     * instead.
+     *
+     * @param <K>            the record key type
+     * @param <V>            the record value type
+     * @param topics         the Kafka topics to subscribe to; must not be empty
+     * @param policy         the buffering policy; must not be a {@code DeadLetter} policy
+     * @param onViolation    the callback invoked when a record cannot be delivered in causal order
+     * @param consumerConfig additional consumer configuration
+     * @param streamsConfig  Kafka Streams configuration ({@code application.id} + {@code bootstrap.servers})
+     * @param storeName      the state-store namespace; the frontier store is
+     *                       {@code storeName + "-frontier"} and the buffer store
+     *                       {@code storeName + "-buffer"} (these name the backing changelog topics,
+     *                       so keep {@code storeName} stable across restarts)
+     * @return a new, running {@code CausalConsumer}
+     * @throws IllegalArgumentException if {@code policy} is a
+     *                                  {@link BufferingPolicy.DeadLetter DeadLetter} policy
+     */
+    static <K, V> CausalConsumer<K, V> create(
+            Collection<String> topics,
+            BufferingPolicy policy,
+            ViolationHandler onViolation,
+            Map<String, Object> consumerConfig,
+            Map<String, Object> streamsConfig,
+            String storeName) {
+        return new ParsleyConsumer<>(topics, policy, onViolation, consumerConfig, streamsConfig, storeName);
     }
 }
