@@ -3,7 +3,7 @@ package io.parsley;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
 
 /**
- * Thrown by {@link CausalViolationHandler#throwing()} when a causal violation is detected.
+ * Thrown by {@link ViolationHandler#throwing()} when a causal violation is detected.
  *
  * <p>Carries the offending {@link ConsumerRecord} and the {@link CausalViolationReason} that
  * describes why the violation occurred.

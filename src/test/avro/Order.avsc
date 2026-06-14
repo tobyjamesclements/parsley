@@ -1,0 +1,10 @@
+{
+  "namespace": "io.parsley.avro",
+  "type": "record",
+  "name": "Order",
+  "fields": [
+    {"name": "orderId", "type": "string"},
+    {"name": "symbol", "type": "string"},
+    {"name": "quantity", "type": "int"}
+  ]
+}

@@ -6,6 +6,10 @@ every consumer processes messages in the correct causal order, even when records
 multiple topics and partitions, by encoding a vector clock onto each message and buffering
 records until their causal dependencies have been observed.</p>
 
+<p>The entire public surface lives in a single package, {@link io.parsley}, and consists of
+interfaces and records; every implementation is package-private and obtained through static
+factory methods.</p>
+
 <h2>Core concepts</h2>
 <dl>
   <dt><strong>Vector clock</strong></dt>
@@ -18,20 +22,21 @@ records until their causal dependencies have been observed.</p>
   that happened-before this one.</dd>
 
   <dt><strong>Causal buffer</strong></dt>
-  <dd>Records whose clock dependencies are not yet satisfied are held in an in-memory buffer and
-  released as soon as the frontier catches up. If the frontier never advances far enough, a
-  configurable {@link io.parsley.BufferingPolicy} decides whether to forward, drop, or
-  dead-letter the record.</dd>
+  <dd>Records whose clock dependencies are not yet satisfied are held in a changelog-backed buffer
+  and released as soon as the frontier catches up. If the frontier never advances far enough, a
+  configurable {@link io.parsley.BufferingPolicy} decides whether to forward the record anyway
+  ({@link io.parsley.BufferingPolicy.ForwardUnsafe ForwardUnsafe}), drop it
+  ({@link io.parsley.BufferingPolicy.Drop Drop}), or route it to a dead-letter sink
+  ({@link io.parsley.BufferingPolicy.DeadLetter DeadLetter}).</dd>
 </dl>
 
-<h2>Package overview</h2>
+<h2>Entry points</h2>
 <table>
-  <thead><tr><th>Package</th><th>Purpose</th></tr></thead>
+  <thead><tr><th>Type</th><th>Purpose</th></tr></thead>
   <tbody>
-    <tr><td>{@link io.parsley}</td><td>Shared vocabulary: vector clock, buffering policy and limit, violation handler, metrics.</td></tr>
-    <tr><td>{@link io.parsley.producer}</td><td>{@code CausalProducer} &mdash; stamps a vector clock onto every record.</td></tr>
-    <tr><td>{@link io.parsley.consumer}</td><td>{@code CausalConsumer} &mdash; a poll-based consumer that delivers records in causal order.</td></tr>
-    <tr><td>{@link io.parsley.stream}</td><td>{@code CausalProcessorSupplier} / {@code CausalStreams} &mdash; build causally consistent Kafka Streams topologies.</td></tr>
+    <tr><td>{@link io.parsley.CausalProducer}</td><td>Stamps the current vector clock onto every record it sends.</td></tr>
+    <tr><td>{@link io.parsley.CausalConsumer}</td><td>A {@code poll()}-based consumer that delivers records in causal order.</td></tr>
+    <tr><td>{@link io.parsley.CausalProcessorSupplier}</td><td>Wraps a user Kafka Streams {@code Processor} so its state access and {@code forward}s run behind the causal guarantee.</td></tr>
   </tbody>
 </table>
 
@@ -40,7 +45,7 @@ records until their causal dependencies have been observed.</p>
 // Consume with causal ordering
 CausalConsumer<String, Order> consumer = CausalConsumer.create(
     List.of("prices", "orders"),
-    BufferingPolicy.ignore(BufferLimit.ofDuration(Duration.ofSeconds(30))),
+    BufferingPolicy.forwardUnsafe(BufferLimit.ofDuration(Duration.ofSeconds(30))),
     consumerConfig,
     streamsConfig
 );

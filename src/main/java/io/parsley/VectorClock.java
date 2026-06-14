@@ -1,6 +1,5 @@
 package io.parsley;
 
-import io.parsley.internal.Attributes;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.apache.kafka.common.TopicPartition;
 import org.apache.kafka.common.header.Header;
@@ -90,6 +89,31 @@ public record VectorClock(Map<TopicPartition, Long> positions) {
             }
         }
         return true;
+    }
+
+    /**
+     * Returns the causal gap between this clock (treated as a requirement) and {@code frontier}
+     * (what has been observed): for every partition where this clock requires a higher offset than
+     * {@code frontier} has observed, the entry maps the partition to the <em>missing</em> amount
+     * ({@code required − observed}, counting an absent frontier position as {@code -1} so the gap is
+     * {@code required + 1}). The result is empty exactly when {@code this.satisfiedBy(frontier)}.
+     *
+     * @param frontier the frontier to measure against; must not be {@code null}
+     * @return the per-partition shortfall, or an empty map if the frontier already satisfies this
+     *         clock
+     */
+    public Map<TopicPartition, Long> missingAgainst(VectorClock frontier) {
+        Map<TopicPartition, Long> gap = new HashMap<>();
+        for (Map.Entry<TopicPartition, Long> entry : positions.entrySet()) {
+            long required = entry.getValue();
+            // An absent partition counts as observed offset -1 (one before offset 0), so a partition
+            // the frontier has never seen yields a gap of required - (-1) = required + 1.
+            long observed = frontier.positions.getOrDefault(entry.getKey(), -1L);
+            if (observed < required) {
+                gap.put(entry.getKey(), required - observed);
+            }
+        }
+        return Map.copyOf(gap);
     }
 
     /**
