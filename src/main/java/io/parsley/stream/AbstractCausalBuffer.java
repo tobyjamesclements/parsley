@@ -8,7 +8,7 @@ import java.util.List;
 
 abstract sealed class AbstractCausalBuffer<K, V>
         implements CausalBuffer<K, V>
-        permits IgnoreBuffer, DropBuffer, DeadLetterBuffer {
+        permits ForwardUnsafeBuffer, DropBuffer, DeadLetterBuffer {
 
     record Buffered<K, V>(CausalRecord<K, V> record, VectorClock dependencies) {}
 

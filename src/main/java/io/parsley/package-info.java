@@ -9,7 +9,7 @@
  *       {@link io.parsley.VectorClock#satisfiedBy satisfiedBy} and combine clocks with
  *       {@link io.parsley.VectorClock#merge merge}</li>
  *   <li>{@link io.parsley.BufferingPolicy} &mdash; what to do when a buffer limit fires:
- *       {@link io.parsley.BufferingPolicy.Ignore Ignore},
+ *       {@link io.parsley.BufferingPolicy.ForwardUnsafe ForwardUnsafe},
  *       {@link io.parsley.BufferingPolicy.Drop Drop},
  *       {@link io.parsley.BufferingPolicy.DeadLetter DeadLetter}</li>
  *   <li>{@link io.parsley.BufferLimit} &mdash; when to stop waiting:

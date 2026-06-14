@@ -20,7 +20,7 @@ class CausalStreamsTest {
 
     private CausalProcessorSupplier<String, String> supplier() {
         return CausalProcessorSupplier.create(
-                BufferingPolicy.ignore(BufferLimit.ofDuration(Duration.ofSeconds(1))),
+                BufferingPolicy.forwardUnsafe(BufferLimit.ofDuration(Duration.ofSeconds(1))),
                 CausalViolationHandler.noop());
     }
 

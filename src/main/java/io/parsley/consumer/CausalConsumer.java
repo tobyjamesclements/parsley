@@ -21,7 +21,7 @@ import java.util.Map;
  * <pre>{@code
  * try (CausalConsumer<String, Order> consumer = CausalConsumer.create(
  *         List.of("prices", "orders"),
- *         BufferingPolicy.ignore(BufferLimit.ofDuration(Duration.ofSeconds(30))),
+ *         BufferingPolicy.forwardUnsafe(BufferLimit.ofDuration(Duration.ofSeconds(30))),
  *         Map.of(),
  *         streamsConfig)) {
  *

@@ -21,6 +21,12 @@ public final class Attributes {
     /** Key under which the frontier is stored in {@link #FRONTIER_STORE}. */
     public static final String FRONTIER_KEY = "f";
 
+    /**
+     * Persistent state store holding records a decorating causal processor has buffered while
+     * their causal dependencies are unmet, so they survive a restart.
+     */
+    public static final String BUFFER_STORE = "parsley-buffer";
+
     /** Header stamped on forwarded records carrying the source topic. */
     public static final String SOURCE_TOPIC = "parsley-src-topic";
 

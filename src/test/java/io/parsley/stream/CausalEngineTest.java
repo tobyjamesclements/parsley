@@ -45,7 +45,7 @@ class CausalEngineTest {
 
     @Test
     void satisfiedRecordForwardsImmediatelyAndAdvancesFrontier() {
-        CausalEngine<String, String> engine = engine(BufferingPolicy.ignore(BufferLimit.ofSize(100)));
+        CausalEngine<String, String> engine = engine(BufferingPolicy.forwardUnsafe(BufferLimit.ofSize(100)));
 
         onRecord(engine, rec(PRICES, 3, VectorClock.empty()));
 
@@ -55,7 +55,7 @@ class CausalEngineTest {
 
     @Test
     void unsatisfiedRecordIsBufferedUntilFrontierCatchesUp() {
-        CausalEngine<String, String> engine = engine(BufferingPolicy.ignore(BufferLimit.ofSize(100)));
+        CausalEngine<String, String> engine = engine(BufferingPolicy.forwardUnsafe(BufferLimit.ofSize(100)));
 
         // An order causally depending on prices-0 having reached offset 3, arriving first.
         VectorClock orderDeps = VectorClock.empty().advance(PRICES, 3);
@@ -71,8 +71,80 @@ class CausalEngineTest {
     }
 
     @Test
+    void persistenceHookMirrorsBufferingAndDrainingAndEviction() {
+        List<CausalRecord<String, String>> held = new ArrayList<>();
+        List<CausalRecord<String, String>> unheld = new ArrayList<>();
+        BufferPersistence<String, String> persistence = new BufferPersistence<>() {
+            @Override
+            public void onHeld(CausalRecord<String, String> record, VectorClock dependencies) {
+                held.add(record);
+            }
+
+            @Override
+            public void onUnheld(CausalRecord<String, String> record) {
+                unheld.add(record);
+            }
+        };
+        CausalEngine<String, String> engine = new CausalEngine<>(
+                BufferingPolicy.forwardUnsafe(BufferLimit.ofSize(100)),
+                (record, reason) -> { }, VectorClock.empty(), null, frontiers::add,
+                persistence, io.parsley.Metrics.noop());
+
+        CausalRecord<String, String> order = rec(ORDERS, 0, VectorClock.empty().advance(PRICES, 3));
+        engine.onRecord(order);
+        assertEquals(List.of(order), held, "buffering a record must fire onHeld");
+        assertTrue(unheld.isEmpty());
+
+        // The premise arrives: the order drains and must fire onUnheld.
+        engine.onRecord(rec(PRICES, 3, VectorClock.empty()));
+        assertEquals(List.of(order), unheld, "draining a record must fire onUnheld");
+    }
+
+    @Test
+    void persistenceHookFiresOnUnheldWhenAStrictPolicyEvicts() {
+        List<CausalRecord<String, String>> unheld = new ArrayList<>();
+        BufferPersistence<String, String> persistence = new BufferPersistence<>() {
+            @Override
+            public void onHeld(CausalRecord<String, String> record, VectorClock dependencies) { }
+
+            @Override
+            public void onUnheld(CausalRecord<String, String> record) {
+                unheld.add(record);
+            }
+        };
+        CausalEngine<String, String> engine = new CausalEngine<>(
+                BufferingPolicy.drop(BufferLimit.ofSize(1)),
+                (record, reason) -> { }, VectorClock.empty(), null, frontiers::add,
+                persistence, io.parsley.Metrics.noop());
+
+        CausalRecord<String, String> order = rec(ORDERS, 0, VectorClock.empty().advance(PRICES, 99));
+        engine.onRecord(order); // buffered then immediately evicted (dropped) by the size-1 limit
+
+        assertEquals(List.of(order), unheld, "a dropped record must still fire onUnheld");
+    }
+
+    @Test
+    void restoredRecordDrainsWhenFrontierCatchesUp() {
+        CausalEngine<String, String> engine = engine(BufferingPolicy.forwardUnsafe(BufferLimit.ofSize(100)));
+
+        // Simulate a record rehydrated from the buffer store on restart: it must not advance the
+        // frontier or fire the frontier listener until its premise is genuinely observed.
+        engine.restore(rec(ORDERS, 0, VectorClock.empty().advance(PRICES, 3)),
+                VectorClock.empty().advance(PRICES, 3));
+        assertEquals(VectorClock.empty(), engine.frontier(), "restore must not advance the frontier");
+        assertTrue(frontiers.isEmpty(), "restore must not fire the frontier listener");
+
+        // Its premise arrives; the restored record drains in causal order behind it.
+        onRecord(engine, rec(PRICES, 3, VectorClock.empty()));
+
+        assertEquals(2, forwarded.size());
+        assertEquals(PRICES, forwarded.get(0).sourcePartition());
+        assertEquals(ORDERS, forwarded.get(1).sourcePartition());
+    }
+
+    @Test
     void missingHeaderForwardsWithViolation() {
-        CausalEngine<String, String> engine = engine(BufferingPolicy.ignore(BufferLimit.ofSize(100)));
+        CausalEngine<String, String> engine = engine(BufferingPolicy.forwardUnsafe(BufferLimit.ofSize(100)));
 
         onRecord(engine, rec(PRICES, 0, null));
 
@@ -82,7 +154,7 @@ class CausalEngineTest {
 
     @Test
     void unresolvableClockForwardsWithViolation() {
-        CausalEngine<String, String> engine = engine(BufferingPolicy.ignore(BufferLimit.ofSize(100)));
+        CausalEngine<String, String> engine = engine(BufferingPolicy.forwardUnsafe(BufferLimit.ofSize(100)));
 
         CausalRecord<String, String> garbage =
                 new CausalRecord<>("k", "v", 0L, List.of(), new byte[]{9, 9, 9}, PRICES, 0);
@@ -93,8 +165,8 @@ class CausalEngineTest {
     }
 
     @Test
-    void sizeLimitEvictsAndForwardsUnderIgnorePolicy() {
-        CausalEngine<String, String> engine = engine(BufferingPolicy.ignore(BufferLimit.ofSize(2)));
+    void sizeLimitEvictsAndForwardsUnderForwardUnsafePolicy() {
+        CausalEngine<String, String> engine = engine(BufferingPolicy.forwardUnsafe(BufferLimit.ofSize(2)));
         VectorClock unmet = VectorClock.empty().advance(PRICES, 99);
 
         onRecord(engine, rec(ORDERS, 0, unmet));
@@ -131,13 +203,13 @@ class CausalEngineTest {
     @Test
     void durationPolicyExposesEvictionInterval() {
         CausalEngine<String, String> engine =
-                engine(BufferingPolicy.ignore(BufferLimit.ofDuration(Duration.ofSeconds(5))));
+                engine(BufferingPolicy.forwardUnsafe(BufferLimit.ofDuration(Duration.ofSeconds(5))));
         assertEquals(Duration.ofSeconds(5), engine.evictionInterval().orElseThrow());
     }
 
     @Test
     void frontierListenerFiresBeforeEachForward() {
-        CausalEngine<String, String> engine = engine(BufferingPolicy.ignore(BufferLimit.ofSize(100)));
+        CausalEngine<String, String> engine = engine(BufferingPolicy.forwardUnsafe(BufferLimit.ofSize(100)));
 
         onRecord(engine, rec(PRICES, 3, VectorClock.empty()));
 

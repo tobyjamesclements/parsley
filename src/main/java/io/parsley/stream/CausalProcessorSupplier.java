@@ -21,7 +21,7 @@ import java.util.function.Consumer;
  * <h2>Topology integration</h2>
  * <pre>{@code
  * CausalProcessorSupplier<String, Order> supplier = CausalProcessorSupplier.create(
- *         BufferingPolicy.ignore(BufferLimit.ofDuration(Duration.ofSeconds(30))),
+ *         BufferingPolicy.forwardUnsafe(BufferLimit.ofDuration(Duration.ofSeconds(30))),
  *         (record, reason) -> log.warn("Violation on {}: {}", record.topic(), reason));
  *
  * KStream<String, Order> ordered = stream.process(supplier);
@@ -40,7 +40,7 @@ import java.util.function.Consumer;
 public interface CausalProcessorSupplier<K, V> extends ProcessorSupplier<K, V, K, V> {
 
     /**
-     * Creates a supplier for an {@link BufferingPolicy.Ignore Ignore} or
+     * Creates a supplier for a {@link BufferingPolicy.ForwardUnsafe ForwardUnsafe} or
      * {@link BufferingPolicy.Drop Drop} policy, using the default frontier store name.
      *
      * @param <K>              the record key type
@@ -58,7 +58,7 @@ public interface CausalProcessorSupplier<K, V> extends ProcessorSupplier<K, V, K
     }
 
     /**
-     * Creates a supplier for an {@link BufferingPolicy.Ignore Ignore} or
+     * Creates a supplier for a {@link BufferingPolicy.ForwardUnsafe ForwardUnsafe} or
      * {@link BufferingPolicy.Drop Drop} policy with an explicit frontier store name.
      *
      * <p>Use a distinct, stable name per causal processor when several share one topology.

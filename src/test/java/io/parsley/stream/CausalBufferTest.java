@@ -20,6 +20,7 @@ class CausalBufferTest {
 
     private final List<CausalViolationReason> violations = new ArrayList<>();
     private final CausalViolationHandler handler = (record, reason) -> violations.add(reason);
+    private final List<CausalRecord<String, String>> removed = new ArrayList<>();
 
     private static CausalRecord<String, String> rec(TopicPartition tp, long offset) {
         return new CausalRecord<>("k", "v", 0L, List.of(), new byte[0], tp, offset);
@@ -27,7 +28,7 @@ class CausalBufferTest {
 
     @Test
     void drainReleasesOnlySatisfiedRecordsInInsertionOrder() {
-        IgnoreBuffer<String, String> buffer = new IgnoreBuffer<>();
+        ForwardUnsafeBuffer<String, String> buffer = new ForwardUnsafeBuffer<>();
         buffer.add(rec(ORDERS, 0), VectorClock.empty().advance(PRICES, 1));
         buffer.add(rec(ORDERS, 1), VectorClock.empty().advance(PRICES, 5));
 
@@ -39,15 +40,16 @@ class CausalBufferTest {
     }
 
     @Test
-    void ignoreBufferReturnsEvictedRecordsForForwarding() {
-        IgnoreBuffer<String, String> buffer = new IgnoreBuffer<>();
+    void forwardUnsafeBufferReturnsEvictedRecordsForForwarding() {
+        ForwardUnsafeBuffer<String, String> buffer = new ForwardUnsafeBuffer<>();
         buffer.add(rec(ORDERS, 0), VectorClock.empty().advance(PRICES, 9));
 
-        List<CausalRecord<String, String>> evicted = buffer.evict(BufferLimit.ofSize(1), handler);
+        List<CausalRecord<String, String>> evicted = buffer.evict(BufferLimit.ofSize(1), handler, removed::add);
 
         assertEquals(1, evicted.size());
         assertEquals(0, buffer.size());
         assertEquals(List.of(CausalViolationReason.LIMIT_REACHED), violations);
+        assertEquals(evicted, removed, "every evicted record must be reported to onRemoved");
     }
 
     @Test
@@ -55,11 +57,13 @@ class CausalBufferTest {
         DropBuffer<String, String> buffer = new DropBuffer<>();
         buffer.add(rec(ORDERS, 0), VectorClock.empty().advance(PRICES, 9));
 
-        List<CausalRecord<String, String>> evicted = buffer.evict(BufferLimit.ofSize(1), handler);
+        List<CausalRecord<String, String>> evicted = buffer.evict(BufferLimit.ofSize(1), handler, removed::add);
 
         assertTrue(evicted.isEmpty());
         assertEquals(0, buffer.size());
         assertEquals(List.of(CausalViolationReason.LIMIT_REACHED), violations);
+        assertEquals(1, removed.size(), "dropped records must still be reported to onRemoved");
+        assertEquals(0L, removed.get(0).sourceOffset());
     }
 
     @Test
@@ -68,11 +72,12 @@ class CausalBufferTest {
         DeadLetterBuffer<String, String> buffer = new DeadLetterBuffer<>(sink::add);
         buffer.add(rec(ORDERS, 0), VectorClock.empty().advance(PRICES, 9));
 
-        List<CausalRecord<String, String>> evicted = buffer.evict(BufferLimit.ofSize(1), handler);
+        List<CausalRecord<String, String>> evicted = buffer.evict(BufferLimit.ofSize(1), handler, removed::add);
 
         assertTrue(evicted.isEmpty());
         assertEquals(1, sink.size());
         assertEquals(List.of(CausalViolationReason.LIMIT_REACHED), violations);
+        assertEquals(sink, removed, "dead-lettered records must also be reported to onRemoved");
     }
 
     @Test

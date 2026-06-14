@@ -47,6 +47,7 @@ final class CausalEngine<K, V> {
     private final CausalViolationHandler violationHandler;
     private final CausalBuffer<K, V> buffer;
     private final FrontierListener frontierListener;
+    private final BufferPersistence<K, V> persistence;
     private final Metrics metrics;
     private final Map<CausalRecord<K, V>, Instant> bufferedAt = new IdentityHashMap<>();
 
@@ -60,7 +61,7 @@ final class CausalEngine<K, V> {
                  Consumer<CausalRecord<K, V>> deadLetterSink,
                  FrontierListener frontierListener) {
         this(policy, violationHandler, initialFrontier, deadLetterSink, frontierListener,
-                Metrics.noop());
+                BufferPersistence.noop(), Metrics.noop());
     }
 
     CausalEngine(BufferingPolicy policy,
@@ -69,10 +70,22 @@ final class CausalEngine<K, V> {
                  Consumer<CausalRecord<K, V>> deadLetterSink,
                  FrontierListener frontierListener,
                  Metrics metrics) {
+        this(policy, violationHandler, initialFrontier, deadLetterSink, frontierListener,
+                BufferPersistence.noop(), metrics);
+    }
+
+    CausalEngine(BufferingPolicy policy,
+                 CausalViolationHandler violationHandler,
+                 VectorClock initialFrontier,
+                 Consumer<CausalRecord<K, V>> deadLetterSink,
+                 FrontierListener frontierListener,
+                 BufferPersistence<K, V> persistence,
+                 Metrics metrics) {
         this.policy = policy;
         this.violationHandler = violationHandler;
         this.frontier = initialFrontier;
         this.frontierListener = frontierListener;
+        this.persistence = persistence;
         this.metrics = metrics;
         this.buffer = createBuffer(policy, deadLetterSink);
         configureLimits(limitOf(policy));
@@ -114,6 +127,7 @@ final class CausalEngine<K, V> {
         } else {
             buffer.add(record, dependencies);
             bufferedAt.put(record, Instant.now());
+            persistence.onHeld(record, dependencies);
             metrics.onMessageBuffered();
             if (buffer.size() >= sizeLimit) {
                 out.addAll(evictNow());
@@ -123,11 +137,24 @@ final class CausalEngine<K, V> {
     }
 
     /**
+     * Re-adds a record to the buffer during restoration from persistent storage, without
+     * re-persisting it or advancing the frontier. The record is gated normally on subsequent
+     * frontier advances.
+     *
+     * @param record       the record to rehydrate
+     * @param dependencies the record's decoded causal dependencies
+     */
+    void restore(CausalRecord<K, V> record, VectorClock dependencies) {
+        buffer.add(record, dependencies);
+        bufferedAt.put(record, Instant.now());
+    }
+
+    /**
      * Evicts the buffer because a limit fired (called by the engine itself for size limits,
      * and periodically by the processor for duration limits).
      *
      * @return records to forward downstream out-of-order; non-empty only for the
-     *         {@link BufferingPolicy.Ignore Ignore} policy
+     *         {@link BufferingPolicy.ForwardUnsafe ForwardUnsafe} policy
      */
     List<CausalRecord<K, V>> evictNow() {
         if (buffer.size() == 0) {
@@ -136,7 +163,7 @@ final class CausalEngine<K, V> {
         List<CausalRecord<K, V>> toForward = buffer.evict(limitOf(policy), (record, reason) -> {
             metrics.onViolation(reason);
             violationHandler.onViolation(record, reason);
-        });
+        }, persistence::onUnheld);
         bufferedAt.clear();
         for (CausalRecord<K, V> record : toForward) {
             advanceFrontier(record);
@@ -168,6 +195,7 @@ final class CausalEngine<K, V> {
         while (!released.isEmpty()) {
             for (CausalRecord<K, V> record : released) {
                 advanceFrontier(record);
+                persistence.onUnheld(record);
                 Instant at = bufferedAt.remove(record);
                 if (at != null) {
                     metrics.onMessageReleased(Duration.between(at, Instant.now()));
@@ -203,7 +231,7 @@ final class CausalEngine<K, V> {
 
     private static BufferLimit limitOf(BufferingPolicy policy) {
         return switch (policy) {
-            case BufferingPolicy.Ignore ignore -> ignore.limit();
+            case BufferingPolicy.ForwardUnsafe forwardUnsafe -> forwardUnsafe.limit();
             case BufferingPolicy.Drop drop -> drop.limit();
             case BufferingPolicy.DeadLetter deadLetter -> deadLetter.limit();
         };

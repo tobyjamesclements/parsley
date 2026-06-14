@@ -61,7 +61,7 @@ class CausalRoundTripIT {
                 ProducerConfig.VALUE_SERIALIZER_CLASS_CONFIG, StringSerializer.class.getName()));
              CausalConsumer<String, String> consumer = CausalConsumer.create(
                      List.of(TOPIC),
-                     BufferingPolicy.ignore(BufferLimit.ofDuration(Duration.ofSeconds(5))),
+                     BufferingPolicy.forwardUnsafe(BufferLimit.ofDuration(Duration.ofSeconds(5))),
                      Map.of(ConsumerConfig.GROUP_ID_CONFIG, "rt-" + UUID.randomUUID()),
                      streamsConfig(bootstrap))) {
 

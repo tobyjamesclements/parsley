@@ -22,14 +22,17 @@ import org.apache.kafka.streams.Topology;
 import org.apache.kafka.streams.TopologyTestDriver;
 import org.apache.kafka.streams.kstream.Consumed;
 import org.apache.kafka.streams.kstream.Produced;
+import org.apache.kafka.streams.state.KeyValueStore;
 import org.apache.kafka.streams.test.TestRecord;
 import org.junit.jupiter.api.Test;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.Properties;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
@@ -40,6 +43,7 @@ class CausalProcessorTopologyTest {
 
     private static final String VECTOR_CLOCK_HEADER = Attributes.VECTOR_CLOCK;
     private static final TopicPartition PRICES_0 = new TopicPartition("prices", 0);
+    private static final TopicPartition ORDERS_0 = new TopicPartition("orders", 0);
 
     private static Properties config() {
         Properties props = new Properties();
@@ -61,7 +65,7 @@ class CausalProcessorTopologyTest {
         StreamsBuilder builder = new StreamsBuilder();
         builder.stream(List.of("prices", "orders"), Consumed.with(Serdes.String(), Serdes.String()))
                 .process(CausalProcessorSupplier.create(
-                        BufferingPolicy.ignore(BufferLimit.ofSize(100)),
+                        BufferingPolicy.forwardUnsafe(BufferLimit.ofSize(100)),
                         CausalViolationHandler.noop()))
                 .to("out", Produced.with(Serdes.String(), Serdes.String()));
 
@@ -91,7 +95,7 @@ class CausalProcessorTopologyTest {
         StreamsBuilder builder = new StreamsBuilder();
         builder.stream("prices", Consumed.with(Serdes.String(), Serdes.String()))
                 .process(CausalProcessorSupplier.create(
-                        BufferingPolicy.ignore(BufferLimit.ofSize(100)),
+                        BufferingPolicy.forwardUnsafe(BufferLimit.ofSize(100)),
                         CausalViolationHandler.noop()))
                 .to("out", Produced.with(Serdes.String(), Serdes.String()));
 
@@ -132,5 +136,60 @@ class CausalProcessorTopologyTest {
             assertEquals(1, deadLettered.size());
             assertEquals("order", deadLettered.get(0).value());
         }
+    }
+
+    @Test
+    void twoProcessorsWithDistinctStoreNamesCoexistAndKeepIsolatedFrontiers() {
+        // Two causal processors in one topology. With the default store name both would register
+        // "parsley-frontier" and Kafka Streams would reject the topology; distinct names are what
+        // make multiple stores possible.
+        StreamsBuilder builder = new StreamsBuilder();
+        builder.stream("orders", Consumed.with(Serdes.String(), Serdes.String()))
+                .process(CausalProcessorSupplier.create(
+                        BufferingPolicy.forwardUnsafe(BufferLimit.ofSize(100)),
+                        CausalViolationHandler.noop(),
+                        "orders-frontier"))
+                .to("orders-out", Produced.with(Serdes.String(), Serdes.String()));
+        builder.stream("prices", Consumed.with(Serdes.String(), Serdes.String()))
+                .process(CausalProcessorSupplier.create(
+                        BufferingPolicy.forwardUnsafe(BufferLimit.ofSize(100)),
+                        CausalViolationHandler.noop(),
+                        "prices-frontier"))
+                .to("prices-out", Produced.with(Serdes.String(), Serdes.String()));
+
+        try (TopologyTestDriver driver = new TopologyTestDriver(builder.build(), config())) {
+            TestInputTopic<String, String> orders =
+                    driver.createInputTopic("orders", new StringSerializer(), new StringSerializer());
+            TestInputTopic<String, String> prices =
+                    driver.createInputTopic("prices", new StringSerializer(), new StringSerializer());
+            TestOutputTopic<String, String> ordersOut =
+                    driver.createOutputTopic("orders-out", new StringDeserializer(), new StringDeserializer());
+            TestOutputTopic<String, String> pricesOut =
+                    driver.createOutputTopic("prices-out", new StringDeserializer(), new StringDeserializer());
+
+            // Each record is causally satisfied (empty premise) so it forwards and advances its
+            // own processor's frontier to its own source partition.
+            orders.pipeInput(new TestRecord<>("k", "order", clockHeader(VectorClock.empty())));
+            prices.pipeInput(new TestRecord<>("k", "price", clockHeader(VectorClock.empty())));
+
+            // Ordering still works per branch.
+            assertEquals(List.of("order"), ordersOut.readValuesToList());
+            assertEquals(List.of("price"), pricesOut.readValuesToList());
+
+            // Each named store holds only its own branch's frontier — proving the name flows
+            // through to the actual persisted state, not just store registration.
+            VectorClock ordersFrontier = frontierIn(driver, "orders-frontier");
+            VectorClock pricesFrontier = frontierIn(driver, "prices-frontier");
+
+            assertEquals(Map.of(ORDERS_0, 0L), ordersFrontier.positions());
+            assertEquals(Map.of(PRICES_0, 0L), pricesFrontier.positions());
+        }
+    }
+
+    private static VectorClock frontierIn(TopologyTestDriver driver, String storeName) {
+        KeyValueStore<String, byte[]> store = driver.getKeyValueStore(storeName);
+        byte[] stored = store.get(Attributes.FRONTIER_KEY);
+        assertNotNull(stored, "expected a persisted frontier in store " + storeName);
+        return VectorClock.fromBytes(stored);
     }
 }

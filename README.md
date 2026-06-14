@@ -85,13 +85,39 @@ producer.send(new ProducerRecord<>("orders", key, value), consumer.frontier());
 
 ```java
 CausalProcessorSupplier<String, String> supplier = CausalProcessorSupplier.create(
-    BufferingPolicy.ignore(BufferLimit.ofDuration(Duration.ofSeconds(30))),
+    BufferingPolicy.forwardUnsafe(BufferLimit.ofDuration(Duration.ofSeconds(30))),
     (record, reason) -> log.warn("Causal violation on {}: {}", record.topic(), reason));
 
 builder.stream(List.of("prices", "orders"), Consumed.with(Serdes.String(), Serdes.String()))
        .process(supplier)
        .to("output-topic");
 ```
+
+**Decorate your own processor** — write an ordinary Kafka Streams `Processor` and wrap its supplier
+in `Parsley.causal(...)`. Inside your `process()`, every state-store read/write and every `forward`
+is causally ordered and the outgoing record is stamped with the current vector clock — transparently,
+with no `CausalProducer` on egress (Streams sinks carry the stamped header out to the topic). You
+never see a vector clock, a frontier, or a buffer:
+
+```java
+ProcessorSupplier<String, Order, String, Enriched> user = new ProcessorSupplier<>() {
+    public Processor<String, Order, String, Enriched> get() { return new EnrichOrder(); }
+    public Set<StoreBuilder<?>> stores() { return Set.of(pricesStateBuilder); }   // your own stores
+};
+
+builder.stream(List.of("prices", "orders"), Consumed.with(Serdes.String(), orderSerde))
+       .process(Parsley.causal(user, BufferingPolicy.deadLetter(limit, "parsley-dlq"),
+                               onViolation, deadLetterSink, Serdes.String(), orderSerde))
+       .to("output-topic");
+```
+
+Held records are persisted to a changelog-backed buffer store (serialised with the serdes you pass,
+resolved per source topic) so they survive a restart. The guarantee holds for every admitted record
+under any policy, and for every record under a **strict** policy (`deadLetter`/`drop`); the lenient
+`forwardUnsafe` policy preserves delivery by forwarding un-satisfied records under sustained lag,
+suspending the guarantee for exactly those records (each flagged via the `ViolationHandler`, with the
+causal gap). Three preconditions apply — closed effects, co-partitioning, and acceptance of the
+policy — documented on `Parsley.causal(...)`.
 
 **Propagate across services** — a vector clock is also a causal token you can hand another service
 (e.g. over HTTP) so it reads consistently elsewhere. Extract it from a consumed record, serialise,

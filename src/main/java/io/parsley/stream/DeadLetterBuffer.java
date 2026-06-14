@@ -16,10 +16,12 @@ final class DeadLetterBuffer<K, V> extends AbstractCausalBuffer<K, V> {
     }
 
     @Override
-    public List<CausalRecord<K, V>> evict(BufferLimit limit, CausalViolationHandler handler) {
+    public List<CausalRecord<K, V>> evict(
+            BufferLimit limit, CausalViolationHandler handler, Consumer<CausalRecord<K, V>> onRemoved) {
         buffer.values().forEach(buffered -> {
             deadLetterSink.accept(buffered.record());
             handler.onViolation(buffered.record().toConsumerRecord(), CausalViolationReason.LIMIT_REACHED);
+            onRemoved.accept(buffered.record());
         });
         buffer.clear();
         return List.of();

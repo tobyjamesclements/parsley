@@ -27,7 +27,7 @@ class CausalProcessorSupplierTest {
     @Test
     void getReturnsAProcessorAndRegistersFrontierStore() {
         CausalProcessorSupplier<String, String> supplier = CausalProcessorSupplier.create(
-                BufferingPolicy.ignore(BufferLimit.ofDuration(Duration.ofSeconds(1))),
+                BufferingPolicy.forwardUnsafe(BufferLimit.ofDuration(Duration.ofSeconds(1))),
                 CausalViolationHandler.noop());
 
         assertNotNull(supplier.get());
@@ -44,5 +44,41 @@ class CausalProcessorSupplierTest {
         CausalProcessorSupplier<String, String> supplier =
                 CausalProcessorSupplier.create(deadLetter, CausalViolationHandler.noop(), cr -> {});
         assertNotNull(supplier.get());
+    }
+
+    @Test
+    void customFrontierStoreNameIsRegistered() {
+        CausalProcessorSupplier<String, String> supplier = CausalProcessorSupplier.create(
+                BufferingPolicy.forwardUnsafe(BufferLimit.ofDuration(Duration.ofSeconds(1))),
+                CausalViolationHandler.noop(),
+                "orders-frontier");
+
+        assertNotNull(supplier.get());
+
+        Set<StoreBuilder<?>> stores = supplier.stores();
+        assertEquals(1, stores.size());
+        assertEquals("orders-frontier", stores.iterator().next().name());
+    }
+
+    @Test
+    void deadLetterFactoryRegistersCustomFrontierStoreName() {
+        BufferingPolicy.DeadLetter deadLetter =
+                (BufferingPolicy.DeadLetter) BufferingPolicy.deadLetter(BufferLimit.ofSize(1), "dlq");
+        CausalProcessorSupplier<String, String> supplier = CausalProcessorSupplier.create(
+                deadLetter, CausalViolationHandler.noop(), cr -> {}, "dlq-frontier");
+
+        assertNotNull(supplier.get());
+
+        Set<StoreBuilder<?>> stores = supplier.stores();
+        assertEquals(1, stores.size());
+        assertEquals("dlq-frontier", stores.iterator().next().name());
+    }
+
+    @Test
+    void explicitNameFactoryRejectsDeadLetterPolicy() {
+        BufferingPolicy.DeadLetter deadLetter =
+                (BufferingPolicy.DeadLetter) BufferingPolicy.deadLetter(BufferLimit.ofSize(1), "dlq");
+        assertThrows(IllegalArgumentException.class,
+                () -> CausalProcessorSupplier.create(deadLetter, CausalViolationHandler.noop(), "frontier"));
     }
 }

@@ -98,6 +98,29 @@ class VectorClockTest {
     }
 
     @Test
+    void missingAgainstIsEmptyWhenTheFrontierSatisfiesTheClock() {
+        VectorClock required = VectorClock.empty().advance(P0, 3);
+        assertTrue(required.missingAgainst(VectorClock.empty().advance(P0, 3)).isEmpty());
+        assertTrue(required.missingAgainst(VectorClock.empty().advance(P0, 9)).isEmpty());
+        assertTrue(VectorClock.empty().missingAgainst(VectorClock.empty()).isEmpty());
+    }
+
+    @Test
+    void missingAgainstReportsThePerPartitionShortfall() {
+        VectorClock required = VectorClock.empty().advance(P0, 5).advance(O0, 2);
+        // P0: required 5, observed 1 → gap 4. O0: required 2, observed absent(-1) → gap 3.
+        VectorClock frontier = VectorClock.empty().advance(P0, 1);
+        assertEquals(Map.of(P0, 4L, O0, 3L), required.missingAgainst(frontier));
+    }
+
+    @Test
+    void missingAgainstCountsAnAbsentPositionAsMinusOne() {
+        VectorClock required = VectorClock.empty().advance(P0, 0);
+        assertEquals(Map.of(P0, 1L), required.missingAgainst(VectorClock.empty()),
+                "requiring offset 0 against an unseen partition is a gap of 1");
+    }
+
+    @Test
     void positionsAreDefensivelyCopied() {
         java.util.Map<TopicPartition, Long> mutable = new java.util.HashMap<>();
         mutable.put(P0, 1L);

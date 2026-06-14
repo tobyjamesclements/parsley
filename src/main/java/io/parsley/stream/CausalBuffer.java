@@ -5,6 +5,7 @@ import io.parsley.CausalViolationHandler;
 import io.parsley.VectorClock;
 
 import java.util.List;
+import java.util.function.Consumer;
 
 /**
  * Buffers records whose causal dependencies are not yet satisfied.
@@ -37,13 +38,17 @@ interface CausalBuffer<K, V> {
 
     /**
      * Evicts the buffered records because {@code limit} fired, reporting a
-     * {@link io.parsley.CausalViolationReason#LIMIT_REACHED} violation per record.
+     * {@link io.parsley.CausalViolationReason#LIMIT_REACHED} violation per record and notifying
+     * {@code onRemoved} for <em>every</em> record that leaves the buffer (regardless of whether the
+     * policy forwards, drops, or dead-letters it).
      *
-     * @param limit   the limit that fired
-     * @param handler the violation callback
+     * @param limit     the limit that fired
+     * @param handler   the violation callback
+     * @param onRemoved called once per record removed from the buffer, for buffer-persistence
      * @return records the caller must forward downstream; empty for drop/dead-letter policies
      */
-    List<CausalRecord<K, V>> evict(BufferLimit limit, CausalViolationHandler handler);
+    List<CausalRecord<K, V>> evict(
+            BufferLimit limit, CausalViolationHandler handler, Consumer<CausalRecord<K, V>> onRemoved);
 
     /**
      * Returns the number of records currently buffered.
