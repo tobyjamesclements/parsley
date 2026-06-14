@@ -1,13 +1,5 @@
-package io.parsley.it;
+package io.parsley;
 
-import io.parsley.BufferLimit;
-import io.parsley.BufferingPolicy;
-import io.parsley.CausalViolationReason;
-import io.parsley.FrontierListener;
-import io.parsley.VectorClock;
-import io.parsley.Violation;
-import io.parsley.ViolationHandler;
-import io.parsley.CausalProcessorSupplier;
 import org.apache.kafka.common.TopicPartition;
 import org.apache.kafka.common.header.Headers;
 import org.apache.kafka.common.header.internals.RecordHeader;

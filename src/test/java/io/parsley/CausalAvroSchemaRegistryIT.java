@@ -1,12 +1,7 @@
-package io.parsley.it;
+package io.parsley;
 
 import io.confluent.kafka.serializers.KafkaAvroSerializer;
 import io.confluent.kafka.streams.serdes.avro.SpecificAvroSerde;
-import io.parsley.BufferLimit;
-import io.parsley.BufferingPolicy;
-import io.parsley.CausalConsumer;
-import io.parsley.CausalProducer;
-import io.parsley.VectorClock;
 import io.parsley.avro.Order;
 import io.parsley.avro.Price;
 import org.apache.avro.specific.SpecificRecord;

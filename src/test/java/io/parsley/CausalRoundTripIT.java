@@ -1,12 +1,5 @@
-package io.parsley.it;
+package io.parsley;
 
-import io.parsley.BufferLimit;
-import io.parsley.BufferingPolicy;
-import io.parsley.CausalViolationReason;
-import io.parsley.VectorClock;
-import io.parsley.Violation;
-import io.parsley.CausalConsumer;
-import io.parsley.CausalProducer;
 import org.apache.kafka.clients.admin.Admin;
 import org.apache.kafka.clients.admin.NewTopic;
 import org.apache.kafka.clients.consumer.ConsumerConfig;

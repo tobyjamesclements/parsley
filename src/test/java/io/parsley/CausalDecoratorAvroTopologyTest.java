@@ -1,15 +1,9 @@
-package io.parsley.it;
+package io.parsley;
 
 import io.confluent.kafka.schemaregistry.testutil.MockSchemaRegistry;
 import io.confluent.kafka.serializers.KafkaAvroDeserializerConfig;
 import io.confluent.kafka.serializers.AbstractKafkaSchemaSerDeConfig;
 import io.confluent.kafka.streams.serdes.avro.SpecificAvroSerde;
-import io.parsley.BufferLimit;
-import io.parsley.BufferingPolicy;
-import io.parsley.CausalProcessorSupplier;
-import io.parsley.VectorClock;
-import io.parsley.Violation;
-import io.parsley.ViolationHandler;
 import io.parsley.avro.Order;
 import io.parsley.avro.Price;
 import org.apache.avro.specific.SpecificRecord;

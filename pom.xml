@@ -132,7 +132,7 @@
                         <artifactId>pitest-maven</artifactId>
                         <configuration>
                             <excludedTestClasses>
-                                <param>io.parsley.it.*</param>
+                                <param>io.parsley.*IT</param>
                             </excludedTestClasses>
                         </configuration>
                         <executions>
