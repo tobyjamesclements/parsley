@@ -27,7 +27,7 @@ jobs:
           distribution: 'temurin'
           cache: 'maven'
       - name: Build Javadoc site
-        run: mvn javadoc:javadoc --no-transfer-progress -DskipTests
+        run: ./mvnw javadoc:javadoc --no-transfer-progress -DskipTests
       - uses: actions/configure-pages@v4
       - uses: actions/upload-pages-artifact@v4
         with:

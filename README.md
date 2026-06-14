@@ -55,8 +55,8 @@ then declare the repository and dependency:
 ```
 
 `parsley` pulls in `kafka-streams` and `kafka-clients` transitively. Java 25 is required
-(`--release 25`). Build from source with `mvn install`; the suite is verified with
-[PIT](https://pitest.org) via `mvn -Pmutation test` (report-only).
+(`--release 25`). Build from source with `./mvnw install`; the suite is verified with
+[PIT](https://pitest.org) via `./mvnw -Pmutation test` (report-only).
 
 ## Usage
 

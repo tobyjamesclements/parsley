@@ -27,7 +27,7 @@ jobs:
           server-password: MAVEN_TOKEN
 
       - name: Publish to GitHub Packages
-        run: mvn --batch-mode deploy -DskipTests
+        run: ./mvnw --batch-mode deploy -DskipTests
         env:
           MAVEN_USERNAME: ${{ github.actor }}
           MAVEN_TOKEN: ${{ secrets.GITHUB_TOKEN }}
