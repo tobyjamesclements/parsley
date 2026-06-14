@@ -1,6 +1,5 @@
 package io.parsley;
 
-import io.parsley.internal.Attributes;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.apache.kafka.common.TopicPartition;
 import org.apache.kafka.common.header.Header;

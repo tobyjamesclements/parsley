@@ -4,8 +4,7 @@ import io.parsley.BufferLimit;
 import io.parsley.BufferingPolicy;
 import io.parsley.VectorClock;
 import io.parsley.ViolationHandler;
-import io.parsley.internal.Attributes;
-import io.parsley.stream.Parsley;
+import io.parsley.CausalProcessor;
 import org.apache.kafka.clients.admin.Admin;
 import org.apache.kafka.clients.admin.NewTopic;
 import org.apache.kafka.clients.consumer.ConsumerConfig;
@@ -84,7 +83,7 @@ class CausalDecoratorSinkPropagationIT {
 
         StreamsBuilder builder = new StreamsBuilder();
         builder.stream(IN, Consumed.with(Serdes.String(), Serdes.String()))
-                .process(Parsley.causal(user, BufferingPolicy.forwardUnsafe(BufferLimit.ofDuration(Duration.ofSeconds(5))),
+                .process(CausalProcessor.create(user, BufferingPolicy.forwardUnsafe(BufferLimit.ofDuration(Duration.ofSeconds(5))),
                         ViolationHandler.noop(), Serdes.String(), Serdes.String()))
                 .to(OUT, Produced.with(Serdes.String(), Serdes.String()));
 
@@ -97,7 +96,7 @@ class CausalDecoratorSinkPropagationIT {
                     ProducerConfig.KEY_SERIALIZER_CLASS_CONFIG, StringSerializer.class.getName(),
                     ProducerConfig.VALUE_SERIALIZER_CLASS_CONFIG, StringSerializer.class.getName()))) {
                 ProducerRecord<String, String> record = new ProducerRecord<>(IN, "k", "hello");
-                record.headers().add(new RecordHeader(Attributes.VECTOR_CLOCK, VectorClock.empty().toBytes()));
+                record.headers().add(new RecordHeader("parsley-vector-clock", VectorClock.empty().toBytes()));
                 producer.send(record).get();
             }
 

@@ -1,8 +1,19 @@
 /**
- * The shared Parsley vocabulary: the value and configuration types used across the producer,
- * consumer, and stream packages.
+ * Parsley: causal consistency for Kafka. A single package whose public surface is interfaces and
+ * records; all implementations are package-private and obtained through factory methods.
  *
- * <h2>Key types</h2>
+ * <h2>Entry points (interfaces with static factories)</h2>
+ * <ul>
+ *   <li>{@link io.parsley.CausalProcessor} &mdash; {@code CausalProcessor.create(...)} wraps your own
+ *       Kafka Streams {@code Processor} so its state access and {@code forward}s run behind the causal
+ *       guarantee; drop it into {@code stream(...).process(...)}</li>
+ *   <li>{@link io.parsley.CausalConsumer} &mdash; {@code CausalConsumer.create(...)} delivers records
+ *       in causal order over a {@code poll()} API</li>
+ *   <li>{@link io.parsley.CausalProducer} &mdash; {@code CausalProducer.create(...)} stamps the causal
+ *       clock onto produced records</li>
+ * </ul>
+ *
+ * <h2>Key value types</h2>
  * <ul>
  *   <li>{@link io.parsley.VectorClock} &mdash; a snapshot of causal progress (highest offset
  *       per {@link org.apache.kafka.common.TopicPartition}); test readiness with

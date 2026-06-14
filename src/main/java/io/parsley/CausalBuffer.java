@@ -1,6 +1,5 @@
-package io.parsley.stream;
+package io.parsley;
 
-import io.parsley.VectorClock;
 
 import java.util.ArrayList;
 import java.util.LinkedHashMap;

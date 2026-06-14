@@ -1,9 +1,5 @@
-package io.parsley.stream;
+package io.parsley;
 
-import io.parsley.BufferingPolicy;
-import io.parsley.VectorClock;
-import io.parsley.ViolationHandler;
-import io.parsley.internal.Attributes;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.apache.kafka.common.TopicPartition;
 import org.apache.kafka.common.header.Header;
@@ -37,7 +33,7 @@ import java.util.function.Consumer;
  * @param <KOut> the forwarded key type
  * @param <VOut> the forwarded value type
  */
-final class DecoratingCausalProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn, KOut, VOut> {
+final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn, KOut, VOut> {
 
     private final Processor<KIn, VIn, KOut, VOut> delegate;
     private final BufferingPolicy policy;
@@ -57,7 +53,7 @@ final class DecoratingCausalProcessor<KIn, VIn, KOut, VOut> implements Processor
     private volatile VectorClock stampClock = VectorClock.empty();
     private volatile RecordMetadata deliveryMetadata;
 
-    DecoratingCausalProcessor(Processor<KIn, VIn, KOut, VOut> delegate,
+    ParsleyProcessor(Processor<KIn, VIn, KOut, VOut> delegate,
                               BufferingPolicy policy,
                               ViolationHandler onViolation,
                               Consumer<ConsumerRecord<KIn, VIn>> deadLetterSink,

@@ -6,8 +6,7 @@ import io.parsley.CausalViolationReason;
 import io.parsley.VectorClock;
 import io.parsley.Violation;
 import io.parsley.ViolationHandler;
-import io.parsley.internal.Attributes;
-import io.parsley.stream.Parsley;
+import io.parsley.CausalProcessor;
 import org.apache.kafka.common.TopicPartition;
 import org.apache.kafka.common.header.Headers;
 import org.apache.kafka.common.header.internals.RecordHeader;
@@ -50,7 +49,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * Exercises {@link Parsley#causal} — the decorating causal processor — through a real Kafka Streams
+ * Exercises {@link CausalProcessor#create} — the decorating causal processor — through a real Kafka Streams
  * topology using the {@link TopologyTestDriver} (no broker required).
  */
 class CausalDecoratorTopologyTest {
@@ -79,7 +78,7 @@ class CausalDecoratorTopologyTest {
 
     private static Headers clockHeader(VectorClock clock) {
         Headers headers = new RecordHeaders();
-        headers.add(new RecordHeader(Attributes.VECTOR_CLOCK, clock.toBytes()));
+        headers.add(new RecordHeader("parsley-vector-clock", clock.toBytes()));
         return headers;
     }
 
@@ -119,7 +118,7 @@ class CausalDecoratorTopologyTest {
     @Test
     void admittedRecordRunsDelegateAndStampsTheMergedClock() {
         Topology topology = topology(
-                Parsley.causal(upperCaser(), BufferingPolicy.forwardUnsafe(BufferLimit.ofSize(100)),
+                CausalProcessor.create(upperCaser(), BufferingPolicy.forwardUnsafe(BufferLimit.ofSize(100)),
                         onViolation, Serdes.String(), Serdes.String()),
                 List.of("in"));
 
@@ -143,7 +142,7 @@ class CausalDecoratorTopologyTest {
     @Test
     void heldRecordIsBufferedThenDrainedThroughDelegate() {
         Topology topology = topology(
-                Parsley.causal(upperCaser(), BufferingPolicy.forwardUnsafe(BufferLimit.ofSize(100)),
+                CausalProcessor.create(upperCaser(), BufferingPolicy.forwardUnsafe(BufferLimit.ofSize(100)),
                         onViolation, Serdes.String(), Serdes.String()),
                 List.of("prices", "orders"));
 
@@ -154,7 +153,7 @@ class CausalDecoratorTopologyTest {
                     driver.createInputTopic("orders", new StringSerializer(), new StringSerializer());
             TestOutputTopic<String, String> out =
                     driver.createOutputTopic("out", new StringDeserializer(), new StringDeserializer());
-            KeyValueStore<String, byte[]> bufferStore = driver.getKeyValueStore(Attributes.BUFFER_STORE);
+            KeyValueStore<String, byte[]> bufferStore = driver.getKeyValueStore("parsley-buffer");
 
             // Order depends on prices-0 offset 0, which hasn't arrived: held, not delivered.
             orders.pipeInput(new TestRecord<>("k", "order",
@@ -175,7 +174,7 @@ class CausalDecoratorTopologyTest {
     @Test
     void strictDropDoesNotInvokeDelegateAndReportsTheGap() {
         Topology topology = topology(
-                Parsley.causal(upperCaser(), BufferingPolicy.drop(BufferLimit.ofSize(1)),
+                CausalProcessor.create(upperCaser(), BufferingPolicy.drop(BufferLimit.ofSize(1)),
                         onViolation, Serdes.String(), Serdes.String()),
                 List.of("orders"));
 
@@ -205,7 +204,7 @@ class CausalDecoratorTopologyTest {
         BufferingPolicy.DeadLetter policy =
                 (BufferingPolicy.DeadLetter) BufferingPolicy.deadLetter(BufferLimit.ofSize(1), "dlq");
         Topology topology = topology(
-                Parsley.causal(upperCaser(), policy, onViolation,
+                CausalProcessor.create(upperCaser(), policy, onViolation,
                         cr -> deadLettered.add(cr.value()), Serdes.String(), Serdes.String()),
                 List.of("orders"));
 
@@ -229,7 +228,7 @@ class CausalDecoratorTopologyTest {
     @Test
     void forwardUnsafeRunsDelegateUnderLagAndFlagsTheViolation() {
         Topology topology = topology(
-                Parsley.causal(upperCaser(), BufferingPolicy.forwardUnsafe(BufferLimit.ofSize(1)),
+                CausalProcessor.create(upperCaser(), BufferingPolicy.forwardUnsafe(BufferLimit.ofSize(1)),
                         onViolation, Serdes.String(), Serdes.String()),
                 List.of("orders"));
 
@@ -266,13 +265,13 @@ class CausalDecoratorTopologyTest {
                 Headers headers = new RecordHeaders();
                 headers.add(new RecordHeader("user-h", "keep".getBytes()));
                 // A stale clock the user happens to carry — stamping must replace, not duplicate it.
-                headers.add(new RecordHeader(Attributes.VECTOR_CLOCK,
+                headers.add(new RecordHeader("parsley-vector-clock",
                         VectorClock.empty().advance(PRICES_0, 5).toBytes()));
                 ctx.forward(record.withHeaders(headers));
             }
         };
         Topology topology = topology(
-                Parsley.causal(user, BufferingPolicy.forwardUnsafe(BufferLimit.ofSize(100)),
+                CausalProcessor.create(user, BufferingPolicy.forwardUnsafe(BufferLimit.ofSize(100)),
                         onViolation, Serdes.String(), Serdes.String()),
                 List.of("in"));
 
@@ -285,7 +284,7 @@ class CausalDecoratorTopologyTest {
             in.pipeInput(new TestRecord<>("k", "v", clockHeader(VectorClock.empty())));
 
             TestRecord<String, String> emitted = out.readRecord();
-            assertEquals(1, count(emitted.headers(), Attributes.VECTOR_CLOCK),
+            assertEquals(1, count(emitted.headers(), "parsley-vector-clock"),
                     "exactly one clock header — stamping is idempotent");
             assertEquals(VectorClock.empty().advance(IN_0, 0), outClock(emitted),
                     "the stamped clock is the frontier, not the user's stale clock");
@@ -312,7 +311,7 @@ class CausalDecoratorTopologyTest {
             }
         };
         Topology topology = topology(
-                Parsley.causal(user, BufferingPolicy.forwardUnsafe(BufferLimit.ofSize(100)),
+                CausalProcessor.create(user, BufferingPolicy.forwardUnsafe(BufferLimit.ofSize(100)),
                         onViolation, Serdes.String(), Serdes.String()),
                 List.of("in"));
 
@@ -364,7 +363,7 @@ class CausalDecoratorTopologyTest {
             }
         };
         Topology topology = topology(
-                Parsley.causal(user, BufferingPolicy.forwardUnsafe(BufferLimit.ofSize(100)),
+                CausalProcessor.create(user, BufferingPolicy.forwardUnsafe(BufferLimit.ofSize(100)),
                         onViolation, Serdes.String(), Serdes.String()),
                 List.of("in"));
 
@@ -391,7 +390,7 @@ class CausalDecoratorTopologyTest {
     void bufferSerdesAreResolvedAndInvokedWithTheSourceTopic() {
         SpyStringSerde valueSpy = new SpyStringSerde();
         Topology topology = topology(
-                Parsley.causal(upperCaser(), BufferingPolicy.forwardUnsafe(BufferLimit.ofSize(100)),
+                CausalProcessor.create(upperCaser(), BufferingPolicy.forwardUnsafe(BufferLimit.ofSize(100)),
                         onViolation, t -> Serdes.String(), t -> valueSpy),
                 List.of("prices", "orders"));
 
@@ -417,11 +416,11 @@ class CausalDecoratorTopologyTest {
         // namespaces are what make multiple decorators possible.
         StreamsBuilder builder = new StreamsBuilder();
         builder.stream("orders", Consumed.with(Serdes.String(), Serdes.String()))
-                .process(Parsley.causal(upperCaser(), BufferingPolicy.forwardUnsafe(BufferLimit.ofSize(100)),
+                .process(CausalProcessor.create(upperCaser(), BufferingPolicy.forwardUnsafe(BufferLimit.ofSize(100)),
                         onViolation, t -> Serdes.String(), t -> Serdes.String(), "orders"))
                 .to("orders-out", Produced.with(Serdes.String(), Serdes.String()));
         builder.stream("prices", Consumed.with(Serdes.String(), Serdes.String()))
-                .process(Parsley.causal(upperCaser(), BufferingPolicy.forwardUnsafe(BufferLimit.ofSize(100)),
+                .process(CausalProcessor.create(upperCaser(), BufferingPolicy.forwardUnsafe(BufferLimit.ofSize(100)),
                         onViolation, t -> Serdes.String(), t -> Serdes.String(), "prices"))
                 .to("prices-out", Produced.with(Serdes.String(), Serdes.String()));
 
@@ -451,7 +450,7 @@ class CausalDecoratorTopologyTest {
 
     private static VectorClock frontierIn(TopologyTestDriver driver, String frontierStoreName) {
         KeyValueStore<String, byte[]> store = driver.getKeyValueStore(frontierStoreName);
-        return VectorClock.fromBytes(store.get(Attributes.FRONTIER_KEY));
+        return VectorClock.fromBytes(store.get("f"));
     }
 
     private static int storeSize(KeyValueStore<String, byte[]> store) {

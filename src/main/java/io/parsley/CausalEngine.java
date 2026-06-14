@@ -1,11 +1,5 @@
-package io.parsley.stream;
+package io.parsley;
 
-import io.parsley.BufferLimit;
-import io.parsley.BufferingPolicy;
-import io.parsley.CausalViolationReason;
-import io.parsley.VectorClock;
-import io.parsley.Violation;
-import io.parsley.ViolationHandler;
 
 import java.time.Duration;
 import java.util.ArrayList;

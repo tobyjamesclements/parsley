@@ -1,7 +1,5 @@
-package io.parsley.stream;
+package io.parsley;
 
-import io.parsley.VectorClock;
-import io.parsley.internal.Attributes;
 import org.apache.kafka.common.header.Header;
 import org.apache.kafka.common.header.Headers;
 import org.apache.kafka.common.header.internals.RecordHeader;

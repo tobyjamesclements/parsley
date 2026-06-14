@@ -1,7 +1,5 @@
-package io.parsley.stream;
+package io.parsley;
 
-import io.parsley.BufferingPolicy;
-import io.parsley.ViolationHandler;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.apache.kafka.common.serialization.Serde;
 import org.apache.kafka.streams.processor.api.ProcessorSupplier;
@@ -10,8 +8,9 @@ import java.util.function.Consumer;
 import java.util.function.Function;
 
 /**
- * Entry point for wrapping an ordinary Kafka Streams {@link ProcessorSupplier} so it runs behind
- * Parsley's causal guarantee.
+ * A {@link ProcessorSupplier} that wraps an ordinary user {@code ProcessorSupplier} so it runs
+ * behind Parsley's causal guarantee. Obtain one from the static {@link #create} factories and drop
+ * it into a topology with {@code stream(...).process(...)}.
  *
  * <p>Write a normal {@link org.apache.kafka.streams.processor.api.Processor} — with arbitrary
  * transformation, connected state-store access, and {@code forward} — declare its state stores in
@@ -24,7 +23,7 @@ import java.util.function.Function;
  * };
  *
  * builder.stream(List.of("prices", "orders"), Consumed.with(Serdes.String(), orderSerde))
- *        .process(Parsley.causal(user, BufferingPolicy.deadLetter(limit, "parsley-dlq"), onViolation,
+ *        .process(CausalProcessor.create(user, BufferingPolicy.deadLetter(limit, "parsley-dlq"), onViolation,
  *                                deadLetterSink, Serdes.String(), orderSerde))
  *        .to("output-topic");
  * }</pre>
@@ -58,12 +57,7 @@ import java.util.function.Function;
  * the produced messages. Held records are persisted to a changelog-backed buffer store (serialised
  * with the serdes you supply, resolved per source topic) so they survive a restart.
  */
-public final class Parsley {
-
-    /** Default store-name namespace; yields {@code "parsley-frontier"} and {@code "parsley-buffer"}. */
-    private static final String DEFAULT_STORE_NAME = "parsley";
-
-    private Parsley() {}
+public interface CausalProcessor<KIn, VIn, KOut, VOut> extends ProcessorSupplier<KIn, VIn, KOut, VOut> {
 
     /**
      * Decorates {@code userSupplier} for a {@link BufferingPolicy.ForwardUnsafe ForwardUnsafe} or
@@ -81,13 +75,13 @@ public final class Parsley {
      * @return a decorated supplier ready for {@code stream(...).process(...)}
      * @throws IllegalArgumentException if {@code policy} is a {@code DeadLetter} policy
      */
-    public static <KIn, VIn, KOut, VOut> ProcessorSupplier<KIn, VIn, KOut, VOut> causal(
+    static <KIn, VIn, KOut, VOut> CausalProcessor<KIn, VIn, KOut, VOut> create(
             ProcessorSupplier<KIn, VIn, KOut, VOut> userSupplier,
             BufferingPolicy policy,
             ViolationHandler onViolation,
             Serde<KIn> keySerde,
             Serde<VIn> valueSerde) {
-        return causal(userSupplier, policy, onViolation, topic -> keySerde, topic -> valueSerde);
+        return create(userSupplier, policy, onViolation, topic -> keySerde, topic -> valueSerde);
     }
 
     /**
@@ -108,17 +102,17 @@ public final class Parsley {
      * @return a decorated supplier ready for {@code stream(...).process(...)}
      * @throws IllegalArgumentException if {@code policy} is a {@code DeadLetter} policy
      */
-    public static <KIn, VIn, KOut, VOut> ProcessorSupplier<KIn, VIn, KOut, VOut> causal(
+    static <KIn, VIn, KOut, VOut> CausalProcessor<KIn, VIn, KOut, VOut> create(
             ProcessorSupplier<KIn, VIn, KOut, VOut> userSupplier,
             BufferingPolicy policy,
             ViolationHandler onViolation,
             Function<String, Serde<KIn>> keySerdeByTopic,
             Function<String, Serde<VIn>> valueSerdeByTopic) {
-        return causal(userSupplier, policy, onViolation, keySerdeByTopic, valueSerdeByTopic, DEFAULT_STORE_NAME);
+        return create(userSupplier, policy, onViolation, keySerdeByTopic, valueSerdeByTopic, "parsley");
     }
 
     /**
-     * As {@link #causal(ProcessorSupplier, BufferingPolicy, ViolationHandler, Function, Function)}
+     * As {@link #create(ProcessorSupplier, BufferingPolicy, ViolationHandler, Function, Function)}
      * but with an explicit {@code storeName} namespace, so several causal processors can share one
      * topology. The processor's frontier store is {@code storeName + "-frontier"} and its buffer
      * store is {@code storeName + "-buffer"}; Kafka Streams requires these to be unique within a
@@ -138,7 +132,7 @@ public final class Parsley {
      * @return a decorated supplier ready for {@code stream(...).process(...)}
      * @throws IllegalArgumentException if {@code policy} is a {@code DeadLetter} policy
      */
-    public static <KIn, VIn, KOut, VOut> ProcessorSupplier<KIn, VIn, KOut, VOut> causal(
+    static <KIn, VIn, KOut, VOut> CausalProcessor<KIn, VIn, KOut, VOut> create(
             ProcessorSupplier<KIn, VIn, KOut, VOut> userSupplier,
             BufferingPolicy policy,
             ViolationHandler onViolation,
@@ -147,9 +141,9 @@ public final class Parsley {
             String storeName) {
         if (policy instanceof BufferingPolicy.DeadLetter) {
             throw new IllegalArgumentException(
-                    "DeadLetter policy requires a dead-letter sink — use a causal() overload with a sink");
+                    "DeadLetter policy requires a dead-letter sink — use a create() overload with a sink");
         }
-        return new DecoratingCausalProcessorSupplier<>(
+        return new ParsleyProcessorSupplier<>(
                 userSupplier, policy, onViolation, null, keySerdeByTopic, valueSerdeByTopic,
                 storeName + "-frontier", storeName + "-buffer");
     }
@@ -170,14 +164,14 @@ public final class Parsley {
      * @param <VOut>         the forwarded value type
      * @return a decorated supplier ready for {@code stream(...).process(...)}
      */
-    public static <KIn, VIn, KOut, VOut> ProcessorSupplier<KIn, VIn, KOut, VOut> causal(
+    static <KIn, VIn, KOut, VOut> CausalProcessor<KIn, VIn, KOut, VOut> create(
             ProcessorSupplier<KIn, VIn, KOut, VOut> userSupplier,
             BufferingPolicy.DeadLetter policy,
             ViolationHandler onViolation,
             Consumer<ConsumerRecord<KIn, VIn>> deadLetterSink,
             Serde<KIn> keySerde,
             Serde<VIn> valueSerde) {
-        return causal(userSupplier, policy, onViolation, deadLetterSink,
+        return create(userSupplier, policy, onViolation, deadLetterSink,
                 topic -> keySerde, topic -> valueSerde);
     }
 
@@ -197,20 +191,20 @@ public final class Parsley {
      * @param <VOut>            the forwarded value type
      * @return a decorated supplier ready for {@code stream(...).process(...)}
      */
-    public static <KIn, VIn, KOut, VOut> ProcessorSupplier<KIn, VIn, KOut, VOut> causal(
+    static <KIn, VIn, KOut, VOut> CausalProcessor<KIn, VIn, KOut, VOut> create(
             ProcessorSupplier<KIn, VIn, KOut, VOut> userSupplier,
             BufferingPolicy.DeadLetter policy,
             ViolationHandler onViolation,
             Consumer<ConsumerRecord<KIn, VIn>> deadLetterSink,
             Function<String, Serde<KIn>> keySerdeByTopic,
             Function<String, Serde<VIn>> valueSerdeByTopic) {
-        return causal(userSupplier, policy, onViolation, deadLetterSink,
-                keySerdeByTopic, valueSerdeByTopic, DEFAULT_STORE_NAME);
+        return create(userSupplier, policy, onViolation, deadLetterSink,
+                keySerdeByTopic, valueSerdeByTopic, "parsley");
     }
 
     /**
      * As
-     * {@link #causal(ProcessorSupplier, BufferingPolicy.DeadLetter, ViolationHandler, Consumer, Function, Function)}
+     * {@link #create(ProcessorSupplier, BufferingPolicy.DeadLetter, ViolationHandler, Consumer, Function, Function)}
      * but with an explicit {@code storeName} namespace (see the non-dead-letter named overload for
      * the naming rules), so several causal processors can share one topology.
      *
@@ -227,7 +221,7 @@ public final class Parsley {
      * @param <VOut>            the forwarded value type
      * @return a decorated supplier ready for {@code stream(...).process(...)}
      */
-    public static <KIn, VIn, KOut, VOut> ProcessorSupplier<KIn, VIn, KOut, VOut> causal(
+    static <KIn, VIn, KOut, VOut> CausalProcessor<KIn, VIn, KOut, VOut> create(
             ProcessorSupplier<KIn, VIn, KOut, VOut> userSupplier,
             BufferingPolicy.DeadLetter policy,
             ViolationHandler onViolation,
@@ -235,7 +229,7 @@ public final class Parsley {
             Function<String, Serde<KIn>> keySerdeByTopic,
             Function<String, Serde<VIn>> valueSerdeByTopic,
             String storeName) {
-        return new DecoratingCausalProcessorSupplier<>(
+        return new ParsleyProcessorSupplier<>(
                 userSupplier, policy, onViolation, deadLetterSink, keySerdeByTopic, valueSerdeByTopic,
                 storeName + "-frontier", storeName + "-buffer");
     }

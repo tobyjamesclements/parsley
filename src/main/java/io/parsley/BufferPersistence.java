@@ -1,6 +1,5 @@
-package io.parsley.stream;
+package io.parsley;
 
-import io.parsley.VectorClock;
 
 /**
  * Mirrors the {@link CausalEngine}'s in-memory buffer to durable storage so held records survive a

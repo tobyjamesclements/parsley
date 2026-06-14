@@ -1,7 +1,5 @@
-package io.parsley.producer;
+package io.parsley;
 
-import io.parsley.VectorClock;
-import io.parsley.internal.Attributes;
 import org.apache.kafka.clients.producer.Callback;
 import org.apache.kafka.clients.producer.KafkaProducer;
 import org.apache.kafka.clients.producer.Producer;
@@ -15,15 +13,15 @@ import java.util.concurrent.Future;
 /**
  * Decorator over a Kafka {@link Producer} that stamps the vector-clock header on each send.
  */
-final class KafkaCausalProducer<K, V> implements CausalProducer<K, V> {
+final class ParsleyProducer<K, V> implements CausalProducer<K, V> {
 
     private final Producer<K, V> delegate;
 
-    KafkaCausalProducer(Map<String, Object> config) {
+    ParsleyProducer(Map<String, Object> config) {
         this(new KafkaProducer<>(config));
     }
 
-    KafkaCausalProducer(Producer<K, V> delegate) {
+    ParsleyProducer(Producer<K, V> delegate) {
         this.delegate = delegate;
     }
 

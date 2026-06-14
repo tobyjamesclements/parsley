@@ -1,4 +1,4 @@
-package io.parsley.stream;
+package io.parsley;
 
 /**
  * A single key/value record header, carried internally on a {@link CausalRecord}.

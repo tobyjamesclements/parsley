@@ -4,7 +4,7 @@ package io.parsley;
  * Callback invoked when a decorating causal processor detects an ordering violation, handed a
  * {@link Violation} that includes the causal gap.
  *
- * <p>Used throughout Parsley (the engine, {@code Parsley.causal(...)}, and the consumer): where the
+ * <p>Used throughout Parsley (the engine, {@code CausalProcessor.create(...)}, and the consumer): where the
  * strict policies produce a recoverable artifact (the dead-letter destination), this makes the
  * lenient {@code forwardUnsafe} path observable to a comparable standard — the handler learns not
  * just <em>that</em> a record was forwarded without its causal premise, but <em>which</em>

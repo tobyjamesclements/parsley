@@ -82,7 +82,7 @@ producer.send(new ProducerRecord<>("orders", key, value), consumer.frontier());
 ```
 
 **Inside a Streams topology** — write an ordinary Kafka Streams `Processor` and wrap its supplier
-in `Parsley.causal(...)`. Inside your `process()`, every state-store read/write and every `forward`
+in `CausalProcessor.create(...)`. Inside your `process()`, every state-store read/write and every `forward`
 is causally ordered and the outgoing record is stamped with the current vector clock — transparently,
 with no `CausalProducer` on egress (Streams sinks carry the stamped header out to the topic). You
 never see a vector clock, a frontier, or a buffer; the required state stores are registered for you:
@@ -94,7 +94,7 @@ ProcessorSupplier<String, Order, String, Enriched> user = new ProcessorSupplier<
 };
 
 builder.stream(List.of("prices", "orders"), Consumed.with(Serdes.String(), orderSerde))
-       .process(Parsley.causal(user, BufferingPolicy.deadLetter(limit, "parsley-dlq"),
+       .process(CausalProcessor.create(user, BufferingPolicy.deadLetter(limit, "parsley-dlq"),
                                onViolation, deadLetterSink, Serdes.String(), orderSerde))
        .to("output-topic");
 ```
@@ -105,7 +105,7 @@ under any policy, and for every record under a **strict** policy (`deadLetter`/`
 `forwardUnsafe` policy preserves delivery by forwarding un-satisfied records under sustained lag,
 suspending the guarantee for exactly those records (each flagged via the `ViolationHandler`, with the
 causal gap). Three preconditions apply — closed effects, co-partitioning, and acceptance of the
-policy — documented on `Parsley.causal(...)`.
+policy — documented on `CausalProcessor.create(...)`.
 
 **Propagate across services** — a vector clock is also a causal token you can hand another service
 (e.g. over HTTP) so it reads consistently elsewhere. Extract it from a consumed record, serialise,

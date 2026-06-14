@@ -1,7 +1,5 @@
-package io.parsley.producer;
+package io.parsley;
 
-import io.parsley.VectorClock;
-import io.parsley.internal.Attributes;
 import org.apache.kafka.clients.producer.MockProducer;
 import org.apache.kafka.clients.producer.ProducerRecord;
 import org.apache.kafka.common.TopicPartition;
@@ -12,7 +10,7 @@ import org.junit.jupiter.api.Test;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 
-class KafkaCausalProducerTest {
+class ParsleyProducerTest {
 
     private static final TopicPartition PRICES = new TopicPartition("prices", 0);
 
@@ -23,7 +21,7 @@ class KafkaCausalProducerTest {
     @Test
     void sendAttachesTheVectorClockHeader() {
         MockProducer<String, String> mock = mock();
-        try (KafkaCausalProducer<String, String> producer = new KafkaCausalProducer<>(mock)) {
+        try (ParsleyProducer<String, String> producer = new ParsleyProducer<>(mock)) {
             VectorClock clock = VectorClock.empty().advance(PRICES, 3);
             producer.send(new ProducerRecord<>("orders", "k", "v"), clock);
 
@@ -38,7 +36,7 @@ class KafkaCausalProducerTest {
     @Test
     void sendPreservesExistingHeadersTopicKeyAndValue() {
         MockProducer<String, String> mock = mock();
-        try (KafkaCausalProducer<String, String> producer = new KafkaCausalProducer<>(mock)) {
+        try (ParsleyProducer<String, String> producer = new ParsleyProducer<>(mock)) {
             ProducerRecord<String, String> record = new ProducerRecord<>("orders", "k", "v");
             record.headers().add("trace-id", "abc".getBytes());
 

@@ -1,8 +1,5 @@
-package io.parsley.stream;
+package io.parsley;
 
-import io.parsley.BufferingPolicy;
-import io.parsley.ViolationHandler;
-import io.parsley.internal.Attributes;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.apache.kafka.common.serialization.Serde;
 import org.apache.kafka.common.serialization.Serdes;
@@ -18,13 +15,13 @@ import java.util.function.Consumer;
 import java.util.function.Function;
 
 /**
- * The {@link ProcessorSupplier} returned by {@code Parsley.causal(...)}: it wraps the user's
- * supplier in a {@link DecoratingCausalProcessor} and {@linkplain #stores() unions} the user's
+ * The {@link CausalProcessor} returned by {@code CausalProcessor.create(...)}: it wraps the user's
+ * supplier in a {@link ParsleyProcessor} and {@linkplain #stores() unions} the user's
  * declared state stores with Parsley's internal frontier and buffer stores, so the DSL wires all of
  * them to the same processor node. The user never names Parsley's internal stores.
  */
-final class DecoratingCausalProcessorSupplier<KIn, VIn, KOut, VOut>
-        implements ProcessorSupplier<KIn, VIn, KOut, VOut> {
+final class ParsleyProcessorSupplier<KIn, VIn, KOut, VOut>
+        implements CausalProcessor<KIn, VIn, KOut, VOut> {
 
     private final ProcessorSupplier<KIn, VIn, KOut, VOut> userSupplier;
     private final BufferingPolicy policy;
@@ -35,7 +32,7 @@ final class DecoratingCausalProcessorSupplier<KIn, VIn, KOut, VOut>
     private final String frontierStoreName;
     private final String bufferStoreName;
 
-    DecoratingCausalProcessorSupplier(ProcessorSupplier<KIn, VIn, KOut, VOut> userSupplier,
+    ParsleyProcessorSupplier(ProcessorSupplier<KIn, VIn, KOut, VOut> userSupplier,
                                       BufferingPolicy policy,
                                       ViolationHandler onViolation,
                                       Consumer<ConsumerRecord<KIn, VIn>> deadLetterSink,
@@ -45,7 +42,7 @@ final class DecoratingCausalProcessorSupplier<KIn, VIn, KOut, VOut>
                 Attributes.FRONTIER_STORE, Attributes.BUFFER_STORE);
     }
 
-    DecoratingCausalProcessorSupplier(ProcessorSupplier<KIn, VIn, KOut, VOut> userSupplier,
+    ParsleyProcessorSupplier(ProcessorSupplier<KIn, VIn, KOut, VOut> userSupplier,
                                       BufferingPolicy policy,
                                       ViolationHandler onViolation,
                                       Consumer<ConsumerRecord<KIn, VIn>> deadLetterSink,
@@ -65,7 +62,7 @@ final class DecoratingCausalProcessorSupplier<KIn, VIn, KOut, VOut>
 
     @Override
     public Processor<KIn, VIn, KOut, VOut> get() {
-        return new DecoratingCausalProcessor<>(
+        return new ParsleyProcessor<>(
                 userSupplier.get(), policy, onViolation, deadLetterSink,
                 new BufferedRecordCodec<>(keySerdeByTopic, valueSerdeByTopic),
                 frontierStoreName, bufferStoreName);

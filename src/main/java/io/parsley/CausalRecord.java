@@ -1,4 +1,4 @@
-package io.parsley.stream;
+package io.parsley;
 
 import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.apache.kafka.common.TopicPartition;

@@ -1,6 +1,5 @@
-package io.parsley.stream;
+package io.parsley;
 
-import io.parsley.VectorClock;
 import org.apache.kafka.common.TopicPartition;
 import org.junit.jupiter.api.Test;
 

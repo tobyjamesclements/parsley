@@ -1,10 +1,5 @@
-package io.parsley.consumer;
+package io.parsley;
 
-import io.parsley.BufferingPolicy;
-import io.parsley.VectorClock;
-import io.parsley.ViolationHandler;
-import io.parsley.internal.Attributes;
-import io.parsley.stream.Parsley;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.apache.kafka.clients.consumer.ConsumerRecords;
 import org.apache.kafka.common.TopicPartition;
@@ -33,8 +28,8 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
 
 /**
- * Decorator over a Kafka Streams pipeline (built from {@link Parsley#causal}) exposing a
- * {@code poll()}-based consumer API. The causal ordering is performed by a {@code Parsley.causal}
+ * Decorator over a Kafka Streams pipeline (built from {@link CausalProcessor#create}) exposing a
+ * {@code poll()}-based consumer API. The causal ordering is performed by a {@link CausalProcessor#create}
  * node whose delegate is a non-forwarding capture processor: it reconstructs each causally ordered
  * record from {@code recordMetadata()} (correct even for records that were buffered and drained
  * later), enqueues it, and reads the frontier back from the processor's state store.
@@ -43,13 +38,13 @@ import java.util.concurrent.atomic.AtomicReference;
  * the upstream producer's clock header — so {@code VectorClock.fromRecord(consumed)} still yields the
  * producer's clock.
  */
-final class KafkaCausalConsumer<K, V> implements CausalConsumer<K, V> {
+final class ParsleyConsumer<K, V> implements CausalConsumer<K, V> {
 
     private final KafkaStreams streams;
     private final LinkedBlockingQueue<ConsumerRecord<K, V>> readyQueue = new LinkedBlockingQueue<>();
     private final AtomicReference<VectorClock> frontierRef = new AtomicReference<>(VectorClock.empty());
 
-    KafkaCausalConsumer(
+    ParsleyConsumer(
             Collection<String> topics,
             BufferingPolicy policy,
             Map<String, Object> consumerConfig,
@@ -68,7 +63,7 @@ final class KafkaCausalConsumer<K, V> implements CausalConsumer<K, V> {
 
         StreamsBuilder builder = new StreamsBuilder();
         builder.<K, V>stream(topics)
-                .process(Parsley.causal(captureSupplier(), policy, ViolationHandler.noop(), keySerde, valueSerde));
+                .process(CausalProcessor.create(captureSupplier(), policy, ViolationHandler.noop(), keySerde, valueSerde));
 
         this.streams = new KafkaStreams(builder.build(), config);
         this.streams.start();

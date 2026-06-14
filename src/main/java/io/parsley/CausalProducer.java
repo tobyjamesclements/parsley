@@ -1,6 +1,5 @@
-package io.parsley.producer;
+package io.parsley;
 
-import io.parsley.VectorClock;
 import org.apache.kafka.clients.producer.Callback;
 import org.apache.kafka.clients.producer.ProducerRecord;
 import org.apache.kafka.clients.producer.RecordMetadata;
@@ -63,6 +62,6 @@ public interface CausalProducer<K, V> extends AutoCloseable {
      * @return a new {@code CausalProducer}
      */
     static <K, V> CausalProducer<K, V> create(Map<String, Object> config) {
-        return new KafkaCausalProducer<>(config);
+        return new ParsleyProducer<>(config);
     }
 }

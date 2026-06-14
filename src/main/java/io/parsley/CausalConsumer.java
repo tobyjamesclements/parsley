@@ -1,7 +1,5 @@
-package io.parsley.consumer;
+package io.parsley;
 
-import io.parsley.BufferingPolicy;
-import io.parsley.VectorClock;
 import org.apache.kafka.clients.consumer.ConsumerRecords;
 
 import java.io.Closeable;
@@ -50,7 +48,7 @@ public interface CausalConsumer<K, V> extends Closeable {
      * Returns the current causal frontier — the highest offset seen on each partition, i.e.
      * everything this consumer has processed so far.
      *
-     * <p>Pass this clock to {@link io.parsley.producer.CausalProducer#send} to propagate the
+     * <p>Pass this clock to {@link CausalProducer#send} to propagate the
      * consumer's causal position onto records it produces, or serialise it to hand downstream as a
      * causal token (see {@link VectorClock} for the cross-service propagation pattern). To instead
      * read the causal context of <em>one specific</em> consumed message — the upstream producer's
@@ -71,7 +69,7 @@ public interface CausalConsumer<K, V> extends Closeable {
      *
      * <p>{@link BufferingPolicy.DeadLetter DeadLetter} policies are not supported by this
      * facade — there is no parameter for a dead-letter sink — and are rejected. To dead-letter
-     * evicted records, build a custom topology with {@link io.parsley.stream.Parsley#causal}'s
+     * evicted records, build a custom topology with {@link CausalProcessor#create}'s
      * dead-letter overload instead.
      *
      * @param <K>            the record key type
@@ -91,6 +89,6 @@ public interface CausalConsumer<K, V> extends Closeable {
             BufferingPolicy policy,
             Map<String, Object> consumerConfig,
             Map<String, Object> streamsConfig) {
-        return new KafkaCausalConsumer<>(topics, policy, consumerConfig, streamsConfig);
+        return new ParsleyConsumer<>(topics, policy, consumerConfig, streamsConfig);
     }
 }
