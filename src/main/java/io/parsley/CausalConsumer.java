@@ -4,8 +4,6 @@ import org.apache.kafka.clients.consumer.ConsumerRecords;
 
 import java.io.Closeable;
 import java.time.Duration;
-import java.util.Collection;
-import java.util.Map;
 
 /**
  * A high-level Kafka consumer that delivers records in causal order.
@@ -17,11 +15,11 @@ import java.util.Map;
  *
  * <h2>Usage</h2>
  * <pre>{@code
- * try (CausalConsumer<String, Order> consumer = CausalConsumer.create(
+ * try (CausalConsumer<String, Order> consumer = CausalConsumers.<String, Order>builder(
  *         List.of("prices", "orders"),
  *         CausalBufferingPolicy.forwardUnsafe(CausalBufferLimit.ofDuration(Duration.ofSeconds(30))),
  *         Map.of(),
- *         streamsConfig)) {
+ *         streamsConfig).build()) {
  *
  *     ConsumerRecords<String, Order> records = consumer.poll(Duration.ofMillis(200));
  *     CausalDependencies frontier = consumer.frontier(); // pass to a CausalProducer when producing
@@ -75,85 +73,4 @@ public interface CausalConsumer<K, V> extends Closeable {
      */
     @Override
     void close();
-
-    /**
-     * Creates a new, running {@code CausalConsumer}, defaulting the violation handler to a no-op
-     * (violations are ignored) and the state-store namespace to {@code "parsley"}.
-     *
-     * @param <K>            the record key type
-     * @param <V>            the record value type
-     * @param topics         the Kafka topics to subscribe to; must not be empty
-     * @param policy         the buffering policy; must not be a {@code DeadLetter} policy
-     * @param consumerConfig additional consumer configuration (overrides defaults derived from
-     *                       {@code streamsConfig})
-     * @param streamsConfig  Kafka Streams configuration; must include at minimum
-     *                       {@code application.id} and {@code bootstrap.servers}
-     * @return a new, running {@code CausalConsumer}
-     * @throws IllegalArgumentException if {@code policy} is a
-     *                                  {@link CausalBufferingPolicy.DeadLetter DeadLetter} policy
-     */
-    static <K, V> CausalConsumer<K, V> create(
-            Collection<String> topics,
-            CausalBufferingPolicy policy,
-            Map<String, Object> consumerConfig,
-            Map<String, Object> streamsConfig) {
-        return create(topics, policy, violation -> {}, consumerConfig, streamsConfig);
-    }
-
-    /**
-     * Creates a new, running {@code CausalConsumer} with an explicit violation handler, defaulting
-     * the state-store namespace to {@code "parsley"}.
-     *
-     * @param <K>            the record key type
-     * @param <V>            the record value type
-     * @param topics         the Kafka topics to subscribe to; must not be empty
-     * @param policy         the buffering policy; must not be a {@code DeadLetter} policy
-     * @param onViolation    the callback invoked when a record cannot be delivered in causal order
-     * @param consumerConfig additional consumer configuration
-     * @param streamsConfig  Kafka Streams configuration ({@code application.id} + {@code bootstrap.servers})
-     * @return a new, running {@code CausalConsumer}
-     * @throws IllegalArgumentException if {@code policy} is a {@code DeadLetter} policy
-     */
-    static <K, V> CausalConsumer<K, V> create(
-            Collection<String> topics,
-            CausalBufferingPolicy policy,
-            CausalViolationHandler onViolation,
-            Map<String, Object> consumerConfig,
-            Map<String, Object> streamsConfig) {
-        return create(topics, policy, onViolation, consumerConfig, streamsConfig, "parsley");
-    }
-
-    /**
-     * Creates a new, running {@code CausalConsumer} with full control over the violation handler and
-     * the state-store namespace.
-     *
-     * <p>{@link CausalBufferingPolicy.DeadLetter DeadLetter} policies are not supported by this facade —
-     * there is no parameter for a dead-letter sink — and are rejected. To dead-letter evicted
-     * records, build a custom topology with {@link CausalProcessorSupplier#create}'s dead-letter overload
-     * instead.
-     *
-     * @param <K>            the record key type
-     * @param <V>            the record value type
-     * @param topics         the Kafka topics to subscribe to; must not be empty
-     * @param policy         the buffering policy; must not be a {@code DeadLetter} policy
-     * @param onViolation    the callback invoked when a record cannot be delivered in causal order
-     * @param consumerConfig additional consumer configuration
-     * @param streamsConfig  Kafka Streams configuration ({@code application.id} + {@code bootstrap.servers})
-     * @param storeName      the state-store namespace; the frontier store is
-     *                       {@code storeName + "-frontier"} and the buffer store
-     *                       {@code storeName + "-buffer"} (these name the backing changelog topics,
-     *                       so keep {@code storeName} stable across restarts)
-     * @return a new, running {@code CausalConsumer}
-     * @throws IllegalArgumentException if {@code policy} is a
-     *                                  {@link CausalBufferingPolicy.DeadLetter DeadLetter} policy
-     */
-    static <K, V> CausalConsumer<K, V> create(
-            Collection<String> topics,
-            CausalBufferingPolicy policy,
-            CausalViolationHandler onViolation,
-            Map<String, Object> consumerConfig,
-            Map<String, Object> streamsConfig,
-            String storeName) {
-        return new ParsleyConsumer<>(topics, policy, onViolation, consumerConfig, streamsConfig, storeName);
-    }
 }

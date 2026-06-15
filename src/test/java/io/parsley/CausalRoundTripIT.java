@@ -56,11 +56,11 @@ class CausalRoundTripIT {
                 ProducerConfig.BOOTSTRAP_SERVERS_CONFIG, bootstrap,
                 ProducerConfig.KEY_SERIALIZER_CLASS_CONFIG, StringSerializer.class.getName(),
                 ProducerConfig.VALUE_SERIALIZER_CLASS_CONFIG, StringSerializer.class.getName())).build();
-             CausalConsumer<String, String> consumer = CausalConsumer.create(
+             CausalConsumer<String, String> consumer = CausalConsumers.<String, String>builder(
                      List.of(TOPIC),
                      CausalBufferingPolicy.forwardUnsafe(CausalBufferLimit.ofDuration(Duration.ofSeconds(5))),
                      Map.of(ConsumerConfig.GROUP_ID_CONFIG, "rt-" + UUID.randomUUID()),
-                     streamsConfig(bootstrap))) {
+                     streamsConfig(bootstrap)).build()) {
 
             // Each record carries a clock advancing the partition it is written to.
             for (int i = 0; i < 5; i++) {
@@ -99,13 +99,14 @@ class CausalRoundTripIT {
         // The handler runs on the Streams thread, so capture must be thread-safe.
         List<CausalViolation> violations = new CopyOnWriteArrayList<>();
 
-        try (CausalConsumer<String, String> consumer = CausalConsumer.create(
+        try (CausalConsumer<String, String> consumer = CausalConsumers.<String, String>builder(
                 List.of(topic),
                 CausalBufferingPolicy.forwardUnsafe(CausalBufferLimit.ofDuration(Duration.ofSeconds(5))),
-                violations::add,                                   // the override that was previously hidden
                 Map.of(ConsumerConfig.GROUP_ID_CONFIG, "rt-" + UUID.randomUUID()),
-                streamsConfig(bootstrap),
-                "custom-store")) {                                 // custom state-store namespace
+                streamsConfig(bootstrap))
+                .onViolation(violations::add)                      // the override that was previously hidden
+                .storeName("custom-store")                         // custom state-store namespace
+                .build()) {
 
             // A plain producer sends a record with NO causal clock header → a MISSING_HEADER violation.
             try (KafkaProducer<String, String> raw = new KafkaProducer<>(Map.of(

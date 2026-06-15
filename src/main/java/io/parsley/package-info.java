@@ -7,8 +7,8 @@
  *   <li>{@link io.parsley.CausalProcessorSupplier} &mdash; {@code CausalProcessorSupplier.create(...)} wraps your own
  *       Kafka Streams {@code Processor} so its state access and {@code forward}s run behind the causal
  *       guarantee; drop it into {@code stream(...).process(...)}</li>
- *   <li>{@link io.parsley.CausalConsumer} &mdash; {@code CausalConsumer.create(...)} delivers records
- *       in causal order over a {@code poll()} API</li>
+ *   <li>{@link io.parsley.CausalConsumer} &mdash; {@code CausalConsumers.builder(...).build()} delivers
+ *       records in causal order over a {@code poll()} API</li>
  *   <li>{@link io.parsley.CausalProducer} &mdash; {@code CausalProducers.builder(...).build()} stamps the
  *       causal clock onto produced records</li>
  * </ul>

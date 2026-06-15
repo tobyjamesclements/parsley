@@ -63,12 +63,12 @@ then declare the repository and dependency:
 **Consume in causal order** — a drop-in replacement for a plain Kafka consumer:
 
 ```java
-try (CausalConsumer<String, String> consumer = CausalConsumer.create(
+try (CausalConsumer<String, String> consumer = CausalConsumers.<String, String>builder(
         List.of("prices", "orders"),
         CausalBufferingPolicy.forwardUnsafe(CausalBufferLimit.ofDuration(Duration.ofSeconds(30))),
         Map.of(ConsumerConfig.GROUP_ID_CONFIG, "my-group"),
         Map.of(StreamsConfig.APPLICATION_ID_CONFIG,    "my-app",
-               StreamsConfig.BOOTSTRAP_SERVERS_CONFIG, "localhost:9092"))) {
+               StreamsConfig.BOOTSTRAP_SERVERS_CONFIG, "localhost:9092")).build()) {
 
     ConsumerRecords<String, String> records = consumer.poll(Duration.ofMillis(100));
     records.forEach(this::process);

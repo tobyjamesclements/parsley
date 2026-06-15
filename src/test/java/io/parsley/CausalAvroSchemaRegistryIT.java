@@ -92,11 +92,11 @@ class CausalAvroSchemaRegistryIT {
                 ProducerConfig.KEY_SERIALIZER_CLASS_CONFIG, StringSerializer.class.getName(),
                 ProducerConfig.VALUE_SERIALIZER_CLASS_CONFIG, KafkaAvroSerializer.class.getName(),
                 "schema.registry.url", registryUrl)).build();
-             CausalConsumer<String, SpecificRecord> consumer = CausalConsumer.create(
+             CausalConsumer<String, SpecificRecord> consumer = CausalConsumers.<String, SpecificRecord>builder(
                      List.of(ORDERS, PRICES),
                      CausalBufferingPolicy.forwardUnsafe(CausalBufferLimit.ofDuration(Duration.ofSeconds(5))),
                      Map.of(ConsumerConfig.GROUP_ID_CONFIG, "avro-rt-" + UUID.randomUUID()),
-                     streamsConfig(bootstrap, registryUrl))) {
+                     streamsConfig(bootstrap, registryUrl)).build()) {
 
             // Each record's clock simply marks its own position, so both self-satisfy and are admitted.
             producer.send(new ProducerRecord<>(PRICES, "ACME", price), CausalDependencies.empty().advance(pricesTp, 0)).get();
