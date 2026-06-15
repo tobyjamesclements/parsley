@@ -107,7 +107,7 @@ final class CausalEngine<K, V> {
             out.add(record);
             drainInto(out);
         } else {
-            buffer.add(record, dependencies);
+            buffer.add(record);
             if (buffer.size() >= sizeLimit) {
                 out.addAll(evictNow());
             }

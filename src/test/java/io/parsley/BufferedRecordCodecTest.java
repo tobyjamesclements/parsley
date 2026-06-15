@@ -29,8 +29,7 @@ class BufferedRecordCodecTest {
                 List.of(new CausalHeader("h1", "a".getBytes()), new CausalHeader("h2", null)),
                 deps.toBytes(), ORDERS_2, 7L);
 
-        Buffered<String, String> restored = codec.deserialize(codec.serialize(record, deps));
-        CausalRecord<String, String> out = restored.record();
+        CausalRecord<String, String> out = codec.deserialize(codec.serialize(record));
 
         assertEquals("key", out.key());
         assertEquals("value", out.value());
@@ -43,16 +42,16 @@ class BufferedRecordCodecTest {
         assertArrayEquals("a".getBytes(), out.headers().get(0).value());
         assertEquals("h2", out.headers().get(1).key());
         assertNull(out.headers().get(1).value());
-        assertEquals(deps, restored.dependencies());
+        assertEquals(deps, VectorClock.fromBytes(out.encodedDependencies()),
+                "the dependency clock is recovered by decoding the restored encodedDependencies");
     }
 
     @Test
     void roundTripsNullKeyAndValue() {
-        VectorClock deps = VectorClock.empty();
         CausalRecord<String, String> record =
                 new CausalRecord<>(null, null, 0L, List.of(), null, ORDERS_2, 0L);
 
-        CausalRecord<String, String> out = codec.deserialize(codec.serialize(record, deps)).record();
+        CausalRecord<String, String> out = codec.deserialize(codec.serialize(record));
 
         assertNull(out.key());
         assertNull(out.value());
@@ -68,7 +67,7 @@ class BufferedRecordCodecTest {
         CausalRecord<String, String> record =
                 new CausalRecord<>("k", "v", 0L, List.of(), VectorClock.empty().toBytes(), ORDERS_2, 1L);
 
-        spying.deserialize(spying.serialize(record, VectorClock.empty()));
+        spying.deserialize(spying.serialize(record));
 
         // Each serde is invoked twice — serialise on buffer, deserialise on restore — always with
         // the record's source topic ("orders"), never the buffer store's changelog name.

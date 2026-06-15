@@ -15,18 +15,19 @@ import java.util.TreeMap;
  */
 final class InMemoryBufferStore<K, V> implements BufferStore<K, V> {
 
-    private final TreeMap<Long, Buffered<K, V>> buffer = new TreeMap<>();
+    private final TreeMap<Long, CausalRecord<K, V>> buffer = new TreeMap<>();
     private long sequence = 0;
 
     @Override
-    public void add(CausalRecord<K, V> record, VectorClock dependencies) {
-        buffer.put(sequence++, new Buffered<>(record, dependencies));
+    public void add(CausalRecord<K, V> record) {
+        buffer.put(sequence++, record);
     }
 
     @Override
     public List<Entry<K, V>> entries() {
         List<Entry<K, V>> entries = new ArrayList<>(buffer.size());
-        buffer.forEach((seq, held) -> entries.add(new Entry<>(seq, held.record(), held.dependencies())));
+        buffer.forEach((seq, record) ->
+                entries.add(new Entry<>(seq, record, VectorClock.fromBytes(record.encodedDependencies()))));
         return entries;
     }
 

@@ -24,12 +24,12 @@ interface BufferStore<K, V> {
     record Entry<K, V>(long sequence, CausalRecord<K, V> record, VectorClock dependencies) {}
 
     /**
-     * Buffers a record with its decoded dependencies under the next insertion sequence.
+     * Buffers a record under the next insertion sequence. The record's decoded dependency clock,
+     * surfaced on each {@link Entry}, is derived from its {@code encodedDependencies}.
      *
-     * @param record       the record to hold
-     * @param dependencies the record's decoded causal dependencies
+     * @param record the record to hold; carries a valid (decodable) dependency clock
      */
-    void add(CausalRecord<K, V> record, VectorClock dependencies);
+    void add(CausalRecord<K, V> record);
 
     /**
      * Returns every buffered entry, in ascending insertion-sequence (causal arrival) order.

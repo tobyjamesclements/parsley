@@ -101,8 +101,7 @@ class CausalEngineTest {
     void recordsAlreadyInTheBufferDrainWhenTheFrontierCatchesUp() {
         // Records that survived a restart are simply already in the buffer store — there is no
         // separate restore step. They must not advance the frontier until their premise is observed.
-        buffer.add(rec(ORDERS, 0, VectorClock.empty().advance(PRICES, 3)),
-                VectorClock.empty().advance(PRICES, 3));
+        buffer.add(rec(ORDERS, 0, VectorClock.empty().advance(PRICES, 3)));
         CausalEngine<String, String> engine = engine(BufferingPolicy.forwardUnsafe(BufferLimit.ofSize(100)));
         assertEquals(VectorClock.empty(), engine.frontier(), "a pre-buffered record must not advance the frontier");
         assertTrue(frontiers.isEmpty(), "a pre-buffered record must not fire the frontier listener");

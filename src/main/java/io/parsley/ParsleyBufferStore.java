@@ -45,8 +45,8 @@ final class ParsleyBufferStore<K, V> implements BufferStore<K, V> {
     }
 
     @Override
-    public void add(CausalRecord<K, V> record, VectorClock dependencies) {
-        store.put(nextSequence++, codec.serialize(record, dependencies));
+    public void add(CausalRecord<K, V> record) {
+        store.put(nextSequence++, codec.serialize(record));
         size++;
     }
 
@@ -56,8 +56,8 @@ final class ParsleyBufferStore<K, V> implements BufferStore<K, V> {
         try (KeyValueIterator<Long, byte[]> all = store.all()) {
             while (all.hasNext()) {
                 var kv = all.next();
-                Buffered<K, V> held = codec.deserialize(kv.value);
-                entries.add(new Entry<>(kv.key, held.record(), held.dependencies()));
+                CausalRecord<K, V> record = codec.deserialize(kv.value);
+                entries.add(new Entry<>(kv.key, record, VectorClock.fromBytes(record.encodedDependencies())));
             }
         }
         // Iteration order across store implementations is not guaranteed to be key order, so sort by

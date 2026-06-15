@@ -38,9 +38,11 @@ final class BufferedRecordCodec<K, V> {
     }
 
     /**
-     * Serialises a held record (with its decoded dependency clock) to bytes.
+     * Serialises a held record to bytes. The dependency clock travels as the record's
+     * {@code encodedDependencies}; the engine re-decodes it on restore (a buffered record always
+     * carries a valid clock), so it is stored once.
      */
-    byte[] serialize(CausalRecord<K, V> record, VectorClock dependencies) {
+    byte[] serialize(CausalRecord<K, V> record) {
         String topic = record.sourcePartition().topic();
         byte[] keyBytes = keySerdeByTopic.apply(topic).serializer().serialize(topic, record.key());
         byte[] valueBytes = valueSerdeByTopic.apply(topic).serializer().serialize(topic, record.value());
@@ -53,13 +55,7 @@ final class BufferedRecordCodec<K, V> {
             out.writeLong(record.timestamp());
             writeNullable(out, keyBytes);
             writeNullable(out, valueBytes);
-            // The dependency clock is written twice, on purpose: the raw header bytes
-            // (encodedDependencies) so the restored record re-forwards byte-identically to how it
-            // arrived, and the decoded clock (dependencies.toBytes()) so the engine can re-gate on
-            // restore without re-parsing the header. They are equal in content but kept distinct so
-            // neither responsibility depends on the other's encoding.
             writeNullable(out, record.encodedDependencies());
-            writeNullable(out, dependencies.toBytes());
             out.writeInt(record.headers().size());
             for (CausalHeader header : record.headers()) {
                 writeString(out, header.key());
@@ -72,9 +68,9 @@ final class BufferedRecordCodec<K, V> {
     }
 
     /**
-     * Reconstructs a held record and its decoded dependency clock from {@link #serialize bytes}.
+     * Reconstructs a held record from {@link #serialize bytes}.
      */
-    Buffered<K, V> deserialize(byte[] bytes) {
+    CausalRecord<K, V> deserialize(byte[] bytes) {
         try (DataInputStream in = new DataInputStream(new ByteArrayInputStream(bytes))) {
             String topic = readString(in);
             int partition = in.readInt();
@@ -83,7 +79,6 @@ final class BufferedRecordCodec<K, V> {
             byte[] keyBytes = readNullable(in);
             byte[] valueBytes = readNullable(in);
             byte[] encodedDependencies = readNullable(in);
-            byte[] dependencyBytes = readNullable(in);
             int headerCount = in.readInt();
             List<CausalHeader> headers = new ArrayList<>(headerCount);
             for (int i = 0; i < headerCount; i++) {
@@ -97,10 +92,9 @@ final class BufferedRecordCodec<K, V> {
             V value = valueBytes == null ? null
                     : valueSerdeByTopic.apply(topic).deserializer().deserialize(topic, valueBytes);
 
-            CausalRecord<K, V> record = new CausalRecord<>(
+            return new CausalRecord<>(
                     key, value, timestamp, headers, encodedDependencies,
                     new TopicPartition(topic, partition), offset);
-            return new Buffered<>(record, VectorClock.fromBytes(dependencyBytes));
         } catch (IOException e) {
             throw new IllegalStateException("Buffered record deserialisation failed", e);
         }

@@ -15,14 +15,16 @@ class BufferStoreTest {
 
     private final BufferStore<String, String> store = new InMemoryBufferStore<>();
 
-    private static CausalRecord<String, String> rec(TopicPartition tp, long offset) {
-        return new CausalRecord<>("k", "v", 0L, List.of(), new byte[0], tp, offset);
+    // The record's encodedDependencies carry the dependency clock; the store derives the decoded
+    // clock from them, so build the record with the clock it depends on.
+    private static CausalRecord<String, String> rec(TopicPartition tp, long offset, VectorClock deps) {
+        return new CausalRecord<>("k", "v", 0L, List.of(), deps.toBytes(), tp, offset);
     }
 
     @Test
     void entriesAreReturnedInInsertionOrderWithTheirDependencies() {
-        store.add(rec(ORDERS, 0), VectorClock.empty().advance(PRICES, 9));
-        store.add(rec(ORDERS, 1), VectorClock.empty().advance(PRICES, 3));
+        store.add(rec(ORDERS, 0, VectorClock.empty().advance(PRICES, 9)));
+        store.add(rec(ORDERS, 1, VectorClock.empty().advance(PRICES, 3)));
 
         List<BufferStore.Entry<String, String>> entries = store.entries();
 
@@ -36,8 +38,8 @@ class BufferStoreTest {
 
     @Test
     void removeDropsTheEntryAndDecrementsSize() {
-        store.add(rec(ORDERS, 0), VectorClock.empty().advance(PRICES, 1));
-        store.add(rec(ORDERS, 1), VectorClock.empty().advance(PRICES, 5));
+        store.add(rec(ORDERS, 0, VectorClock.empty().advance(PRICES, 1)));
+        store.add(rec(ORDERS, 1, VectorClock.empty().advance(PRICES, 5)));
         assertEquals(2, store.size());
 
         long firstSeq = store.entries().get(0).sequence();
