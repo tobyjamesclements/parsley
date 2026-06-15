@@ -8,7 +8,6 @@ import org.apache.kafka.streams.processor.api.Processor;
 import org.apache.kafka.streams.processor.api.ProcessorContext;
 import org.apache.kafka.streams.processor.api.Record;
 import org.apache.kafka.streams.processor.api.RecordMetadata;
-import org.apache.kafka.streams.state.KeyValueIterator;
 import org.apache.kafka.streams.state.KeyValueStore;
 
 import java.util.ArrayList;
@@ -55,7 +54,7 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
 
     private ProcessorContext<KOut, VOut> context;
     private KeyValueStore<String, byte[]> frontierStore;
-    private KeyValueStore<String, byte[]> bufferStore;
+    private KeyValueStore<Long, byte[]> bufferStore;
     private CausalEngine<KIn, VIn> engine;
     // Read live by the stamping proxy: the clock to stamp on forward, and the source coordinate to
     // report from recordMetadata(), for the record currently being delivered. Written and read on the
@@ -117,23 +116,13 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
             frontierListener.onFrontierAdvanced(frontier);
         };
 
-        BufferPersistence<KIn, VIn> persistence = new BufferPersistence<>() {
-            @Override
-            public void onHeld(CausalRecord<KIn, VIn> record, VectorClock dependencies) {
-                bufferStore.put(BufferedRecordCodec.storeKey(record), codec.serialize(record, dependencies));
-            }
-
-            @Override
-            public void onUnheld(CausalRecord<KIn, VIn> record) {
-                bufferStore.delete(BufferedRecordCodec.storeKey(record));
-            }
-        };
+        // The buffer store IS the buffer: held records that survived the previous run are already in
+        // it, so there is nothing to "restore" — StoreBufferStore seeds its sequence past them and the
+        // engine drains them on the next frontier advance.
+        BufferStore<KIn, VIn> buffer = new StoreBufferStore<>(bufferStore, codec);
 
         this.engine = new CausalEngine<>(policy, onViolation, initialFrontier,
-                engineDeadLetter, listener, persistence);
-
-        // Re-hydrate records that were still buffered when the previous run stopped.
-        restoreHeldRecords();
+                engineDeadLetter, listener, buffer);
 
         // The delegate runs against the stamping proxy, never the raw context, so its forwards are
         // clock-stamped and its recordMetadata() reflects the delivered record.
@@ -189,15 +178,6 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
         // recordMetadata() fall back to the real context.
         deliveryMetadata = null;
         stampClock = engine.frontier();
-    }
-
-    private void restoreHeldRecords() {
-        try (KeyValueIterator<String, byte[]> all = bufferStore.all()) {
-            while (all.hasNext()) {
-                BufferedRecordCodec.Buffered<KIn, VIn> buffered = codec.deserialize(all.next().value);
-                engine.restore(buffered.record(), buffered.dependencies());
-            }
-        }
     }
 
     private CausalRecord<KIn, VIn> toCausalRecord(Record<KIn, VIn> record) {

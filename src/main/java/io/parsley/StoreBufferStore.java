@@ -1,0 +1,80 @@
+package io.parsley;
+
+import org.apache.kafka.streams.state.KeyValueIterator;
+import org.apache.kafka.streams.state.KeyValueStore;
+
+import java.util.ArrayList;
+import java.util.Comparator;
+import java.util.List;
+
+/**
+ * A {@link BufferStore} backed by a changelog-replicated Kafka {@link KeyValueStore}, keyed by a
+ * monotonic insertion sequence and valued by the {@link BufferedRecordCodec}-serialised record. This
+ * is the authoritative, restart-durable home of held records: because the store <em>is</em> the
+ * buffer, held records need no separate rehydration step — they are read back on the next drain.
+ *
+ * <p>The insertion-sequence counter and the live record count are seeded once from the store at
+ * construction (a single pass over its keys), so a restarted instance continues the sequence past
+ * whatever survived the previous run.
+ *
+ * @param <K> the record key type
+ * @param <V> the record value type
+ */
+final class StoreBufferStore<K, V> implements BufferStore<K, V> {
+
+    private final KeyValueStore<Long, byte[]> store;
+    private final BufferedRecordCodec<K, V> codec;
+    private long nextSequence;
+    private int size;
+
+    StoreBufferStore(KeyValueStore<Long, byte[]> store, BufferedRecordCodec<K, V> codec) {
+        this.store = store;
+        this.codec = codec;
+        // Seed the sequence past anything that survived a previous run, and count what is held, in a
+        // single pass — this replaces the old explicit "restore held records" step.
+        long maxSequence = -1;
+        int count = 0;
+        try (KeyValueIterator<Long, byte[]> all = store.all()) {
+            while (all.hasNext()) {
+                maxSequence = Math.max(maxSequence, all.next().key);
+                count++;
+            }
+        }
+        this.nextSequence = maxSequence + 1;
+        this.size = count;
+    }
+
+    @Override
+    public void add(CausalRecord<K, V> record, VectorClock dependencies) {
+        store.put(nextSequence++, codec.serialize(record, dependencies));
+        size++;
+    }
+
+    @Override
+    public List<Entry<K, V>> entries() {
+        List<Entry<K, V>> entries = new ArrayList<>(size);
+        try (KeyValueIterator<Long, byte[]> all = store.all()) {
+            while (all.hasNext()) {
+                var kv = all.next();
+                Buffered<K, V> held = codec.deserialize(kv.value);
+                entries.add(new Entry<>(kv.key, held.record(), held.dependencies()));
+            }
+        }
+        // Iteration order across store implementations is not guaranteed to be key order, so sort by
+        // sequence explicitly to hand back records in causal arrival order.
+        entries.sort(Comparator.comparingLong(Entry::sequence));
+        return entries;
+    }
+
+    @Override
+    public void remove(long sequence) {
+        if (store.delete(sequence) != null) {
+            size--;
+        }
+    }
+
+    @Override
+    public int size() {
+        return size;
+    }
+}

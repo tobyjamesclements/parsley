@@ -43,9 +43,8 @@ final class CausalEngine<K, V> {
     private final BufferingPolicy policy;
     private final ViolationHandler violationHandler;
     private final Consumer<CausalRecord<K, V>> deadLetterSink;
-    private final CausalBuffer<K, V> buffer = new CausalBuffer<>();
+    private final BufferStore<K, V> buffer;
     private final FrontierListener frontierListener;
-    private final BufferPersistence<K, V> persistence;
 
     private VectorClock frontier;
     private int sizeLimit = Integer.MAX_VALUE;
@@ -55,17 +54,8 @@ final class CausalEngine<K, V> {
                  ViolationHandler violationHandler,
                  VectorClock initialFrontier,
                  Consumer<CausalRecord<K, V>> deadLetterSink,
-                 FrontierListener frontierListener) {
-        this(policy, violationHandler, initialFrontier, deadLetterSink, frontierListener,
-                BufferPersistence.noop());
-    }
-
-    CausalEngine(BufferingPolicy policy,
-                 ViolationHandler violationHandler,
-                 VectorClock initialFrontier,
-                 Consumer<CausalRecord<K, V>> deadLetterSink,
                  FrontierListener frontierListener,
-                 BufferPersistence<K, V> persistence) {
+                 BufferStore<K, V> buffer) {
         if (policy instanceof BufferingPolicy.DeadLetter && deadLetterSink == null) {
             throw new IllegalArgumentException("DeadLetter policy requires a dead-letter sink");
         }
@@ -74,7 +64,7 @@ final class CausalEngine<K, V> {
         this.frontier = initialFrontier;
         this.deadLetterSink = deadLetterSink;
         this.frontierListener = frontierListener;
-        this.persistence = persistence;
+        this.buffer = buffer;
         configureLimits(limitOf(policy));
     }
 
@@ -118,24 +108,11 @@ final class CausalEngine<K, V> {
             drainInto(out);
         } else {
             buffer.add(record, dependencies);
-            persistence.onHeld(record, dependencies);
             if (buffer.size() >= sizeLimit) {
                 out.addAll(evictNow());
             }
         }
         return out;
-    }
-
-    /**
-     * Re-adds a record to the buffer during restoration from persistent storage, without
-     * re-persisting it or advancing the frontier. The record is gated normally on subsequent
-     * frontier advances.
-     *
-     * @param record       the record to rehydrate
-     * @param dependencies the record's decoded causal dependencies
-     */
-    void restore(CausalRecord<K, V> record, VectorClock dependencies) {
-        buffer.add(record, dependencies);
     }
 
     /**
@@ -147,25 +124,25 @@ final class CausalEngine<K, V> {
      *         {@link BufferingPolicy.ForwardUnsafe ForwardUnsafe} policy
      */
     List<CausalRecord<K, V>> evictNow() {
-        List<CausalBuffer.Buffered<K, V>> evicted = buffer.evictAll();
+        List<BufferStore.Entry<K, V>> evicted = buffer.entries();
         if (evicted.isEmpty()) {
             return List.of();
         }
-        for (CausalBuffer.Buffered<K, V> entry : evicted) {
+        for (BufferStore.Entry<K, V> entry : evicted) {
             violate(entry.record(), CausalViolationReason.LIMIT_REACHED, entry.dependencies());
-            persistence.onUnheld(entry.record());
+            buffer.remove(entry.sequence());
         }
         List<CausalRecord<K, V>> toForward = new ArrayList<>();
         switch (policy) {
             case BufferingPolicy.ForwardUnsafe forwardUnsafe -> {
-                for (CausalBuffer.Buffered<K, V> entry : evicted) {
+                for (BufferStore.Entry<K, V> entry : evicted) {
                     advanceFrontier(entry.record());
                     toForward.add(entry.record());
                 }
             }
             case BufferingPolicy.Drop drop -> { /* discard the evicted records */ }
             case BufferingPolicy.DeadLetter deadLetter -> {
-                for (CausalBuffer.Buffered<K, V> entry : evicted) {
+                for (BufferStore.Entry<K, V> entry : evicted) {
                     deadLetterSink.accept(entry.record());
                 }
             }
@@ -194,18 +171,32 @@ final class CausalEngine<K, V> {
 
     // Releasing a record advances the frontier, which may in turn satisfy records still buffered
     // behind it — so we drain in passes until a pass releases nothing. (A single pass is not enough:
-    // B may depend on A, and A's release is what unblocks B.) Each released record is forwarded in
-    // the same frontier-advancing-and-forwarding manner as a directly satisfied one.
+    // B may depend on A, and A's release is what unblocks B.) Each pass selects against the frontier
+    // as of the pass start, then advances through the released records; the next pass sees the moved
+    // frontier. Each released record is forwarded just like a directly satisfied one.
     private void drainInto(List<CausalRecord<K, V>> out) {
-        List<CausalRecord<K, V>> released = buffer.drain(frontier);
-        while (!released.isEmpty()) {
-            for (CausalRecord<K, V> record : released) {
-                advanceFrontier(record);
-                persistence.onUnheld(record);
-                out.add(record);
+        List<BufferStore.Entry<K, V>> releasable = releasableEntries();
+        while (!releasable.isEmpty()) {
+            for (BufferStore.Entry<K, V> entry : releasable) {
+                buffer.remove(entry.sequence());
+                advanceFrontier(entry.record());
+                out.add(entry.record());
             }
-            released = buffer.drain(frontier);
+            releasable = releasableEntries();
         }
+    }
+
+    // The buffered entries whose dependencies the current frontier already satisfies, in arrival
+    // order. The whole set is materialised before any release, so a release within the pass does not
+    // change which records the pass forwards.
+    private List<BufferStore.Entry<K, V>> releasableEntries() {
+        List<BufferStore.Entry<K, V>> releasable = new ArrayList<>();
+        for (BufferStore.Entry<K, V> entry : buffer.entries()) {
+            if (entry.dependencies().satisfiedBy(frontier)) {
+                releasable.add(entry);
+            }
+        }
+        return releasable;
     }
 
     private void advanceFrontier(CausalRecord<K, V> record) {

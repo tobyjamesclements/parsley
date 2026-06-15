@@ -14,8 +14,8 @@ import java.util.List;
 import java.util.function.Function;
 
 /**
- * Serialises a buffered {@link CausalRecord} to and from the bytes stored in the durable buffer
- * store, so held records survive a restart.
+ * Serialises a buffered {@link CausalRecord} to and from the byte value stored in the durable buffer
+ * store (keyed by insertion sequence), so held records survive a restart.
  *
  * <p>The key and value are (de)serialised with the user's serdes, resolved <strong>by the record's
  * own source topic</strong> and invoked with that source topic as the {@code (topic, …)} argument —
@@ -35,17 +35,6 @@ final class BufferedRecordCodec<K, V> {
                         Function<String, Serde<V>> valueSerdeByTopic) {
         this.keySerdeByTopic = keySerdeByTopic;
         this.valueSerdeByTopic = valueSerdeByTopic;
-    }
-
-    /**
-     * Returns the buffer-store key for {@code record}: {@code topic/partition/offset}. Stable and
-     * unique across restarts, and prefixed by source topic so each input topic's held records are
-     * logically separated within the single store.
-     */
-    static String storeKey(CausalRecord<?, ?> record) {
-        return record.sourcePartition().topic() + "/"
-                + record.sourcePartition().partition() + "/"
-                + record.sourceOffset();
     }
 
     /**
@@ -116,9 +105,6 @@ final class BufferedRecordCodec<K, V> {
             throw new IllegalStateException("Buffered record deserialisation failed", e);
         }
     }
-
-    /** A restored record together with its decoded dependency clock. */
-    record Buffered<K, V>(CausalRecord<K, V> record, VectorClock dependencies) {}
 
     private static void writeString(DataOutputStream out, String value) throws IOException {
         byte[] bytes = value.getBytes(StandardCharsets.UTF_8);

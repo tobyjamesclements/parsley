@@ -91,14 +91,23 @@ final class ParsleyProcessorSupplier<KIn, VIn, KOut, VOut>
             stores.addAll(userStores);
         }
         stores.add(byteStore(frontierStoreName));
-        stores.add(byteStore(bufferStoreName));
+        stores.add(bufferStore(bufferStoreName));
         return stores;
     }
 
+    // The frontier store is keyed by a single well-known String key; the buffer store is keyed by the
+    // monotonic insertion sequence (a long), so its entries iterate in causal arrival order.
     private static StoreBuilder<KeyValueStore<String, byte[]>> byteStore(String name) {
         return Stores.keyValueStoreBuilder(
                 Stores.persistentKeyValueStore(name),
                 Serdes.String(),
+                Serdes.ByteArray());
+    }
+
+    private static StoreBuilder<KeyValueStore<Long, byte[]>> bufferStore(String name) {
+        return Stores.keyValueStoreBuilder(
+                Stores.persistentKeyValueStore(name),
+                Serdes.Long(),
                 Serdes.ByteArray());
     }
 }

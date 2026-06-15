@@ -29,7 +29,7 @@ class BufferedRecordCodecTest {
                 List.of(new CausalHeader("h1", "a".getBytes()), new CausalHeader("h2", null)),
                 deps.toBytes(), ORDERS_2, 7L);
 
-        BufferedRecordCodec.Buffered<String, String> restored = codec.deserialize(codec.serialize(record, deps));
+        Buffered<String, String> restored = codec.deserialize(codec.serialize(record, deps));
         CausalRecord<String, String> out = restored.record();
 
         assertEquals("key", out.key());
@@ -74,13 +74,6 @@ class BufferedRecordCodecTest {
         // the record's source topic ("orders"), never the buffer store's changelog name.
         assertEquals(List.of("orders", "orders"), keySpy.topics);
         assertEquals(List.of("orders", "orders"), valueSpy.topics);
-    }
-
-    @Test
-    void storeKeyEncodesSourceCoordinate() {
-        CausalRecord<String, String> record =
-                new CausalRecord<>("k", "v", 0L, List.of(), null, ORDERS_2, 7L);
-        assertEquals("orders/2/7", BufferedRecordCodec.storeKey(record));
     }
 
     /** A String serde that records the topic argument it was invoked with. */
