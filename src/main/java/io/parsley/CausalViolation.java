@@ -6,12 +6,12 @@ import org.apache.kafka.common.TopicPartition;
 import java.util.Map;
 
 /**
- * A causal-ordering violation, reported to a {@link ViolationHandler} with enough context to act
+ * A causal-ordering violation, reported to a {@link CausalViolationHandler} with enough context to act
  * on or audit it.
  *
  * <p>A violation arises when a record cannot be delivered in strict causal order — it carried an
  * unresolvable clock, no clock attribute, or was evicted from the buffer because a
- * {@link BufferLimit} fired. The payload carries the
+ * {@link CausalBufferLimit} fired. The payload carries the
  * <em>causal gap</em>: what the frontier had observed ({@link #frontier}) versus what the record
  * required ({@link #required}), and the per-partition shortfall ({@link #gap}) — the difference
  * between a violation you can operate around (replay, compensate, alert) and one you can only find
@@ -26,17 +26,17 @@ import java.util.Map;
  * @param gap      the per-partition shortfall ({@code required − observed}) for every partition the
  *                 frontier had not caught up on; empty if {@code required.satisfiedBy(frontier)}
  */
-public record Violation(
+public record CausalViolation(
         ConsumerRecord<?, ?> record,
         CausalViolationReason reason,
-        VectorClock frontier,
-        VectorClock required,
+        CausalDependencies frontier,
+        CausalDependencies required,
         Map<TopicPartition, Long> gap) {
 
     /**
      * Canonical constructor; defensively copies {@code gap}.
      */
-    public Violation {
+    public CausalViolation {
         gap = Map.copyOf(gap);
     }
 }

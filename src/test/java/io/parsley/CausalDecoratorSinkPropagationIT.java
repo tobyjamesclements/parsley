@@ -78,8 +78,8 @@ class CausalDecoratorSinkPropagationIT {
 
         StreamsBuilder builder = new StreamsBuilder();
         builder.stream(IN, Consumed.with(Serdes.String(), Serdes.String()))
-                .process(CausalProcessorSupplier.create(user, BufferingPolicy.forwardUnsafe(BufferLimit.ofDuration(Duration.ofSeconds(5))),
-                        ViolationHandler.noop(), Serdes.String(), Serdes.String()))
+                .process(CausalProcessorSupplier.create(user, CausalBufferingPolicy.forwardUnsafe(CausalBufferLimit.ofDuration(Duration.ofSeconds(5))),
+                        CausalViolationHandler.noop(), Serdes.String(), Serdes.String()))
                 .to(OUT, Produced.with(Serdes.String(), Serdes.String()));
 
         try (KafkaStreams streams = new KafkaStreams(builder.build(), streamsConfig(bootstrap))) {
@@ -91,7 +91,7 @@ class CausalDecoratorSinkPropagationIT {
                     ProducerConfig.KEY_SERIALIZER_CLASS_CONFIG, StringSerializer.class.getName(),
                     ProducerConfig.VALUE_SERIALIZER_CLASS_CONFIG, StringSerializer.class.getName()))) {
                 ProducerRecord<String, String> record = new ProducerRecord<>(IN, "k", "hello");
-                record.headers().add(new RecordHeader("parsley-vector-clock", VectorClock.empty().toBytes()));
+                record.headers().add(new RecordHeader("parsley-vector-clock", CausalDependencies.empty().toBytes()));
                 producer.send(record).get();
             }
 
@@ -106,8 +106,8 @@ class CausalDecoratorSinkPropagationIT {
                 ConsumerRecord<String, byte[]> out = poll(consumer);
                 assertEquals("HELLO", new String(out.value()), "the delegate's transform reached the sink");
 
-                Optional<VectorClock> clock = VectorClock.fromHeaders(out.headers());
-                assertEquals(Optional.of(VectorClock.empty().advance(new TopicPartition(IN, 0), 0)), clock,
+                Optional<CausalDependencies> clock = CausalDependencies.fromHeaders(out.headers());
+                assertEquals(Optional.of(CausalDependencies.empty().advance(new TopicPartition(IN, 0), 0)), clock,
                         "the clock stamped at forward must survive the sink to the output topic");
             }
         }

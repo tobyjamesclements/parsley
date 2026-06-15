@@ -6,22 +6,22 @@ import java.util.List;
 /**
  * Defines when records held in a causal buffer should be evicted.
  *
- * <p>{@code BufferLimit} is a sealed interface. Use the static factory methods to construct
+ * <p>{@code CausalBufferLimit} is a sealed interface. Use the static factory methods to construct
  * instances:
  *
  * <ul>
  *   <li>{@link #ofDuration(Duration)} — evict after waiting this long with no frontier advancement
  *   <li>{@link #ofSize(int)} — evict when the buffer holds this many messages
- *   <li>{@link #first(BufferLimit...)} — evict when the first of several limits fires
+ *   <li>{@link #first(CausalBufferLimit...)} — evict when the first of several limits fires
  * </ul>
  *
- * <p>A {@code BufferLimit} is always paired with a {@link BufferingPolicy} that determines
+ * <p>A {@code CausalBufferLimit} is always paired with a {@link CausalBufferingPolicy} that determines
  * <em>what</em> happens to evicted records (forward with a violation, drop, or dead-letter).
  */
-public sealed interface BufferLimit permits
-        BufferLimit.DurationLimit,
-        BufferLimit.SizeLimit,
-        BufferLimit.FirstLimit {
+public sealed interface CausalBufferLimit permits
+        CausalBufferLimit.DurationLimit,
+        CausalBufferLimit.SizeLimit,
+        CausalBufferLimit.FirstLimit {
 
     /**
      * Creates a {@link DurationLimit} that evicts records buffered longer than {@code duration}.
@@ -29,7 +29,7 @@ public sealed interface BufferLimit permits
      * @param duration the maximum buffer duration; must not be {@code null}
      * @return a new {@code DurationLimit}
      */
-    static BufferLimit ofDuration(Duration duration) {
+    static CausalBufferLimit ofDuration(Duration duration) {
         return new DurationLimit(duration);
     }
 
@@ -40,7 +40,7 @@ public sealed interface BufferLimit permits
      * @param messages the maximum buffer size in message count; must be positive
      * @return a new {@code SizeLimit}
      */
-    static BufferLimit ofSize(int messages) {
+    static CausalBufferLimit ofSize(int messages) {
         return new SizeLimit(messages);
     }
 
@@ -50,7 +50,7 @@ public sealed interface BufferLimit permits
      * @param limits the constituent limits; at least one required, none {@code null}
      * @return a new {@code FirstLimit}
      */
-    static BufferLimit first(BufferLimit... limits) {
+    static CausalBufferLimit first(CausalBufferLimit... limits) {
         return new FirstLimit(List.of(limits));
     }
 
@@ -61,7 +61,7 @@ public sealed interface BufferLimit permits
      * @param duration the maximum time to hold a record; must not be {@code null},
      *                 zero, or negative
      */
-    record DurationLimit(Duration duration) implements BufferLimit {
+    record DurationLimit(Duration duration) implements CausalBufferLimit {
         /**
          * Canonical constructor.
          *
@@ -79,11 +79,11 @@ public sealed interface BufferLimit permits
     /**
      * Evicts the buffer when its size reaches {@code messages}.
      * Eviction releases <em>all</em> buffered records according to the
-     * {@link BufferingPolicy}.
+     * {@link CausalBufferingPolicy}.
      *
      * @param messages the maximum number of records to hold at once; must be positive
      */
-    record SizeLimit(int messages) implements BufferLimit {
+    record SizeLimit(int messages) implements CausalBufferLimit {
         /**
          * Canonical constructor.
          *
@@ -103,7 +103,7 @@ public sealed interface BufferLimit permits
      * @param limits the constituent limits; must not be {@code null} or empty; copied
      *               defensively
      */
-    record FirstLimit(List<BufferLimit> limits) implements BufferLimit {
+    record FirstLimit(List<CausalBufferLimit> limits) implements CausalBufferLimit {
         /**
          * Canonical constructor; defensively copies {@code limits}.
          *

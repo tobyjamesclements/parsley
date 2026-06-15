@@ -26,12 +26,12 @@ final class ParsleyProducer<K, V> implements CausalProducer<K, V> {
     }
 
     @Override
-    public Future<RecordMetadata> send(ProducerRecord<K, V> record, VectorClock clock) {
+    public Future<RecordMetadata> send(ProducerRecord<K, V> record, CausalDependencies clock) {
         return delegate.send(withClock(record, clock));
     }
 
     @Override
-    public Future<RecordMetadata> send(ProducerRecord<K, V> record, VectorClock clock, Callback callback) {
+    public Future<RecordMetadata> send(ProducerRecord<K, V> record, CausalDependencies clock, Callback callback) {
         return delegate.send(withClock(record, clock), callback);
     }
 
@@ -40,7 +40,7 @@ final class ParsleyProducer<K, V> implements CausalProducer<K, V> {
         delegate.close();
     }
 
-    private ProducerRecord<K, V> withClock(ProducerRecord<K, V> record, VectorClock clock) {
+    private ProducerRecord<K, V> withClock(ProducerRecord<K, V> record, CausalDependencies clock) {
         ProducerRecord<K, V> enriched = new ProducerRecord<>(
                 record.topic(), record.partition(), record.timestamp(),
                 record.key(), record.value(), record.headers());

@@ -27,7 +27,7 @@ final class InMemoryBufferStore<K, V> implements CausalBufferStore<K, V> {
     public List<Entry<K, V>> entries() {
         List<Entry<K, V>> entries = new ArrayList<>(buffer.size());
         buffer.forEach((seq, record) ->
-                entries.add(new Entry<>(seq, record, VectorClock.fromBytes(record.encodedDependencies()))));
+                entries.add(new Entry<>(seq, record, CausalDependencies.fromBytes(record.encodedDependencies()))));
         return entries;
     }
 

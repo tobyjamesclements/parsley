@@ -23,7 +23,7 @@ class ParsleySerializerTest {
 
     @Test
     void roundTripsEveryField() {
-        VectorClock deps = VectorClock.empty().advance(new TopicPartition("prices", 0), 4);
+        CausalDependencies deps = CausalDependencies.empty().advance(new TopicPartition("prices", 0), 4);
         ParsleyRecord<String, String> record = new ParsleyRecord<>(
                 "key", "value", 123L,
                 List.of(new ParsleyHeader("h1", "a".getBytes()), new ParsleyHeader("h2", null)),
@@ -42,7 +42,7 @@ class ParsleySerializerTest {
         assertArrayEquals("a".getBytes(), out.headers().get(0).value());
         assertEquals("h2", out.headers().get(1).key());
         assertNull(out.headers().get(1).value());
-        assertEquals(deps, VectorClock.fromBytes(out.encodedDependencies()),
+        assertEquals(deps, CausalDependencies.fromBytes(out.encodedDependencies()),
                 "the dependency clock is recovered by decoding the restored encodedDependencies");
     }
 
@@ -65,7 +65,7 @@ class ParsleySerializerTest {
         ParsleySerializer<String, String> spying =
                 new ParsleySerializer<>(new ParsleyResolver<>(topic -> keySpy, topic -> valueSpy));
         ParsleyRecord<String, String> record =
-                new ParsleyRecord<>("k", "v", 0L, List.of(), VectorClock.empty().toBytes(), ORDERS_2, 1L);
+                new ParsleyRecord<>("k", "v", 0L, List.of(), CausalDependencies.empty().toBytes(), ORDERS_2, 1L);
 
         spying.deserialize(spying.serialize(record));
 

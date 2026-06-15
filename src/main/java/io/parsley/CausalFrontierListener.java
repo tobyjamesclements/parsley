@@ -2,7 +2,7 @@ package io.parsley;
 
 /**
  * Callback invoked when a decorating causal processor advances its causal frontier, handed the new
- * {@linkplain VectorClock frontier} — the highest offset the processor has admitted on each
+ * {@linkplain CausalDependencies frontier} — the highest offset the processor has admitted on each
  * partition so far.
  *
  * <p>This is the public way to observe causal progress out of a {@code CausalProcessorSupplier}
@@ -21,24 +21,24 @@ package io.parsley;
  * supplier may back several processor tasks (one per assigned partition), each with its own frontier
  * over its own partitions, and they may run on different Streams threads — so an implementation that
  * aggregates across tasks must be <strong>thread-safe</strong> and should
- * {@linkplain VectorClock#merge merge} rather than overwrite.
+ * {@linkplain CausalDependencies#merge merge} rather than overwrite.
  */
 @FunctionalInterface
-public interface FrontierListener {
+public interface CausalFrontierListener {
 
     /**
      * Called when the causal frontier advances (and once at startup with the restored frontier).
      *
      * @param frontier the new absolute frontier; never {@code null}
      */
-    void onFrontierAdvanced(VectorClock frontier);
+    void onFrontierAdvanced(CausalDependencies frontier);
 
     /**
      * Returns a listener that ignores all frontier advances.
      *
-     * @return a no-op {@code FrontierListener}
+     * @return a no-op {@code CausalFrontierListener}
      */
-    static FrontierListener noop() {
+    static CausalFrontierListener noop() {
         return frontier -> {};
     }
 }

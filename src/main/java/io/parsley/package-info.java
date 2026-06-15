@@ -15,21 +15,21 @@
  *
  * <h2>Key value types</h2>
  * <ul>
- *   <li>{@link io.parsley.VectorClock} &mdash; a snapshot of causal progress (highest offset
+ *   <li>{@link io.parsley.CausalDependencies} &mdash; a snapshot of causal progress (highest offset
  *       per {@link org.apache.kafka.common.TopicPartition}); test readiness with
- *       {@link io.parsley.VectorClock#satisfiedBy satisfiedBy} and combine clocks with
- *       {@link io.parsley.VectorClock#merge merge}</li>
- *   <li>{@link io.parsley.BufferingPolicy} &mdash; what to do when a buffer limit fires:
- *       {@link io.parsley.BufferingPolicy.ForwardUnsafe ForwardUnsafe},
- *       {@link io.parsley.BufferingPolicy.Drop Drop},
- *       {@link io.parsley.BufferingPolicy.DeadLetter DeadLetter}</li>
- *   <li>{@link io.parsley.BufferLimit} &mdash; when to stop waiting:
- *       {@link io.parsley.BufferLimit.DurationLimit DurationLimit},
- *       {@link io.parsley.BufferLimit.SizeLimit SizeLimit},
- *       {@link io.parsley.BufferLimit.FirstLimit FirstLimit}</li>
- *   <li>{@link io.parsley.ViolationHandler} &mdash; violation callback, handed a
- *       {@link io.parsley.Violation} carrying the causal gap</li>
- *   <li>{@link io.parsley.FrontierListener} &mdash; frontier-advance callback, the public way to
+ *       {@link io.parsley.CausalDependencies#satisfiedBy satisfiedBy} and combine clocks with
+ *       {@link io.parsley.CausalDependencies#merge merge}</li>
+ *   <li>{@link io.parsley.CausalBufferingPolicy} &mdash; what to do when a buffer limit fires:
+ *       {@link io.parsley.CausalBufferingPolicy.ForwardUnsafe ForwardUnsafe},
+ *       {@link io.parsley.CausalBufferingPolicy.Drop Drop},
+ *       {@link io.parsley.CausalBufferingPolicy.DeadLetter DeadLetter}</li>
+ *   <li>{@link io.parsley.CausalBufferLimit} &mdash; when to stop waiting:
+ *       {@link io.parsley.CausalBufferLimit.DurationLimit DurationLimit},
+ *       {@link io.parsley.CausalBufferLimit.SizeLimit SizeLimit},
+ *       {@link io.parsley.CausalBufferLimit.FirstLimit FirstLimit}</li>
+ *   <li>{@link io.parsley.CausalViolationHandler} &mdash; violation callback, handed a
+ *       {@link io.parsley.CausalViolation} carrying the causal gap</li>
+ *   <li>{@link io.parsley.CausalFrontierListener} &mdash; frontier-advance callback, the public way to
  *       observe causal progress out of a {@link io.parsley.CausalProcessorSupplier}</li>
  * </ul>
  */

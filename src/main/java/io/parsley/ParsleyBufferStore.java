@@ -57,7 +57,7 @@ final class ParsleyBufferStore<K, V> implements CausalBufferStore<K, V> {
             while (all.hasNext()) {
                 var kv = all.next();
                 ParsleyRecord<K, V> record = serializer.deserialize(kv.value);
-                entries.add(new Entry<>(kv.key, record, VectorClock.fromBytes(record.encodedDependencies())));
+                entries.add(new Entry<>(kv.key, record, CausalDependencies.fromBytes(record.encodedDependencies())));
             }
         }
         // Iteration order across store implementations is not guaranteed to be key order, so sort by

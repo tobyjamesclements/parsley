@@ -10,7 +10,7 @@ import java.util.concurrent.Future;
 /**
  * A Kafka producer that attaches a causal vector-clock header to every record it sends.
  *
- * <p>Each {@link #send} call embeds the serialised {@link VectorClock} as a
+ * <p>Each {@link #send} call embeds the serialised {@link CausalDependencies} as a
  * {@code parsley-vector-clock} header. Downstream causal consumers and processors use this
  * header to determine whether a record's causal dependencies have been satisfied. The clock is
  * typically the frontier of an upstream causal consumer.
@@ -39,7 +39,7 @@ public interface CausalProducer<K, V> extends AutoCloseable {
      * @param clock  the causal vector clock to embed; must not be {@code null}
      * @return a {@link Future} for the {@link RecordMetadata} of the sent record
      */
-    Future<RecordMetadata> send(ProducerRecord<K, V> record, VectorClock clock);
+    Future<RecordMetadata> send(ProducerRecord<K, V> record, CausalDependencies clock);
 
     /**
      * Sends a record with {@code clock} attached, invoking {@code callback} on completion.
@@ -49,7 +49,7 @@ public interface CausalProducer<K, V> extends AutoCloseable {
      * @param callback the callback invoked on send completion or failure; may be {@code null}
      * @return a {@link Future} for the {@link RecordMetadata} of the sent record
      */
-    Future<RecordMetadata> send(ProducerRecord<K, V> record, VectorClock clock, Callback callback);
+    Future<RecordMetadata> send(ProducerRecord<K, V> record, CausalDependencies clock, Callback callback);
 
     /**
      * Closes the underlying Kafka producer and releases all resources.

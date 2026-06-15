@@ -32,10 +32,10 @@ import java.util.concurrent.atomic.AtomicReference;
  * node whose delegate is a non-forwarding capture processor: it reconstructs each causally ordered
  * record from {@code recordMetadata()} (correct even for records that were buffered and drained
  * later) and enqueues it. The frontier is observed through the processor's public
- * {@link FrontierListener} hook rather than by reading its internal state store.
+ * {@link CausalFrontierListener} hook rather than by reading its internal state store.
  *
  * <p>Because the capture never forwards, no clock stamping occurs and each delivered record retains
- * the upstream producer's clock header — so {@code VectorClock.fromRecord(consumed)} still yields the
+ * the upstream producer's clock header — so {@code CausalDependencies.fromRecord(consumed)} still yields the
  * producer's clock.
  */
 final class ParsleyConsumer<K, V> implements CausalConsumer<K, V> {
@@ -44,12 +44,12 @@ final class ParsleyConsumer<K, V> implements CausalConsumer<K, V> {
     private final Serde<K> keySerde;
     private final Serde<V> valueSerde;
     private final LinkedBlockingQueue<ConsumerRecord<K, V>> readyQueue = new LinkedBlockingQueue<>();
-    private final AtomicReference<VectorClock> frontierRef = new AtomicReference<>(VectorClock.empty());
+    private final AtomicReference<CausalDependencies> frontierRef = new AtomicReference<>(CausalDependencies.empty());
 
     ParsleyConsumer(
             Collection<String> topics,
-            BufferingPolicy policy,
-            ViolationHandler onViolation,
+            CausalBufferingPolicy policy,
+            CausalViolationHandler onViolation,
             Map<String, Object> consumerConfig,
             Map<String, Object> streamsConfig,
             String storeName) {
@@ -81,7 +81,7 @@ final class ParsleyConsumer<K, V> implements CausalConsumer<K, V> {
     // Merge (rather than overwrite) so the frontier is correct across multiple partitions/tasks —
     // each task publishes a frontier over only its own partitions — and across the restored frontier
     // each task seeds at startup. Invoked from Streams threads; updateAndGet keeps it atomic.
-    private void onFrontierAdvanced(VectorClock frontier) {
+    private void onFrontierAdvanced(CausalDependencies frontier) {
         frontierRef.updateAndGet(current -> current.merge(frontier));
     }
 
@@ -142,7 +142,7 @@ final class ParsleyConsumer<K, V> implements CausalConsumer<K, V> {
     }
 
     @Override
-    public VectorClock frontier() {
+    public CausalDependencies frontier() {
         return frontierRef.get();
     }
 

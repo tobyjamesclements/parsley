@@ -15,62 +15,62 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-class VectorClockTest {
+class CausalDependenciesTest {
 
     private static final TopicPartition P0 = new TopicPartition("prices", 0);
     private static final TopicPartition O0 = new TopicPartition("orders", 0);
 
     @Test
     void emptyClockIsSatisfiedByAnything() {
-        assertTrue(VectorClock.empty().satisfiedBy(VectorClock.empty()));
-        assertTrue(VectorClock.empty().satisfiedBy(VectorClock.empty().advance(P0, 7)));
+        assertTrue(CausalDependencies.empty().satisfiedBy(CausalDependencies.empty()));
+        assertTrue(CausalDependencies.empty().satisfiedBy(CausalDependencies.empty().advance(P0, 7)));
     }
 
     @Test
     void advanceTakesTheMaximum() {
-        VectorClock clock = VectorClock.empty().advance(P0, 5).advance(P0, 2);
+        CausalDependencies clock = CausalDependencies.empty().advance(P0, 5).advance(P0, 2);
         assertEquals(Map.of(P0, 5L), clock.positions());
     }
 
     @Test
     void satisfiedByRequiresEveryPartitionToBeCaughtUp() {
-        VectorClock required = VectorClock.empty().advance(P0, 3);
-        assertFalse(required.satisfiedBy(VectorClock.empty()));
-        assertFalse(required.satisfiedBy(VectorClock.empty().advance(P0, 2)));
-        assertTrue(required.satisfiedBy(VectorClock.empty().advance(P0, 3)));
-        assertTrue(required.satisfiedBy(VectorClock.empty().advance(P0, 4)));
+        CausalDependencies required = CausalDependencies.empty().advance(P0, 3);
+        assertFalse(required.satisfiedBy(CausalDependencies.empty()));
+        assertFalse(required.satisfiedBy(CausalDependencies.empty().advance(P0, 2)));
+        assertTrue(required.satisfiedBy(CausalDependencies.empty().advance(P0, 3)));
+        assertTrue(required.satisfiedBy(CausalDependencies.empty().advance(P0, 4)));
     }
 
     @Test
     void mergeTakesPerPartitionMaximum() {
-        VectorClock a = VectorClock.empty().advance(P0, 3).advance(O0, 1);
-        VectorClock b = VectorClock.empty().advance(P0, 1).advance(O0, 9);
+        CausalDependencies a = CausalDependencies.empty().advance(P0, 3).advance(O0, 1);
+        CausalDependencies b = CausalDependencies.empty().advance(P0, 1).advance(O0, 9);
         assertEquals(Map.of(P0, 3L, O0, 9L), a.merge(b).positions());
     }
 
     @Test
     void serialisationRoundTrips() {
-        VectorClock clock = VectorClock.empty().advance(P0, 42).advance(O0, 7);
-        assertEquals(clock, VectorClock.fromBytes(clock.toBytes()));
+        CausalDependencies clock = CausalDependencies.empty().advance(P0, 42).advance(O0, 7);
+        assertEquals(clock, CausalDependencies.fromBytes(clock.toBytes()));
     }
 
     @Test
     void emptyClockSerialisationRoundTrips() {
-        assertEquals(VectorClock.empty(), VectorClock.fromBytes(VectorClock.empty().toBytes()));
+        assertEquals(CausalDependencies.empty(), CausalDependencies.fromBytes(CausalDependencies.empty().toBytes()));
     }
 
     @Test
     void fromBytesRejectsGarbage() {
-        assertThrows(IllegalStateException.class, () -> VectorClock.fromBytes(new byte[]{1, 2, 3}));
+        assertThrows(IllegalStateException.class, () -> CausalDependencies.fromBytes(new byte[]{1, 2, 3}));
     }
 
     @Test
     void fromHeadersReadsTheStampedClock() {
-        VectorClock clock = VectorClock.empty().advance(P0, 12).advance(O0, 4);
+        CausalDependencies clock = CausalDependencies.empty().advance(P0, 12).advance(O0, 4);
         Headers headers = new RecordHeaders();
         headers.add(new RecordHeader(ParsleyAttributes.VECTOR_CLOCK, clock.toBytes()));
 
-        assertEquals(Optional.of(clock), VectorClock.fromHeaders(headers));
+        assertEquals(Optional.of(clock), CausalDependencies.fromHeaders(headers));
     }
 
     @Test
@@ -78,44 +78,44 @@ class VectorClockTest {
         Headers headers = new RecordHeaders();
         headers.add(new RecordHeader("trace-id", "abc".getBytes()));
 
-        assertEquals(Optional.empty(), VectorClock.fromHeaders(headers));
+        assertEquals(Optional.empty(), CausalDependencies.fromHeaders(headers));
     }
 
     @Test
     void fromRecordReadsTheStampedClock() {
-        VectorClock clock = VectorClock.empty().advance(P0, 27);
+        CausalDependencies clock = CausalDependencies.empty().advance(P0, 27);
         ConsumerRecord<String, String> record = new ConsumerRecord<>("orders", 0, 5L, "k", "v");
         record.headers().add(new RecordHeader(ParsleyAttributes.VECTOR_CLOCK, clock.toBytes()));
 
-        assertEquals(Optional.of(clock), VectorClock.fromRecord(record));
+        assertEquals(Optional.of(clock), CausalDependencies.fromRecord(record));
     }
 
     @Test
     void fromRecordIsEmptyWhenRecordCarriesNoClock() {
         ConsumerRecord<String, String> record = new ConsumerRecord<>("orders", 0, 5L, "k", "v");
-        assertEquals(Optional.empty(), VectorClock.fromRecord(record));
+        assertEquals(Optional.empty(), CausalDependencies.fromRecord(record));
     }
 
     @Test
     void missingAgainstIsEmptyWhenTheFrontierSatisfiesTheClock() {
-        VectorClock required = VectorClock.empty().advance(P0, 3);
-        assertTrue(required.missingAgainst(VectorClock.empty().advance(P0, 3)).isEmpty());
-        assertTrue(required.missingAgainst(VectorClock.empty().advance(P0, 9)).isEmpty());
-        assertTrue(VectorClock.empty().missingAgainst(VectorClock.empty()).isEmpty());
+        CausalDependencies required = CausalDependencies.empty().advance(P0, 3);
+        assertTrue(required.missingAgainst(CausalDependencies.empty().advance(P0, 3)).isEmpty());
+        assertTrue(required.missingAgainst(CausalDependencies.empty().advance(P0, 9)).isEmpty());
+        assertTrue(CausalDependencies.empty().missingAgainst(CausalDependencies.empty()).isEmpty());
     }
 
     @Test
     void missingAgainstReportsThePerPartitionShortfall() {
-        VectorClock required = VectorClock.empty().advance(P0, 5).advance(O0, 2);
+        CausalDependencies required = CausalDependencies.empty().advance(P0, 5).advance(O0, 2);
         // P0: required 5, observed 1 → gap 4. O0: required 2, observed absent(-1) → gap 3.
-        VectorClock frontier = VectorClock.empty().advance(P0, 1);
+        CausalDependencies frontier = CausalDependencies.empty().advance(P0, 1);
         assertEquals(Map.of(P0, 4L, O0, 3L), required.missingAgainst(frontier));
     }
 
     @Test
     void missingAgainstCountsAnAbsentPositionAsMinusOne() {
-        VectorClock required = VectorClock.empty().advance(P0, 0);
-        assertEquals(Map.of(P0, 1L), required.missingAgainst(VectorClock.empty()),
+        CausalDependencies required = CausalDependencies.empty().advance(P0, 0);
+        assertEquals(Map.of(P0, 1L), required.missingAgainst(CausalDependencies.empty()),
                 "requiring offset 0 against an unseen partition is a gap of 1");
     }
 
@@ -123,7 +123,7 @@ class VectorClockTest {
     void positionsAreDefensivelyCopied() {
         java.util.Map<TopicPartition, Long> mutable = new java.util.HashMap<>();
         mutable.put(P0, 1L);
-        VectorClock clock = new VectorClock(mutable);
+        CausalDependencies clock = new CausalDependencies(mutable);
         mutable.put(P0, 99L);
         assertEquals(1L, clock.positions().get(P0));
     }

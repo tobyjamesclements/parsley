@@ -11,7 +11,7 @@ import java.util.Map;
  * A high-level Kafka consumer that delivers records in causal order.
  *
  * <p>A {@code CausalConsumer} wraps a Kafka Streams topology to provide causal ordering across
- * one or more topics. Records whose {@link VectorClock} dependencies are not yet satisfied by
+ * one or more topics. Records whose {@link CausalDependencies} dependencies are not yet satisfied by
  * the current frontier are held in an internal buffer; once the frontier catches up, buffered
  * records are released and returned in subsequent {@link #poll} calls.
  *
@@ -19,12 +19,12 @@ import java.util.Map;
  * <pre>{@code
  * try (CausalConsumer<String, Order> consumer = CausalConsumer.create(
  *         List.of("prices", "orders"),
- *         BufferingPolicy.forwardUnsafe(BufferLimit.ofDuration(Duration.ofSeconds(30))),
+ *         CausalBufferingPolicy.forwardUnsafe(CausalBufferLimit.ofDuration(Duration.ofSeconds(30))),
  *         Map.of(),
  *         streamsConfig)) {
  *
  *     ConsumerRecords<String, Order> records = consumer.poll(Duration.ofMillis(200));
- *     VectorClock frontier = consumer.frontier(); // pass to a CausalProducer when producing
+ *     CausalDependencies frontier = consumer.frontier(); // pass to a CausalProducer when producing
  * }
  * }</pre>
  *
@@ -49,7 +49,7 @@ public interface CausalConsumer<K, V> extends Closeable {
      * Polls for records whose causal dependencies are satisfied.
      *
      * <p>Records with unsatisfied dependencies remain buffered until the frontier catches up
-     * or the configured {@link io.parsley.BufferLimit} fires.
+     * or the configured {@link io.parsley.CausalBufferLimit} fires.
      *
      * @param timeout the maximum time to block waiting for records; must not be {@code null}
      * @return records ready for processing; never {@code null}, may be empty
@@ -62,13 +62,13 @@ public interface CausalConsumer<K, V> extends Closeable {
      *
      * <p>Pass this clock to {@link CausalProducer#send} to propagate the
      * consumer's causal position onto records it produces, or serialise it to hand downstream as a
-     * causal token (see {@link VectorClock} for the cross-service propagation pattern). To instead
+     * causal token (see {@link CausalDependencies} for the cross-service propagation pattern). To instead
      * read the causal context of <em>one specific</em> consumed message — the upstream producer's
-     * clock — use {@link VectorClock#fromRecord(org.apache.kafka.clients.consumer.ConsumerRecord)}.
+     * clock — use {@link CausalDependencies#fromRecord(org.apache.kafka.clients.consumer.ConsumerRecord)}.
      *
-     * @return the current {@link VectorClock} frontier; never {@code null}
+     * @return the current {@link CausalDependencies} frontier; never {@code null}
      */
-    VectorClock frontier();
+    CausalDependencies frontier();
 
     /**
      * Stops the consumer and releases all resources.
@@ -78,7 +78,7 @@ public interface CausalConsumer<K, V> extends Closeable {
 
     /**
      * Creates a new, running {@code CausalConsumer}, defaulting the violation handler to
-     * {@link ViolationHandler#noop()} and the state-store namespace to {@code "parsley"}.
+     * {@link CausalViolationHandler#noop()} and the state-store namespace to {@code "parsley"}.
      *
      * @param <K>            the record key type
      * @param <V>            the record value type
@@ -90,14 +90,14 @@ public interface CausalConsumer<K, V> extends Closeable {
      *                       {@code application.id} and {@code bootstrap.servers}
      * @return a new, running {@code CausalConsumer}
      * @throws IllegalArgumentException if {@code policy} is a
-     *                                  {@link BufferingPolicy.DeadLetter DeadLetter} policy
+     *                                  {@link CausalBufferingPolicy.DeadLetter DeadLetter} policy
      */
     static <K, V> CausalConsumer<K, V> create(
             Collection<String> topics,
-            BufferingPolicy policy,
+            CausalBufferingPolicy policy,
             Map<String, Object> consumerConfig,
             Map<String, Object> streamsConfig) {
-        return create(topics, policy, ViolationHandler.noop(), consumerConfig, streamsConfig);
+        return create(topics, policy, CausalViolationHandler.noop(), consumerConfig, streamsConfig);
     }
 
     /**
@@ -116,8 +116,8 @@ public interface CausalConsumer<K, V> extends Closeable {
      */
     static <K, V> CausalConsumer<K, V> create(
             Collection<String> topics,
-            BufferingPolicy policy,
-            ViolationHandler onViolation,
+            CausalBufferingPolicy policy,
+            CausalViolationHandler onViolation,
             Map<String, Object> consumerConfig,
             Map<String, Object> streamsConfig) {
         return create(topics, policy, onViolation, consumerConfig, streamsConfig, "parsley");
@@ -127,7 +127,7 @@ public interface CausalConsumer<K, V> extends Closeable {
      * Creates a new, running {@code CausalConsumer} with full control over the violation handler and
      * the state-store namespace.
      *
-     * <p>{@link BufferingPolicy.DeadLetter DeadLetter} policies are not supported by this facade —
+     * <p>{@link CausalBufferingPolicy.DeadLetter DeadLetter} policies are not supported by this facade —
      * there is no parameter for a dead-letter sink — and are rejected. To dead-letter evicted
      * records, build a custom topology with {@link CausalProcessorSupplier#create}'s dead-letter overload
      * instead.
@@ -145,12 +145,12 @@ public interface CausalConsumer<K, V> extends Closeable {
      *                       so keep {@code storeName} stable across restarts)
      * @return a new, running {@code CausalConsumer}
      * @throws IllegalArgumentException if {@code policy} is a
-     *                                  {@link BufferingPolicy.DeadLetter DeadLetter} policy
+     *                                  {@link CausalBufferingPolicy.DeadLetter DeadLetter} policy
      */
     static <K, V> CausalConsumer<K, V> create(
             Collection<String> topics,
-            BufferingPolicy policy,
-            ViolationHandler onViolation,
+            CausalBufferingPolicy policy,
+            CausalViolationHandler onViolation,
             Map<String, Object> consumerConfig,
             Map<String, Object> streamsConfig,
             String storeName) {

@@ -1,10 +1,10 @@
 package io.parsley;
 
 /**
- * Defines what happens to a record when its {@link BufferLimit} fires.
+ * Defines what happens to a record when its {@link CausalBufferLimit} fires.
  *
- * <p>{@code BufferingPolicy} is a sealed interface with three variants. Each variant pairs a
- * {@link BufferLimit} (the <em>when</em>) with an eviction strategy (the <em>what</em>):
+ * <p>{@code CausalBufferingPolicy} is a sealed interface with three variants. Each variant pairs a
+ * {@link CausalBufferLimit} (the <em>when</em>) with an eviction strategy (the <em>what</em>):
  *
  * <ul>
  *   <li>{@link ForwardUnsafe} — forward the evicted record downstream out-of-order and report a
@@ -24,10 +24,10 @@ package io.parsley;
  * <p>Use the static factory methods to construct instances:
  * {@link #forwardUnsafe}, {@link #drop}, {@link #deadLetter}.
  */
-public sealed interface BufferingPolicy permits
-        BufferingPolicy.ForwardUnsafe,
-        BufferingPolicy.Drop,
-        BufferingPolicy.DeadLetter {
+public sealed interface CausalBufferingPolicy permits
+        CausalBufferingPolicy.ForwardUnsafe,
+        CausalBufferingPolicy.Drop,
+        CausalBufferingPolicy.DeadLetter {
 
     /**
      * Returns whether this policy is <strong>strict</strong> — i.e. it never forwards an
@@ -46,7 +46,7 @@ public sealed interface BufferingPolicy permits
      * @param limit the eviction trigger
      * @return a new {@code ForwardUnsafe} policy
      */
-    static BufferingPolicy forwardUnsafe(BufferLimit limit) {
+    static CausalBufferingPolicy forwardUnsafe(CausalBufferLimit limit) {
         return new ForwardUnsafe(limit);
     }
 
@@ -56,7 +56,7 @@ public sealed interface BufferingPolicy permits
      * @param limit the eviction trigger
      * @return a new {@code Drop} policy
      */
-    static BufferingPolicy drop(BufferLimit limit) {
+    static CausalBufferingPolicy drop(CausalBufferLimit limit) {
         return new Drop(limit);
     }
 
@@ -68,7 +68,7 @@ public sealed interface BufferingPolicy permits
      * @param destination the dead-letter destination name (e.g. a Kafka topic)
      * @return a new {@code DeadLetter} policy
      */
-    static BufferingPolicy deadLetter(BufferLimit limit, String destination) {
+    static CausalBufferingPolicy deadLetter(CausalBufferLimit limit, String destination) {
         return new DeadLetter(limit, destination);
     }
 
@@ -83,7 +83,7 @@ public sealed interface BufferingPolicy permits
      *
      * @param limit the limit that triggers eviction
      */
-    record ForwardUnsafe(BufferLimit limit) implements BufferingPolicy {
+    record ForwardUnsafe(CausalBufferLimit limit) implements CausalBufferingPolicy {
         @Override
         public boolean strict() {
             return false;
@@ -99,7 +99,7 @@ public sealed interface BufferingPolicy permits
      *
      * @param limit the limit that triggers eviction
      */
-    record Drop(BufferLimit limit) implements BufferingPolicy {
+    record Drop(CausalBufferLimit limit) implements CausalBufferingPolicy {
         @Override
         public boolean strict() {
             return true;
@@ -114,7 +114,7 @@ public sealed interface BufferingPolicy permits
      * @param limit       the limit that triggers eviction
      * @param destination the destination name to route evicted records to (e.g. a Kafka topic)
      */
-    record DeadLetter(BufferLimit limit, String destination) implements BufferingPolicy {
+    record DeadLetter(CausalBufferLimit limit, String destination) implements CausalBufferingPolicy {
         @Override
         public boolean strict() {
             return true;

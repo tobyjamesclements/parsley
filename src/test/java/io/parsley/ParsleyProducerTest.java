@@ -22,14 +22,14 @@ class ParsleyProducerTest {
     void sendAttachesTheVectorClockHeader() {
         MockProducer<String, String> mock = mock();
         try (ParsleyProducer<String, String> producer = new ParsleyProducer<>(mock)) {
-            VectorClock clock = VectorClock.empty().advance(PRICES, 3);
+            CausalDependencies clock = CausalDependencies.empty().advance(PRICES, 3);
             producer.send(new ProducerRecord<>("orders", "k", "v"), clock);
 
             assertEquals(1, mock.history().size());
             ProducerRecord<String, String> sent = mock.history().get(0);
             Header header = sent.headers().lastHeader(ParsleyAttributes.VECTOR_CLOCK);
             assertNotNull(header, "vector-clock header must be present");
-            assertEquals(clock, VectorClock.fromBytes(header.value()));
+            assertEquals(clock, CausalDependencies.fromBytes(header.value()));
         }
     }
 
@@ -40,7 +40,7 @@ class ParsleyProducerTest {
             ProducerRecord<String, String> record = new ProducerRecord<>("orders", "k", "v");
             record.headers().add("trace-id", "abc".getBytes());
 
-            producer.send(record, VectorClock.empty());
+            producer.send(record, CausalDependencies.empty());
 
             ProducerRecord<String, String> sent = mock.history().get(0);
             assertEquals("orders", sent.topic());

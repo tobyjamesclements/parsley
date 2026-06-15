@@ -35,22 +35,22 @@ import java.util.function.Consumer;
 final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn, KOut, VOut> {
 
     private final Processor<KIn, VIn, KOut, VOut> delegate;
-    private final BufferingPolicy policy;
-    private final ViolationHandler onViolation;
+    private final CausalBufferingPolicy policy;
+    private final CausalViolationHandler onViolation;
     private final Consumer<ConsumerRecord<KIn, VIn>> deadLetterSink;
     private final ParsleySerializer<KIn, VIn> serializer;
     private final String frontierStoreName;
     private final String bufferStoreName;
-    private final FrontierListener frontierListener;
+    private final CausalFrontierListener frontierListener;
 
     // All mutable state below is confined to the single Kafka Streams thread that owns this task:
     // process() and any wall-clock punctuator run on that same thread, interleaved but never
     // concurrently. So the un-synchronized fields here are safe without further guarding.
 
-    // The engine advances the frontier once per admitted record and fires the FrontierListener each
+    // The engine advances the frontier once per admitted record and fires the CausalFrontierListener each
     // time, in the same order as the records it returns; we record those frontier values here so each
     // delivered record can be stamped with the frontier as of *its own* admission (not the batch end).
-    private final List<VectorClock> snapshots = new ArrayList<>();
+    private final List<CausalDependencies> snapshots = new ArrayList<>();
 
     private ProcessorContext<KOut, VOut> context;
     private KeyValueStore<String, byte[]> frontierStore;
@@ -60,17 +60,17 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
     // report from recordMetadata(), for the record currently being delivered. Written and read on the
     // one task thread (see above); volatile is belt-and-suspenders against any future caller that
     // might read them off-thread, not a fix for a real race.
-    private volatile VectorClock stampClock = VectorClock.empty();
+    private volatile CausalDependencies stampClock = CausalDependencies.empty();
     private volatile RecordMetadata deliveryMetadata;
 
     ParsleyProcessor(Processor<KIn, VIn, KOut, VOut> delegate,
-                     BufferingPolicy policy,
-                     ViolationHandler onViolation,
+                     CausalBufferingPolicy policy,
+                     CausalViolationHandler onViolation,
                      Consumer<ConsumerRecord<KIn, VIn>> deadLetterSink,
                      ParsleySerializer<KIn, VIn> serializer,
                      String frontierStoreName,
                      String bufferStoreName,
-                     FrontierListener frontierListener) {
+                     CausalFrontierListener frontierListener) {
         this.delegate = delegate;
         this.policy = policy;
         this.onViolation = onViolation;
@@ -88,16 +88,16 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
         this.bufferStore = context.getStateStore(bufferStoreName);
 
         // Restore the frontier persisted by a previous run (cold start → empty).
-        VectorClock initialFrontier = VectorClock.empty();
+        CausalDependencies initialFrontier = CausalDependencies.empty();
         byte[] stored = frontierStore.get(ParsleyAttributes.FRONTIER_KEY);
         if (stored != null) {
-            initialFrontier = VectorClock.fromBytes(stored);
+            initialFrontier = CausalDependencies.fromBytes(stored);
         }
         this.stampClock = initialFrontier;
 
         // Publish the restored frontier so an observer (e.g. a CausalConsumer) has a correct view
         // before the first new record is admitted. This goes straight to the public listener, never
-        // through the engine's FrontierListener below, whose per-advance snapshot bookkeeping must
+        // through the engine's CausalFrontierListener below, whose per-advance snapshot bookkeeping must
         // stay in lock-step with the records the engine returns.
         frontierListener.onFrontierAdvanced(initialFrontier);
 

@@ -49,11 +49,11 @@ import java.util.function.Supplier;
 final class ParsleyProcessorContext<KOut, VOut> implements ProcessorContext<KOut, VOut> {
 
     private final ProcessorContext<KOut, VOut> delegate;
-    private final Supplier<VectorClock> frontier;
+    private final Supplier<CausalDependencies> frontier;
     private final Supplier<Optional<RecordMetadata>> deliveredMetadata;
 
     ParsleyProcessorContext(ProcessorContext<KOut, VOut> delegate,
-                             Supplier<VectorClock> frontier,
+                             Supplier<CausalDependencies> frontier,
                              Supplier<Optional<RecordMetadata>> deliveredMetadata) {
         this.delegate = delegate;
         this.frontier = frontier;

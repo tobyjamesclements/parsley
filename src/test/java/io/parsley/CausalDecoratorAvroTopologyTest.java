@@ -58,8 +58,8 @@ class CausalDecoratorAvroTopologyTest {
     private static final TopicPartition PRICES_0 = new TopicPartition(PRICES, 0);
 
     private final List<SpecificRecord> processed = new ArrayList<>();
-    private final List<Violation> violations = new ArrayList<>();
-    private final ViolationHandler onViolation = violations::add;
+    private final List<CausalViolation> violations = new ArrayList<>();
+    private final CausalViolationHandler onViolation = violations::add;
 
     @AfterEach
     void dropRegistryScope() {
@@ -78,7 +78,7 @@ class CausalDecoratorAvroTopologyTest {
         builder.stream(List.of(PRICES, ORDERS), Consumed.with(Serdes.String(), avro))
                 .process(CausalProcessorSupplier.create(
                         user,
-                        BufferingPolicy.forwardUnsafe(BufferLimit.ofSize(100)),
+                        CausalBufferingPolicy.forwardUnsafe(CausalBufferLimit.ofSize(100)),
                         onViolation,
                         topic -> Serdes.String(),
                         topic -> avro));
@@ -95,13 +95,13 @@ class CausalDecoratorAvroTopologyTest {
 
             // The order depends on prices-0@0, which has not arrived: it is held (Avro-serialised
             // into the buffer store), not delivered.
-            orders.pipeInput(new TestRecord<>("k", order, clockHeader(VectorClock.empty().advance(PRICES_0, 0))));
+            orders.pipeInput(new TestRecord<>("k", order, clockHeader(CausalDependencies.empty().advance(PRICES_0, 0))));
             assertTrue(processed.isEmpty(), "held record must not reach the delegate");
             assertEquals(1, storeSize(bufferStore), "held record must be persisted (Avro bytes) to the buffer store");
 
             // The price arrives and advances the frontier, draining the order back through the codec.
             Price price = new Price("ACME", 42.5);
-            prices.pipeInput(new TestRecord<>("k", price, clockHeader(VectorClock.empty())));
+            prices.pipeInput(new TestRecord<>("k", price, clockHeader(CausalDependencies.empty())));
 
             assertEquals(List.of(price, order), processed,
                     "the price is admitted, then the order drains as an Avro Order equal to the original");
@@ -164,7 +164,7 @@ class CausalDecoratorAvroTopologyTest {
         return props;
     }
 
-    private static Headers clockHeader(VectorClock clock) {
+    private static Headers clockHeader(CausalDependencies clock) {
         Headers headers = new RecordHeaders();
         headers.add(new RecordHeader("parsley-vector-clock", clock.toBytes()));
         return headers;

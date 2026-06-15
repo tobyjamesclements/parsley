@@ -21,7 +21,7 @@ interface CausalBufferStore<K, V> {
      * A buffered entry: its insertion sequence (an opaque handle for {@link #remove(long)}), the
      * record, and its decoded dependency clock.
      */
-    record Entry<K, V>(long sequence, ParsleyRecord<K, V> record, VectorClock dependencies) {}
+    record Entry<K, V>(long sequence, ParsleyRecord<K, V> record, CausalDependencies dependencies) {}
 
     /**
      * Buffers a record under the next insertion sequence. The record's decoded dependency clock,

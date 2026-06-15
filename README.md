@@ -65,7 +65,7 @@ then declare the repository and dependency:
 ```java
 try (CausalConsumer<String, String> consumer = CausalConsumer.create(
         List.of("prices", "orders"),
-        BufferingPolicy.forwardUnsafe(BufferLimit.ofDuration(Duration.ofSeconds(30))),
+        CausalBufferingPolicy.forwardUnsafe(CausalBufferLimit.ofDuration(Duration.ofSeconds(30))),
         Map.of(ConsumerConfig.GROUP_ID_CONFIG, "my-group"),
         Map.of(StreamsConfig.APPLICATION_ID_CONFIG,    "my-app",
                StreamsConfig.BOOTSTRAP_SERVERS_CONFIG, "localhost:9092"))) {
@@ -94,7 +94,7 @@ ProcessorSupplier<String, Order, String, Enriched> user = new ProcessorSupplier<
 };
 
 builder.stream(List.of("prices", "orders"), Consumed.with(Serdes.String(), orderSerde))
-       .process(CausalProcessorSupplier.create(user, BufferingPolicy.deadLetter(limit, "parsley-dlq"),
+       .process(CausalProcessorSupplier.create(user, CausalBufferingPolicy.deadLetter(limit, "parsley-dlq"),
                                onViolation, deadLetterSink, Serdes.String(), orderSerde))
        .to("output-topic");
 ```
@@ -103,7 +103,7 @@ Held records are persisted to a changelog-backed buffer store (serialised with t
 resolved per source topic) so they survive a restart. The guarantee holds for every admitted record
 under any policy, and for every record under a **strict** policy (`deadLetter`/`drop`); the lenient
 `forwardUnsafe` policy preserves delivery by forwarding un-satisfied records under sustained lag,
-suspending the guarantee for exactly those records (each flagged via the `ViolationHandler`, with the
+suspending the guarantee for exactly those records (each flagged via the `CausalViolationHandler`, with the
 causal gap). Three preconditions apply — closed effects, co-partitioning, and acceptance of the
 policy — documented on `CausalProcessorSupplier.create(...)`.
 
@@ -113,9 +113,9 @@ and apply *your own* encryption/transport (Parsley ships none); the receiver reb
 its read:
 
 ```java
-VectorClock context = VectorClock.fromRecord(reply).orElseGet(consumer::frontier);
+CausalDependencies context = CausalDependencies.fromRecord(reply).orElseGet(consumer::frontier);
 send(myCipher.encrypt(context.toBytes()));                 // → HTTP, your transport
-// receiver: VectorClock.fromBytes(...).satisfiedBy(localFrontier)
+// receiver: CausalDependencies.fromBytes(...).satisfiedBy(localFrontier)
 ```
 
 ## Operating notes
@@ -136,6 +136,6 @@ incomplete partition set silently.
   changelog-backed state, rebalance-safe restoration, and transactional forwarding for free.
 - **Frontier on every produce.** The producer holds no frontier of its own; passing the clock at
   each `send` makes the causal claim explicit at the call site.
-- **One concrete `VectorClock`.** Parsley targets Kafka only, so the clock is a single concrete
+- **One concrete `CausalDependencies`.** Parsley targets Kafka only, so the clock is a single concrete
   value type that owns its wire format — no broker-neutral, self-typed indirection the library would
   never use.

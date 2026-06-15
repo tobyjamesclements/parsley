@@ -8,7 +8,7 @@ final class ParsleyAttributes {
 
     private ParsleyAttributes() {}
 
-    /** Header carrying a record's serialised dependency {@code VectorClock}. */
+    /** Header carrying a record's serialised dependency {@code CausalDependencies}. */
     static final String VECTOR_CLOCK = "parsley-vector-clock";
 
     /** Persistent state store holding the consumer's frontier. */

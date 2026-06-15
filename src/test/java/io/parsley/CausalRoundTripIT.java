@@ -58,14 +58,14 @@ class CausalRoundTripIT {
                 ProducerConfig.VALUE_SERIALIZER_CLASS_CONFIG, StringSerializer.class.getName()));
              CausalConsumer<String, String> consumer = CausalConsumer.create(
                      List.of(TOPIC),
-                     BufferingPolicy.forwardUnsafe(BufferLimit.ofDuration(Duration.ofSeconds(5))),
+                     CausalBufferingPolicy.forwardUnsafe(CausalBufferLimit.ofDuration(Duration.ofSeconds(5))),
                      Map.of(ConsumerConfig.GROUP_ID_CONFIG, "rt-" + UUID.randomUUID()),
                      streamsConfig(bootstrap))) {
 
             // Each record carries a clock advancing the partition it is written to.
             for (int i = 0; i < 5; i++) {
                 producer.send(new ProducerRecord<>(TOPIC, "k", "v" + i),
-                        VectorClock.empty().advance(tp, i));
+                        CausalDependencies.empty().advance(tp, i));
             }
 
             List<ConsumerRecord<String, String>> received = new ArrayList<>();
@@ -83,8 +83,8 @@ class CausalRoundTripIT {
             // Each delivered record still carries the producer's vector-clock header, extractable
             // via the public API — this is the causal context a service would forward to a client.
             for (int i = 0; i < 5; i++) {
-                assertEquals(Optional.of(VectorClock.empty().advance(tp, i)),
-                        VectorClock.fromRecord(received.get(i)),
+                assertEquals(Optional.of(CausalDependencies.empty().advance(tp, i)),
+                        CausalDependencies.fromRecord(received.get(i)),
                         "record " + i + " should carry its producer's clock");
             }
         }
@@ -97,11 +97,11 @@ class CausalRoundTripIT {
         createTopic(bootstrap, topic);
 
         // The handler runs on the Streams thread, so capture must be thread-safe.
-        List<Violation> violations = new CopyOnWriteArrayList<>();
+        List<CausalViolation> violations = new CopyOnWriteArrayList<>();
 
         try (CausalConsumer<String, String> consumer = CausalConsumer.create(
                 List.of(topic),
-                BufferingPolicy.forwardUnsafe(BufferLimit.ofDuration(Duration.ofSeconds(5))),
+                CausalBufferingPolicy.forwardUnsafe(CausalBufferLimit.ofDuration(Duration.ofSeconds(5))),
                 violations::add,                                   // the override that was previously hidden
                 Map.of(ConsumerConfig.GROUP_ID_CONFIG, "rt-" + UUID.randomUUID()),
                 streamsConfig(bootstrap),

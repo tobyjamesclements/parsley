@@ -12,36 +12,36 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
-class ViolationHandlerTest {
+class CausalViolationHandlerTest {
 
     private final ConsumerRecord<String, String> record =
             new ConsumerRecord<>("orders", 2, 5L, "k", "v");
-    private final Violation violation = new Violation(
+    private final CausalViolation violation = new CausalViolation(
             record, CausalViolationReason.MISSING_HEADER,
-            VectorClock.empty(), VectorClock.empty(), Map.of());
+            CausalDependencies.empty(), CausalDependencies.empty(), Map.of());
 
     @Test
     void throwingThrowsWithRecordAndReason() {
         CausalViolationException ex = assertThrows(CausalViolationException.class,
-                () -> ViolationHandler.throwing().onViolation(violation));
+                () -> CausalViolationHandler.throwing().onViolation(violation));
         assertSame(record, ex.record());
         assertEquals(CausalViolationReason.MISSING_HEADER, ex.reason());
     }
 
     @Test
     void noopIgnores() {
-        assertDoesNotThrow(() -> ViolationHandler.noop().onViolation(violation));
+        assertDoesNotThrow(() -> CausalViolationHandler.noop().onViolation(violation));
     }
 
     @Test
     void lambdaReceivesTheViolationWithItsGap() {
         TopicPartition prices = new TopicPartition("prices", 0);
-        Violation limit = new Violation(
+        CausalViolation limit = new CausalViolation(
                 record, CausalViolationReason.LIMIT_REACHED,
-                VectorClock.empty(), VectorClock.empty().advance(prices, 4), Map.of(prices, 5L));
+                CausalDependencies.empty(), CausalDependencies.empty().advance(prices, 4), Map.of(prices, 5L));
 
-        AtomicReference<Violation> seen = new AtomicReference<>();
-        ViolationHandler handler = seen::set;
+        AtomicReference<CausalViolation> seen = new AtomicReference<>();
+        CausalViolationHandler handler = seen::set;
         handler.onViolation(limit);
 
         assertEquals(CausalViolationReason.LIMIT_REACHED, seen.get().reason());

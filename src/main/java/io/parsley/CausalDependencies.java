@@ -37,27 +37,27 @@ import java.util.Optional;
  *   <li>Serialise it with {@link #toBytes()}, then apply <em>your own</em> encryption and a URL-safe
  *       encoding (e.g. Base64) and place it in an HTTP header.
  *   <li>On the receiving side, decode and decrypt, rebuild with {@link #fromBytes(byte[])}, and gate
- *       the downstream read with {@link #satisfiedBy(VectorClock)} against that store's frontier.
+ *       the downstream read with {@link #satisfiedBy(CausalDependencies)} against that store's frontier.
  * </ol>
  *
  * @param positions the partition-to-highest-offset map; copied defensively
  */
-public record VectorClock(Map<TopicPartition, Long> positions) {
+public record CausalDependencies(Map<TopicPartition, Long> positions) {
 
     /**
      * Canonical constructor; defensively copies {@code positions}.
      */
-    public VectorClock(Map<TopicPartition, Long> positions) {
+    public CausalDependencies(Map<TopicPartition, Long> positions) {
         this.positions = Map.copyOf(positions);
     }
 
     /**
      * Returns an empty clock with no partition positions recorded.
      *
-     * @return an empty {@code VectorClock}
+     * @return an empty {@code CausalDependencies}
      */
-    public static VectorClock empty() {
-        return new VectorClock(Map.of());
+    public static CausalDependencies empty() {
+        return new CausalDependencies(Map.of());
     }
 
     /**
@@ -65,12 +65,12 @@ public record VectorClock(Map<TopicPartition, Long> positions) {
      *
      * @param tp     the topic-partition to advance
      * @param offset the newly observed offset
-     * @return a new {@code VectorClock} with the updated position
+     * @return a new {@code CausalDependencies} with the updated position
      */
-    public VectorClock advance(TopicPartition tp, long offset) {
+    public CausalDependencies advance(TopicPartition tp, long offset) {
         Map<TopicPartition, Long> advanced = new HashMap<>(positions);
         advanced.merge(tp, offset, Math::max);
-        return new VectorClock(advanced);
+        return new CausalDependencies(advanced);
     }
 
     /**
@@ -81,7 +81,7 @@ public record VectorClock(Map<TopicPartition, Long> positions) {
      * @param frontier the frontier clock to test against; must not be {@code null}
      * @return {@code true} if the frontier has caught up with this clock
      */
-    public boolean satisfiedBy(VectorClock frontier) {
+    public boolean satisfiedBy(CausalDependencies frontier) {
         for (Map.Entry<TopicPartition, Long> entry : positions.entrySet()) {
             Long observed = frontier.positions.get(entry.getKey());
             if (observed == null || observed < entry.getValue()) {
@@ -102,7 +102,7 @@ public record VectorClock(Map<TopicPartition, Long> positions) {
      * @return the per-partition shortfall, or an empty map if the frontier already satisfies this
      *         clock
      */
-    public Map<TopicPartition, Long> missingAgainst(VectorClock frontier) {
+    public Map<TopicPartition, Long> missingAgainst(CausalDependencies frontier) {
         Map<TopicPartition, Long> gap = new HashMap<>();
         for (Map.Entry<TopicPartition, Long> entry : positions.entrySet()) {
             long required = entry.getValue();
@@ -121,12 +121,12 @@ public record VectorClock(Map<TopicPartition, Long> positions) {
      * the two position maps.
      *
      * @param other the clock to merge with; must not be {@code null}
-     * @return a new {@code VectorClock} dominating both operands
+     * @return a new {@code CausalDependencies} dominating both operands
      */
-    public VectorClock merge(VectorClock other) {
+    public CausalDependencies merge(CausalDependencies other) {
         Map<TopicPartition, Long> merged = new HashMap<>(positions);
         other.positions.forEach((tp, offset) -> merged.merge(tp, offset, Math::max));
-        return new VectorClock(merged);
+        return new CausalDependencies(merged);
     }
 
     /**
@@ -154,7 +154,7 @@ public record VectorClock(Map<TopicPartition, Long> positions) {
             }
             return baos.toByteArray();
         } catch (IOException e) {
-            throw new IllegalStateException("VectorClock serialisation failed", e);
+            throw new IllegalStateException("CausalDependencies serialisation failed", e);
         }
     }
 
@@ -162,10 +162,10 @@ public record VectorClock(Map<TopicPartition, Long> positions) {
      * Reconstructs a clock from its {@link #toBytes() serialised} form.
      *
      * @param bytes the serialised clock; must not be {@code null}
-     * @return the deserialised {@code VectorClock}
+     * @return the deserialised {@code CausalDependencies}
      * @throws IllegalStateException if {@code bytes} is not a valid serialised clock
      */
-    public static VectorClock fromBytes(byte[] bytes) {
+    public static CausalDependencies fromBytes(byte[] bytes) {
         try (DataInputStream dis = new DataInputStream(new ByteArrayInputStream(bytes))) {
             int count = dis.readInt();
             Map<TopicPartition, Long> positions = new HashMap<>(count);
@@ -178,9 +178,9 @@ public record VectorClock(Map<TopicPartition, Long> positions) {
                 long offset = dis.readLong();
                 positions.put(new TopicPartition(topic, partition), offset);
             }
-            return new VectorClock(positions);
+            return new CausalDependencies(positions);
         } catch (IOException e) {
-            throw new IllegalStateException("VectorClock deserialisation failed", e);
+            throw new IllegalStateException("CausalDependencies deserialisation failed", e);
         }
     }
 
@@ -196,7 +196,7 @@ public record VectorClock(Map<TopicPartition, Long> positions) {
      * @return the embedded clock, or empty if the record carried no clock header
      * @throws IllegalStateException if the header is present but not a valid serialised clock
      */
-    public static Optional<VectorClock> fromRecord(ConsumerRecord<?, ?> record) {
+    public static Optional<CausalDependencies> fromRecord(ConsumerRecord<?, ?> record) {
         return fromHeaders(record.headers());
     }
 
@@ -207,13 +207,13 @@ public record VectorClock(Map<TopicPartition, Long> positions) {
      * @return the embedded clock, or empty if no clock header is present
      * @throws IllegalStateException if the header is present but not a valid serialised clock
      */
-    public static Optional<VectorClock> fromHeaders(Headers headers) {
+    public static Optional<CausalDependencies> fromHeaders(Headers headers) {
         Header header = headers.lastHeader(ParsleyAttributes.VECTOR_CLOCK);
         return header == null ? Optional.empty() : Optional.of(fromBytes(header.value()));
     }
 
     @Override
     public String toString() {
-        return "VectorClock" + positions;
+        return "CausalDependencies" + positions;
     }
 }

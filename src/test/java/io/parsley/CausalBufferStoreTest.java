@@ -17,20 +17,20 @@ class CausalBufferStoreTest {
 
     // The record's encodedDependencies carry the dependency clock; the store derives the decoded
     // clock from them, so build the record with the clock it depends on.
-    private static ParsleyRecord<String, String> rec(TopicPartition tp, long offset, VectorClock deps) {
+    private static ParsleyRecord<String, String> rec(TopicPartition tp, long offset, CausalDependencies deps) {
         return new ParsleyRecord<>("k", "v", 0L, List.of(), deps.toBytes(), tp, offset);
     }
 
     @Test
     void entriesAreReturnedInInsertionOrderWithTheirDependencies() {
-        store.add(rec(ORDERS, 0, VectorClock.empty().advance(PRICES, 9)));
-        store.add(rec(ORDERS, 1, VectorClock.empty().advance(PRICES, 3)));
+        store.add(rec(ORDERS, 0, CausalDependencies.empty().advance(PRICES, 9)));
+        store.add(rec(ORDERS, 1, CausalDependencies.empty().advance(PRICES, 3)));
 
         List<CausalBufferStore.Entry<String, String>> entries = store.entries();
 
         assertEquals(2, entries.size());
         assertEquals(0L, entries.get(0).record().sourceOffset());
-        assertEquals(VectorClock.empty().advance(PRICES, 9), entries.get(0).dependencies());
+        assertEquals(CausalDependencies.empty().advance(PRICES, 9), entries.get(0).dependencies());
         assertEquals(1L, entries.get(1).record().sourceOffset());
         assertTrue(entries.get(0).sequence() < entries.get(1).sequence(),
                 "earlier-added entry must carry the lower sequence");
@@ -38,8 +38,8 @@ class CausalBufferStoreTest {
 
     @Test
     void removeDropsTheEntryAndDecrementsSize() {
-        store.add(rec(ORDERS, 0, VectorClock.empty().advance(PRICES, 1)));
-        store.add(rec(ORDERS, 1, VectorClock.empty().advance(PRICES, 5)));
+        store.add(rec(ORDERS, 0, CausalDependencies.empty().advance(PRICES, 1)));
+        store.add(rec(ORDERS, 1, CausalDependencies.empty().advance(PRICES, 5)));
         assertEquals(2, store.size());
 
         long firstSeq = store.entries().get(0).sequence();

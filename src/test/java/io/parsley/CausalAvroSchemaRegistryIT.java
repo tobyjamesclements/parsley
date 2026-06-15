@@ -94,13 +94,13 @@ class CausalAvroSchemaRegistryIT {
                 "schema.registry.url", registryUrl));
              CausalConsumer<String, SpecificRecord> consumer = CausalConsumer.create(
                      List.of(ORDERS, PRICES),
-                     BufferingPolicy.forwardUnsafe(BufferLimit.ofDuration(Duration.ofSeconds(5))),
+                     CausalBufferingPolicy.forwardUnsafe(CausalBufferLimit.ofDuration(Duration.ofSeconds(5))),
                      Map.of(ConsumerConfig.GROUP_ID_CONFIG, "avro-rt-" + UUID.randomUUID()),
                      streamsConfig(bootstrap, registryUrl))) {
 
             // Each record's clock simply marks its own position, so both self-satisfy and are admitted.
-            producer.send(new ProducerRecord<>(PRICES, "ACME", price), VectorClock.empty().advance(pricesTp, 0)).get();
-            producer.send(new ProducerRecord<>(ORDERS, "o-1", order), VectorClock.empty().advance(ordersTp, 0)).get();
+            producer.send(new ProducerRecord<>(PRICES, "ACME", price), CausalDependencies.empty().advance(pricesTp, 0)).get();
+            producer.send(new ProducerRecord<>(ORDERS, "o-1", order), CausalDependencies.empty().advance(ordersTp, 0)).get();
 
             List<ConsumerRecord<String, SpecificRecord>> received = new ArrayList<>();
             await().atMost(Duration.ofSeconds(90)).until(() -> {

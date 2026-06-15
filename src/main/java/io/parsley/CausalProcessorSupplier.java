@@ -23,7 +23,7 @@ import java.util.function.Function;
  * };
  *
  * builder.stream(List.of("prices", "orders"), Consumed.with(Serdes.String(), orderSerde))
- *        .process(CausalProcessorSupplier.create(user, BufferingPolicy.deadLetter(limit, "parsley-dlq"), onViolation,
+ *        .process(CausalProcessorSupplier.create(user, CausalBufferingPolicy.deadLetter(limit, "parsley-dlq"), onViolation,
  *                                deadLetterSink, Serdes.String(), orderSerde))
  *        .to("output-topic");
  * }</pre>
@@ -44,12 +44,12 @@ import java.util.function.Function;
  *       events. Parsley does not detect or enforce this (consistent with existing library
  *       behaviour) — a misconfigured topology silently evaluates against an incomplete frontier.
  *   <li><strong>Accepted buffering policy.</strong> The user accepts the chosen
- *       {@link BufferingPolicy}'s behaviour under sustained lag. <strong>Strict</strong> policies
+ *       {@link CausalBufferingPolicy}'s behaviour under sustained lag. <strong>Strict</strong> policies
  *       ({@code deadLetter}, {@code drop}) divert un-satisfiable records away from {@code process()}
  *       — the guarantee holds unconditionally for every record that reaches {@code process()}, at
  *       the cost of delivery. The <strong>lenient</strong> policy ({@code forwardUnsafe}) preserves
  *       delivery by admitting un-satisfied records, which suspends the guarantee for exactly those
- *       records; they are flagged via the {@link ViolationHandler}.
+ *       records; they are flagged via the {@link CausalViolationHandler}.
  * </ol>
  *
  * <p>Outgoing messages are stamped with the current frontier transparently as they are forwarded —
@@ -60,8 +60,8 @@ import java.util.function.Function;
 public interface CausalProcessorSupplier<KIn, VIn, KOut, VOut> extends ProcessorSupplier<KIn, VIn, KOut, VOut> {
 
     /**
-     * Decorates {@code userSupplier} for a {@link BufferingPolicy.ForwardUnsafe ForwardUnsafe} or
-     * {@link BufferingPolicy.Drop Drop} policy, using one serde pair for all input topics.
+     * Decorates {@code userSupplier} for a {@link CausalBufferingPolicy.ForwardUnsafe ForwardUnsafe} or
+     * {@link CausalBufferingPolicy.Drop Drop} policy, using one serde pair for all input topics.
      *
      * @param userSupplier the user's processor supplier
      * @param policy       the buffering policy; must not be a {@code DeadLetter} policy
@@ -77,16 +77,16 @@ public interface CausalProcessorSupplier<KIn, VIn, KOut, VOut> extends Processor
      */
     static <KIn, VIn, KOut, VOut> CausalProcessorSupplier<KIn, VIn, KOut, VOut> create(
             ProcessorSupplier<KIn, VIn, KOut, VOut> userSupplier,
-            BufferingPolicy policy,
-            ViolationHandler onViolation,
+            CausalBufferingPolicy policy,
+            CausalViolationHandler onViolation,
             Serde<KIn> keySerde,
             Serde<VIn> valueSerde) {
         return create(userSupplier, policy, onViolation, topic -> keySerde, topic -> valueSerde);
     }
 
     /**
-     * Decorates {@code userSupplier} for a {@link BufferingPolicy.ForwardUnsafe ForwardUnsafe} or
-     * {@link BufferingPolicy.Drop Drop} policy, resolving the buffer serde by source topic so input
+     * Decorates {@code userSupplier} for a {@link CausalBufferingPolicy.ForwardUnsafe ForwardUnsafe} or
+     * {@link CausalBufferingPolicy.Drop Drop} policy, resolving the buffer serde by source topic so input
      * topics with distinct (e.g. Avro {@code SpecificRecord} / Schema Registry) serdes round-trip
      * correctly.
      *
@@ -104,15 +104,15 @@ public interface CausalProcessorSupplier<KIn, VIn, KOut, VOut> extends Processor
      */
     static <KIn, VIn, KOut, VOut> CausalProcessorSupplier<KIn, VIn, KOut, VOut> create(
             ProcessorSupplier<KIn, VIn, KOut, VOut> userSupplier,
-            BufferingPolicy policy,
-            ViolationHandler onViolation,
+            CausalBufferingPolicy policy,
+            CausalViolationHandler onViolation,
             Function<String, Serde<KIn>> keySerdeByTopic,
             Function<String, Serde<VIn>> valueSerdeByTopic) {
         return create(userSupplier, policy, onViolation, keySerdeByTopic, valueSerdeByTopic, "parsley");
     }
 
     /**
-     * As {@link #create(ProcessorSupplier, BufferingPolicy, ViolationHandler, Function, Function)}
+     * As {@link #create(ProcessorSupplier, CausalBufferingPolicy, CausalViolationHandler, Function, Function)}
      * but with an explicit {@code storeName} namespace, so several causal processors can share one
      * topology. The processor's frontier store is {@code storeName + "-frontier"} and its buffer
      * store is {@code storeName + "-buffer"}; Kafka Streams requires these to be unique within a
@@ -134,18 +134,18 @@ public interface CausalProcessorSupplier<KIn, VIn, KOut, VOut> extends Processor
      */
     static <KIn, VIn, KOut, VOut> CausalProcessorSupplier<KIn, VIn, KOut, VOut> create(
             ProcessorSupplier<KIn, VIn, KOut, VOut> userSupplier,
-            BufferingPolicy policy,
-            ViolationHandler onViolation,
+            CausalBufferingPolicy policy,
+            CausalViolationHandler onViolation,
             Function<String, Serde<KIn>> keySerdeByTopic,
             Function<String, Serde<VIn>> valueSerdeByTopic,
             String storeName) {
         return create(userSupplier, policy, onViolation, keySerdeByTopic, valueSerdeByTopic, storeName,
-                FrontierListener.noop());
+                CausalFrontierListener.noop());
     }
 
     /**
-     * As {@link #create(ProcessorSupplier, BufferingPolicy, ViolationHandler, Function, Function, String)}
-     * but with a {@link FrontierListener} that observes every advance of this processor's causal
+     * As {@link #create(ProcessorSupplier, CausalBufferingPolicy, CausalViolationHandler, Function, Function, String)}
+     * but with a {@link CausalFrontierListener} that observes every advance of this processor's causal
      * frontier (and the restored frontier at startup). Use it to track causal progress without
      * reaching into the processor's internal state stores — this is how {@link CausalConsumer}
      * surfaces {@link CausalConsumer#frontier()}.
@@ -158,7 +158,7 @@ public interface CausalProcessorSupplier<KIn, VIn, KOut, VOut> extends Processor
      * @param storeName         the state-store namespace for this processor's frontier and buffer
      * @param frontierListener  invoked with the new frontier after every advance, and once with the
      *                          restored frontier at startup; must be thread-safe (see
-     *                          {@link FrontierListener})
+     *                          {@link CausalFrontierListener})
      * @param <KIn>             the input key type
      * @param <VIn>             the input value type
      * @param <KOut>            the forwarded key type
@@ -168,13 +168,13 @@ public interface CausalProcessorSupplier<KIn, VIn, KOut, VOut> extends Processor
      */
     static <KIn, VIn, KOut, VOut> CausalProcessorSupplier<KIn, VIn, KOut, VOut> create(
             ProcessorSupplier<KIn, VIn, KOut, VOut> userSupplier,
-            BufferingPolicy policy,
-            ViolationHandler onViolation,
+            CausalBufferingPolicy policy,
+            CausalViolationHandler onViolation,
             Function<String, Serde<KIn>> keySerdeByTopic,
             Function<String, Serde<VIn>> valueSerdeByTopic,
             String storeName,
-            FrontierListener frontierListener) {
-        if (policy instanceof BufferingPolicy.DeadLetter) {
+            CausalFrontierListener frontierListener) {
+        if (policy instanceof CausalBufferingPolicy.DeadLetter) {
             throw new IllegalArgumentException(
                     "DeadLetter policy requires a dead-letter sink — use a create() overload with a sink");
         }
@@ -184,7 +184,7 @@ public interface CausalProcessorSupplier<KIn, VIn, KOut, VOut> extends Processor
     }
 
     /**
-     * Decorates {@code userSupplier} for a {@link BufferingPolicy.DeadLetter DeadLetter} policy,
+     * Decorates {@code userSupplier} for a {@link CausalBufferingPolicy.DeadLetter DeadLetter} policy,
      * routing evicted records to {@code deadLetterSink}, using one serde pair for all input topics.
      *
      * @param userSupplier   the user's processor supplier
@@ -201,8 +201,8 @@ public interface CausalProcessorSupplier<KIn, VIn, KOut, VOut> extends Processor
      */
     static <KIn, VIn, KOut, VOut> CausalProcessorSupplier<KIn, VIn, KOut, VOut> create(
             ProcessorSupplier<KIn, VIn, KOut, VOut> userSupplier,
-            BufferingPolicy.DeadLetter policy,
-            ViolationHandler onViolation,
+            CausalBufferingPolicy.DeadLetter policy,
+            CausalViolationHandler onViolation,
             Consumer<ConsumerRecord<KIn, VIn>> deadLetterSink,
             Serde<KIn> keySerde,
             Serde<VIn> valueSerde) {
@@ -211,7 +211,7 @@ public interface CausalProcessorSupplier<KIn, VIn, KOut, VOut> extends Processor
     }
 
     /**
-     * Decorates {@code userSupplier} for a {@link BufferingPolicy.DeadLetter DeadLetter} policy,
+     * Decorates {@code userSupplier} for a {@link CausalBufferingPolicy.DeadLetter DeadLetter} policy,
      * routing evicted records to {@code deadLetterSink}, resolving the buffer serde by source topic.
      *
      * @param userSupplier      the user's processor supplier
@@ -228,8 +228,8 @@ public interface CausalProcessorSupplier<KIn, VIn, KOut, VOut> extends Processor
      */
     static <KIn, VIn, KOut, VOut> CausalProcessorSupplier<KIn, VIn, KOut, VOut> create(
             ProcessorSupplier<KIn, VIn, KOut, VOut> userSupplier,
-            BufferingPolicy.DeadLetter policy,
-            ViolationHandler onViolation,
+            CausalBufferingPolicy.DeadLetter policy,
+            CausalViolationHandler onViolation,
             Consumer<ConsumerRecord<KIn, VIn>> deadLetterSink,
             Function<String, Serde<KIn>> keySerdeByTopic,
             Function<String, Serde<VIn>> valueSerdeByTopic) {
@@ -239,7 +239,7 @@ public interface CausalProcessorSupplier<KIn, VIn, KOut, VOut> extends Processor
 
     /**
      * As
-     * {@link #create(ProcessorSupplier, BufferingPolicy.DeadLetter, ViolationHandler, Consumer, Function, Function)}
+     * {@link #create(ProcessorSupplier, CausalBufferingPolicy.DeadLetter, CausalViolationHandler, Consumer, Function, Function)}
      * but with an explicit {@code storeName} namespace (see the non-dead-letter named overload for
      * the naming rules), so several causal processors can share one topology.
      *
@@ -258,8 +258,8 @@ public interface CausalProcessorSupplier<KIn, VIn, KOut, VOut> extends Processor
      */
     static <KIn, VIn, KOut, VOut> CausalProcessorSupplier<KIn, VIn, KOut, VOut> create(
             ProcessorSupplier<KIn, VIn, KOut, VOut> userSupplier,
-            BufferingPolicy.DeadLetter policy,
-            ViolationHandler onViolation,
+            CausalBufferingPolicy.DeadLetter policy,
+            CausalViolationHandler onViolation,
             Consumer<ConsumerRecord<KIn, VIn>> deadLetterSink,
             Function<String, Serde<KIn>> keySerdeByTopic,
             Function<String, Serde<VIn>> valueSerdeByTopic,

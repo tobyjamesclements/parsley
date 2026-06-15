@@ -2,16 +2,16 @@ package io.parsley;
 
 /**
  * Callback invoked when a decorating causal processor detects an ordering violation, handed a
- * {@link Violation} that includes the causal gap.
+ * {@link CausalViolation} that includes the causal gap.
  *
  * <p>Used throughout Parsley (the engine, {@code CausalProcessorSupplier.create(...)}, and the consumer): where the
  * strict policies produce a recoverable artifact (the dead-letter destination), this makes the
  * lenient {@code forwardUnsafe} path observable to a comparable standard — the handler learns not
  * just <em>that</em> a record was forwarded without its causal premise, but <em>which</em>
- * dependencies were missing and by how much (via {@link Violation#gap()}).
+ * dependencies were missing and by how much (via {@link CausalViolation#gap()}).
  */
 @FunctionalInterface
-public interface ViolationHandler {
+public interface CausalViolationHandler {
 
     /**
      * Called when a causal violation occurs.
@@ -19,14 +19,14 @@ public interface ViolationHandler {
      * @param violation the violation, including the offending record, the reason, and the causal
      *                  gap; never {@code null}
      */
-    void onViolation(Violation violation);
+    void onViolation(CausalViolation violation);
 
     /**
      * Returns a handler that silently ignores all violations.
      *
-     * @return a no-op {@code ViolationHandler}
+     * @return a no-op {@code CausalViolationHandler}
      */
-    static ViolationHandler noop() {
+    static CausalViolationHandler noop() {
         return violation -> {};
     }
 
@@ -35,9 +35,9 @@ public interface ViolationHandler {
      *
      * <p>Use when any causal disorder should be treated as a fatal error.
      *
-     * @return a throwing {@code ViolationHandler}
+     * @return a throwing {@code CausalViolationHandler}
      */
-    static ViolationHandler throwing() {
+    static CausalViolationHandler throwing() {
         return violation -> { throw new CausalViolationException(violation.record(), violation.reason()); };
     }
 }
