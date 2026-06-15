@@ -52,10 +52,10 @@ class CausalRoundTripIT {
 
         TopicPartition tp = new TopicPartition(TOPIC, 0);
 
-        try (CausalProducer<String, String> producer = CausalProducer.create(Map.of(
+        try (CausalProducer<String, String> producer = CausalProducers.<String, String>builder(Map.of(
                 ProducerConfig.BOOTSTRAP_SERVERS_CONFIG, bootstrap,
                 ProducerConfig.KEY_SERIALIZER_CLASS_CONFIG, StringSerializer.class.getName(),
-                ProducerConfig.VALUE_SERIALIZER_CLASS_CONFIG, StringSerializer.class.getName()));
+                ProducerConfig.VALUE_SERIALIZER_CLASS_CONFIG, StringSerializer.class.getName())).build();
              CausalConsumer<String, String> consumer = CausalConsumer.create(
                      List.of(TOPIC),
                      CausalBufferingPolicy.forwardUnsafe(CausalBufferLimit.ofDuration(Duration.ofSeconds(5))),

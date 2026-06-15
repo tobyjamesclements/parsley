@@ -87,11 +87,11 @@ class CausalAvroSchemaRegistryIT {
         Order order = new Order("o-1", "ACME", 5);
         Price price = new Price("ACME", 42.5);
 
-        try (CausalProducer<String, SpecificRecord> producer = CausalProducer.create(Map.of(
+        try (CausalProducer<String, SpecificRecord> producer = CausalProducers.<String, SpecificRecord>builder(Map.of(
                 ProducerConfig.BOOTSTRAP_SERVERS_CONFIG, bootstrap,
                 ProducerConfig.KEY_SERIALIZER_CLASS_CONFIG, StringSerializer.class.getName(),
                 ProducerConfig.VALUE_SERIALIZER_CLASS_CONFIG, KafkaAvroSerializer.class.getName(),
-                "schema.registry.url", registryUrl));
+                "schema.registry.url", registryUrl)).build();
              CausalConsumer<String, SpecificRecord> consumer = CausalConsumer.create(
                      List.of(ORDERS, PRICES),
                      CausalBufferingPolicy.forwardUnsafe(CausalBufferLimit.ofDuration(Duration.ofSeconds(5))),

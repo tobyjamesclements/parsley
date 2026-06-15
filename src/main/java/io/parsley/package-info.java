@@ -9,8 +9,8 @@
  *       guarantee; drop it into {@code stream(...).process(...)}</li>
  *   <li>{@link io.parsley.CausalConsumer} &mdash; {@code CausalConsumer.create(...)} delivers records
  *       in causal order over a {@code poll()} API</li>
- *   <li>{@link io.parsley.CausalProducer} &mdash; {@code CausalProducer.create(...)} stamps the causal
- *       clock onto produced records</li>
+ *   <li>{@link io.parsley.CausalProducer} &mdash; {@code CausalProducers.builder(...).build()} stamps the
+ *       causal clock onto produced records</li>
  * </ul>
  *
  * <h2>Key value types</h2>

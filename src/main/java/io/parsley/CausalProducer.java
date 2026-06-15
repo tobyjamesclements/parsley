@@ -4,7 +4,6 @@ import org.apache.kafka.clients.producer.Callback;
 import org.apache.kafka.clients.producer.ProducerRecord;
 import org.apache.kafka.clients.producer.RecordMetadata;
 
-import java.util.Map;
 import java.util.concurrent.Future;
 
 /**
@@ -17,7 +16,7 @@ import java.util.concurrent.Future;
  *
  * <h2>Usage</h2>
  * <pre>{@code
- * CausalProducer<String, String> producer = CausalProducer.create(producerConfig);
+ * CausalProducer<String, String> producer = CausalProducers.<String, String>builder(producerConfig).build();
  * producer.send(new ProducerRecord<>("orders", key, value), consumer.frontier());
  * }</pre>
  *
@@ -56,18 +55,4 @@ public interface CausalProducer<K, V> extends AutoCloseable {
      */
     @Override
     void close();
-
-    /**
-     * Creates a new {@code CausalProducer} with the given Kafka producer configuration.
-     *
-     * @param <K>    the record key type
-     * @param <V>    the record value type
-     * @param config Kafka producer configuration ({@code ProducerConfig} properties); must
-     *               include at minimum {@code bootstrap.servers}, {@code key.serializer}, and
-     *               {@code value.serializer}
-     * @return a new {@code CausalProducer}
-     */
-    static <K, V> CausalProducer<K, V> create(Map<String, Object> config) {
-        return new ParsleyProducer<>(config);
-    }
 }
