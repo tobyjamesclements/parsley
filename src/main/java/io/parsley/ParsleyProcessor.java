@@ -117,9 +117,9 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
         };
 
         // The buffer store IS the buffer: held records that survived the previous run are already in
-        // it, so there is nothing to "restore" — StoreBufferStore seeds its sequence past them and the
+        // it, so there is nothing to "restore" — ParsleyBufferStore seeds its sequence past them and the
         // engine drains them on the next frontier advance.
-        BufferStore<KIn, VIn> buffer = new StoreBufferStore<>(bufferStore, codec);
+        BufferStore<KIn, VIn> buffer = new ParsleyBufferStore<>(bufferStore, codec);
 
         this.engine = new CausalEngine<>(policy, onViolation, initialFrontier,
                 engineDeadLetter, listener, buffer);

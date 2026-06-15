@@ -8,7 +8,7 @@ import java.util.TreeMap;
  * An in-memory {@link BufferStore} backed by a {@link TreeMap} keyed by insertion sequence. Used
  * where buffer durability is not required — unit tests that exercise the {@link CausalEngine}
  * without a Kafka state store, and to stand in for a restored buffer in tests. Production uses
- * {@link StoreBufferStore}.
+ * {@link ParsleyBufferStore}.
  *
  * @param <K> the record key type
  * @param <V> the record value type

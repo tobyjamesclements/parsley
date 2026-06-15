@@ -20,14 +20,14 @@ import java.util.List;
  * @param <K> the record key type
  * @param <V> the record value type
  */
-final class StoreBufferStore<K, V> implements BufferStore<K, V> {
+final class ParsleyBufferStore<K, V> implements BufferStore<K, V> {
 
     private final KeyValueStore<Long, byte[]> store;
     private final BufferedRecordCodec<K, V> codec;
     private long nextSequence;
     private int size;
 
-    StoreBufferStore(KeyValueStore<Long, byte[]> store, BufferedRecordCodec<K, V> codec) {
+    ParsleyBufferStore(KeyValueStore<Long, byte[]> store, BufferedRecordCodec<K, V> codec) {
         this.store = store;
         this.codec = codec;
         // Seed the sequence past anything that survived a previous run, and count what is held, in a
