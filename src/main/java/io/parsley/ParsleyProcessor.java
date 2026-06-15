@@ -20,7 +20,7 @@ import java.util.function.Consumer;
  * delivered to {@code delegate.process(...)} only once the frontier dominates its dependency clock
  * (or the policy forces it). State reads/writes the delegate performs and every record it forwards
  * are therefore causally ordered, and forwards are clock-stamped by a
- * {@link StampingProcessorContext}.
+ * {@link ParsleyProcessorContext}.
  *
  * <p>Held records are persisted to a changelog-backed buffer store and restored on {@code init}, so
  * they survive a restart (a buffered record's source offset is committed past it, so it would
@@ -126,7 +126,7 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
 
         // The delegate runs against the stamping proxy, never the raw context, so its forwards are
         // clock-stamped and its recordMetadata() reflects the delivered record.
-        ProcessorContext<KOut, VOut> stamping = new StampingProcessorContext<>(
+        ProcessorContext<KOut, VOut> stamping = new ParsleyProcessorContext<>(
                 context, () -> stampClock, () -> Optional.ofNullable(deliveryMetadata));
         delegate.init(stamping);
 

@@ -46,13 +46,13 @@ import java.util.function.Supplier;
  * @param <KOut> the forwarded key type
  * @param <VOut> the forwarded value type
  */
-final class StampingProcessorContext<KOut, VOut> implements ProcessorContext<KOut, VOut> {
+final class ParsleyProcessorContext<KOut, VOut> implements ProcessorContext<KOut, VOut> {
 
     private final ProcessorContext<KOut, VOut> delegate;
     private final Supplier<VectorClock> frontier;
     private final Supplier<Optional<RecordMetadata>> deliveredMetadata;
 
-    StampingProcessorContext(ProcessorContext<KOut, VOut> delegate,
+    ParsleyProcessorContext(ProcessorContext<KOut, VOut> delegate,
                              Supplier<VectorClock> frontier,
                              Supplier<Optional<RecordMetadata>> deliveredMetadata) {
         this.delegate = delegate;
