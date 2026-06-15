@@ -32,13 +32,4 @@ public interface CausalFrontierListener {
      * @param frontier the new absolute frontier; never {@code null}
      */
     void onFrontierAdvanced(CausalDependencies frontier);
-
-    /**
-     * Returns a listener that ignores all frontier advances.
-     *
-     * @return a no-op {@code CausalFrontierListener}
-     */
-    static CausalFrontierListener noop() {
-        return frontier -> {};
-    }
 }

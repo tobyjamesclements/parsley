@@ -52,7 +52,7 @@ final class ParsleyProcessorSupplier<KIn, VIn, KOut, VOut>
                                       String frontierStoreName,
                                       String bufferStoreName) {
         this(userSupplier, policy, onViolation, deadLetterSink, keySerdeByTopic, valueSerdeByTopic,
-                frontierStoreName, bufferStoreName, CausalFrontierListener.noop());
+                frontierStoreName, bufferStoreName, frontier -> {});
     }
 
     ParsleyProcessorSupplier(ProcessorSupplier<KIn, VIn, KOut, VOut> userSupplier,

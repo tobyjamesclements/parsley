@@ -140,7 +140,7 @@ public interface CausalProcessorSupplier<KIn, VIn, KOut, VOut> extends Processor
             Function<String, Serde<VIn>> valueSerdeByTopic,
             String storeName) {
         return create(userSupplier, policy, onViolation, keySerdeByTopic, valueSerdeByTopic, storeName,
-                CausalFrontierListener.noop());
+                frontier -> {});
     }
 
     /**

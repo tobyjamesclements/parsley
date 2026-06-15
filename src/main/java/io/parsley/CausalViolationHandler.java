@@ -22,15 +22,6 @@ public interface CausalViolationHandler {
     void onViolation(CausalViolation violation);
 
     /**
-     * Returns a handler that silently ignores all violations.
-     *
-     * @return a no-op {@code CausalViolationHandler}
-     */
-    static CausalViolationHandler noop() {
-        return violation -> {};
-    }
-
-    /**
      * Returns a handler that throws a {@link CausalViolationException} on every violation.
      *
      * <p>Use when any causal disorder should be treated as a fatal error.

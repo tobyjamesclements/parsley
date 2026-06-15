@@ -77,8 +77,8 @@ public interface CausalConsumer<K, V> extends Closeable {
     void close();
 
     /**
-     * Creates a new, running {@code CausalConsumer}, defaulting the violation handler to
-     * {@link CausalViolationHandler#noop()} and the state-store namespace to {@code "parsley"}.
+     * Creates a new, running {@code CausalConsumer}, defaulting the violation handler to a no-op
+     * (violations are ignored) and the state-store namespace to {@code "parsley"}.
      *
      * @param <K>            the record key type
      * @param <V>            the record value type
@@ -97,7 +97,7 @@ public interface CausalConsumer<K, V> extends Closeable {
             CausalBufferingPolicy policy,
             Map<String, Object> consumerConfig,
             Map<String, Object> streamsConfig) {
-        return create(topics, policy, CausalViolationHandler.noop(), consumerConfig, streamsConfig);
+        return create(topics, policy, violation -> {}, consumerConfig, streamsConfig);
     }
 
     /**

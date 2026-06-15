@@ -7,7 +7,6 @@ import org.junit.jupiter.api.Test;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicReference;
 
-import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -26,11 +25,6 @@ class CausalViolationHandlerTest {
                 () -> CausalViolationHandler.throwing().onViolation(violation));
         assertSame(record, ex.record());
         assertEquals(CausalViolationReason.MISSING_HEADER, ex.reason());
-    }
-
-    @Test
-    void noopIgnores() {
-        assertDoesNotThrow(() -> CausalViolationHandler.noop().onViolation(violation));
     }
 
     @Test
