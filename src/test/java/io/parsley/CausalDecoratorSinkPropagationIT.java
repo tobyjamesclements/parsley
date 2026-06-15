@@ -78,8 +78,8 @@ class CausalDecoratorSinkPropagationIT {
 
         StreamsBuilder builder = new StreamsBuilder();
         builder.stream(IN, Consumed.with(Serdes.String(), Serdes.String()))
-                .process(CausalProcessorSupplier.create(user, CausalBufferingPolicy.forwardUnsafe(CausalBufferLimit.ofDuration(Duration.ofSeconds(5))),
-                        violation -> {}, Serdes.String(), Serdes.String()))
+                .process(CausalProcessors.builder(user, CausalBufferingPolicy.forwardUnsafe(CausalBufferLimit.ofDuration(Duration.ofSeconds(5))))
+                        .serdes(Serdes.String(), Serdes.String()).onViolation(violation -> {}).build())
                 .to(OUT, Produced.with(Serdes.String(), Serdes.String()));
 
         try (KafkaStreams streams = new KafkaStreams(builder.build(), streamsConfig(bootstrap))) {

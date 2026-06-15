@@ -111,8 +111,8 @@ class CausalDecoratorTopologyTest {
     @Test
     void admittedRecordRunsDelegateAndStampsTheMergedClock() {
         Topology topology = topology(
-                CausalProcessorSupplier.create(upperCaser(), CausalBufferingPolicy.forwardUnsafe(CausalBufferLimit.ofSize(100)),
-                        onViolation, Serdes.String(), Serdes.String()),
+                CausalProcessors.builder(upperCaser(), CausalBufferingPolicy.forwardUnsafe(CausalBufferLimit.ofSize(100)))
+                        .serdes(Serdes.String(), Serdes.String()).onViolation(onViolation).build(),
                 List.of("in"));
 
         try (TopologyTestDriver driver = new TopologyTestDriver(topology, config(null))) {
@@ -135,8 +135,8 @@ class CausalDecoratorTopologyTest {
     @Test
     void heldRecordIsBufferedThenDrainedThroughDelegate() {
         Topology topology = topology(
-                CausalProcessorSupplier.create(upperCaser(), CausalBufferingPolicy.forwardUnsafe(CausalBufferLimit.ofSize(100)),
-                        onViolation, Serdes.String(), Serdes.String()),
+                CausalProcessors.builder(upperCaser(), CausalBufferingPolicy.forwardUnsafe(CausalBufferLimit.ofSize(100)))
+                        .serdes(Serdes.String(), Serdes.String()).onViolation(onViolation).build(),
                 List.of("prices", "orders"));
 
         try (TopologyTestDriver driver = new TopologyTestDriver(topology, config(null))) {
@@ -167,8 +167,8 @@ class CausalDecoratorTopologyTest {
     @Test
     void strictDropDoesNotInvokeDelegateAndReportsTheGap() {
         Topology topology = topology(
-                CausalProcessorSupplier.create(upperCaser(), CausalBufferingPolicy.drop(CausalBufferLimit.ofSize(1)),
-                        onViolation, Serdes.String(), Serdes.String()),
+                CausalProcessors.builder(upperCaser(), CausalBufferingPolicy.drop(CausalBufferLimit.ofSize(1)))
+                        .serdes(Serdes.String(), Serdes.String()).onViolation(onViolation).build(),
                 List.of("orders"));
 
         try (TopologyTestDriver driver = new TopologyTestDriver(topology, config(null))) {
@@ -197,8 +197,9 @@ class CausalDecoratorTopologyTest {
         CausalBufferingPolicy.DeadLetter policy =
                 (CausalBufferingPolicy.DeadLetter) CausalBufferingPolicy.deadLetter(CausalBufferLimit.ofSize(1), "dlq");
         Topology topology = topology(
-                CausalProcessorSupplier.create(upperCaser(), policy, onViolation,
-                        cr -> deadLettered.add(cr.value()), Serdes.String(), Serdes.String()),
+                CausalProcessors.builder(upperCaser(), policy)
+                        .serdes(Serdes.String(), Serdes.String()).onViolation(onViolation)
+                        .deadLetterSink(cr -> deadLettered.add(cr.value())).build(),
                 List.of("orders"));
 
         try (TopologyTestDriver driver = new TopologyTestDriver(topology, config(null))) {
@@ -221,8 +222,8 @@ class CausalDecoratorTopologyTest {
     @Test
     void forwardUnsafeRunsDelegateUnderLagAndFlagsTheViolation() {
         Topology topology = topology(
-                CausalProcessorSupplier.create(upperCaser(), CausalBufferingPolicy.forwardUnsafe(CausalBufferLimit.ofSize(1)),
-                        onViolation, Serdes.String(), Serdes.String()),
+                CausalProcessors.builder(upperCaser(), CausalBufferingPolicy.forwardUnsafe(CausalBufferLimit.ofSize(1)))
+                        .serdes(Serdes.String(), Serdes.String()).onViolation(onViolation).build(),
                 List.of("orders"));
 
         try (TopologyTestDriver driver = new TopologyTestDriver(topology, config(null))) {
@@ -264,8 +265,8 @@ class CausalDecoratorTopologyTest {
             }
         };
         Topology topology = topology(
-                CausalProcessorSupplier.create(user, CausalBufferingPolicy.forwardUnsafe(CausalBufferLimit.ofSize(100)),
-                        onViolation, Serdes.String(), Serdes.String()),
+                CausalProcessors.builder(user, CausalBufferingPolicy.forwardUnsafe(CausalBufferLimit.ofSize(100)))
+                        .serdes(Serdes.String(), Serdes.String()).onViolation(onViolation).build(),
                 List.of("in"));
 
         try (TopologyTestDriver driver = new TopologyTestDriver(topology, config(null))) {
@@ -304,8 +305,8 @@ class CausalDecoratorTopologyTest {
             }
         };
         Topology topology = topology(
-                CausalProcessorSupplier.create(user, CausalBufferingPolicy.forwardUnsafe(CausalBufferLimit.ofSize(100)),
-                        onViolation, Serdes.String(), Serdes.String()),
+                CausalProcessors.builder(user, CausalBufferingPolicy.forwardUnsafe(CausalBufferLimit.ofSize(100)))
+                        .serdes(Serdes.String(), Serdes.String()).onViolation(onViolation).build(),
                 List.of("in"));
 
         try (TopologyTestDriver driver = new TopologyTestDriver(topology, config(null))) {
@@ -356,8 +357,8 @@ class CausalDecoratorTopologyTest {
             }
         };
         Topology topology = topology(
-                CausalProcessorSupplier.create(user, CausalBufferingPolicy.forwardUnsafe(CausalBufferLimit.ofSize(100)),
-                        onViolation, Serdes.String(), Serdes.String()),
+                CausalProcessors.builder(user, CausalBufferingPolicy.forwardUnsafe(CausalBufferLimit.ofSize(100)))
+                        .serdes(Serdes.String(), Serdes.String()).onViolation(onViolation).build(),
                 List.of("in"));
 
         try (TopologyTestDriver driver = new TopologyTestDriver(topology, config(null))) {
@@ -384,8 +385,8 @@ class CausalDecoratorTopologyTest {
     void bufferSerdesAreResolvedAndInvokedWithTheSourceTopic() {
         SpyStringSerde valueSpy = new SpyStringSerde();
         Topology topology = topology(
-                CausalProcessorSupplier.create(upperCaser(), CausalBufferingPolicy.forwardUnsafe(CausalBufferLimit.ofSize(100)),
-                        onViolation, t -> Serdes.String(), t -> valueSpy),
+                CausalProcessors.builder(upperCaser(), CausalBufferingPolicy.forwardUnsafe(CausalBufferLimit.ofSize(100)))
+                        .serdesByTopic(t -> Serdes.String(), t -> valueSpy).onViolation(onViolation).build(),
                 List.of("prices", "orders"));
 
         try (TopologyTestDriver driver = new TopologyTestDriver(topology, config(null))) {
@@ -410,12 +411,12 @@ class CausalDecoratorTopologyTest {
         // namespaces are what make multiple decorators possible.
         StreamsBuilder builder = new StreamsBuilder();
         builder.stream("orders", Consumed.with(Serdes.String(), Serdes.String()))
-                .process(CausalProcessorSupplier.create(upperCaser(), CausalBufferingPolicy.forwardUnsafe(CausalBufferLimit.ofSize(100)),
-                        onViolation, t -> Serdes.String(), t -> Serdes.String(), "orders"))
+                .process(CausalProcessors.builder(upperCaser(), CausalBufferingPolicy.forwardUnsafe(CausalBufferLimit.ofSize(100)))
+                        .serdesByTopic(t -> Serdes.String(), t -> Serdes.String()).onViolation(onViolation).storeName("orders").build())
                 .to("orders-out", Produced.with(Serdes.String(), Serdes.String()));
         builder.stream("prices", Consumed.with(Serdes.String(), Serdes.String()))
-                .process(CausalProcessorSupplier.create(upperCaser(), CausalBufferingPolicy.forwardUnsafe(CausalBufferLimit.ofSize(100)),
-                        onViolation, t -> Serdes.String(), t -> Serdes.String(), "prices"))
+                .process(CausalProcessors.builder(upperCaser(), CausalBufferingPolicy.forwardUnsafe(CausalBufferLimit.ofSize(100)))
+                        .serdesByTopic(t -> Serdes.String(), t -> Serdes.String()).onViolation(onViolation).storeName("prices").build())
                 .to("prices-out", Produced.with(Serdes.String(), Serdes.String()));
 
         try (TopologyTestDriver driver = new TopologyTestDriver(builder.build(), config(null))) {
@@ -445,8 +446,8 @@ class CausalDecoratorTopologyTest {
         List<CausalDependencies> observed = new ArrayList<>();
         CausalFrontierListener listener = observed::add;
         Topology topology = topology(
-                CausalProcessorSupplier.create(upperCaser(), CausalBufferingPolicy.forwardUnsafe(CausalBufferLimit.ofSize(100)),
-                        onViolation, t -> Serdes.String(), t -> Serdes.String(), "in", listener),
+                CausalProcessors.builder(upperCaser(), CausalBufferingPolicy.forwardUnsafe(CausalBufferLimit.ofSize(100)))
+                        .serdesByTopic(t -> Serdes.String(), t -> Serdes.String()).onViolation(onViolation).storeName("in").frontierListener(listener).build(),
                 List.of("in"));
 
         try (TopologyTestDriver driver = new TopologyTestDriver(topology, config(null))) {

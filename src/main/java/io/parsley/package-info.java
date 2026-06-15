@@ -4,7 +4,7 @@
  *
  * <h2>Entry points (interfaces with static factories)</h2>
  * <ul>
- *   <li>{@link io.parsley.CausalProcessorSupplier} &mdash; {@code CausalProcessorSupplier.create(...)} wraps your own
+ *   <li>{@link io.parsley.CausalProcessorSupplier} &mdash; {@code CausalProcessors.builder(...).build()} wraps your own
  *       Kafka Streams {@code Processor} so its state access and {@code forward}s run behind the causal
  *       guarantee; drop it into {@code stream(...).process(...)}</li>
  *   <li>{@link io.parsley.CausalConsumer} &mdash; {@code CausalConsumers.builder(...).build()} delivers

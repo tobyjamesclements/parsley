@@ -11,15 +11,6 @@ final class ParsleyAttributes {
     /** Header carrying a record's serialised dependency {@code CausalDependencies}. */
     static final String VECTOR_CLOCK = "parsley-vector-clock";
 
-    /** Persistent state store holding the consumer's frontier. */
-    static final String FRONTIER_STORE = "parsley-frontier";
-
-    /** Key under which the frontier is stored in {@link #FRONTIER_STORE}. */
+    /** Key under which the frontier is stored in the processor's frontier state store. */
     static final String FRONTIER_KEY = "f";
-
-    /**
-     * Persistent state store holding records a decorating causal processor has buffered while
-     * their causal dependencies are unmet, so they survive a restart.
-     */
-    static final String BUFFER_STORE = "parsley-buffer";
 }

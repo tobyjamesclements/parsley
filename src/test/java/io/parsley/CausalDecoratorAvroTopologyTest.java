@@ -76,12 +76,12 @@ class CausalDecoratorAvroTopologyTest {
         ProcessorSupplier<String, SpecificRecord, String, SpecificRecord> user = capturing();
         StreamsBuilder builder = new StreamsBuilder();
         builder.stream(List.of(PRICES, ORDERS), Consumed.with(Serdes.String(), avro))
-                .process(CausalProcessorSupplier.create(
+                .process(CausalProcessors.builder(
                         user,
-                        CausalBufferingPolicy.forwardUnsafe(CausalBufferLimit.ofSize(100)),
-                        onViolation,
-                        topic -> Serdes.String(),
-                        topic -> avro));
+                        CausalBufferingPolicy.forwardUnsafe(CausalBufferLimit.ofSize(100)))
+                        .serdesByTopic(topic -> Serdes.String(), topic -> avro)
+                        .onViolation(onViolation)
+                        .build());
         Topology topology = builder.build();
 
         try (TopologyTestDriver driver = new TopologyTestDriver(topology, config())) {

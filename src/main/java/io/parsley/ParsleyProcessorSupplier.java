@@ -15,7 +15,7 @@ import java.util.function.Consumer;
 import java.util.function.Function;
 
 /**
- * The {@link CausalProcessorSupplier} returned by {@code CausalProcessorSupplier.create(...)}: it wraps the user's
+ * The {@link CausalProcessorSupplier} returned by {@link CausalProcessors}: it wraps the user's
  * supplier in a {@link ParsleyProcessor} and {@linkplain #stores() unions} the user's
  * declared state stores with Parsley's internal frontier and buffer stores, so the DSL wires all of
  * them to the same processor node. The user never names Parsley's internal stores.
@@ -32,28 +32,6 @@ final class ParsleyProcessorSupplier<KIn, VIn, KOut, VOut>
     private final String frontierStoreName;
     private final String bufferStoreName;
     private final CausalFrontierListener frontierListener;
-
-    ParsleyProcessorSupplier(ProcessorSupplier<KIn, VIn, KOut, VOut> userSupplier,
-                                      CausalBufferingPolicy policy,
-                                      CausalViolationHandler onViolation,
-                                      Consumer<ConsumerRecord<KIn, VIn>> deadLetterSink,
-                                      Function<String, Serde<KIn>> keySerdeByTopic,
-                                      Function<String, Serde<VIn>> valueSerdeByTopic) {
-        this(userSupplier, policy, onViolation, deadLetterSink, keySerdeByTopic, valueSerdeByTopic,
-                ParsleyAttributes.FRONTIER_STORE, ParsleyAttributes.BUFFER_STORE);
-    }
-
-    ParsleyProcessorSupplier(ProcessorSupplier<KIn, VIn, KOut, VOut> userSupplier,
-                                      CausalBufferingPolicy policy,
-                                      CausalViolationHandler onViolation,
-                                      Consumer<ConsumerRecord<KIn, VIn>> deadLetterSink,
-                                      Function<String, Serde<KIn>> keySerdeByTopic,
-                                      Function<String, Serde<VIn>> valueSerdeByTopic,
-                                      String frontierStoreName,
-                                      String bufferStoreName) {
-        this(userSupplier, policy, onViolation, deadLetterSink, keySerdeByTopic, valueSerdeByTopic,
-                frontierStoreName, bufferStoreName, frontier -> {});
-    }
 
     ParsleyProcessorSupplier(ProcessorSupplier<KIn, VIn, KOut, VOut> userSupplier,
                                       CausalBufferingPolicy policy,

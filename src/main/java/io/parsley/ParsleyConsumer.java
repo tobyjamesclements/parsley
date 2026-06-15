@@ -71,8 +71,12 @@ final class ParsleyConsumer<K, V> implements CausalConsumer<K, V> {
 
         StreamsBuilder builder = new StreamsBuilder();
         builder.<K, V>stream(topics)
-                .process(CausalProcessorSupplier.create(captureSupplier(), policy, onViolation,
-                        topic -> keySerde, topic -> valueSerde, storeName, this::onFrontierAdvanced));
+                .process(CausalProcessors.builder(captureSupplier(), policy)
+                        .serdesByTopic(topic -> keySerde, topic -> valueSerde)
+                        .onViolation(onViolation)
+                        .storeName(storeName)
+                        .frontierListener(this::onFrontierAdvanced)
+                        .build());
 
         this.streams = new KafkaStreams(builder.build(), config);
         this.streams.start();
