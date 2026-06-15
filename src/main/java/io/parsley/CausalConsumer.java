@@ -17,7 +17,7 @@ import java.time.Duration;
  * <pre>{@code
  * try (CausalConsumer<String, Order> consumer = CausalConsumers.<String, Order>builder(
  *         List.of("prices", "orders"),
- *         CausalBufferingPolicy.forwardUnsafe(CausalBufferLimit.ofDuration(Duration.ofSeconds(30))),
+ *         CausalBufferPolicy.forwardUnsafe(CausalBufferLimit.ofDuration(Duration.ofSeconds(30))),
  *         Map.of(),
  *         streamsConfig).build()) {
  *

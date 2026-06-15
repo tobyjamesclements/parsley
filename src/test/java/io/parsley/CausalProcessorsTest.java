@@ -17,21 +17,21 @@ class CausalProcessorsTest {
                 public void process(Record<String, String> record) {}
             };
 
-    private static CausalProcessors.Builder<String, String, String, String> builder(CausalBufferingPolicy policy) {
+    private static CausalProcessors.Builder<String, String, String, String> builder(CausalBufferPolicy policy) {
         return CausalProcessors.builder(USER, policy);
     }
 
     @Test
     void buildRequiresSerdes() {
         CausalProcessors.Builder<String, String, String, String> b =
-                builder(CausalBufferingPolicy.forwardUnsafe(CausalBufferLimit.ofSize(1)));
+                builder(CausalBufferPolicy.forwardUnsafe(CausalBufferLimit.ofSize(1)));
         assertThrows(IllegalStateException.class, b::build);
     }
 
     @Test
     void deadLetterPolicyRequiresASink() {
         CausalProcessors.Builder<String, String, String, String> b =
-                builder(CausalBufferingPolicy.deadLetter(CausalBufferLimit.ofSize(1), "dlq"))
+                builder(CausalBufferPolicy.deadLetter(CausalBufferLimit.ofSize(1), "dlq"))
                         .serdes(Serdes.String(), Serdes.String());
         assertThrows(IllegalArgumentException.class, b::build);
     }
@@ -39,7 +39,7 @@ class CausalProcessorsTest {
     @Test
     void sinkIsIllegalWithoutADeadLetterPolicy() {
         CausalProcessors.Builder<String, String, String, String> b =
-                builder(CausalBufferingPolicy.forwardUnsafe(CausalBufferLimit.ofSize(1)))
+                builder(CausalBufferPolicy.forwardUnsafe(CausalBufferLimit.ofSize(1)))
                         .serdes(Serdes.String(), Serdes.String())
                         .deadLetterSink(cr -> {});
         assertThrows(IllegalArgumentException.class, b::build);
@@ -48,7 +48,7 @@ class CausalProcessorsTest {
     @Test
     void buildsAValidSupplier() {
         CausalProcessorSupplier<String, String, String, String> supplier =
-                builder(CausalBufferingPolicy.forwardUnsafe(CausalBufferLimit.ofSize(1)))
+                builder(CausalBufferPolicy.forwardUnsafe(CausalBufferLimit.ofSize(1)))
                         .serdes(Serdes.String(), Serdes.String())
                         .build();
         assertNotNull(supplier);

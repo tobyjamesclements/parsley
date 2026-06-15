@@ -22,11 +22,11 @@ class ParsleyEngineTest {
     // The engine's buffer; held directly so tests can inspect what is currently buffered.
     private final InMemoryBufferStore<String, String> buffer = new InMemoryBufferStore<>();
 
-    private ParsleyEngine<String, String> engine(CausalBufferingPolicy policy) {
+    private ParsleyEngine<String, String> engine(CausalBufferPolicy policy) {
         return engine(policy, null);
     }
 
-    private ParsleyEngine<String, String> engine(CausalBufferingPolicy policy,
+    private ParsleyEngine<String, String> engine(CausalBufferPolicy policy,
                                                 java.util.function.Consumer<ParsleyRecord<String, String>> sink) {
         return new ParsleyEngine<>(policy, violations::add, CausalDependencies.empty(), sink, frontiers::add,
                 buffer);
@@ -47,7 +47,7 @@ class ParsleyEngineTest {
 
     @Test
     void satisfiedRecordForwardsImmediatelyAndAdvancesFrontier() {
-        ParsleyEngine<String, String> engine = engine(CausalBufferingPolicy.forwardUnsafe(CausalBufferLimit.ofSize(100)));
+        ParsleyEngine<String, String> engine = engine(CausalBufferPolicy.forwardUnsafe(CausalBufferLimit.ofSize(100)));
 
         onRecord(engine, rec(PRICES, 3, CausalDependencies.empty()));
 
@@ -57,7 +57,7 @@ class ParsleyEngineTest {
 
     @Test
     void unsatisfiedRecordIsBufferedUntilFrontierCatchesUp() {
-        ParsleyEngine<String, String> engine = engine(CausalBufferingPolicy.forwardUnsafe(CausalBufferLimit.ofSize(100)));
+        ParsleyEngine<String, String> engine = engine(CausalBufferPolicy.forwardUnsafe(CausalBufferLimit.ofSize(100)));
 
         // An order causally depending on prices-0 having reached offset 3, arriving first.
         CausalDependencies orderDeps = CausalDependencies.empty().advance(PRICES, 3);
@@ -76,7 +76,7 @@ class ParsleyEngineTest {
 
     @Test
     void bufferHoldsAnUnsatisfiedRecordAndReleasesItOnDrain() {
-        ParsleyEngine<String, String> engine = engine(CausalBufferingPolicy.forwardUnsafe(CausalBufferLimit.ofSize(100)));
+        ParsleyEngine<String, String> engine = engine(CausalBufferPolicy.forwardUnsafe(CausalBufferLimit.ofSize(100)));
 
         ParsleyRecord<String, String> order = rec(ORDERS, 0, CausalDependencies.empty().advance(PRICES, 3));
         engine.onRecord(order);
@@ -89,7 +89,7 @@ class ParsleyEngineTest {
 
     @Test
     void strictEvictionRemovesTheRecordFromTheBuffer() {
-        ParsleyEngine<String, String> engine = engine(CausalBufferingPolicy.drop(CausalBufferLimit.ofSize(1)));
+        ParsleyEngine<String, String> engine = engine(CausalBufferPolicy.drop(CausalBufferLimit.ofSize(1)));
 
         // Buffered then immediately evicted (dropped) by the size-1 limit.
         engine.onRecord(rec(ORDERS, 0, CausalDependencies.empty().advance(PRICES, 99)));
@@ -102,7 +102,7 @@ class ParsleyEngineTest {
         // Records that survived a restart are simply already in the buffer store — there is no
         // separate restore step. They must not advance the frontier until their premise is observed.
         buffer.add(rec(ORDERS, 0, CausalDependencies.empty().advance(PRICES, 3)));
-        ParsleyEngine<String, String> engine = engine(CausalBufferingPolicy.forwardUnsafe(CausalBufferLimit.ofSize(100)));
+        ParsleyEngine<String, String> engine = engine(CausalBufferPolicy.forwardUnsafe(CausalBufferLimit.ofSize(100)));
         assertEquals(CausalDependencies.empty(), engine.frontier(), "a pre-buffered record must not advance the frontier");
         assertTrue(frontiers.isEmpty(), "a pre-buffered record must not fire the frontier listener");
 
@@ -116,7 +116,7 @@ class ParsleyEngineTest {
 
     @Test
     void missingHeaderForwardsWithViolation() {
-        ParsleyEngine<String, String> engine = engine(CausalBufferingPolicy.forwardUnsafe(CausalBufferLimit.ofSize(100)));
+        ParsleyEngine<String, String> engine = engine(CausalBufferPolicy.forwardUnsafe(CausalBufferLimit.ofSize(100)));
 
         onRecord(engine, rec(PRICES, 0, null));
 
@@ -128,7 +128,7 @@ class ParsleyEngineTest {
 
     @Test
     void unresolvableClockForwardsWithViolation() {
-        ParsleyEngine<String, String> engine = engine(CausalBufferingPolicy.forwardUnsafe(CausalBufferLimit.ofSize(100)));
+        ParsleyEngine<String, String> engine = engine(CausalBufferPolicy.forwardUnsafe(CausalBufferLimit.ofSize(100)));
 
         ParsleyRecord<String, String> garbage =
                 new ParsleyRecord<>("k", "v", 0L, List.of(), new byte[]{9, 9, 9}, PRICES, 0);
@@ -140,7 +140,7 @@ class ParsleyEngineTest {
 
     @Test
     void sizeLimitEvictsAndForwardsUnderForwardUnsafePolicy() {
-        ParsleyEngine<String, String> engine = engine(CausalBufferingPolicy.forwardUnsafe(CausalBufferLimit.ofSize(2)));
+        ParsleyEngine<String, String> engine = engine(CausalBufferPolicy.forwardUnsafe(CausalBufferLimit.ofSize(2)));
         CausalDependencies unmet = CausalDependencies.empty().advance(PRICES, 99);
 
         onRecord(engine, rec(ORDERS, 0, unmet));
@@ -155,7 +155,7 @@ class ParsleyEngineTest {
 
     @Test
     void dropPolicyDiscardsOnEvictionAndReportsTheGap() {
-        ParsleyEngine<String, String> engine = engine(CausalBufferingPolicy.drop(CausalBufferLimit.ofSize(1)));
+        ParsleyEngine<String, String> engine = engine(CausalBufferPolicy.drop(CausalBufferLimit.ofSize(1)));
 
         onRecord(engine, rec(ORDERS, 0, CausalDependencies.empty().advance(PRICES, 99)));
 
@@ -172,7 +172,7 @@ class ParsleyEngineTest {
     void deadLetterPolicyRoutesEvictedRecordsToSink() {
         List<ParsleyRecord<String, String>> deadLettered = new ArrayList<>();
         ParsleyEngine<String, String> engine = engine(
-                CausalBufferingPolicy.deadLetter(CausalBufferLimit.ofSize(1), "dlq"), deadLettered::add);
+                CausalBufferPolicy.deadLetter(CausalBufferLimit.ofSize(1), "dlq"), deadLettered::add);
 
         onRecord(engine, rec(ORDERS, 0, CausalDependencies.empty().advance(PRICES, 99)));
 
@@ -184,13 +184,13 @@ class ParsleyEngineTest {
     @Test
     void durationPolicyExposesEvictionInterval() {
         ParsleyEngine<String, String> engine =
-                engine(CausalBufferingPolicy.forwardUnsafe(CausalBufferLimit.ofDuration(Duration.ofSeconds(5))));
+                engine(CausalBufferPolicy.forwardUnsafe(CausalBufferLimit.ofDuration(Duration.ofSeconds(5))));
         assertEquals(Duration.ofSeconds(5), engine.evictionInterval().orElseThrow());
     }
 
     @Test
     void frontierListenerFiresBeforeEachForward() {
-        ParsleyEngine<String, String> engine = engine(CausalBufferingPolicy.forwardUnsafe(CausalBufferLimit.ofSize(100)));
+        ParsleyEngine<String, String> engine = engine(CausalBufferPolicy.forwardUnsafe(CausalBufferLimit.ofSize(100)));
 
         onRecord(engine, rec(PRICES, 3, CausalDependencies.empty()));
 

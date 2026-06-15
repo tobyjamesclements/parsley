@@ -65,7 +65,7 @@ then declare the repository and dependency:
 ```java
 try (CausalConsumer<String, String> consumer = CausalConsumers.<String, String>builder(
         List.of("prices", "orders"),
-        CausalBufferingPolicy.forwardUnsafe(CausalBufferLimit.ofDuration(Duration.ofSeconds(30))),
+        CausalBufferPolicy.forwardUnsafe(CausalBufferLimit.ofDuration(Duration.ofSeconds(30))),
         Map.of(ConsumerConfig.GROUP_ID_CONFIG, "my-group"),
         Map.of(StreamsConfig.APPLICATION_ID_CONFIG,    "my-app",
                StreamsConfig.BOOTSTRAP_SERVERS_CONFIG, "localhost:9092")).build()) {
@@ -94,7 +94,7 @@ ProcessorSupplier<String, Order, String, Enriched> user = new ProcessorSupplier<
 };
 
 builder.stream(List.of("prices", "orders"), Consumed.with(Serdes.String(), orderSerde))
-       .process(CausalProcessors.builder(user, CausalBufferingPolicy.deadLetter(limit, "parsley-dlq"))
+       .process(CausalProcessors.builder(user, CausalBufferPolicy.deadLetter(limit, "parsley-dlq"))
                                .serdes(Serdes.String(), orderSerde).onViolation(onViolation)
                                .deadLetterSink(deadLetterSink).build())
        .to("output-topic");

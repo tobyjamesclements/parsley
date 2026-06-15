@@ -5,17 +5,17 @@ import java.util.Map;
 
 /**
  * Factory for {@link CausalConsumer}. Obtain a {@link Builder} with
- * {@link #builder(Collection, CausalBufferingPolicy, Map, Map)}, set any optional fields, and call
+ * {@link #builder(Collection, CausalBufferPolicy, Map, Map)}, set any optional fields, and call
  * {@link Builder#build()}:
  *
  * <pre>{@code
  * CausalConsumer<String, Order> consumer = CausalConsumers.<String, Order>builder(
  *         List.of("prices", "orders"),
- *         CausalBufferingPolicy.forwardUnsafe(CausalBufferLimit.ofDuration(Duration.ofSeconds(30))),
+ *         CausalBufferPolicy.forwardUnsafe(CausalBufferLimit.ofDuration(Duration.ofSeconds(30))),
  *         Map.of(), streamsConfig).build();
  * }</pre>
  *
- * <p>{@link CausalBufferingPolicy.DeadLetter DeadLetter} policies are not supported by this facade —
+ * <p>{@link CausalBufferPolicy#deadLetter Dead-letter} policies are not supported by this facade —
  * there is no dead-letter sink — and are rejected by {@link Builder#build()}. To dead-letter evicted
  * records, build a custom topology with {@link CausalProcessors} instead.
  */
@@ -30,7 +30,7 @@ public final class CausalConsumers {
      * @param <V>            the record value type
      * @param topics         the Kafka topics to subscribe to; must not be empty
      * @param policy         the buffering policy; must not be a
-     *                       {@link CausalBufferingPolicy.DeadLetter DeadLetter} policy
+     *                       {@link CausalBufferPolicy#deadLetter dead-letter} policy
      * @param consumerConfig additional consumer configuration (overrides defaults derived from
      *                       {@code streamsConfig})
      * @param streamsConfig  Kafka Streams configuration; must include at minimum
@@ -39,7 +39,7 @@ public final class CausalConsumers {
      */
     public static <K, V> Builder<K, V> builder(
             Collection<String> topics,
-            CausalBufferingPolicy policy,
+            CausalBufferPolicy policy,
             Map<String, Object> consumerConfig,
             Map<String, Object> streamsConfig) {
         return new Builder<>(topics, policy, consumerConfig, streamsConfig);
@@ -54,13 +54,13 @@ public final class CausalConsumers {
     public static final class Builder<K, V> {
 
         private final Collection<String> topics;
-        private final CausalBufferingPolicy policy;
+        private final CausalBufferPolicy policy;
         private final Map<String, Object> consumerConfig;
         private final Map<String, Object> streamsConfig;
         private CausalViolationHandler onViolation = violation -> {};
         private String storeName = "parsley";
 
-        private Builder(Collection<String> topics, CausalBufferingPolicy policy,
+        private Builder(Collection<String> topics, CausalBufferPolicy policy,
                         Map<String, Object> consumerConfig, Map<String, Object> streamsConfig) {
             this.topics = topics;
             this.policy = policy;
@@ -97,7 +97,7 @@ public final class CausalConsumers {
          *
          * @return a new, running {@code CausalConsumer}
          * @throws IllegalArgumentException if {@code policy} is a
-         *                                  {@link CausalBufferingPolicy.DeadLetter DeadLetter} policy
+         *                                  {@link CausalBufferPolicy#deadLetter dead-letter} policy
          */
         public CausalConsumer<K, V> build() {
             return new ParsleyConsumer<>(topics, policy, onViolation, consumerConfig, streamsConfig, storeName);

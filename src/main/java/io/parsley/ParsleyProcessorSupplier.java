@@ -24,7 +24,7 @@ final class ParsleyProcessorSupplier<KIn, VIn, KOut, VOut>
         implements CausalProcessorSupplier<KIn, VIn, KOut, VOut> {
 
     private final ProcessorSupplier<KIn, VIn, KOut, VOut> userSupplier;
-    private final CausalBufferingPolicy policy;
+    private final CausalBufferPolicy policy;
     private final CausalViolationHandler onViolation;
     private final Consumer<ConsumerRecord<KIn, VIn>> deadLetterSink;
     private final Function<String, Serde<KIn>> keySerdeByTopic;
@@ -34,7 +34,7 @@ final class ParsleyProcessorSupplier<KIn, VIn, KOut, VOut>
     private final CausalFrontierListener frontierListener;
 
     ParsleyProcessorSupplier(ProcessorSupplier<KIn, VIn, KOut, VOut> userSupplier,
-                                      CausalBufferingPolicy policy,
+                                      CausalBufferPolicy policy,
                                       CausalViolationHandler onViolation,
                                       Consumer<ConsumerRecord<KIn, VIn>> deadLetterSink,
                                       Function<String, Serde<KIn>> keySerdeByTopic,

@@ -35,7 +35,7 @@ import java.util.function.Consumer;
 final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn, KOut, VOut> {
 
     private final Processor<KIn, VIn, KOut, VOut> delegate;
-    private final CausalBufferingPolicy policy;
+    private final CausalBufferPolicy policy;
     private final CausalViolationHandler onViolation;
     private final Consumer<ConsumerRecord<KIn, VIn>> deadLetterSink;
     private final ParsleySerializer<KIn, VIn> serializer;
@@ -64,7 +64,7 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
     private volatile RecordMetadata deliveryMetadata;
 
     ParsleyProcessor(Processor<KIn, VIn, KOut, VOut> delegate,
-                     CausalBufferingPolicy policy,
+                     CausalBufferPolicy policy,
                      CausalViolationHandler onViolation,
                      Consumer<ConsumerRecord<KIn, VIn>> deadLetterSink,
                      ParsleySerializer<KIn, VIn> serializer,

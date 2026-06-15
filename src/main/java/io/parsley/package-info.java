@@ -19,14 +19,10 @@
  *       per {@link org.apache.kafka.common.TopicPartition}); test readiness with
  *       {@link io.parsley.CausalDependencies#satisfiedBy satisfiedBy} and combine clocks with
  *       {@link io.parsley.CausalDependencies#merge merge}</li>
- *   <li>{@link io.parsley.CausalBufferingPolicy} &mdash; what to do when a buffer limit fires:
- *       {@link io.parsley.CausalBufferingPolicy.ForwardUnsafe ForwardUnsafe},
- *       {@link io.parsley.CausalBufferingPolicy.Drop Drop},
- *       {@link io.parsley.CausalBufferingPolicy.DeadLetter DeadLetter}</li>
+ *   <li>{@link io.parsley.CausalBufferPolicy} &mdash; what to do when a buffer limit fires:
+ *       {@code forwardUnsafe}, {@code drop}, or {@code deadLetter}</li>
  *   <li>{@link io.parsley.CausalBufferLimit} &mdash; when to stop waiting:
- *       {@link io.parsley.CausalBufferLimit.DurationLimit DurationLimit},
- *       {@link io.parsley.CausalBufferLimit.SizeLimit SizeLimit},
- *       {@link io.parsley.CausalBufferLimit.FirstLimit FirstLimit}</li>
+ *       {@code ofDuration}, {@code ofSize}, or {@code first}</li>
  *   <li>{@link io.parsley.CausalViolationHandler} &mdash; violation callback, handed a
  *       {@link io.parsley.CausalViolation} carrying the causal gap</li>
  *   <li>{@link io.parsley.CausalFrontierListener} &mdash; frontier-advance callback, the public way to

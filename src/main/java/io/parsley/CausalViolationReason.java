@@ -30,7 +30,7 @@ public enum CausalViolationReason {
 
     /**
      * The record's causal dependencies were not satisfied before the {@link CausalBufferLimit}
-     * fired. The record was evicted from the buffer according to the {@link CausalBufferingPolicy}
+     * fired. The record was evicted from the buffer according to the {@link CausalBufferPolicy}
      * (forwarded out-of-order, dropped, or dead-lettered).
      */
     LIMIT_REACHED

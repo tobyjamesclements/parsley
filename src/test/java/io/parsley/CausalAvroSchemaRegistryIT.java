@@ -94,7 +94,7 @@ class CausalAvroSchemaRegistryIT {
                 "schema.registry.url", registryUrl)).build();
              CausalConsumer<String, SpecificRecord> consumer = CausalConsumers.<String, SpecificRecord>builder(
                      List.of(ORDERS, PRICES),
-                     CausalBufferingPolicy.forwardUnsafe(CausalBufferLimit.ofDuration(Duration.ofSeconds(5))),
+                     CausalBufferPolicy.forwardUnsafe(CausalBufferLimit.ofDuration(Duration.ofSeconds(5))),
                      Map.of(ConsumerConfig.GROUP_ID_CONFIG, "avro-rt-" + UUID.randomUUID()),
                      streamsConfig(bootstrap, registryUrl)).build()) {
 

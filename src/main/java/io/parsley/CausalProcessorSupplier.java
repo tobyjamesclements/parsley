@@ -18,7 +18,7 @@ import org.apache.kafka.streams.processor.api.ProcessorSupplier;
  * };
  *
  * builder.stream(List.of("prices", "orders"), Consumed.with(Serdes.String(), orderSerde))
- *        .process(CausalProcessors.builder(user, CausalBufferingPolicy.deadLetter(limit, "parsley-dlq"))
+ *        .process(CausalProcessors.builder(user, CausalBufferPolicy.deadLetter(limit, "parsley-dlq"))
  *                                .serdes(Serdes.String(), orderSerde).onViolation(onViolation)
  *                                .deadLetterSink(deadLetterSink).build())
  *        .to("output-topic");
@@ -40,7 +40,7 @@ import org.apache.kafka.streams.processor.api.ProcessorSupplier;
  *       events. Parsley does not detect or enforce this (consistent with existing library
  *       behaviour) — a misconfigured topology silently evaluates against an incomplete frontier.
  *   <li><strong>Accepted buffering policy.</strong> The user accepts the chosen
- *       {@link CausalBufferingPolicy}'s behaviour under sustained lag. <strong>Strict</strong> policies
+ *       {@link CausalBufferPolicy}'s behaviour under sustained lag. <strong>Strict</strong> policies
  *       ({@code deadLetter}, {@code drop}) divert un-satisfiable records away from {@code process()}
  *       — the guarantee holds unconditionally for every record that reaches {@code process()}, at
  *       the cost of delivery. The <strong>lenient</strong> policy ({@code forwardUnsafe}) preserves

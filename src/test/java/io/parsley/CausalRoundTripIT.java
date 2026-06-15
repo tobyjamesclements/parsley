@@ -58,7 +58,7 @@ class CausalRoundTripIT {
                 ProducerConfig.VALUE_SERIALIZER_CLASS_CONFIG, StringSerializer.class.getName())).build();
              CausalConsumer<String, String> consumer = CausalConsumers.<String, String>builder(
                      List.of(TOPIC),
-                     CausalBufferingPolicy.forwardUnsafe(CausalBufferLimit.ofDuration(Duration.ofSeconds(5))),
+                     CausalBufferPolicy.forwardUnsafe(CausalBufferLimit.ofDuration(Duration.ofSeconds(5))),
                      Map.of(ConsumerConfig.GROUP_ID_CONFIG, "rt-" + UUID.randomUUID()),
                      streamsConfig(bootstrap)).build()) {
 
@@ -101,7 +101,7 @@ class CausalRoundTripIT {
 
         try (CausalConsumer<String, String> consumer = CausalConsumers.<String, String>builder(
                 List.of(topic),
-                CausalBufferingPolicy.forwardUnsafe(CausalBufferLimit.ofDuration(Duration.ofSeconds(5))),
+                CausalBufferPolicy.forwardUnsafe(CausalBufferLimit.ofDuration(Duration.ofSeconds(5))),
                 Map.of(ConsumerConfig.GROUP_ID_CONFIG, "rt-" + UUID.randomUUID()),
                 streamsConfig(bootstrap))
                 .onViolation(violations::add)                      // the override that was previously hidden

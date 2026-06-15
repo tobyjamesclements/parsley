@@ -16,9 +16,9 @@ import java.util.function.Consumer;
  * advances the causal frontier, and cascades releases from the buffer as the frontier moves.
  *
  * <p>The engine also owns policy-driven eviction: when a {@link CausalBufferLimit} fires it surrenders the
- * buffer and, per {@link CausalBufferingPolicy}, forwards the evicted records out-of-order
- * ({@link CausalBufferingPolicy.ForwardUnsafe ForwardUnsafe}), discards them ({@link CausalBufferingPolicy.Drop
- * Drop}), or routes them to the dead-letter sink ({@link CausalBufferingPolicy.DeadLetter DeadLetter}) —
+ * buffer and, per {@link CausalBufferPolicy}, forwards the evicted records out-of-order
+ * ({@link ForwardUnsafe ForwardUnsafe}), discards them ({@link Drop
+ * Drop}), or routes them to the dead-letter sink ({@link DeadLetter DeadLetter}) —
  * reporting a {@link CausalViolation} (with the causal gap) for each.
  *
  * <p><strong>Frontier persistence ordering:</strong> the {@link FrontierCallback} fires for
@@ -40,7 +40,7 @@ final class ParsleyEngine<K, V> {
         void frontierAdvanced(CausalDependencies frontier);
     }
 
-    private final CausalBufferingPolicy policy;
+    private final CausalBufferPolicy policy;
     private final CausalViolationHandler violationHandler;
     private final Consumer<ParsleyRecord<K, V>> deadLetterSink;
     private final CausalBufferStore<K, V> buffer;
@@ -50,13 +50,13 @@ final class ParsleyEngine<K, V> {
     private int sizeLimit = Integer.MAX_VALUE;
     private Duration evictionInterval;
 
-    ParsleyEngine(CausalBufferingPolicy policy,
+    ParsleyEngine(CausalBufferPolicy policy,
                  CausalViolationHandler violationHandler,
                  CausalDependencies initialFrontier,
                  Consumer<ParsleyRecord<K, V>> deadLetterSink,
                  FrontierCallback frontierListener,
                  CausalBufferStore<K, V> buffer) {
-        if (policy instanceof CausalBufferingPolicy.DeadLetter && deadLetterSink == null) {
+        if (policy instanceof DeadLetter && deadLetterSink == null) {
             throw new IllegalArgumentException("DeadLetter policy requires a dead-letter sink");
         }
         this.policy = policy;
@@ -121,7 +121,7 @@ final class ParsleyEngine<K, V> {
      * evicted record and applies the policy.
      *
      * @return records to forward downstream out-of-order; non-empty only for the
-     *         {@link CausalBufferingPolicy.ForwardUnsafe ForwardUnsafe} policy
+     *         {@link ForwardUnsafe ForwardUnsafe} policy
      */
     List<ParsleyRecord<K, V>> evictNow() {
         List<CausalBufferStore.Entry<K, V>> evicted = buffer.entries();
@@ -134,14 +134,14 @@ final class ParsleyEngine<K, V> {
         }
         List<ParsleyRecord<K, V>> toForward = new ArrayList<>();
         switch (policy) {
-            case CausalBufferingPolicy.ForwardUnsafe forwardUnsafe -> {
+            case ForwardUnsafe forwardUnsafe -> {
                 for (CausalBufferStore.Entry<K, V> entry : evicted) {
                     advanceFrontier(entry.record());
                     toForward.add(entry.record());
                 }
             }
-            case CausalBufferingPolicy.Drop drop -> { /* discard the evicted records */ }
-            case CausalBufferingPolicy.DeadLetter deadLetter -> {
+            case Drop drop -> { /* discard the evicted records */ }
+            case DeadLetter deadLetter -> {
                 for (CausalBufferStore.Entry<K, V> entry : evicted) {
                     deadLetterSink.accept(entry.record());
                 }
@@ -161,7 +161,7 @@ final class ParsleyEngine<K, V> {
 
     /**
      * Returns the interval at which the processor must call {@link #evictNow}, if the policy's
-     * limit contains a {@link CausalBufferLimit.DurationLimit DurationLimit}.
+     * limit contains a {@link DurationLimit DurationLimit}.
      *
      * @return the eviction interval, or empty if no duration limit is configured
      */
@@ -209,21 +209,21 @@ final class ParsleyEngine<K, V> {
                 record.toConsumerRecord(), reason, frontier, required, required.missingAgainst(frontier)));
     }
 
-    private static CausalBufferLimit limitOf(CausalBufferingPolicy policy) {
+    private static CausalBufferLimit limitOf(CausalBufferPolicy policy) {
         return switch (policy) {
-            case CausalBufferingPolicy.ForwardUnsafe forwardUnsafe -> forwardUnsafe.limit();
-            case CausalBufferingPolicy.Drop drop -> drop.limit();
-            case CausalBufferingPolicy.DeadLetter deadLetter -> deadLetter.limit();
+            case ForwardUnsafe forwardUnsafe -> forwardUnsafe.limit();
+            case Drop drop -> drop.limit();
+            case DeadLetter deadLetter -> deadLetter.limit();
         };
     }
 
     private void configureLimits(CausalBufferLimit limit) {
         switch (limit) {
-            case CausalBufferLimit.DurationLimit durationLimit ->
+            case DurationLimit durationLimit ->
                     evictionInterval = durationLimit.duration();
-            case CausalBufferLimit.SizeLimit sl ->
+            case SizeLimit sl ->
                     sizeLimit = sl.messages();
-            case CausalBufferLimit.FirstLimit firstLimit -> {
+            case FirstLimit firstLimit -> {
                 for (CausalBufferLimit inner : firstLimit.limits()) {
                     configureLimits(inner);
                 }

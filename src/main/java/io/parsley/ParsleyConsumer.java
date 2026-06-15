@@ -48,7 +48,7 @@ final class ParsleyConsumer<K, V> implements CausalConsumer<K, V> {
 
     ParsleyConsumer(
             Collection<String> topics,
-            CausalBufferingPolicy policy,
+            CausalBufferPolicy policy,
             CausalViolationHandler onViolation,
             Map<String, Object> consumerConfig,
             Map<String, Object> streamsConfig,

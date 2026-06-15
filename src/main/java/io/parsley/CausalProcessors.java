@@ -11,12 +11,12 @@ import java.util.function.Function;
  * Factory for {@link CausalProcessorSupplier} — the decorating causal processor you drop into a Kafka
  * Streams topology with {@code stream(...).process(...)}.
  *
- * <p>Obtain a {@link Builder} with {@link #builder(ProcessorSupplier, CausalBufferingPolicy)}, set the
+ * <p>Obtain a {@link Builder} with {@link #builder(ProcessorSupplier, CausalBufferPolicy)}, set the
  * required serdes and any optional fields, then call {@link Builder#build()}:
  *
  * <pre>{@code
  * builder.stream(List.of("prices", "orders"), Consumed.with(Serdes.String(), orderSerde))
- *        .process(CausalProcessors.builder(userSupplier, CausalBufferingPolicy.deadLetter(limit, "dlq"))
+ *        .process(CausalProcessors.builder(userSupplier, CausalBufferPolicy.deadLetter(limit, "dlq"))
  *                .serdes(Serdes.String(), orderSerde)
  *                .onViolation(onViolation)
  *                .deadLetterSink(deadLetterSink)
@@ -37,7 +37,7 @@ public final class CausalProcessors {
      * @param userSupplier the user's processor supplier (its declared state stores are unioned with
      *                     Parsley's internal frontier and buffer stores)
      * @param policy       the buffering policy; if it is a
-     *                     {@link CausalBufferingPolicy.DeadLetter DeadLetter} policy, a
+     *                     {@link CausalBufferPolicy#deadLetter dead-letter} policy, a
      *                     {@link Builder#deadLetterSink(Consumer) dead-letter sink} is required
      * @param <KIn>        the input key type
      * @param <VIn>        the input value type
@@ -47,7 +47,7 @@ public final class CausalProcessors {
      */
     public static <KIn, VIn, KOut, VOut> Builder<KIn, VIn, KOut, VOut> builder(
             ProcessorSupplier<KIn, VIn, KOut, VOut> userSupplier,
-            CausalBufferingPolicy policy) {
+            CausalBufferPolicy policy) {
         return new Builder<>(userSupplier, policy);
     }
 
@@ -55,7 +55,7 @@ public final class CausalProcessors {
      * Builder for a {@link CausalProcessorSupplier}. A serde pair is required (via {@link #serdes} or
      * {@link #serdesByTopic}); the violation handler, store namespace, and frontier listener are
      * optional; a dead-letter sink is required exactly when the policy is a
-     * {@link CausalBufferingPolicy.DeadLetter DeadLetter} policy.
+     * {@link CausalBufferPolicy#deadLetter dead-letter} policy.
      *
      * @param <KIn>  the input key type
      * @param <VIn>  the input value type
@@ -65,7 +65,7 @@ public final class CausalProcessors {
     public static final class Builder<KIn, VIn, KOut, VOut> {
 
         private final ProcessorSupplier<KIn, VIn, KOut, VOut> userSupplier;
-        private final CausalBufferingPolicy policy;
+        private final CausalBufferPolicy policy;
         private Function<String, Serde<KIn>> keySerdeByTopic;
         private Function<String, Serde<VIn>> valueSerdeByTopic;
         private CausalViolationHandler onViolation = violation -> {};
@@ -73,7 +73,7 @@ public final class CausalProcessors {
         private CausalFrontierListener frontierListener = frontier -> {};
         private Consumer<ConsumerRecord<KIn, VIn>> deadLetterSink;
 
-        private Builder(ProcessorSupplier<KIn, VIn, KOut, VOut> userSupplier, CausalBufferingPolicy policy) {
+        private Builder(ProcessorSupplier<KIn, VIn, KOut, VOut> userSupplier, CausalBufferPolicy policy) {
             this.userSupplier = userSupplier;
             this.policy = policy;
         }
@@ -148,7 +148,7 @@ public final class CausalProcessors {
 
         /**
          * Sets the sink that receives evicted records under a
-         * {@link CausalBufferingPolicy.DeadLetter DeadLetter} policy. Required for a DeadLetter policy
+         * {@link CausalBufferPolicy#deadLetter dead-letter} policy. Required for a dead-letter policy
          * and illegal for any other.
          *
          * @param deadLetterSink the dead-letter sink
@@ -171,7 +171,7 @@ public final class CausalProcessors {
             if (keySerdeByTopic == null || valueSerdeByTopic == null) {
                 throw new IllegalStateException("serdes are required; call serdes(...) or serdesByTopic(...)");
             }
-            boolean isDeadLetter = policy instanceof CausalBufferingPolicy.DeadLetter;
+            boolean isDeadLetter = policy instanceof DeadLetter;
             if (isDeadLetter && deadLetterSink == null) {
                 throw new IllegalArgumentException(
                         "DeadLetter policy requires a dead-letter sink — call deadLetterSink(...)");
