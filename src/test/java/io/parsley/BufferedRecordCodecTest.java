@@ -24,12 +24,12 @@ class BufferedRecordCodecTest {
     @Test
     void roundTripsEveryField() {
         VectorClock deps = VectorClock.empty().advance(new TopicPartition("prices", 0), 4);
-        CausalRecord<String, String> record = new CausalRecord<>(
+        ParsleyRecord<String, String> record = new ParsleyRecord<>(
                 "key", "value", 123L,
-                List.of(new CausalHeader("h1", "a".getBytes()), new CausalHeader("h2", null)),
+                List.of(new ParsleyHeader("h1", "a".getBytes()), new ParsleyHeader("h2", null)),
                 deps.toBytes(), ORDERS_2, 7L);
 
-        CausalRecord<String, String> out = codec.deserialize(codec.serialize(record));
+        ParsleyRecord<String, String> out = codec.deserialize(codec.serialize(record));
 
         assertEquals("key", out.key());
         assertEquals("value", out.value());
@@ -48,10 +48,10 @@ class BufferedRecordCodecTest {
 
     @Test
     void roundTripsNullKeyAndValue() {
-        CausalRecord<String, String> record =
-                new CausalRecord<>(null, null, 0L, List.of(), null, ORDERS_2, 0L);
+        ParsleyRecord<String, String> record =
+                new ParsleyRecord<>(null, null, 0L, List.of(), null, ORDERS_2, 0L);
 
-        CausalRecord<String, String> out = codec.deserialize(codec.serialize(record));
+        ParsleyRecord<String, String> out = codec.deserialize(codec.serialize(record));
 
         assertNull(out.key());
         assertNull(out.value());
@@ -64,8 +64,8 @@ class BufferedRecordCodecTest {
         SpySerde valueSpy = new SpySerde();
         BufferedRecordCodec<String, String> spying =
                 new BufferedRecordCodec<>(topic -> keySpy, topic -> valueSpy);
-        CausalRecord<String, String> record =
-                new CausalRecord<>("k", "v", 0L, List.of(), VectorClock.empty().toBytes(), ORDERS_2, 1L);
+        ParsleyRecord<String, String> record =
+                new ParsleyRecord<>("k", "v", 0L, List.of(), VectorClock.empty().toBytes(), ORDERS_2, 1L);
 
         spying.deserialize(spying.serialize(record));
 

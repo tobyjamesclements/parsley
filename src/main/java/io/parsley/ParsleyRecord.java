@@ -25,11 +25,11 @@ import java.util.Optional;
  * @param sourcePartition     the topic-partition the record was read from
  * @param sourceOffset        the offset the record was read from
  */
-record CausalRecord<K, V>(
+record ParsleyRecord<K, V>(
         K key,
         V value,
         long timestamp,
-        List<CausalHeader> headers,
+        List<ParsleyHeader> headers,
         byte[] encodedDependencies,
         TopicPartition sourcePartition,
         long sourceOffset) {
@@ -37,7 +37,7 @@ record CausalRecord<K, V>(
     /**
      * Canonical constructor; defensively copies {@code headers}.
      */
-    CausalRecord {
+    ParsleyRecord {
         headers = List.copyOf(headers);
     }
 
@@ -71,7 +71,7 @@ record CausalRecord<K, V>(
      */
     Headers toHeaders() {
         Headers kafkaHeaders = new RecordHeaders();
-        for (CausalHeader header : headers) {
+        for (ParsleyHeader header : headers) {
             kafkaHeaders.add(new RecordHeader(header.key(), header.value()));
         }
         return kafkaHeaders;

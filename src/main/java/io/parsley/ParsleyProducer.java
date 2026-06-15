@@ -44,7 +44,7 @@ final class ParsleyProducer<K, V> implements CausalProducer<K, V> {
         ProducerRecord<K, V> enriched = new ProducerRecord<>(
                 record.topic(), record.partition(), record.timestamp(),
                 record.key(), record.value(), record.headers());
-        enriched.headers().add(new RecordHeader(Attributes.VECTOR_CLOCK, clock.toBytes()));
+        enriched.headers().add(new RecordHeader(ParsleyAttributes.VECTOR_CLOCK, clock.toBytes()));
         return enriched;
     }
 }

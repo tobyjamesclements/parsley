@@ -8,7 +8,7 @@ import java.util.Comparator;
 import java.util.List;
 
 /**
- * A {@link BufferStore} backed by a changelog-replicated Kafka {@link KeyValueStore}, keyed by a
+ * A {@link CausalBufferStore} backed by a changelog-replicated Kafka {@link KeyValueStore}, keyed by a
  * monotonic insertion sequence and valued by the {@link BufferedRecordCodec}-serialised record. This
  * is the authoritative, restart-durable home of held records: because the store <em>is</em> the
  * buffer, held records need no separate rehydration step — they are read back on the next drain.
@@ -20,7 +20,7 @@ import java.util.List;
  * @param <K> the record key type
  * @param <V> the record value type
  */
-final class ParsleyBufferStore<K, V> implements BufferStore<K, V> {
+final class ParsleyBufferStore<K, V> implements CausalBufferStore<K, V> {
 
     private final KeyValueStore<Long, byte[]> store;
     private final BufferedRecordCodec<K, V> codec;
@@ -45,7 +45,7 @@ final class ParsleyBufferStore<K, V> implements BufferStore<K, V> {
     }
 
     @Override
-    public void add(CausalRecord<K, V> record) {
+    public void add(ParsleyRecord<K, V> record) {
         store.put(nextSequence++, codec.serialize(record));
         size++;
     }
@@ -56,7 +56,7 @@ final class ParsleyBufferStore<K, V> implements BufferStore<K, V> {
         try (KeyValueIterator<Long, byte[]> all = store.all()) {
             while (all.hasNext()) {
                 var kv = all.next();
-                CausalRecord<K, V> record = codec.deserialize(kv.value);
+                ParsleyRecord<K, V> record = codec.deserialize(kv.value);
                 entries.add(new Entry<>(kv.key, record, VectorClock.fromBytes(record.encodedDependencies())));
             }
         }

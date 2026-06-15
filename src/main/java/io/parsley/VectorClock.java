@@ -208,7 +208,7 @@ public record VectorClock(Map<TopicPartition, Long> positions) {
      * @throws IllegalStateException if the header is present but not a valid serialised clock
      */
     public static Optional<VectorClock> fromHeaders(Headers headers) {
-        Header header = headers.lastHeader(Attributes.VECTOR_CLOCK);
+        Header header = headers.lastHeader(ParsleyAttributes.VECTOR_CLOCK);
         return header == null ? Optional.empty() : Optional.of(fromBytes(header.value()));
     }
 

@@ -27,7 +27,7 @@ class ParsleyProducerTest {
 
             assertEquals(1, mock.history().size());
             ProducerRecord<String, String> sent = mock.history().get(0);
-            Header header = sent.headers().lastHeader(Attributes.VECTOR_CLOCK);
+            Header header = sent.headers().lastHeader(ParsleyAttributes.VECTOR_CLOCK);
             assertNotNull(header, "vector-clock header must be present");
             assertEquals(clock, VectorClock.fromBytes(header.value()));
         }

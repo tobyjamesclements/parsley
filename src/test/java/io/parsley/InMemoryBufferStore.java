@@ -5,21 +5,21 @@ import java.util.List;
 import java.util.TreeMap;
 
 /**
- * An in-memory {@link BufferStore} backed by a {@link TreeMap} keyed by insertion sequence. Used
- * where buffer durability is not required — unit tests that exercise the {@link CausalEngine}
+ * An in-memory {@link CausalBufferStore} backed by a {@link TreeMap} keyed by insertion sequence. Used
+ * where buffer durability is not required — unit tests that exercise the {@link ParsleyEngine}
  * without a Kafka state store, and to stand in for a restored buffer in tests. Production uses
  * {@link ParsleyBufferStore}.
  *
  * @param <K> the record key type
  * @param <V> the record value type
  */
-final class InMemoryBufferStore<K, V> implements BufferStore<K, V> {
+final class InMemoryBufferStore<K, V> implements CausalBufferStore<K, V> {
 
-    private final TreeMap<Long, CausalRecord<K, V>> buffer = new TreeMap<>();
+    private final TreeMap<Long, ParsleyRecord<K, V>> buffer = new TreeMap<>();
     private long sequence = 0;
 
     @Override
-    public void add(CausalRecord<K, V> record) {
+    public void add(ParsleyRecord<K, V> record) {
         buffer.put(sequence++, record);
     }
 

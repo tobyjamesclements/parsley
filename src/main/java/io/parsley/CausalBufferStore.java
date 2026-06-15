@@ -9,19 +9,19 @@ import java.util.List;
  *
  * <p>There is no separate in-memory copy: a durable implementation <em>is</em> the buffer, so held
  * records need no rehydration step after a restart — they are simply read back on the next drain.
- * The {@link CausalEngine} drives the buffer through this interface and is agnostic to whether it is
+ * The {@link ParsleyEngine} drives the buffer through this interface and is agnostic to whether it is
  * purely in-memory (tests) or backed by a changelog-replicated Kafka store (production).
  *
  * @param <K> the record key type
  * @param <V> the record value type
  */
-interface BufferStore<K, V> {
+interface CausalBufferStore<K, V> {
 
     /**
      * A buffered entry: its insertion sequence (an opaque handle for {@link #remove(long)}), the
      * record, and its decoded dependency clock.
      */
-    record Entry<K, V>(long sequence, CausalRecord<K, V> record, VectorClock dependencies) {}
+    record Entry<K, V>(long sequence, ParsleyRecord<K, V> record, VectorClock dependencies) {}
 
     /**
      * Buffers a record under the next insertion sequence. The record's decoded dependency clock,
@@ -29,7 +29,7 @@ interface BufferStore<K, V> {
      *
      * @param record the record to hold; carries a valid (decodable) dependency clock
      */
-    void add(CausalRecord<K, V> record);
+    void add(ParsleyRecord<K, V> record);
 
     /**
      * Returns every buffered entry, in ascending insertion-sequence (causal arrival) order.

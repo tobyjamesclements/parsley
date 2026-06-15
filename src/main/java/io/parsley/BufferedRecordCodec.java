@@ -14,7 +14,7 @@ import java.util.List;
 import java.util.function.Function;
 
 /**
- * Serialises a buffered {@link CausalRecord} to and from the byte value stored in the durable buffer
+ * Serialises a buffered {@link ParsleyRecord} to and from the byte value stored in the durable buffer
  * store (keyed by insertion sequence), so held records survive a restart.
  *
  * <p>The key and value are (de)serialised with the user's serdes, resolved <strong>by the record's
@@ -42,7 +42,7 @@ final class BufferedRecordCodec<K, V> {
      * {@code encodedDependencies}; the engine re-decodes it on restore (a buffered record always
      * carries a valid clock), so it is stored once.
      */
-    byte[] serialize(CausalRecord<K, V> record) {
+    byte[] serialize(ParsleyRecord<K, V> record) {
         String topic = record.sourcePartition().topic();
         byte[] keyBytes = keySerdeByTopic.apply(topic).serializer().serialize(topic, record.key());
         byte[] valueBytes = valueSerdeByTopic.apply(topic).serializer().serialize(topic, record.value());
@@ -57,7 +57,7 @@ final class BufferedRecordCodec<K, V> {
             writeNullable(out, valueBytes);
             writeNullable(out, record.encodedDependencies());
             out.writeInt(record.headers().size());
-            for (CausalHeader header : record.headers()) {
+            for (ParsleyHeader header : record.headers()) {
                 writeString(out, header.key());
                 writeNullable(out, header.value());
             }
@@ -70,7 +70,7 @@ final class BufferedRecordCodec<K, V> {
     /**
      * Reconstructs a held record from {@link #serialize bytes}.
      */
-    CausalRecord<K, V> deserialize(byte[] bytes) {
+    ParsleyRecord<K, V> deserialize(byte[] bytes) {
         try (DataInputStream in = new DataInputStream(new ByteArrayInputStream(bytes))) {
             String topic = readString(in);
             int partition = in.readInt();
@@ -80,11 +80,11 @@ final class BufferedRecordCodec<K, V> {
             byte[] valueBytes = readNullable(in);
             byte[] encodedDependencies = readNullable(in);
             int headerCount = in.readInt();
-            List<CausalHeader> headers = new ArrayList<>(headerCount);
+            List<ParsleyHeader> headers = new ArrayList<>(headerCount);
             for (int i = 0; i < headerCount; i++) {
                 String key = readString(in);
                 byte[] value = readNullable(in);
-                headers.add(new CausalHeader(key, value));
+                headers.add(new ParsleyHeader(key, value));
             }
 
             K key = keyBytes == null ? null
@@ -92,7 +92,7 @@ final class BufferedRecordCodec<K, V> {
             V value = valueBytes == null ? null
                     : valueSerdeByTopic.apply(topic).deserializer().deserialize(topic, valueBytes);
 
-            return new CausalRecord<>(
+            return new ParsleyRecord<>(
                     key, value, timestamp, headers, encodedDependencies,
                     new TopicPartition(topic, partition), offset);
         } catch (IOException e) {

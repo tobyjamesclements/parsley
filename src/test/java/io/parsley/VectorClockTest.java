@@ -68,7 +68,7 @@ class VectorClockTest {
     void fromHeadersReadsTheStampedClock() {
         VectorClock clock = VectorClock.empty().advance(P0, 12).advance(O0, 4);
         Headers headers = new RecordHeaders();
-        headers.add(new RecordHeader(Attributes.VECTOR_CLOCK, clock.toBytes()));
+        headers.add(new RecordHeader(ParsleyAttributes.VECTOR_CLOCK, clock.toBytes()));
 
         assertEquals(Optional.of(clock), VectorClock.fromHeaders(headers));
     }
@@ -85,7 +85,7 @@ class VectorClockTest {
     void fromRecordReadsTheStampedClock() {
         VectorClock clock = VectorClock.empty().advance(P0, 27);
         ConsumerRecord<String, String> record = new ConsumerRecord<>("orders", 0, 5L, "k", "v");
-        record.headers().add(new RecordHeader(Attributes.VECTOR_CLOCK, clock.toBytes()));
+        record.headers().add(new RecordHeader(ParsleyAttributes.VECTOR_CLOCK, clock.toBytes()));
 
         assertEquals(Optional.of(clock), VectorClock.fromRecord(record));
     }

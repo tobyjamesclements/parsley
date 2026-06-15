@@ -8,17 +8,17 @@ import java.util.List;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-class BufferStoreTest {
+class CausalBufferStoreTest {
 
     private static final TopicPartition PRICES = new TopicPartition("prices", 0);
     private static final TopicPartition ORDERS = new TopicPartition("orders", 0);
 
-    private final BufferStore<String, String> store = new InMemoryBufferStore<>();
+    private final CausalBufferStore<String, String> store = new InMemoryBufferStore<>();
 
     // The record's encodedDependencies carry the dependency clock; the store derives the decoded
     // clock from them, so build the record with the clock it depends on.
-    private static CausalRecord<String, String> rec(TopicPartition tp, long offset, VectorClock deps) {
-        return new CausalRecord<>("k", "v", 0L, List.of(), deps.toBytes(), tp, offset);
+    private static ParsleyRecord<String, String> rec(TopicPartition tp, long offset, VectorClock deps) {
+        return new ParsleyRecord<>("k", "v", 0L, List.of(), deps.toBytes(), tp, offset);
     }
 
     @Test
@@ -26,7 +26,7 @@ class BufferStoreTest {
         store.add(rec(ORDERS, 0, VectorClock.empty().advance(PRICES, 9)));
         store.add(rec(ORDERS, 1, VectorClock.empty().advance(PRICES, 3)));
 
-        List<BufferStore.Entry<String, String>> entries = store.entries();
+        List<CausalBufferStore.Entry<String, String>> entries = store.entries();
 
         assertEquals(2, entries.size());
         assertEquals(0L, entries.get(0).record().sourceOffset());

@@ -12,4 +12,4 @@ import org.apache.kafka.streams.processor.api.RecordMetadata;
  * @param partition the source partition
  * @param offset    the source offset
  */
-record DeliveredRecordMetadata(String topic, int partition, long offset) implements RecordMetadata {}
+record ParsleyRecordMetadata(String topic, int partition, long offset) implements RecordMetadata {}

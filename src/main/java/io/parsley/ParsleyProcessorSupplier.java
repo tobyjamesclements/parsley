@@ -40,7 +40,7 @@ final class ParsleyProcessorSupplier<KIn, VIn, KOut, VOut>
                                       Function<String, Serde<KIn>> keySerdeByTopic,
                                       Function<String, Serde<VIn>> valueSerdeByTopic) {
         this(userSupplier, policy, onViolation, deadLetterSink, keySerdeByTopic, valueSerdeByTopic,
-                Attributes.FRONTIER_STORE, Attributes.BUFFER_STORE);
+                ParsleyAttributes.FRONTIER_STORE, ParsleyAttributes.BUFFER_STORE);
     }
 
     ParsleyProcessorSupplier(ProcessorSupplier<KIn, VIn, KOut, VOut> userSupplier,

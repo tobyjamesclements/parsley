@@ -21,7 +21,7 @@ import java.util.function.Consumer;
  * Drop}), or routes them to the dead-letter sink ({@link BufferingPolicy.DeadLetter DeadLetter}) —
  * reporting a {@link Violation} (with the causal gap) for each.
  *
- * <p><strong>Frontier persistence ordering:</strong> the {@link FrontierListener} fires for
+ * <p><strong>Frontier persistence ordering:</strong> the {@link FrontierCallback} fires for
  * every frontier advancement <em>before</em> the corresponding record is returned for
  * forwarding, so persisting the frontier in the listener is guaranteed to happen before the
  * record leaves the engine.
@@ -29,33 +29,33 @@ import java.util.function.Consumer;
  * @param <K> the record key type
  * @param <V> the record value type
  */
-final class CausalEngine<K, V> {
+final class ParsleyEngine<K, V> {
 
     /**
      * Receives the new frontier after every advancement, before the record that caused the
      * advancement is returned for forwarding.
      */
     @FunctionalInterface
-    interface FrontierListener {
+    interface FrontierCallback {
         void frontierAdvanced(VectorClock frontier);
     }
 
     private final BufferingPolicy policy;
     private final ViolationHandler violationHandler;
-    private final Consumer<CausalRecord<K, V>> deadLetterSink;
-    private final BufferStore<K, V> buffer;
-    private final FrontierListener frontierListener;
+    private final Consumer<ParsleyRecord<K, V>> deadLetterSink;
+    private final CausalBufferStore<K, V> buffer;
+    private final FrontierCallback frontierListener;
 
     private VectorClock frontier;
     private int sizeLimit = Integer.MAX_VALUE;
     private Duration evictionInterval;
 
-    CausalEngine(BufferingPolicy policy,
+    ParsleyEngine(BufferingPolicy policy,
                  ViolationHandler violationHandler,
                  VectorClock initialFrontier,
-                 Consumer<CausalRecord<K, V>> deadLetterSink,
-                 FrontierListener frontierListener,
-                 BufferStore<K, V> buffer) {
+                 Consumer<ParsleyRecord<K, V>> deadLetterSink,
+                 FrontierCallback frontierListener,
+                 CausalBufferStore<K, V> buffer) {
         if (policy instanceof BufferingPolicy.DeadLetter && deadLetterSink == null) {
             throw new IllegalArgumentException("DeadLetter policy requires a dead-letter sink");
         }
@@ -74,8 +74,8 @@ final class CausalEngine<K, V> {
      * @param record the record to process
      * @return the records to forward downstream, in order; possibly empty
      */
-    List<CausalRecord<K, V>> onRecord(CausalRecord<K, V> record) {
-        List<CausalRecord<K, V>> out = new ArrayList<>();
+    List<ParsleyRecord<K, V>> onRecord(ParsleyRecord<K, V> record) {
+        List<ParsleyRecord<K, V>> out = new ArrayList<>();
 
         // A record we cannot gate (no clock header, or one we cannot decode) is admitted
         // unconditionally rather than held forever: we report the violation, then advance the
@@ -123,26 +123,26 @@ final class CausalEngine<K, V> {
      * @return records to forward downstream out-of-order; non-empty only for the
      *         {@link BufferingPolicy.ForwardUnsafe ForwardUnsafe} policy
      */
-    List<CausalRecord<K, V>> evictNow() {
-        List<BufferStore.Entry<K, V>> evicted = buffer.entries();
+    List<ParsleyRecord<K, V>> evictNow() {
+        List<CausalBufferStore.Entry<K, V>> evicted = buffer.entries();
         if (evicted.isEmpty()) {
             return List.of();
         }
-        for (BufferStore.Entry<K, V> entry : evicted) {
+        for (CausalBufferStore.Entry<K, V> entry : evicted) {
             violate(entry.record(), CausalViolationReason.LIMIT_REACHED, entry.dependencies());
             buffer.remove(entry.sequence());
         }
-        List<CausalRecord<K, V>> toForward = new ArrayList<>();
+        List<ParsleyRecord<K, V>> toForward = new ArrayList<>();
         switch (policy) {
             case BufferingPolicy.ForwardUnsafe forwardUnsafe -> {
-                for (BufferStore.Entry<K, V> entry : evicted) {
+                for (CausalBufferStore.Entry<K, V> entry : evicted) {
                     advanceFrontier(entry.record());
                     toForward.add(entry.record());
                 }
             }
             case BufferingPolicy.Drop drop -> { /* discard the evicted records */ }
             case BufferingPolicy.DeadLetter deadLetter -> {
-                for (BufferStore.Entry<K, V> entry : evicted) {
+                for (CausalBufferStore.Entry<K, V> entry : evicted) {
                     deadLetterSink.accept(entry.record());
                 }
             }
@@ -174,10 +174,10 @@ final class CausalEngine<K, V> {
     // B may depend on A, and A's release is what unblocks B.) Each pass selects against the frontier
     // as of the pass start, then advances through the released records; the next pass sees the moved
     // frontier. Each released record is forwarded just like a directly satisfied one.
-    private void drainInto(List<CausalRecord<K, V>> out) {
-        List<BufferStore.Entry<K, V>> releasable = releasableEntries();
+    private void drainInto(List<ParsleyRecord<K, V>> out) {
+        List<CausalBufferStore.Entry<K, V>> releasable = releasableEntries();
         while (!releasable.isEmpty()) {
-            for (BufferStore.Entry<K, V> entry : releasable) {
+            for (CausalBufferStore.Entry<K, V> entry : releasable) {
                 buffer.remove(entry.sequence());
                 advanceFrontier(entry.record());
                 out.add(entry.record());
@@ -189,9 +189,9 @@ final class CausalEngine<K, V> {
     // The buffered entries whose dependencies the current frontier already satisfies, in arrival
     // order. The whole set is materialised before any release, so a release within the pass does not
     // change which records the pass forwards.
-    private List<BufferStore.Entry<K, V>> releasableEntries() {
-        List<BufferStore.Entry<K, V>> releasable = new ArrayList<>();
-        for (BufferStore.Entry<K, V> entry : buffer.entries()) {
+    private List<CausalBufferStore.Entry<K, V>> releasableEntries() {
+        List<CausalBufferStore.Entry<K, V>> releasable = new ArrayList<>();
+        for (CausalBufferStore.Entry<K, V> entry : buffer.entries()) {
             if (entry.dependencies().satisfiedBy(frontier)) {
                 releasable.add(entry);
             }
@@ -199,12 +199,12 @@ final class CausalEngine<K, V> {
         return releasable;
     }
 
-    private void advanceFrontier(CausalRecord<K, V> record) {
+    private void advanceFrontier(ParsleyRecord<K, V> record) {
         frontier = frontier.advance(record.sourcePartition(), record.sourceOffset());
         frontierListener.frontierAdvanced(frontier);
     }
 
-    private void violate(CausalRecord<K, V> record, CausalViolationReason reason, VectorClock required) {
+    private void violate(ParsleyRecord<K, V> record, CausalViolationReason reason, VectorClock required) {
         violationHandler.onViolation(new Violation(
                 record.toConsumerRecord(), reason, frontier, required, required.missingAgainst(frontier)));
     }
