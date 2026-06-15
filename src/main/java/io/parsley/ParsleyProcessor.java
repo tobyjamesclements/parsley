@@ -38,7 +38,7 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
     private final BufferingPolicy policy;
     private final ViolationHandler onViolation;
     private final Consumer<ConsumerRecord<KIn, VIn>> deadLetterSink;
-    private final BufferedRecordCodec<KIn, VIn> codec;
+    private final ParsleySerializer<KIn, VIn> serializer;
     private final String frontierStoreName;
     private final String bufferStoreName;
     private final FrontierListener frontierListener;
@@ -67,7 +67,7 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
                      BufferingPolicy policy,
                      ViolationHandler onViolation,
                      Consumer<ConsumerRecord<KIn, VIn>> deadLetterSink,
-                     BufferedRecordCodec<KIn, VIn> codec,
+                     ParsleySerializer<KIn, VIn> serializer,
                      String frontierStoreName,
                      String bufferStoreName,
                      FrontierListener frontierListener) {
@@ -75,7 +75,7 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
         this.policy = policy;
         this.onViolation = onViolation;
         this.deadLetterSink = deadLetterSink;
-        this.codec = codec;
+        this.serializer = serializer;
         this.frontierStoreName = frontierStoreName;
         this.bufferStoreName = bufferStoreName;
         this.frontierListener = frontierListener;
@@ -119,7 +119,7 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
         // The buffer store IS the buffer: held records that survived the previous run are already in
         // it, so there is nothing to "restore" — ParsleyBufferStore seeds its sequence past them and the
         // engine drains them on the next frontier advance.
-        CausalBufferStore<KIn, VIn> buffer = new ParsleyBufferStore<>(bufferStore, codec);
+        CausalBufferStore<KIn, VIn> buffer = new ParsleyBufferStore<>(bufferStore, serializer);
 
         this.engine = new ParsleyEngine<>(policy, onViolation, initialFrontier,
                 engineDeadLetter, listener, buffer);

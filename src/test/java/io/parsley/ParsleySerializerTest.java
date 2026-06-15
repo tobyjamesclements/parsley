@@ -14,12 +14,12 @@ import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
 
-class BufferedRecordCodecTest {
+class ParsleySerializerTest {
 
     private static final TopicPartition ORDERS_2 = new TopicPartition("orders", 2);
 
-    private final BufferedRecordCodec<String, String> codec =
-            new BufferedRecordCodec<>(topic -> Serdes.String(), topic -> Serdes.String());
+    private final ParsleySerializer<String, String> serializer =
+            new ParsleySerializer<>(new ParsleyResolver<>(topic -> Serdes.String(), topic -> Serdes.String()));
 
     @Test
     void roundTripsEveryField() {
@@ -29,7 +29,7 @@ class BufferedRecordCodecTest {
                 List.of(new ParsleyHeader("h1", "a".getBytes()), new ParsleyHeader("h2", null)),
                 deps.toBytes(), ORDERS_2, 7L);
 
-        ParsleyRecord<String, String> out = codec.deserialize(codec.serialize(record));
+        ParsleyRecord<String, String> out = serializer.deserialize(serializer.serialize(record));
 
         assertEquals("key", out.key());
         assertEquals("value", out.value());
@@ -51,7 +51,7 @@ class BufferedRecordCodecTest {
         ParsleyRecord<String, String> record =
                 new ParsleyRecord<>(null, null, 0L, List.of(), null, ORDERS_2, 0L);
 
-        ParsleyRecord<String, String> out = codec.deserialize(codec.serialize(record));
+        ParsleyRecord<String, String> out = serializer.deserialize(serializer.serialize(record));
 
         assertNull(out.key());
         assertNull(out.value());
@@ -62,8 +62,8 @@ class BufferedRecordCodecTest {
     void serialisationUsesTheRecordSourceTopicNotTheStoreName() {
         SpySerde keySpy = new SpySerde();
         SpySerde valueSpy = new SpySerde();
-        BufferedRecordCodec<String, String> spying =
-                new BufferedRecordCodec<>(topic -> keySpy, topic -> valueSpy);
+        ParsleySerializer<String, String> spying =
+                new ParsleySerializer<>(new ParsleyResolver<>(topic -> keySpy, topic -> valueSpy));
         ParsleyRecord<String, String> record =
                 new ParsleyRecord<>("k", "v", 0L, List.of(), VectorClock.empty().toBytes(), ORDERS_2, 1L);
 

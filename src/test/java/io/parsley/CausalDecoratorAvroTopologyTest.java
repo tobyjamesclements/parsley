@@ -42,7 +42,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * over multiple input topics, each carrying its own schema, against an in-process
  * {@link MockSchemaRegistry} (no broker, no Docker).
  *
- * <p>The point under test is {@code BufferedRecordCodec}'s per-source-topic serde resolution: a held
+ * <p>The point under test is {@code ParsleyResolver}'s per-source-topic serde resolution: a held
  * {@link Order} must be Avro-serialised into the buffer store under the {@code orders-value} subject
  * (its source topic), then deserialised back to an equal {@code Order} when it drains — never under
  * the changelog/store name.

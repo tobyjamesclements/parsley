@@ -9,7 +9,7 @@ import java.util.List;
 
 /**
  * A {@link CausalBufferStore} backed by a changelog-replicated Kafka {@link KeyValueStore}, keyed by a
- * monotonic insertion sequence and valued by the {@link BufferedRecordCodec}-serialised record. This
+ * monotonic insertion sequence and valued by the {@link ParsleySerializer}-serialised record. This
  * is the authoritative, restart-durable home of held records: because the store <em>is</em> the
  * buffer, held records need no separate rehydration step — they are read back on the next drain.
  *
@@ -23,13 +23,13 @@ import java.util.List;
 final class ParsleyBufferStore<K, V> implements CausalBufferStore<K, V> {
 
     private final KeyValueStore<Long, byte[]> store;
-    private final BufferedRecordCodec<K, V> codec;
+    private final ParsleySerializer<K, V> serializer;
     private long nextSequence;
     private int size;
 
-    ParsleyBufferStore(KeyValueStore<Long, byte[]> store, BufferedRecordCodec<K, V> codec) {
+    ParsleyBufferStore(KeyValueStore<Long, byte[]> store, ParsleySerializer<K, V> serializer) {
         this.store = store;
-        this.codec = codec;
+        this.serializer = serializer;
         // Seed the sequence past anything that survived a previous run, and count what is held, in a
         // single pass — this replaces the old explicit "restore held records" step.
         long maxSequence = -1;
@@ -46,7 +46,7 @@ final class ParsleyBufferStore<K, V> implements CausalBufferStore<K, V> {
 
     @Override
     public void add(ParsleyRecord<K, V> record) {
-        store.put(nextSequence++, codec.serialize(record));
+        store.put(nextSequence++, serializer.serialize(record));
         size++;
     }
 
@@ -56,7 +56,7 @@ final class ParsleyBufferStore<K, V> implements CausalBufferStore<K, V> {
         try (KeyValueIterator<Long, byte[]> all = store.all()) {
             while (all.hasNext()) {
                 var kv = all.next();
-                ParsleyRecord<K, V> record = codec.deserialize(kv.value);
+                ParsleyRecord<K, V> record = serializer.deserialize(kv.value);
                 entries.add(new Entry<>(kv.key, record, VectorClock.fromBytes(record.encodedDependencies())));
             }
         }

@@ -1,7 +1,6 @@
 package io.parsley;
 
 import org.apache.kafka.common.TopicPartition;
-import org.apache.kafka.common.serialization.Serde;
 
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
@@ -11,41 +10,35 @@ import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.function.Function;
 
 /**
- * Serialises a buffered {@link ParsleyRecord} to and from the byte value stored in the durable buffer
+ * Serialises a held {@link ParsleyRecord} to and from the byte value stored in the durable buffer
  * store (keyed by insertion sequence), so held records survive a restart.
  *
- * <p>The key and value are (de)serialised with the user's serdes, resolved <strong>by the record's
- * own source topic</strong> and invoked with that source topic as the {@code (topic, …)} argument —
- * never the buffer store's changelog name — so topic-scoped serdes (e.g. Avro + Schema Registry
- * {@code TopicNameStrategy}) resolve the correct subject. Everything else (source coordinate,
- * timestamp, dependency-clock bytes, and headers) is written in a compact hand-rolled form.
+ * <p>Key and value bytes are produced/consumed with the serdes a {@link ParsleyResolver} resolves
+ * from the record's own source topic; the rest of the envelope (source coordinate, timestamp,
+ * dependency-clock bytes, headers) is written in a compact hand-rolled form. The dependency clock
+ * travels as the record's {@code encodedDependencies} and is re-decoded on restore (a buffered record
+ * always carries a valid clock), so it is stored once.
  *
  * @param <K> the record key type
  * @param <V> the record value type
  */
-final class BufferedRecordCodec<K, V> {
+final class ParsleySerializer<K, V> {
 
-    private final Function<String, Serde<K>> keySerdeByTopic;
-    private final Function<String, Serde<V>> valueSerdeByTopic;
+    private final ParsleyResolver<K, V> resolver;
 
-    BufferedRecordCodec(Function<String, Serde<K>> keySerdeByTopic,
-                        Function<String, Serde<V>> valueSerdeByTopic) {
-        this.keySerdeByTopic = keySerdeByTopic;
-        this.valueSerdeByTopic = valueSerdeByTopic;
+    ParsleySerializer(ParsleyResolver<K, V> resolver) {
+        this.resolver = resolver;
     }
 
     /**
-     * Serialises a held record to bytes. The dependency clock travels as the record's
-     * {@code encodedDependencies}; the engine re-decodes it on restore (a buffered record always
-     * carries a valid clock), so it is stored once.
+     * Serialises a held record to bytes.
      */
     byte[] serialize(ParsleyRecord<K, V> record) {
         String topic = record.sourcePartition().topic();
-        byte[] keyBytes = keySerdeByTopic.apply(topic).serializer().serialize(topic, record.key());
-        byte[] valueBytes = valueSerdeByTopic.apply(topic).serializer().serialize(topic, record.value());
+        byte[] keyBytes = resolver.keySerde(topic).serializer().serialize(topic, record.key());
+        byte[] valueBytes = resolver.valueSerde(topic).serializer().serialize(topic, record.value());
 
         try (ByteArrayOutputStream baos = new ByteArrayOutputStream();
              DataOutputStream out = new DataOutputStream(baos)) {
@@ -88,9 +81,9 @@ final class BufferedRecordCodec<K, V> {
             }
 
             K key = keyBytes == null ? null
-                    : keySerdeByTopic.apply(topic).deserializer().deserialize(topic, keyBytes);
+                    : resolver.keySerde(topic).deserializer().deserialize(topic, keyBytes);
             V value = valueBytes == null ? null
-                    : valueSerdeByTopic.apply(topic).deserializer().deserialize(topic, valueBytes);
+                    : resolver.valueSerde(topic).deserializer().deserialize(topic, valueBytes);
 
             return new ParsleyRecord<>(
                     key, value, timestamp, headers, encodedDependencies,

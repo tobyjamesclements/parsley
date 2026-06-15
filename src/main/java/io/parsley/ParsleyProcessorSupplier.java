@@ -79,7 +79,7 @@ final class ParsleyProcessorSupplier<KIn, VIn, KOut, VOut>
     public Processor<KIn, VIn, KOut, VOut> get() {
         return new ParsleyProcessor<>(
                 userSupplier.get(), policy, onViolation, deadLetterSink,
-                new BufferedRecordCodec<>(keySerdeByTopic, valueSerdeByTopic),
+                new ParsleySerializer<>(new ParsleyResolver<>(keySerdeByTopic, valueSerdeByTopic)),
                 frontierStoreName, bufferStoreName, frontierListener);
     }
 

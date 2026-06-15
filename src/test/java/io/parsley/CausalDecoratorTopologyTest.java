@@ -374,8 +374,9 @@ class CausalDecoratorTopologyTest {
         }
     }
 
-    // Note: restart/restoration is covered by BufferedRecordCodecTest (envelope round-trip) and
-    // CausalEngineTest#restoredRecordDrainsWhenFrontierCatchesUp (engine.restore semantics).
+    // Note: restart/restoration is covered by ParsleySerializerTest (envelope round-trip) and
+    // ParsleyEngineTest#recordsAlreadyInTheBufferDrainWhenTheFrontierCatchesUp (the buffer store is
+    // the source of truth, so held records are simply already present after a restart).
     // TopologyTestDriver does not persist state-store contents across driver instances, so a
     // genuine cross-restart test cannot be expressed against it.
 
