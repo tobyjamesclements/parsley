@@ -32,13 +32,29 @@ import java.util.Optional;
  * deliberately ships no encryption or transport for this (that is your concern); the building blocks
  * are:
  * <ol>
- *   <li>Obtain the context: {@link #fromRecord(ConsumerRecord)} on the consumed message (the
- *       upstream producer's clock), or {@code consumer.frontier()} for everything you have consumed.
+ *   <li>Obtain the context. Prefer {@link #fromRecord(ConsumerRecord)} on the message that triggered
+ *       this work — the upstream producer's own clock, bounded by that hop's fan-in and transitively
+ *       carrying its own dependencies. Use {@code consumer.frontier()} only when the read genuinely
+ *       depends on <em>everything</em> consumed (e.g. an aggregator), since it carries every partition
+ *       consumed (see the size note below).
  *   <li>Serialise it with {@link #toBytes()}, then apply <em>your own</em> encryption and a URL-safe
  *       encoding (e.g. Base64) and place it in an HTTP header.
  *   <li>On the receiving side, decode and decrypt, rebuild with {@link #fromBytes(byte[])}, and gate
  *       the downstream read with {@link #satisfiedBy(CausalDependencies)} against that store's frontier.
  * </ol>
+ *
+ * <h2>Clock size and the {@code message.max.bytes} ceiling</h2>
+ * The {@link #toBytes() serialised} clock is {@code 5 + Σ(14 + topicLen)} bytes over its entries — so
+ * its size is proportional to the number of causally relevant topic-partitions, and a clock stamped
+ * into a record header counts against Kafka's record-size limit ({@code message.max.bytes} /
+ * {@code max.request.size}, ~1&nbsp;MB by default; there is no separate header budget). A clock that
+ * spans enough partitions will breach that limit and the produce fails. The automatic Streams
+ * stamping path is bounded by the number of source topics of the subtopology (each task observes one
+ * partition per source topic), and is therefore typically tiny; the figure to watch is a manual
+ * {@code consumer.frontier()} propagated by a wide-fan-in consumer, or a very broad regex
+ * subscription. Parsley never truncates a clock (that would silently break the guarantee), so keep
+ * the relevant-partition count within your record-size budget and prefer {@link #fromRecord} where it
+ * suffices.
  *
  * @param positions the partition-to-highest-offset map; copied defensively
  */

@@ -75,11 +75,24 @@ try (CausalConsumer<String, String> consumer = CausalConsumers.<String, String>b
 }
 ```
 
-**Produce with causal context** — pass the consumer's frontier; it is attached as a header:
+**Produce with causal context** — pass a clock; it is attached as a header. Prefer the clock of the
+message that triggered this send (`fromRecord`) — it is bounded by that hop's fan-in and transitively
+carries its own dependencies. Reach for `consumer.frontier()` only when the record genuinely depends
+on everything you have consumed (e.g. an aggregator):
 
 ```java
-producer.send(new ProducerRecord<>("orders", key, value), consumer.frontier());
+CausalDependencies context = CausalDependencies.fromRecord(trigger).orElseGet(consumer::frontier);
+producer.send(new ProducerRecord<>("orders", key, value), context);
 ```
+
+> **Clock size and the `message.max.bytes` ceiling.** A serialised clock is `5 + Σ(14 + topicLen)`
+> bytes over its entries, so its size is proportional to the number of causally relevant
+> topic-partitions, and a stamped clock counts against Kafka's record-size limit (`message.max.bytes`
+> / `max.request.size`, ~1 MB default — there is no separate header budget). The automatic Streams
+> path stamps the per-task frontier, bounded by the number of source topics in the subtopology (one
+> partition per topic per task), so it stays small — watch instead a wide-fan-in `consumer.frontier()`
+> or a very broad regex subscription. Parsley never truncates a clock (that would silently break the
+> guarantee); keep the relevant-partition count within your record-size budget.
 
 **Inside a Streams topology** — write an ordinary Kafka Streams `Processor` and wrap its supplier
 with `CausalProcessors.builder(...).build()`. Inside your `process()`, every state-store read/write and every `forward`

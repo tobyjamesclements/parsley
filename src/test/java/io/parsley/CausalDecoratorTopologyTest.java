@@ -470,6 +470,69 @@ class CausalDecoratorTopologyTest {
         }
     }
 
+    @Test
+    void automaticStampFrontierIsBoundedByInputTopicCountNotRecordCount() {
+        // The automatically stamped clock is the per-task frontier, which advances only by each
+        // record's own source coordinate (one partition per source topic) — so its size is bounded
+        // by the number of source topics in the subtopology, never by the number of records. This
+        // pins the O(#input topics) envelope the docs promise for the Streams path.
+        Topology topology = topology(
+                CausalProcessors.builder(upperCaser(), CausalBufferPolicy.forwardUnsafe(CausalBufferLimit.ofSize(1000)))
+                        .serdes(Serdes.String(), Serdes.String()).onViolation(onViolation).build(),
+                List.of("a", "b", "c"));
+
+        try (TopologyTestDriver driver = new TopologyTestDriver(topology, config(null))) {
+            TestInputTopic<String, String> a =
+                    driver.createInputTopic("a", new StringSerializer(), new StringSerializer());
+            TestInputTopic<String, String> b =
+                    driver.createInputTopic("b", new StringSerializer(), new StringSerializer());
+            TestInputTopic<String, String> c =
+                    driver.createInputTopic("c", new StringSerializer(), new StringSerializer());
+
+            for (int i = 0; i < 50; i++) {
+                a.pipeInput(new TestRecord<>("k", "v" + i, clockHeader(CausalDependencies.empty())));
+                b.pipeInput(new TestRecord<>("k", "v" + i, clockHeader(CausalDependencies.empty())));
+                c.pipeInput(new TestRecord<>("k", "v" + i, clockHeader(CausalDependencies.empty())));
+            }
+
+            CausalDependencies frontier = frontierIn(driver, "parsley-frontier");
+            assertEquals(3, frontier.positions().size(),
+                    "the stamped frontier is bounded by the number of source topics, not record count");
+        }
+    }
+
+    @Test
+    void aLargeInboundClockIsNeverFoldedIntoTheStampedOutput() {
+        // The most important regression guard: an inbound dependency clock is used only to gate the
+        // record; it must never be merged into the frontier and re-stamped. A record carrying a clock
+        // over hundreds of (unrelated) partitions, force-forwarded under forwardUnsafe, must still be
+        // stamped with only its own source coordinate — proving the inbound clock cannot amplify the
+        // stamped output and breach the header-size budget.
+        CausalDependencies big = CausalDependencies.empty();
+        for (int p = 0; p < 500; p++) {
+            big = big.advance(new TopicPartition("ghost", p), 1_000 + p);
+        }
+
+        Topology topology = topology(
+                CausalProcessors.builder(upperCaser(), CausalBufferPolicy.forwardUnsafe(CausalBufferLimit.ofSize(1)))
+                        .serdes(Serdes.String(), Serdes.String()).onViolation(onViolation).build(),
+                List.of("in"));
+
+        try (TopologyTestDriver driver = new TopologyTestDriver(topology, config(null))) {
+            TestInputTopic<String, String> in =
+                    driver.createInputTopic("in", new StringSerializer(), new StringSerializer());
+            TestOutputTopic<String, String> out =
+                    driver.createOutputTopic("out", new StringDeserializer(), new StringDeserializer());
+
+            in.pipeInput(new TestRecord<>("k", "v", clockHeader(big)));
+
+            CausalDependencies stamped = outClock(out.readRecord());
+            assertEquals(CausalDependencies.empty().advance(IN_0, 0), stamped,
+                    "a 500-partition inbound clock must not enlarge the stamped output clock");
+            assertEquals(1, stamped.positions().size(), "the stamped clock carries only the source coordinate");
+        }
+    }
+
     // --- small utilities -----------------------------------------------------------------------
 
     private static CausalDependencies frontierIn(TopologyTestDriver driver, String frontierStoreName) {

@@ -115,6 +115,25 @@ class ParsleyEngineTest {
     }
 
     @Test
+    void inboundClockIsNeverFoldedIntoTheFrontier() {
+        // The frontier advances only by each record's own source coordinate; a record's inbound
+        // dependency clock is used to gate it, never merged in. So even a record carrying a clock over
+        // hundreds of partitions enlarges the frontier by exactly one entry — guarding the stamped
+        // clock's size against amplification by upstream clocks.
+        ParsleyEngine<String, String> engine = engine(CausalBufferPolicy.forwardUnsafe(CausalBufferLimit.ofSize(1)));
+
+        CausalDependencies big = CausalDependencies.empty();
+        for (int p = 0; p < 200; p++) {
+            big = big.advance(new TopicPartition("ghost", p), 1_000 + p);
+        }
+        // Buffered then immediately force-forwarded by the size-1 forwardUnsafe limit.
+        onRecord(engine, rec(ORDERS, 0, big));
+
+        assertEquals(Map.of(ORDERS, 0L), engine.frontier().positions(),
+                "the inbound dependency clock must never be merged into the frontier");
+    }
+
+    @Test
     void missingHeaderForwardsWithViolation() {
         ParsleyEngine<String, String> engine = engine(CausalBufferPolicy.forwardUnsafe(CausalBufferLimit.ofSize(100)));
 

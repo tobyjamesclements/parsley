@@ -18,7 +18,10 @@
  *   <li>{@link io.parsley.CausalDependencies} &mdash; a snapshot of causal progress (highest offset
  *       per {@link org.apache.kafka.common.TopicPartition}); test readiness with
  *       {@link io.parsley.CausalDependencies#satisfiedBy satisfiedBy} and combine clocks with
- *       {@link io.parsley.CausalDependencies#merge merge}</li>
+ *       {@link io.parsley.CausalDependencies#merge merge}. Its serialised size grows with the number
+ *       of relevant topic-partitions and counts against Kafka's {@code message.max.bytes}, so prefer
+ *       {@link io.parsley.CausalDependencies#fromRecord fromRecord} over a wide {@code frontier()}
+ *       when propagating across services</li>
  *   <li>{@link io.parsley.CausalBufferPolicy} &mdash; what to do when a buffer limit fires:
  *       {@code forwardUnsafe}, {@code drop}, or {@code deadLetter}</li>
  *   <li>{@link io.parsley.CausalBufferLimit} &mdash; when to stop waiting:
