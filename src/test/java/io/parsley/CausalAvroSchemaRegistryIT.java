@@ -116,9 +116,14 @@ class CausalAvroSchemaRegistryIT {
             assertEquals(order, receivedOrder, "the Order round-trips through Avro + Schema Registry");
             assertEquals(price, receivedPrice, "the Price round-trips through Avro + Schema Registry");
 
-            // The frontier advanced over both topic-partitions.
-            assertTrue(consumer.frontier().positions().containsKey(ordersTp), "frontier covers orders-0");
-            assertTrue(consumer.frontier().positions().containsKey(pricesTp), "frontier covers prices-0");
+            // The frontier advanced over both topic-partitions (compare by partition only — the
+            // consumer holds real Kafka topic UUIDs which differ from name-derived test UUIDs).
+            assertTrue(consumer.frontier().positions().stream()
+                    .anyMatch(p -> p.partition() == ordersTp.partition()),
+                    "frontier covers orders-0");
+            assertTrue(consumer.frontier().positions().stream()
+                    .anyMatch(p -> p.partition() == pricesTp.partition()),
+                    "frontier covers prices-0");
         }
     }
 

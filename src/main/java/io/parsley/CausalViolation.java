@@ -1,9 +1,8 @@
 package io.parsley;
 
 import org.apache.kafka.clients.consumer.ConsumerRecord;
-import org.apache.kafka.common.TopicPartition;
 
-import java.util.Map;
+import java.util.List;
 
 /**
  * A causal-ordering violation, reported to a {@link CausalViolationHandler} with enough context to act
@@ -13,7 +12,7 @@ import java.util.Map;
  * unresolvable clock, no clock attribute, or was evicted from the buffer because a
  * {@link CausalBufferLimit} fired. The payload carries the
  * <em>causal gap</em>: what the frontier had observed ({@link #frontier}) versus what the record
- * required ({@link #required}), and the per-partition shortfall ({@link #gap}) — the difference
+ * required ({@link #required}), and the per-position shortfall ({@link #gap}) — the difference
  * between a violation you can operate around (replay, compensate, alert) and one you can only find
  * in a postmortem.
  *
@@ -23,21 +22,23 @@ import java.util.Map;
  * @param frontier the frontier observed at the moment of the violation; never {@code null}
  * @param required the clock the record required to be delivered in order; never {@code null}
  *                 (empty if the record carried no resolvable clock)
- * @param gap      the per-partition shortfall ({@code required − observed}) for every partition the
- *                 frontier had not caught up on; empty if {@code required.satisfiedBy(frontier)}
+ * @param gap      the per-position shortfall ({@code required − observed}) for every position the
+ *                 frontier had not caught up on; the {@link CausalPosition#offset()} field of each
+ *                 entry holds the shortfall amount, not an absolute log offset; empty if
+ *                 {@code required.satisfiedBy(frontier)}
  */
 public record CausalViolation(
         ConsumerRecord<?, ?> record,
         CausalViolationReason reason,
-        CausalDependencies frontier,
+        CausalFrontier frontier,
         CausalDependencies required,
-        Map<TopicPartition, Long> gap) {
+        List<CausalPosition> gap) {
 
     /**
      * Canonical constructor; defensively copies {@code gap}.
      */
     public CausalViolation {
-        gap = Map.copyOf(gap);
+        gap = List.copyOf(gap);
     }
 
     /**
@@ -54,7 +55,7 @@ public record CausalViolation(
      * <h3>Replay path</h3>
      * <ol>
      *   <li>Decode the required clock: {@code CausalDependencies.fromBytes(header.value())}.</li>
-     *   <li>Wait until your consumer's frontier satisfies it (i.e. it has observed every offset
+     *   <li>Wait until your consumer's frontier satisfies it (i.e. it has observed every position
      *       the original record required).</li>
      *   <li>Re-produce the original record with the same {@code parsley-vector-clock} value,
      *       stripping the {@code parsley-dlq-*} headers first.</li>
@@ -63,10 +64,10 @@ public record CausalViolation(
     public static final String DLQ_REQUIRED_CLOCK_HEADER = "parsley-dlq-required-clock";
 
     /**
-     * Name of the header stamped on every dead-lettered record: the per-partition causal shortfall
-     * at eviction time ({@code required − observed}), encoded as a {@link CausalDependencies} clock
-     * via {@link CausalDependencies#toBytes()}. Useful for diagnostics (how far behind was the
-     * frontier on each partition when this record was evicted?); not needed for replay.
+     * Name of the header stamped on every dead-lettered record: the per-position causal shortfall
+     * at eviction time, encoded as a {@link CausalDependencies} clock via
+     * {@link CausalDependencies#toBytes()}. Each entry's {@link CausalPosition#offset()} is the
+     * shortfall ({@code required − observed}). Useful for diagnostics; not needed for replay.
      */
     public static final String DLQ_GAP_HEADER = "parsley-dlq-gap";
 }

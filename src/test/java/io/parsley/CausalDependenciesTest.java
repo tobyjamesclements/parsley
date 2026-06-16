@@ -7,8 +7,9 @@ import org.apache.kafka.common.header.internals.RecordHeader;
 import org.apache.kafka.common.header.internals.RecordHeaders;
 import org.junit.jupiter.api.Test;
 
-import java.util.Map;
+import java.util.List;
 import java.util.Optional;
+import java.util.Set;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -22,30 +23,31 @@ class CausalDependenciesTest {
 
     @Test
     void emptyClockIsSatisfiedByAnything() {
-        assertTrue(CausalDependencies.empty().satisfiedBy(CausalDependencies.empty()));
-        assertTrue(CausalDependencies.empty().satisfiedBy(CausalDependencies.empty().advance(P0, 7)));
+        assertTrue(CausalDependencies.empty().satisfiedBy(CausalFrontier.empty()));
+        assertTrue(CausalDependencies.empty().satisfiedBy(CausalFrontier.empty().advance(P0, 7)));
     }
 
     @Test
     void advanceTakesTheMaximum() {
         CausalDependencies clock = CausalDependencies.empty().advance(P0, 5).advance(P0, 2);
-        assertEquals(Map.of(P0, 5L), clock.positions());
+        assertEquals(CausalDependencies.empty().advance(P0, 5), clock);
     }
 
     @Test
     void satisfiedByRequiresEveryPartitionToBeCaughtUp() {
         CausalDependencies required = CausalDependencies.empty().advance(P0, 3);
-        assertFalse(required.satisfiedBy(CausalDependencies.empty()));
-        assertFalse(required.satisfiedBy(CausalDependencies.empty().advance(P0, 2)));
-        assertTrue(required.satisfiedBy(CausalDependencies.empty().advance(P0, 3)));
-        assertTrue(required.satisfiedBy(CausalDependencies.empty().advance(P0, 4)));
+        assertFalse(required.satisfiedBy(CausalFrontier.empty()));
+        assertFalse(required.satisfiedBy(CausalFrontier.empty().advance(P0, 2)));
+        assertTrue(required.satisfiedBy(CausalFrontier.empty().advance(P0, 3)));
+        assertTrue(required.satisfiedBy(CausalFrontier.empty().advance(P0, 4)));
     }
 
     @Test
-    void mergeTakesPerPartitionMaximum() {
-        CausalDependencies a = CausalDependencies.empty().advance(P0, 3).advance(O0, 1);
-        CausalDependencies b = CausalDependencies.empty().advance(P0, 1).advance(O0, 9);
-        assertEquals(Map.of(P0, 3L, O0, 9L), a.merge(b).positions());
+    void frontierMergeTakesPerPartitionMaximum() {
+        CausalFrontier a = CausalFrontier.empty().advance(P0, 3).advance(O0, 1);
+        CausalFrontier b = CausalFrontier.empty().advance(P0, 1).advance(O0, 9);
+        CausalFrontier merged = a.merge(b);
+        assertEquals(CausalFrontier.empty().advance(P0, 3).advance(O0, 9), merged);
     }
 
     @Test
@@ -107,32 +109,39 @@ class CausalDependenciesTest {
     @Test
     void missingAgainstIsEmptyWhenTheFrontierSatisfiesTheClock() {
         CausalDependencies required = CausalDependencies.empty().advance(P0, 3);
-        assertTrue(required.missingAgainst(CausalDependencies.empty().advance(P0, 3)).isEmpty());
-        assertTrue(required.missingAgainst(CausalDependencies.empty().advance(P0, 9)).isEmpty());
-        assertTrue(CausalDependencies.empty().missingAgainst(CausalDependencies.empty()).isEmpty());
+        assertTrue(required.missingAgainst(CausalFrontier.empty().advance(P0, 3)).isEmpty());
+        assertTrue(required.missingAgainst(CausalFrontier.empty().advance(P0, 9)).isEmpty());
+        assertTrue(CausalDependencies.empty().missingAgainst(CausalFrontier.empty()).isEmpty());
     }
 
     @Test
     void missingAgainstReportsThePerPartitionShortfall() {
         CausalDependencies required = CausalDependencies.empty().advance(P0, 5).advance(O0, 2);
         // P0: required 5, observed 1 → gap 4. O0: required 2, observed absent(-1) → gap 3.
-        CausalDependencies frontier = CausalDependencies.empty().advance(P0, 1);
-        assertEquals(Map.of(P0, 4L, O0, 3L), required.missingAgainst(frontier));
+        List<CausalPosition> gap = required.missingAgainst(CausalFrontier.empty().advance(P0, 1));
+        assertEquals(Set.of(
+                new CausalPosition(CausalPosition.nameUuid("prices"), 0, 4L),
+                new CausalPosition(CausalPosition.nameUuid("orders"), 0, 3L)),
+                Set.copyOf(gap));
     }
 
     @Test
     void missingAgainstCountsAnAbsentPositionAsMinusOne() {
         CausalDependencies required = CausalDependencies.empty().advance(P0, 0);
-        assertEquals(Map.of(P0, 1L), required.missingAgainst(CausalDependencies.empty()),
+        List<CausalPosition> gap = required.missingAgainst(CausalFrontier.empty());
+        assertEquals(List.of(new CausalPosition(CausalPosition.nameUuid("prices"), 0, 1L)), gap,
                 "requiring offset 0 against an unseen partition is a gap of 1");
     }
 
     @Test
-    void positionsAreDefensivelyCopied() {
-        java.util.Map<TopicPartition, Long> mutable = new java.util.HashMap<>();
-        mutable.put(P0, 1L);
-        CausalDependencies clock = new CausalDependencies(mutable);
-        mutable.put(P0, 99L);
-        assertEquals(1L, clock.positions().get(P0));
+    void frontierAndDependenciesShareWireFormat() {
+        // A frontier serialised with toBytes() must be decodable as CausalDependencies and vice versa.
+        CausalFrontier frontier = CausalFrontier.empty().advance(P0, 5).advance(O0, 2);
+        CausalDependencies decoded = CausalDependencies.fromBytes(frontier.toBytes());
+        assertEquals(frontier.asDependencies(), decoded);
+
+        CausalDependencies deps = CausalDependencies.empty().advance(P0, 5).advance(O0, 2);
+        CausalFrontier frontierDecoded = CausalFrontier.fromBytes(deps.toBytes());
+        assertEquals(frontier, frontierDecoded);
     }
 }

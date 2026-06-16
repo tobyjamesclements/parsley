@@ -10,6 +10,7 @@ import org.junit.jupiter.api.Test;
 import java.util.ArrayList;
 import java.util.List;
 
+import static java.nio.charset.StandardCharsets.UTF_8;
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
@@ -22,13 +23,28 @@ class ParsleySerializerTest {
     private final ParsleySerializer<String, String> serializer =
             new ParsleySerializer<>(new ParsleyResolver<>(topic -> Serdes.String(), topic -> Serdes.String()));
 
+    /** Builds a record with the given user headers plus the required internal coordinate/clock headers. */
+    private static ParsleyRecord<String, String> rec(String key, String value, long timestamp,
+                                                      TopicPartition tp, long offset,
+                                                      CausalDependencies deps,
+                                                      List<ParsleyHeader> userHeaders) {
+        List<ParsleyHeader> headers = new ArrayList<>(userHeaders);
+        if (deps != null) {
+            headers.add(new ParsleyHeader(ParsleyAttributes.VECTOR_CLOCK, deps.toBytes()));
+        }
+        headers.add(new ParsleyHeader(ParsleyAttributes.SRC_TOPIC, tp.topic().getBytes(UTF_8)));
+        headers.add(new ParsleyHeader(ParsleyAttributes.SRC_PARTITION, ParsleyRecord.intToBytes(tp.partition())));
+        headers.add(new ParsleyHeader(ParsleyAttributes.SRC_OFFSET, ParsleyRecord.longToBytes(offset)));
+        return new ParsleyRecord<>(key, value, timestamp, headers);
+    }
+
     @Test
     void roundTripsEveryField() {
         CausalDependencies deps = CausalDependencies.empty().advance(new TopicPartition("prices", 0), 4);
-        ParsleyRecord<String, String> record = new ParsleyRecord<>(
-                "key", "value", 123L,
-                List.of(new ParsleyHeader("h1", "a".getBytes()), new ParsleyHeader("h2", null)),
-                deps.toBytes(), ORDERS_2, 7L);
+        List<ParsleyHeader> userHeaders = List.of(
+                new ParsleyHeader("h1", "a".getBytes()),
+                new ParsleyHeader("h2", null));
+        ParsleyRecord<String, String> record = rec("key", "value", 123L, ORDERS_2, 7L, deps, userHeaders);
 
         ParsleyRecord<String, String> out = serializer.deserialize(serializer.serialize(record));
 
@@ -38,7 +54,8 @@ class ParsleySerializerTest {
         assertEquals(ORDERS_2, out.sourcePartition());
         assertEquals(7L, out.sourceOffset());
         assertArrayEquals(deps.toBytes(), out.encodedDependencies());
-        assertEquals(2, out.headers().size());
+        // 2 user headers + VECTOR_CLOCK + SRC_TOPIC + SRC_PARTITION + SRC_OFFSET = 6
+        assertEquals(6, out.headers().size());
         assertEquals("h1", out.headers().get(0).key());
         assertArrayEquals("a".getBytes(), out.headers().get(0).value());
         assertEquals("h2", out.headers().get(1).key());
@@ -49,8 +66,7 @@ class ParsleySerializerTest {
 
     @Test
     void roundTripsNullKeyAndValue() {
-        ParsleyRecord<String, String> record =
-                new ParsleyRecord<>(null, null, 0L, List.of(), null, ORDERS_2, 0L);
+        ParsleyRecord<String, String> record = rec(null, null, 0L, ORDERS_2, 0L, null, List.of());
 
         ParsleyRecord<String, String> out = serializer.deserialize(serializer.serialize(record));
 
@@ -66,7 +82,7 @@ class ParsleySerializerTest {
         ParsleySerializer<String, String> spying =
                 new ParsleySerializer<>(new ParsleyResolver<>(topic -> keySpy, topic -> valueSpy));
         ParsleyRecord<String, String> record =
-                new ParsleyRecord<>("k", "v", 0L, List.of(), CausalDependencies.empty().toBytes(), ORDERS_2, 1L);
+                rec("k", "v", 0L, ORDERS_2, 1L, CausalDependencies.empty(), List.of());
 
         spying.deserialize(spying.serialize(record));
 
@@ -78,7 +94,7 @@ class ParsleySerializerTest {
 
     @Test
     void deserializeRejectsAnUnknownFormatVersion() {
-        // Leading version byte 99 (not 1) — rejected before any field is read.
+        // Leading version byte 99 (not 2) — rejected before any field is read.
         assertThrows(IllegalStateException.class, () -> serializer.deserialize(new byte[]{99}));
     }
 

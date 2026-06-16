@@ -4,7 +4,7 @@ import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.apache.kafka.common.TopicPartition;
 import org.junit.jupiter.api.Test;
 
-import java.util.Map;
+import java.util.List;
 import java.util.concurrent.atomic.AtomicReference;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -17,7 +17,7 @@ class CausalViolationHandlerTest {
             new ConsumerRecord<>("orders", 2, 5L, "k", "v");
     private final CausalViolation violation = new CausalViolation(
             record, CausalViolationReason.MISSING_HEADER,
-            CausalDependencies.empty(), CausalDependencies.empty(), Map.of());
+            CausalFrontier.empty(), CausalDependencies.empty(), List.of());
 
     @Test
     void throwingThrowsWithRecordAndReason() {
@@ -32,13 +32,14 @@ class CausalViolationHandlerTest {
         TopicPartition prices = new TopicPartition("prices", 0);
         CausalViolation limit = new CausalViolation(
                 record, CausalViolationReason.LIMIT_REACHED,
-                CausalDependencies.empty(), CausalDependencies.empty().advance(prices, 4), Map.of(prices, 5L));
+                CausalFrontier.empty(), CausalDependencies.empty().advance(prices, 4),
+                List.of(new CausalPosition(CausalPosition.nameUuid("prices"), 0, 5L)));
 
         AtomicReference<CausalViolation> seen = new AtomicReference<>();
         CausalViolationHandler handler = seen::set;
         handler.onViolation(limit);
 
         assertEquals(CausalViolationReason.LIMIT_REACHED, seen.get().reason());
-        assertEquals(Map.of(prices, 5L), seen.get().gap());
+        assertEquals(List.of(new CausalPosition(CausalPosition.nameUuid("prices"), 0, 5L)), seen.get().gap());
     }
 }

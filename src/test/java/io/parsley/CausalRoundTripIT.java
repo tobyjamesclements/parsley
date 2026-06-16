@@ -78,7 +78,8 @@ class CausalRoundTripIT {
             assertEquals(List.of("v0", "v1", "v2", "v3", "v4"),
                     received.stream().map(ConsumerRecord::value).toList());
             assertFalse(consumer.frontier().positions().isEmpty(), "frontier must have advanced");
-            assertTrue(consumer.frontier().positions().containsKey(tp));
+            assertTrue(consumer.frontier().positions().stream().anyMatch(p -> p.partition() == tp.partition()),
+                    "frontier covers partition " + tp.partition());
 
             // Each delivered record still carries the producer's vector-clock header, extractable
             // via the public API — this is the causal context a service would forward to a client.

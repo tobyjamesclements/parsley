@@ -1,13 +1,11 @@
 package io.parsley;
 
-import org.apache.kafka.common.TopicPartition;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Map;
 import java.util.Optional;
 import java.util.function.Consumer;
 
@@ -45,7 +43,7 @@ final class ParsleyEngine<K, V> {
      */
     @FunctionalInterface
     interface FrontierCallback {
-        void frontierAdvanced(CausalDependencies frontier);
+        void frontierAdvanced(CausalFrontier frontier);
     }
 
     private final CausalBufferPolicy policy;
@@ -55,13 +53,13 @@ final class ParsleyEngine<K, V> {
     private final FrontierCallback frontierListener;
     private final ParsleyMetrics metrics;
 
-    private CausalDependencies frontier;
+    private CausalFrontier frontier;
     private int sizeLimit = Integer.MAX_VALUE;
     private Duration evictionInterval;
 
     ParsleyEngine(CausalBufferPolicy policy,
                  CausalViolationHandler violationHandler,
-                 CausalDependencies initialFrontier,
+                 CausalFrontier initialFrontier,
                  Consumer<ParsleyRecord<K, V>> deadLetterSink,
                  FrontierCallback frontierListener,
                  CausalBufferStore<K, V> buffer,
@@ -88,11 +86,6 @@ final class ParsleyEngine<K, V> {
     List<ParsleyRecord<K, V>> onRecord(ParsleyRecord<K, V> record) {
         List<ParsleyRecord<K, V>> out = new ArrayList<>();
 
-        // A record we cannot gate (no clock header, or one we cannot decode) is admitted
-        // unconditionally rather than held forever: we report the violation, then advance the
-        // frontier and forward it exactly as for a satisfied record — so its offset still counts as
-        // observed and any records buffered behind it can drain. The required clock is reported as
-        // empty because there is no decodable dependency to measure the gap against.
         byte[] encoded = record.encodedDependencies();
         if (encoded == null) {
             violate(record, CausalViolationReason.MISSING_HEADER, CausalDependencies.empty());
@@ -132,9 +125,8 @@ final class ParsleyEngine<K, V> {
     }
 
     /**
-     * Evicts the buffer because a limit fired (called by the engine itself for size limits,
-     * and periodically by the processor for duration limits). Reports a {@link CausalViolation} per
-     * evicted record and applies the policy.
+     * Evicts the buffer because a limit fired. Reports a {@link CausalViolation} per evicted
+     * record and applies the policy.
      *
      * @return records to forward downstream out-of-order; non-empty only for the
      *         {@link ForwardUnsafePolicy ForwardUnsafe} policy
@@ -173,7 +165,7 @@ final class ParsleyEngine<K, V> {
      *
      * @return the frontier
      */
-    CausalDependencies frontier() {
+    CausalFrontier frontier() {
         return frontier;
     }
 
@@ -187,11 +179,6 @@ final class ParsleyEngine<K, V> {
         return Optional.ofNullable(evictionInterval);
     }
 
-    // Releasing a record advances the frontier, which may in turn satisfy records still buffered
-    // behind it — so we drain in passes until a pass releases nothing. (A single pass is not enough:
-    // B may depend on A, and A's release is what unblocks B.) Each pass selects against the frontier
-    // as of the pass start, then advances through the released records; the next pass sees the moved
-    // frontier. Each released record is forwarded just like a directly satisfied one.
     private void drainInto(List<ParsleyRecord<K, V>> out) {
         List<CausalBufferStore.Entry<K, V>> releasable = releasableEntries();
         int totalReleased = 0;
@@ -210,9 +197,6 @@ final class ParsleyEngine<K, V> {
         }
     }
 
-    // The buffered entries whose dependencies the current frontier already satisfies, in arrival
-    // order. The whole set is materialised before any release, so a release within the pass does not
-    // change which records the pass forwards.
     private List<CausalBufferStore.Entry<K, V>> releasableEntries() {
         List<CausalBufferStore.Entry<K, V>> releasable = new ArrayList<>();
         for (CausalBufferStore.Entry<K, V> entry : buffer.entries()) {
@@ -224,7 +208,7 @@ final class ParsleyEngine<K, V> {
     }
 
     private void advanceFrontier(ParsleyRecord<K, V> record) {
-        frontier = frontier.advance(record.sourcePartition(), record.sourceOffset());
+        frontier = frontier.advance(record.sourceTopicId(), record.sourcePartitionIndex(), record.sourceOffset());
         frontierListener.frontierAdvanced(frontier);
     }
 
@@ -239,18 +223,17 @@ final class ParsleyEngine<K, V> {
     }
 
     private ParsleyRecord<K, V> withDlqHeaders(ParsleyRecord<K, V> record, CausalDependencies required) {
-        Map<TopicPartition, Long> gap = required.missingAgainst(frontier);
+        List<CausalPosition> gap = required.missingAgainst(frontier);
         CausalDependencies gapAsDeps = CausalDependencies.empty();
-        for (Map.Entry<TopicPartition, Long> e : gap.entrySet()) {
-            gapAsDeps = gapAsDeps.advance(e.getKey(), e.getValue());
+        for (CausalPosition p : gap) {
+            gapAsDeps = gapAsDeps.advance(p.topicId(), p.partition(), p.offset());
         }
         List<ParsleyHeader> h = new ArrayList<>(record.headers());
         h.add(new ParsleyHeader(CausalViolation.DLQ_REASON_HEADER,
                 CausalViolationReason.LIMIT_REACHED.name().getBytes(UTF_8)));
         h.add(new ParsleyHeader(CausalViolation.DLQ_REQUIRED_CLOCK_HEADER, required.toBytes()));
         h.add(new ParsleyHeader(CausalViolation.DLQ_GAP_HEADER, gapAsDeps.toBytes()));
-        return new ParsleyRecord<>(record.key(), record.value(), record.timestamp(), h,
-                record.encodedDependencies(), record.sourcePartition(), record.sourceOffset());
+        return new ParsleyRecord<>(record.key(), record.value(), record.timestamp(), h);
     }
 
     private static CausalBufferLimit limitOf(CausalBufferPolicy policy) {

@@ -2,6 +2,7 @@ package io.parsley;
 
 import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.apache.kafka.common.TopicPartition;
+import org.apache.kafka.common.Uuid;
 import org.apache.kafka.common.header.Header;
 import org.apache.kafka.common.header.Headers;
 
@@ -10,68 +11,52 @@ import java.io.ByteArrayOutputStream;
 import java.io.DataInputStream;
 import java.io.DataOutputStream;
 import java.io.IOException;
-import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Optional;
 
 /**
- * A snapshot of causal progress: the highest offset observed on each Kafka
- * {@link TopicPartition}.
+ * A producer-stamped set of causal requirements: the positions a consumer must have observed before
+ * a record stamped with this clock may be delivered.
  *
- * <p>A producer stamps its current clock onto every message; a consumer maintains a
- * <em>frontier</em> clock reflecting everything it has processed. A message may be delivered
- * once the consumer's frontier {@linkplain #satisfiedBy satisfies} the message's clock — i.e.
- * the consumer has already observed everything the message causally depends on.
+ * <p>Clock keys are Kafka topic UUIDs, so topic deletion and recreation produce a different identity
+ * even when the name is reused. Use {@link #advance(TopicPartition, long)} for convenience when
+ * only a topic name is available; it derives the UUID via {@link CausalPosition#nameUuid}.
  *
- * <p>Instances are immutable; {@link #advance} and {@link #merge} return new clocks.
+ * <p>Instances are immutable. {@link #advance} returns a new clock.
  *
  * <h2>Propagating causal context across services</h2>
- * A clock is also the unit of causal context you can hand to another service — for example, to
- * tell a client "the reply has been processed; don't read until you have caught up to here." Parsley
- * deliberately ships no encryption or transport for this (that is your concern); the building blocks
- * are:
- * <ol>
- *   <li>Obtain the context. Prefer {@link #fromRecord(ConsumerRecord)} on the message that triggered
- *       this work — the upstream producer's own clock, bounded by that hop's fan-in and transitively
- *       carrying its own dependencies. Use {@code consumer.frontier()} only when the read genuinely
- *       depends on <em>everything</em> consumed (e.g. an aggregator), since it carries every partition
- *       consumed (see the size note below).
- *   <li>Serialise it with {@link #toBytes()}, then apply <em>your own</em> encryption and a URL-safe
- *       encoding (e.g. Base64) and place it in an HTTP header.
- *   <li>On the receiving side, decode and decrypt, rebuild with {@link #fromBytes(byte[])}, and gate
- *       the downstream read with {@link #satisfiedBy(CausalDependencies)} against that store's frontier.
- * </ol>
+ * Use {@link #fromRecord(ConsumerRecord)} to read the upstream producer's clock off a consumed
+ * record (this is usually the right choice — it carries exactly the partitions the producer
+ * depended on). Use {@link CausalFrontier#asDependencies()} only when the read genuinely depends on
+ * <em>everything</em> the consumer has processed (e.g. an aggregator), since the frontier carries
+ * every partition ever seen. Serialise with {@link #toBytes()} / {@link #fromBytes(byte[])}.
  *
  * <h2>Clock size and the {@code message.max.bytes} ceiling</h2>
- * The {@link #toBytes() serialised} clock is {@code 5 + Σ(14 + topicLen)} bytes over its entries — so
- * its size is proportional to the number of causally relevant topic-partitions, and a clock stamped
- * into a record header counts against Kafka's record-size limit ({@code message.max.bytes} /
- * {@code max.request.size}, ~1&nbsp;MB by default; there is no separate header budget). A clock that
- * spans enough partitions will breach that limit and the produce fails. The automatic Streams
- * stamping path is bounded by the number of source topics of the subtopology (each task observes one
- * partition per source topic), and is therefore typically tiny; the figure to watch is a manual
- * {@code consumer.frontier()} propagated by a wide-fan-in consumer, or a very broad regex
- * subscription. Parsley never truncates a clock (that would silently break the guarantee), so keep
- * the relevant-partition count within your record-size budget and prefer {@link #fromRecord} where it
- * suffices.
- *
- * @param positions the partition-to-highest-offset map; copied defensively
+ * The {@link #toBytes() serialised} clock is {@code 5 + 28 × entries} bytes. A clock spanning
+ * many partitions can breach Kafka's record-size limit ({@code message.max.bytes}, ~1&nbsp;MB by
+ * default). The automatic Streams stamping path is bounded by the number of source topics in the
+ * subtopology; the figure to watch is a manual {@link CausalFrontier#asDependencies()} call on a
+ * wide-fan-in consumer.
  */
-public record CausalDependencies(Map<TopicPartition, Long> positions) {
+public final class CausalDependencies {
 
-    /** Leading byte of the {@link #toBytes() wire format}; lets the format evolve compatibly. */
+    /** Leading byte of the wire format; shared with {@link CausalFrontier}. */
     private static final byte WIRE_VERSION = 1;
 
-    /**
-     * Canonical constructor; defensively copies {@code positions}.
-     */
-    public CausalDependencies(Map<TopicPartition, Long> positions) {
-        this.positions = Map.copyOf(positions);
+    private record Key(Uuid topicId, int partition) {}
+
+    private final Map<Key, Long> required; // always immutable
+
+    private CausalDependencies(Map<Key, Long> required) {
+        this.required = required; // already immutable (Map.copyOf called by callers)
     }
 
     /**
-     * Returns an empty clock with no partition positions recorded.
+     * Returns an empty clock with no positions recorded.
      *
      * @return an empty {@code CausalDependencies}
      */
@@ -80,30 +65,42 @@ public record CausalDependencies(Map<TopicPartition, Long> positions) {
     }
 
     /**
-     * Returns a new clock with {@code tp} advanced to {@code max(current, offset)}.
+     * Returns a new clock with {@code (topicId, partition)} advanced to
+     * {@code max(current, offset)}.
+     *
+     * @param topicId   the topic UUID
+     * @param partition the partition index
+     * @param offset    the required offset
+     * @return a new {@code CausalDependencies} with the updated position
+     */
+    public CausalDependencies advance(Uuid topicId, int partition, long offset) {
+        Map<Key, Long> next = new HashMap<>(required);
+        next.merge(new Key(topicId, partition), offset, Math::max);
+        return new CausalDependencies(Map.copyOf(next));
+    }
+
+    /**
+     * Convenience overload that derives the topic UUID via {@link CausalPosition#nameUuid}.
      *
      * @param tp     the topic-partition to advance
-     * @param offset the newly observed offset
+     * @param offset the required offset
      * @return a new {@code CausalDependencies} with the updated position
      */
     public CausalDependencies advance(TopicPartition tp, long offset) {
-        Map<TopicPartition, Long> advanced = new HashMap<>(positions);
-        advanced.merge(tp, offset, Math::max);
-        return new CausalDependencies(advanced);
+        return advance(CausalPosition.nameUuid(tp.topic()), tp.partition(), offset);
     }
 
     /**
      * Returns {@code true} if {@code frontier} has observed at least everything this clock
-     * requires — for every partition in this clock, the frontier's offset is ≥ this clock's
-     * offset. Partitions absent from {@code frontier} are unsatisfied.
+     * requires — for every position in this clock, the frontier's observed offset is ≥ this
+     * clock's required offset.
      *
-     * @param frontier the frontier clock to test against; must not be {@code null}
+     * @param frontier the frontier to test against; must not be {@code null}
      * @return {@code true} if the frontier has caught up with this clock
      */
-    public boolean satisfiedBy(CausalDependencies frontier) {
-        for (Map.Entry<TopicPartition, Long> entry : positions.entrySet()) {
-            Long observed = frontier.positions.get(entry.getKey());
-            if (observed == null || observed < entry.getValue()) {
+    public boolean satisfiedBy(CausalFrontier frontier) {
+        for (Map.Entry<Key, Long> entry : required.entrySet()) {
+            if (frontier.observed(entry.getKey().topicId(), entry.getKey().partition()) < entry.getValue()) {
                 return false;
             }
         }
@@ -111,51 +108,50 @@ public record CausalDependencies(Map<TopicPartition, Long> positions) {
     }
 
     /**
-     * Returns the causal gap between this clock (treated as a requirement) and {@code frontier}
-     * (what has been observed): for every partition where this clock requires a higher offset than
-     * {@code frontier} has observed, the entry maps the partition to the <em>missing</em> amount
+     * Returns the causal gap between this clock (treated as a requirement) and {@code frontier}:
+     * for every position where this clock requires a higher offset than the frontier has observed,
+     * the result contains a {@link CausalPosition} with the <em>shortfall</em>
      * ({@code required − observed}, counting an absent frontier position as {@code -1} so the gap is
-     * {@code required + 1}). The result is empty exactly when {@code this.satisfiedBy(frontier)}.
+     * {@code required + 1}). The result is empty exactly when {@link #satisfiedBy}.
      *
      * @param frontier the frontier to measure against; must not be {@code null}
-     * @return the per-partition shortfall, or an empty map if the frontier already satisfies this
-     *         clock
+     * @return per-position shortfalls; empty if the frontier already satisfies this clock
      */
-    public Map<TopicPartition, Long> missingAgainst(CausalDependencies frontier) {
-        Map<TopicPartition, Long> gap = new HashMap<>();
-        for (Map.Entry<TopicPartition, Long> entry : positions.entrySet()) {
-            long required = entry.getValue();
-            // An absent partition counts as observed offset -1 (one before offset 0), so a partition
-            // the frontier has never seen yields a gap of required - (-1) = required + 1.
-            long observed = frontier.positions.getOrDefault(entry.getKey(), -1L);
-            if (observed < required) {
-                gap.put(entry.getKey(), required - observed);
+    public List<CausalPosition> missingAgainst(CausalFrontier frontier) {
+        List<CausalPosition> gap = new ArrayList<>();
+        for (Map.Entry<Key, Long> entry : required.entrySet()) {
+            long req = entry.getValue();
+            long obs = frontier.observed(entry.getKey().topicId(), entry.getKey().partition());
+            if (obs < req) {
+                gap.add(new CausalPosition(entry.getKey().topicId(), entry.getKey().partition(), req - obs));
             }
         }
-        return Map.copyOf(gap);
+        return List.copyOf(gap);
     }
 
     /**
-     * Returns the causal union of this clock and {@code other}: the per-partition maximum of
-     * the two position maps.
+     * Returns the positions in this clock as an unordered list of {@link CausalPosition}s.
      *
-     * @param other the clock to merge with; must not be {@code null}
-     * @return a new {@code CausalDependencies} dominating both operands
+     * @return the dependency positions; never {@code null}
      */
-    public CausalDependencies merge(CausalDependencies other) {
-        Map<TopicPartition, Long> merged = new HashMap<>(positions);
-        other.positions.forEach((tp, offset) -> merged.merge(tp, offset, Math::max));
-        return new CausalDependencies(merged);
+    public List<CausalPosition> dependencies() {
+        List<CausalPosition> list = new ArrayList<>(required.size());
+        required.forEach((k, v) -> list.add(new CausalPosition(k.topicId(), k.partition(), v)));
+        return list;
     }
 
     /**
-     * Serialises this clock to a compact binary form.
+     * Serialises this clock to a compact binary form compatible with {@link CausalFrontier#toBytes()}.
      *
      * <h2>Wire format</h2>
      * <pre>
-     * [byte  version] [int count]
+     * [byte  version=0x01]
+     * [int   count]
      * for each entry:
-     *   [short topicLen] [byte[] topic (UTF-8)] [int partition] [long offset]
+     *   [long  topicId.mostSignificantBits]
+     *   [long  topicId.leastSignificantBits]
+     *   [int   partition]
+     *   [long  offset]
      * </pre>
      *
      * @return the serialised clock
@@ -164,11 +160,10 @@ public record CausalDependencies(Map<TopicPartition, Long> positions) {
         try (ByteArrayOutputStream baos = new ByteArrayOutputStream();
              DataOutputStream dos = new DataOutputStream(baos)) {
             dos.writeByte(WIRE_VERSION);
-            dos.writeInt(positions.size());
-            for (Map.Entry<TopicPartition, Long> entry : positions.entrySet()) {
-                byte[] topicBytes = entry.getKey().topic().getBytes(StandardCharsets.UTF_8);
-                dos.writeShort(topicBytes.length);
-                dos.write(topicBytes);
+            dos.writeInt(required.size());
+            for (Map.Entry<Key, Long> entry : required.entrySet()) {
+                dos.writeLong(entry.getKey().topicId().getMostSignificantBits());
+                dos.writeLong(entry.getKey().topicId().getLeastSignificantBits());
                 dos.writeInt(entry.getKey().partition());
                 dos.writeLong(entry.getValue());
             }
@@ -183,8 +178,7 @@ public record CausalDependencies(Map<TopicPartition, Long> positions) {
      *
      * @param bytes the serialised clock; must not be {@code null}
      * @return the deserialised {@code CausalDependencies}
-     * @throws IllegalStateException if {@code bytes} is not a valid serialised clock, including an
-     *                               unrecognised {@linkplain #toBytes() wire-format version}
+     * @throws IllegalStateException if {@code bytes} is not valid, including an unrecognised version
      */
     public static CausalDependencies fromBytes(byte[] bytes) {
         try (DataInputStream dis = new DataInputStream(new ByteArrayInputStream(bytes))) {
@@ -194,17 +188,15 @@ public record CausalDependencies(Map<TopicPartition, Long> positions) {
                         "unsupported CausalDependencies wire version: " + version + " (expected " + WIRE_VERSION + ")");
             }
             int count = dis.readInt();
-            Map<TopicPartition, Long> positions = new HashMap<>(count);
+            Map<Key, Long> map = new HashMap<>(count);
             for (int i = 0; i < count; i++) {
-                int topicLen = dis.readUnsignedShort();
-                byte[] topicBytes = new byte[topicLen];
-                dis.readFully(topicBytes);
-                String topic = new String(topicBytes, StandardCharsets.UTF_8);
+                long msb = dis.readLong();
+                long lsb = dis.readLong();
                 int partition = dis.readInt();
                 long offset = dis.readLong();
-                positions.put(new TopicPartition(topic, partition), offset);
+                map.put(new Key(new Uuid(msb, lsb), partition), offset);
             }
-            return new CausalDependencies(positions);
+            return new CausalDependencies(Map.copyOf(map));
         } catch (IOException e) {
             throw new IllegalStateException("CausalDependencies deserialisation failed", e);
         }
@@ -213,10 +205,6 @@ public record CausalDependencies(Map<TopicPartition, Long> positions) {
     /**
      * Extracts the causal clock a Parsley-stamped message carries in its
      * {@code parsley-vector-clock} header.
-     *
-     * <p>Use this to read the upstream producer's causal context off a record you consumed — for
-     * example, to propagate it to a client (see the class-level
-     * <a href="#propagating-causal-context-across-services">propagation</a> notes).
      *
      * @param record the consumed record; must not be {@code null}
      * @return the embedded clock, or empty if the record carried no clock header
@@ -239,7 +227,19 @@ public record CausalDependencies(Map<TopicPartition, Long> positions) {
     }
 
     @Override
+    public boolean equals(Object o) {
+        if (this == o) return true;
+        if (!(o instanceof CausalDependencies other)) return false;
+        return required.equals(other.required);
+    }
+
+    @Override
+    public int hashCode() {
+        return Objects.hashCode(required);
+    }
+
+    @Override
     public String toString() {
-        return "CausalDependencies" + positions;
+        return "CausalDependencies" + dependencies();
     }
 }

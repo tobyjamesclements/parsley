@@ -188,7 +188,7 @@ class CausalDecoratorTopologyTest {
             assertEquals(1, violations.size());
             CausalViolation violation = violations.get(0);
             assertEquals(CausalViolationReason.LIMIT_REACHED, violation.reason());
-            assertEquals(Map.of(PRICES_0, 100L), violation.gap(),
+            assertEquals(List.of(new CausalPosition(CausalPosition.nameUuid("prices"), 0, 100L)), violation.gap(),
                     "gap is required(99) minus observed(absent=-1) = 100");
         }
     }
@@ -241,7 +241,7 @@ class CausalDecoratorTopologyTest {
             assertEquals(List.of("ORDER"), out.readValuesToList());
             assertEquals(1, violations.size());
             assertEquals(CausalViolationReason.LIMIT_REACHED, violations.get(0).reason());
-            assertEquals(Map.of(PRICES_0, 100L), violations.get(0).gap());
+            assertEquals(List.of(new CausalPosition(CausalPosition.nameUuid("prices"), 0, 100L)), violations.get(0).gap());
         }
     }
 
@@ -437,14 +437,14 @@ class CausalDecoratorTopologyTest {
             assertEquals(List.of("PRICE"), pricesOut.readValuesToList());
 
             // Each decorator persisted only its own branch's frontier under its own namespace.
-            assertEquals(Map.of(ORDERS_0, 0L), frontierIn(driver, "orders-frontier").positions());
-            assertEquals(Map.of(PRICES_0, 0L), frontierIn(driver, "prices-frontier").positions());
+            assertEquals(CausalFrontier.empty().advance(ORDERS_0, 0), frontierIn(driver, "orders-frontier"));
+            assertEquals(CausalFrontier.empty().advance(PRICES_0, 0), frontierIn(driver, "prices-frontier"));
         }
     }
 
     @Test
     void frontierListenerPublishesRestoredThenAdvancingFrontiers() {
-        List<CausalDependencies> observed = new ArrayList<>();
+        List<CausalFrontier> observed = new ArrayList<>();
         CausalFrontierListener listener = observed::add;
         Topology topology = topology(
                 CausalProcessors.builder(upperCaser(), CausalBufferPolicy.forwardUnsafe(CausalBufferLimit.ofSize(100)))
@@ -457,16 +457,16 @@ class CausalDecoratorTopologyTest {
 
             // The processor publishes its restored frontier at init — empty on a cold start — so an
             // observer's view is correct before the first record is admitted.
-            assertEquals(List.of(CausalDependencies.empty()), observed,
+            assertEquals(List.of(CausalFrontier.empty()), observed,
                     "the restored frontier is published once at startup");
 
             in.pipeInput(new TestRecord<>("k", "a", clockHeader(CausalDependencies.empty())));
             in.pipeInput(new TestRecord<>("k", "b", clockHeader(CausalDependencies.empty())));
 
             assertEquals(
-                    List.of(CausalDependencies.empty(),
-                            CausalDependencies.empty().advance(IN_0, 0),
-                            CausalDependencies.empty().advance(IN_0, 1)),
+                    List.of(CausalFrontier.empty(),
+                            CausalFrontier.empty().advance(IN_0, 0),
+                            CausalFrontier.empty().advance(IN_0, 1)),
                     observed,
                     "every frontier advance is published, in admission order");
         }
@@ -497,7 +497,7 @@ class CausalDecoratorTopologyTest {
                 c.pipeInput(new TestRecord<>("k", "v" + i, clockHeader(CausalDependencies.empty())));
             }
 
-            CausalDependencies frontier = frontierIn(driver, "parsley-frontier");
+            CausalFrontier frontier = frontierIn(driver, "parsley-frontier");
             assertEquals(3, frontier.positions().size(),
                     "the stamped frontier is bounded by the number of source topics, not record count");
         }
@@ -531,7 +531,7 @@ class CausalDecoratorTopologyTest {
             CausalDependencies stamped = outClock(out.readRecord());
             assertEquals(CausalDependencies.empty().advance(IN_0, 0), stamped,
                     "a 500-partition inbound clock must not enlarge the stamped output clock");
-            assertEquals(1, stamped.positions().size(), "the stamped clock carries only the source coordinate");
+            assertEquals(1, stamped.dependencies().size(), "the stamped clock carries only the source coordinate");
         }
     }
 
@@ -575,9 +575,9 @@ class CausalDecoratorTopologyTest {
                 .orElseThrow(() -> new AssertionError("Parsley metric not found: " + metricName));
     }
 
-    private static CausalDependencies frontierIn(TopologyTestDriver driver, String frontierStoreName) {
+    private static CausalFrontier frontierIn(TopologyTestDriver driver, String frontierStoreName) {
         KeyValueStore<String, byte[]> store = driver.getKeyValueStore(frontierStoreName);
-        return CausalDependencies.fromBytes(store.get("f"));
+        return CausalFrontier.fromBytes(store.get("f"));
     }
 
     private static int storeSize(KeyValueStore<String, byte[]> store) {

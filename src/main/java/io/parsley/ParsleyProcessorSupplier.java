@@ -1,6 +1,7 @@
 package io.parsley;
 
 import org.apache.kafka.clients.consumer.ConsumerRecord;
+import org.apache.kafka.common.Uuid;
 import org.apache.kafka.common.serialization.Serde;
 import org.apache.kafka.common.serialization.Serdes;
 import org.apache.kafka.streams.processor.api.Processor;
@@ -10,6 +11,7 @@ import org.apache.kafka.streams.state.StoreBuilder;
 import org.apache.kafka.streams.state.Stores;
 
 import java.util.HashSet;
+import java.util.Map;
 import java.util.Set;
 import java.util.function.Consumer;
 import java.util.function.Function;
@@ -32,6 +34,7 @@ final class ParsleyProcessorSupplier<KIn, VIn, KOut, VOut>
     private final String frontierStoreName;
     private final String bufferStoreName;
     private final CausalFrontierListener frontierListener;
+    private final Map<String, Uuid> topicUuids;
 
     ParsleyProcessorSupplier(ProcessorSupplier<KIn, VIn, KOut, VOut> userSupplier,
                                       CausalBufferPolicy policy,
@@ -41,7 +44,8 @@ final class ParsleyProcessorSupplier<KIn, VIn, KOut, VOut>
                                       Function<String, Serde<VIn>> valueSerdeByTopic,
                                       String frontierStoreName,
                                       String bufferStoreName,
-                                      CausalFrontierListener frontierListener) {
+                                      CausalFrontierListener frontierListener,
+                                      Map<String, Uuid> topicUuids) {
         this.userSupplier = userSupplier;
         this.policy = policy;
         this.onViolation = onViolation;
@@ -51,6 +55,7 @@ final class ParsleyProcessorSupplier<KIn, VIn, KOut, VOut>
         this.frontierStoreName = frontierStoreName;
         this.bufferStoreName = bufferStoreName;
         this.frontierListener = frontierListener;
+        this.topicUuids = topicUuids;
     }
 
     @Override
@@ -58,7 +63,7 @@ final class ParsleyProcessorSupplier<KIn, VIn, KOut, VOut>
         return new ParsleyProcessor<>(
                 userSupplier.get(), policy, onViolation, deadLetterSink,
                 new ParsleySerializer<>(new ParsleyResolver<>(keySerdeByTopic, valueSerdeByTopic)),
-                frontierStoreName, bufferStoreName, frontierListener);
+                frontierStoreName, bufferStoreName, frontierListener, topicUuids);
     }
 
     @Override
@@ -73,8 +78,6 @@ final class ParsleyProcessorSupplier<KIn, VIn, KOut, VOut>
         return stores;
     }
 
-    // The frontier store is keyed by a single well-known String key; the buffer store is keyed by the
-    // monotonic insertion sequence (a long), so its entries iterate in causal arrival order.
     private static StoreBuilder<KeyValueStore<String, byte[]>> byteStore(String name) {
         return Stores.keyValueStoreBuilder(
                 Stores.persistentKeyValueStore(name),

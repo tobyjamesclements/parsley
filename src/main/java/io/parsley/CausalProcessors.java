@@ -1,9 +1,11 @@
 package io.parsley;
 
 import org.apache.kafka.clients.consumer.ConsumerRecord;
+import org.apache.kafka.common.Uuid;
 import org.apache.kafka.common.serialization.Serde;
 import org.apache.kafka.streams.processor.api.ProcessorSupplier;
 
+import java.util.Map;
 import java.util.function.Consumer;
 import java.util.function.Function;
 
@@ -72,6 +74,7 @@ public final class CausalProcessors {
         private String storeName = "parsley";
         private CausalFrontierListener frontierListener = frontier -> {};
         private Consumer<ConsumerRecord<KIn, VIn>> deadLetterSink;
+        private Map<String, Uuid> topicUuids = Map.of();
 
         private Builder(ProcessorSupplier<KIn, VIn, KOut, VOut> userSupplier, CausalBufferPolicy policy) {
             this.userSupplier = userSupplier;
@@ -160,6 +163,21 @@ public final class CausalProcessors {
         }
 
         /**
+         * Provides the Kafka topic UUIDs for the input topics, keyed by topic name. Used as the
+         * stable clock key so that topic deletion and recreation produce different clock identities.
+         * Topics absent from the map fall back to a deterministic name-derived UUID via
+         * {@link CausalPosition#nameUuid}.
+         *
+         * @param topicUuids topic-name → Kafka UUID map; typically from
+         *                   {@code AdminClient.describeTopics(topics)}
+         * @return this builder
+         */
+        public Builder<KIn, VIn, KOut, VOut> topicUuids(Map<String, Uuid> topicUuids) {
+            this.topicUuids = Map.copyOf(topicUuids);
+            return this;
+        }
+
+        /**
          * Builds the {@link CausalProcessorSupplier}.
          *
          * @return a decorated supplier ready for {@code stream(...).process(...)}
@@ -182,7 +200,7 @@ public final class CausalProcessors {
             }
             return new ParsleyProcessorSupplier<>(
                     userSupplier, policy, onViolation, deadLetterSink, keySerdeByTopic, valueSerdeByTopic,
-                    storeName + "-frontier", storeName + "-buffer", frontierListener);
+                    storeName + "-frontier", storeName + "-buffer", frontierListener, topicUuids);
         }
     }
 }

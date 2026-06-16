@@ -16,6 +16,8 @@ final class ParsleyAttributes {
 
     /** Internal header: the source topic of a record routed through the outbox path. */
     static final String SRC_TOPIC     = "_parsley_src_topic";
+    /** Internal header: the Kafka topic UUID (16 bytes: MSB then LSB) of the source topic. */
+    static final String SRC_TOPIC_ID  = "_parsley_src_topic_id";
     /** Internal header: the source partition (4-byte big-endian int) of a record routed through the outbox path. */
     static final String SRC_PARTITION = "_parsley_src_partition";
     /** Internal header: the source offset (8-byte big-endian long) of a record routed through the outbox path. */
