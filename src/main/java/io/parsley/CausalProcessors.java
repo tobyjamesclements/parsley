@@ -171,7 +171,7 @@ public final class CausalProcessors {
             if (keySerdeByTopic == null || valueSerdeByTopic == null) {
                 throw new IllegalStateException("serdes are required; call serdes(...) or serdesByTopic(...)");
             }
-            boolean isDeadLetter = policy instanceof DeadLetter;
+            boolean isDeadLetter = policy instanceof DeadLetterPolicy;
             if (isDeadLetter && deadLetterSink == null) {
                 throw new IllegalArgumentException(
                         "DeadLetter policy requires a dead-letter sink — call deadLetterSink(...)");

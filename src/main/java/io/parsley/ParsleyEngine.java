@@ -17,8 +17,8 @@ import java.util.function.Consumer;
  *
  * <p>The engine also owns policy-driven eviction: when a {@link CausalBufferLimit} fires it surrenders the
  * buffer and, per {@link CausalBufferPolicy}, forwards the evicted records out-of-order
- * ({@link ForwardUnsafe ForwardUnsafe}), discards them ({@link Drop
- * Drop}), or routes them to the dead-letter sink ({@link DeadLetter DeadLetter}) —
+ * ({@link ForwardUnsafePolicy ForwardUnsafe}), discards them ({@link DropPolicy
+ * Drop}), or routes them to the dead-letter sink ({@link DeadLetterPolicy DeadLetter}) —
  * reporting a {@link CausalViolation} (with the causal gap) for each.
  *
  * <p><strong>Frontier persistence ordering:</strong> the {@link FrontierCallback} fires for
@@ -56,7 +56,7 @@ final class ParsleyEngine<K, V> {
                  Consumer<ParsleyRecord<K, V>> deadLetterSink,
                  FrontierCallback frontierListener,
                  CausalBufferStore<K, V> buffer) {
-        if (policy instanceof DeadLetter && deadLetterSink == null) {
+        if (policy instanceof DeadLetterPolicy && deadLetterSink == null) {
             throw new IllegalArgumentException("DeadLetter policy requires a dead-letter sink");
         }
         this.policy = policy;
@@ -121,7 +121,7 @@ final class ParsleyEngine<K, V> {
      * evicted record and applies the policy.
      *
      * @return records to forward downstream out-of-order; non-empty only for the
-     *         {@link ForwardUnsafe ForwardUnsafe} policy
+     *         {@link ForwardUnsafePolicy ForwardUnsafe} policy
      */
     List<ParsleyRecord<K, V>> evictNow() {
         List<CausalBufferStore.Entry<K, V>> evicted = buffer.entries();
@@ -134,14 +134,14 @@ final class ParsleyEngine<K, V> {
         }
         List<ParsleyRecord<K, V>> toForward = new ArrayList<>();
         switch (policy) {
-            case ForwardUnsafe forwardUnsafe -> {
+            case ForwardUnsafePolicy forwardUnsafe -> {
                 for (CausalBufferStore.Entry<K, V> entry : evicted) {
                     advanceFrontier(entry.record());
                     toForward.add(entry.record());
                 }
             }
-            case Drop drop -> { /* discard the evicted records */ }
-            case DeadLetter deadLetter -> {
+            case DropPolicy drop -> { /* discard the evicted records */ }
+            case DeadLetterPolicy deadLetter -> {
                 for (CausalBufferStore.Entry<K, V> entry : evicted) {
                     deadLetterSink.accept(entry.record());
                 }
@@ -211,9 +211,9 @@ final class ParsleyEngine<K, V> {
 
     private static CausalBufferLimit limitOf(CausalBufferPolicy policy) {
         return switch (policy) {
-            case ForwardUnsafe forwardUnsafe -> forwardUnsafe.limit();
-            case Drop drop -> drop.limit();
-            case DeadLetter deadLetter -> deadLetter.limit();
+            case ForwardUnsafePolicy forwardUnsafe -> forwardUnsafe.limit();
+            case DropPolicy drop -> drop.limit();
+            case DeadLetterPolicy deadLetter -> deadLetter.limit();
         };
     }
 

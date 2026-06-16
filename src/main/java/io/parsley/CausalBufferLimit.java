@@ -53,31 +53,3 @@ public sealed interface CausalBufferLimit permits DurationLimit, SizeLimit, Firs
         return new FirstLimit(List.of(limits));
     }
 }
-
-/** Evicts records buffered longer than {@code duration}. */
-record DurationLimit(Duration duration) implements CausalBufferLimit {
-    DurationLimit {
-        if (duration == null || duration.isZero() || duration.isNegative()) {
-            throw new IllegalArgumentException("duration must be positive, was " + duration);
-        }
-    }
-}
-
-/** Evicts the buffer when its size reaches {@code messages}. */
-record SizeLimit(int messages) implements CausalBufferLimit {
-    SizeLimit {
-        if (messages <= 0) {
-            throw new IllegalArgumentException("messages must be positive, was " + messages);
-        }
-    }
-}
-
-/** Evicts when the first of {@code limits} fires; copies {@code limits} defensively. */
-record FirstLimit(List<CausalBufferLimit> limits) implements CausalBufferLimit {
-    FirstLimit {
-        limits = List.copyOf(limits);
-        if (limits.isEmpty()) {
-            throw new IllegalArgumentException("at least one limit is required");
-        }
-    }
-}

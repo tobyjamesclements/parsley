@@ -20,7 +20,7 @@ package io.parsley;
  * <strong>lenient</strong>: it preserves delivery by forwarding un-satisfied records, which suspends
  * the guarantee for exactly those records (each flagged as a violation).
  */
-public sealed interface CausalBufferPolicy permits ForwardUnsafe, Drop, DeadLetter {
+public sealed interface CausalBufferPolicy permits ForwardUnsafePolicy, DropPolicy, DeadLetterPolicy {
 
     /**
      * Returns whether this policy is <strong>strict</strong> — i.e. it never forwards an
@@ -42,7 +42,7 @@ public sealed interface CausalBufferPolicy permits ForwardUnsafe, Drop, DeadLett
      * @return a new {@code forwardUnsafe} policy
      */
     static CausalBufferPolicy forwardUnsafe(CausalBufferLimit limit) {
-        return new ForwardUnsafe(limit);
+        return new ForwardUnsafePolicy(limit);
     }
 
     /**
@@ -54,7 +54,7 @@ public sealed interface CausalBufferPolicy permits ForwardUnsafe, Drop, DeadLett
      * @return a new {@code drop} policy
      */
     static CausalBufferPolicy drop(CausalBufferLimit limit) {
-        return new Drop(limit);
+        return new DropPolicy(limit);
     }
 
     /**
@@ -66,30 +66,6 @@ public sealed interface CausalBufferPolicy permits ForwardUnsafe, Drop, DeadLett
      * @return a new {@code deadLetter} policy
      */
     static CausalBufferPolicy deadLetter(CausalBufferLimit limit, String destination) {
-        return new DeadLetter(limit, destination);
-    }
-}
-
-/** Lenient eviction: forward the evicted record out-of-order and flag a violation. */
-record ForwardUnsafe(CausalBufferLimit limit) implements CausalBufferPolicy {
-    @Override
-    public boolean strict() {
-        return false;
-    }
-}
-
-/** Strict eviction: discard the evicted record and report a violation. */
-record Drop(CausalBufferLimit limit) implements CausalBufferPolicy {
-    @Override
-    public boolean strict() {
-        return true;
-    }
-}
-
-/** Strict eviction: route the evicted record to {@code destination} and report a violation. */
-record DeadLetter(CausalBufferLimit limit, String destination) implements CausalBufferPolicy {
-    @Override
-    public boolean strict() {
-        return true;
+        return new DeadLetterPolicy(limit, destination);
     }
 }
