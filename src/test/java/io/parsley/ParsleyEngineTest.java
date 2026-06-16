@@ -1,6 +1,7 @@
 package io.parsley;
 
 import org.apache.kafka.common.TopicPartition;
+import org.apache.kafka.common.header.Headers;
 import org.junit.jupiter.api.Test;
 
 import java.time.Duration;
@@ -8,7 +9,9 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 
+import static java.nio.charset.StandardCharsets.UTF_8;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class ParsleyEngineTest {
@@ -198,6 +201,35 @@ class ParsleyEngineTest {
         assertTrue(forwarded.isEmpty());
         assertEquals(1, deadLettered.size());
         assertEquals(List.of(CausalViolationReason.LIMIT_REACHED), reasons());
+    }
+
+    @Test
+    void deadLetteredRecordCarriesCausalContextHeaders() {
+        List<ParsleyRecord<String, String>> deadLettered = new ArrayList<>();
+        CausalDependencies required = CausalDependencies.empty().advance(PRICES, 5L);
+
+        ParsleyEngine<String, String> engine = engine(
+                CausalBufferPolicy.deadLetter(CausalBufferLimit.ofSize(1), "dlq"), deadLettered::add);
+        onRecord(engine, rec(ORDERS, 0, required));
+
+        assertEquals(1, deadLettered.size());
+        Headers headers = deadLettered.get(0).toConsumerRecord().headers();
+
+        // Reason header is always LIMIT_REACHED for eviction.
+        assertNotNull(headers.lastHeader(CausalViolation.DLQ_REASON_HEADER));
+        assertEquals("LIMIT_REACHED",
+                new String(headers.lastHeader(CausalViolation.DLQ_REASON_HEADER).value(), UTF_8));
+
+        // Required clock round-trips so a replayer knows what to wait for.
+        assertNotNull(headers.lastHeader(CausalViolation.DLQ_REQUIRED_CLOCK_HEADER));
+        assertEquals(required,
+                CausalDependencies.fromBytes(headers.lastHeader(CausalViolation.DLQ_REQUIRED_CLOCK_HEADER).value()));
+
+        // Gap header names every partition the frontier had not yet caught up on.
+        assertNotNull(headers.lastHeader(CausalViolation.DLQ_GAP_HEADER));
+        CausalDependencies decodedGap =
+                CausalDependencies.fromBytes(headers.lastHeader(CausalViolation.DLQ_GAP_HEADER).value());
+        assertTrue(decodedGap.positions().containsKey(PRICES), "gap must cover the unsatisfied partition");
     }
 
     @Test

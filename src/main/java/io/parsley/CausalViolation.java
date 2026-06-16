@@ -39,4 +39,34 @@ public record CausalViolation(
     public CausalViolation {
         gap = Map.copyOf(gap);
     }
+
+    /**
+     * Name of the header stamped on every dead-lettered record: the UTF-8 name of the
+     * {@link CausalViolationReason} that caused eviction (e.g. {@code "LIMIT_REACHED"}).
+     */
+    public static final String DLQ_REASON_HEADER = "parsley-dlq-reason";
+
+    /**
+     * Name of the header stamped on every dead-lettered record: the required
+     * {@link CausalDependencies} clock, encoded via {@link CausalDependencies#toBytes()} and
+     * decodable via {@link CausalDependencies#fromBytes(byte[])}.
+     *
+     * <h3>Replay path</h3>
+     * <ol>
+     *   <li>Decode the required clock: {@code CausalDependencies.fromBytes(header.value())}.</li>
+     *   <li>Wait until your consumer's frontier satisfies it (i.e. it has observed every offset
+     *       the original record required).</li>
+     *   <li>Re-produce the original record with the same {@code parsley-vector-clock} value,
+     *       stripping the {@code parsley-dlq-*} headers first.</li>
+     * </ol>
+     */
+    public static final String DLQ_REQUIRED_CLOCK_HEADER = "parsley-dlq-required-clock";
+
+    /**
+     * Name of the header stamped on every dead-lettered record: the per-partition causal shortfall
+     * at eviction time ({@code required − observed}), encoded as a {@link CausalDependencies} clock
+     * via {@link CausalDependencies#toBytes()}. Useful for diagnostics (how far behind was the
+     * frontier on each partition when this record was evicted?); not needed for replay.
+     */
+    public static final String DLQ_GAP_HEADER = "parsley-dlq-gap";
 }

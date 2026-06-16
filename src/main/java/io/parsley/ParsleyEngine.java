@@ -1,13 +1,17 @@
 package io.parsley;
 
+import org.apache.kafka.common.TopicPartition;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.function.Consumer;
+
+import static java.nio.charset.StandardCharsets.UTF_8;
 
 /**
  * The causal buffering engine.
@@ -157,7 +161,7 @@ final class ParsleyEngine<K, V> {
             case DropPolicy drop -> { /* discard the evicted records */ }
             case DeadLetterPolicy deadLetter -> {
                 for (CausalBufferStore.Entry<K, V> entry : evicted) {
-                    deadLetterSink.accept(entry.record());
+                    deadLetterSink.accept(withDlqHeaders(entry.record(), entry.dependencies()));
                 }
             }
         }
@@ -232,6 +236,21 @@ final class ParsleyEngine<K, V> {
                 record.sourceOffset(), violation.gap());
         violationHandler.onViolation(violation);
         metrics.recordViolation();
+    }
+
+    private ParsleyRecord<K, V> withDlqHeaders(ParsleyRecord<K, V> record, CausalDependencies required) {
+        Map<TopicPartition, Long> gap = required.missingAgainst(frontier);
+        CausalDependencies gapAsDeps = CausalDependencies.empty();
+        for (Map.Entry<TopicPartition, Long> e : gap.entrySet()) {
+            gapAsDeps = gapAsDeps.advance(e.getKey(), e.getValue());
+        }
+        List<ParsleyHeader> h = new ArrayList<>(record.headers());
+        h.add(new ParsleyHeader(CausalViolation.DLQ_REASON_HEADER,
+                CausalViolationReason.LIMIT_REACHED.name().getBytes(UTF_8)));
+        h.add(new ParsleyHeader(CausalViolation.DLQ_REQUIRED_CLOCK_HEADER, required.toBytes()));
+        h.add(new ParsleyHeader(CausalViolation.DLQ_GAP_HEADER, gapAsDeps.toBytes()));
+        return new ParsleyRecord<>(record.key(), record.value(), record.timestamp(), h,
+                record.encodedDependencies(), record.sourcePartition(), record.sourceOffset());
     }
 
     private static CausalBufferLimit limitOf(CausalBufferPolicy policy) {
