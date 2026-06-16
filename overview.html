@@ -3,57 +3,59 @@
 <body>
 <p>Parsley is a Java library for <strong>causal consistency</strong> over Kafka. It ensures that
 every consumer processes messages in the correct causal order, even when records originate from
-multiple topics and partitions, by encoding a vector clock onto each message and buffering
-records until their causal dependencies have been observed.</p>
+multiple topics and partitions, by encoding each message's causal dependencies onto it and buffering
+records until those dependencies have been observed.</p>
 
 <p>The entire public surface lives in a single package, {@link io.parsley}, and consists of
-interfaces and records; every implementation is package-private and obtained through static
-factory methods.</p>
+interfaces and value types; every implementation is package-private and obtained through a
+builder factory ({@link io.parsley.CausalProducers}, {@link io.parsley.CausalConsumers},
+{@link io.parsley.CausalProcessors}).</p>
 
 <h2>Core concepts</h2>
 <dl>
-  <dt><strong>Vector clock</strong></dt>
-  <dd>A snapshot of causal progress: a map from each {@link org.apache.kafka.common.TopicPartition}
-  to the highest offset observed. A consumer's <em>frontier</em> is its current vector clock.</dd>
+  <dt><strong>Causal dependencies</strong></dt>
+  <dd>A snapshot of causal progress &mdash; a map from each
+  {@link org.apache.kafka.common.TopicPartition} to the highest offset observed &mdash; carried as
+  {@link io.parsley.CausalDependencies}. A consumer's <em>frontier</em> is its current
+  {@code CausalDependencies}.</dd>
 
   <dt><strong>Causal ordering</strong></dt>
-  <dd>A message is causally ready when the consumer's frontier dominates the vector clock
-  embedded in the message header &mdash; meaning the consumer has already processed every message
-  that happened-before this one.</dd>
+  <dd>A message is causally ready when the consumer's frontier dominates the dependencies embedded
+  in the message header &mdash; meaning the consumer has already processed every message that
+  happened-before this one.</dd>
 
   <dt><strong>Causal buffer</strong></dt>
-  <dd>Records whose clock dependencies are not yet satisfied are held in a changelog-backed buffer
-  and released as soon as the frontier catches up. If the frontier never advances far enough, a
-  configurable {@link io.parsley.BufferingPolicy} decides whether to forward the record anyway
-  ({@link io.parsley.BufferingPolicy.ForwardUnsafe ForwardUnsafe}), drop it
-  ({@link io.parsley.BufferingPolicy.Drop Drop}), or route it to a dead-letter sink
-  ({@link io.parsley.BufferingPolicy.DeadLetter DeadLetter}).</dd>
+  <dd>Records whose dependencies are not yet satisfied are held in a changelog-backed buffer and
+  released as soon as the frontier catches up. A {@link io.parsley.CausalBufferLimit} bounds how long
+  or how large the buffer may grow; when it fires, a configurable
+  {@link io.parsley.CausalBufferPolicy} decides whether to forward the record anyway
+  ({@code forwardUnsafe}), drop it ({@code drop}), or route it to a dead-letter sink
+  ({@code deadLetter}).</dd>
 </dl>
 
 <h2>Entry points</h2>
 <table>
   <thead><tr><th>Type</th><th>Purpose</th></tr></thead>
   <tbody>
-    <tr><td>{@link io.parsley.CausalProducer}</td><td>Stamps the current vector clock onto every record it sends.</td></tr>
-    <tr><td>{@link io.parsley.CausalConsumer}</td><td>A {@code poll()}-based consumer that delivers records in causal order.</td></tr>
-    <tr><td>{@link io.parsley.CausalProcessorSupplier}</td><td>Wraps a user Kafka Streams {@code Processor} so its state access and {@code forward}s run behind the causal guarantee.</td></tr>
+    <tr><td>{@link io.parsley.CausalProducer}</td><td>Stamps the current causal dependencies onto every record it sends; built via {@link io.parsley.CausalProducers}.</td></tr>
+    <tr><td>{@link io.parsley.CausalConsumer}</td><td>A {@code poll()}-based consumer that delivers records in causal order; built via {@link io.parsley.CausalConsumers}.</td></tr>
+    <tr><td>{@link io.parsley.CausalProcessorSupplier}</td><td>Wraps a user Kafka Streams {@code Processor} so its state access and {@code forward}s run behind the causal guarantee; built via {@link io.parsley.CausalProcessors}.</td></tr>
   </tbody>
 </table>
 
 <h2>Typical usage</h2>
 <pre>{@code
 // Consume with causal ordering
-CausalConsumer<String, Order> consumer = CausalConsumer.create(
+CausalConsumer<String, Order> consumer = CausalConsumers.<String, Order>builder(
     List.of("prices", "orders"),
-    BufferingPolicy.forwardUnsafe(BufferLimit.ofDuration(Duration.ofSeconds(30))),
+    CausalBufferPolicy.forwardUnsafe(CausalBufferLimit.ofDuration(Duration.ofSeconds(30))),
     consumerConfig,
-    streamsConfig
-);
+    streamsConfig).build();
 ConsumerRecords<String, Order> records = consumer.poll(Duration.ofMillis(100));
 records.forEach(record -> process(record));
 
 // Produce, propagating the consumer's causal position
-CausalProducer<String, Event> producer = CausalProducer.create(producerConfig);
+CausalProducer<String, Event> producer = CausalProducers.<String, Event>builder(producerConfig).build();
 producer.send(new ProducerRecord<>("events", key, event), consumer.frontier());
 }</pre>
 </body>
