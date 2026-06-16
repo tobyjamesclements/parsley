@@ -49,6 +49,14 @@ public interface CausalConsumer<K, V> extends Closeable {
      * <p>Records with unsatisfied dependencies remain buffered until the frontier catches up
      * or the configured {@link io.parsley.CausalBufferLimit} fires.
      *
+     * <h2>Delivery guarantee</h2>
+     * Records are delivered <strong>at-least-once</strong>: admitted records are written to an
+     * internal Kafka outbox topic before being returned here, so they survive a crash and will be
+     * re-delivered on restart. For <strong>exactly-once</strong> delivery, set
+     * {@code processing.guarantee=exactly_once_v2} in the {@code streamsConfig} passed to
+     * {@link CausalConsumers}; the internal outbox consumer already reads with
+     * {@code isolation.level=read_committed}, so no additional configuration is needed.
+     *
      * @param timeout the maximum time to block waiting for records; must not be {@code null}
      * @return records ready for processing; never {@code null}, may be empty
      */

@@ -31,6 +31,8 @@ import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
 
+import java.util.Optional;
+
 import static org.awaitility.Awaitility.await;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -117,6 +119,70 @@ class CausalAvroSchemaRegistryIT {
             // The frontier advanced over both topic-partitions.
             assertTrue(consumer.frontier().positions().containsKey(ordersTp), "frontier covers orders-0");
             assertTrue(consumer.frontier().positions().containsKey(pricesTp), "frontier covers prices-0");
+        }
+    }
+
+    @Test
+    void bufferedAvroOrderIsReleasedByArrivingPriceAndDeserializesWithCorrectSchemaSubject() throws Exception {
+        String bootstrap = kafka.getBootstrapServers();
+        String registryUrl = "http://" + schemaRegistry.getHost() + ":" + schemaRegistry.getMappedPort(8081);
+        createTopics(bootstrap, ORDERS, PRICES);
+
+        TopicPartition pricesTp = new TopicPartition(PRICES, 0);
+
+        Order order = new Order("o-buf", "ACME", 10);
+        Price price = new Price("ACME", 99.0);
+
+        try (CausalProducer<String, SpecificRecord> producer = CausalProducers.<String, SpecificRecord>builder(Map.of(
+                ProducerConfig.BOOTSTRAP_SERVERS_CONFIG, bootstrap,
+                ProducerConfig.KEY_SERIALIZER_CLASS_CONFIG, StringSerializer.class.getName(),
+                ProducerConfig.VALUE_SERIALIZER_CLASS_CONFIG, KafkaAvroSerializer.class.getName(),
+                "schema.registry.url", registryUrl)).build();
+             CausalConsumer<String, SpecificRecord> consumer = CausalConsumers.<String, SpecificRecord>builder(
+                     List.of(ORDERS, PRICES),
+                     // Long eviction window so the Order can only be released naturally, never by limit.
+                     CausalBufferPolicy.forwardUnsafe(CausalBufferLimit.ofDuration(Duration.ofSeconds(60))),
+                     Map.of(ConsumerConfig.GROUP_ID_CONFIG, "avro-buf-" + UUID.randomUUID()),
+                     streamsConfig(bootstrap, registryUrl)).build()) {
+
+            // Order declares it has seen prices-0@0 — it will be buffered until Price arrives.
+            producer.send(new ProducerRecord<>(ORDERS, "o-buf", order),
+                    CausalDependencies.empty().advance(pricesTp, 0)).get();
+
+            // Poll briefly to confirm the Order is buffered and not yet delivered.
+            List<ConsumerRecord<String, SpecificRecord>> received = new ArrayList<>();
+            await().during(Duration.ofSeconds(3)).atMost(Duration.ofSeconds(5)).until(() -> {
+                consumer.poll(Duration.ofMillis(200)).forEach(received::add);
+                return received.isEmpty();
+            });
+            assertTrue(received.isEmpty(), "Order must be buffered before Price arrives");
+
+            // Price has no causal dependency — admitted immediately, advancing frontier to prices-0@0.
+            // This satisfies the Order's dependency and triggers its natural release.
+            producer.send(new ProducerRecord<>(PRICES, "ACME", price),
+                    CausalDependencies.empty()).get();
+
+            await().atMost(Duration.ofSeconds(60)).until(() -> {
+                consumer.poll(Duration.ofMillis(500)).forEach(received::add);
+                return received.size() >= 2;
+            });
+
+            // Causal order: Price (the dependency) must arrive before the Order it unblocked.
+            assertEquals(PRICES, received.get(0).topic(), "Price must be delivered first (it unblocked Order)");
+            assertEquals(ORDERS, received.get(1).topic(), "Order must be delivered second");
+
+            // The buffered Order's Avro payload must deserialize correctly. If SRC_TOPIC were set to
+            // "prices" or "outbox" instead of "orders", the deserializer would pick the wrong Schema
+            // Registry subject and return the wrong type or throw.
+            Price  receivedPrice = (Price)  received.get(0).value();
+            Order  receivedOrder = (Order)  received.get(1).value();
+            assertEquals(price, receivedPrice, "Price round-trips through Avro buffer path");
+            assertEquals(order, receivedOrder, "Order round-trips through Avro buffer path");
+
+            // The buffered Order's original producer clock must be restored (not replaced by frontier).
+            assertEquals(Optional.of(CausalDependencies.empty().advance(pricesTp, 0)),
+                    CausalDependencies.fromRecord(received.get(1)),
+                    "Order must carry the producer's original clock, not the delivery-time frontier");
         }
     }
 
