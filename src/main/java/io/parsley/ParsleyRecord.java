@@ -2,11 +2,14 @@ package io.parsley;
 
 import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.apache.kafka.common.TopicPartition;
+import org.apache.kafka.common.header.Header;
 import org.apache.kafka.common.header.Headers;
 import org.apache.kafka.common.header.internals.RecordHeader;
 import org.apache.kafka.common.header.internals.RecordHeaders;
 import org.apache.kafka.common.record.TimestampType;
+import org.apache.kafka.streams.processor.api.Record;
 
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
 
@@ -39,6 +42,31 @@ record ParsleyRecord<K, V>(
      */
     ParsleyRecord {
         headers = List.copyOf(headers);
+    }
+
+    /**
+     * Builds an envelope from an inbound Kafka Streams {@link Record} and its source coordinate. The
+     * coordinate is supplied by the caller (captured from the processing context, since it is not
+     * carried on the {@code Record} itself); the {@code parsley-vector-clock} header, if present,
+     * becomes the record's {@code encodedDependencies}.
+     *
+     * @param record          the inbound Streams record
+     * @param sourcePartition the topic-partition the record was read from
+     * @param sourceOffset    the offset the record was read from
+     * @param <K>             the record key type
+     * @param <V>             the record value type
+     * @return a new {@code ParsleyRecord}
+     */
+    static <K, V> ParsleyRecord<K, V> of(Record<K, V> record, TopicPartition sourcePartition, long sourceOffset) {
+        List<ParsleyHeader> headers = new ArrayList<>();
+        for (Header header : record.headers()) {
+            headers.add(new ParsleyHeader(header.key(), header.value()));
+        }
+        Header clockHeader = record.headers().lastHeader(ParsleyAttributes.VECTOR_CLOCK);
+        return new ParsleyRecord<>(
+                record.key(), record.value(), record.timestamp(), headers,
+                clockHeader == null ? null : clockHeader.value(),
+                sourcePartition, sourceOffset);
     }
 
     /**

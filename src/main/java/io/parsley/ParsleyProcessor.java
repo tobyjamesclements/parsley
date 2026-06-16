@@ -2,7 +2,6 @@ package io.parsley;
 
 import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.apache.kafka.common.TopicPartition;
-import org.apache.kafka.common.header.Header;
 import org.apache.kafka.streams.processor.PunctuationType;
 import org.apache.kafka.streams.processor.api.Processor;
 import org.apache.kafka.streams.processor.api.ProcessorContext;
@@ -138,7 +137,7 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
 
     @Override
     public void process(Record<KIn, VIn> record) {
-        deliver(gate(toCausalRecord(record)));
+        deliver(gate(ingest(record)));
     }
 
     @Override
@@ -172,7 +171,7 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
             stampClock = snapshots.get(i);
             deliveryMetadata = new ParsleyRecordMetadata(
                     record.sourcePartition().topic(), record.sourcePartition().partition(), record.sourceOffset());
-            delegate.process(rebuild(record));
+            delegate.process(new Record<>(record.key(), record.value(), record.timestamp(), record.toHeaders()));
         }
         // Between deliveries (e.g. a user punctuator firing) stamp the live frontier and let
         // recordMetadata() fall back to the real context.
@@ -180,26 +179,13 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
         stampClock = engine.frontier();
     }
 
-    private ParsleyRecord<KIn, VIn> toCausalRecord(Record<KIn, VIn> record) {
+    private ParsleyRecord<KIn, VIn> ingest(Record<KIn, VIn> record) {
         // Capture the source coordinate now, at ingest, while recordMetadata() is still about this
         // record — it is carried on the envelope so it survives buffering (see deliver()).
         Optional<RecordMetadata> meta = context.recordMetadata();
-        String topic = meta.map(RecordMetadata::topic).orElse("");
-        int partition = meta.map(RecordMetadata::partition).orElse(0);
-        long offset = meta.map(RecordMetadata::offset).orElse(0L);
-
-        List<ParsleyHeader> headers = new ArrayList<>();
-        for (Header header : record.headers()) {
-            headers.add(new ParsleyHeader(header.key(), header.value()));
-        }
-        Header clockHeader = record.headers().lastHeader(ParsleyAttributes.VECTOR_CLOCK);
-        return new ParsleyRecord<>(
-                record.key(), record.value(), record.timestamp(), headers,
-                clockHeader == null ? null : clockHeader.value(),
-                new TopicPartition(topic, partition), offset);
-    }
-
-    private Record<KIn, VIn> rebuild(ParsleyRecord<KIn, VIn> record) {
-        return new Record<>(record.key(), record.value(), record.timestamp(), record.toHeaders());
+        TopicPartition source = new TopicPartition(
+                meta.map(RecordMetadata::topic).orElse(""),
+                meta.map(RecordMetadata::partition).orElse(0));
+        return ParsleyRecord.of(record, source, meta.map(RecordMetadata::offset).orElse(0L));
     }
 }
