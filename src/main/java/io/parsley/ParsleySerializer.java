@@ -26,6 +26,9 @@ import java.util.List;
  */
 final class ParsleySerializer<K, V> {
 
+    /** Leading byte of the buffer-store value format; lets the format evolve compatibly. */
+    private static final byte FORMAT_VERSION = 1;
+
     private final ParsleyResolver<K, V> resolver;
 
     ParsleySerializer(ParsleyResolver<K, V> resolver) {
@@ -42,6 +45,7 @@ final class ParsleySerializer<K, V> {
 
         try (ByteArrayOutputStream baos = new ByteArrayOutputStream();
              DataOutputStream out = new DataOutputStream(baos)) {
+            out.writeByte(FORMAT_VERSION);
             writeString(out, topic);
             out.writeInt(record.sourcePartition().partition());
             out.writeLong(record.sourceOffset());
@@ -65,6 +69,11 @@ final class ParsleySerializer<K, V> {
      */
     ParsleyRecord<K, V> deserialize(byte[] bytes) {
         try (DataInputStream in = new DataInputStream(new ByteArrayInputStream(bytes))) {
+            byte version = in.readByte();
+            if (version != FORMAT_VERSION) {
+                throw new IllegalStateException(
+                        "unsupported buffered-record format version: " + version + " (expected " + FORMAT_VERSION + ")");
+            }
             String topic = readString(in);
             int partition = in.readInt();
             long offset = in.readLong();

@@ -13,6 +13,7 @@ import java.util.List;
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 
 class ParsleySerializerTest {
 
@@ -73,6 +74,12 @@ class ParsleySerializerTest {
         // the record's source topic ("orders"), never the buffer store's changelog name.
         assertEquals(List.of("orders", "orders"), keySpy.topics);
         assertEquals(List.of("orders", "orders"), valueSpy.topics);
+    }
+
+    @Test
+    void deserializeRejectsAnUnknownFormatVersion() {
+        // Leading version byte 99 (not 1) — rejected before any field is read.
+        assertThrows(IllegalStateException.class, () -> serializer.deserialize(new byte[]{99}));
     }
 
     /** A String serde that records the topic argument it was invoked with. */

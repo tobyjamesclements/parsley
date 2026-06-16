@@ -44,6 +44,9 @@ import java.util.Optional;
  */
 public record CausalDependencies(Map<TopicPartition, Long> positions) {
 
+    /** Leading byte of the {@link #toBytes() wire format}; lets the format evolve compatibly. */
+    private static final byte WIRE_VERSION = 1;
+
     /**
      * Canonical constructor; defensively copies {@code positions}.
      */
@@ -134,7 +137,7 @@ public record CausalDependencies(Map<TopicPartition, Long> positions) {
      *
      * <h2>Wire format</h2>
      * <pre>
-     * [int   count]
+     * [byte  version] [int count]
      * for each entry:
      *   [short topicLen] [byte[] topic (UTF-8)] [int partition] [long offset]
      * </pre>
@@ -144,6 +147,7 @@ public record CausalDependencies(Map<TopicPartition, Long> positions) {
     public byte[] toBytes() {
         try (ByteArrayOutputStream baos = new ByteArrayOutputStream();
              DataOutputStream dos = new DataOutputStream(baos)) {
+            dos.writeByte(WIRE_VERSION);
             dos.writeInt(positions.size());
             for (Map.Entry<TopicPartition, Long> entry : positions.entrySet()) {
                 byte[] topicBytes = entry.getKey().topic().getBytes(StandardCharsets.UTF_8);
@@ -163,10 +167,16 @@ public record CausalDependencies(Map<TopicPartition, Long> positions) {
      *
      * @param bytes the serialised clock; must not be {@code null}
      * @return the deserialised {@code CausalDependencies}
-     * @throws IllegalStateException if {@code bytes} is not a valid serialised clock
+     * @throws IllegalStateException if {@code bytes} is not a valid serialised clock, including an
+     *                               unrecognised {@linkplain #toBytes() wire-format version}
      */
     public static CausalDependencies fromBytes(byte[] bytes) {
         try (DataInputStream dis = new DataInputStream(new ByteArrayInputStream(bytes))) {
+            byte version = dis.readByte();
+            if (version != WIRE_VERSION) {
+                throw new IllegalStateException(
+                        "unsupported CausalDependencies wire version: " + version + " (expected " + WIRE_VERSION + ")");
+            }
             int count = dis.readInt();
             Map<TopicPartition, Long> positions = new HashMap<>(count);
             for (int i = 0; i < count; i++) {

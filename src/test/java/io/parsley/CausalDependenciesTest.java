@@ -65,6 +65,14 @@ class CausalDependenciesTest {
     }
 
     @Test
+    void fromBytesRejectsAnUnknownWireVersion() {
+        // version byte 99 (not 1), then a well-formed empty body — must be rejected on the version.
+        IllegalStateException ex = assertThrows(IllegalStateException.class,
+                () -> CausalDependencies.fromBytes(new byte[]{99, 0, 0, 0, 0}));
+        assertTrue(ex.getMessage().contains("99"), "error names the unsupported version; got: " + ex.getMessage());
+    }
+
+    @Test
     void fromHeadersReadsTheStampedClock() {
         CausalDependencies clock = CausalDependencies.empty().advance(P0, 12).advance(O0, 4);
         Headers headers = new RecordHeaders();
