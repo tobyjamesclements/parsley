@@ -1,5 +1,7 @@
 package io.parsley;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.time.Duration;
 import java.util.ArrayList;
@@ -31,6 +33,8 @@ import java.util.function.Consumer;
  */
 final class ParsleyEngine<K, V> {
 
+    private static final Logger log = LoggerFactory.getLogger(ParsleyEngine.class);
+
     /**
      * Receives the new frontier after every advancement, before the record that caused the
      * advancement is returned for forwarding.
@@ -45,6 +49,7 @@ final class ParsleyEngine<K, V> {
     private final Consumer<ParsleyRecord<K, V>> deadLetterSink;
     private final CausalBufferStore<K, V> buffer;
     private final FrontierCallback frontierListener;
+    private final ParsleyMetrics metrics;
 
     private CausalDependencies frontier;
     private int sizeLimit = Integer.MAX_VALUE;
@@ -55,7 +60,8 @@ final class ParsleyEngine<K, V> {
                  CausalDependencies initialFrontier,
                  Consumer<ParsleyRecord<K, V>> deadLetterSink,
                  FrontierCallback frontierListener,
-                 CausalBufferStore<K, V> buffer) {
+                 CausalBufferStore<K, V> buffer,
+                 ParsleyMetrics metrics) {
         if (policy instanceof DeadLetterPolicy && deadLetterSink == null) {
             throw new IllegalArgumentException("DeadLetter policy requires a dead-letter sink");
         }
@@ -65,6 +71,7 @@ final class ParsleyEngine<K, V> {
         this.deadLetterSink = deadLetterSink;
         this.frontierListener = frontierListener;
         this.buffer = buffer;
+        this.metrics = metrics;
         configureLimits(limitOf(policy));
     }
 
@@ -108,7 +115,12 @@ final class ParsleyEngine<K, V> {
             drainInto(out);
         } else {
             buffer.add(record);
-            if (buffer.size() >= sizeLimit) {
+            int depth = buffer.size();
+            log.debug("Holding {}-{} @{} (buffer depth: {})",
+                    record.sourcePartition().topic(), record.sourcePartition().partition(),
+                    record.sourceOffset(), depth);
+            metrics.recordBuffered(depth);
+            if (depth >= sizeLimit) {
                 out.addAll(evictNow());
             }
         }
@@ -128,10 +140,12 @@ final class ParsleyEngine<K, V> {
         if (evicted.isEmpty()) {
             return List.of();
         }
+        log.warn("Evicting {} held record(s) (policy: {})", evicted.size(), policy.getClass().getSimpleName());
         for (CausalBufferStore.Entry<K, V> entry : evicted) {
             violate(entry.record(), CausalViolationReason.LIMIT_REACHED, entry.dependencies());
             buffer.remove(entry.sequence());
         }
+        metrics.recordEvicted(evicted.size());
         List<ParsleyRecord<K, V>> toForward = new ArrayList<>();
         switch (policy) {
             case ForwardUnsafePolicy forwardUnsafe -> {
@@ -176,13 +190,19 @@ final class ParsleyEngine<K, V> {
     // frontier. Each released record is forwarded just like a directly satisfied one.
     private void drainInto(List<ParsleyRecord<K, V>> out) {
         List<CausalBufferStore.Entry<K, V>> releasable = releasableEntries();
+        int totalReleased = 0;
         while (!releasable.isEmpty()) {
             for (CausalBufferStore.Entry<K, V> entry : releasable) {
                 buffer.remove(entry.sequence());
                 advanceFrontier(entry.record());
                 out.add(entry.record());
             }
+            totalReleased += releasable.size();
             releasable = releasableEntries();
+        }
+        if (totalReleased > 0) {
+            log.debug("Released {} record(s) from buffer (depth now {})", totalReleased, buffer.size());
+            metrics.recordReleased(totalReleased, buffer.size());
         }
     }
 
@@ -205,8 +225,13 @@ final class ParsleyEngine<K, V> {
     }
 
     private void violate(ParsleyRecord<K, V> record, CausalViolationReason reason, CausalDependencies required) {
-        violationHandler.onViolation(new CausalViolation(
-                record.toConsumerRecord(), reason, frontier, required, required.missingAgainst(frontier)));
+        CausalViolation violation = new CausalViolation(
+                record.toConsumerRecord(), reason, frontier, required, required.missingAgainst(frontier));
+        log.warn("Causal violation [{} on {}-{} @{}] gap: {}",
+                reason, record.sourcePartition().topic(), record.sourcePartition().partition(),
+                record.sourceOffset(), violation.gap());
+        violationHandler.onViolation(violation);
+        metrics.recordViolation();
     }
 
     private static CausalBufferLimit limitOf(CausalBufferPolicy policy) {

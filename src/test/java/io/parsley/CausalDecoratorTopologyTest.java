@@ -1,5 +1,7 @@
 package io.parsley;
 
+import org.apache.kafka.common.Metric;
+import org.apache.kafka.common.MetricName;
 import org.apache.kafka.common.TopicPartition;
 import org.apache.kafka.common.header.Headers;
 import org.apache.kafka.common.header.internals.RecordHeader;
@@ -533,7 +535,45 @@ class CausalDecoratorTopologyTest {
         }
     }
 
+    @Test
+    void streamsMetricsSensorsArePopulatedAfterBufferingAndRelease() {
+        Topology topology = topology(
+                CausalProcessors.builder(upperCaser(), CausalBufferPolicy.forwardUnsafe(CausalBufferLimit.ofSize(100)))
+                        .serdes(Serdes.String(), Serdes.String()).onViolation(onViolation).build(),
+                List.of("prices", "orders"));
+
+        try (TopologyTestDriver driver = new TopologyTestDriver(topology, config(null))) {
+            TestInputTopic<String, String> prices =
+                    driver.createInputTopic("prices", new StringSerializer(), new StringSerializer());
+            TestInputTopic<String, String> orders =
+                    driver.createInputTopic("orders", new StringSerializer(), new StringSerializer());
+
+            // Buffer one order (depends on prices-0 offset 0, not yet arrived).
+            orders.pipeInput(new TestRecord<>("k", "order",
+                    clockHeader(CausalDependencies.empty().advance(PRICES_0, 0))));
+            // Release it (the price arrives and advances the frontier).
+            prices.pipeInput(new TestRecord<>("k", "price", clockHeader(CausalDependencies.empty())));
+
+            assertEquals(1.0, parsleyMetric(driver, "records-buffered-total"), 0.001,
+                    "one record was added to the buffer");
+            assertEquals(1.0, parsleyMetric(driver, "records-released-total"), 0.001,
+                    "one record was released from the buffer");
+            assertEquals(0.0, parsleyMetric(driver, "buffer-depth"), 0.001,
+                    "buffer is empty after the drain");
+        }
+    }
+
     // --- small utilities -----------------------------------------------------------------------
+
+    private static double parsleyMetric(TopologyTestDriver driver, String metricName) {
+        Map<MetricName, ? extends Metric> all = driver.metrics();
+        return all.entrySet().stream()
+                .filter(e -> e.getKey().name().equals(metricName)
+                          && e.getKey().group().contains("parsley"))
+                .findFirst()
+                .map(e -> ((Number) e.getValue().metricValue()).doubleValue())
+                .orElseThrow(() -> new AssertionError("Parsley metric not found: " + metricName));
+    }
 
     private static CausalDependencies frontierIn(TopologyTestDriver driver, String frontierStoreName) {
         KeyValueStore<String, byte[]> store = driver.getKeyValueStore(frontierStoreName);

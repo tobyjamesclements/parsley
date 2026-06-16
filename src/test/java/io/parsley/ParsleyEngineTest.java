@@ -29,7 +29,7 @@ class ParsleyEngineTest {
     private ParsleyEngine<String, String> engine(CausalBufferPolicy policy,
                                                 java.util.function.Consumer<ParsleyRecord<String, String>> sink) {
         return new ParsleyEngine<>(policy, violations::add, CausalDependencies.empty(), sink, frontiers::add,
-                buffer);
+                buffer, ParsleyMetrics.NOOP);
     }
 
     private List<CausalViolationReason> reasons() {
@@ -215,5 +215,49 @@ class ParsleyEngineTest {
 
         // Listener observed the advanced frontier; persistence happens before the record is returned.
         assertEquals(engine.frontier(), frontiers.get(frontiers.size() - 1));
+    }
+
+    @Test
+    void metricsCallbacksFireOnBufferAndRelease() {
+        List<Integer> bufferedDepths = new ArrayList<>();
+        List<Integer> releasedCounts = new ArrayList<>();
+        List<Integer> releasedDepths = new ArrayList<>();
+        ParsleyMetrics capturing = new ParsleyMetrics() {
+            @Override public void recordBuffered(int depth)        { bufferedDepths.add(depth); }
+            @Override public void recordReleased(int c, int depth) { releasedCounts.add(c); releasedDepths.add(depth); }
+            @Override public void recordEvicted(int c)             {}
+            @Override public void recordViolation()                {}
+        };
+        ParsleyEngine<String, String> engine = new ParsleyEngine<>(
+                CausalBufferPolicy.forwardUnsafe(CausalBufferLimit.ofSize(100)),
+                violations::add, CausalDependencies.empty(), null, frontiers::add, buffer, capturing);
+
+        // An unsatisfied record is buffered: depth becomes 1.
+        engine.onRecord(rec(ORDERS, 0, CausalDependencies.empty().advance(PRICES, 3)));
+        assertEquals(List.of(1), bufferedDepths, "recordBuffered fires with the new depth");
+        assertTrue(releasedCounts.isEmpty());
+
+        // Its premise arrives: both the price and the drained order are released.
+        engine.onRecord(rec(PRICES, 3, CausalDependencies.empty()));
+        assertEquals(List.of(1), releasedCounts, "recordReleased fires with the count of drained records");
+        assertEquals(List.of(0), releasedDepths, "buffer is empty after the drain");
+    }
+
+    @Test
+    void metricsCallbackFiresOnEviction() {
+        List<Integer> evictedCounts = new ArrayList<>();
+        ParsleyMetrics capturing = new ParsleyMetrics() {
+            @Override public void recordBuffered(int d)        {}
+            @Override public void recordReleased(int c, int d) {}
+            @Override public void recordEvicted(int c)         { evictedCounts.add(c); }
+            @Override public void recordViolation()            {}
+        };
+        ParsleyEngine<String, String> engine = new ParsleyEngine<>(
+                CausalBufferPolicy.drop(CausalBufferLimit.ofSize(1)),
+                violations::add, CausalDependencies.empty(), null, frontiers::add, buffer, capturing);
+
+        engine.onRecord(rec(ORDERS, 0, CausalDependencies.empty().advance(PRICES, 99)));
+
+        assertEquals(List.of(1), evictedCounts, "recordEvicted fires with the count of evicted records");
     }
 }

@@ -1,7 +1,11 @@
 package io.parsley;
 
 import org.apache.kafka.clients.consumer.ConsumerRecord;
+import org.apache.kafka.common.MetricName;
 import org.apache.kafka.common.TopicPartition;
+import org.apache.kafka.common.metrics.Sensor;
+import org.apache.kafka.common.metrics.stats.Value;
+import org.apache.kafka.streams.StreamsMetrics;
 import org.apache.kafka.streams.processor.PunctuationType;
 import org.apache.kafka.streams.processor.api.Processor;
 import org.apache.kafka.streams.processor.api.ProcessorContext;
@@ -11,6 +15,7 @@ import org.apache.kafka.streams.state.KeyValueStore;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.function.Consumer;
 
@@ -55,6 +60,7 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
     private KeyValueStore<String, byte[]> frontierStore;
     private KeyValueStore<Long, byte[]> bufferStore;
     private ParsleyEngine<KIn, VIn> engine;
+    private List<Sensor> sensorsToClose = List.of();
     // Read live by the stamping proxy: the clock to stamp on forward, and the source coordinate to
     // report from recordMetadata(), for the record currently being delivered. Written and read on the
     // one task thread (see above); volatile is belt-and-suspenders against any future caller that
@@ -120,8 +126,10 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
         // engine drains them on the next frontier advance.
         CausalBufferStore<KIn, VIn> buffer = new ParsleyBufferStore<>(bufferStore, serializer);
 
+        ParsleyMetrics metrics = buildMetrics(context);
+
         this.engine = new ParsleyEngine<>(policy, onViolation, initialFrontier,
-                engineDeadLetter, listener, buffer);
+                engineDeadLetter, listener, buffer, metrics);
 
         // The delegate runs against the stamping proxy, never the raw context, so its forwards are
         // clock-stamped and its recordMetadata() reflects the delivered record.
@@ -143,6 +151,34 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
     @Override
     public void close() {
         delegate.close();
+        for (Sensor sensor : sensorsToClose) {
+            context.metrics().removeSensor(sensor);
+        }
+    }
+
+    private ParsleyMetrics buildMetrics(ProcessorContext<?, ?> ctx) {
+        StreamsMetrics sm = ctx.metrics();
+        String taskId = ctx.taskId().toString();
+
+        Sensor buffered  = sm.addRateTotalSensor("parsley", taskId, "records-buffered",  Sensor.RecordingLevel.INFO);
+        Sensor released  = sm.addRateTotalSensor("parsley", taskId, "records-released",  Sensor.RecordingLevel.INFO);
+        Sensor evicted   = sm.addRateTotalSensor("parsley", taskId, "records-evicted",   Sensor.RecordingLevel.INFO);
+        Sensor violation = sm.addRateTotalSensor("parsley", taskId, "violations",         Sensor.RecordingLevel.INFO);
+
+        // A "last recorded value" sensor for the current buffer depth — polled as a gauge.
+        Sensor depth = sm.addSensor("parsley-buffer-depth-" + taskId, Sensor.RecordingLevel.INFO);
+        depth.add(new MetricName("buffer-depth", "stream-parsley-metrics",
+                "Current number of records held in the causal buffer",
+                Map.of("parsley-id", taskId)), new Value());
+
+        sensorsToClose = List.of(buffered, released, evicted, violation, depth);
+
+        return new ParsleyMetrics() {
+            @Override public void recordBuffered(int d)       { buffered.record();   depth.record(d); }
+            @Override public void recordReleased(int c, int d){ released.record(c);  depth.record(d); }
+            @Override public void recordEvicted(int c)        { evicted.record(c);   depth.record(0); }
+            @Override public void recordViolation()           { violation.record(); }
+        };
     }
 
     /** Runs an incoming record through the engine, resetting the per-call snapshot buffer first. */

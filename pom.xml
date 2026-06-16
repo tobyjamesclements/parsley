@@ -65,6 +65,13 @@
             <artifactId>kafka-streams</artifactId>
             <version>${kafka.version}</version>
         </dependency>
+        <!-- SLF4J API for operational logging; the binding is supplied by the host application
+             (Kafka Streams itself requires one at runtime). -->
+        <dependency>
+            <groupId>org.slf4j</groupId>
+            <artifactId>slf4j-api</artifactId>
+            <version>1.7.36</version>
+        </dependency>
 
         <dependency>
             <groupId>org.junit.jupiter</groupId>
