@@ -3,7 +3,6 @@ package io.parsley;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.apache.kafka.clients.consumer.ConsumerRecords;
 import org.apache.kafka.common.TopicPartition;
-import org.apache.kafka.common.record.TimestampType;
 import org.apache.kafka.common.serialization.Serde;
 import org.apache.kafka.streams.KafkaStreams;
 import org.apache.kafka.streams.StreamsBuilder;
@@ -21,7 +20,6 @@ import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.Optional;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
@@ -101,16 +99,12 @@ final class ParsleyConsumer<K, V> implements CausalConsumer<K, V> {
             @Override
             public void process(Record<K, V> record) {
                 RecordMetadata meta = ctx.recordMetadata().orElseThrow();
-                // Rebuild the consumer-facing record from the processor's record metadata, which
-                // names the record's true source coordinate even when it was buffered and drained
-                // later (not the Streams record currently being processed). The -1, -1 are the
-                // serialized key/value sizes — unknown here, as the record is already deserialised.
-                ConsumerRecord<K, V> cr = new ConsumerRecord<>(
-                        meta.topic(), meta.partition(), meta.offset(),
-                        record.timestamp(), TimestampType.CREATE_TIME,
-                        -1, -1,
-                        record.key(), record.value(),
-                        record.headers(), Optional.empty());
+                // Rebuild the consumer-facing record through the envelope, from the processor's record
+                // metadata — which names the record's true source coordinate even when it was buffered
+                // and drained later (not the Streams record currently being processed).
+                ConsumerRecord<K, V> cr = ParsleyRecord
+                        .of(record, new TopicPartition(meta.topic(), meta.partition()), meta.offset())
+                        .toConsumerRecord();
 
                 readyQueue.add(cr);
             }
