@@ -113,7 +113,7 @@ class CausalDecoratorTopologyTest {
     @Test
     void admittedRecordRunsDelegateAndStampsTheMergedClock() {
         Topology topology = topology(
-                CausalProcessors.builder(upperCaser(), CausalBufferPolicy.forwardUnsafe(CausalBufferLimit.ofSize(100)))
+                CausalProcessors.builder(upperCaser(), CausalBufferPolicy.drop(CausalBufferLimit.ofSize(100)))
                         .serdes(Serdes.String(), Serdes.String()).onViolation(onViolation).build(),
                 List.of("in"));
 
@@ -137,7 +137,7 @@ class CausalDecoratorTopologyTest {
     @Test
     void heldRecordIsBufferedThenDrainedThroughDelegate() {
         Topology topology = topology(
-                CausalProcessors.builder(upperCaser(), CausalBufferPolicy.forwardUnsafe(CausalBufferLimit.ofSize(100)))
+                CausalProcessors.builder(upperCaser(), CausalBufferPolicy.drop(CausalBufferLimit.ofSize(100)))
                         .serdes(Serdes.String(), Serdes.String()).onViolation(onViolation).build(),
                 List.of("prices", "orders"));
 
@@ -266,7 +266,7 @@ class CausalDecoratorTopologyTest {
             }
         };
         Topology topology = topology(
-                CausalProcessors.builder(user, CausalBufferPolicy.forwardUnsafe(CausalBufferLimit.ofSize(100)))
+                CausalProcessors.builder(user, CausalBufferPolicy.drop(CausalBufferLimit.ofSize(100)))
                         .serdes(Serdes.String(), Serdes.String()).onViolation(onViolation).build(),
                 List.of("in"));
 
@@ -306,7 +306,7 @@ class CausalDecoratorTopologyTest {
             }
         };
         Topology topology = topology(
-                CausalProcessors.builder(user, CausalBufferPolicy.forwardUnsafe(CausalBufferLimit.ofSize(100)))
+                CausalProcessors.builder(user, CausalBufferPolicy.drop(CausalBufferLimit.ofSize(100)))
                         .serdes(Serdes.String(), Serdes.String()).onViolation(onViolation).build(),
                 List.of("in"));
 
@@ -358,7 +358,7 @@ class CausalDecoratorTopologyTest {
             }
         };
         Topology topology = topology(
-                CausalProcessors.builder(user, CausalBufferPolicy.forwardUnsafe(CausalBufferLimit.ofSize(100)))
+                CausalProcessors.builder(user, CausalBufferPolicy.drop(CausalBufferLimit.ofSize(100)))
                         .serdes(Serdes.String(), Serdes.String()).onViolation(onViolation).build(),
                 List.of("in"));
 
@@ -386,7 +386,7 @@ class CausalDecoratorTopologyTest {
     void bufferSerdesAreResolvedAndInvokedWithTheSourceTopic() {
         SpyStringSerde valueSpy = new SpyStringSerde();
         Topology topology = topology(
-                CausalProcessors.builder(upperCaser(), CausalBufferPolicy.forwardUnsafe(CausalBufferLimit.ofSize(100)))
+                CausalProcessors.builder(upperCaser(), CausalBufferPolicy.drop(CausalBufferLimit.ofSize(100)))
                         .serdesByTopic(t -> Serdes.String(), t -> valueSpy).onViolation(onViolation).build(),
                 List.of("prices", "orders"));
 
@@ -412,11 +412,11 @@ class CausalDecoratorTopologyTest {
         // namespaces are what make multiple decorators possible.
         StreamsBuilder builder = new StreamsBuilder();
         builder.stream("orders", Consumed.with(Serdes.String(), Serdes.String()))
-                .process(CausalProcessors.builder(upperCaser(), CausalBufferPolicy.forwardUnsafe(CausalBufferLimit.ofSize(100)))
+                .process(CausalProcessors.builder(upperCaser(), CausalBufferPolicy.drop(CausalBufferLimit.ofSize(100)))
                         .serdesByTopic(t -> Serdes.String(), t -> Serdes.String()).onViolation(onViolation).storeName("orders").build())
                 .to("orders-out", Produced.with(Serdes.String(), Serdes.String()));
         builder.stream("prices", Consumed.with(Serdes.String(), Serdes.String()))
-                .process(CausalProcessors.builder(upperCaser(), CausalBufferPolicy.forwardUnsafe(CausalBufferLimit.ofSize(100)))
+                .process(CausalProcessors.builder(upperCaser(), CausalBufferPolicy.drop(CausalBufferLimit.ofSize(100)))
                         .serdesByTopic(t -> Serdes.String(), t -> Serdes.String()).onViolation(onViolation).storeName("prices").build())
                 .to("prices-out", Produced.with(Serdes.String(), Serdes.String()));
 
@@ -447,7 +447,7 @@ class CausalDecoratorTopologyTest {
         List<CausalFrontier> observed = new ArrayList<>();
         CausalFrontierListener listener = observed::add;
         Topology topology = topology(
-                CausalProcessors.builder(upperCaser(), CausalBufferPolicy.forwardUnsafe(CausalBufferLimit.ofSize(100)))
+                CausalProcessors.builder(upperCaser(), CausalBufferPolicy.drop(CausalBufferLimit.ofSize(100)))
                         .serdesByTopic(t -> Serdes.String(), t -> Serdes.String()).onViolation(onViolation).storeName("in").frontierListener(listener).build(),
                 List.of("in"));
 
@@ -479,7 +479,7 @@ class CausalDecoratorTopologyTest {
         // by the number of source topics in the subtopology, never by the number of records. This
         // pins the O(#input topics) envelope the docs promise for the Streams path.
         Topology topology = topology(
-                CausalProcessors.builder(upperCaser(), CausalBufferPolicy.forwardUnsafe(CausalBufferLimit.ofSize(1000)))
+                CausalProcessors.builder(upperCaser(), CausalBufferPolicy.drop(CausalBufferLimit.ofSize(1000)))
                         .serdes(Serdes.String(), Serdes.String()).onViolation(onViolation).build(),
                 List.of("a", "b", "c"));
 
@@ -538,7 +538,7 @@ class CausalDecoratorTopologyTest {
     @Test
     void streamsMetricsSensorsArePopulatedAfterBufferingAndRelease() {
         Topology topology = topology(
-                CausalProcessors.builder(upperCaser(), CausalBufferPolicy.forwardUnsafe(CausalBufferLimit.ofSize(100)))
+                CausalProcessors.builder(upperCaser(), CausalBufferPolicy.drop(CausalBufferLimit.ofSize(100)))
                         .serdes(Serdes.String(), Serdes.String()).onViolation(onViolation).build(),
                 List.of("prices", "orders"));
 

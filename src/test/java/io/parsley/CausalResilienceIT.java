@@ -73,7 +73,7 @@ class CausalResilienceIT {
         try (CausalConsumer<String, String> consumer1 =
                      CausalConsumers.<String, String>builder(
                              List.of(PRICES, ORDERS),
-                             CausalBufferPolicy.forwardUnsafe(CausalBufferLimit.ofDuration(Duration.ofMinutes(5))),
+                             CausalBufferPolicy.drop(CausalBufferLimit.ofDuration(Duration.ofMinutes(5))),
                              Map.of(),
                              streamsConfig(bootstrap, appId))
                              .topicAdmin(new MockAdminClient(TopicAdmin.ofBootstrap(bootstrap)))
@@ -103,7 +103,7 @@ class CausalResilienceIT {
         try (CausalConsumer<String, String> consumer2 =
                      CausalConsumers.<String, String>builder(
                              List.of(PRICES, ORDERS),
-                             CausalBufferPolicy.forwardUnsafe(CausalBufferLimit.ofDuration(Duration.ofMinutes(5))),
+                             CausalBufferPolicy.drop(CausalBufferLimit.ofDuration(Duration.ofMinutes(5))),
                              Map.of(),
                              streamsConfig(bootstrap, appId))
                              .topicAdmin(new MockAdminClient(TopicAdmin.ofBootstrap(bootstrap)))
@@ -143,7 +143,7 @@ class CausalResilienceIT {
         try (CausalConsumer<String, String> consumer =
                      CausalConsumers.<String, String>builder(
                              List.of(EVENTS),
-                             CausalBufferPolicy.forwardUnsafe(CausalBufferLimit.ofSize(100)),
+                             CausalBufferPolicy.drop(CausalBufferLimit.ofSize(100)),
                              Map.of(),
                              streamsConfigWithThreads(bootstrap, 2)).build();
              CausalProducer<String, String> producer = causalProducer(bootstrap)) {

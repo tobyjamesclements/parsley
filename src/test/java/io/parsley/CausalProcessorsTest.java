@@ -24,7 +24,7 @@ class CausalProcessorsTest {
     @Test
     void buildRequiresSerdes() {
         CausalProcessors.Builder<String, String, String, String> b =
-                builder(CausalBufferPolicy.forwardUnsafe(CausalBufferLimit.ofSize(1)));
+                builder(CausalBufferPolicy.drop(CausalBufferLimit.ofSize(1)));
         assertThrows(IllegalStateException.class, b::build);
     }
 
@@ -39,7 +39,7 @@ class CausalProcessorsTest {
     @Test
     void sinkIsIllegalWithoutADeadLetterPolicy() {
         CausalProcessors.Builder<String, String, String, String> b =
-                builder(CausalBufferPolicy.forwardUnsafe(CausalBufferLimit.ofSize(1)))
+                builder(CausalBufferPolicy.drop(CausalBufferLimit.ofSize(1)))
                         .serdes(Serdes.String(), Serdes.String())
                         .deadLetterSink(cr -> {});
         assertThrows(IllegalArgumentException.class, b::build);
@@ -48,7 +48,7 @@ class CausalProcessorsTest {
     @Test
     void buildsAValidSupplier() {
         CausalProcessorSupplier<String, String, String, String> supplier =
-                builder(CausalBufferPolicy.forwardUnsafe(CausalBufferLimit.ofSize(1)))
+                builder(CausalBufferPolicy.drop(CausalBufferLimit.ofSize(1)))
                         .serdes(Serdes.String(), Serdes.String())
                         .build();
         assertNotNull(supplier);

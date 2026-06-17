@@ -78,7 +78,7 @@ class CausalDecoratorAvroTopologyTest {
         builder.stream(List.of(PRICES, ORDERS), Consumed.with(Serdes.String(), avro))
                 .process(CausalProcessors.builder(
                         user,
-                        CausalBufferPolicy.forwardUnsafe(CausalBufferLimit.ofSize(100)))
+                        CausalBufferPolicy.drop(CausalBufferLimit.ofSize(100)))
                         .serdesByTopic(topic -> Serdes.String(), topic -> avro)
                         .onViolation(onViolation)
                         .build());

@@ -97,9 +97,11 @@ class CausalAvroSchemaRegistryIT {
                 "schema.registry.url", registryUrl)).build();
              CausalConsumer<String, SpecificRecord> consumer = CausalConsumers.<String, SpecificRecord>builder(
                      List.of(ORDERS, PRICES),
-                     CausalBufferPolicy.forwardUnsafe(CausalBufferLimit.ofDuration(Duration.ofSeconds(5))),
+                     CausalBufferPolicy.drop(CausalBufferLimit.ofDuration(Duration.ofSeconds(5))),
                      Map.of(ConsumerConfig.GROUP_ID_CONFIG, "avro-rt-" + UUID.randomUUID()),
-                     streamsConfig(bootstrap, registryUrl)).build()) {
+                     streamsConfig(bootstrap, registryUrl))
+                     .topicAdmin(new MockAdminClient(TopicAdmin.ofBootstrap(bootstrap)))
+                     .build()) {
 
             // Each record's clock simply marks its own position, so both self-satisfy and are admitted.
             producer.send(new ProducerRecord<>(PRICES, "ACME", price), CausalDependencies.empty().advance(pricesTp, 0)).get();
@@ -117,8 +119,7 @@ class CausalAvroSchemaRegistryIT {
             assertEquals(order, receivedOrder, "the Order round-trips through Avro + Schema Registry");
             assertEquals(price, receivedPrice, "the Price round-trips through Avro + Schema Registry");
 
-            // The frontier advanced over both topic-partitions (compare by partition only — the
-            // consumer holds real Kafka topic UUIDs which differ from name-derived test UUIDs).
+            // The frontier advanced over both topic-partitions.
             assertTrue(consumer.frontier().positions().stream()
                     .anyMatch(p -> p.partition() == ordersTp.partition()),
                     "frontier covers orders-0");
