@@ -1,6 +1,7 @@
 package io.parsley;
 
 import org.apache.kafka.common.TopicPartition;
+import org.apache.kafka.common.Uuid;
 import org.apache.kafka.common.header.Headers;
 import org.junit.jupiter.api.Test;
 
@@ -285,5 +286,42 @@ class ParsleyEngineTest {
         engine.onRecord(rec(ORDERS, 0, CausalDependencies.empty().advance(PRICES, 99)));
 
         assertEquals(List.of(1), evictedCounts, "recordEvicted fires with the count of evicted records");
+    }
+
+    private static ParsleyRecord<String, String> rec(TopicPartition tp, long offset,
+                                                      Uuid topicId, CausalDependencies deps) {
+        List<ParsleyHeader> headers = new ArrayList<>();
+        if (deps != null) {
+            headers.add(new ParsleyHeader(ParsleyAttributes.VECTOR_CLOCK, deps.toBytes()));
+        }
+        headers.add(new ParsleyHeader(ParsleyAttributes.SRC_TOPIC, tp.topic().getBytes(UTF_8)));
+        headers.add(new ParsleyHeader(ParsleyAttributes.SRC_PARTITION, ParsleyRecord.intToBytes(tp.partition())));
+        headers.add(new ParsleyHeader(ParsleyAttributes.SRC_OFFSET, ParsleyRecord.longToBytes(offset)));
+        headers.add(new ParsleyHeader(ParsleyAttributes.SRC_TOPIC_ID, ParsleyRecord.uuidToBytes(topicId)));
+        return new ParsleyRecord<>("k", "v", 0L, headers);
+    }
+
+    @Test
+    void recreatedTopicDoesNotSatisfyDependencyOnOldIncarnation() {
+        ParsleyEngine<String, String> engine =
+                engine(CausalBufferPolicy.forwardUnsafe(CausalBufferLimit.ofSize(100)));
+
+        Uuid oldPrices = new Uuid(0L, 1L);
+        Uuid newPrices = new Uuid(0L, 2L);   // recreated — different UUID, same name + partition
+
+        // ORDERS depends on prices-0@5 under the OLD incarnation.
+        onRecord(engine, rec(ORDERS, 0, CausalPosition.nameUuid(ORDERS.topic()),
+                CausalDependencies.empty().advance(oldPrices, 0, 5L)));
+        assertTrue(forwarded.isEmpty(), "order must be buffered: old-prices dependency unsatisfied");
+
+        // A record from the NEW prices incarnation at the same offset must NOT unblock ORDERS.
+        onRecord(engine, rec(PRICES, 5, newPrices, CausalDependencies.empty()));
+        assertEquals(1, forwarded.size(), "only new-prices record forwarded; order still buffered");
+        assertEquals(PRICES, forwarded.get(0).sourcePartition());
+
+        // A record from the OLD prices incarnation arrives — dependency now satisfied.
+        onRecord(engine, rec(PRICES, 5, oldPrices, CausalDependencies.empty()));
+        assertEquals(3, forwarded.size(), "old-prices record forwarded, then buffered order released");
+        assertEquals(ORDERS, forwarded.get(2).sourcePartition());
     }
 }

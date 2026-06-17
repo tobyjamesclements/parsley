@@ -2,6 +2,7 @@ package io.parsley;
 
 import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.apache.kafka.common.TopicPartition;
+import org.apache.kafka.common.Uuid;
 import org.apache.kafka.common.header.Headers;
 import org.apache.kafka.common.header.internals.RecordHeader;
 import org.apache.kafka.common.header.internals.RecordHeaders;
@@ -143,5 +144,18 @@ class CausalDependenciesTest {
         CausalDependencies deps = CausalDependencies.empty().advance(P0, 5).advance(O0, 2);
         CausalFrontier frontierDecoded = CausalFrontier.fromBytes(deps.toBytes());
         assertEquals(frontier, frontierDecoded);
+    }
+
+    @Test
+    void recreatedTopicUuidDistinguishesFromOldIncarnation() {
+        Uuid oldUuid = new Uuid(0L, 1L);
+        Uuid newUuid = new Uuid(0L, 2L);   // same name, different incarnation
+
+        CausalDependencies required = CausalDependencies.empty().advance(oldUuid, 0, 5L);
+
+        assertFalse(required.satisfiedBy(CausalFrontier.empty().advance(newUuid, 0, 5L)),
+                "new-UUID frontier must not satisfy old-UUID dependency");
+        assertTrue(required.satisfiedBy(CausalFrontier.empty().advance(oldUuid, 0, 5L)),
+                "old-UUID frontier at matching offset must satisfy the dependency");
     }
 }
