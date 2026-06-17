@@ -30,7 +30,7 @@ class ParsleySerializerTest {
                                                       List<ParsleyHeader> userHeaders) {
         List<ParsleyHeader> headers = new ArrayList<>(userHeaders);
         if (deps != null) {
-            headers.add(new ParsleyHeader(ParsleyAttributes.VECTOR_CLOCK, deps.toBytes()));
+            headers.add(new ParsleyHeader(ParsleyAttributes.CAUSAL_DEPENDENCIES, deps.toBytes()));
         }
         headers.add(new ParsleyHeader(ParsleyAttributes.SRC_TOPIC, tp.topic().getBytes(UTF_8)));
         headers.add(new ParsleyHeader(ParsleyAttributes.SRC_PARTITION, ParsleyRecord.intToBytes(tp.partition())));
@@ -54,7 +54,7 @@ class ParsleySerializerTest {
         assertEquals(ORDERS_2, out.sourcePartition());
         assertEquals(7L, out.sourceOffset());
         assertArrayEquals(deps.toBytes(), out.encodedDependencies());
-        // 2 user headers + VECTOR_CLOCK + SRC_TOPIC + SRC_PARTITION + SRC_OFFSET = 6
+        // 2 user headers + CAUSAL_DEPENDENCIES + SRC_TOPIC + SRC_PARTITION + SRC_OFFSET = 6
         assertEquals(6, out.headers().size());
         assertEquals("h1", out.headers().get(0).key());
         assertArrayEquals("a".getBytes(), out.headers().get(0).value());

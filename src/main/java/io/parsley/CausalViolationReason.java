@@ -7,7 +7,7 @@ package io.parsley;
  * be delivered in strict causal order.
  *
  * <ul>
- *   <li>{@link #MISSING_HEADER} — the record carried no {@code parsley-vector-clock} attribute
+ *   <li>{@link #MISSING_HEADER} — the record carried no {@code parsley-causal-dependencies} attribute
  *   <li>{@link #UNRESOLVABLE_CLOCK} — the attribute was present but could not be decoded
  *   <li>{@link #LIMIT_REACHED} — the record was evicted because a {@link CausalBufferLimit} fired
  * </ul>
@@ -15,14 +15,14 @@ package io.parsley;
 public enum CausalViolationReason {
 
     /**
-     * The incoming record had no {@code parsley-vector-clock} attribute. It was forwarded
+     * The incoming record had no {@code parsley-causal-dependencies} attribute. It was forwarded
      * immediately without buffering. This typically indicates a producer that is not
      * Parsley-aware.
      */
     MISSING_HEADER,
 
     /**
-     * The {@code parsley-vector-clock} attribute was present but its contents could not be
+     * The {@code parsley-causal-dependencies} attribute was present but its contents could not be
      * deserialised into a {@link CausalDependencies}. The record was forwarded immediately.
      * This may indicate a version mismatch between producer and consumer.
      */

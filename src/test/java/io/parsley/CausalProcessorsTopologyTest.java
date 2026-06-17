@@ -74,7 +74,7 @@ class CausalProcessorsTopologyTest {
 
     private static Headers clockHeader(CausalDependencies clock) {
         Headers headers = new RecordHeaders();
-        headers.add(new RecordHeader("parsley-vector-clock", clock.toBytes()));
+        headers.add(new RecordHeader("parsley-causal-dependencies", clock.toBytes()));
         return headers;
     }
 
@@ -261,7 +261,7 @@ class CausalProcessorsTopologyTest {
                 Headers headers = new RecordHeaders();
                 headers.add(new RecordHeader("user-h", "keep".getBytes()));
                 // A stale clock the user happens to carry — stamping must replace, not duplicate it.
-                headers.add(new RecordHeader("parsley-vector-clock",
+                headers.add(new RecordHeader("parsley-causal-dependencies",
                         CausalDependencies.empty().advance(PRICES_ID, 0, 5).toBytes()));
                 ctx.forward(record.withHeaders(headers));
             }
@@ -280,7 +280,7 @@ class CausalProcessorsTopologyTest {
             in.pipeInput(new TestRecord<>("k", "v", clockHeader(CausalDependencies.empty())));
 
             TestRecord<String, String> emitted = out.readRecord();
-            assertEquals(1, count(emitted.headers(), "parsley-vector-clock"),
+            assertEquals(1, count(emitted.headers(), "parsley-causal-dependencies"),
                     "exactly one clock header — stamping is idempotent");
             assertEquals(CausalDependencies.empty().advance(IN_ID, 0, 0), outClock(emitted),
                     "the stamped clock is the frontier, not the user's stale clock");
@@ -962,7 +962,7 @@ class CausalProcessorsTopologyTest {
             TestOutputTopic<String, String> out =
                     driver.createOutputTopic("out", new StringDeserializer(), new StringDeserializer());
 
-            // Unclocked discount: no parsley-vector-clock header → MISSING_HEADER → admitted
+            // Unclocked discount: no parsley-causal-dependencies header → MISSING_HEADER → admitted
             // immediately even though the materialized chain hasn't produced anything yet.
             discounts.pipeInput(new TestRecord<>("k", "discount"));
             assertEquals(List.of("DISCOUNT"), out.readValuesToList(),

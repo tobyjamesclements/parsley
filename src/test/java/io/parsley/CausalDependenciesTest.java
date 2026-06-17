@@ -79,7 +79,7 @@ class CausalDependenciesTest {
     void fromHeadersReadsTheStampedClock() {
         CausalDependencies clock = CausalDependencies.empty().advance(PRICES_ID, 0, 12).advance(ORDERS_ID, 0, 4);
         Headers headers = new RecordHeaders();
-        headers.add(new RecordHeader(ParsleyAttributes.VECTOR_CLOCK, clock.toBytes()));
+        headers.add(new RecordHeader(ParsleyAttributes.CAUSAL_DEPENDENCIES, clock.toBytes()));
 
         assertEquals(Optional.of(clock), CausalDependencies.fromHeaders(headers));
     }
@@ -96,7 +96,7 @@ class CausalDependenciesTest {
     void fromRecordReadsTheStampedClock() {
         CausalDependencies clock = CausalDependencies.empty().advance(PRICES_ID, 0, 27);
         ConsumerRecord<String, String> record = new ConsumerRecord<>("orders", 0, 5L, "k", "v");
-        record.headers().add(new RecordHeader(ParsleyAttributes.VECTOR_CLOCK, clock.toBytes()));
+        record.headers().add(new RecordHeader(ParsleyAttributes.CAUSAL_DEPENDENCIES, clock.toBytes()));
 
         assertEquals(Optional.of(clock), CausalDependencies.fromRecord(record));
     }

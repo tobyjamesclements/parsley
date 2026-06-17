@@ -57,7 +57,7 @@ public record CausalViolation(
      *   <li>Decode the required clock: {@code CausalDependencies.fromBytes(header.value())}.</li>
      *   <li>Wait until your consumer's frontier satisfies it (i.e. it has observed every position
      *       the original record required).</li>
-     *   <li>Re-produce the original record with the same {@code parsley-vector-clock} value,
+     *   <li>Re-produce the original record with the same {@code parsley-causal-dependencies} value,
      *       stripping the {@code parsley-dlq-*} headers first.</li>
      * </ol>
      */

@@ -11,7 +11,7 @@ import java.util.Map;
 import java.util.concurrent.Future;
 
 /**
- * Decorator over a Kafka {@link Producer} that stamps the vector-clock header on each send.
+ * Decorator over a Kafka {@link Producer} that stamps the causal-dependencies header on each send.
  */
 final class ParsleyProducer<K, V> implements CausalProducer<K, V> {
 
@@ -44,7 +44,7 @@ final class ParsleyProducer<K, V> implements CausalProducer<K, V> {
         ProducerRecord<K, V> enriched = new ProducerRecord<>(
                 record.topic(), record.partition(), record.timestamp(),
                 record.key(), record.value(), record.headers());
-        enriched.headers().add(new RecordHeader(ParsleyAttributes.VECTOR_CLOCK, clock.toBytes()));
+        enriched.headers().add(new RecordHeader(ParsleyAttributes.CAUSAL_DEPENDENCIES, clock.toBytes()));
         return enriched;
     }
 }

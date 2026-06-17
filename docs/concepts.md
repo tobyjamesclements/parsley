@@ -1,10 +1,10 @@
 # Concepts
 
-## Vector clocks and causal dependencies
+## Causal dependencies
 
-A **vector clock** is a snapshot of what a producer had observed when it sent a record — a map from
-`(topicId, partition)` to the highest offset seen on that coordinate. Parsley serialises this as a
-compact binary header (`parsley-vector-clock`) attached to every outgoing record.
+`CausalDependencies` is a snapshot of what a producer had observed when it sent a record — a map
+from `(topicId, partition)` to the highest offset seen on that coordinate. Parsley serialises this
+as a compact binary header (`parsley-causal-dependencies`) attached to every outgoing record.
 
 On the consumer side, the clock is decoded into a `CausalDependencies` value: the minimum frontier
 a downstream consumer must have reached before the record may be delivered. A record is **causally
@@ -16,7 +16,7 @@ so records stamped against the old `prices` are never accidentally satisfied by 
 
 ## The frontier
 
-The **causal frontier** (`CausalFrontier`) is the consumer's own vector clock — the highest offset
+The **causal frontier** (`CausalFrontier`) tracks the highest offset
 it has successfully delivered on each `(topicId, partition)` coordinate. Every time a record is
 forwarded, the frontier advances. Frontiers from multiple sources can be merged with
 `CausalFrontier.merge`, taking the per-coordinate maximum.
@@ -63,7 +63,7 @@ be upheld for a specific record. Three reasons exist:
 
 | Reason | Meaning |
 |---|---|
-| `MISSING_HEADER` | The record carries no `parsley-vector-clock` header (not stamped by Parsley) |
+| `MISSING_HEADER` | The record carries no `parsley-causal-dependencies` header (not stamped by Parsley) |
 | `UNRESOLVABLE_CLOCK` | The header is present but cannot be deserialised (corrupt or unsupported wire version) |
 | `LIMIT_REACHED` | The record was evicted from the buffer because a limit fired |
 

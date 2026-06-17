@@ -35,7 +35,7 @@ import java.util.function.Supplier;
  * <p>The frontier is read <strong>live</strong> through a {@link Supplier} at stamp time, so a
  * forward during record admission sees the post-admit frontier and a forward from a punctuator sees
  * the frontier as of fire time. Stamping is idempotent — any existing
- * {@link ParsleyAttributes#VECTOR_CLOCK} header is removed before the current clock is added — and never
+ * {@link ParsleyAttributes#CAUSAL_DEPENDENCIES} header is removed before the current clock is added — and never
  * mutates the incoming record's headers (a fresh header set is built and applied via
  * {@link Record#withHeaders}).
  *
@@ -73,11 +73,11 @@ final class ParsleyProcessorContext<KOut, VOut> implements ProcessorContext<KOut
     private <K extends KOut, V extends VOut> Record<K, V> stamp(Record<K, V> record) {
         Headers stamped = new RecordHeaders();
         for (Header header : record.headers()) {
-            if (!header.key().equals(ParsleyAttributes.VECTOR_CLOCK)) {
+            if (!header.key().equals(ParsleyAttributes.CAUSAL_DEPENDENCIES)) {
                 stamped.add(header);
             }
         }
-        stamped.add(new RecordHeader(ParsleyAttributes.VECTOR_CLOCK, frontier.get().toBytes()));
+        stamped.add(new RecordHeader(ParsleyAttributes.CAUSAL_DEPENDENCIES, frontier.get().toBytes()));
         return record.withHeaders(stamped);
     }
 

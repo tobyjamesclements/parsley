@@ -90,7 +90,7 @@ class CausalProcessorsSinkPropagationIT {
                     ProducerConfig.KEY_SERIALIZER_CLASS_CONFIG, StringSerializer.class.getName(),
                     ProducerConfig.VALUE_SERIALIZER_CLASS_CONFIG, StringSerializer.class.getName()))) {
                 ProducerRecord<String, String> record = new ProducerRecord<>(IN, "k", "hello");
-                record.headers().add(new RecordHeader("parsley-vector-clock", CausalDependencies.empty().toBytes()));
+                record.headers().add(new RecordHeader("parsley-causal-dependencies", CausalDependencies.empty().toBytes()));
                 producer.send(record).get();
             }
 

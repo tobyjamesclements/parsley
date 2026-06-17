@@ -7,10 +7,10 @@ import org.apache.kafka.clients.producer.RecordMetadata;
 import java.util.concurrent.Future;
 
 /**
- * A Kafka producer that attaches a causal vector-clock header to every record it sends.
+ * A Kafka producer that attaches a causal dependencies header to every record it sends.
  *
  * <p>Each {@link #send} call embeds the serialised {@link CausalDependencies} as a
- * {@code parsley-vector-clock} header. Downstream causal consumers and processors use this
+ * {@code parsley-causal-dependencies} header. Downstream causal consumers and processors use this
  * header to determine whether a record's causal dependencies have been satisfied.
  *
  * <h2>Usage</h2>
@@ -38,10 +38,10 @@ import java.util.concurrent.Future;
 public interface CausalProducer<K, V> extends AutoCloseable {
 
     /**
-     * Sends a record with {@code clock} attached as a {@code parsley-vector-clock} header.
+     * Sends a record with {@code clock} attached as a {@code parsley-causal-dependencies} header.
      *
      * @param record the record to send; must not be {@code null}
-     * @param clock  the causal vector clock to embed; must not be {@code null}
+     * @param clock  the causal dependencies to embed; must not be {@code null}
      * @return a {@link Future} for the {@link RecordMetadata} of the sent record
      */
     Future<RecordMetadata> send(ProducerRecord<K, V> record, CausalDependencies clock);
@@ -50,7 +50,7 @@ public interface CausalProducer<K, V> extends AutoCloseable {
      * Sends a record with {@code clock} attached, invoking {@code callback} on completion.
      *
      * @param record   the record to send; must not be {@code null}
-     * @param clock    the causal vector clock to embed; must not be {@code null}
+     * @param clock    the causal dependencies to embed; must not be {@code null}
      * @param callback the callback invoked on send completion or failure; may be {@code null}
      * @return a {@link Future} for the {@link RecordMetadata} of the sent record
      */

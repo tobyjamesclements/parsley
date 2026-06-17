@@ -44,7 +44,7 @@ class ParsleyEngineTest {
     private static ParsleyRecord<String, String> rec(TopicPartition tp, long offset, CausalDependencies deps) {
         List<ParsleyHeader> headers = new ArrayList<>();
         if (deps != null) {
-            headers.add(new ParsleyHeader(ParsleyAttributes.VECTOR_CLOCK, deps.toBytes()));
+            headers.add(new ParsleyHeader(ParsleyAttributes.CAUSAL_DEPENDENCIES, deps.toBytes()));
         }
         headers.add(new ParsleyHeader(ParsleyAttributes.SRC_TOPIC, tp.topic().getBytes(UTF_8)));
         headers.add(new ParsleyHeader(ParsleyAttributes.SRC_PARTITION, ParsleyRecord.intToBytes(tp.partition())));
@@ -150,7 +150,7 @@ class ParsleyEngineTest {
         ParsleyEngine<String, String> engine = engine(CausalBufferPolicy.drop(CausalBufferLimit.ofSize(100)));
 
         ParsleyRecord<String, String> garbage = new ParsleyRecord<>("k", "v", 0L, List.of(
-                new ParsleyHeader(ParsleyAttributes.VECTOR_CLOCK, new byte[]{9, 9, 9}),
+                new ParsleyHeader(ParsleyAttributes.CAUSAL_DEPENDENCIES, new byte[]{9, 9, 9}),
                 new ParsleyHeader(ParsleyAttributes.SRC_TOPIC, PRICES.topic().getBytes(UTF_8)),
                 new ParsleyHeader(ParsleyAttributes.SRC_PARTITION, ParsleyRecord.intToBytes(PRICES.partition())),
                 new ParsleyHeader(ParsleyAttributes.SRC_OFFSET, ParsleyRecord.longToBytes(0L))));
@@ -329,7 +329,7 @@ class ParsleyEngineTest {
                                                       Uuid topicId, CausalDependencies deps) {
         List<ParsleyHeader> headers = new ArrayList<>();
         if (deps != null) {
-            headers.add(new ParsleyHeader(ParsleyAttributes.VECTOR_CLOCK, deps.toBytes()));
+            headers.add(new ParsleyHeader(ParsleyAttributes.CAUSAL_DEPENDENCIES, deps.toBytes()));
         }
         headers.add(new ParsleyHeader(ParsleyAttributes.SRC_TOPIC, tp.topic().getBytes(UTF_8)));
         headers.add(new ParsleyHeader(ParsleyAttributes.SRC_PARTITION, ParsleyRecord.intToBytes(tp.partition())));

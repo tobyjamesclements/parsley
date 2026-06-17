@@ -1,6 +1,6 @@
 # Parsley
 
-Causal consistency for Kafka — producers that encode a vector clock onto every message,
+Causal consistency for Kafka — producers that encode causal dependencies onto every message,
 consumers that deliver multiple topics in causal order, and Kafka Streams topologies built from
 causally consistent processors.
 
@@ -18,7 +18,7 @@ load-dependent latency cost.
 
 ## How it works
 
-Every message carries the producer's **vector clock** as a header. When a message arrives, the
+Every message carries the producer's **causal dependencies** as a header. When a message arrives, the
 consumer checks whether its **frontier** already satisfies that clock; if so it forwards
 immediately, otherwise it holds the message in a **causal buffer** until the frontier catches up.
 
@@ -35,7 +35,7 @@ The library is a single jar with three entry points, sharing a common vocabulary
 
 ## Where to go next
 
-- [**Concepts**](concepts.md) — vector clocks, frontiers, the buffer, violation policies
+- [**Concepts**](concepts.md) — causal dependencies, frontiers, the buffer, violation policies
 - [**Getting started**](getting-started.md) — dependency setup, producer, and consumer examples
 - [**Streams integration**](streams.md) — wrapping a `Processor`, preconditions, recovery
 - [**Configuration**](configuration.md) — limits, policies, violation handler, DLQ headers

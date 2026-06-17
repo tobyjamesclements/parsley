@@ -8,8 +8,8 @@ final class ParsleyAttributes {
 
     private ParsleyAttributes() {}
 
-    /** Header carrying a record's serialised dependency {@code CausalDependencies}. */
-    static final String VECTOR_CLOCK = "parsley-vector-clock";
+    /** Header carrying a record's serialised {@code CausalDependencies}. */
+    static final String CAUSAL_DEPENDENCIES = "parsley-causal-dependencies";
 
     /** Key under which the frontier is stored in the processor's frontier state store. */
     static final String FRONTIER_KEY = "f";
@@ -23,7 +23,7 @@ final class ParsleyAttributes {
     /** Internal header: the source offset (8-byte big-endian long) of a record routed through the outbox path. */
     static final String SRC_OFFSET    = "_parsley_src_offset";
     /**
-     * Internal header: a copy of the producer's original {@link #VECTOR_CLOCK} header, saved before
+     * Internal header: a copy of the producer's original {@link #CAUSAL_DEPENDENCIES} header, saved before
      * {@link ParsleyProcessorContext} stamps it with the frontier. Restored in
      * {@code ParsleyConsumer.poll()} so that {@link CausalDependencies#fromRecord} still returns the
      * upstream producer's causal intent, not the delivery-time frontier.

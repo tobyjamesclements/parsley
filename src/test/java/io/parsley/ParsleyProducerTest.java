@@ -16,7 +16,7 @@ class ParsleyProducerTest {
     }
 
     @Test
-    void sendAttachesTheVectorClockHeader() {
+    void sendAttachesTheCausalDependenciesHeader() {
         MockProducer<String, String> mock = mock();
         try (ParsleyProducer<String, String> producer = new ParsleyProducer<>(mock)) {
             CausalDependencies clock = CausalDependencies.empty().advance(CausalPosition.deriveUuid("prices"), 0, 3);
@@ -24,8 +24,8 @@ class ParsleyProducerTest {
 
             assertEquals(1, mock.history().size());
             ProducerRecord<String, String> sent = mock.history().get(0);
-            Header header = sent.headers().lastHeader(ParsleyAttributes.VECTOR_CLOCK);
-            assertNotNull(header, "vector-clock header must be present");
+            Header header = sent.headers().lastHeader(ParsleyAttributes.CAUSAL_DEPENDENCIES);
+            assertNotNull(header, "causal-dependencies header must be present");
             assertEquals(clock, CausalDependencies.fromBytes(header.value()));
         }
     }

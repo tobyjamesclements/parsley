@@ -212,7 +212,7 @@ public final class CausalDependencies {
 
     /**
      * Extracts the causal clock a Parsley-stamped message carries in its
-     * {@code parsley-vector-clock} header.
+     * {@code parsley-causal-dependencies} header.
      *
      * @param record the consumed record; must not be {@code null}
      * @return the embedded clock, or empty if the record carried no clock header
@@ -223,14 +223,14 @@ public final class CausalDependencies {
     }
 
     /**
-     * Extracts the causal clock from the {@code parsley-vector-clock} header in {@code headers}.
+     * Extracts the causal clock from the {@code parsley-causal-dependencies} header in {@code headers}.
      *
      * @param headers the record headers to read; must not be {@code null}
      * @return the embedded clock, or empty if no clock header is present
      * @throws IllegalStateException if the header is present but not a valid serialised clock
      */
     public static Optional<CausalDependencies> fromHeaders(Headers headers) {
-        Header header = headers.lastHeader(ParsleyAttributes.VECTOR_CLOCK);
+        Header header = headers.lastHeader(ParsleyAttributes.CAUSAL_DEPENDENCIES);
         return header == null ? Optional.empty() : Optional.of(fromBytes(header.value()));
     }
 

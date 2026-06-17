@@ -20,7 +20,7 @@ import java.util.Optional;
  * The internal envelope the engine processes: a record whose source coordinate and dependency clock
  * are carried as internal headers ({@link ParsleyAttributes#SRC_TOPIC},
  * {@link ParsleyAttributes#SRC_TOPIC_ID}, {@link ParsleyAttributes#SRC_PARTITION},
- * {@link ParsleyAttributes#SRC_OFFSET}, {@link ParsleyAttributes#VECTOR_CLOCK}) alongside any user
+ * {@link ParsleyAttributes#SRC_OFFSET}, {@link ParsleyAttributes#CAUSAL_DEPENDENCIES}) alongside any user
  * headers.
  *
  * @param <K>       the record key type
@@ -113,11 +113,11 @@ record ParsleyRecord<K, V>(K key, V value, long timestamp, List<ParsleyHeader> h
     }
 
     /**
-     * Returns the raw bytes of the {@link ParsleyAttributes#VECTOR_CLOCK} header, or {@code null}
+     * Returns the raw bytes of the {@link ParsleyAttributes#CAUSAL_DEPENDENCIES} header, or {@code null}
      * if the record carried none.
      */
     byte[] encodedDependencies() {
-        ParsleyHeader h = findHeader(ParsleyAttributes.VECTOR_CLOCK);
+        ParsleyHeader h = findHeader(ParsleyAttributes.CAUSAL_DEPENDENCIES);
         return h == null ? null : h.value();
     }
 

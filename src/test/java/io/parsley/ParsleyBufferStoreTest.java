@@ -19,11 +19,11 @@ class ParsleyBufferStoreTest {
 
     private final ParsleyBufferStore<String, String> store = new MockBufferStore<>();
 
-    // The record's VECTOR_CLOCK header carries the dependency clock; the store derives the decoded
+    // The record's CAUSAL_DEPENDENCIES header carries the dependency clock; the store derives the decoded
     // clock from it, so build the record with the clock it depends on.
     private static ParsleyRecord<String, String> rec(TopicPartition tp, long offset, CausalDependencies deps) {
         return new ParsleyRecord<>("k", "v", 0L, List.of(
-                new ParsleyHeader(ParsleyAttributes.VECTOR_CLOCK, deps.toBytes()),
+                new ParsleyHeader(ParsleyAttributes.CAUSAL_DEPENDENCIES, deps.toBytes()),
                 new ParsleyHeader(ParsleyAttributes.SRC_TOPIC, tp.topic().getBytes(UTF_8)),
                 new ParsleyHeader(ParsleyAttributes.SRC_PARTITION, ParsleyRecord.intToBytes(tp.partition())),
                 new ParsleyHeader(ParsleyAttributes.SRC_OFFSET, ParsleyRecord.longToBytes(offset))));

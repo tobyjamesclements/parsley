@@ -65,7 +65,7 @@ import static java.nio.charset.StandardCharsets.UTF_8;
  * {@code streamsConfig} for exactly-once.
  *
  * <p>Because {@link ParsleyProcessorContext} stamps the delivery-time frontier onto the
- * {@link ParsleyAttributes#VECTOR_CLOCK} header when the outbox delegate calls
+ * {@link ParsleyAttributes#CAUSAL_DEPENDENCIES} header when the outbox delegate calls
  * {@code ctx.forward()}, the original producer's clock is saved under
  * {@link ParsleyAttributes#ORIG_CLOCK} before forwarding and restored in {@code poll()} so that
  * {@link CausalDependencies#fromRecord} still returns the upstream producer's causal intent.
@@ -162,7 +162,7 @@ final class ParsleyConsumer<K, V> implements CausalConsumer<K, V> {
                 // SRC_TOPIC/SRC_TOPIC_ID/SRC_PARTITION/SRC_OFFSET are already on the record
                 // (written by ParsleyRecord.of() at ingest time). Just save the producer's clock
                 // before ParsleyProcessorContext.stamp() replaces it with the delivery-time frontier.
-                Header origClock = record.headers().lastHeader(ParsleyAttributes.VECTOR_CLOCK);
+                Header origClock = record.headers().lastHeader(ParsleyAttributes.CAUSAL_DEPENDENCIES);
                 Headers h = new RecordHeaders(record.headers());
                 if (origClock != null) {
                     h.add(ParsleyAttributes.ORIG_CLOCK, origClock.value());
@@ -243,7 +243,7 @@ final class ParsleyConsumer<K, V> implements CausalConsumer<K, V> {
 
     /**
      * Strips all internal {@code _parsley_*} headers and swaps the delivery-time frontier clock
-     * back for the producer's original {@link ParsleyAttributes#VECTOR_CLOCK}.
+     * back for the producer's original {@link ParsleyAttributes#CAUSAL_DEPENDENCIES}.
      */
     private static Headers restoreOriginalClock(Headers source) {
         Header origClock = source.lastHeader(ParsleyAttributes.ORIG_CLOCK);
@@ -251,11 +251,11 @@ final class ParsleyConsumer<K, V> implements CausalConsumer<K, V> {
         for (Header h : source) {
             String key = h.key();
             if (key.startsWith("_parsley_")) continue;
-            if (key.equals(ParsleyAttributes.VECTOR_CLOCK)) continue;
+            if (key.equals(ParsleyAttributes.CAUSAL_DEPENDENCIES)) continue;
             out.add(h);
         }
         if (origClock != null) {
-            out.add(new RecordHeader(ParsleyAttributes.VECTOR_CLOCK, origClock.value()));
+            out.add(new RecordHeader(ParsleyAttributes.CAUSAL_DEPENDENCIES, origClock.value()));
         }
         return out;
     }

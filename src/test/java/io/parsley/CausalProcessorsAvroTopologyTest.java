@@ -166,7 +166,7 @@ class CausalProcessorsAvroTopologyTest {
 
     private static Headers clockHeader(CausalDependencies clock) {
         Headers headers = new RecordHeaders();
-        headers.add(new RecordHeader("parsley-vector-clock", clock.toBytes()));
+        headers.add(new RecordHeader("parsley-causal-dependencies", clock.toBytes()));
         return headers;
     }
 

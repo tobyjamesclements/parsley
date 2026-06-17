@@ -33,7 +33,7 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * End-to-end round trip against a real broker: a {@link CausalProducer} stamps vector clocks,
+ * End-to-end round trip against a real broker: a {@link CausalProducer} stamps causal dependencies,
  * and a {@link CausalConsumer} delivers the records in causal order with an advancing frontier.
  */
 @Testcontainers(disabledWithoutDocker = true)
@@ -85,7 +85,7 @@ class CausalRoundTripIT {
             assertTrue(consumer.frontier().positions().stream().anyMatch(p -> p.partition() == 0),
                     "frontier covers partition 0");
 
-            // Each delivered record still carries the producer's vector-clock header, extractable
+            // Each delivered record still carries the producer's causal-dependencies header, extractable
             // via the public API — this is the causal context a service would forward to a client.
             for (int i = 0; i < 5; i++) {
                 CausalDependencies expected = i == 0
