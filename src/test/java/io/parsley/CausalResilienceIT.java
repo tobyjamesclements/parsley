@@ -5,15 +5,17 @@ import org.apache.kafka.clients.admin.NewTopic;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.apache.kafka.clients.producer.ProducerConfig;
 import org.apache.kafka.clients.producer.ProducerRecord;
-import org.apache.kafka.common.Uuid;
+import org.apache.kafka.common.TopicPartition;
 import org.apache.kafka.common.serialization.StringSerializer;
 import org.apache.kafka.streams.StreamsConfig;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.kafka.KafkaContainer;
 import org.testcontainers.utility.DockerImageName;
 
+import java.nio.file.Path;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
@@ -37,6 +39,9 @@ class CausalResilienceIT {
     private final KafkaContainer kafka =
             new KafkaContainer(DockerImageName.parse("apache/kafka:3.7.0"));
 
+    @TempDir
+    private Path stateDir;
+
     private static final String PRICES = "prices";
     private static final String ORDERS = "orders";
     private static final String EVENTS = "events";
@@ -48,16 +53,15 @@ class CausalResilienceIT {
      * <p>This exercises the full state-store changelog restoration path and the
      * {@link ParsleyEngine} WaitIndex re-seeding from the restored buffer.
      *
-     * <p>The dependency is expressed with the real Kafka topic UUID (fetched via AdminClient)
-     * rather than the {@code advance(TopicPartition, offset)} convenience overload which uses a
-     * deterministic name-based UUID. The consumer's frontier uses the real UUID, so only the
-     * real UUID triggers a proper drain; the name-based UUID would cause the record to remain
-     * buffered until eviction.
+     * <p>Both the producer and the consumer use the same name-derived UUID for PRICES (via
+     * {@link MockAdminClient}), so {@link CausalDependencies#advance(TopicPartition, long)}
+     * produces the same UUID that the consumer's frontier tracks — enabling natural causal drain
+     * rather than eviction.
      */
     @Test
     void restartWithBufferedRecord_resumesDrainAfterRecovery() throws Exception {
         String bootstrap = kafka.getBootstrapServers();
-        Uuid pricesUuid = createTopic(bootstrap, PRICES, 1);
+        createTopic(bootstrap, PRICES, 1);
         createTopic(bootstrap, ORDERS, 1);
 
         // Fixed applicationId so Kafka Streams restores the frontier, buffer, and wait-index
@@ -71,13 +75,15 @@ class CausalResilienceIT {
                              List.of(PRICES, ORDERS),
                              CausalBufferPolicy.forwardUnsafe(CausalBufferLimit.ofDuration(Duration.ofMinutes(5))),
                              Map.of(),
-                             streamsConfig(bootstrap, appId)).build();
+                             streamsConfig(bootstrap, appId))
+                             .topicAdmin(new MockAdminClient(TopicAdmin.ofBootstrap(bootstrap)))
+                             .build();
              CausalProducer<String, String> producer = causalProducer(bootstrap)) {
 
-            // Use the real Kafka UUID so the frontier (which also uses the real UUID) can satisfy
-            // this dependency when PRICES arrives.
+            // advance(TopicPartition, offset) uses nameUuid; MockAdminClient ensures the consumer
+            // frontier also uses nameUuid, so the two match and causal drain fires naturally.
             producer.send(new ProducerRecord<>(ORDERS, "k", "order-1"),
-                    CausalDependencies.empty().advance(pricesUuid, 0, 0)).get();
+                    CausalDependencies.empty().advance(new TopicPartition(PRICES, 0), 0)).get();
 
             // Poll a few times — ORDERS should be buffered, not delivered.
             for (int i = 0; i < 3; i++) {
@@ -99,11 +105,13 @@ class CausalResilienceIT {
                              List.of(PRICES, ORDERS),
                              CausalBufferPolicy.forwardUnsafe(CausalBufferLimit.ofDuration(Duration.ofMinutes(5))),
                              Map.of(),
-                             streamsConfig(bootstrap, appId)).build();
+                             streamsConfig(bootstrap, appId))
+                             .topicAdmin(new MockAdminClient(TopicAdmin.ofBootstrap(bootstrap)))
+                             .build();
              CausalProducer<String, String> producer = causalProducer(bootstrap)) {
 
             // PRICES has no dependencies — admitted immediately, advancing the frontier to
-            // pricesUuid/0@offset=0, which satisfies the buffered ORDERS record.
+            // prices/0@offset=0, which satisfies the buffered ORDERS record.
             producer.send(new ProducerRecord<>(PRICES, "k", "price-1"),
                     CausalDependencies.empty()).get();
 
@@ -167,10 +175,11 @@ class CausalResilienceIT {
 
     // ---- helpers ----
 
-    private static Map<String, Object> streamsConfig(String bootstrap, String appId) {
+    private Map<String, Object> streamsConfig(String bootstrap, String appId) {
         return Map.of(
                 StreamsConfig.APPLICATION_ID_CONFIG, appId,
                 StreamsConfig.BOOTSTRAP_SERVERS_CONFIG, bootstrap,
+                StreamsConfig.STATE_DIR_CONFIG, stateDir.toString(),
                 StreamsConfig.DEFAULT_KEY_SERDE_CLASS_CONFIG,
                 org.apache.kafka.common.serialization.Serdes.String().getClass().getName(),
                 StreamsConfig.DEFAULT_VALUE_SERDE_CLASS_CONFIG,
@@ -178,10 +187,11 @@ class CausalResilienceIT {
                 StreamsConfig.COMMIT_INTERVAL_MS_CONFIG, 200);
     }
 
-    private static Map<String, Object> streamsConfigWithThreads(String bootstrap, int threads) {
+    private Map<String, Object> streamsConfigWithThreads(String bootstrap, int threads) {
         return Map.of(
                 StreamsConfig.APPLICATION_ID_CONFIG, "resilience-multithread-app",
                 StreamsConfig.BOOTSTRAP_SERVERS_CONFIG, bootstrap,
+                StreamsConfig.STATE_DIR_CONFIG, stateDir.toString(),
                 StreamsConfig.DEFAULT_KEY_SERDE_CLASS_CONFIG,
                 org.apache.kafka.common.serialization.Serdes.String().getClass().getName(),
                 StreamsConfig.DEFAULT_VALUE_SERDE_CLASS_CONFIG,
@@ -197,11 +207,9 @@ class CausalResilienceIT {
                 ProducerConfig.VALUE_SERIALIZER_CLASS_CONFIG, StringSerializer.class.getName())).build();
     }
 
-    /** Creates a topic and returns its Kafka-assigned UUID. */
-    private static Uuid createTopic(String bootstrap, String topic, int partitions) throws Exception {
+    private static void createTopic(String bootstrap, String topic, int partitions) throws Exception {
         try (Admin admin = Admin.create(Map.of("bootstrap.servers", bootstrap))) {
             admin.createTopics(Set.of(new NewTopic(topic, partitions, (short) 1))).all().get();
-            return admin.describeTopics(List.of(topic)).allTopicNames().get().get(topic).topicId();
         }
     }
 }

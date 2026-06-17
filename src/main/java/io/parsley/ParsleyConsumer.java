@@ -1,7 +1,5 @@
 package io.parsley;
 
-import org.apache.kafka.clients.admin.Admin;
-import org.apache.kafka.clients.admin.NewTopic;
 import org.apache.kafka.clients.admin.TopicDescription;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.apache.kafka.clients.consumer.ConsumerRecords;
@@ -36,7 +34,6 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
-import java.util.Set;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.atomic.AtomicReference;
 
@@ -84,7 +81,8 @@ final class ParsleyConsumer<K, V> implements CausalConsumer<K, V> {
             CausalViolationHandler onViolation,
             Map<String, Object> consumerConfig,
             Map<String, Object> streamsConfig,
-            String storeName) {
+            String storeName,
+            TopicAdmin topicAdmin) {
 
         Map<String, Object> merged = new HashMap<>();
         merged.put("processing.exception.handler.global.enabled", "true");
@@ -103,7 +101,13 @@ final class ParsleyConsumer<K, V> implements CausalConsumer<K, V> {
         this.keySerde = keySerde;
         this.valueSerde = valueSerde;
 
-        Map<String, Uuid> topicUuids = setupOutbox(bootstrap, topics, outboxTopic);
+        TopicAdmin admin = (topicAdmin != null) ? topicAdmin : TopicAdmin.ofBootstrap(bootstrap);
+        Map<String, Uuid> topicUuids;
+        try {
+            topicUuids = setupOutbox(admin, topics, outboxTopic);
+        } finally {
+            try { admin.close(); } catch (Exception ignored) {}
+        }
 
         Serde<byte[]> bytes = Serdes.ByteArray();
         StreamsBuilder builder = new StreamsBuilder();
@@ -197,11 +201,10 @@ final class ParsleyConsumer<K, V> implements CausalConsumer<K, V> {
     /**
      * Creates the outbox topic and returns the Kafka topic UUIDs for each input topic.
      */
-    private static Map<String, Uuid> setupOutbox(String bootstrap, Collection<String> inputTopics,
+    private static Map<String, Uuid> setupOutbox(TopicAdmin admin, Collection<String> inputTopics,
                                                   String outboxTopic) {
-        try (Admin admin = Admin.create(Map.of("bootstrap.servers", bootstrap))) {
-            Map<String, TopicDescription> descriptions =
-                    admin.describeTopics(new ArrayList<>(inputTopics)).allTopicNames().get();
+        try {
+            Map<String, TopicDescription> descriptions = admin.describeTopics(new ArrayList<>(inputTopics));
 
             Map<String, Uuid> topicUuids = new HashMap<>();
             descriptions.forEach((topic, desc) -> topicUuids.put(topic, desc.topicId()));
@@ -211,17 +214,21 @@ final class ParsleyConsumer<K, V> implements CausalConsumer<K, V> {
                     .max()
                     .orElse(1);
             try {
-                admin.createTopics(Set.of(new NewTopic(outboxTopic, maxPartitions, (short) 1))).all().get();
+                admin.createTopic(outboxTopic, maxPartitions);
             } catch (ExecutionException e) {
                 if (!(e.getCause() instanceof TopicExistsException)) {
                     throw new RuntimeException("Failed to create outbox topic " + outboxTopic, e);
                 }
+            } catch (Exception e) {
+                throw new RuntimeException("Failed to create outbox topic " + outboxTopic, e);
             }
             return Map.copyOf(topicUuids);
+        } catch (RuntimeException e) {
+            throw e;
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             throw new RuntimeException(e);
-        } catch (ExecutionException e) {
+        } catch (Exception e) {
             throw new RuntimeException("Failed to describe input topics for outbox sizing", e);
         }
     }

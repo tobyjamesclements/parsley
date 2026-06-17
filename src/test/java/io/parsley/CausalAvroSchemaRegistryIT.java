@@ -30,6 +30,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
+import java.util.concurrent.atomic.AtomicReference;
 
 import java.util.Optional;
 
@@ -138,6 +139,10 @@ class CausalAvroSchemaRegistryIT {
         Order order = new Order("o-buf", "ACME", 10);
         Price price = new Price("ACME", 99.0);
 
+        // drop policy: if the Order is evicted instead of drained causally, it is lost and the
+        // await below fails — protecting against regressions where eviction masks a broken drain.
+        AtomicReference<CausalViolation> eviction = new AtomicReference<>();
+
         try (CausalProducer<String, SpecificRecord> producer = CausalProducers.<String, SpecificRecord>builder(Map.of(
                 ProducerConfig.BOOTSTRAP_SERVERS_CONFIG, bootstrap,
                 ProducerConfig.KEY_SERIALIZER_CLASS_CONFIG, StringSerializer.class.getName(),
@@ -145,10 +150,14 @@ class CausalAvroSchemaRegistryIT {
                 "schema.registry.url", registryUrl)).build();
              CausalConsumer<String, SpecificRecord> consumer = CausalConsumers.<String, SpecificRecord>builder(
                      List.of(ORDERS, PRICES),
-                     // Long eviction window so the Order can only be released naturally, never by limit.
-                     CausalBufferPolicy.forwardUnsafe(CausalBufferLimit.ofDuration(Duration.ofSeconds(60))),
+                     // Short eviction window with drop: if causal drain is broken the Order is lost,
+                     // the await fails, and onViolation surfaces a clear cause.
+                     CausalBufferPolicy.drop(CausalBufferLimit.ofDuration(Duration.ofSeconds(5))),
                      Map.of(ConsumerConfig.GROUP_ID_CONFIG, "avro-buf-" + UUID.randomUUID()),
-                     streamsConfig(bootstrap, registryUrl)).build()) {
+                     streamsConfig(bootstrap, registryUrl))
+                     .onViolation(eviction::set)
+                     .topicAdmin(new MockAdminClient(TopicAdmin.ofBootstrap(bootstrap)))
+                     .build()) {
 
             // Order declares it has seen prices-0@0 — it will be buffered until Price arrives.
             producer.send(new ProducerRecord<>(ORDERS, "o-buf", order),
@@ -167,8 +176,11 @@ class CausalAvroSchemaRegistryIT {
             producer.send(new ProducerRecord<>(PRICES, "ACME", price),
                     CausalDependencies.empty()).get();
 
-            await().atMost(Duration.ofSeconds(60)).until(() -> {
+            await().atMost(Duration.ofSeconds(30)).until(() -> {
                 consumer.poll(Duration.ofMillis(500)).forEach(received::add);
+                CausalViolation v = eviction.get();
+                if (v != null) throw new AssertionError(
+                        "Order was evicted instead of drained causally: " + v);
                 return received.size() >= 2;
             });
 

@@ -59,6 +59,7 @@ public final class CausalConsumers {
         private final Map<String, Object> streamsConfig;
         private CausalViolationHandler onViolation = violation -> {};
         private String storeName = "parsley";
+        private TopicAdmin topicAdmin = null;
 
         private Builder(Collection<String> topics, CausalBufferPolicy policy,
                         Map<String, Object> consumerConfig, Map<String, Object> streamsConfig) {
@@ -93,6 +94,22 @@ public final class CausalConsumers {
         }
 
         /**
+         * Overrides the {@link TopicAdmin} used for outbox setup (default: a live Kafka
+         * {@link org.apache.kafka.clients.admin.Admin} created from {@code bootstrap.servers}).
+         * Supply a {@code MockAdminClient} in tests to avoid a real broker dependency or to force
+         * deterministic name-derived UUIDs so that {@link CausalDependencies#advance(
+         * org.apache.kafka.common.TopicPartition, long)} resolves to the same UUID as the
+         * consumer's frontier.
+         *
+         * @param topicAdmin the {@link TopicAdmin} to use; closed automatically after outbox setup
+         * @return this builder
+         */
+        public Builder<K, V> topicAdmin(TopicAdmin topicAdmin) {
+            this.topicAdmin = topicAdmin;
+            return this;
+        }
+
+        /**
          * Builds and starts the {@link CausalConsumer}.
          *
          * @return a new, running {@code CausalConsumer}
@@ -100,7 +117,7 @@ public final class CausalConsumers {
          *                                  {@link CausalBufferPolicy#deadLetter dead-letter} policy
          */
         public CausalConsumer<K, V> build() {
-            return new ParsleyConsumer<>(topics, policy, onViolation, consumerConfig, streamsConfig, storeName);
+            return new ParsleyConsumer<>(topics, policy, onViolation, consumerConfig, streamsConfig, storeName, topicAdmin);
         }
     }
 }
