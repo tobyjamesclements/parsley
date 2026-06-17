@@ -52,6 +52,7 @@ class CausalProcessorsTopologyTest {
     private static final Uuid IN_ID     = CausalPosition.deriveUuid("in");
     private static final Uuid PRICES_ID = CausalPosition.deriveUuid("prices");
     private static final Uuid ORDERS_ID = CausalPosition.deriveUuid("orders");
+    private static final Uuid QUOTES_ID = CausalPosition.deriveUuid("quotes");
 
     private final List<String> processed = new ArrayList<>();
     private final List<CausalViolation> violations = new ArrayList<>();
@@ -560,6 +561,474 @@ class CausalProcessorsTopologyTest {
                     "one record was released from the buffer");
             assertEquals(0.0, parsleyMetric(driver, "buffer-depth"), 0.001,
                     "buffer is empty after the drain");
+        }
+    }
+
+    /**
+     * A record whose dep clock contains its own source coordinate is forwarded immediately: the
+     * self-referential entry is stripped at admission, leaving an empty clock (satisfied).
+     *
+     * <p>The buffer size limit is set to 1 so any attempt to buffer the record would fire
+     * {@link CausalViolationReason#LIMIT_REACHED} immediately — proving the record never
+     * entered the buffer path.
+     */
+    @Test
+    void selfReferentialDependency_isStrippedAndForwardedImmediately() {
+        Topology topology = topology(
+                CausalProcessors.builder(upperCaser(), CausalBufferPolicy.drop(CausalBufferLimit.ofSize(1)))
+                        .serdes(Serdes.String(), Serdes.String()).onViolation(onViolation).build(),
+                List.of("in"));
+
+        try (TopologyTestDriver driver = new TopologyTestDriver(topology, config(null))) {
+            TestInputTopic<String, String> in =
+                    driver.createInputTopic("in", new StringSerializer(), new StringSerializer());
+            TestOutputTopic<String, String> out =
+                    driver.createOutputTopic("out", new StringDeserializer(), new StringDeserializer());
+            KeyValueStore<String, byte[]> bufferStore = driver.getKeyValueStore("parsley-buffer");
+
+            // Dep clock requires IN_ID/0@0 — exactly the record's own source coordinate.
+            in.pipeInput(new TestRecord<>("k", "hello",
+                    clockHeader(CausalDependencies.empty().advance(IN_ID, 0, 0))));
+
+            assertEquals(List.of("HELLO"), out.readValuesToList(),
+                    "self-dep stripped → empty clock → forwarded immediately");
+            assertTrue(violations.isEmpty(), "no violation: the circular entry is silently removed");
+            assertEquals(0, storeSize(bufferStore),
+                    "record must never enter the buffer even with size limit 1");
+        }
+    }
+
+    /**
+     * Verifies that a fused two-processor chain (no intermediate Kafka topic) does not deadlock
+     * when proc1's frontier stamp includes the current record's own source coordinate.
+     *
+     * <p>In a fused topology, proc2's {@code context.recordMetadata()} returns the original source
+     * metadata, so the forwarded record has the same source coordinate as its dep clock entry.
+     * Without the self-reference strip this would cause every forwarded record to be held
+     * indefinitely in proc2's buffer.
+     */
+    @Test
+    void fusedChain_proc1StampDoesNotCircularlyBlockProc2() {
+        StreamsBuilder builder = new StreamsBuilder();
+        Consumed<String, String> consumed = Consumed.with(Serdes.String(), Serdes.String());
+        Produced<String, String> produced = Produced.with(Serdes.String(), Serdes.String());
+        List<CausalViolation> proc1Violations = new ArrayList<>();
+        List<CausalViolation> proc2Violations = new ArrayList<>();
+
+        // Fused chain: proc1 → proc2, no .to("intermediate") between them.
+        // proc1 admits the record, stamps its frontier (which now contains the source coord), and
+        // forwards. proc2 receives the stamped record; because the topology is fused,
+        // context.recordMetadata() still returns the original "in" metadata → self-reference dep.
+        builder.stream("in", consumed)
+                .process(CausalProcessors.builder(upperCaser(),
+                                CausalBufferPolicy.drop(CausalBufferLimit.ofSize(100)))
+                        .serdes(Serdes.String(), Serdes.String())
+                        .onViolation(proc1Violations::add)
+                        .storeName("first").build())
+                .process(CausalProcessors.builder(upperCaser(),
+                                CausalBufferPolicy.drop(CausalBufferLimit.ofSize(100)))
+                        .serdes(Serdes.String(), Serdes.String())
+                        .onViolation(proc2Violations::add)
+                        .storeName("second").build())
+                .to("out", produced);
+
+        try (TopologyTestDriver driver = new TopologyTestDriver(builder.build(), config(null))) {
+            TestInputTopic<String, String> in =
+                    driver.createInputTopic("in", new StringSerializer(), new StringSerializer());
+            TestOutputTopic<String, String> out =
+                    driver.createOutputTopic("out", new StringDeserializer(), new StringDeserializer());
+
+            in.pipeInput(new TestRecord<>("k", "hello", clockHeader(CausalDependencies.empty())));
+
+            assertEquals(List.of("HELLO"), out.readValuesToList(),
+                    "record must flow through both processors and reach the output");
+            assertTrue(proc1Violations.isEmpty(), "proc1 must not violate");
+            assertTrue(proc2Violations.isEmpty(),
+                    "proc2 must not violate: self-dep is stripped before evaluation");
+            assertEquals(0, storeSize(driver.getKeyValueStore("second-buffer")),
+                    "proc2 buffer must be empty — record was never held");
+        }
+    }
+
+    /**
+     * Verifies that two {@link CausalProcessors} instances chained via a materialized Kafka topic
+     * each enforce causal ordering independently, with full drainage at both layers (backlog #14).
+     *
+     * <h2>Topology</h2>
+     * <pre>
+     *   [prices, orders] ──→ proc1("first") ──→ "quotes" (materialized)
+     *                                                   ↓
+     *   [prices, orders] ──────────────────────→ proc2("second") ──→ out
+     * </pre>
+     * Proc2 subscribes to "quotes" (proc1's derived output) AND to "prices"/"orders" directly.
+     *
+     * <h2>Why materialization is required</h2>
+     * Without {@code .to("quotes")} the chain is fused: {@code recordMetadata().topic()} in
+     * proc2 returns the original Kafka source topic, so every forwarded record's dep includes its
+     * own source coordinate. Self-referential entries are stripped at engine admission time, so the
+     * forwarded record is forwarded immediately rather than held indefinitely — but with
+     * materialization, quotes records have source {@code QUOTES_ID} and deps
+     * {@code {PRICES_ID@x, ORDERS_ID@y}}: no self-reference at all, and the causal ordering across
+     * two layers is preserved. See {@code fusedChain_proc1StampDoesNotCircularlyBlockProc2} for
+     * the targeted regression guard.
+     *
+     * <h2>Why distinct {@code storeName} values are required</h2>
+     * Each {@code CausalProcessorSupplier} registers three KeyValueStores
+     * ({@code {name}-frontier}, {@code {name}-buffer}, {@code {name}-wait-index}). Without
+     * distinct names Kafka Streams rejects the topology with a duplicate-store error.
+     *
+     * <h2>How proc2 bootstraps without circular dependency</h2>
+     * Direct "prices" and "orders" subscriptions advance proc2's frontier on {@code PRICES_ID}
+     * and {@code ORDERS_ID}. Once both dimensions are satisfied, proc2 drains the buffered
+     * quotes records. Both buffer stores are empty at the end.
+     */
+    @Test
+    void chainedProcessors_materializationEnablesFullDrainAtBothLayers() {
+        StreamsBuilder builder = new StreamsBuilder();
+        Consumed<String, String>  consumed = Consumed.with(Serdes.String(), Serdes.String());
+        Produced<String, String>  produced = Produced.with(Serdes.String(), Serdes.String());
+        List<CausalViolation> proc1Violations = new ArrayList<>();
+        List<CausalViolation> proc2Violations = new ArrayList<>();
+
+        // Each source topic is declared once; the DSL branches the node when the same KStream
+        // object appears in multiple merge() calls. Declaring separate builder.stream() calls
+        // for the same topic would create overlapping source nodes, which Kafka Streams rejects.
+        // Each source topic is declared once; the DSL branches the node when the same KStream
+        // object appears in multiple merge() calls. Declaring separate builder.stream() calls
+        // for the same topic would create overlapping source nodes, which Kafka Streams rejects.
+        var pricesSrc = builder.stream("prices", consumed);
+        var ordersSrc = builder.stream("orders", consumed);
+        var quotesSrc = builder.stream("quotes",  consumed);
+
+        // Proc1: holds orders (dep on prices) until prices arrive. Output materializes to "quotes"
+        // — a new derived event type. Quotes records carry dep {PRICES_ID@x, ORDERS_ID@y} from
+        // proc1's frontier stamp; their source is QUOTES_ID (not self-stamped).
+        pricesSrc.merge(ordersSrc)
+                .process(CausalProcessors.builder(upperCaser(),
+                             CausalBufferPolicy.drop(CausalBufferLimit.ofSize(100)))
+                        .serdesByTopic(t -> Serdes.String(), t -> Serdes.String())
+                        .onViolation(proc1Violations::add)
+                        .storeName("first").build())
+                .to("quotes", produced);
+
+        // Proc2: receives "quotes" (proc1's derived output) AND "prices"/"orders" directly
+        // (the same source KStream objects, branched by the DSL). Direct prices/orders bootstrap
+        // proc2's frontier on PRICES_ID and ORDERS_ID. Once satisfied, proc2 drains the buffered
+        // quotes records without any circular dependency.
+        quotesSrc.merge(pricesSrc).merge(ordersSrc)
+                .process(CausalProcessors.builder(upperCaser(),
+                             CausalBufferPolicy.drop(CausalBufferLimit.ofSize(100)))
+                        .serdesByTopic(t -> Serdes.String(), t -> Serdes.String())
+                        .onViolation(proc2Violations::add)
+                        .storeName("second").build())
+                .to("out", produced);
+
+        try (TopologyTestDriver driver = new TopologyTestDriver(builder.build(), config(null))) {
+            TestInputTopic<String, String> prices =
+                    driver.createInputTopic("prices", new StringSerializer(), new StringSerializer());
+            TestInputTopic<String, String> orders =
+                    driver.createInputTopic("orders", new StringSerializer(), new StringSerializer());
+            TestOutputTopic<String, String> out =
+                    driver.createOutputTopic("out", new StringDeserializer(), new StringDeserializer());
+
+            // Phase 1: orders arrive before prices; held at proc1 AND at proc2 (direct subscription).
+            orders.pipeInput(new TestRecord<>("k", "order",
+                    clockHeader(CausalDependencies.empty().advance(PRICES_ID, 0, 0))));
+            assertTrue(out.isEmpty(), "orders must be held before prices arrive");
+            assertEquals(1, storeSize(driver.getKeyValueStore("first-buffer")),
+                    "proc1 must buffer the order");
+            assertEquals(1, storeSize(driver.getKeyValueStore("second-buffer")),
+                    "proc2 must buffer the direct order");
+
+            // Phase 2: prices arrives — proc1 drains and materializes two quotes records, then
+            // proc2 bootstraps its frontier from the direct prices/orders and drains both quotes.
+            prices.pipeInput(new TestRecord<>("k", "price",
+                    clockHeader(CausalDependencies.empty())));
+
+            // Both layers drained completely; no records stuck in either buffer.
+            assertEquals(0, storeSize(driver.getKeyValueStore("first-buffer")));
+            assertEquals(0, storeSize(driver.getKeyValueStore("second-buffer")));
+
+            // "out" has 4 records: direct price, direct order (proc2's own admissions) plus
+            // the proc1-forwarded price and order (arriving via "quotes"). Exact ordering is
+            // TopologyTestDriver-dependent; assert the value multiset.
+            List<String> outValues = out.readValuesToList();
+            assertEquals(4, outValues.size());
+            assertEquals(2, outValues.stream().filter("PRICE"::equals).count(),
+                    "two PRICE records: direct and via quotes");
+            assertEquals(2, outValues.stream().filter("ORDER"::equals).count(),
+                    "two ORDER records: direct and via quotes");
+
+            // Proc1's frontier spans both source topics after draining.
+            assertEquals(CausalFrontier.empty().advance(PRICES_ID, 0, 0).advance(ORDERS_ID, 0, 0),
+                    frontierIn(driver, "first-frontier"));
+
+            // Proc2's frontier spans prices and orders (from direct admissions) plus quotes@1
+            // (the last quotes record proc2 drained).
+            CausalFrontier f2 = frontierIn(driver, "second-frontier");
+            assertEquals(0L, f2.offsetFor(PRICES_ID, 0), "proc2 saw prices directly");
+            assertEquals(0L, f2.offsetFor(ORDERS_ID, 0), "proc2 saw orders directly");
+            assertEquals(1L, f2.offsetFor(QUOTES_ID, 0), "proc2 drained both quotes records");
+
+            assertTrue(proc1Violations.isEmpty(),
+                    "proc1 must not violate: prices has empty clock, orders has dep clock");
+            assertTrue(proc2Violations.isEmpty(),
+                    "proc2 must not violate: all records carry valid clocks");
+        }
+    }
+
+    /**
+     * Materialized chain where proc2 also consumes a genuinely independent third topic
+     * ("discounts") whose records carry a causal dep on the derived "quotes" topic.
+     *
+     * <h2>Topology</h2>
+     * <pre>
+     *   "prices" ──→ proc1("first") ──→ "quotes" (materialized)
+     *                                          ↓
+     *   "prices" ─────────────────────→ proc2("second") ──→ "out"
+     *   "discounts" ──────────────────→ proc2("second")
+     * </pre>
+     * The discount record arrives at proc2 before "quotes" has been produced, so it is buffered.
+     * Once proc1 materialises quotes@0, proc2's frontier advances through PRICES (direct) and then
+     * QUOTES (quotes@0 drains), satisfying the discount's dep and releasing it last.
+     */
+    @Test
+    void materializationChain_clockedSidecar_bufferedUntilDerivedTopicArrives() {
+        StreamsBuilder builder = new StreamsBuilder();
+        Consumed<String, String> consumed = Consumed.with(Serdes.String(), Serdes.String());
+        Produced<String, String> produced = Produced.with(Serdes.String(), Serdes.String());
+        List<CausalViolation> proc1Violations = new ArrayList<>();
+        List<CausalViolation> proc2Violations = new ArrayList<>();
+
+        var pricesSrc    = builder.stream("prices",    consumed);
+        var quotesSrc    = builder.stream("quotes",    consumed);
+        var discountsSrc = builder.stream("discounts", consumed);
+
+        pricesSrc
+                .process(CausalProcessors.builder(upperCaser(),
+                                CausalBufferPolicy.drop(CausalBufferLimit.ofSize(100)))
+                        .serdes(Serdes.String(), Serdes.String())
+                        .onViolation(proc1Violations::add)
+                        .storeName("first").build())
+                .to("quotes", produced);
+
+        // proc2 takes proc1's materialised output, the original prices (to bootstrap PRICES
+        // frontier), and the independent "discounts" stream.
+        quotesSrc.merge(pricesSrc).merge(discountsSrc)
+                .process(CausalProcessors.builder(upperCaser(),
+                                CausalBufferPolicy.drop(CausalBufferLimit.ofSize(100)))
+                        .serdes(Serdes.String(), Serdes.String())
+                        .onViolation(proc2Violations::add)
+                        .storeName("second").build())
+                .to("out", produced);
+
+        try (TopologyTestDriver driver = new TopologyTestDriver(builder.build(), config(null))) {
+            TestInputTopic<String, String> prices =
+                    driver.createInputTopic("prices", new StringSerializer(), new StringSerializer());
+            TestInputTopic<String, String> discounts =
+                    driver.createInputTopic("discounts", new StringSerializer(), new StringSerializer());
+            TestOutputTopic<String, String> out =
+                    driver.createOutputTopic("out", new StringDeserializer(), new StringDeserializer());
+
+            // Discount arrives before quotes@0 has been produced — must be buffered.
+            discounts.pipeInput(new TestRecord<>("k", "discount",
+                    clockHeader(CausalDependencies.empty().advance(QUOTES_ID, 0, 0))));
+            assertTrue(out.isEmpty(), "discount must be held: quotes@0 not yet in proc2's frontier");
+            assertEquals(1, storeSize(driver.getKeyValueStore("second-buffer")));
+
+            // Price arrives: proc1 materialises quotes@0 (stamped {PRICES_ID@0}).
+            // Proc2's direct price subscription advances its PRICES frontier, allowing it to admit
+            // quotes@0, which advances its QUOTES frontier and drains the discount.
+            prices.pipeInput(new TestRecord<>("k", "price", clockHeader(CausalDependencies.empty())));
+
+            assertEquals(0, storeSize(driver.getKeyValueStore("second-buffer")),
+                    "discount must have drained once quotes@0 was admitted");
+            List<String> values = out.readValuesToList();
+            assertEquals(3, values.size(), "price (direct), price (via quotes), and discount");
+            assertEquals(2, values.stream().filter("PRICE"::equals).count());
+            assertEquals(1, values.stream().filter("DISCOUNT"::equals).count());
+            assertEquals("DISCOUNT", values.get(values.size() - 1),
+                    "discount is last: buffered until quotes@0 advanced the QUOTES frontier");
+            assertTrue(proc1Violations.isEmpty());
+            assertTrue(proc2Violations.isEmpty());
+        }
+    }
+
+    /**
+     * Fused chain where proc2 also consumes a clocked independent topic ("discounts") whose
+     * records carry a dep on the original "in" source.
+     *
+     * <h2>Topology</h2>
+     * <pre>
+     *   "in"        ──→ proc1("first") ──→ (fused) ──→ proc2("second") ──→ "out"
+     *   "discounts" ──────────────────────────────────→ proc2("second")
+     * </pre>
+     * The discount arrives before proc1 has seen "in"@0, so proc2 buffers it. When proc1 processes
+     * "in"@0 and fuses to proc2, the self-dep is stripped and proc2 admits the "in" record,
+     * advancing its IN_ID frontier. The discount then drains immediately.
+     *
+     * <p>This proves the self-dep strip does not prevent the frontier from advancing for IN_ID:
+     * proc2 correctly recognises that IN_ID@0 is now satisfied and releases the discount.
+     */
+    @Test
+    void fusedChain_clockedSidecar_bufferedUntilFusedOutputAdvancesFrontier() {
+        StreamsBuilder builder = new StreamsBuilder();
+        Consumed<String, String> consumed = Consumed.with(Serdes.String(), Serdes.String());
+        Produced<String, String> produced = Produced.with(Serdes.String(), Serdes.String());
+        List<CausalViolation> proc1Violations = new ArrayList<>();
+        List<CausalViolation> proc2Violations = new ArrayList<>();
+
+        var discountsSrc = builder.stream("discounts", consumed);
+
+        // proc1 fused directly into proc2 (no .to("intermediate")); discounts also merge into proc2.
+        builder.stream("in", consumed)
+                .process(CausalProcessors.builder(upperCaser(),
+                                CausalBufferPolicy.drop(CausalBufferLimit.ofSize(100)))
+                        .serdes(Serdes.String(), Serdes.String())
+                        .onViolation(proc1Violations::add)
+                        .storeName("first").build())
+                .merge(discountsSrc)
+                .process(CausalProcessors.builder(upperCaser(),
+                                CausalBufferPolicy.drop(CausalBufferLimit.ofSize(100)))
+                        .serdes(Serdes.String(), Serdes.String())
+                        .onViolation(proc2Violations::add)
+                        .storeName("second").build())
+                .to("out", produced);
+
+        try (TopologyTestDriver driver = new TopologyTestDriver(builder.build(), config(null))) {
+            TestInputTopic<String, String> in =
+                    driver.createInputTopic("in", new StringSerializer(), new StringSerializer());
+            TestInputTopic<String, String> discounts =
+                    driver.createInputTopic("discounts", new StringSerializer(), new StringSerializer());
+            TestOutputTopic<String, String> out =
+                    driver.createOutputTopic("out", new StringDeserializer(), new StringDeserializer());
+
+            // Discount depends on in@0 which hasn't been processed yet — must be buffered.
+            discounts.pipeInput(new TestRecord<>("k", "discount",
+                    clockHeader(CausalDependencies.empty().advance(IN_ID, 0, 0))));
+            assertTrue(out.isEmpty(), "discount must be held: IN_ID@0 not yet in proc2's frontier");
+            assertEquals(1, storeSize(driver.getKeyValueStore("second-buffer")));
+
+            // "in"@0 arrives: proc1 admits it, stamps frontier {IN_ID@0}, fuses to proc2.
+            // Proc2's engine strips the self-dep → admits → frontier has IN_ID@0 → discount drains.
+            in.pipeInput(new TestRecord<>("k", "in-record", clockHeader(CausalDependencies.empty())));
+
+            assertEquals(0, storeSize(driver.getKeyValueStore("second-buffer")));
+            assertEquals(List.of("IN-RECORD", "DISCOUNT"), out.readValuesToList(),
+                    "in-record admitted first (self-dep stripped), discount drains immediately after");
+            assertTrue(proc1Violations.isEmpty());
+            assertTrue(proc2Violations.isEmpty());
+        }
+    }
+
+    /**
+     * Materialized chain: an unclocked sidecar record is admitted immediately with a
+     * {@link CausalViolationReason#MISSING_HEADER} violation and never enters the buffer,
+     * regardless of where the materialized chain's frontier stands.
+     */
+    @Test
+    void materializationChain_unclockedSidecar_admittedImmediately() {
+        StreamsBuilder builder = new StreamsBuilder();
+        Consumed<String, String> consumed = Consumed.with(Serdes.String(), Serdes.String());
+        Produced<String, String> produced = Produced.with(Serdes.String(), Serdes.String());
+        List<CausalViolation> proc1Violations = new ArrayList<>();
+        List<CausalViolation> proc2Violations = new ArrayList<>();
+
+        var pricesSrc    = builder.stream("prices",    consumed);
+        var quotesSrc    = builder.stream("quotes",    consumed);
+        var discountsSrc = builder.stream("discounts", consumed);
+
+        pricesSrc
+                .process(CausalProcessors.builder(upperCaser(),
+                                CausalBufferPolicy.drop(CausalBufferLimit.ofSize(100)))
+                        .serdes(Serdes.String(), Serdes.String())
+                        .onViolation(proc1Violations::add)
+                        .storeName("first").build())
+                .to("quotes", produced);
+
+        quotesSrc.merge(pricesSrc).merge(discountsSrc)
+                .process(CausalProcessors.builder(upperCaser(),
+                                CausalBufferPolicy.drop(CausalBufferLimit.ofSize(100)))
+                        .serdes(Serdes.String(), Serdes.String())
+                        .onViolation(proc2Violations::add)
+                        .storeName("second").build())
+                .to("out", produced);
+
+        try (TopologyTestDriver driver = new TopologyTestDriver(builder.build(), config(null))) {
+            TestInputTopic<String, String> prices =
+                    driver.createInputTopic("prices", new StringSerializer(), new StringSerializer());
+            TestInputTopic<String, String> discounts =
+                    driver.createInputTopic("discounts", new StringSerializer(), new StringSerializer());
+            TestOutputTopic<String, String> out =
+                    driver.createOutputTopic("out", new StringDeserializer(), new StringDeserializer());
+
+            // Unclocked discount: no parsley-vector-clock header → MISSING_HEADER → admitted
+            // immediately even though the materialized chain hasn't produced anything yet.
+            discounts.pipeInput(new TestRecord<>("k", "discount"));
+            assertEquals(List.of("DISCOUNT"), out.readValuesToList(),
+                    "unclocked record must be forwarded immediately without buffering");
+            assertEquals(1, proc2Violations.size());
+            assertEquals(CausalViolationReason.MISSING_HEADER, proc2Violations.get(0).reason());
+            assertEquals(0, storeSize(driver.getKeyValueStore("second-buffer")));
+
+            // Normal materialized flow continues without interference from the unclocked record.
+            prices.pipeInput(new TestRecord<>("k", "price", clockHeader(CausalDependencies.empty())));
+            assertEquals(2, out.readValuesToList().size(), "price (direct) and quotes-derived");
+            assertEquals(1, proc2Violations.size(), "no new violations from clocked price/quotes");
+            assertTrue(proc1Violations.isEmpty());
+        }
+    }
+
+    /**
+     * Fused chain: an unclocked sidecar record is admitted immediately with a
+     * {@link CausalViolationReason#MISSING_HEADER} violation, interleaved correctly alongside the
+     * fused proc1 output.
+     */
+    @Test
+    void fusedChain_unclockedSidecar_admittedImmediately() {
+        StreamsBuilder builder = new StreamsBuilder();
+        Consumed<String, String> consumed = Consumed.with(Serdes.String(), Serdes.String());
+        Produced<String, String> produced = Produced.with(Serdes.String(), Serdes.String());
+        List<CausalViolation> proc1Violations = new ArrayList<>();
+        List<CausalViolation> proc2Violations = new ArrayList<>();
+
+        var discountsSrc = builder.stream("discounts", consumed);
+
+        builder.stream("in", consumed)
+                .process(CausalProcessors.builder(upperCaser(),
+                                CausalBufferPolicy.drop(CausalBufferLimit.ofSize(100)))
+                        .serdes(Serdes.String(), Serdes.String())
+                        .onViolation(proc1Violations::add)
+                        .storeName("first").build())
+                .merge(discountsSrc)
+                .process(CausalProcessors.builder(upperCaser(),
+                                CausalBufferPolicy.drop(CausalBufferLimit.ofSize(100)))
+                        .serdes(Serdes.String(), Serdes.String())
+                        .onViolation(proc2Violations::add)
+                        .storeName("second").build())
+                .to("out", produced);
+
+        try (TopologyTestDriver driver = new TopologyTestDriver(builder.build(), config(null))) {
+            TestInputTopic<String, String> in =
+                    driver.createInputTopic("in", new StringSerializer(), new StringSerializer());
+            TestInputTopic<String, String> discounts =
+                    driver.createInputTopic("discounts", new StringSerializer(), new StringSerializer());
+            TestOutputTopic<String, String> out =
+                    driver.createOutputTopic("out", new StringDeserializer(), new StringDeserializer());
+
+            // Unclocked discount admitted immediately, before proc1 has processed anything.
+            discounts.pipeInput(new TestRecord<>("k", "discount"));
+            assertEquals(List.of("DISCOUNT"), out.readValuesToList());
+            assertEquals(1, proc2Violations.size());
+            assertEquals(CausalViolationReason.MISSING_HEADER, proc2Violations.get(0).reason());
+            assertEquals(0, storeSize(driver.getKeyValueStore("second-buffer")),
+                    "unclocked record must never enter the buffer");
+
+            // Fused proc1 output flows through proc2 normally alongside the earlier unclocked record.
+            in.pipeInput(new TestRecord<>("k", "in-record", clockHeader(CausalDependencies.empty())));
+            assertEquals(List.of("IN-RECORD"), out.readValuesToList());
+            assertEquals(1, proc2Violations.size(), "no new violations from clocked in-record");
+            assertTrue(proc1Violations.isEmpty());
         }
     }
 

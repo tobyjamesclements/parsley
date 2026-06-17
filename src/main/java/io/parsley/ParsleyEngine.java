@@ -124,7 +124,13 @@ final class ParsleyEngine<K, V> {
             return out;
         }
 
+        dependencies = dependencies.withoutSelfReference(
+                record.sourceTopicId(), record.sourcePartitionIndex(), record.sourceOffset());
+
         if (dependencies.isSatisfiedBy(frontier)) {
+            log.debug("Forwarding {}-{} @{} (satisfied immediately)",
+                    record.sourcePartition().topic(), record.sourcePartition().partition(),
+                    record.sourceOffset());
             advanceFrontier(record);
             out.add(record);
             drainInto(out, record.sourceTopicId(), record.sourcePartitionIndex());
@@ -132,9 +138,11 @@ final class ParsleyEngine<K, V> {
             long seq = buffer.add(record);
             waitIndex.index(seq, dependencies, frontier);
             int depth = buffer.size();
-            log.debug("Holding {}-{} @{} (buffer depth: {})",
-                    record.sourcePartition().topic(), record.sourcePartition().partition(),
-                    record.sourceOffset(), depth);
+            if (log.isDebugEnabled()) {
+                log.debug("Holding {}-{} @{} (buffer depth: {}, gap: {})",
+                        record.sourcePartition().topic(), record.sourcePartition().partition(),
+                        record.sourceOffset(), depth, dependencies.findMissing(frontier));
+            }
             metrics.recordBuffered(depth);
             if (depth >= sizeLimit) {
                 out.addAll(evictNow());
@@ -220,8 +228,14 @@ final class ParsleyEngine<K, V> {
                     ParsleyBufferStore.Entry<K, V> entry = buffer.get(candidate.recordId());
                     if (entry == null) {
                         stale.add(candidate);
-                    } else if (entry.dependencies().isSatisfiedBy(frontier)) {
-                        releasable.add(entry);
+                    } else {
+                        CausalDependencies deps = entry.dependencies().withoutSelfReference(
+                                entry.record().sourceTopicId(),
+                                entry.record().sourcePartitionIndex(),
+                                entry.record().sourceOffset());
+                        if (deps.isSatisfiedBy(frontier)) {
+                            releasable.add(entry);
+                        }
                     }
                 }
             }

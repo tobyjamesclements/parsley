@@ -13,6 +13,7 @@ import java.util.Set;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -143,6 +144,46 @@ class CausalDependenciesTest {
         CausalDependencies deps = CausalDependencies.empty().advance(PRICES_ID, 0, 5).advance(ORDERS_ID, 0, 2);
         CausalFrontier frontierDecoded = CausalFrontier.fromBytes(deps.toBytes());
         assertEquals(frontier, frontierDecoded);
+    }
+
+    @Test
+    void withoutSelfReference_stripsEntryAtExactSelfOffset() {
+        CausalDependencies clock = CausalDependencies.empty().advance(PRICES_ID, 0, 3);
+        CausalDependencies stripped = clock.withoutSelfReference(PRICES_ID, 0, 3);
+        assertEquals(CausalDependencies.empty(), stripped,
+                "entry at req==selfOffset is a self-reference and must be removed");
+    }
+
+    @Test
+    void withoutSelfReference_stripsEntryAtFutureOffset() {
+        CausalDependencies clock = CausalDependencies.empty().advance(PRICES_ID, 0, 10);
+        CausalDependencies stripped = clock.withoutSelfReference(PRICES_ID, 0, 3);
+        assertEquals(CausalDependencies.empty(), stripped,
+                "entry at req>selfOffset is also circular (requires a future record) and must be removed");
+    }
+
+    @Test
+    void withoutSelfReference_preservesEntryAtPriorOffset() {
+        CausalDependencies clock = CausalDependencies.empty().advance(PRICES_ID, 0, 2);
+        assertSame(clock, clock.withoutSelfReference(PRICES_ID, 0, 3),
+                "dep on a prior record is satisfiable and must not be stripped");
+    }
+
+    @Test
+    void withoutSelfReference_returnsUnchangedWhenCoordinateAbsent() {
+        CausalDependencies clock = CausalDependencies.empty().advance(ORDERS_ID, 0, 5);
+        assertSame(clock, clock.withoutSelfReference(PRICES_ID, 0, 3),
+                "no entry for (topicId, partition) — nothing to strip");
+    }
+
+    @Test
+    void withoutSelfReference_preservesUnrelatedEntries() {
+        CausalDependencies clock = CausalDependencies.empty()
+                .advance(PRICES_ID, 0, 3)
+                .advance(ORDERS_ID, 0, 7);
+        CausalDependencies stripped = clock.withoutSelfReference(PRICES_ID, 0, 3);
+        assertEquals(CausalDependencies.empty().advance(ORDERS_ID, 0, 7), stripped,
+                "only the self-referential entry is removed; other entries survive");
     }
 
     @Test

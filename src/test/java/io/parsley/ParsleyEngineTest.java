@@ -292,6 +292,39 @@ class ParsleyEngineTest {
         assertEquals(List.of(1), evictedCounts, "recordEvicted fires with the count of evicted records");
     }
 
+    @Test
+    void selfDependencyOnly_forwardsImmediately() {
+        ParsleyEngine<String, String> engine = engine(CausalBufferPolicy.drop(CausalBufferLimit.ofSize(100)));
+
+        // Record at PRICES/0@3 whose dep clock requires PRICES/0@3 — exactly itself.
+        onRecord(engine, rec(PRICES, 3, CausalDependencies.empty().advance(PRICES_ID, 0, 3)));
+
+        assertEquals(1, forwarded.size(), "self-dep is stripped → clock empty → forwarded immediately");
+        assertTrue(violations.isEmpty(), "no violation: the circular entry is silently removed");
+        assertEquals(0, buffer.size(), "record must never enter the buffer");
+        assertEquals(CausalFrontier.empty().advance(PRICES_ID, 0, 3), engine.frontier());
+    }
+
+    @Test
+    void selfDependencyPlusReal_buffersOnRealDepOnly() {
+        ParsleyEngine<String, String> engine = engine(CausalBufferPolicy.drop(CausalBufferLimit.ofSize(100)));
+
+        // ORDERS/0@0 has self-dep on ORDERS_ID/0@0 AND a real dep on PRICES_ID/0@5.
+        // After stripping the self-ref, the effective clock is {PRICES_ID/0@5}: still unsatisfied.
+        CausalDependencies mixed = CausalDependencies.empty()
+                .advance(ORDERS_ID, 0, 0)
+                .advance(PRICES_ID, 0, 5);
+        onRecord(engine, rec(ORDERS, 0, mixed));
+        assertTrue(forwarded.isEmpty(), "real dep on PRICES@5 still holds the record");
+        assertEquals(1, buffer.size());
+
+        // PRICES@5 arrives — satisfies the real dep; ORDERS drains.
+        onRecord(engine, rec(PRICES, 5, CausalDependencies.empty()));
+        assertEquals(2, forwarded.size());
+        assertEquals(PRICES, forwarded.get(0).sourcePartition());
+        assertEquals(ORDERS, forwarded.get(1).sourcePartition());
+    }
+
     private static ParsleyRecord<String, String> rec(TopicPartition tp, long offset,
                                                       Uuid topicId, CausalDependencies deps) {
         List<ParsleyHeader> headers = new ArrayList<>();

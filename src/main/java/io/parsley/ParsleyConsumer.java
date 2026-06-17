@@ -25,6 +25,9 @@ import org.apache.kafka.streams.processor.api.ProcessorContext;
 import org.apache.kafka.streams.processor.api.ProcessorSupplier;
 import org.apache.kafka.streams.processor.api.Record;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 import java.nio.ByteBuffer;
 import java.time.Duration;
 import java.util.ArrayList;
@@ -68,6 +71,8 @@ import static java.nio.charset.StandardCharsets.UTF_8;
  * {@link CausalDependencies#fromRecord} still returns the upstream producer's causal intent.
  */
 final class ParsleyConsumer<K, V> implements CausalConsumer<K, V> {
+
+    private static final Logger log = LoggerFactory.getLogger(ParsleyConsumer.class);
 
     private final KafkaStreams streams;
     private final KafkaConsumer<byte[], byte[]> outboxConsumer;
@@ -133,6 +138,9 @@ final class ParsleyConsumer<K, V> implements CausalConsumer<K, V> {
         outboxCfg.put("value.deserializer", ByteArrayDeserializer.class.getName());
         this.outboxConsumer = new KafkaConsumer<>(outboxCfg);
         this.outboxConsumer.subscribe(List.of(outboxTopic));
+        log.info("ParsleyConsumer started [applicationId: {}, topics: {}, outbox: {}]",
+                applicationId, topics, outboxTopic);
+        log.debug("Topic UUIDs: {}", topicUuids);
     }
 
     // Merge rather than overwrite so the frontier is correct across tasks/partitions/threads.

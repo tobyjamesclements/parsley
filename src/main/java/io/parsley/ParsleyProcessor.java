@@ -13,6 +13,8 @@ import org.apache.kafka.streams.processor.api.ProcessorContext;
 import org.apache.kafka.streams.processor.api.Record;
 import org.apache.kafka.streams.processor.api.RecordMetadata;
 import org.apache.kafka.streams.state.KeyValueStore;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -38,6 +40,8 @@ import java.util.function.Consumer;
  * @param <VOut> the forwarded value type
  */
 final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn, KOut, VOut> {
+
+    private static final Logger log = LoggerFactory.getLogger(ParsleyProcessor.class);
 
     private final Processor<KIn, VIn, KOut, VOut> delegate;
     private final CausalBufferPolicy policy;
@@ -100,6 +104,11 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
             initialFrontier = CausalFrontier.fromBytes(stored);
         }
         this.stampClock = initialFrontier;
+        if (stored != null) {
+            log.debug("Processor initialized [task: {}] — frontier restored: {}", context.taskId(), initialFrontier);
+        } else {
+            log.debug("Processor initialized [task: {}] — frontier empty (fresh start)", context.taskId());
+        }
 
         // Publish the restored frontier so an observer has a correct view before the first record.
         frontierListener.onFrontierAdvanced(initialFrontier);
@@ -137,6 +146,7 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
 
     @Override
     public void close() {
+        log.debug("Processor closing [task: {}]", context.taskId());
         delegate.close();
         for (Sensor sensor : sensorsToClose) {
             context.metrics().removeSensor(sensor);
