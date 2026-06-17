@@ -33,6 +33,7 @@ final class ParsleyProcessorSupplier<KIn, VIn, KOut, VOut>
     private final Function<String, Serde<VIn>> valueSerdeByTopic;
     private final String frontierStoreName;
     private final String bufferStoreName;
+    private final String waitIndexStoreName;
     private final CausalFrontierListener frontierListener;
     private final Map<String, Uuid> topicUuids;
 
@@ -44,6 +45,7 @@ final class ParsleyProcessorSupplier<KIn, VIn, KOut, VOut>
                                       Function<String, Serde<VIn>> valueSerdeByTopic,
                                       String frontierStoreName,
                                       String bufferStoreName,
+                                      String waitIndexStoreName,
                                       CausalFrontierListener frontierListener,
                                       Map<String, Uuid> topicUuids) {
         this.userSupplier = userSupplier;
@@ -54,6 +56,7 @@ final class ParsleyProcessorSupplier<KIn, VIn, KOut, VOut>
         this.valueSerdeByTopic = valueSerdeByTopic;
         this.frontierStoreName = frontierStoreName;
         this.bufferStoreName = bufferStoreName;
+        this.waitIndexStoreName = waitIndexStoreName;
         this.frontierListener = frontierListener;
         this.topicUuids = topicUuids;
     }
@@ -63,7 +66,7 @@ final class ParsleyProcessorSupplier<KIn, VIn, KOut, VOut>
         return new ParsleyProcessor<>(
                 userSupplier.get(), policy, onViolation, deadLetterSink,
                 new ParsleySerializer<>(new ParsleyResolver<>(keySerdeByTopic, valueSerdeByTopic)),
-                frontierStoreName, bufferStoreName, frontierListener, topicUuids);
+                frontierStoreName, bufferStoreName, waitIndexStoreName, frontierListener, topicUuids);
     }
 
     @Override
@@ -75,6 +78,7 @@ final class ParsleyProcessorSupplier<KIn, VIn, KOut, VOut>
         }
         stores.add(byteStore(frontierStoreName));
         stores.add(bufferStore(bufferStoreName));
+        stores.add(waitIndexStore(waitIndexStoreName));
         return stores;
     }
 
@@ -89,6 +93,13 @@ final class ParsleyProcessorSupplier<KIn, VIn, KOut, VOut>
         return Stores.keyValueStoreBuilder(
                 Stores.persistentKeyValueStore(name),
                 Serdes.Long(),
+                Serdes.ByteArray());
+    }
+
+    private static StoreBuilder<KeyValueStore<byte[], byte[]>> waitIndexStore(String name) {
+        return Stores.keyValueStoreBuilder(
+                Stores.persistentKeyValueStore(name),
+                Serdes.ByteArray(),
                 Serdes.ByteArray());
     }
 }

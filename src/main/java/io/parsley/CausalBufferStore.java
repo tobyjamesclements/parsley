@@ -24,12 +24,23 @@ interface CausalBufferStore<K, V> {
     record Entry<K, V>(long sequence, ParsleyRecord<K, V> record, CausalDependencies dependencies) {}
 
     /**
-     * Buffers a record under the next insertion sequence. The record's decoded dependency clock,
-     * surfaced on each {@link Entry}, is derived from its {@code encodedDependencies}.
+     * Buffers a record under the next insertion sequence and returns that sequence. The sequence
+     * is the opaque handle used by {@link #get} and {@link #remove}.
      *
      * @param record the record to hold; carries a valid (decodable) dependency clock
+     * @return the insertion sequence assigned to the buffered record
      */
-    void add(ParsleyRecord<K, V> record);
+    long add(ParsleyRecord<K, V> record);
+
+    /**
+     * Returns the buffered entry for the given insertion sequence, or {@code null} if no such
+     * entry exists. Used by the drain path to verify that a wait-index candidate is still in the
+     * buffer before attempting release.
+     *
+     * @param sequence the sequence of an entry previously returned by {@link #add}
+     * @return the entry, or {@code null} if already removed
+     */
+    Entry<K, V> get(long sequence);
 
     /**
      * Returns every buffered entry, in ascending insertion-sequence (causal arrival) order.

@@ -1,12 +1,15 @@
 package io.parsley;
 
+import org.apache.kafka.common.Uuid;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.time.Duration;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Optional;
+import java.util.Set;
 import java.util.function.Consumer;
 
 import static java.nio.charset.StandardCharsets.UTF_8;
@@ -30,6 +33,11 @@ import static java.nio.charset.StandardCharsets.UTF_8;
  * forwarding, so persisting the frontier in the listener is guaranteed to happen before the
  * record leaves the engine.
  *
+ * <p><strong>Drain algorithm:</strong> the engine uses a {@link WaitIndex} to avoid a full
+ * buffer scan on every frontier advance. When a coordinate advances, only records indexed on
+ * that coordinate are checked for causal satisfaction. The cascade repeats for each newly
+ * released record's source coordinate.
+ *
  * @param <K> the record key type
  * @param <V> the record value type
  */
@@ -46,10 +54,13 @@ final class ParsleyEngine<K, V> {
         void frontierAdvanced(CausalFrontier frontier);
     }
 
+    private record CoordKey(Uuid topicId, int partition) {}
+
     private final CausalBufferPolicy policy;
     private final CausalViolationHandler violationHandler;
     private final Consumer<ParsleyRecord<K, V>> deadLetterSink;
     private final CausalBufferStore<K, V> buffer;
+    private final WaitIndex waitIndex;
     private final FrontierCallback frontierListener;
     private final ParsleyMetrics metrics;
 
@@ -63,6 +74,7 @@ final class ParsleyEngine<K, V> {
                  Consumer<ParsleyRecord<K, V>> deadLetterSink,
                  FrontierCallback frontierListener,
                  CausalBufferStore<K, V> buffer,
+                 WaitIndex waitIndex,
                  ParsleyMetrics metrics) {
         if (policy instanceof DeadLetterPolicy && deadLetterSink == null) {
             throw new IllegalArgumentException("DeadLetter policy requires a dead-letter sink");
@@ -73,8 +85,14 @@ final class ParsleyEngine<K, V> {
         this.deadLetterSink = deadLetterSink;
         this.frontierListener = frontierListener;
         this.buffer = buffer;
+        this.waitIndex = waitIndex;
         this.metrics = metrics;
         configureLimits(limitOf(policy));
+        // Populate the wait index for any records already in the buffer (e.g., restored from
+        // a state store after a restart). This is a one-time O(n) pass at construction.
+        for (CausalBufferStore.Entry<K, V> entry : buffer.entries()) {
+            waitIndex.index(entry.sequence(), entry.dependencies(), frontier);
+        }
     }
 
     /**
@@ -91,7 +109,7 @@ final class ParsleyEngine<K, V> {
             violate(record, CausalViolationReason.MISSING_HEADER, CausalDependencies.empty());
             advanceFrontier(record);
             out.add(record);
-            drainInto(out);
+            drainInto(out, record.sourceTopicId(), record.sourcePartitionIndex());
             return out;
         }
 
@@ -102,16 +120,17 @@ final class ParsleyEngine<K, V> {
             violate(record, CausalViolationReason.UNRESOLVABLE_CLOCK, CausalDependencies.empty());
             advanceFrontier(record);
             out.add(record);
-            drainInto(out);
+            drainInto(out, record.sourceTopicId(), record.sourcePartitionIndex());
             return out;
         }
 
         if (dependencies.satisfiedBy(frontier)) {
             advanceFrontier(record);
             out.add(record);
-            drainInto(out);
+            drainInto(out, record.sourceTopicId(), record.sourcePartitionIndex());
         } else {
-            buffer.add(record);
+            long seq = buffer.add(record);
+            waitIndex.index(seq, dependencies, frontier);
             int depth = buffer.size();
             log.debug("Holding {}-{} @{} (buffer depth: {})",
                     record.sourcePartition().topic(), record.sourcePartition().partition(),
@@ -179,32 +198,52 @@ final class ParsleyEngine<K, V> {
         return Optional.ofNullable(evictionInterval);
     }
 
-    private void drainInto(List<ParsleyRecord<K, V>> out) {
-        List<CausalBufferStore.Entry<K, V>> releasable = releasableEntries();
+    /**
+     * Releases buffered records that have become causally satisfiable because the coordinate
+     * {@code (topicId, partition)} just advanced. Cascades: each released record advances its
+     * own source coordinate, which may unlock further records.
+     */
+    private void drainInto(List<ParsleyRecord<K, V>> out, Uuid topicId, int partition) {
+        Set<CoordKey> toScan = new HashSet<>();
+        toScan.add(new CoordKey(topicId, partition));
         int totalReleased = 0;
-        while (!releasable.isEmpty()) {
+
+        while (!toScan.isEmpty()) {
+            Set<Long> seen = new HashSet<>();
+            List<CausalBufferStore.Entry<K, V>> releasable = new ArrayList<>();
+            List<WaitIndex.Candidate> stale = new ArrayList<>();
+
+            for (CoordKey coord : toScan) {
+                long coordOffset = frontier.observed(coord.topicId(), coord.partition());
+                for (WaitIndex.Candidate candidate : waitIndex.candidatesFor(coord.topicId(), coord.partition(), coordOffset)) {
+                    if (!seen.add(candidate.recordId())) continue;
+                    CausalBufferStore.Entry<K, V> entry = buffer.get(candidate.recordId());
+                    if (entry == null) {
+                        stale.add(candidate);
+                    } else if (entry.dependencies().satisfiedBy(frontier)) {
+                        releasable.add(entry);
+                    }
+                }
+            }
+
+            stale.forEach(waitIndex::tombstone);
+            toScan.clear();
+
+            if (releasable.isEmpty()) break;
+
             for (CausalBufferStore.Entry<K, V> entry : releasable) {
                 buffer.remove(entry.sequence());
                 advanceFrontier(entry.record());
+                toScan.add(new CoordKey(entry.record().sourceTopicId(), entry.record().sourcePartitionIndex()));
                 out.add(entry.record());
             }
             totalReleased += releasable.size();
-            releasable = releasableEntries();
         }
+
         if (totalReleased > 0) {
             log.debug("Released {} record(s) from buffer (depth now {})", totalReleased, buffer.size());
             metrics.recordReleased(totalReleased, buffer.size());
         }
-    }
-
-    private List<CausalBufferStore.Entry<K, V>> releasableEntries() {
-        List<CausalBufferStore.Entry<K, V>> releasable = new ArrayList<>();
-        for (CausalBufferStore.Entry<K, V> entry : buffer.entries()) {
-            if (entry.dependencies().satisfiedBy(frontier)) {
-                releasable.add(entry);
-            }
-        }
-        return releasable;
     }
 
     private void advanceFrontier(ParsleyRecord<K, V> record) {

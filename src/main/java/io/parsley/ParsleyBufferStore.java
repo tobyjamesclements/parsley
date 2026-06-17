@@ -45,9 +45,19 @@ final class ParsleyBufferStore<K, V> implements CausalBufferStore<K, V> {
     }
 
     @Override
-    public void add(ParsleyRecord<K, V> record) {
-        store.put(nextSequence++, serializer.serialize(record));
+    public long add(ParsleyRecord<K, V> record) {
+        long seq = nextSequence++;
+        store.put(seq, serializer.serialize(record));
         size++;
+        return seq;
+    }
+
+    @Override
+    public Entry<K, V> get(long sequence) {
+        byte[] value = store.get(sequence);
+        if (value == null) return null;
+        ParsleyRecord<K, V> record = serializer.deserialize(value);
+        return new Entry<>(sequence, record, CausalDependencies.fromBytes(record.encodedDependencies()));
     }
 
     @Override

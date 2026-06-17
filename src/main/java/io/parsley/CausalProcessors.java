@@ -200,7 +200,8 @@ public final class CausalProcessors {
             }
             return new ParsleyProcessorSupplier<>(
                     userSupplier, policy, onViolation, deadLetterSink, keySerdeByTopic, valueSerdeByTopic,
-                    storeName + "-frontier", storeName + "-buffer", frontierListener, topicUuids);
+                    storeName + "-frontier", storeName + "-buffer", storeName + "-wait-index",
+                    frontierListener, topicUuids);
         }
     }
 }

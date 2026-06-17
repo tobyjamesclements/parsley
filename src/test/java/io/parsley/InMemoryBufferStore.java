@@ -19,8 +19,17 @@ final class InMemoryBufferStore<K, V> implements CausalBufferStore<K, V> {
     private long sequence = 0;
 
     @Override
-    public void add(ParsleyRecord<K, V> record) {
-        buffer.put(sequence++, record);
+    public long add(ParsleyRecord<K, V> record) {
+        long seq = sequence++;
+        buffer.put(seq, record);
+        return seq;
+    }
+
+    @Override
+    public Entry<K, V> get(long sequence) {
+        ParsleyRecord<K, V> record = buffer.get(sequence);
+        if (record == null) return null;
+        return new Entry<>(sequence, record, CausalDependencies.fromBytes(record.encodedDependencies()));
     }
 
     @Override

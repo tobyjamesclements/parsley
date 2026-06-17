@@ -46,6 +46,7 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
     private final ParsleySerializer<KIn, VIn> serializer;
     private final String frontierStoreName;
     private final String bufferStoreName;
+    private final String waitIndexStoreName;
     private final CausalFrontierListener frontierListener;
     private final Map<String, Uuid> topicUuids;
 
@@ -57,6 +58,7 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
     private ProcessorContext<KOut, VOut> context;
     private KeyValueStore<String, byte[]> frontierStore;
     private KeyValueStore<Long, byte[]> bufferStore;
+    private KeyValueStore<byte[], byte[]> waitIndexStore;
     private ParsleyEngine<KIn, VIn> engine;
     private List<Sensor> sensorsToClose = List.of();
     // Read live by the stamping proxy; volatile as belt-and-suspenders (single task thread owns this).
@@ -70,6 +72,7 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
                      ParsleySerializer<KIn, VIn> serializer,
                      String frontierStoreName,
                      String bufferStoreName,
+                     String waitIndexStoreName,
                      CausalFrontierListener frontierListener,
                      Map<String, Uuid> topicUuids) {
         this.delegate = delegate;
@@ -79,6 +82,7 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
         this.serializer = serializer;
         this.frontierStoreName = frontierStoreName;
         this.bufferStoreName = bufferStoreName;
+        this.waitIndexStoreName = waitIndexStoreName;
         this.frontierListener = frontierListener;
         this.topicUuids = topicUuids;
     }
@@ -88,6 +92,7 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
         this.context = context;
         this.frontierStore = context.getStateStore(frontierStoreName);
         this.bufferStore = context.getStateStore(bufferStoreName);
+        this.waitIndexStore = context.getStateStore(waitIndexStoreName);
 
         CausalFrontier initialFrontier = CausalFrontier.empty();
         byte[] stored = frontierStore.get(ParsleyAttributes.FRONTIER_KEY);
@@ -110,11 +115,12 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
         };
 
         CausalBufferStore<KIn, VIn> buffer = new ParsleyBufferStore<>(bufferStore, serializer);
+        WaitIndex waitIndex = new ParsleyWaitIndex(waitIndexStore);
 
         ParsleyMetrics metrics = buildMetrics(context);
 
         this.engine = new ParsleyEngine<>(policy, onViolation, initialFrontier,
-                engineDeadLetter, listener, buffer, metrics);
+                engineDeadLetter, listener, buffer, waitIndex, metrics);
 
         ProcessorContext<KOut, VOut> stamping = new ParsleyProcessorContext<>(
                 context, () -> stampClock, () -> Optional.ofNullable(deliveryMetadata));

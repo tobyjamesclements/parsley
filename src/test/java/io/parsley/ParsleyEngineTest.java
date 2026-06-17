@@ -32,7 +32,7 @@ class ParsleyEngineTest {
     private ParsleyEngine<String, String> engine(CausalBufferPolicy policy,
                                                 java.util.function.Consumer<ParsleyRecord<String, String>> sink) {
         return new ParsleyEngine<>(policy, violations::add, CausalFrontier.empty(), sink, frontiers::add,
-                buffer, ParsleyMetrics.NOOP);
+                buffer, new InMemoryWaitIndex(), ParsleyMetrics.NOOP);
     }
 
     private List<CausalViolationReason> reasons() {
@@ -259,7 +259,8 @@ class ParsleyEngineTest {
         };
         ParsleyEngine<String, String> engine = new ParsleyEngine<>(
                 CausalBufferPolicy.forwardUnsafe(CausalBufferLimit.ofSize(100)),
-                violations::add, CausalFrontier.empty(), null, frontiers::add, buffer, capturing);
+                violations::add, CausalFrontier.empty(), null, frontiers::add, buffer,
+                new InMemoryWaitIndex(), capturing);
 
         engine.onRecord(rec(ORDERS, 0, CausalDependencies.empty().advance(PRICES, 3)));
         assertEquals(List.of(1), bufferedDepths, "recordBuffered fires with the new depth");
@@ -281,7 +282,8 @@ class ParsleyEngineTest {
         };
         ParsleyEngine<String, String> engine = new ParsleyEngine<>(
                 CausalBufferPolicy.drop(CausalBufferLimit.ofSize(1)),
-                violations::add, CausalFrontier.empty(), null, frontiers::add, buffer, capturing);
+                violations::add, CausalFrontier.empty(), null, frontiers::add, buffer,
+                new InMemoryWaitIndex(), capturing);
 
         engine.onRecord(rec(ORDERS, 0, CausalDependencies.empty().advance(PRICES, 99)));
 
