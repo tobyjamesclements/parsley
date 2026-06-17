@@ -49,30 +49,14 @@ forwarding unsatisfied records out-of-order. The guarantee holds for every *admi
 any policy, and for every record under a strict policy (`drop` or `deadLetter`). Choose the policy
 that matches your application's tolerance for out-of-order delivery vs. potential message loss.
 
-## Fused vs. materialized topologies
-
-In a **fused** topology (processor chained directly to another processor with no `.to("topic")`
-between them), the forwarded record inherits the original source coordinate. Parsley strips any
-self-referential dependency entries at engine admission, so a fused chain does not cause a record
-to block on itself.
-
-In a **materialized** topology (output written to a Kafka topic via `.to("output-topic")`), the
-forwarded record receives a new source coordinate on the output topic. Downstream processors that
-consume only the output topic rely on the dep clock for causal ordering — the original source
-coordinate is preserved in the stamp deliberately for this reason.
-
 ## Restart and recovery
 
-The causal buffer and frontier are stored in changelog-backed RocksDB state stores. On restart or
-rebalance:
+The causal buffer and frontier are stored in durable state stores. On restart or rebalance:
 
 - The frontier is restored to the position it held before shutdown — exactly the frontier at
   which the last forwarded record was confirmed.
-- Held records are restored from the buffer store and re-evaluated against the restored frontier.
-  No re-fetch from the broker is required.
-
-The `FrontierCallback` fires *before* each record is forwarded, guaranteeing that the persisted
-frontier is always at least as advanced as the last forwarded record.
+- Held records are re-evaluated against the restored frontier; no re-fetch from the broker is
+  required.
 
 ## Operating notes
 

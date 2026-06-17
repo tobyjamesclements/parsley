@@ -21,19 +21,17 @@ it has successfully delivered on each `(topicId, partition)` coordinate. Every t
 forwarded, the frontier advances. Frontiers from multiple sources can be merged with
 `CausalFrontier.merge`, taking the per-coordinate maximum.
 
-The frontier is **persisted** before each record is forwarded (via a changelog-backed state store),
-so it survives restarts and rebalances.
+The frontier is **persisted** before each record is forwarded, so it survives restarts and rebalances.
 
 ## The causal buffer
 
-Records whose dependencies are not yet satisfied are held in a **causal buffer** — also
-changelog-backed, so held records survive a restart without re-delivery from the broker.
+Records whose dependencies are not yet satisfied are held in a **causal buffer**. Held records
+survive a restart; no re-delivery from the broker is required.
 
 When a coordinate in the frontier advances (because a causally ready record was forwarded),
 Parsley checks the buffer for records that were waiting on that coordinate. If any are now
 satisfied, they are released and their source coordinates advance the frontier in turn — cascading
-until no further releases occur. This cascade is index-accelerated: only records indexed on the
-advancing coordinate are re-evaluated, avoiding a full buffer scan.
+until no further releases occur.
 
 ## Buffer limits
 

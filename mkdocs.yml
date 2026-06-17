@@ -41,3 +41,9 @@ nav:
   - Streams integration: streams.md
   - Configuration: configuration.md
   - API reference: api/index.html
+  - Internals:
+    - Overview: internals/overview.md
+    - Wire format: internals/wire-format.md
+    - The engine: internals/engine.md
+    - Streams integration: internals/streams.md
+    - Consumer: internals/consumer.md

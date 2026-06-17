@@ -104,7 +104,7 @@ is not an error in isolation, but their *frequency* and *gap size* are the key s
 
 ---
 
-## Clock size { #clock-size }
+## Clock size
 
 The serialised `parsley-causal-dependencies` header is `5 + 28 × entries` bytes. It counts against
 Kafka's record-size limit (`message.max.bytes` / `max.request.size`, ~1 MB default — there is no
