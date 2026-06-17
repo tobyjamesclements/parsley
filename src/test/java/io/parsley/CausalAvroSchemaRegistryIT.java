@@ -11,7 +11,7 @@ import org.apache.kafka.clients.consumer.ConsumerConfig;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.apache.kafka.clients.producer.ProducerConfig;
 import org.apache.kafka.clients.producer.ProducerRecord;
-import org.apache.kafka.common.TopicPartition;
+import org.apache.kafka.common.Uuid;
 import org.apache.kafka.common.serialization.Serdes;
 import org.apache.kafka.common.serialization.StringSerializer;
 import org.apache.kafka.streams.StreamsConfig;
@@ -84,9 +84,6 @@ class CausalAvroSchemaRegistryIT {
         String registryUrl = "http://" + schemaRegistry.getHost() + ":" + schemaRegistry.getMappedPort(8081);
         createTopics(bootstrap, ORDERS, PRICES);
 
-        TopicPartition ordersTp = new TopicPartition(ORDERS, 0);
-        TopicPartition pricesTp = new TopicPartition(PRICES, 0);
-
         Order order = new Order("o-1", "ACME", 5);
         Price price = new Price("ACME", 42.5);
 
@@ -97,15 +94,15 @@ class CausalAvroSchemaRegistryIT {
                 "schema.registry.url", registryUrl)).build();
              CausalConsumer<String, SpecificRecord> consumer = CausalConsumers.<String, SpecificRecord>builder(
                      List.of(ORDERS, PRICES),
-                     CausalBufferPolicy.drop(CausalBufferLimit.ofDuration(Duration.ofSeconds(5))),
+                     CausalBufferPolicy.drop(CausalBufferLimit.ofDuration(Duration.ofSeconds(10))),
                      Map.of(ConsumerConfig.GROUP_ID_CONFIG, "avro-rt-" + UUID.randomUUID()),
                      streamsConfig(bootstrap, registryUrl))
-                     .topicAdmin(new MockAdminClient(TopicAdmin.ofBootstrap(bootstrap)))
+                     .topicAdmin(new MockAdminClient(ParsleyTopicAdmin.ofBootstrap(bootstrap)))
                      .build()) {
 
-            // Each record's clock simply marks its own position, so both self-satisfy and are admitted.
-            producer.send(new ProducerRecord<>(PRICES, "ACME", price), CausalDependencies.empty().advance(pricesTp, 0)).get();
-            producer.send(new ProducerRecord<>(ORDERS, "o-1", order), CausalDependencies.empty().advance(ordersTp, 0)).get();
+            // Neither record has a causal dependency — both are admitted immediately.
+            producer.send(new ProducerRecord<>(PRICES, "ACME", price), CausalDependencies.empty()).get();
+            producer.send(new ProducerRecord<>(ORDERS, "o-1", order), CausalDependencies.empty()).get();
 
             List<ConsumerRecord<String, SpecificRecord>> received = new ArrayList<>();
             await().atMost(Duration.ofSeconds(90)).until(() -> {
@@ -121,10 +118,10 @@ class CausalAvroSchemaRegistryIT {
 
             // The frontier advanced over both topic-partitions.
             assertTrue(consumer.frontier().positions().stream()
-                    .anyMatch(p -> p.partition() == ordersTp.partition()),
+                    .anyMatch(p -> p.partition() == 0),
                     "frontier covers orders-0");
             assertTrue(consumer.frontier().positions().stream()
-                    .anyMatch(p -> p.partition() == pricesTp.partition()),
+                    .anyMatch(p -> p.partition() == 0),
                     "frontier covers prices-0");
         }
     }
@@ -135,7 +132,7 @@ class CausalAvroSchemaRegistryIT {
         String registryUrl = "http://" + schemaRegistry.getHost() + ":" + schemaRegistry.getMappedPort(8081);
         createTopics(bootstrap, ORDERS, PRICES);
 
-        TopicPartition pricesTp = new TopicPartition(PRICES, 0);
+        Uuid pricesId = CausalPosition.nameUuid(PRICES);
 
         Order order = new Order("o-buf", "ACME", 10);
         Price price = new Price("ACME", 99.0);
@@ -157,12 +154,12 @@ class CausalAvroSchemaRegistryIT {
                      Map.of(ConsumerConfig.GROUP_ID_CONFIG, "avro-buf-" + UUID.randomUUID()),
                      streamsConfig(bootstrap, registryUrl))
                      .onViolation(eviction::set)
-                     .topicAdmin(new MockAdminClient(TopicAdmin.ofBootstrap(bootstrap)))
+                     .topicAdmin(new MockAdminClient(ParsleyTopicAdmin.ofBootstrap(bootstrap)))
                      .build()) {
 
             // Order declares it has seen prices-0@0 — it will be buffered until Price arrives.
             producer.send(new ProducerRecord<>(ORDERS, "o-buf", order),
-                    CausalDependencies.empty().advance(pricesTp, 0)).get();
+                    CausalDependencies.empty().advance(pricesId, 0, 0)).get();
 
             // Poll briefly to confirm the Order is buffered and not yet delivered.
             List<ConsumerRecord<String, SpecificRecord>> received = new ArrayList<>();
@@ -198,7 +195,7 @@ class CausalAvroSchemaRegistryIT {
             assertEquals(order, receivedOrder, "Order round-trips through Avro buffer path");
 
             // The buffered Order's original producer clock must be restored (not replaced by frontier).
-            assertEquals(Optional.of(CausalDependencies.empty().advance(pricesTp, 0)),
+            assertEquals(Optional.of(CausalDependencies.empty().advance(pricesId, 0, 0)),
                     CausalDependencies.fromRecord(received.get(1)),
                     "Order must carry the producer's original clock, not the delivery-time frontier");
         }

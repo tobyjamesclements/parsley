@@ -114,8 +114,8 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
             frontierListener.onFrontierAdvanced(frontier);
         };
 
-        CausalBufferStore<KIn, VIn> buffer = new ParsleyBufferStore<>(bufferStore, serializer);
-        WaitIndex waitIndex = new ParsleyWaitIndex(waitIndexStore);
+        ParsleyBufferStore<KIn, VIn> buffer = new RocksBufferStore<>(bufferStore, serializer);
+        ParsleyWaitIndex waitIndex = new RocksWaitIndex(waitIndexStore);
 
         ParsleyMetrics metrics = buildMetrics(context);
 

@@ -5,7 +5,6 @@ import org.apache.kafka.clients.admin.NewTopic;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.apache.kafka.clients.producer.ProducerConfig;
 import org.apache.kafka.clients.producer.ProducerRecord;
-import org.apache.kafka.common.TopicPartition;
 import org.apache.kafka.common.serialization.StringSerializer;
 import org.apache.kafka.streams.StreamsConfig;
 import org.junit.jupiter.api.Test;
@@ -51,12 +50,11 @@ class CausalResilienceIT {
      * {@code applicationId}) and drained correctly once the dependency arrives.
      *
      * <p>This exercises the full state-store changelog restoration path and the
-     * {@link ParsleyEngine} WaitIndex re-seeding from the restored buffer.
+     * {@link ParsleyEngine} ParsleyWaitIndex re-seeding from the restored buffer.
      *
      * <p>Both the producer and the consumer use the same name-derived UUID for PRICES (via
-     * {@link MockAdminClient}), so {@link CausalDependencies#advance(TopicPartition, long)}
-     * produces the same UUID that the consumer's frontier tracks — enabling natural causal drain
-     * rather than eviction.
+     * {@link MockAdminClient} and {@link CausalPosition#nameUuid}), so the stamped clock matches
+     * the consumer's frontier — enabling natural causal drain rather than eviction.
      */
     @Test
     void restartWithBufferedRecord_resumesDrainAfterRecovery() throws Exception {
@@ -76,14 +74,12 @@ class CausalResilienceIT {
                              CausalBufferPolicy.drop(CausalBufferLimit.ofDuration(Duration.ofMinutes(5))),
                              Map.of(),
                              streamsConfig(bootstrap, appId))
-                             .topicAdmin(new MockAdminClient(TopicAdmin.ofBootstrap(bootstrap)))
+                             .topicAdmin(new MockAdminClient(ParsleyTopicAdmin.ofBootstrap(bootstrap)))
                              .build();
              CausalProducer<String, String> producer = causalProducer(bootstrap)) {
 
-            // advance(TopicPartition, offset) uses nameUuid; MockAdminClient ensures the consumer
-            // frontier also uses nameUuid, so the two match and causal drain fires naturally.
             producer.send(new ProducerRecord<>(ORDERS, "k", "order-1"),
-                    CausalDependencies.empty().advance(new TopicPartition(PRICES, 0), 0)).get();
+                    CausalDependencies.empty().advance(CausalPosition.nameUuid(PRICES), 0, 0)).get();
 
             // Poll a few times — ORDERS should be buffered, not delivered.
             for (int i = 0; i < 3; i++) {
@@ -98,7 +94,7 @@ class CausalResilienceIT {
 
         // Phase 2: new consumer, same applicationId — Kafka Streams restores all three state
         // stores (frontier, buffer, wait-index) from changelog. The ParsleyEngine constructor
-        // re-seeds the WaitIndex from the restored buffer in an O(n) pass.
+        // re-seeds the ParsleyWaitIndex from the restored buffer in an O(n) pass.
         List<ConsumerRecord<String, String>> phase2 = new ArrayList<>();
         try (CausalConsumer<String, String> consumer2 =
                      CausalConsumers.<String, String>builder(
@@ -106,7 +102,7 @@ class CausalResilienceIT {
                              CausalBufferPolicy.drop(CausalBufferLimit.ofDuration(Duration.ofMinutes(5))),
                              Map.of(),
                              streamsConfig(bootstrap, appId))
-                             .topicAdmin(new MockAdminClient(TopicAdmin.ofBootstrap(bootstrap)))
+                             .topicAdmin(new MockAdminClient(ParsleyTopicAdmin.ofBootstrap(bootstrap)))
                              .build();
              CausalProducer<String, String> producer = causalProducer(bootstrap)) {
 

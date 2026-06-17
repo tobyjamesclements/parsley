@@ -14,7 +14,7 @@ import java.util.Set;
  * outbox topic. Keeping the interface narrow lets tests supply a {@code MockAdminClient} without
  * implementing the full ~40-method {@link Admin} surface.
  */
-interface TopicAdmin extends AutoCloseable {
+interface ParsleyTopicAdmin extends AutoCloseable {
 
     /**
      * Returns topic metadata keyed by topic name for each name in {@code topics}.
@@ -35,16 +35,16 @@ interface TopicAdmin extends AutoCloseable {
     void createTopic(String name, int partitions) throws Exception;
 
     /**
-     * Returns a {@link TopicAdmin} backed by a real Kafka {@link Admin} connected to
+     * Returns a {@link ParsleyTopicAdmin} backed by a real Kafka {@link Admin} connected to
      * {@code bootstrap}. The returned instance closes the underlying {@code Admin} on
      * {@link #close()}.
      *
      * @param bootstrap the Kafka bootstrap servers string
-     * @return a live, closeable {@code TopicAdmin}
+     * @return a live, closeable {@code ParsleyTopicAdmin}
      */
-    static TopicAdmin ofBootstrap(String bootstrap) {
+    static ParsleyTopicAdmin ofBootstrap(String bootstrap) {
         Admin admin = Admin.create(Map.of("bootstrap.servers", bootstrap));
-        return new TopicAdmin() {
+        return new ParsleyTopicAdmin() {
             @Override
             public Map<String, TopicDescription> describeTopics(List<String> topics) throws Exception {
                 return admin.describeTopics(topics).allTopicNames().get();

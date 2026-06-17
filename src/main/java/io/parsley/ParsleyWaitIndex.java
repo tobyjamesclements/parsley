@@ -1,78 +1,55 @@
 package io.parsley;
 
 import org.apache.kafka.common.Uuid;
-import org.apache.kafka.streams.state.KeyValueIterator;
-import org.apache.kafka.streams.state.KeyValueStore;
 
-import java.nio.ByteBuffer;
-import java.util.ArrayList;
 import java.util.List;
 
 /**
- * A {@link WaitIndex} backed by a changelog-replicated Kafka {@link KeyValueStore}.
+ * A secondary index over the causal buffer that maps coordinate advances to candidate records.
  *
- * <h2>Key layout (36 bytes, all fields big-endian)</h2>
- * <pre>
- * [topicId MSB      : 8B]
- * [topicId LSB      : 8B]
- * [partition        : 4B]
- * [requiredOffset   : 8B]
- * [recordId         : 8B]
- * </pre>
+ * <p>When a record is buffered, its unsatisfied coordinates (those where the required offset exceeds
+ * the current frontier) are indexed here. When the frontier advances on coordinate C, {@link
+ * #candidatesFor} returns the records waiting on C so the engine can check them for full causal
+ * satisfaction without scanning the entire buffer.
  *
- * <p>All numeric fields are encoded big-endian so that RocksDB's lexicographic comparator
- * reflects natural numeric order. A range scan of the form "coordinate C, requiredOffset ≤ N"
- * becomes {@code store.range(key(C, 0, 0), key(C, N, Long.MAX_VALUE))}.
+ * <p>The index is <em>not</em> the source of truth: the buffer store and the current frontier are
+ * authoritative. The index only reduces the search space. Stale entries (pointing to
+ * already-released or evicted records) are tolerated and cleaned up lazily via {@link #tombstone}.
  */
-final class ParsleyWaitIndex implements WaitIndex {
+interface ParsleyWaitIndex {
 
-    private static final byte[] PRESENT = new byte[0];
-    private static final int KEY_SIZE = 36;
+    /**
+     * An index hit: the record waiting on a coordinate, plus the key information needed to
+     * tombstone this entry if the record is no longer in the buffer.
+     */
+    record Candidate(Uuid topicId, int partition, long requiredOffset, long recordId) {}
 
-    private final KeyValueStore<byte[], byte[]> store;
+    /**
+     * Indexes every coordinate in {@code required} that is not yet satisfied by {@code frontier}.
+     *
+     * @param recordId the buffer sequence number of the buffered record
+     * @param required the record's causal dependencies
+     * @param frontier the frontier at the time of buffering; unsatisfied = required offset &gt; observed
+     */
+    void index(long recordId, CausalDependencies required, CausalFrontier frontier);
 
-    ParsleyWaitIndex(KeyValueStore<byte[], byte[]> store) {
-        this.store = store;
-    }
+    /**
+     * Returns all index entries for {@code (topicId, partition)} whose required offset is ≤
+     * {@code newOffset}. The result may include stale entries; callers must verify with the buffer
+     * store and call {@link #tombstone} for any that no longer have a buffer entry.
+     *
+     * @param topicId   the topic UUID whose frontier just advanced
+     * @param partition the partition whose frontier just advanced
+     * @param newOffset the new observed offset on this coordinate
+     * @return candidates; empty if none are indexed on this coordinate within the offset range
+     */
+    List<Candidate> candidatesFor(Uuid topicId, int partition, long newOffset);
 
-    @Override
-    public void index(long recordId, CausalDependencies required, CausalFrontier frontier) {
-        for (CausalPosition pos : required.dependencies()) {
-            if (frontier.observed(pos.topicId(), pos.partition()) < pos.offset()) {
-                store.put(key(pos.topicId(), pos.partition(), pos.offset(), recordId), PRESENT);
-            }
-        }
-    }
-
-    @Override
-    public List<Candidate> candidatesFor(Uuid topicId, int partition, long newOffset) {
-        byte[] from = key(topicId, partition, 0L, 0L);
-        byte[] to   = key(topicId, partition, newOffset, Long.MAX_VALUE);
-        List<Candidate> candidates = new ArrayList<>();
-        try (KeyValueIterator<byte[], byte[]> iter = store.range(from, to)) {
-            while (iter.hasNext()) {
-                byte[] k = iter.next().key;
-                long requiredOffset = ByteBuffer.wrap(k, 20, 8).getLong();
-                long recordId       = ByteBuffer.wrap(k, 28, 8).getLong();
-                candidates.add(new Candidate(topicId, partition, requiredOffset, recordId));
-            }
-        }
-        return candidates;
-    }
-
-    @Override
-    public void tombstone(Candidate candidate) {
-        store.delete(key(candidate.topicId(), candidate.partition(),
-                candidate.requiredOffset(), candidate.recordId()));
-    }
-
-    static byte[] key(Uuid topicId, int partition, long requiredOffset, long recordId) {
-        return ByteBuffer.allocate(KEY_SIZE)
-                .putLong(topicId.getMostSignificantBits())
-                .putLong(topicId.getLeastSignificantBits())
-                .putInt(partition)
-                .putLong(requiredOffset)
-                .putLong(recordId)
-                .array();
-    }
+    /**
+     * Removes a single index entry. Called to lazily clean up stale entries discovered during a
+     * scan.
+     *
+     * @param candidate the stale candidate to tombstone
+     */
+    void tombstone(Candidate candidate);
 }

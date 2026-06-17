@@ -20,7 +20,7 @@ package io.parsley;
  * <strong>lenient</strong>: it preserves delivery by forwarding un-satisfied records, which suspends
  * the guarantee for exactly those records (each flagged as a violation).
  */
-public sealed interface CausalBufferPolicy permits ForwardUnsafePolicy, DropPolicy, DeadLetterPolicy {
+public sealed interface CausalBufferPolicy permits ParsleyForwardUnsafePolicy, ParsleyDropPolicy, ParsleyDeadLetterPolicy {
 
     /**
      * Returns whether this policy is <strong>strict</strong> — i.e. it never forwards an
@@ -42,7 +42,7 @@ public sealed interface CausalBufferPolicy permits ForwardUnsafePolicy, DropPoli
      * @return a new {@code forwardUnsafe} policy
      */
     static CausalBufferPolicy forwardUnsafe(CausalBufferLimit limit) {
-        return new ForwardUnsafePolicy(limit);
+        return new ParsleyForwardUnsafePolicy(limit);
     }
 
     /**
@@ -54,7 +54,7 @@ public sealed interface CausalBufferPolicy permits ForwardUnsafePolicy, DropPoli
      * @return a new {@code drop} policy
      */
     static CausalBufferPolicy drop(CausalBufferLimit limit) {
-        return new DropPolicy(limit);
+        return new ParsleyDropPolicy(limit);
     }
 
     /**
@@ -66,6 +66,6 @@ public sealed interface CausalBufferPolicy permits ForwardUnsafePolicy, DropPoli
      * @return a new {@code deadLetter} policy
      */
     static CausalBufferPolicy deadLetter(CausalBufferLimit limit, String destination) {
-        return new DeadLetterPolicy(limit, destination);
+        return new ParsleyDeadLetterPolicy(limit, destination);
     }
 }

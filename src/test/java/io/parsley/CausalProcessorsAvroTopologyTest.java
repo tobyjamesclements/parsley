@@ -7,7 +7,7 @@ import io.confluent.kafka.streams.serdes.avro.SpecificAvroSerde;
 import io.parsley.avro.Order;
 import io.parsley.avro.Price;
 import org.apache.avro.specific.SpecificRecord;
-import org.apache.kafka.common.TopicPartition;
+import org.apache.kafka.common.Uuid;
 import org.apache.kafka.common.header.Headers;
 import org.apache.kafka.common.header.internals.RecordHeader;
 import org.apache.kafka.common.header.internals.RecordHeaders;
@@ -47,7 +47,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * (its source topic), then deserialised back to an equal {@code Order} when it drains — never under
  * the changelog/store name.
  */
-class CausalDecoratorAvroTopologyTest {
+class CausalProcessorsAvroTopologyTest {
 
     // The scope is the part after mock:// — MockSchemaRegistry keys its in-JVM client by it.
     private static final String SCOPE = "parsley-avro-topology";
@@ -55,7 +55,7 @@ class CausalDecoratorAvroTopologyTest {
 
     private static final String PRICES = "prices";
     private static final String ORDERS = "orders";
-    private static final TopicPartition PRICES_0 = new TopicPartition(PRICES, 0);
+    private static final Uuid PRICES_ID = CausalPosition.nameUuid(PRICES);
 
     private final List<SpecificRecord> processed = new ArrayList<>();
     private final List<CausalViolation> violations = new ArrayList<>();
@@ -95,7 +95,7 @@ class CausalDecoratorAvroTopologyTest {
 
             // The order depends on prices-0@0, which has not arrived: it is held (Avro-serialised
             // into the buffer store), not delivered.
-            orders.pipeInput(new TestRecord<>("k", order, clockHeader(CausalDependencies.empty().advance(PRICES_0, 0))));
+            orders.pipeInput(new TestRecord<>("k", order, clockHeader(CausalDependencies.empty().advance(PRICES_ID, 0, 0))));
             assertTrue(processed.isEmpty(), "held record must not reach the delegate");
             assertEquals(1, storeSize(bufferStore), "held record must be persisted (Avro bytes) to the buffer store");
 

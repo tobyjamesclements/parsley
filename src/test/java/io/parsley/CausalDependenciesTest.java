@@ -1,7 +1,6 @@
 package io.parsley;
 
 import org.apache.kafka.clients.consumer.ConsumerRecord;
-import org.apache.kafka.common.TopicPartition;
 import org.apache.kafka.common.Uuid;
 import org.apache.kafka.common.header.Headers;
 import org.apache.kafka.common.header.internals.RecordHeader;
@@ -19,41 +18,41 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class CausalDependenciesTest {
 
-    private static final TopicPartition P0 = new TopicPartition("prices", 0);
-    private static final TopicPartition O0 = new TopicPartition("orders", 0);
+    private static final Uuid PRICES_ID = CausalPosition.nameUuid("prices");
+    private static final Uuid ORDERS_ID = CausalPosition.nameUuid("orders");
 
     @Test
     void emptyClockIsSatisfiedByAnything() {
         assertTrue(CausalDependencies.empty().satisfiedBy(CausalFrontier.empty()));
-        assertTrue(CausalDependencies.empty().satisfiedBy(CausalFrontier.empty().advance(P0, 7)));
+        assertTrue(CausalDependencies.empty().satisfiedBy(CausalFrontier.empty().advance(PRICES_ID, 0, 7)));
     }
 
     @Test
     void advanceTakesTheMaximum() {
-        CausalDependencies clock = CausalDependencies.empty().advance(P0, 5).advance(P0, 2);
-        assertEquals(CausalDependencies.empty().advance(P0, 5), clock);
+        CausalDependencies clock = CausalDependencies.empty().advance(PRICES_ID, 0, 5).advance(PRICES_ID, 0, 2);
+        assertEquals(CausalDependencies.empty().advance(PRICES_ID, 0, 5), clock);
     }
 
     @Test
     void satisfiedByRequiresEveryPartitionToBeCaughtUp() {
-        CausalDependencies required = CausalDependencies.empty().advance(P0, 3);
+        CausalDependencies required = CausalDependencies.empty().advance(PRICES_ID, 0, 3);
         assertFalse(required.satisfiedBy(CausalFrontier.empty()));
-        assertFalse(required.satisfiedBy(CausalFrontier.empty().advance(P0, 2)));
-        assertTrue(required.satisfiedBy(CausalFrontier.empty().advance(P0, 3)));
-        assertTrue(required.satisfiedBy(CausalFrontier.empty().advance(P0, 4)));
+        assertFalse(required.satisfiedBy(CausalFrontier.empty().advance(PRICES_ID, 0, 2)));
+        assertTrue(required.satisfiedBy(CausalFrontier.empty().advance(PRICES_ID, 0, 3)));
+        assertTrue(required.satisfiedBy(CausalFrontier.empty().advance(PRICES_ID, 0, 4)));
     }
 
     @Test
     void frontierMergeTakesPerPartitionMaximum() {
-        CausalFrontier a = CausalFrontier.empty().advance(P0, 3).advance(O0, 1);
-        CausalFrontier b = CausalFrontier.empty().advance(P0, 1).advance(O0, 9);
+        CausalFrontier a = CausalFrontier.empty().advance(PRICES_ID, 0, 3).advance(ORDERS_ID, 0, 1);
+        CausalFrontier b = CausalFrontier.empty().advance(PRICES_ID, 0, 1).advance(ORDERS_ID, 0, 9);
         CausalFrontier merged = a.merge(b);
-        assertEquals(CausalFrontier.empty().advance(P0, 3).advance(O0, 9), merged);
+        assertEquals(CausalFrontier.empty().advance(PRICES_ID, 0, 3).advance(ORDERS_ID, 0, 9), merged);
     }
 
     @Test
     void serialisationRoundTrips() {
-        CausalDependencies clock = CausalDependencies.empty().advance(P0, 42).advance(O0, 7);
+        CausalDependencies clock = CausalDependencies.empty().advance(PRICES_ID, 0, 42).advance(ORDERS_ID, 0, 7);
         assertEquals(clock, CausalDependencies.fromBytes(clock.toBytes()));
     }
 
@@ -77,7 +76,7 @@ class CausalDependenciesTest {
 
     @Test
     void fromHeadersReadsTheStampedClock() {
-        CausalDependencies clock = CausalDependencies.empty().advance(P0, 12).advance(O0, 4);
+        CausalDependencies clock = CausalDependencies.empty().advance(PRICES_ID, 0, 12).advance(ORDERS_ID, 0, 4);
         Headers headers = new RecordHeaders();
         headers.add(new RecordHeader(ParsleyAttributes.VECTOR_CLOCK, clock.toBytes()));
 
@@ -94,7 +93,7 @@ class CausalDependenciesTest {
 
     @Test
     void fromRecordReadsTheStampedClock() {
-        CausalDependencies clock = CausalDependencies.empty().advance(P0, 27);
+        CausalDependencies clock = CausalDependencies.empty().advance(PRICES_ID, 0, 27);
         ConsumerRecord<String, String> record = new ConsumerRecord<>("orders", 0, 5L, "k", "v");
         record.headers().add(new RecordHeader(ParsleyAttributes.VECTOR_CLOCK, clock.toBytes()));
 
@@ -109,17 +108,17 @@ class CausalDependenciesTest {
 
     @Test
     void missingAgainstIsEmptyWhenTheFrontierSatisfiesTheClock() {
-        CausalDependencies required = CausalDependencies.empty().advance(P0, 3);
-        assertTrue(required.missingAgainst(CausalFrontier.empty().advance(P0, 3)).isEmpty());
-        assertTrue(required.missingAgainst(CausalFrontier.empty().advance(P0, 9)).isEmpty());
+        CausalDependencies required = CausalDependencies.empty().advance(PRICES_ID, 0, 3);
+        assertTrue(required.missingAgainst(CausalFrontier.empty().advance(PRICES_ID, 0, 3)).isEmpty());
+        assertTrue(required.missingAgainst(CausalFrontier.empty().advance(PRICES_ID, 0, 9)).isEmpty());
         assertTrue(CausalDependencies.empty().missingAgainst(CausalFrontier.empty()).isEmpty());
     }
 
     @Test
     void missingAgainstReportsThePerPartitionShortfall() {
-        CausalDependencies required = CausalDependencies.empty().advance(P0, 5).advance(O0, 2);
+        CausalDependencies required = CausalDependencies.empty().advance(PRICES_ID, 0, 5).advance(ORDERS_ID, 0, 2);
         // P0: required 5, observed 1 → gap 4. O0: required 2, observed absent(-1) → gap 3.
-        List<CausalPosition> gap = required.missingAgainst(CausalFrontier.empty().advance(P0, 1));
+        List<CausalPosition> gap = required.missingAgainst(CausalFrontier.empty().advance(PRICES_ID, 0, 1));
         assertEquals(Set.of(
                 new CausalPosition(CausalPosition.nameUuid("prices"), 0, 4L),
                 new CausalPosition(CausalPosition.nameUuid("orders"), 0, 3L)),
@@ -128,7 +127,7 @@ class CausalDependenciesTest {
 
     @Test
     void missingAgainstCountsAnAbsentPositionAsMinusOne() {
-        CausalDependencies required = CausalDependencies.empty().advance(P0, 0);
+        CausalDependencies required = CausalDependencies.empty().advance(PRICES_ID, 0, 0);
         List<CausalPosition> gap = required.missingAgainst(CausalFrontier.empty());
         assertEquals(List.of(new CausalPosition(CausalPosition.nameUuid("prices"), 0, 1L)), gap,
                 "requiring offset 0 against an unseen partition is a gap of 1");
@@ -137,11 +136,11 @@ class CausalDependenciesTest {
     @Test
     void frontierAndDependenciesShareWireFormat() {
         // A frontier serialised with toBytes() must be decodable as CausalDependencies and vice versa.
-        CausalFrontier frontier = CausalFrontier.empty().advance(P0, 5).advance(O0, 2);
+        CausalFrontier frontier = CausalFrontier.empty().advance(PRICES_ID, 0, 5).advance(ORDERS_ID, 0, 2);
         CausalDependencies decoded = CausalDependencies.fromBytes(frontier.toBytes());
         assertEquals(frontier.asDependencies(), decoded);
 
-        CausalDependencies deps = CausalDependencies.empty().advance(P0, 5).advance(O0, 2);
+        CausalDependencies deps = CausalDependencies.empty().advance(PRICES_ID, 0, 5).advance(ORDERS_ID, 0, 2);
         CausalFrontier frontierDecoded = CausalFrontier.fromBytes(deps.toBytes());
         assertEquals(frontier, frontierDecoded);
     }

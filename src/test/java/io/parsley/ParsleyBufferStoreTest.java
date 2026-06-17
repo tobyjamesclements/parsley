@@ -1,6 +1,7 @@
 package io.parsley;
 
 import org.apache.kafka.common.TopicPartition;
+import org.apache.kafka.common.Uuid;
 import org.junit.jupiter.api.Test;
 
 import java.util.List;
@@ -9,12 +10,14 @@ import static java.nio.charset.StandardCharsets.UTF_8;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-class CausalBufferStoreTest {
+class ParsleyBufferStoreTest {
 
     private static final TopicPartition PRICES = new TopicPartition("prices", 0);
     private static final TopicPartition ORDERS = new TopicPartition("orders", 0);
+    private static final Uuid PRICES_ID = CausalPosition.nameUuid("prices");
+    private static final Uuid ORDERS_ID = CausalPosition.nameUuid("orders");
 
-    private final CausalBufferStore<String, String> store = new InMemoryBufferStore<>();
+    private final ParsleyBufferStore<String, String> store = new MockBufferStore<>();
 
     // The record's VECTOR_CLOCK header carries the dependency clock; the store derives the decoded
     // clock from it, so build the record with the clock it depends on.
@@ -28,14 +31,14 @@ class CausalBufferStoreTest {
 
     @Test
     void entriesAreReturnedInInsertionOrderWithTheirDependencies() {
-        store.add(rec(ORDERS, 0, CausalDependencies.empty().advance(PRICES, 9)));
-        store.add(rec(ORDERS, 1, CausalDependencies.empty().advance(PRICES, 3)));
+        store.add(rec(ORDERS, 0, CausalDependencies.empty().advance(PRICES_ID, 0, 9)));
+        store.add(rec(ORDERS, 1, CausalDependencies.empty().advance(PRICES_ID, 0, 3)));
 
-        List<CausalBufferStore.Entry<String, String>> entries = store.entries();
+        List<ParsleyBufferStore.Entry<String, String>> entries = store.entries();
 
         assertEquals(2, entries.size());
         assertEquals(0L, entries.get(0).record().sourceOffset());
-        assertEquals(CausalDependencies.empty().advance(PRICES, 9), entries.get(0).dependencies());
+        assertEquals(CausalDependencies.empty().advance(PRICES_ID, 0, 9), entries.get(0).dependencies());
         assertEquals(1L, entries.get(1).record().sourceOffset());
         assertTrue(entries.get(0).sequence() < entries.get(1).sequence(),
                 "earlier-added entry must carry the lower sequence");
@@ -43,8 +46,8 @@ class CausalBufferStoreTest {
 
     @Test
     void removeDropsTheEntryAndDecrementsSize() {
-        store.add(rec(ORDERS, 0, CausalDependencies.empty().advance(PRICES, 1)));
-        store.add(rec(ORDERS, 1, CausalDependencies.empty().advance(PRICES, 5)));
+        store.add(rec(ORDERS, 0, CausalDependencies.empty().advance(PRICES_ID, 0, 1)));
+        store.add(rec(ORDERS, 1, CausalDependencies.empty().advance(PRICES_ID, 0, 5)));
         assertEquals(2, store.size());
 
         long firstSeq = store.entries().get(0).sequence();

@@ -5,8 +5,8 @@ import java.time.Duration;
 /**
  * Evicts records buffered longer than {@code duration}.
  */
-record DurationLimit(Duration duration) implements CausalBufferLimit {
-    DurationLimit {
+record ParsleyDurationLimit(Duration duration) implements CausalBufferLimit {
+    ParsleyDurationLimit {
         if (duration == null || duration.isZero() || duration.isNegative()) {
             throw new IllegalArgumentException("duration must be positive, was " + duration);
         }

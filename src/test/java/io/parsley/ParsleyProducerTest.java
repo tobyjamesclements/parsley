@@ -2,7 +2,6 @@ package io.parsley;
 
 import org.apache.kafka.clients.producer.MockProducer;
 import org.apache.kafka.clients.producer.ProducerRecord;
-import org.apache.kafka.common.TopicPartition;
 import org.apache.kafka.common.header.Header;
 import org.apache.kafka.common.serialization.StringSerializer;
 import org.junit.jupiter.api.Test;
@@ -12,8 +11,6 @@ import static org.junit.jupiter.api.Assertions.assertNotNull;
 
 class ParsleyProducerTest {
 
-    private static final TopicPartition PRICES = new TopicPartition("prices", 0);
-
     private MockProducer<String, String> mock() {
         return new MockProducer<>(true, null, new StringSerializer(), new StringSerializer());
     }
@@ -22,7 +19,7 @@ class ParsleyProducerTest {
     void sendAttachesTheVectorClockHeader() {
         MockProducer<String, String> mock = mock();
         try (ParsleyProducer<String, String> producer = new ParsleyProducer<>(mock)) {
-            CausalDependencies clock = CausalDependencies.empty().advance(PRICES, 3);
+            CausalDependencies clock = CausalDependencies.empty().advance(CausalPosition.nameUuid("prices"), 0, 3);
             producer.send(new ProducerRecord<>("orders", "k", "v"), clock);
 
             assertEquals(1, mock.history().size());

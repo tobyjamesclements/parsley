@@ -8,7 +8,7 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * A {@link TopicAdmin} that substitutes deterministic name-derived UUIDs (via
+ * A {@link ParsleyTopicAdmin} that substitutes deterministic name-derived UUIDs (via
  * {@link CausalPosition#nameUuid}) for every topic's Kafka-assigned UUID.
  *
  * <p>This makes {@link CausalDependencies#advance(org.apache.kafka.common.TopicPartition, long)}
@@ -18,22 +18,22 @@ import java.util.Map;
  *
  * <h2>Constructors</h2>
  * <dl>
- *   <dt>{@link #MockAdminClient(TopicAdmin)} — for ITs with a real broker</dt>
+ *   <dt>{@link #MockAdminClient(ParsleyTopicAdmin)} — for ITs with a real broker</dt>
  *   <dd>Delegates {@code createTopic} and partition-count reads to the real admin, but replaces
  *       each topic's UUID with {@code nameUuid}. Partition counts are therefore accurate for
  *       outbox sizing. Close the delegate by passing the result of
- *       {@link TopicAdmin#ofBootstrap(String)}.</dd>
+ *       {@link ParsleyTopicAdmin#ofBootstrap(String)}.</dd>
  *   <dt>{@link #MockAdminClient()} — for unit tests without a real broker</dt>
  *   <dd>All operations are no-ops or return minimal stubs. {@code describeTopics} returns one
  *       partition per topic (enough for the outbox sizing calculation) with a {@code nameUuid}.
  *       {@code createTopic} is a no-op.</dd>
  * </dl>
  */
-final class MockAdminClient implements TopicAdmin {
+final class MockAdminClient implements ParsleyTopicAdmin {
 
-    private final TopicAdmin delegate;
+    private final ParsleyTopicAdmin delegate;
 
-    MockAdminClient(TopicAdmin delegate) {
+    MockAdminClient(ParsleyTopicAdmin delegate) {
         this.delegate = delegate;
     }
 

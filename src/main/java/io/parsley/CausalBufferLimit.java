@@ -16,7 +16,7 @@ import java.util.List;
  * <p>A {@code CausalBufferLimit} is always paired with a {@link CausalBufferPolicy} that determines
  * <em>what</em> happens to evicted records (forward with a violation, drop, or dead-letter).
  */
-public sealed interface CausalBufferLimit permits DurationLimit, SizeLimit, FirstLimit {
+public sealed interface CausalBufferLimit permits ParsleyDurationLimit, ParsleySizeLimit, ParsleyFirstLimit {
 
     /**
      * Creates a limit that evicts records buffered longer than {@code duration} without their causal
@@ -27,7 +27,7 @@ public sealed interface CausalBufferLimit permits DurationLimit, SizeLimit, Firs
      * @throws IllegalArgumentException if {@code duration} is {@code null}, zero, or negative
      */
     static CausalBufferLimit ofDuration(Duration duration) {
-        return new DurationLimit(duration);
+        return new ParsleyDurationLimit(duration);
     }
 
     /**
@@ -39,7 +39,7 @@ public sealed interface CausalBufferLimit permits DurationLimit, SizeLimit, Firs
      * @throws IllegalArgumentException if {@code messages} is not positive
      */
     static CausalBufferLimit ofSize(int messages) {
-        return new SizeLimit(messages);
+        return new ParsleySizeLimit(messages);
     }
 
     /**
@@ -50,6 +50,6 @@ public sealed interface CausalBufferLimit permits DurationLimit, SizeLimit, Firs
      * @throws IllegalArgumentException if {@code limits} is empty
      */
     static CausalBufferLimit first(CausalBufferLimit... limits) {
-        return new FirstLimit(List.of(limits));
+        return new ParsleyFirstLimit(List.of(limits));
     }
 }

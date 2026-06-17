@@ -6,7 +6,7 @@ package io.parsley;
  *
  * @param limit the eviction trigger
  */
-record ForwardUnsafePolicy(CausalBufferLimit limit) implements CausalBufferPolicy {
+record ParsleyForwardUnsafePolicy(CausalBufferLimit limit) implements CausalBufferPolicy {
     @Override
     public boolean strict() {
         return false;

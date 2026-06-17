@@ -1,90 +1,65 @@
 package io.parsley;
 
-import org.apache.kafka.streams.state.KeyValueIterator;
-import org.apache.kafka.streams.state.KeyValueStore;
-
-import java.util.ArrayList;
-import java.util.Comparator;
 import java.util.List;
 
 /**
- * A {@link CausalBufferStore} backed by a changelog-replicated Kafka {@link KeyValueStore}, keyed by a
- * monotonic insertion sequence and valued by the {@link ParsleySerializer}-serialised record. This
- * is the authoritative, restart-durable home of held records: because the store <em>is</em> the
- * buffer, held records need no separate rehydration step — they are read back on the next drain.
+ * The held-record buffer: the single, authoritative store of records whose causal dependencies are
+ * not yet satisfied. Entries carry a monotonic insertion sequence, and {@link #entries()} yields
+ * them in that order, so iteration reflects causal arrival order.
  *
- * <p>The insertion-sequence counter and the live record count are seeded once from the store at
- * construction (a single pass over its keys), so a restarted instance continues the sequence past
- * whatever survived the previous run.
+ * <p>There is no separate in-memory copy: a durable implementation <em>is</em> the buffer, so held
+ * records need no rehydration step after a restart — they are simply read back on the next drain.
+ * The {@link ParsleyEngine} drives the buffer through this interface and is agnostic to whether it is
+ * purely in-memory (tests) or backed by a changelog-replicated Kafka store (production).
  *
  * @param <K> the record key type
  * @param <V> the record value type
  */
-final class ParsleyBufferStore<K, V> implements CausalBufferStore<K, V> {
+interface ParsleyBufferStore<K, V> {
 
-    private final KeyValueStore<Long, byte[]> store;
-    private final ParsleySerializer<K, V> serializer;
-    private long nextSequence;
-    private int size;
+    /**
+     * A buffered entry: its insertion sequence (an opaque handle for {@link #remove(long)}), the
+     * record, and its decoded dependency clock.
+     */
+    record Entry<K, V>(long sequence, ParsleyRecord<K, V> record, CausalDependencies dependencies) {}
 
-    ParsleyBufferStore(KeyValueStore<Long, byte[]> store, ParsleySerializer<K, V> serializer) {
-        this.store = store;
-        this.serializer = serializer;
-        // Seed the sequence past anything that survived a previous run, and count what is held, in a
-        // single pass — this replaces the old explicit "restore held records" step.
-        long maxSequence = -1;
-        int count = 0;
-        try (KeyValueIterator<Long, byte[]> all = store.all()) {
-            while (all.hasNext()) {
-                maxSequence = Math.max(maxSequence, all.next().key);
-                count++;
-            }
-        }
-        this.nextSequence = maxSequence + 1;
-        this.size = count;
-    }
+    /**
+     * Buffers a record under the next insertion sequence and returns that sequence. The sequence
+     * is the opaque handle used by {@link #get} and {@link #remove}.
+     *
+     * @param record the record to hold; carries a valid (decodable) dependency clock
+     * @return the insertion sequence assigned to the buffered record
+     */
+    long add(ParsleyRecord<K, V> record);
 
-    @Override
-    public long add(ParsleyRecord<K, V> record) {
-        long seq = nextSequence++;
-        store.put(seq, serializer.serialize(record));
-        size++;
-        return seq;
-    }
+    /**
+     * Returns the buffered entry for the given insertion sequence, or {@code null} if no such
+     * entry exists. Used by the drain path to verify that a wait-index candidate is still in the
+     * buffer before attempting release.
+     *
+     * @param sequence the sequence of an entry previously returned by {@link #add}
+     * @return the entry, or {@code null} if already removed
+     */
+    Entry<K, V> get(long sequence);
 
-    @Override
-    public Entry<K, V> get(long sequence) {
-        byte[] value = store.get(sequence);
-        if (value == null) return null;
-        ParsleyRecord<K, V> record = serializer.deserialize(value);
-        return new Entry<>(sequence, record, CausalDependencies.fromBytes(record.encodedDependencies()));
-    }
+    /**
+     * Returns every buffered entry, in ascending insertion-sequence (causal arrival) order.
+     *
+     * @return the buffered entries; empty if the buffer is empty
+     */
+    List<Entry<K, V>> entries();
 
-    @Override
-    public List<Entry<K, V>> entries() {
-        List<Entry<K, V>> entries = new ArrayList<>(size);
-        try (KeyValueIterator<Long, byte[]> all = store.all()) {
-            while (all.hasNext()) {
-                var kv = all.next();
-                ParsleyRecord<K, V> record = serializer.deserialize(kv.value);
-                entries.add(new Entry<>(kv.key, record, CausalDependencies.fromBytes(record.encodedDependencies())));
-            }
-        }
-        // Iteration order across store implementations is not guaranteed to be key order, so sort by
-        // sequence explicitly to hand back records in causal arrival order.
-        entries.sort(Comparator.comparingLong(Entry::sequence));
-        return entries;
-    }
+    /**
+     * Removes the entry with the given insertion sequence.
+     *
+     * @param sequence the sequence of an entry previously returned by {@link #entries()}
+     */
+    void remove(long sequence);
 
-    @Override
-    public void remove(long sequence) {
-        if (store.delete(sequence) != null) {
-            size--;
-        }
-    }
-
-    @Override
-    public int size() {
-        return size;
-    }
+    /**
+     * Returns the number of records currently buffered.
+     *
+     * @return the buffer size
+     */
+    int size();
 }

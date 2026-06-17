@@ -15,22 +15,22 @@ class CausalBufferPolicyTest {
 
     @Test
     void forwardUnsafeHoldsLimit() {
-        ForwardUnsafePolicy policy = assertInstanceOf(
-                ForwardUnsafePolicy.class, CausalBufferPolicy.forwardUnsafe(limit));
+        ParsleyForwardUnsafePolicy policy = assertInstanceOf(
+                ParsleyForwardUnsafePolicy.class, CausalBufferPolicy.forwardUnsafe(limit));
         assertEquals(limit, policy.limit());
     }
 
     @Test
     void dropHoldsLimit() {
-        DropPolicy policy =
-                assertInstanceOf(DropPolicy.class, CausalBufferPolicy.drop(limit));
+        ParsleyDropPolicy policy =
+                assertInstanceOf(ParsleyDropPolicy.class, CausalBufferPolicy.drop(limit));
         assertEquals(limit, policy.limit());
     }
 
     @Test
     void deadLetterHoldsLimitAndDestination() {
-        DeadLetterPolicy policy = assertInstanceOf(
-                DeadLetterPolicy.class, CausalBufferPolicy.deadLetter(limit, "dlq"));
+        ParsleyDeadLetterPolicy policy = assertInstanceOf(
+                ParsleyDeadLetterPolicy.class, CausalBufferPolicy.deadLetter(limit, "dlq"));
         assertEquals(limit, policy.limit());
         assertEquals("dlq", policy.destination());
     }

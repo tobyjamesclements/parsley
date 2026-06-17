@@ -9,7 +9,6 @@ import org.apache.kafka.clients.consumer.KafkaConsumer;
 import org.apache.kafka.clients.producer.KafkaProducer;
 import org.apache.kafka.clients.producer.ProducerConfig;
 import org.apache.kafka.clients.producer.ProducerRecord;
-import org.apache.kafka.common.TopicPartition;
 import org.apache.kafka.common.header.internals.RecordHeader;
 import org.apache.kafka.common.serialization.ByteArrayDeserializer;
 import org.apache.kafka.common.serialization.Serdes;
@@ -48,7 +47,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
  * is needed on egress. A raw {@link KafkaConsumer} reads the output topic and checks the header.
  */
 @Testcontainers(disabledWithoutDocker = true)
-class CausalDecoratorSinkPropagationIT {
+class CausalProcessorsSinkPropagationIT {
 
     @Container
     private final KafkaContainer kafka =
@@ -107,7 +106,7 @@ class CausalDecoratorSinkPropagationIT {
                 assertEquals("HELLO", new String(out.value()), "the delegate's transform reached the sink");
 
                 Optional<CausalDependencies> clock = CausalDependencies.fromHeaders(out.headers());
-                assertEquals(Optional.of(CausalDependencies.empty().advance(new TopicPartition(IN, 0), 0)), clock,
+                assertEquals(Optional.of(CausalDependencies.empty().advance(CausalPosition.nameUuid(IN), 0, 0)), clock,
                         "the clock stamped at forward must survive the sink to the output topic");
             }
         }

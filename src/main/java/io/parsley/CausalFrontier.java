@@ -1,6 +1,5 @@
 package io.parsley;
 
-import org.apache.kafka.common.TopicPartition;
 import org.apache.kafka.common.Uuid;
 
 import java.io.ByteArrayInputStream;
@@ -21,10 +20,8 @@ import java.util.Objects;
  *
  * <p>Instances are immutable. {@link #advance} and {@link #merge} return new frontiers.
  *
- * <p>Use {@link #advance(TopicPartition, long)} for convenience when only a topic name is
- * available (e.g. in tests or paths without AdminClient); it derives the UUID via
- * {@link CausalPosition#nameUuid}. For production paths where a real AdminClient UUID is
- * available, prefer {@link #advance(Uuid, int, long)}.
+ * <p>For paths without a real AdminClient UUID, derive one via {@link CausalPosition#nameUuid}
+ * and call {@link #advance(Uuid, int, long)} directly.
  *
  * <h2>Converting to dependencies</h2>
  * Call {@link #asDependencies()} to turn the frontier into a {@link CausalDependencies} that can be
@@ -67,17 +64,6 @@ public final class CausalFrontier {
         Map<Key, Long> next = new HashMap<>(observed);
         next.merge(new Key(topicId, partition), offset, Math::max);
         return new CausalFrontier(Map.copyOf(next));
-    }
-
-    /**
-     * Convenience overload that derives the topic UUID via {@link CausalPosition#nameUuid}.
-     *
-     * @param tp     the topic-partition to advance
-     * @param offset the newly observed offset
-     * @return a new {@code CausalFrontier} with the updated position
-     */
-    public CausalFrontier advance(TopicPartition tp, long offset) {
-        return advance(CausalPosition.nameUuid(tp.topic()), tp.partition(), offset);
     }
 
     /**

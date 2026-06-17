@@ -19,8 +19,8 @@ class CausalBufferLimitTest {
 
     @Test
     void ofDurationHoldsDuration() {
-        DurationLimit limit =
-                assertInstanceOf(DurationLimit.class, CausalBufferLimit.ofDuration(Duration.ofSeconds(5)));
+        ParsleyDurationLimit limit =
+                assertInstanceOf(ParsleyDurationLimit.class, CausalBufferLimit.ofDuration(Duration.ofSeconds(5)));
         assertEquals(Duration.ofSeconds(5), limit.duration());
     }
 
@@ -32,8 +32,8 @@ class CausalBufferLimitTest {
 
     @Test
     void ofSizeHoldsCount() {
-        SizeLimit limit =
-                assertInstanceOf(SizeLimit.class, CausalBufferLimit.ofSize(10));
+        ParsleySizeLimit limit =
+                assertInstanceOf(ParsleySizeLimit.class, CausalBufferLimit.ofSize(10));
         assertEquals(10, limit.messages());
     }
 
@@ -46,8 +46,8 @@ class CausalBufferLimitTest {
     void firstHoldsConstituents() {
         CausalBufferLimit duration = CausalBufferLimit.ofDuration(Duration.ofSeconds(1));
         CausalBufferLimit size = CausalBufferLimit.ofSize(5);
-        FirstLimit first =
-                assertInstanceOf(FirstLimit.class, CausalBufferLimit.first(duration, size));
+        ParsleyFirstLimit first =
+                assertInstanceOf(ParsleyFirstLimit.class, CausalBufferLimit.first(duration, size));
         assertEquals(2, first.limits().size());
     }
 }

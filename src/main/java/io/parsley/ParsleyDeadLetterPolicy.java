@@ -7,7 +7,7 @@ package io.parsley;
  * @param limit       the eviction trigger
  * @param destination the dead-letter destination name (e.g. a Kafka topic)
  */
-record DeadLetterPolicy(CausalBufferLimit limit, String destination) implements CausalBufferPolicy {
+record ParsleyDeadLetterPolicy(CausalBufferLimit limit, String destination) implements CausalBufferPolicy {
     @Override
     public boolean strict() {
         return true;

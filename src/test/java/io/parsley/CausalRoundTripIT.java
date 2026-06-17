@@ -8,7 +8,7 @@ import org.apache.kafka.clients.consumer.ConsumerRecords;
 import org.apache.kafka.clients.producer.KafkaProducer;
 import org.apache.kafka.clients.producer.ProducerConfig;
 import org.apache.kafka.clients.producer.ProducerRecord;
-import org.apache.kafka.common.TopicPartition;
+import org.apache.kafka.common.Uuid;
 import org.apache.kafka.common.serialization.StringDeserializer;
 import org.apache.kafka.common.serialization.StringSerializer;
 import org.apache.kafka.streams.StreamsConfig;
@@ -50,7 +50,7 @@ class CausalRoundTripIT {
         String bootstrap = kafka.getBootstrapServers();
         createTopic(bootstrap, TOPIC);
 
-        TopicPartition tp = new TopicPartition(TOPIC, 0);
+        Uuid topicId = CausalPosition.nameUuid(TOPIC);
 
         try (CausalProducer<String, String> producer = CausalProducers.<String, String>builder(Map.of(
                 ProducerConfig.BOOTSTRAP_SERVERS_CONFIG, bootstrap,
@@ -60,12 +60,16 @@ class CausalRoundTripIT {
                      List.of(TOPIC),
                      CausalBufferPolicy.drop(CausalBufferLimit.ofDuration(Duration.ofSeconds(5))),
                      Map.of(ConsumerConfig.GROUP_ID_CONFIG, "rt-" + UUID.randomUUID()),
-                     streamsConfig(bootstrap)).build()) {
+                     streamsConfig(bootstrap))
+                     .topicAdmin(new MockAdminClient())
+                     .build()) {
 
-            // Each record carries a clock advancing the partition it is written to.
+            // Each record depends on the previous one, forming a causal chain.
             for (int i = 0; i < 5; i++) {
-                producer.send(new ProducerRecord<>(TOPIC, "k", "v" + i),
-                        CausalDependencies.empty().advance(tp, i));
+                CausalDependencies deps = i == 0
+                        ? CausalDependencies.empty()
+                        : CausalDependencies.empty().advance(topicId, 0, (long) (i - 1));
+                producer.send(new ProducerRecord<>(TOPIC, "k", "v" + i), deps);
             }
 
             List<ConsumerRecord<String, String>> received = new ArrayList<>();
@@ -78,14 +82,16 @@ class CausalRoundTripIT {
             assertEquals(List.of("v0", "v1", "v2", "v3", "v4"),
                     received.stream().map(ConsumerRecord::value).toList());
             assertFalse(consumer.frontier().positions().isEmpty(), "frontier must have advanced");
-            assertTrue(consumer.frontier().positions().stream().anyMatch(p -> p.partition() == tp.partition()),
-                    "frontier covers partition " + tp.partition());
+            assertTrue(consumer.frontier().positions().stream().anyMatch(p -> p.partition() == 0),
+                    "frontier covers partition 0");
 
             // Each delivered record still carries the producer's vector-clock header, extractable
             // via the public API — this is the causal context a service would forward to a client.
             for (int i = 0; i < 5; i++) {
-                assertEquals(Optional.of(CausalDependencies.empty().advance(tp, i)),
-                        CausalDependencies.fromRecord(received.get(i)),
+                CausalDependencies expected = i == 0
+                        ? CausalDependencies.empty()
+                        : CausalDependencies.empty().advance(topicId, 0, (long) (i - 1));
+                assertEquals(Optional.of(expected), CausalDependencies.fromRecord(received.get(i)),
                         "record " + i + " should carry its producer's clock");
             }
         }

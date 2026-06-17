@@ -1,7 +1,6 @@
 package io.parsley;
 
 import org.apache.kafka.clients.consumer.ConsumerRecord;
-import org.apache.kafka.common.TopicPartition;
 import org.junit.jupiter.api.Test;
 
 import java.util.List;
@@ -29,10 +28,9 @@ class CausalViolationHandlerTest {
 
     @Test
     void lambdaReceivesTheViolationWithItsGap() {
-        TopicPartition prices = new TopicPartition("prices", 0);
         CausalViolation limit = new CausalViolation(
                 record, CausalViolationReason.LIMIT_REACHED,
-                CausalFrontier.empty(), CausalDependencies.empty().advance(prices, 4),
+                CausalFrontier.empty(), CausalDependencies.empty().advance(CausalPosition.nameUuid("prices"), 0, 4),
                 List.of(new CausalPosition(CausalPosition.nameUuid("prices"), 0, 5L)));
 
         AtomicReference<CausalViolation> seen = new AtomicReference<>();

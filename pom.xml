@@ -213,13 +213,30 @@
                     <argLine>--enable-native-access=ALL-UNNAMED</argLine>
                     <includes>
                         <include>**/*Test.java</include>
-                        <include>**/*IT.java</include>
                     </includes>
+                </configuration>
+            </plugin>
+            <!-- IT tests (Testcontainers/broker-dependent) run in the integration-test phase.
+                 Use 'mvn test' for fast tests only; 'mvn verify' for the full suite. -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-failsafe-plugin</artifactId>
+                <version>3.5.2</version>
+                <configuration>
+                    <argLine>--enable-native-access=ALL-UNNAMED</argLine>
                     <systemPropertyVariables>
                         <!-- Docker API 1.32 (Testcontainers default) is rejected by Docker 29.x (min 1.40) -->
                         <api.version>1.44</api.version>
                     </systemPropertyVariables>
                 </configuration>
+                <executions>
+                    <execution>
+                        <goals>
+                            <goal>integration-test</goal>
+                            <goal>verify</goal>
+                        </goals>
+                    </execution>
+                </executions>
             </plugin>
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>

@@ -82,7 +82,7 @@ final class ParsleyConsumer<K, V> implements CausalConsumer<K, V> {
             Map<String, Object> consumerConfig,
             Map<String, Object> streamsConfig,
             String storeName,
-            TopicAdmin topicAdmin) {
+            ParsleyTopicAdmin topicAdmin) {
 
         Map<String, Object> merged = new HashMap<>();
         merged.put("processing.exception.handler.global.enabled", "true");
@@ -101,7 +101,7 @@ final class ParsleyConsumer<K, V> implements CausalConsumer<K, V> {
         this.keySerde = keySerde;
         this.valueSerde = valueSerde;
 
-        TopicAdmin admin = (topicAdmin != null) ? topicAdmin : TopicAdmin.ofBootstrap(bootstrap);
+        ParsleyTopicAdmin admin = (topicAdmin != null) ? topicAdmin : ParsleyTopicAdmin.ofBootstrap(bootstrap);
         Map<String, Uuid> topicUuids;
         try {
             topicUuids = setupOutbox(admin, topics, outboxTopic);
@@ -201,7 +201,7 @@ final class ParsleyConsumer<K, V> implements CausalConsumer<K, V> {
     /**
      * Creates the outbox topic and returns the Kafka topic UUIDs for each input topic.
      */
-    private static Map<String, Uuid> setupOutbox(TopicAdmin admin, Collection<String> inputTopics,
+    private static Map<String, Uuid> setupOutbox(ParsleyTopicAdmin admin, Collection<String> inputTopics,
                                                   String outboxTopic) {
         try {
             Map<String, TopicDescription> descriptions = admin.describeTopics(new ArrayList<>(inputTopics));

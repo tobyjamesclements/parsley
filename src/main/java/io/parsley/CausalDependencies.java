@@ -1,7 +1,6 @@
 package io.parsley;
 
 import org.apache.kafka.clients.consumer.ConsumerRecord;
-import org.apache.kafka.common.TopicPartition;
 import org.apache.kafka.common.Uuid;
 import org.apache.kafka.common.header.Header;
 import org.apache.kafka.common.header.Headers;
@@ -23,8 +22,7 @@ import java.util.Optional;
  * a record stamped with this clock may be delivered.
  *
  * <p>Clock keys are Kafka topic UUIDs, so topic deletion and recreation produce a different identity
- * even when the name is reused. Use {@link #advance(TopicPartition, long)} for convenience when
- * only a topic name is available; it derives the UUID via {@link CausalPosition#nameUuid}.
+ * even when the name is reused.
  *
  * <p>Instances are immutable. {@link #advance} returns a new clock.
  *
@@ -77,17 +75,6 @@ public final class CausalDependencies {
         Map<Key, Long> next = new HashMap<>(required);
         next.merge(new Key(topicId, partition), offset, Math::max);
         return new CausalDependencies(Map.copyOf(next));
-    }
-
-    /**
-     * Convenience overload that derives the topic UUID via {@link CausalPosition#nameUuid}.
-     *
-     * @param tp     the topic-partition to advance
-     * @param offset the required offset
-     * @return a new {@code CausalDependencies} with the updated position
-     */
-    public CausalDependencies advance(TopicPartition tp, long offset) {
-        return advance(CausalPosition.nameUuid(tp.topic()), tp.partition(), offset);
     }
 
     /**

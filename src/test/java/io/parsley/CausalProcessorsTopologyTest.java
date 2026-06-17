@@ -2,7 +2,7 @@ package io.parsley;
 
 import org.apache.kafka.common.Metric;
 import org.apache.kafka.common.MetricName;
-import org.apache.kafka.common.TopicPartition;
+import org.apache.kafka.common.Uuid;
 import org.apache.kafka.common.header.Headers;
 import org.apache.kafka.common.header.internals.RecordHeader;
 import org.apache.kafka.common.header.internals.RecordHeaders;
@@ -47,11 +47,11 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * Exercises {@link CausalProcessors} — the decorating causal processor — through a real Kafka Streams
  * topology using the {@link TopologyTestDriver} (no broker required).
  */
-class CausalDecoratorTopologyTest {
+class CausalProcessorsTopologyTest {
 
-    private static final TopicPartition IN_0 = new TopicPartition("in", 0);
-    private static final TopicPartition PRICES_0 = new TopicPartition("prices", 0);
-    private static final TopicPartition ORDERS_0 = new TopicPartition("orders", 0);
+    private static final Uuid IN_ID     = CausalPosition.nameUuid("in");
+    private static final Uuid PRICES_ID = CausalPosition.nameUuid("prices");
+    private static final Uuid ORDERS_ID = CausalPosition.nameUuid("orders");
 
     private final List<String> processed = new ArrayList<>();
     private final List<CausalViolation> violations = new ArrayList<>();
@@ -128,7 +128,7 @@ class CausalDecoratorTopologyTest {
             assertEquals(List.of("hello"), processed, "delegate.process must run for an admitted record");
             TestRecord<String, String> emitted = out.readRecord();
             assertEquals("HELLO", emitted.value(), "delegate's transform must be applied");
-            assertEquals(CausalDependencies.empty().advance(IN_0, 0), outClock(emitted),
+            assertEquals(CausalDependencies.empty().advance(IN_ID, 0, 0), outClock(emitted),
                     "forward must be stamped with the frontier as of admission");
             assertTrue(violations.isEmpty());
         }
@@ -152,7 +152,7 @@ class CausalDecoratorTopologyTest {
 
             // Order depends on prices-0 offset 0, which hasn't arrived: held, not delivered.
             orders.pipeInput(new TestRecord<>("k", "order",
-                    clockHeader(CausalDependencies.empty().advance(PRICES_0, 0))));
+                    clockHeader(CausalDependencies.empty().advance(PRICES_ID, 0, 0))));
             assertTrue(processed.isEmpty(), "held record must not reach the delegate");
             assertTrue(out.isEmpty());
             assertEquals(1, storeSize(bufferStore), "held record must be persisted to the buffer store");
@@ -181,7 +181,7 @@ class CausalDecoratorTopologyTest {
 
             // Depends on a price that never arrives; size limit 1 evicts immediately.
             orders.pipeInput(new TestRecord<>("k", "order",
-                    clockHeader(CausalDependencies.empty().advance(PRICES_0, 99))));
+                    clockHeader(CausalDependencies.empty().advance(PRICES_ID, 0, 99))));
 
             assertTrue(processed.isEmpty(), "strict policy must never run the delegate for an un-satisfiable record");
             assertTrue(out.isEmpty());
@@ -210,7 +210,7 @@ class CausalDecoratorTopologyTest {
                     driver.createOutputTopic("out", new StringDeserializer(), new StringDeserializer());
 
             orders.pipeInput(new TestRecord<>("k", "order",
-                    clockHeader(CausalDependencies.empty().advance(PRICES_0, 99))));
+                    clockHeader(CausalDependencies.empty().advance(PRICES_ID, 0, 99))));
 
             assertTrue(processed.isEmpty(), "strict policy must never run the delegate");
             assertTrue(out.isEmpty());
@@ -234,7 +234,7 @@ class CausalDecoratorTopologyTest {
                     driver.createOutputTopic("out", new StringDeserializer(), new StringDeserializer());
 
             orders.pipeInput(new TestRecord<>("k", "order",
-                    clockHeader(CausalDependencies.empty().advance(PRICES_0, 99))));
+                    clockHeader(CausalDependencies.empty().advance(PRICES_ID, 0, 99))));
 
             assertEquals(List.of("order"), processed,
                     "lenient policy delivers the un-satisfied record to the delegate");
@@ -261,7 +261,7 @@ class CausalDecoratorTopologyTest {
                 headers.add(new RecordHeader("user-h", "keep".getBytes()));
                 // A stale clock the user happens to carry — stamping must replace, not duplicate it.
                 headers.add(new RecordHeader("parsley-vector-clock",
-                        CausalDependencies.empty().advance(PRICES_0, 5).toBytes()));
+                        CausalDependencies.empty().advance(PRICES_ID, 0, 5).toBytes()));
                 ctx.forward(record.withHeaders(headers));
             }
         };
@@ -281,7 +281,7 @@ class CausalDecoratorTopologyTest {
             TestRecord<String, String> emitted = out.readRecord();
             assertEquals(1, count(emitted.headers(), "parsley-vector-clock"),
                     "exactly one clock header — stamping is idempotent");
-            assertEquals(CausalDependencies.empty().advance(IN_0, 0), outClock(emitted),
+            assertEquals(CausalDependencies.empty().advance(IN_ID, 0, 0), outClock(emitted),
                     "the stamped clock is the frontier, not the user's stale clock");
             assertEquals("keep", new String(emitted.headers().lastHeader("user-h").value()),
                     "user headers are preserved");
@@ -322,7 +322,7 @@ class CausalDecoratorTopologyTest {
 
             TestRecord<String, String> punctuated = out.readRecord();
             assertEquals("punct", punctuated.value());
-            assertEquals(CausalDependencies.empty().advance(IN_0, 0), outClock(punctuated),
+            assertEquals(CausalDependencies.empty().advance(IN_ID, 0, 0), outClock(punctuated),
                     "punctuator forwards are stamped with the live frontier");
         }
     }
@@ -396,7 +396,7 @@ class CausalDecoratorTopologyTest {
 
             // An unmet dependency forces the order to be buffered, which serialises it.
             orders.pipeInput(new TestRecord<>("k", "order",
-                    clockHeader(CausalDependencies.empty().advance(PRICES_0, 5))));
+                    clockHeader(CausalDependencies.empty().advance(PRICES_ID, 0, 5))));
 
             assertTrue(valueSpy.serializeTopics.contains("orders"),
                     "the buffer value serde must be invoked with the record's source topic, not the changelog name");
@@ -437,8 +437,8 @@ class CausalDecoratorTopologyTest {
             assertEquals(List.of("PRICE"), pricesOut.readValuesToList());
 
             // Each decorator persisted only its own branch's frontier under its own namespace.
-            assertEquals(CausalFrontier.empty().advance(ORDERS_0, 0), frontierIn(driver, "orders-frontier"));
-            assertEquals(CausalFrontier.empty().advance(PRICES_0, 0), frontierIn(driver, "prices-frontier"));
+            assertEquals(CausalFrontier.empty().advance(ORDERS_ID, 0, 0), frontierIn(driver, "orders-frontier"));
+            assertEquals(CausalFrontier.empty().advance(PRICES_ID, 0, 0), frontierIn(driver, "prices-frontier"));
         }
     }
 
@@ -465,8 +465,8 @@ class CausalDecoratorTopologyTest {
 
             assertEquals(
                     List.of(CausalFrontier.empty(),
-                            CausalFrontier.empty().advance(IN_0, 0),
-                            CausalFrontier.empty().advance(IN_0, 1)),
+                            CausalFrontier.empty().advance(IN_ID, 0, 0),
+                            CausalFrontier.empty().advance(IN_ID, 0, 1)),
                     observed,
                     "every frontier advance is published, in admission order");
         }
@@ -512,7 +512,7 @@ class CausalDecoratorTopologyTest {
         // stamped output and breach the header-size budget.
         CausalDependencies big = CausalDependencies.empty();
         for (int p = 0; p < 500; p++) {
-            big = big.advance(new TopicPartition("ghost", p), 1_000 + p);
+            big = big.advance(CausalPosition.nameUuid("ghost"), p, 1_000 + p);
         }
 
         Topology topology = topology(
@@ -529,7 +529,7 @@ class CausalDecoratorTopologyTest {
             in.pipeInput(new TestRecord<>("k", "v", clockHeader(big)));
 
             CausalDependencies stamped = outClock(out.readRecord());
-            assertEquals(CausalDependencies.empty().advance(IN_0, 0), stamped,
+            assertEquals(CausalDependencies.empty().advance(IN_ID, 0, 0), stamped,
                     "a 500-partition inbound clock must not enlarge the stamped output clock");
             assertEquals(1, stamped.dependencies().size(), "the stamped clock carries only the source coordinate");
         }
@@ -550,7 +550,7 @@ class CausalDecoratorTopologyTest {
 
             // Buffer one order (depends on prices-0 offset 0, not yet arrived).
             orders.pipeInput(new TestRecord<>("k", "order",
-                    clockHeader(CausalDependencies.empty().advance(PRICES_0, 0))));
+                    clockHeader(CausalDependencies.empty().advance(PRICES_ID, 0, 0))));
             // Release it (the price arrives and advances the frontier).
             prices.pipeInput(new TestRecord<>("k", "price", clockHeader(CausalDependencies.empty())));
 

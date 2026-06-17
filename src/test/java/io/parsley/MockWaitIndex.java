@@ -12,11 +12,11 @@ import java.util.Set;
 import java.util.TreeMap;
 
 /**
- * An in-memory {@link WaitIndex} backed by a nested {@link TreeMap}. Used in unit tests that
+ * An in-memory {@link ParsleyWaitIndex} backed by a nested {@link TreeMap}. Used in unit tests that
  * exercise {@link ParsleyEngine} without a Kafka state store. Production uses
- * {@link ParsleyWaitIndex}.
+ * {@link RocksWaitIndex}.
  */
-final class InMemoryWaitIndex implements WaitIndex {
+final class MockWaitIndex implements ParsleyWaitIndex {
 
     private record CoordKey(Uuid topicId, int partition) {}
 
