@@ -4,6 +4,9 @@
 # Target directories
 target/
 
+# MkDocs build output
+site/
+
 # Compiled class file
 *.class
 

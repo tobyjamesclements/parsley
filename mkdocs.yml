@@ -1,0 +1,34 @@
+site_name: Parsley
+site_description: Causal consistency for Kafka
+repo_url: https://github.com/tobyjamesclements/parsley
+repo_name: tobyjamesclements/parsley
+
+theme:
+  name: material
+  palette:
+    - scheme: default
+      primary: green
+      accent: light green
+  features:
+    - navigation.top
+    - navigation.footer
+    - search.highlight
+    - content.code.copy
+
+markdown_extensions:
+  - attr_list
+  - admonition
+  - pymdownx.details
+  - pymdownx.highlight:
+      anchor_linenums: true
+  - pymdownx.superfences
+  - pymdownx.inlinehilite
+  - tables
+
+nav:
+  - Home: index.md
+  - Concepts: concepts.md
+  - Getting started: getting-started.md
+  - Streams integration: streams.md
+  - Configuration: configuration.md
+  - API reference: api/index.html

@@ -1,4 +1,4 @@
-name: Javadoc
+name: Docs
 
 on:
   workflow_run:
@@ -26,11 +26,20 @@ jobs:
           java-version: '25'
           distribution: 'temurin'
           cache: 'maven'
-      - name: Build Javadoc site
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+      - name: Build Javadoc
         run: ./mvnw javadoc:javadoc --no-transfer-progress -DskipTests
+      - name: Install MkDocs
+        run: pip install mkdocs-material
+      - name: Build docs site
+        run: mkdocs build
+      - name: Fold Javadoc into site
+        run: cp -r target/reports/apidocs site/api
       - uses: actions/configure-pages@v4
       - uses: actions/upload-pages-artifact@v4
         with:
-          path: target/reports/apidocs
+          path: site
       - uses: actions/deploy-pages@v4
         id: deployment

@@ -11,7 +11,7 @@ import java.nio.charset.StandardCharsets;
  *
  * <p>Topic UUIDs are the stable clock key across topic deletion and recreation. Use
  * {@link #deriveUuid(String)} to derive a deterministic UUID from a topic name when no live
- * AdminClient UUID is available (unit tests, {@link org.apache.kafka.streams.TopologyTestDriver}).
+ * AdminClient UUID is available (unit tests, {@code TopologyTestDriver}).
  *
  * @param topicId   the Kafka topic UUID
  * @param partition the partition index
