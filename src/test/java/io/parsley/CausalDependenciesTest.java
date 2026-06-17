@@ -18,13 +18,13 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class CausalDependenciesTest {
 
-    private static final Uuid PRICES_ID = CausalPosition.nameUuid("prices");
-    private static final Uuid ORDERS_ID = CausalPosition.nameUuid("orders");
+    private static final Uuid PRICES_ID = CausalPosition.deriveUuid("prices");
+    private static final Uuid ORDERS_ID = CausalPosition.deriveUuid("orders");
 
     @Test
     void emptyClockIsSatisfiedByAnything() {
-        assertTrue(CausalDependencies.empty().satisfiedBy(CausalFrontier.empty()));
-        assertTrue(CausalDependencies.empty().satisfiedBy(CausalFrontier.empty().advance(PRICES_ID, 0, 7)));
+        assertTrue(CausalDependencies.empty().isSatisfiedBy(CausalFrontier.empty()));
+        assertTrue(CausalDependencies.empty().isSatisfiedBy(CausalFrontier.empty().advance(PRICES_ID, 0, 7)));
     }
 
     @Test
@@ -36,10 +36,10 @@ class CausalDependenciesTest {
     @Test
     void satisfiedByRequiresEveryPartitionToBeCaughtUp() {
         CausalDependencies required = CausalDependencies.empty().advance(PRICES_ID, 0, 3);
-        assertFalse(required.satisfiedBy(CausalFrontier.empty()));
-        assertFalse(required.satisfiedBy(CausalFrontier.empty().advance(PRICES_ID, 0, 2)));
-        assertTrue(required.satisfiedBy(CausalFrontier.empty().advance(PRICES_ID, 0, 3)));
-        assertTrue(required.satisfiedBy(CausalFrontier.empty().advance(PRICES_ID, 0, 4)));
+        assertFalse(required.isSatisfiedBy(CausalFrontier.empty()));
+        assertFalse(required.isSatisfiedBy(CausalFrontier.empty().advance(PRICES_ID, 0, 2)));
+        assertTrue(required.isSatisfiedBy(CausalFrontier.empty().advance(PRICES_ID, 0, 3)));
+        assertTrue(required.isSatisfiedBy(CausalFrontier.empty().advance(PRICES_ID, 0, 4)));
     }
 
     @Test
@@ -109,27 +109,27 @@ class CausalDependenciesTest {
     @Test
     void missingAgainstIsEmptyWhenTheFrontierSatisfiesTheClock() {
         CausalDependencies required = CausalDependencies.empty().advance(PRICES_ID, 0, 3);
-        assertTrue(required.missingAgainst(CausalFrontier.empty().advance(PRICES_ID, 0, 3)).isEmpty());
-        assertTrue(required.missingAgainst(CausalFrontier.empty().advance(PRICES_ID, 0, 9)).isEmpty());
-        assertTrue(CausalDependencies.empty().missingAgainst(CausalFrontier.empty()).isEmpty());
+        assertTrue(required.findMissing(CausalFrontier.empty().advance(PRICES_ID, 0, 3)).isEmpty());
+        assertTrue(required.findMissing(CausalFrontier.empty().advance(PRICES_ID, 0, 9)).isEmpty());
+        assertTrue(CausalDependencies.empty().findMissing(CausalFrontier.empty()).isEmpty());
     }
 
     @Test
     void missingAgainstReportsThePerPartitionShortfall() {
         CausalDependencies required = CausalDependencies.empty().advance(PRICES_ID, 0, 5).advance(ORDERS_ID, 0, 2);
-        // P0: required 5, observed 1 → gap 4. O0: required 2, observed absent(-1) → gap 3.
-        List<CausalPosition> gap = required.missingAgainst(CausalFrontier.empty().advance(PRICES_ID, 0, 1));
+        // P0: required 5, offsetFor 1 → gap 4. O0: required 2, offsetFor absent(-1) → gap 3.
+        List<CausalPosition> gap = required.findMissing(CausalFrontier.empty().advance(PRICES_ID, 0, 1));
         assertEquals(Set.of(
-                new CausalPosition(CausalPosition.nameUuid("prices"), 0, 4L),
-                new CausalPosition(CausalPosition.nameUuid("orders"), 0, 3L)),
+                new CausalPosition(CausalPosition.deriveUuid("prices"), 0, 4L),
+                new CausalPosition(CausalPosition.deriveUuid("orders"), 0, 3L)),
                 Set.copyOf(gap));
     }
 
     @Test
     void missingAgainstCountsAnAbsentPositionAsMinusOne() {
         CausalDependencies required = CausalDependencies.empty().advance(PRICES_ID, 0, 0);
-        List<CausalPosition> gap = required.missingAgainst(CausalFrontier.empty());
-        assertEquals(List.of(new CausalPosition(CausalPosition.nameUuid("prices"), 0, 1L)), gap,
+        List<CausalPosition> gap = required.findMissing(CausalFrontier.empty());
+        assertEquals(List.of(new CausalPosition(CausalPosition.deriveUuid("prices"), 0, 1L)), gap,
                 "requiring offset 0 against an unseen partition is a gap of 1");
     }
 
@@ -138,7 +138,7 @@ class CausalDependenciesTest {
         // A frontier serialised with toBytes() must be decodable as CausalDependencies and vice versa.
         CausalFrontier frontier = CausalFrontier.empty().advance(PRICES_ID, 0, 5).advance(ORDERS_ID, 0, 2);
         CausalDependencies decoded = CausalDependencies.fromBytes(frontier.toBytes());
-        assertEquals(frontier.asDependencies(), decoded);
+        assertEquals(frontier.toDependencies(), decoded);
 
         CausalDependencies deps = CausalDependencies.empty().advance(PRICES_ID, 0, 5).advance(ORDERS_ID, 0, 2);
         CausalFrontier frontierDecoded = CausalFrontier.fromBytes(deps.toBytes());
@@ -152,9 +152,9 @@ class CausalDependenciesTest {
 
         CausalDependencies required = CausalDependencies.empty().advance(oldUuid, 0, 5L);
 
-        assertFalse(required.satisfiedBy(CausalFrontier.empty().advance(newUuid, 0, 5L)),
+        assertFalse(required.isSatisfiedBy(CausalFrontier.empty().advance(newUuid, 0, 5L)),
                 "new-UUID frontier must not satisfy old-UUID dependency");
-        assertTrue(required.satisfiedBy(CausalFrontier.empty().advance(oldUuid, 0, 5L)),
+        assertTrue(required.isSatisfiedBy(CausalFrontier.empty().advance(oldUuid, 0, 5L)),
                 "old-UUID frontier at matching offset must satisfy the dependency");
     }
 }

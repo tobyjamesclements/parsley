@@ -26,9 +26,9 @@ public interface CausalViolationHandler {
      *
      * <p>Use when any causal disorder should be treated as a fatal error.
      *
-     * @return a throwing {@code CausalViolationHandler}
+     * @return a throwOnViolation {@code CausalViolationHandler}
      */
-    static CausalViolationHandler throwing() {
+    static CausalViolationHandler throwOnViolation() {
         return violation -> { throw new CausalViolationException(violation.record(), violation.reason()); };
     }
 }

@@ -19,7 +19,7 @@ class ParsleyProducerTest {
     void sendAttachesTheVectorClockHeader() {
         MockProducer<String, String> mock = mock();
         try (ParsleyProducer<String, String> producer = new ParsleyProducer<>(mock)) {
-            CausalDependencies clock = CausalDependencies.empty().advance(CausalPosition.nameUuid("prices"), 0, 3);
+            CausalDependencies clock = CausalDependencies.empty().advance(CausalPosition.deriveUuid("prices"), 0, 3);
             producer.send(new ProducerRecord<>("orders", "k", "v"), clock);
 
             assertEquals(1, mock.history().size());

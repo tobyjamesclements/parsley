@@ -166,7 +166,7 @@ public final class CausalProcessors {
          * Provides the Kafka topic UUIDs for the input topics, keyed by topic name. Used as the
          * stable clock key so that topic deletion and recreation produce different clock identities.
          * Topics absent from the map fall back to a deterministic name-derived UUID via
-         * {@link CausalPosition#nameUuid}.
+         * {@link CausalPosition#deriveUuid}.
          *
          * @param topicUuids topic-name → Kafka UUID map; typically from
          *                   {@code AdminClient.describeTopics(topics)}

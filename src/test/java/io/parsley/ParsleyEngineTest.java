@@ -19,8 +19,8 @@ class ParsleyEngineTest {
 
     private static final TopicPartition PRICES = new TopicPartition("prices", 0);
     private static final TopicPartition ORDERS = new TopicPartition("orders", 0);
-    private static final Uuid PRICES_ID = CausalPosition.nameUuid(PRICES.topic());
-    private static final Uuid ORDERS_ID = CausalPosition.nameUuid(ORDERS.topic());
+    private static final Uuid PRICES_ID = CausalPosition.deriveUuid(PRICES.topic());
+    private static final Uuid ORDERS_ID = CausalPosition.deriveUuid(ORDERS.topic());
 
     private final List<ParsleyRecord<String, String>> forwarded = new ArrayList<>();
     private final List<CausalViolation> violations = new ArrayList<>();
@@ -72,7 +72,7 @@ class ParsleyEngineTest {
 
         CausalDependencies orderDeps = CausalDependencies.empty().advance(PRICES_ID, 0, 3);
         onRecord(engine, rec(ORDERS, 0, orderDeps));
-        assertTrue(forwarded.isEmpty(), "order must be buffered until its price premise is observed");
+        assertTrue(forwarded.isEmpty(), "order must be buffered until its price premise is offsetFor");
 
         onRecord(engine, rec(PRICES, 3, CausalDependencies.empty()));
 
@@ -124,7 +124,7 @@ class ParsleyEngineTest {
 
         CausalDependencies big = CausalDependencies.empty();
         for (int p = 0; p < 200; p++) {
-            big = big.advance(CausalPosition.nameUuid("ghost"), p, 1_000 + p);
+            big = big.advance(CausalPosition.deriveUuid("ghost"), p, 1_000 + p);
         }
         onRecord(engine, rec(ORDERS, 0, big));
 
@@ -187,8 +187,8 @@ class ParsleyEngineTest {
         assertEquals(CausalViolationReason.LIMIT_REACHED, violation.reason());
         assertEquals(CausalFrontier.empty(), violation.frontier());
         assertEquals(CausalDependencies.empty().advance(PRICES_ID, 0, 99), violation.required());
-        assertEquals(List.of(new CausalPosition(CausalPosition.nameUuid("prices"), 0, 100L)),
-                violation.gap(), "required 99 vs observed -1 → gap 100");
+        assertEquals(List.of(new CausalPosition(CausalPosition.deriveUuid("prices"), 0, 100L)),
+                violation.gap(), "required 99 vs offsetFor -1 → gap 100");
     }
 
     @Test
@@ -228,7 +228,7 @@ class ParsleyEngineTest {
         CausalDependencies decodedGap =
                 CausalDependencies.fromBytes(headers.lastHeader(CausalViolation.DLQ_GAP_HEADER).value());
         assertTrue(decodedGap.dependencies().stream()
-                .anyMatch(p -> p.topicId().equals(CausalPosition.nameUuid("prices")) && p.partition() == 0),
+                .anyMatch(p -> p.topicId().equals(CausalPosition.deriveUuid("prices")) && p.partition() == 0),
                 "gap must cover the unsatisfied partition");
     }
 
@@ -314,7 +314,7 @@ class ParsleyEngineTest {
         Uuid newPrices = new Uuid(0L, 2L);   // recreated — different UUID, same name + partition
 
         // ORDERS depends on prices-0@5 under the OLD incarnation.
-        onRecord(engine, rec(ORDERS, 0, CausalPosition.nameUuid(ORDERS.topic()),
+        onRecord(engine, rec(ORDERS, 0, CausalPosition.deriveUuid(ORDERS.topic()),
                 CausalDependencies.empty().advance(oldPrices, 0, 5L)));
         assertTrue(forwarded.isEmpty(), "order must be buffered: old-prices dependency unsatisfied");
 

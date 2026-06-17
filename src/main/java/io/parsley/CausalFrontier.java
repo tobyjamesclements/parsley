@@ -20,11 +20,11 @@ import java.util.Objects;
  *
  * <p>Instances are immutable. {@link #advance} and {@link #merge} return new frontiers.
  *
- * <p>For paths without a real AdminClient UUID, derive one via {@link CausalPosition#nameUuid}
+ * <p>For paths without a real AdminClient UUID, derive one via {@link CausalPosition#deriveUuid}
  * and call {@link #advance(Uuid, int, long)} directly.
  *
  * <h2>Converting to dependencies</h2>
- * Call {@link #asDependencies()} to turn the frontier into a {@link CausalDependencies} that can be
+ * Call {@link #toDependencies()} to turn the frontier into a {@link CausalDependencies} that can be
  * stamped onto a produced record or handed to another service. This is intentionally explicit — it
  * makes the "I depend on everything I have seen" trade-off visible at the call site. For a single
  * consumed record's causal context, prefer {@link CausalDependencies#fromRecord} instead.
@@ -36,10 +36,10 @@ public final class CausalFrontier {
 
     private record Key(Uuid topicId, int partition) {}
 
-    private final Map<Key, Long> observed; // always immutable
+    private final Map<Key, Long> offsetFor; // always immutable
 
-    private CausalFrontier(Map<Key, Long> observed) {
-        this.observed = observed; // already immutable (Map.copyOf called by callers)
+    private CausalFrontier(Map<Key, Long> offsetFor) {
+        this.offsetFor = offsetFor; // already immutable (Map.copyOf called by callers)
     }
 
     /**
@@ -61,7 +61,7 @@ public final class CausalFrontier {
      * @return a new {@code CausalFrontier} with the updated position
      */
     public CausalFrontier advance(Uuid topicId, int partition, long offset) {
-        Map<Key, Long> next = new HashMap<>(observed);
+        Map<Key, Long> next = new HashMap<>(offsetFor);
         next.merge(new Key(topicId, partition), offset, Math::max);
         return new CausalFrontier(Map.copyOf(next));
     }
@@ -73,8 +73,8 @@ public final class CausalFrontier {
      * @return a new {@code CausalFrontier} dominating both operands
      */
     public CausalFrontier merge(CausalFrontier other) {
-        Map<Key, Long> merged = new HashMap<>(observed);
-        other.observed.forEach((k, v) -> merged.merge(k, v, Math::max));
+        Map<Key, Long> merged = new HashMap<>(offsetFor);
+        other.offsetFor.forEach((k, v) -> merged.merge(k, v, Math::max));
         return new CausalFrontier(Map.copyOf(merged));
     }
 
@@ -85,9 +85,9 @@ public final class CausalFrontier {
      *
      * @return a {@code CausalDependencies} equivalent to this frontier
      */
-    public CausalDependencies asDependencies() {
+    public CausalDependencies toDependencies() {
         CausalDependencies deps = CausalDependencies.empty();
-        for (Map.Entry<Key, Long> e : observed.entrySet()) {
+        for (Map.Entry<Key, Long> e : offsetFor.entrySet()) {
             deps = deps.advance(e.getKey().topicId(), e.getKey().partition(), e.getValue());
         }
         return deps;
@@ -99,18 +99,18 @@ public final class CausalFrontier {
      * @return the positions; never {@code null}
      */
     public List<CausalPosition> positions() {
-        List<CausalPosition> list = new ArrayList<>(observed.size());
-        observed.forEach((k, v) -> list.add(new CausalPosition(k.topicId(), k.partition(), v)));
+        List<CausalPosition> list = new ArrayList<>(offsetFor.size());
+        offsetFor.forEach((k, v) -> list.add(new CausalPosition(k.topicId(), k.partition(), v)));
         return list;
     }
 
     /**
      * Returns the highest observed offset for {@code (topicId, partition)}, or {@code -1} if the
      * position has never been observed. Package-private; used by
-     * {@link CausalDependencies#satisfiedBy}.
+     * {@link CausalDependencies#isSatisfiedBy}.
      */
-    long observed(Uuid topicId, int partition) {
-        return observed.getOrDefault(new Key(topicId, partition), -1L);
+    long offsetFor(Uuid topicId, int partition) {
+        return offsetFor.getOrDefault(new Key(topicId, partition), -1L);
     }
 
     /**
@@ -134,8 +134,8 @@ public final class CausalFrontier {
         try (ByteArrayOutputStream baos = new ByteArrayOutputStream();
              DataOutputStream dos = new DataOutputStream(baos)) {
             dos.writeByte(WIRE_VERSION);
-            dos.writeInt(observed.size());
-            for (Map.Entry<Key, Long> e : observed.entrySet()) {
+            dos.writeInt(offsetFor.size());
+            for (Map.Entry<Key, Long> e : offsetFor.entrySet()) {
                 dos.writeLong(e.getKey().topicId().getMostSignificantBits());
                 dos.writeLong(e.getKey().topicId().getLeastSignificantBits());
                 dos.writeInt(e.getKey().partition());
@@ -180,12 +180,12 @@ public final class CausalFrontier {
     public boolean equals(Object o) {
         if (this == o) return true;
         if (!(o instanceof CausalFrontier other)) return false;
-        return observed.equals(other.observed);
+        return offsetFor.equals(other.offsetFor);
     }
 
     @Override
     public int hashCode() {
-        return Objects.hashCode(observed);
+        return Objects.hashCode(offsetFor);
     }
 
     @Override

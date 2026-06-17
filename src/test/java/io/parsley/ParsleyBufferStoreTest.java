@@ -14,8 +14,8 @@ class ParsleyBufferStoreTest {
 
     private static final TopicPartition PRICES = new TopicPartition("prices", 0);
     private static final TopicPartition ORDERS = new TopicPartition("orders", 0);
-    private static final Uuid PRICES_ID = CausalPosition.nameUuid("prices");
-    private static final Uuid ORDERS_ID = CausalPosition.nameUuid("orders");
+    private static final Uuid PRICES_ID = CausalPosition.deriveUuid("prices");
+    private static final Uuid ORDERS_ID = CausalPosition.deriveUuid("orders");
 
     private final ParsleyBufferStore<String, String> store = new MockBufferStore<>();
 

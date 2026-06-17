@@ -97,9 +97,8 @@ public final class CausalConsumers {
          * Overrides the {@link ParsleyTopicAdmin} used for outbox setup (default: a live Kafka
          * {@link org.apache.kafka.clients.admin.Admin} created from {@code bootstrap.servers}).
          * Supply a {@code MockAdminClient} in tests to avoid a real broker dependency or to force
-         * deterministic name-derived UUIDs so that {@link CausalDependencies#advance(
-         * org.apache.kafka.common.TopicPartition, long)} resolves to the same UUID as the
-         * consumer's frontier.
+         * deterministic name-derived UUIDs so that {@link CausalPosition#deriveUuid} produces
+         * the same UUID the consumer uses for those topics, keeping test clocks consistent.
          *
          * @param topicAdmin the {@link ParsleyTopicAdmin} to use; closed automatically after outbox setup
          * @return this builder

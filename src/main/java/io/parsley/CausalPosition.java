@@ -10,7 +10,7 @@ import java.nio.charset.StandardCharsets;
  * dependency entry ("I require at least this position").
  *
  * <p>Topic UUIDs are the stable clock key across topic deletion and recreation. Use
- * {@link #nameUuid(String)} to derive a deterministic UUID from a topic name when no live
+ * {@link #deriveUuid(String)} to derive a deterministic UUID from a topic name when no live
  * AdminClient UUID is available (unit tests, {@link org.apache.kafka.streams.TopologyTestDriver}).
  *
  * @param topicId   the Kafka topic UUID
@@ -28,7 +28,7 @@ public record CausalPosition(Uuid topicId, int partition, long offset) {
      * @param topicName the topic name; must not be {@code null}
      * @return a deterministic, name-derived UUID
      */
-    public static Uuid nameUuid(String topicName) {
+    public static Uuid deriveUuid(String topicName) {
         java.util.UUID jvm = java.util.UUID.nameUUIDFromBytes(
                 topicName.getBytes(StandardCharsets.UTF_8));
         return new Uuid(jvm.getMostSignificantBits(), jvm.getLeastSignificantBits());

@@ -50,7 +50,7 @@ class CausalRoundTripIT {
         String bootstrap = kafka.getBootstrapServers();
         createTopic(bootstrap, TOPIC);
 
-        Uuid topicId = CausalPosition.nameUuid(TOPIC);
+        Uuid topicId = CausalPosition.deriveUuid(TOPIC);
 
         try (CausalProducer<String, String> producer = CausalProducers.<String, String>builder(Map.of(
                 ProducerConfig.BOOTSTRAP_SERVERS_CONFIG, bootstrap,

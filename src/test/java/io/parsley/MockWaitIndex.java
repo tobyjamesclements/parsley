@@ -26,7 +26,7 @@ final class MockWaitIndex implements ParsleyWaitIndex {
     @Override
     public void index(long recordId, CausalDependencies required, CausalFrontier frontier) {
         for (CausalPosition pos : required.dependencies()) {
-            if (frontier.observed(pos.topicId(), pos.partition()) < pos.offset()) {
+            if (frontier.offsetFor(pos.topicId(), pos.partition()) < pos.offset()) {
                 index.computeIfAbsent(new CoordKey(pos.topicId(), pos.partition()), k -> new TreeMap<>())
                      .computeIfAbsent(pos.offset(), o -> new HashSet<>())
                      .add(recordId);
@@ -35,7 +35,7 @@ final class MockWaitIndex implements ParsleyWaitIndex {
     }
 
     @Override
-    public List<Candidate> candidatesFor(Uuid topicId, int partition, long newOffset) {
+    public List<Candidate> findCandidates(Uuid topicId, int partition, long newOffset) {
         NavigableMap<Long, Set<Long>> byOffset = index.get(new CoordKey(topicId, partition));
         if (byOffset == null) return List.of();
         List<Candidate> result = new ArrayList<>();
@@ -48,7 +48,7 @@ final class MockWaitIndex implements ParsleyWaitIndex {
     }
 
     @Override
-    public void tombstone(Candidate candidate) {
+    public void prune(Candidate candidate) {
         CoordKey key = new CoordKey(candidate.topicId(), candidate.partition());
         TreeMap<Long, Set<Long>> byOffset = index.get(key);
         if (byOffset == null) return;

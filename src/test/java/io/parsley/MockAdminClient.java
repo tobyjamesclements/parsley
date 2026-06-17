@@ -9,10 +9,10 @@ import java.util.Map;
 
 /**
  * A {@link ParsleyTopicAdmin} that substitutes deterministic name-derived UUIDs (via
- * {@link CausalPosition#nameUuid}) for every topic's Kafka-assigned UUID.
+ * {@link CausalPosition#deriveUuid}) for every topic's Kafka-assigned UUID.
  *
  * <p>This makes {@link CausalDependencies#advance(org.apache.kafka.common.TopicPartition, long)}
- * — which also uses {@code nameUuid} internally — resolve to the same UUID that the consumer's
+ * — which also uses {@code deriveUuid} internally — resolve to the same UUID that the consumer's
  * frontier uses, so cross-topic causal dependencies drain naturally in integration tests rather
  * than waiting for the eviction limit.
  *
@@ -20,12 +20,12 @@ import java.util.Map;
  * <dl>
  *   <dt>{@link #MockAdminClient(ParsleyTopicAdmin)} — for ITs with a real broker</dt>
  *   <dd>Delegates {@code createTopic} and partition-count reads to the real admin, but replaces
- *       each topic's UUID with {@code nameUuid}. Partition counts are therefore accurate for
+ *       each topic's UUID with {@code deriveUuid}. Partition counts are therefore accurate for
  *       outbox sizing. Close the delegate by passing the result of
  *       {@link ParsleyTopicAdmin#ofBootstrap(String)}.</dd>
  *   <dt>{@link #MockAdminClient()} — for unit tests without a real broker</dt>
  *   <dd>All operations are no-ops or return minimal stubs. {@code describeTopics} returns one
- *       partition per topic (enough for the outbox sizing calculation) with a {@code nameUuid}.
+ *       partition per topic (enough for the outbox sizing calculation) with a {@code deriveUuid}.
  *       {@code createTopic} is a no-op.</dd>
  * </dl>
  */
@@ -49,14 +49,14 @@ final class MockAdminClient implements ParsleyTopicAdmin {
             for (Map.Entry<String, TopicDescription> entry : real.entrySet()) {
                 String name = entry.getKey();
                 TopicDescription desc = entry.getValue();
-                Uuid nameUuid = CausalPosition.nameUuid(name);
+                Uuid deriveUuid = CausalPosition.deriveUuid(name);
                 result.put(name, new TopicDescription(
-                        name, desc.isInternal(), desc.partitions(), desc.authorizedOperations(), nameUuid));
+                        name, desc.isInternal(), desc.partitions(), desc.authorizedOperations(), deriveUuid));
             }
         } else {
             for (String topic : topics) {
-                Uuid nameUuid = CausalPosition.nameUuid(topic);
-                result.put(topic, new TopicDescription(topic, false, List.of(), null, nameUuid));
+                Uuid deriveUuid = CausalPosition.deriveUuid(topic);
+                result.put(topic, new TopicDescription(topic, false, List.of(), null, deriveUuid));
             }
         }
         return result;

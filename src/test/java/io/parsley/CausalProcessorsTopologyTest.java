@@ -49,9 +49,9 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  */
 class CausalProcessorsTopologyTest {
 
-    private static final Uuid IN_ID     = CausalPosition.nameUuid("in");
-    private static final Uuid PRICES_ID = CausalPosition.nameUuid("prices");
-    private static final Uuid ORDERS_ID = CausalPosition.nameUuid("orders");
+    private static final Uuid IN_ID     = CausalPosition.deriveUuid("in");
+    private static final Uuid PRICES_ID = CausalPosition.deriveUuid("prices");
+    private static final Uuid ORDERS_ID = CausalPosition.deriveUuid("orders");
 
     private final List<String> processed = new ArrayList<>();
     private final List<CausalViolation> violations = new ArrayList<>();
@@ -188,8 +188,8 @@ class CausalProcessorsTopologyTest {
             assertEquals(1, violations.size());
             CausalViolation violation = violations.get(0);
             assertEquals(CausalViolationReason.LIMIT_REACHED, violation.reason());
-            assertEquals(List.of(new CausalPosition(CausalPosition.nameUuid("prices"), 0, 100L)), violation.gap(),
-                    "gap is required(99) minus observed(absent=-1) = 100");
+            assertEquals(List.of(new CausalPosition(CausalPosition.deriveUuid("prices"), 0, 100L)), violation.gap(),
+                    "gap is required(99) minus offsetFor(absent=-1) = 100");
         }
     }
 
@@ -241,7 +241,7 @@ class CausalProcessorsTopologyTest {
             assertEquals(List.of("ORDER"), out.readValuesToList());
             assertEquals(1, violations.size());
             assertEquals(CausalViolationReason.LIMIT_REACHED, violations.get(0).reason());
-            assertEquals(List.of(new CausalPosition(CausalPosition.nameUuid("prices"), 0, 100L)), violations.get(0).gap());
+            assertEquals(List.of(new CausalPosition(CausalPosition.deriveUuid("prices"), 0, 100L)), violations.get(0).gap());
         }
     }
 
@@ -444,8 +444,8 @@ class CausalProcessorsTopologyTest {
 
     @Test
     void frontierListenerPublishesRestoredThenAdvancingFrontiers() {
-        List<CausalFrontier> observed = new ArrayList<>();
-        CausalFrontierListener listener = observed::add;
+        List<CausalFrontier> offsetFor = new ArrayList<>();
+        CausalFrontierListener listener = offsetFor::add;
         Topology topology = topology(
                 CausalProcessors.builder(upperCaser(), CausalBufferPolicy.drop(CausalBufferLimit.ofSize(100)))
                         .serdesByTopic(t -> Serdes.String(), t -> Serdes.String()).onViolation(onViolation).storeName("in").frontierListener(listener).build(),
@@ -457,7 +457,7 @@ class CausalProcessorsTopologyTest {
 
             // The processor publishes its restored frontier at init — empty on a cold start — so an
             // observer's view is correct before the first record is admitted.
-            assertEquals(List.of(CausalFrontier.empty()), observed,
+            assertEquals(List.of(CausalFrontier.empty()), offsetFor,
                     "the restored frontier is published once at startup");
 
             in.pipeInput(new TestRecord<>("k", "a", clockHeader(CausalDependencies.empty())));
@@ -467,7 +467,7 @@ class CausalProcessorsTopologyTest {
                     List.of(CausalFrontier.empty(),
                             CausalFrontier.empty().advance(IN_ID, 0, 0),
                             CausalFrontier.empty().advance(IN_ID, 0, 1)),
-                    observed,
+                    offsetFor,
                     "every frontier advance is published, in admission order");
         }
     }
@@ -512,7 +512,7 @@ class CausalProcessorsTopologyTest {
         // stamped output and breach the header-size budget.
         CausalDependencies big = CausalDependencies.empty();
         for (int p = 0; p < 500; p++) {
-            big = big.advance(CausalPosition.nameUuid("ghost"), p, 1_000 + p);
+            big = big.advance(CausalPosition.deriveUuid("ghost"), p, 1_000 + p);
         }
 
         Topology topology = topology(

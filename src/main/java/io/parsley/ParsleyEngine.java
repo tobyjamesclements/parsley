@@ -124,7 +124,7 @@ final class ParsleyEngine<K, V> {
             return out;
         }
 
-        if (dependencies.satisfiedBy(frontier)) {
+        if (dependencies.isSatisfiedBy(frontier)) {
             advanceFrontier(record);
             out.add(record);
             drainInto(out, record.sourceTopicId(), record.sourcePartitionIndex());
@@ -214,19 +214,19 @@ final class ParsleyEngine<K, V> {
             List<ParsleyWaitIndex.Candidate> stale = new ArrayList<>();
 
             for (CoordinateKey coord : toScan) {
-                long coordOffset = frontier.observed(coord.topicId(), coord.partition());
-                for (ParsleyWaitIndex.Candidate candidate : waitIndex.candidatesFor(coord.topicId(), coord.partition(), coordOffset)) {
+                long coordOffset = frontier.offsetFor(coord.topicId(), coord.partition());
+                for (ParsleyWaitIndex.Candidate candidate : waitIndex.findCandidates(coord.topicId(), coord.partition(), coordOffset)) {
                     if (!seen.add(candidate.recordId())) continue;
                     ParsleyBufferStore.Entry<K, V> entry = buffer.get(candidate.recordId());
                     if (entry == null) {
                         stale.add(candidate);
-                    } else if (entry.dependencies().satisfiedBy(frontier)) {
+                    } else if (entry.dependencies().isSatisfiedBy(frontier)) {
                         releasable.add(entry);
                     }
                 }
             }
 
-            stale.forEach(waitIndex::tombstone);
+            stale.forEach(waitIndex::prune);
             toScan.clear();
 
             if (releasable.isEmpty()) break;
@@ -253,7 +253,7 @@ final class ParsleyEngine<K, V> {
 
     private void violate(ParsleyRecord<K, V> record, CausalViolationReason reason, CausalDependencies required) {
         CausalViolation violation = new CausalViolation(
-                record.toConsumerRecord(), reason, frontier, required, required.missingAgainst(frontier));
+                record.toConsumerRecord(), reason, frontier, required, required.findMissing(frontier));
         log.warn("Causal violation [{} on {}-{} @{}] gap: {}",
                 reason, record.sourcePartition().topic(), record.sourcePartition().partition(),
                 record.sourceOffset(), violation.gap());
@@ -262,7 +262,7 @@ final class ParsleyEngine<K, V> {
     }
 
     private ParsleyRecord<K, V> withDlqHeaders(ParsleyRecord<K, V> record, CausalDependencies required) {
-        List<CausalPosition> gap = required.missingAgainst(frontier);
+        List<CausalPosition> gap = required.findMissing(frontier);
         CausalDependencies gapAsDeps = CausalDependencies.empty();
         for (CausalPosition p : gap) {
             gapAsDeps = gapAsDeps.advance(p.topicId(), p.partition(), p.offset());

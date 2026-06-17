@@ -193,7 +193,7 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
         Optional<RecordMetadata> meta = context.recordMetadata();
         String topic = meta.map(RecordMetadata::topic).orElse("");
         TopicPartition source = new TopicPartition(topic, meta.map(RecordMetadata::partition).orElse(0));
-        Uuid topicId = topicUuids.getOrDefault(topic, CausalPosition.nameUuid(topic));
+        Uuid topicId = topicUuids.getOrDefault(topic, CausalPosition.deriveUuid(topic));
         return ParsleyRecord.of(record, source, meta.map(RecordMetadata::offset).orElse(0L), topicId);
     }
 }

@@ -21,7 +21,7 @@ class CausalViolationHandlerTest {
     @Test
     void throwingThrowsWithRecordAndReason() {
         CausalViolationException ex = assertThrows(CausalViolationException.class,
-                () -> CausalViolationHandler.throwing().onViolation(violation));
+                () -> CausalViolationHandler.throwOnViolation().onViolation(violation));
         assertSame(record, ex.record());
         assertEquals(CausalViolationReason.MISSING_HEADER, ex.reason());
     }
@@ -30,14 +30,14 @@ class CausalViolationHandlerTest {
     void lambdaReceivesTheViolationWithItsGap() {
         CausalViolation limit = new CausalViolation(
                 record, CausalViolationReason.LIMIT_REACHED,
-                CausalFrontier.empty(), CausalDependencies.empty().advance(CausalPosition.nameUuid("prices"), 0, 4),
-                List.of(new CausalPosition(CausalPosition.nameUuid("prices"), 0, 5L)));
+                CausalFrontier.empty(), CausalDependencies.empty().advance(CausalPosition.deriveUuid("prices"), 0, 4),
+                List.of(new CausalPosition(CausalPosition.deriveUuid("prices"), 0, 5L)));
 
         AtomicReference<CausalViolation> seen = new AtomicReference<>();
         CausalViolationHandler handler = seen::set;
         handler.onViolation(limit);
 
         assertEquals(CausalViolationReason.LIMIT_REACHED, seen.get().reason());
-        assertEquals(List.of(new CausalPosition(CausalPosition.nameUuid("prices"), 0, 5L)), seen.get().gap());
+        assertEquals(List.of(new CausalPosition(CausalPosition.deriveUuid("prices"), 0, 5L)), seen.get().gap());
     }
 }

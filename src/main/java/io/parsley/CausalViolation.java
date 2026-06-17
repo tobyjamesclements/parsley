@@ -19,13 +19,13 @@ import java.util.List;
  * @param record   the offending record, as the original Kafka {@link ConsumerRecord}; never
  *                 {@code null}
  * @param reason   why the record violated causal order; never {@code null}
- * @param frontier the frontier observed at the moment of the violation; never {@code null}
+ * @param frontier the frontier at the moment of the violation; never {@code null}
  * @param required the clock the record required to be delivered in order; never {@code null}
  *                 (empty if the record carried no resolvable clock)
  * @param gap      the per-position shortfall ({@code required − observed}) for every position the
  *                 frontier had not caught up on; the {@link CausalPosition#offset()} field of each
  *                 entry holds the shortfall amount, not an absolute log offset; empty if
- *                 {@code required.satisfiedBy(frontier)}
+ *                 {@code required.isSatisfiedBy(frontier)}
  */
 public record CausalViolation(
         ConsumerRecord<?, ?> record,

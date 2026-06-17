@@ -13,16 +13,18 @@ builder factory ({@link io.parsley.CausalProducers}, {@link io.parsley.CausalCon
 
 <h2>Core concepts</h2>
 <dl>
-  <dt><strong>Causal dependencies</strong></dt>
-  <dd>A snapshot of causal progress &mdash; a map from each
-  {@link org.apache.kafka.common.TopicPartition} to the highest offset observed &mdash; carried as
-  {@link io.parsley.CausalDependencies}. A consumer's <em>frontier</em> is its current
-  {@code CausalDependencies}.</dd>
+  <dt><strong>Causal frontier</strong></dt>
+  <dd>The highest offset observed on each topic-partition, keyed by topic UUID so that topic
+  deletion and recreation produce a distinct identity even when the name is reused. Carried as
+  {@link io.parsley.CausalFrontier}; combine two frontiers with
+  {@link io.parsley.CausalFrontier#merge merge}.</dd>
 
-  <dt><strong>Causal ordering</strong></dt>
-  <dd>A message is causally ready when the consumer's frontier dominates the dependencies embedded
-  in the message header &mdash; meaning the consumer has already processed every message that
-  happened-before this one.</dd>
+  <dt><strong>Causal dependencies</strong></dt>
+  <dd>The minimum frontier a downstream consumer must have observed before a record may be
+  delivered &mdash; the upstream producer's snapshot of what it had seen when it sent the record.
+  Carried as {@link io.parsley.CausalDependencies} in a {@code parsley-vector-clock} header.
+  A record is causally ready when {@link io.parsley.CausalDependencies#isSatisfiedBy isSatisfiedBy}
+  returns {@code true} against the consumer's current frontier.</dd>
 
   <dt><strong>Causal buffer</strong></dt>
   <dd>Records whose dependencies are not yet satisfied are held in a changelog-backed buffer and
@@ -56,7 +58,7 @@ records.forEach(record -> process(record));
 
 // Produce, propagating the consumer's causal position
 CausalProducer<String, Event> producer = CausalProducers.<String, Event>builder(producerConfig).build();
-producer.send(new ProducerRecord<>("events", key, event), consumer.frontier());
+producer.send(new ProducerRecord<>("events", key, event), consumer.frontier().toDependencies());
 }</pre>
 </body>
 </html>

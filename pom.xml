@@ -60,10 +60,13 @@
             <artifactId>kafka-clients</artifactId>
             <version>${kafka.version}</version>
         </dependency>
+        <!-- Optional: only CausalConsumer and CausalProcessorSupplier users need this at runtime.
+             Producer-only dependents should not receive it transitively. -->
         <dependency>
             <groupId>org.apache.kafka</groupId>
             <artifactId>kafka-streams</artifactId>
             <version>${kafka.version}</version>
+            <optional>true</optional>
         </dependency>
         <!-- SLF4J API for operational logging; the binding is supplied by the host application
              (Kafka Streams itself requires one at runtime). -->
@@ -183,9 +186,10 @@
                     </execution>
                 </executions>
             </plugin>
-            <!-- avro-maven-plugin registers its output as a MAIN source root; register it as a
-                 TEST source root instead so the generated SpecificRecords compile test-only and
-                 never ship in the published jar. -->
+            <!-- avro-maven-plugin's schema goal always calls project.addCompileSourceRoot(),
+                 registering its output as a main source root. This re-registers it as a test
+                 source root instead so generated SpecificRecord classes never ship in the jar.
+                 build-helper is the standard solution; avro-maven-plugin 1.11.x has no test-schema goal. -->
             <plugin>
                 <groupId>org.codehaus.mojo</groupId>
                 <artifactId>build-helper-maven-plugin</artifactId>

@@ -29,7 +29,7 @@ import java.util.Optional;
  * <h2>Propagating causal context across services</h2>
  * Use {@link #fromRecord(ConsumerRecord)} to read the upstream producer's clock off a consumed
  * record (this is usually the right choice — it carries exactly the partitions the producer
- * depended on). Use {@link CausalFrontier#asDependencies()} only when the read genuinely depends on
+ * depended on). Use {@link CausalFrontier#toDependencies()} only when the read genuinely depends on
  * <em>everything</em> the consumer has processed (e.g. an aggregator), since the frontier carries
  * every partition ever seen. Serialise with {@link #toBytes()} / {@link #fromBytes(byte[])}.
  *
@@ -37,7 +37,7 @@ import java.util.Optional;
  * The {@link #toBytes() serialised} clock is {@code 5 + 28 × entries} bytes. A clock spanning
  * many partitions can breach Kafka's record-size limit ({@code message.max.bytes}, ~1&nbsp;MB by
  * default). The automatic Streams stamping path is bounded by the number of source topics in the
- * subtopology; the figure to watch is a manual {@link CausalFrontier#asDependencies()} call on a
+ * subtopology; the figure to watch is a manual {@link CausalFrontier#toDependencies()} call on a
  * wide-fan-in consumer.
  */
 public final class CausalDependencies {
@@ -85,9 +85,9 @@ public final class CausalDependencies {
      * @param frontier the frontier to test against; must not be {@code null}
      * @return {@code true} if the frontier has caught up with this clock
      */
-    public boolean satisfiedBy(CausalFrontier frontier) {
+    public boolean isSatisfiedBy(CausalFrontier frontier) {
         for (Map.Entry<Key, Long> entry : required.entrySet()) {
-            if (frontier.observed(entry.getKey().topicId(), entry.getKey().partition()) < entry.getValue()) {
+            if (frontier.offsetFor(entry.getKey().topicId(), entry.getKey().partition()) < entry.getValue()) {
                 return false;
             }
         }
@@ -99,16 +99,16 @@ public final class CausalDependencies {
      * for every position where this clock requires a higher offset than the frontier has observed,
      * the result contains a {@link CausalPosition} with the <em>shortfall</em>
      * ({@code required − observed}, counting an absent frontier position as {@code -1} so the gap is
-     * {@code required + 1}). The result is empty exactly when {@link #satisfiedBy}.
+     * {@code required + 1}). The result is empty exactly when {@link #isSatisfiedBy}.
      *
      * @param frontier the frontier to measure against; must not be {@code null}
      * @return per-position shortfalls; empty if the frontier already satisfies this clock
      */
-    public List<CausalPosition> missingAgainst(CausalFrontier frontier) {
+    public List<CausalPosition> findMissing(CausalFrontier frontier) {
         List<CausalPosition> gap = new ArrayList<>();
         for (Map.Entry<Key, Long> entry : required.entrySet()) {
             long req = entry.getValue();
-            long obs = frontier.observed(entry.getKey().topicId(), entry.getKey().partition());
+            long obs = frontier.offsetFor(entry.getKey().topicId(), entry.getKey().partition());
             if (obs < req) {
                 gap.add(new CausalPosition(entry.getKey().topicId(), entry.getKey().partition(), req - obs));
             }

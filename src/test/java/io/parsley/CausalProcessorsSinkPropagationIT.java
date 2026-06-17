@@ -106,7 +106,7 @@ class CausalProcessorsSinkPropagationIT {
                 assertEquals("HELLO", new String(out.value()), "the delegate's transform reached the sink");
 
                 Optional<CausalDependencies> clock = CausalDependencies.fromHeaders(out.headers());
-                assertEquals(Optional.of(CausalDependencies.empty().advance(CausalPosition.nameUuid(IN), 0, 0)), clock,
+                assertEquals(Optional.of(CausalDependencies.empty().advance(CausalPosition.deriveUuid(IN), 0, 0)), clock,
                         "the clock stamped at forward must survive the sink to the output topic");
             }
         }

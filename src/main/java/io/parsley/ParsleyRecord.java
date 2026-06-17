@@ -68,11 +68,11 @@ record ParsleyRecord<K, V>(K key, V value, long timestamp, List<ParsleyHeader> h
     }
 
     /**
-     * Convenience overload that derives the topic UUID via {@link CausalPosition#nameUuid}. Used
+     * Convenience overload that derives the topic UUID via {@link CausalPosition#deriveUuid}. Used
      * in paths where no AdminClient UUID is available (tests, {@link org.apache.kafka.streams.TopologyTestDriver}).
      */
     static <K, V> ParsleyRecord<K, V> of(Record<K, V> record, TopicPartition sourcePartition, long sourceOffset) {
-        return of(record, sourcePartition, sourceOffset, CausalPosition.nameUuid(sourcePartition.topic()));
+        return of(record, sourcePartition, sourceOffset, CausalPosition.deriveUuid(sourcePartition.topic()));
     }
 
     /** The source topic, read from the {@link ParsleyAttributes#SRC_TOPIC} header. */
@@ -83,12 +83,12 @@ record ParsleyRecord<K, V>(K key, V value, long timestamp, List<ParsleyHeader> h
 
     /**
      * The Kafka UUID of the source topic, read from the {@link ParsleyAttributes#SRC_TOPIC_ID}
-     * header. Falls back to {@link CausalPosition#nameUuid} if the header is absent (e.g. records
+     * header. Falls back to {@link CausalPosition#deriveUuid} if the header is absent (e.g. records
      * built in tests without an explicit UUID).
      */
     Uuid sourceTopicId() {
         ParsleyHeader h = findHeader(ParsleyAttributes.SRC_TOPIC_ID);
-        if (h == null) return CausalPosition.nameUuid(sourceTopic());
+        if (h == null) return CausalPosition.deriveUuid(sourceTopic());
         byte[] b = h.value();
         long msb = ByteBuffer.wrap(b, 0, 8).getLong();
         long lsb = ByteBuffer.wrap(b, 8, 8).getLong();

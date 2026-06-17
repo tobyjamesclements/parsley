@@ -66,7 +66,7 @@ public interface CausalConsumer<K, V> extends Closeable {
      * Returns the current causal frontier — the highest offset seen on each partition, i.e.
      * everything this consumer has processed so far.
      *
-     * <p>Call {@link CausalFrontier#asDependencies()} to convert to a {@link CausalDependencies}
+     * <p>Call {@link CausalFrontier#toDependencies()} to convert to a {@link CausalDependencies}
      * for passing to {@link CausalProducer#send} or for cross-service propagation. To instead read
      * the causal context of <em>one specific</em> consumed message — the upstream producer's clock
      * — use {@link CausalDependencies#fromRecord(org.apache.kafka.clients.consumer.ConsumerRecord)}.

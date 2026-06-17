@@ -132,7 +132,7 @@ class CausalAvroSchemaRegistryIT {
         String registryUrl = "http://" + schemaRegistry.getHost() + ":" + schemaRegistry.getMappedPort(8081);
         createTopics(bootstrap, ORDERS, PRICES);
 
-        Uuid pricesId = CausalPosition.nameUuid(PRICES);
+        Uuid pricesId = CausalPosition.deriveUuid(PRICES);
 
         Order order = new Order("o-buf", "ACME", 10);
         Price price = new Price("ACME", 99.0);

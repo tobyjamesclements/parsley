@@ -38,14 +38,14 @@ final class RocksWaitIndex implements ParsleyWaitIndex {
     @Override
     public void index(long recordId, CausalDependencies required, CausalFrontier frontier) {
         for (CausalPosition pos : required.dependencies()) {
-            if (frontier.observed(pos.topicId(), pos.partition()) < pos.offset()) {
+            if (frontier.offsetFor(pos.topicId(), pos.partition()) < pos.offset()) {
                 store.put(key(pos.topicId(), pos.partition(), pos.offset(), recordId), PRESENT);
             }
         }
     }
 
     @Override
-    public List<Candidate> candidatesFor(Uuid topicId, int partition, long newOffset) {
+    public List<Candidate> findCandidates(Uuid topicId, int partition, long newOffset) {
         byte[] from = key(topicId, partition, 0L, 0L);
         byte[] to   = key(topicId, partition, newOffset, Long.MAX_VALUE);
         List<Candidate> candidates = new ArrayList<>();
@@ -61,7 +61,7 @@ final class RocksWaitIndex implements ParsleyWaitIndex {
     }
 
     @Override
-    public void tombstone(Candidate candidate) {
+    public void prune(Candidate candidate) {
         store.delete(key(candidate.topicId(), candidate.partition(),
                 candidate.requiredOffset(), candidate.recordId()));
     }

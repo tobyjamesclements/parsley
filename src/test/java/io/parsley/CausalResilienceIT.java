@@ -53,7 +53,7 @@ class CausalResilienceIT {
      * {@link ParsleyEngine} ParsleyWaitIndex re-seeding from the restored buffer.
      *
      * <p>Both the producer and the consumer use the same name-derived UUID for PRICES (via
-     * {@link MockAdminClient} and {@link CausalPosition#nameUuid}), so the stamped clock matches
+     * {@link MockAdminClient} and {@link CausalPosition#deriveUuid}), so the stamped clock matches
      * the consumer's frontier — enabling natural causal drain rather than eviction.
      */
     @Test
@@ -79,7 +79,7 @@ class CausalResilienceIT {
              CausalProducer<String, String> producer = causalProducer(bootstrap)) {
 
             producer.send(new ProducerRecord<>(ORDERS, "k", "order-1"),
-                    CausalDependencies.empty().advance(CausalPosition.nameUuid(PRICES), 0, 0)).get();
+                    CausalDependencies.empty().advance(CausalPosition.deriveUuid(PRICES), 0, 0)).get();
 
             // Poll a few times — ORDERS should be buffered, not delivered.
             for (int i = 0; i < 3; i++) {

@@ -40,7 +40,7 @@ class ParsleySerializerTest {
 
     @Test
     void roundTripsEveryField() {
-        CausalDependencies deps = CausalDependencies.empty().advance(CausalPosition.nameUuid("prices"), 0, 4);
+        CausalDependencies deps = CausalDependencies.empty().advance(CausalPosition.deriveUuid("prices"), 0, 4);
         List<ParsleyHeader> userHeaders = List.of(
                 new ParsleyHeader("h1", "a".getBytes()),
                 new ParsleyHeader("h2", null));
