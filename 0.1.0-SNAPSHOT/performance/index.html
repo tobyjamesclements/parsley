@@ -11,10 +11,10 @@
       
       
       
-        <link rel="prev" href="..">
+        <link rel="prev" href="../configuration/">
       
       
-        <link rel="next" href="../getting-started/">
+        <link rel="next" href="../migration/">
       
       
         
@@ -25,7 +25,7 @@
     
     
       
-        <title>Concepts - Parsley</title>
+        <title>Performance - Parsley</title>
       
     
     
@@ -76,7 +76,7 @@
     <div data-md-component="skip">
       
         
-        <a href="#concepts" class="md-skip">
+        <a href="#performance" class="md-skip">
           Skip to content
         </a>
       
@@ -116,7 +116,7 @@
         <div class="md-header__topic" data-md-component="header-topic">
           <span class="md-ellipsis">
             
-              Concepts
+              Performance
             
           </span>
         </div>
@@ -286,37 +286,10 @@
       
   
   
-    
   
   
-  
-    <li class="md-nav__item md-nav__item--active">
-      
-      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
-      
-      
-        
-      
-      
-        <label class="md-nav__link md-nav__link--active" for="__toc">
-          
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    Concepts
-  
-
-    
-  </span>
-  
-  
-
-          <span class="md-nav__icon md-icon"></span>
-        </label>
-      
-      <a href="./" class="md-nav__link md-nav__link--active">
+    <li class="md-nav__item">
+      <a href="../concepts/" class="md-nav__link">
         
   
   
@@ -332,103 +305,6 @@
   
 
       </a>
-      
-        
-
-<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
-  
-  
-  
-    
-  
-  
-    <label class="md-nav__title" for="__toc">
-      <span class="md-nav__icon md-icon"></span>
-      Table of contents
-    </label>
-    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
-      
-        <li class="md-nav__item">
-  <a href="#causal-dependencies" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Causal dependencies
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#the-frontier" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        The frontier
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#the-causal-buffer" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        The causal buffer
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#buffer-limits" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Buffer limits
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#buffer-policies" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Buffer policies
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#causal-violations" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Causal violations
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#co-partitioning" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Co-partitioning
-      
-    </span>
-  </a>
-  
-</li>
-      
-    </ul>
-  
-</nav>
-      
     </li>
   
 
@@ -518,10 +394,37 @@
       
   
   
+    
   
   
-    <li class="md-nav__item">
-      <a href="../performance/" class="md-nav__link">
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Performance
+  
+
+    
+  </span>
+  
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
         
   
   
@@ -537,6 +440,148 @@
   
 
       </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#three-latency-categories" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Three latency categories
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Three latency categories">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#1-per-record-header-overhead" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        1. Per-record header overhead
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#2-causal-buffering-latency" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        2. Causal buffering latency
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="2. Causal buffering latency">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#wait-index-lookup-logarithmic-in-buffer-depth" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Wait-index lookup — logarithmic in buffer depth
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#per-released-record-linear-in-k" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Per-released record — linear in k
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#cascade-depth-linear-in-r" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Cascade depth — linear in r
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#putting-it-together" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Putting it together
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#3-recovery-latency" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        3. Recovery latency
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#summary" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Summary
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#running-the-benchmarks" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Running the benchmarks
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
     </li>
   
 
@@ -844,10 +889,110 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
-  <a href="#causal-dependencies" class="md-nav__link">
+  <a href="#three-latency-categories" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Causal dependencies
+        Three latency categories
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Three latency categories">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#1-per-record-header-overhead" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        1. Per-record header overhead
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#2-causal-buffering-latency" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        2. Causal buffering latency
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="2. Causal buffering latency">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#wait-index-lookup-logarithmic-in-buffer-depth" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Wait-index lookup — logarithmic in buffer depth
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#per-released-record-linear-in-k" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Per-released record — linear in k
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#cascade-depth-linear-in-r" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Cascade depth — linear in r
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#putting-it-together" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Putting it together
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#3-recovery-latency" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        3. Recovery latency
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#summary" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Summary
       
     </span>
   </a>
@@ -855,65 +1000,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#the-frontier" class="md-nav__link">
+  <a href="#running-the-benchmarks" class="md-nav__link">
     <span class="md-ellipsis">
       
-        The frontier
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#the-causal-buffer" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        The causal buffer
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#buffer-limits" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Buffer limits
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#buffer-policies" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Buffer policies
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#causal-violations" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Causal violations
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#co-partitioning" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Co-partitioning
+        Running the benchmarks
       
     </span>
   </a>
@@ -940,127 +1030,351 @@
   
 
 
-<h1 id="concepts">Concepts</h1>
-<h2 id="causal-dependencies">Causal dependencies</h2>
-<p><code>CausalDependencies</code> is a snapshot of what a producer had observed when it sent a record — a map
-from <code>(topicId, partition)</code> to the highest offset seen on that coordinate. Parsley serialises this
-as a compact binary header (<code>parsley-causal-dependencies</code>) attached to every outgoing record.</p>
-<p>On the consumer side, it is decoded into a <code>CausalDependencies</code> value: the minimum frontier
-a downstream consumer must have reached before the record may be delivered. A record is <strong>causally
-ready</strong> when <code>CausalDependencies.isSatisfiedBy(frontier)</code> returns <code>true</code>.</p>
-<p>Keys are Kafka <strong>topic UUIDs</strong>, not topic names. UUID-keyed dependencies survive topic deletion and
-recreation: a new incarnation of <code>prices</code> gets a new UUID and is treated as a distinct dependency,
-so records stamped against the old <code>prices</code> are never accidentally satisfied by the new one.</p>
-<h2 id="the-frontier">The frontier</h2>
-<p>The <strong>causal frontier</strong> (<code>CausalFrontier</code>) tracks the highest offset
-it has successfully delivered on each <code>(topicId, partition)</code> coordinate. Every time a record is
-forwarded, the frontier advances. Frontiers from multiple sources can be merged with
-<code>CausalFrontier.merge</code>, taking the per-coordinate maximum.</p>
-<p>The frontier is <strong>persisted</strong> before each record is forwarded, so it survives restarts and rebalances.</p>
-<h2 id="the-causal-buffer">The causal buffer</h2>
-<p>Records whose dependencies are not yet satisfied are held in a <strong>causal buffer</strong>. Held records
-survive a restart; no re-delivery from the broker is required.</p>
-<p>When a coordinate in the frontier advances (because a causally ready record was forwarded),
-Parsley checks the buffer for records that were waiting on that coordinate. If any are now
-satisfied, they are released and their source coordinates advance the frontier in turn — cascading
-until no further releases occur.</p>
-<h2 id="buffer-limits">Buffer limits</h2>
-<p>A <code>CausalBufferLimit</code> bounds how long or how large the buffer may grow before a <strong>policy</strong> fires:</p>
+<h1 id="performance">Performance</h1>
+<p>Parsley adds overhead to your Kafka processing in three distinct places. Understanding where the
+cost lives — and how it scales — helps you reason about capacity and tune limits before deploying
+to production.</p>
+<div class="admonition warning">
+<p class="admonition-title">Absolute numbers are infrastructure-specific</p>
+<p>This page describes <strong>how Parsley's costs scale</strong>, not what they are. The latency figures that
+appear in the tables below are illustrative results from one run on one machine; they are not
+specifications. To get numbers meaningful for your capacity planning, run the benchmark suite
+in your own environment — see <a href="#running-the-benchmarks">Running the benchmarks</a>.</p>
+</div>
+<hr />
+<h2 id="three-latency-categories">Three latency categories</h2>
+<h3 id="1-per-record-header-overhead">1. Per-record header overhead</h3>
+<p>Every record Parsley handles requires three operations: deserialise the incoming dependency header,
+check whether the frontier satisfies it, and stamp the updated clock onto the outgoing record.</p>
+<p>Benchmarking confirms that all three operations scale <strong>linearly with clock width</strong> — the number
+of <code>(topic, partition)</code> pairs tracked in the causal context. Doubling the clock width roughly
+doubles the cost of each operation.</p>
+<p>The following results illustrate this scaling in one environment; your numbers will differ:</p>
 <table>
 <thead>
 <tr>
-<th>Limit</th>
-<th>Factory</th>
-<th>Description</th>
+<th style="text-align: right;">Clock width</th>
+<th style="text-align: right;">Deserialise</th>
+<th style="text-align: right;">Dominance check</th>
+<th style="text-align: right;">Serialise</th>
 </tr>
 </thead>
 <tbody>
 <tr>
-<td>Size</td>
-<td><code>CausalBufferLimit.ofSize(n)</code></td>
-<td>Fire when the buffer holds ≥ <code>n</code> records</td>
+<td style="text-align: right;">1 partition</td>
+<td style="text-align: right;">27 ns</td>
+<td style="text-align: right;">2 ns</td>
+<td style="text-align: right;">16 ns</td>
 </tr>
 <tr>
-<td>Duration</td>
-<td><code>CausalBufferLimit.ofDuration(d)</code></td>
-<td>Fire after the buffer has held records for <code>d</code> (time-based; requires the processor to call eviction on schedule)</td>
+<td style="text-align: right;">4 partitions</td>
+<td style="text-align: right;">131 ns</td>
+<td style="text-align: right;">18 ns</td>
+<td style="text-align: right;">55 ns</td>
 </tr>
 <tr>
-<td>First-of</td>
-<td><code>CausalBufferLimit.first(a, b, ...)</code></td>
-<td>Fire when the first of several limits fires</td>
+<td style="text-align: right;">16 partitions</td>
+<td style="text-align: right;">406 ns</td>
+<td style="text-align: right;">60 ns</td>
+<td style="text-align: right;">211 ns</td>
+</tr>
+<tr>
+<td style="text-align: right;">64 partitions</td>
+<td style="text-align: right;">1548 ns</td>
+<td style="text-align: right;">244 ns</td>
+<td style="text-align: right;">785 ns</td>
 </tr>
 </tbody>
 </table>
-<h2 id="buffer-policies">Buffer policies</h2>
-<p>A <code>CausalBufferPolicy</code> determines what happens when the limit fires. <strong>All policies</strong> report a
-<code>CausalViolation</code> for every evicted record.</p>
+<p>The practical implication is not the specific nanosecond values but the <strong>slope</strong>: cost grows
+proportionally with clock width, so keeping the dependency list narrow is the primary lever for
+controlling per-record overhead.</p>
+<div class="admonition tip">
+<p class="admonition-title">Controlling clock width</p>
+<p>In Streams, Parsley stamps the per-task frontier automatically. The width is bounded by the
+number of source partitions assigned to the task, which is usually small. The wider paths are
+<code>consumer.frontier()</code> and <code>CausalFrontier.toDependencies()</code>, which carry every partition the
+consumer has ever seen. Prefer <code>CausalDependencies.fromRecord(trigger)</code> when you only need to
+express a dependency on a single upstream record — it carries a much narrower clock.</p>
+</div>
+<hr />
+<h3 id="2-causal-buffering-latency">2. Causal buffering latency</h3>
+<p>This cost is paid when a causally ready trigger arrives and Parsley releases held records from the
+buffer. The drain algorithm has three independent components that each contribute to the latency.</p>
+<h4 id="wait-index-lookup-logarithmic-in-buffer-depth">Wait-index lookup — logarithmic in buffer depth</h4>
+<p>Before releasing anything, Parsley queries a RocksDB range index to find which held records were
+waiting for the arriving coordinate. Benchmarking confirms this lookup is <strong>O(log n)</strong> in the
+total number of buffered records n.</p>
+<p>The practical consequence: doubling the buffer adds a roughly fixed increment of latency rather
+than doubling it. The drain baseline grows slowly even as the buffer fills — example results from
+one run:</p>
 <table>
 <thead>
 <tr>
-<th>Policy</th>
-<th>Factory</th>
-<th>On eviction</th>
+<th style="text-align: right;">Buffer depth (n)</th>
+<th style="text-align: right;">Drain baseline</th>
 </tr>
 </thead>
 <tbody>
 <tr>
-<td>Forward unsafe</td>
-<td><code>CausalBufferPolicy.forwardUnsafe(limit)</code></td>
-<td>Forwards the record out-of-order (lenient — delivery is preserved, ordering is not)</td>
+<td style="text-align: right;">1</td>
+<td style="text-align: right;">~15 µs</td>
 </tr>
 <tr>
-<td>Drop</td>
-<td><code>CausalBufferPolicy.drop(limit)</code></td>
-<td>Discards the record (strict — no out-of-order delivery)</td>
+<td style="text-align: right;">8</td>
+<td style="text-align: right;">~19 µs</td>
 </tr>
 <tr>
-<td>Dead letter</td>
-<td><code>CausalBufferPolicy.deadLetter(limit)</code></td>
-<td>Routes the record to a dead-letter sink with additional headers describing the gap (strict)</td>
+<td style="text-align: right;">32</td>
+<td style="text-align: right;">~25 µs</td>
+</tr>
+<tr>
+<td style="text-align: right;">128</td>
+<td style="text-align: right;">~24 µs</td>
+</tr>
+<tr>
+<td style="text-align: right;">512</td>
+<td style="text-align: right;">~31 µs</td>
+</tr>
+<tr>
+<td style="text-align: right;">1024</td>
+<td style="text-align: right;">~43 µs</td>
 </tr>
 </tbody>
 </table>
-<h2 id="causal-violations">Causal violations</h2>
-<p>A <code>CausalViolation</code> is reported via <code>CausalViolationHandler</code> whenever the causal guarantee cannot
-be upheld for a specific record. Three reasons exist:</p>
+<p>The specific values are not portable, but the shallow slope is the key property: across a
+1000× increase in buffer depth, the lookup cost grows by roughly 3×.</p>
+<h4 id="per-released-record-linear-in-k">Per-released record — linear in k</h4>
+<p>If k held records all depend on the same coordinate, Parsley releases all k of them in one drain
+pass. Benchmarking confirms this cost is <strong>O(k)</strong> — linear in the number of records released.
+Each released record requires a RocksDB read, a frontier advance, and a forward call.</p>
+<p>Example results at n=128 fixed:</p>
 <table>
 <thead>
 <tr>
-<th>Reason</th>
-<th>Meaning</th>
+<th style="text-align: right;">Records released (k)</th>
+<th style="text-align: right;">Drain cost</th>
 </tr>
 </thead>
 <tbody>
 <tr>
-<td><code>MISSING_HEADER</code></td>
-<td>The record carries no <code>parsley-causal-dependencies</code> header (not stamped by Parsley)</td>
+<td style="text-align: right;">1</td>
+<td style="text-align: right;">~24 µs</td>
 </tr>
 <tr>
-<td><code>UNRESOLVABLE_DEPENDENCIES</code></td>
-<td>The header is present but cannot be deserialised (corrupt or unsupported wire version)</td>
+<td style="text-align: right;">2</td>
+<td style="text-align: right;">~34 µs</td>
 </tr>
 <tr>
-<td><code>LIMIT_REACHED</code></td>
-<td>The record was evicted from the buffer because a limit fired</td>
+<td style="text-align: right;">4</td>
+<td style="text-align: right;">~54 µs</td>
+</tr>
+<tr>
+<td style="text-align: right;">8</td>
+<td style="text-align: right;">~92 µs</td>
+</tr>
+<tr>
+<td style="text-align: right;">16</td>
+<td style="text-align: right;">~161 µs</td>
+</tr>
+<tr>
+<td style="text-align: right;">32</td>
+<td style="text-align: right;">~290 µs</td>
 </tr>
 </tbody>
 </table>
-<p>The action taken for each violation reason is configured by the policy. The convenience factories
-(<code>forwardUnsafe</code>, <code>drop</code>, <code>deadLetter</code>) apply the same action to all three reasons. The
-<code>CausalBufferPolicy.builder()</code> lets each reason carry a distinct <code>ViolationAction</code> — for example,
-forwarding records with no Parsley header while dropping or dead-lettering records evicted from the
-buffer. The frontier always advances regardless of action, so records buffered downstream are not
-permanently stalled by the violation.</p>
-<p>Each violation includes the current frontier, the required dependencies, and the <strong>causal gap</strong>:
-a per-coordinate shortfall showing exactly how far the frontier was behind at the time of eviction.</p>
-<h2 id="co-partitioning">Co-partitioning</h2>
-<p>Parsley evaluates dependencies against the partitions assigned to a single consumer instance. For
-the guarantee to hold, an instance must be assigned <strong>all</strong> partitions in a causally related set.
-The standard approach is to <strong>co-partition</strong> related topics so causally related messages share the
-same partition number across topics, allowing each instance to own partition <em>N</em> everywhere.</p>
-<p>Parsley does not detect or enforce co-partitioning — a misconfigured topology evaluates against an
-incomplete partition set silently.</p>
+<p>Note that k=1 already carries a baseline cost from the index lookup; the marginal cost per
+additional released record is what scales linearly from there.</p>
+<h4 id="cascade-depth-linear-in-r">Cascade depth — linear in r</h4>
+<p>When a released record itself enables another held record (which enables another, and so on),
+Parsley propagates the release through a cascade. Benchmarking confirms this cost is <strong>O(r)</strong>
+in the cascade depth r.</p>
+<p>Example results at n=128, k=1 fixed:</p>
+<table>
+<thead>
+<tr>
+<th style="text-align: right;">Cascade depth (r)</th>
+<th style="text-align: right;">Drain cost</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align: right;">1</td>
+<td style="text-align: right;">~25 µs</td>
+</tr>
+<tr>
+<td style="text-align: right;">2</td>
+<td style="text-align: right;">~35 µs</td>
+</tr>
+<tr>
+<td style="text-align: right;">4</td>
+<td style="text-align: right;">~58 µs</td>
+</tr>
+<tr>
+<td style="text-align: right;">8</td>
+<td style="text-align: right;">~99 µs</td>
+</tr>
+<tr>
+<td style="text-align: right;">16</td>
+<td style="text-align: right;">~178 µs</td>
+</tr>
+<tr>
+<td style="text-align: right;">32</td>
+<td style="text-align: right;">~324 µs</td>
+</tr>
+</tbody>
+</table>
+<p>Deep cascades only occur when you have long chains of sequential dependencies — unusual in most
+topologies. In a topology where each step depends only on the previous one, r equals the number
+of such steps that become simultaneously ready.</p>
+<h4 id="putting-it-together">Putting it together</h4>
+<p>The full drain cost when a trigger arrives is:</p>
+<blockquote>
+<p><strong>O(log n + k + r)</strong></p>
+</blockquote>
+<p>where n is the total buffer depth, k is the number of records sharing the trigger coordinate,
+and r is the cascade depth. For typical workloads with small k and r, the logarithmic index
+lookup dominates. Heavy fan-in at a single dependency offset drives up k; strict sequential
+pipelines drive up r.</p>
+<hr />
+<h3 id="3-recovery-latency">3. Recovery latency</h3>
+<p>When Parsley restarts or a Kafka Streams task is reassigned to a new worker, <code>ParsleyProcessor.init()</code>
+restores state from RocksDB before processing begins.</p>
+<p><strong>Frontier restore</strong> reads a single key and deserialises the frontier. Benchmarking confirms
+this is <strong>O(1)</strong> — effectively constant regardless of buffer size:</p>
+<table>
+<thead>
+<tr>
+<th style="text-align: right;">Buffer held at crash</th>
+<th style="text-align: right;">Frontier restore</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align: right;">1 record</td>
+<td style="text-align: right;">~461 ns</td>
+</tr>
+<tr>
+<td style="text-align: right;">1024 records</td>
+<td style="text-align: right;">~439 ns</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Buffer restore</strong> scans every buffered record to rebuild the wait index. Benchmarking confirms
+this is <strong>O(n)</strong> in the number of records held at the time of the crash or reassignment:</p>
+<table>
+<thead>
+<tr>
+<th style="text-align: right;">Records held at crash (n)</th>
+<th style="text-align: right;">Buffer restore</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align: right;">1</td>
+<td style="text-align: right;">~2 µs</td>
+</tr>
+<tr>
+<td style="text-align: right;">8</td>
+<td style="text-align: right;">~13 µs</td>
+</tr>
+<tr>
+<td style="text-align: right;">32</td>
+<td style="text-align: right;">~58 µs</td>
+</tr>
+<tr>
+<td style="text-align: right;">128</td>
+<td style="text-align: right;">~211 µs</td>
+</tr>
+<tr>
+<td style="text-align: right;">512</td>
+<td style="text-align: right;">~908 µs</td>
+</tr>
+<tr>
+<td style="text-align: right;">1024</td>
+<td style="text-align: right;">~1.9 ms</td>
+</tr>
+</tbody>
+</table>
+<p>The cost grows proportionally with buffer size. In your environment the per-record cost will
+differ, but the linear relationship will hold: a buffer twice as large will take roughly twice as
+long to restore.</p>
+<div class="admonition tip">
+<p class="admonition-title">Keep the buffer small for faster restarts</p>
+<p>A tight <code>CausalBufferLimit.ofSize(n)</code> reduces both the number of records held under lag and
+the startup cost if those records were persisted at crash time. The trade-off is more frequent
+policy firings (violations). Size the buffer to the lag you can tolerate, not the maximum
+possible.</p>
+</div>
+<hr />
+<h2 id="summary">Summary</h2>
+<table>
+<thead>
+<tr>
+<th>Category</th>
+<th>Complexity</th>
+<th>Scales with</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Deserialise header</td>
+<td>O(w)</td>
+<td>Clock width</td>
+</tr>
+<tr>
+<td>Dominance check</td>
+<td>O(w)</td>
+<td>Clock width</td>
+</tr>
+<tr>
+<td>Serialise header</td>
+<td>O(w)</td>
+<td>Clock width</td>
+</tr>
+<tr>
+<td>Buffer drain (index lookup)</td>
+<td>O(log n)</td>
+<td>Total records in buffer</td>
+</tr>
+<tr>
+<td>Buffer drain (per-released record)</td>
+<td>O(k)</td>
+<td>Records sharing the trigger coordinate</td>
+</tr>
+<tr>
+<td>Cascade propagation</td>
+<td>O(r)</td>
+<td>Chained release depth</td>
+</tr>
+<tr>
+<td>Frontier restore on restart</td>
+<td>O(1)</td>
+<td>—</td>
+</tr>
+<tr>
+<td>Buffer restore on restart</td>
+<td>O(n)</td>
+<td>Records held at time of restart</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2 id="running-the-benchmarks">Running the benchmarks</h2>
+<p>The benchmark suite lives in <code>src/test/java/io/parsley/</code> and can be run with Maven. It uses
+<code>TopologyTestDriver</code> and does not require a running Kafka cluster by default.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>mvn -Pbenchmarks test
+</code></pre></div>
+<p>To run a single curve with reduced iterations (smoke test):</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>mvn -Pbenchmarks test \
+<a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a>  &quot;-Dbenchmark.args=-wi 1 -i 3 -f 1 -p clockWidth=4 -p n=8 -p k=1 -p r=1 HeaderEvaluationBenchmark&quot;
+</code></pre></div>
+<p>To export results as JSON for graphing:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>mvn -Pbenchmarks test \
+<a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a>  &quot;-Dbenchmark.args=-rf json -rff results.json&quot;
+</code></pre></div>
+<p>See <a href="../internals/benchmarks/">Internals: Benchmark suite</a> for the full parameter reference,
+system property overrides, and instructions for running against your own Kafka cluster and storage.</p>
 
 
 
@@ -1096,7 +1410,7 @@ incomplete partition set silently.</p>
       <nav class="md-footer__inner md-grid" aria-label="Footer" >
         
           
-          <a href=".." class="md-footer__link md-footer__link--prev" aria-label="Previous: Home">
+          <a href="../configuration/" class="md-footer__link md-footer__link--prev" aria-label="Previous: Configuration">
             <div class="md-footer__button md-icon">
               
               <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
@@ -1106,20 +1420,20 @@ incomplete partition set silently.</p>
                 Previous
               </span>
               <div class="md-ellipsis">
-                Home
+                Configuration
               </div>
             </div>
           </a>
         
         
           
-          <a href="../getting-started/" class="md-footer__link md-footer__link--next" aria-label="Next: Getting started">
+          <a href="../migration/" class="md-footer__link md-footer__link--next" aria-label="Next: Migration">
             <div class="md-footer__title">
               <span class="md-footer__direction">
                 Next
               </span>
               <div class="md-ellipsis">
-                Getting started
+                Migration
               </div>
             </div>
             <div class="md-footer__button md-icon">
