@@ -66,8 +66,8 @@ import static java.nio.charset.StandardCharsets.UTF_8;
  *
  * <p>Because {@link ParsleyProcessorContext} stamps the delivery-time frontier onto the
  * {@link ParsleyAttributes#CAUSAL_DEPENDENCIES} header when the outbox delegate calls
- * {@code ctx.forward()}, the original producer's clock is saved under
- * {@link ParsleyAttributes#ORIG_CLOCK} before forwarding and restored in {@code poll()} so that
+ * {@code ctx.forward()}, the original producer's dependencies are saved under
+ * {@link ParsleyAttributes#ORIGINAL_DEPENDENCIES} before forwarding and restored in {@code poll()} so that
  * {@link CausalDependencies#fromRecord} still returns the upstream producer's causal intent.
  */
 final class ParsleyConsumer<K, V> implements CausalConsumer<K, V> {
@@ -160,12 +160,12 @@ final class ParsleyConsumer<K, V> implements CausalConsumer<K, V> {
             @Override
             public void process(Record<byte[], byte[]> record) {
                 // SRC_TOPIC/SRC_TOPIC_ID/SRC_PARTITION/SRC_OFFSET are already on the record
-                // (written by ParsleyRecord.of() at ingest time). Just save the producer's clock
-                // before ParsleyProcessorContext.stamp() replaces it with the delivery-time frontier.
-                Header origClock = record.headers().lastHeader(ParsleyAttributes.CAUSAL_DEPENDENCIES);
+                // (written by ParsleyRecord.of() at ingest time). Just save the producer's dependencies
+                // before ParsleyProcessorContext.stamp() replaces them with the delivery-time frontier.
+                Header originalDependencies = record.headers().lastHeader(ParsleyAttributes.CAUSAL_DEPENDENCIES);
                 Headers h = new RecordHeaders(record.headers());
-                if (origClock != null) {
-                    h.add(ParsleyAttributes.ORIG_CLOCK, origClock.value());
+                if (originalDependencies != null) {
+                    h.add(ParsleyAttributes.ORIGINAL_DEPENDENCIES, originalDependencies.value());
                 }
                 ctx.forward(new Record<>(record.key(), record.value(), record.timestamp(), h));
             }
@@ -182,7 +182,7 @@ final class ParsleyConsumer<K, V> implements CausalConsumer<K, V> {
             long   srcOffset    = longFromBytes(r.headers().lastHeader(ParsleyAttributes.SRC_OFFSET).value());
             K key   = keySerde.deserializer().deserialize(srcTopic, r.key());
             V value = valueSerde.deserializer().deserialize(srcTopic, r.value());
-            Headers headers = restoreOriginalClock(r.headers());
+            Headers headers = restoreOriginalDependencies(r.headers());
             ConsumerRecord<K, V> cr = new ConsumerRecord<>(
                     srcTopic, srcPartition, srcOffset,
                     r.timestamp(), TimestampType.CREATE_TIME,
@@ -242,11 +242,11 @@ final class ParsleyConsumer<K, V> implements CausalConsumer<K, V> {
     }
 
     /**
-     * Strips all internal {@code _parsley_*} headers and swaps the delivery-time frontier clock
-     * back for the producer's original {@link ParsleyAttributes#CAUSAL_DEPENDENCIES}.
+     * Strips all internal {@code _parsley_*} headers and restores the producer's original
+     * {@link ParsleyAttributes#CAUSAL_DEPENDENCIES} from {@link ParsleyAttributes#ORIGINAL_DEPENDENCIES}.
      */
-    private static Headers restoreOriginalClock(Headers source) {
-        Header origClock = source.lastHeader(ParsleyAttributes.ORIG_CLOCK);
+    private static Headers restoreOriginalDependencies(Headers source) {
+        Header originalDependencies = source.lastHeader(ParsleyAttributes.ORIGINAL_DEPENDENCIES);
         RecordHeaders out = new RecordHeaders();
         for (Header h : source) {
             String key = h.key();
@@ -254,8 +254,8 @@ final class ParsleyConsumer<K, V> implements CausalConsumer<K, V> {
             if (key.equals(ParsleyAttributes.CAUSAL_DEPENDENCIES)) continue;
             out.add(h);
         }
-        if (origClock != null) {
-            out.add(new RecordHeader(ParsleyAttributes.CAUSAL_DEPENDENCIES, origClock.value()));
+        if (originalDependencies != null) {
+            out.add(new RecordHeader(ParsleyAttributes.CAUSAL_DEPENDENCIES, originalDependencies.value()));
         }
         return out;
     }

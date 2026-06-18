@@ -35,8 +35,8 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * to the same output topic (backlog #13).
  *
  * <p>The gap closed: no existing test spins up two independent {@link CausalProducer} instances
- * writing to the same topic with their <em>own</em> frontier clocks (distinct clock dimensions).
- * Previous tests use a single producer or a single clock dimension. This class verifies that the
+ * writing to the same topic with their <em>own</em> frontiers (distinct partition dimensions).
+ * Previous tests use a single producer or a single partition dimension. This class verifies that the
  * consumer correctly maintains a multi-dimensional frontier and holds/releases records from each
  * producer independently.
  */
@@ -54,29 +54,29 @@ class CausalConcurrentProducersIT {
     /**
      * Verifies that two independent {@link CausalProducer} instances writing concurrently to the
      * same output topic are held and released independently by the consumer, based on each
-     * producer's distinct clock dimension.
+     * producer's distinct partition.
      *
      * <h2>Topology</h2>
      * <ul>
      *   <li>{@code SOURCE_A} (1 partition) — the upstream topic producer-A declares dependency on.</li>
      *   <li>{@code SOURCE_B} (1 partition) — the upstream topic producer-B declares dependency on.</li>
-     *   <li>{@code OUTPUT} (1 partition) — both producers write here with their respective clocks.</li>
+     *   <li>{@code OUTPUT} (1 partition) — both producers write here with their respective dependencies.</li>
      * </ul>
      * The consumer subscribes to all three topics so its frontier can advance on SOURCE_A and
      * SOURCE_B, satisfying the buffered OUTPUT dependencies.
      *
-     * <h2>Clock alignment</h2>
+     * <h2>UUID alignment</h2>
      * Both producers and the consumer use {@link MockAdminClient} (no-arg), which substitutes
      * deterministic name-derived UUIDs ({@link CausalPosition#deriveUuid}) for every topic. The
-     * test constructs producer clocks with the same {@code deriveUuid} call, so the stamped clock
-     * keys match the consumer's frontier keys and records drain naturally rather than waiting for
-     * the eviction limit.
+     * test constructs producer dependencies with the same {@code deriveUuid} call, so the stamped
+     * dependency keys match the consumer's frontier keys and records drain naturally rather than
+     * waiting for the eviction limit.
      *
      * <h2>Protocol</h2>
      * <ol>
      *   <li><b>Concurrent send</b> — producer-A and producer-B send 3 records each to OUTPUT from
      *       separate threads. Producer-A stamps {@code {SOURCE_A/p0 → i}} and producer-B stamps
-     *       {@code {SOURCE_B/p0 → i}}. These are independent clock dimensions; neither producer
+     *       {@code {SOURCE_B/p0 → i}}. These are independent partition dimensions; neither producer
      *       knows about the other's upstream topic.</li>
      *   <li><b>Confirm all held</b> — poll several rounds; assert 0 OUTPUT records delivered.
      *       Neither SOURCE_A nor SOURCE_B has any records, so the consumer's frontier is absent on
@@ -88,10 +88,11 @@ class CausalConcurrentProducersIT {
      *       producer-B OUTPUT records appear.</li>
      * </ol>
      *
-     * <h2>Clock propagation spot-check</h2>
+     * <h2>Dependency propagation spot-check</h2>
      * One record from each producer is verified with {@link CausalDependencies#fromRecord}: the
-     * original producer clock must survive the outbox path ({@code ParsleyConsumer} saves the
-     * producer clock as {@code ORIG_CLOCK} before stamping, then restores it in {@code poll()}).
+     * original producer dependencies must survive the outbox path ({@code ParsleyConsumer} saves
+     * them under {@code ORIGINAL_DEPENDENCIES} before stamping, then restores them in
+     * {@code poll()}).
      */
     @Test
     void twoIndependentProducers_concurrentSendsWithDifferentClocks_consumerDeliversOnceDepsSatisfied()
@@ -115,7 +116,7 @@ class CausalConcurrentProducersIT {
              CausalProducer<String, String> producerB = causalProducer(bootstrap)) {
 
             // Phase 1: concurrent send from two independent producers to the same OUTPUT topic.
-            // Each producer carries its own clock dimension; neither references the other's upstream.
+            // Each producer carries its own partition dimension; neither references the other's upstream.
             CompletableFuture<Void> sendsA = CompletableFuture.runAsync(() -> {
                 try {
                     for (int i = 0; i < 3; i++) {
@@ -176,20 +177,20 @@ class CausalConcurrentProducersIT {
 
             assertEquals(6, outputRecords(received).size(), "all 6 OUTPUT records must be delivered");
 
-            // Clock propagation spot-check: the original producer clock must survive the outbox path.
+            // Dependency propagation spot-check: the original producer dependencies must survive the outbox path.
             ConsumerRecord<String, String> a0 = outputRecords(received).stream()
                     .filter(r -> r.value().equals("a0")).findFirst().orElseThrow();
             assertEquals(
                     Optional.of(CausalDependencies.empty().advance(topicAId, 0, 0)),
                     CausalDependencies.fromRecord(a0),
-                    "a0 must carry producer-A's original clock");
+                    "a0 must carry producer-A's original dependencies");
 
             ConsumerRecord<String, String> b0 = outputRecords(received).stream()
                     .filter(r -> r.value().equals("b0")).findFirst().orElseThrow();
             assertEquals(
                     Optional.of(CausalDependencies.empty().advance(topicBId, 0, 0)),
                     CausalDependencies.fromRecord(b0),
-                    "b0 must carry producer-B's original clock");
+                    "b0 must carry producer-B's original dependencies");
 
             assertTrue(consumer.frontier().positions().stream()
                             .anyMatch(p -> p.topicId().equals(topicAId)),

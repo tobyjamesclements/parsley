@@ -129,7 +129,7 @@ class ParsleyEngineTest {
         onRecord(engine, rec(ORDERS, 0, big));
 
         assertEquals(CausalFrontier.empty().advance(ORDERS_ID, 0, 0), engine.frontier(),
-                "the inbound dependency clock must never be merged into the frontier");
+                "the inbound dependencies must never be merged into the frontier");
         assertEquals(1, engine.frontier().positions().size());
     }
 
@@ -157,7 +157,7 @@ class ParsleyEngineTest {
         onRecord(engine, garbage);
 
         assertEquals(1, forwarded.size());
-        assertEquals(List.of(CausalViolationReason.UNRESOLVABLE_CLOCK), reasons());
+        assertEquals(List.of(CausalViolationReason.UNRESOLVABLE_DEPENDENCIES), reasons());
     }
 
     @Test
@@ -220,9 +220,9 @@ class ParsleyEngineTest {
         assertEquals("LIMIT_REACHED",
                 new String(headers.lastHeader(CausalViolation.DLQ_REASON_HEADER).value(), UTF_8));
 
-        assertNotNull(headers.lastHeader(CausalViolation.DLQ_REQUIRED_CLOCK_HEADER));
+        assertNotNull(headers.lastHeader(CausalViolation.DLQ_REQUIRED_DEPENDENCIES_HEADER));
         assertEquals(required,
-                CausalDependencies.fromBytes(headers.lastHeader(CausalViolation.DLQ_REQUIRED_CLOCK_HEADER).value()));
+                CausalDependencies.fromBytes(headers.lastHeader(CausalViolation.DLQ_REQUIRED_DEPENDENCIES_HEADER).value()));
 
         assertNotNull(headers.lastHeader(CausalViolation.DLQ_GAP_HEADER));
         CausalDependencies decodedGap =
@@ -296,10 +296,10 @@ class ParsleyEngineTest {
     void selfDependencyOnly_forwardsImmediately() {
         ParsleyEngine<String, String> engine = engine(CausalBufferPolicy.drop(CausalBufferLimit.ofSize(100)));
 
-        // Record at PRICES/0@3 whose dep clock requires PRICES/0@3 — exactly itself.
+        // Record at PRICES/0@3 whose dependencies require PRICES/0@3 — exactly itself.
         onRecord(engine, rec(PRICES, 3, CausalDependencies.empty().advance(PRICES_ID, 0, 3)));
 
-        assertEquals(1, forwarded.size(), "self-dep is stripped → clock empty → forwarded immediately");
+        assertEquals(1, forwarded.size(), "self-dep is stripped → dependencies empty → forwarded immediately");
         assertTrue(violations.isEmpty(), "no violation: the circular entry is silently removed");
         assertEquals(0, buffer.size(), "record must never enter the buffer");
         assertEquals(CausalFrontier.empty().advance(PRICES_ID, 0, 3), engine.frontier());
@@ -310,7 +310,7 @@ class ParsleyEngineTest {
         ParsleyEngine<String, String> engine = engine(CausalBufferPolicy.drop(CausalBufferLimit.ofSize(100)));
 
         // ORDERS/0@0 has self-dep on ORDERS_ID/0@0 AND a real dep on PRICES_ID/0@5.
-        // After stripping the self-ref, the effective clock is {PRICES_ID/0@5}: still unsatisfied.
+        // After stripping the self-ref, the effective dependencies are {PRICES_ID/0@5}: still unsatisfied.
         CausalDependencies mixed = CausalDependencies.empty()
                 .advance(ORDERS_ID, 0, 0)
                 .advance(PRICES_ID, 0, 5);

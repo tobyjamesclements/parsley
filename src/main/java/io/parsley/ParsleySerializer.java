@@ -15,7 +15,7 @@ import java.util.List;
  *
  * <p>Key and value bytes are produced/consumed with the serdes a {@link ParsleyResolver} resolves
  * from the record's own source topic (read from the {@link ParsleyAttributes#SRC_TOPIC} header).
- * Headers are written in full — they carry the source coordinate and dependency clock — so the
+ * Headers are written in full — they carry the source coordinate and dependencies — so the
  * serialised form is self-describing and no separate coordinate fields are needed.
  *
  * <p>Format (v2): {@code [version:1][timestamp:8][header-count:4][headers...][key-len:4][key-bytes][value-len:4][value-bytes]}.

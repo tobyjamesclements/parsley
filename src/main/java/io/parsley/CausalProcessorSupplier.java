@@ -26,7 +26,7 @@ import org.apache.kafka.streams.processor.api.ProcessorSupplier;
  *
  * <h2>The guarantee</h2>
  * Within the user's {@code process()}, every state read reflects all causally-prior writes, every
- * state write and every {@code forward} is a causally-ordered, clock-stamped event —
+ * state write and every {@code forward} is a causally-ordered, dependency-stamped event —
  * <strong>provided</strong> three preconditions hold:
  *
  * <ol>

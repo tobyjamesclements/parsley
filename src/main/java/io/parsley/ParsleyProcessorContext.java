@@ -29,13 +29,13 @@ import java.util.function.Supplier;
  *
  * <p>This is what makes outgoing messages causally stamped without the user touching a
  * {@code CausalProducer}: within a topology {@code forward} is internal routing, and Kafka Streams
- * sinks propagate a {@link Record}'s headers onto the produced {@code ProducerRecord}, so a clock
- * stamped here rides the headers all the way to the output topic.
+ * sinks propagate a {@link Record}'s headers onto the produced {@code ProducerRecord}, so
+ * dependencies stamped here ride the headers all the way to the output topic.
  *
  * <p>The frontier is read <strong>live</strong> through a {@link Supplier} at stamp time, so a
  * forward during record admission sees the post-admit frontier and a forward from a punctuator sees
  * the frontier as of fire time. Stamping is idempotent — any existing
- * {@link ParsleyAttributes#CAUSAL_DEPENDENCIES} header is removed before the current clock is added — and never
+ * {@link ParsleyAttributes#CAUSAL_DEPENDENCIES} header is removed before the current frontier is written — and never
  * mutates the incoming record's headers (a fresh header set is built and applied via
  * {@link Record#withHeaders}).
  *

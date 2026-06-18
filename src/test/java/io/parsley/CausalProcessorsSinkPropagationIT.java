@@ -42,9 +42,10 @@ import static org.awaitility.Awaitility.await;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 
 /**
- * End-to-end proof that a clock stamped by the decorator at {@code forward} rides the record headers
- * through a Streams sink ({@code .to(topic)}) out to the output topic — so no {@code CausalProducer}
- * is needed on egress. A raw {@link KafkaConsumer} reads the output topic and checks the header.
+ * End-to-end proof that dependencies stamped by the decorator at {@code forward} ride the record
+ * headers through a Streams sink ({@code .to(topic)}) out to the output topic — so no
+ * {@code CausalProducer} is needed on egress. A raw {@link KafkaConsumer} reads the output topic
+ * and checks the header.
  */
 @Testcontainers(disabledWithoutDocker = true)
 class CausalProcessorsSinkPropagationIT {
@@ -84,7 +85,7 @@ class CausalProcessorsSinkPropagationIT {
         try (KafkaStreams streams = new KafkaStreams(builder.build(), streamsConfig(bootstrap))) {
             streams.start();
 
-            // Produce one record carrying an (empty) clock so it is admitted and the frontier advances.
+            // Produce one record carrying empty dependencies so it is admitted and the frontier advances.
             try (KafkaProducer<String, String> producer = new KafkaProducer<>(Map.of(
                     ProducerConfig.BOOTSTRAP_SERVERS_CONFIG, bootstrap,
                     ProducerConfig.KEY_SERIALIZER_CLASS_CONFIG, StringSerializer.class.getName(),
@@ -105,9 +106,9 @@ class CausalProcessorsSinkPropagationIT {
                 ConsumerRecord<String, byte[]> out = poll(consumer);
                 assertEquals("HELLO", new String(out.value()), "the delegate's transform reached the sink");
 
-                Optional<CausalDependencies> clock = CausalDependencies.fromHeaders(out.headers());
-                assertEquals(Optional.of(CausalDependencies.empty().advance(CausalPosition.deriveUuid(IN), 0, 0)), clock,
-                        "the clock stamped at forward must survive the sink to the output topic");
+                Optional<CausalDependencies> stamped = CausalDependencies.fromHeaders(out.headers());
+                assertEquals(Optional.of(CausalDependencies.empty().advance(CausalPosition.deriveUuid(IN), 0, 0)), stamped,
+                        "the dependencies stamped at forward must survive the sink to the output topic");
             }
         }
     }

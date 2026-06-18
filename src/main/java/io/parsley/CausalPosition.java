@@ -9,7 +9,7 @@ import java.nio.charset.StandardCharsets;
  * an offset. The same type serves as a frontier entry ("I have observed this far") and as a
  * dependency entry ("I require at least this position").
  *
- * <p>Topic UUIDs are the stable clock key across topic deletion and recreation. Use
+ * <p>Topic UUIDs are the stable identity key across topic deletion and recreation. Use
  * {@link #deriveUuid(String)} to derive a deterministic UUID from a topic name when no live
  * AdminClient UUID is available (unit tests, {@code TopologyTestDriver}).
  *

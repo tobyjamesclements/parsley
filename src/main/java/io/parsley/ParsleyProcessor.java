@@ -24,9 +24,9 @@ import java.util.function.Consumer;
 
 /**
  * Wraps a user {@link Processor} and gates delegation on the causal frontier: an incoming record is
- * delivered to {@code delegate.process(...)} only once the frontier dominates its dependency clock
+ * delivered to {@code delegate.process(...)} only once the frontier dominates its causal dependencies
  * (or the policy forces it). State reads/writes the delegate performs and every record it forwards
- * are therefore causally ordered, and forwards are clock-stamped by a
+ * are therefore causally ordered, and forwards are stamped with the current frontier by a
  * {@link ParsleyProcessorContext}.
  *
  * <p>Held records are persisted to a changelog-backed buffer store and restored on {@code init}, so
@@ -66,7 +66,7 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
     private ParsleyEngine<KIn, VIn> engine;
     private List<Sensor> sensorsToClose = List.of();
     // Read live by the stamping proxy; volatile as belt-and-suspenders (single task thread owns this).
-    private volatile CausalFrontier stampClock = CausalFrontier.empty();
+    private volatile CausalFrontier stampFrontier = CausalFrontier.empty();
     private volatile RecordMetadata deliveryMetadata;
 
     ParsleyProcessor(Processor<KIn, VIn, KOut, VOut> delegate,
@@ -103,7 +103,7 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
         if (stored != null) {
             initialFrontier = CausalFrontier.fromBytes(stored);
         }
-        this.stampClock = initialFrontier;
+        this.stampFrontier = initialFrontier;
         if (stored != null) {
             log.debug("Processor initialized [task: {}] — frontier restored: {}", context.taskId(), initialFrontier);
         } else {
@@ -132,7 +132,7 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
                 engineDeadLetter, listener, buffer, waitIndex, metrics);
 
         ProcessorContext<KOut, VOut> stamping = new ParsleyProcessorContext<>(
-                context, () -> stampClock, () -> Optional.ofNullable(deliveryMetadata));
+                context, () -> stampFrontier, () -> Optional.ofNullable(deliveryMetadata));
         delegate.init(stamping);
 
         engine.evictionInterval().ifPresent(interval ->
@@ -190,13 +190,13 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
     private void deliver(List<ParsleyRecord<KIn, VIn>> admitted) {
         for (int i = 0; i < admitted.size(); i++) {
             ParsleyRecord<KIn, VIn> record = admitted.get(i);
-            stampClock = snapshots.get(i);
+            stampFrontier = snapshots.get(i);
             deliveryMetadata = new ParsleyRecordMetadata(
                     record.sourcePartition().topic(), record.sourcePartition().partition(), record.sourceOffset());
             delegate.process(new Record<>(record.key(), record.value(), record.timestamp(), record.toHeaders()));
         }
         deliveryMetadata = null;
-        stampClock = engine.frontier();
+        stampFrontier = engine.frontier();
     }
 
     private ParsleyRecord<KIn, VIn> ingest(Record<KIn, VIn> record) {

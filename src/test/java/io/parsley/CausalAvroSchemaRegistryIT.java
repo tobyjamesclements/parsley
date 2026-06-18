@@ -194,10 +194,10 @@ class CausalAvroSchemaRegistryIT {
             assertEquals(price, receivedPrice, "Price round-trips through Avro buffer path");
             assertEquals(order, receivedOrder, "Order round-trips through Avro buffer path");
 
-            // The buffered Order's original producer clock must be restored (not replaced by frontier).
+            // The buffered Order's original producer dependencies must be restored (not replaced by frontier).
             assertEquals(Optional.of(CausalDependencies.empty().advance(pricesId, 0, 0)),
                     CausalDependencies.fromRecord(received.get(1)),
-                    "Order must carry the producer's original clock, not the delivery-time frontier");
+                    "Order must carry the producer's original dependencies, not the delivery-time frontier");
         }
     }
 

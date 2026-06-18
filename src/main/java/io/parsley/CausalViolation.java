@@ -8,8 +8,8 @@ import java.util.List;
  * A causal-ordering violation, reported to a {@link CausalViolationHandler} with enough context to act
  * on or audit it.
  *
- * <p>A violation arises when a record cannot be delivered in strict causal order — it carried an
- * unresolvable clock, no clock attribute, or was evicted from the buffer because a
+ * <p>A violation arises when a record cannot be delivered in strict causal order — it carried
+ * unresolvable dependencies, no dependencies attribute, or was evicted from the buffer because a
  * {@link CausalBufferLimit} fired. The payload carries the
  * <em>causal gap</em>: what the frontier had observed ({@link #frontier}) versus what the record
  * required ({@link #required}), and the per-position shortfall ({@link #gap}) — the difference
@@ -20,8 +20,8 @@ import java.util.List;
  *                 {@code null}
  * @param reason   why the record violated causal order; never {@code null}
  * @param frontier the frontier at the moment of the violation; never {@code null}
- * @param required the clock the record required to be delivered in order; never {@code null}
- *                 (empty if the record carried no resolvable clock)
+ * @param required the dependencies the record required to be delivered in order; never {@code null}
+ *                 (empty if the record carried no resolvable dependencies)
  * @param gap      the per-position shortfall ({@code required − observed}) for every position the
  *                 frontier had not caught up on; the {@link CausalPosition#offset()} field of each
  *                 entry holds the shortfall amount, not an absolute log offset; empty if
@@ -49,23 +49,23 @@ public record CausalViolation(
 
     /**
      * Name of the header stamped on every dead-lettered record: the required
-     * {@link CausalDependencies} clock, encoded via {@link CausalDependencies#toBytes()} and
+     * {@link CausalDependencies}, encoded via {@link CausalDependencies#toBytes()} and
      * decodable via {@link CausalDependencies#fromBytes(byte[])}.
      *
      * <h3>Replay path</h3>
      * <ol>
-     *   <li>Decode the required clock: {@code CausalDependencies.fromBytes(header.value())}.</li>
-     *   <li>Wait until your consumer's frontier satisfies it (i.e. it has observed every position
+     *   <li>Decode the required dependencies: {@code CausalDependencies.fromBytes(header.value())}.</li>
+     *   <li>Wait until your consumer's frontier satisfies them (i.e. it has observed every position
      *       the original record required).</li>
      *   <li>Re-produce the original record with the same {@code parsley-causal-dependencies} value,
      *       stripping the {@code parsley-dlq-*} headers first.</li>
      * </ol>
      */
-    public static final String DLQ_REQUIRED_CLOCK_HEADER = "parsley-dlq-required-clock";
+    public static final String DLQ_REQUIRED_DEPENDENCIES_HEADER = "parsley-dlq-required-dependencies";
 
     /**
      * Name of the header stamped on every dead-lettered record: the per-position causal shortfall
-     * at eviction time, encoded as a {@link CausalDependencies} clock via
+     * at eviction time, encoded as a {@link CausalDependencies} value via
      * {@link CausalDependencies#toBytes()}. Each entry's {@link CausalPosition#offset()} is the
      * shortfall ({@code required − observed}). Useful for diagnostics; not needed for replay.
      */

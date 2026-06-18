@@ -98,7 +98,7 @@ public final class CausalConsumers {
          * {@link org.apache.kafka.clients.admin.Admin} created from {@code bootstrap.servers}).
          * Supply a {@code MockAdminClient} in tests to avoid a real broker dependency or to force
          * deterministic name-derived UUIDs so that {@link CausalPosition#deriveUuid} produces
-         * the same UUID the consumer uses for those topics, keeping test clocks consistent.
+         * the same UUID the consumer uses for those topics, keeping test UUIDs consistent.
          *
          * @param topicAdmin the {@link ParsleyTopicAdmin} to use; closed automatically after outbox setup
          * @return this builder

@@ -30,8 +30,8 @@ class CausalDependenciesTest {
 
     @Test
     void advanceTakesTheMaximum() {
-        CausalDependencies clock = CausalDependencies.empty().advance(PRICES_ID, 0, 5).advance(PRICES_ID, 0, 2);
-        assertEquals(CausalDependencies.empty().advance(PRICES_ID, 0, 5), clock);
+        CausalDependencies deps = CausalDependencies.empty().advance(PRICES_ID, 0, 5).advance(PRICES_ID, 0, 2);
+        assertEquals(CausalDependencies.empty().advance(PRICES_ID, 0, 5), deps);
     }
 
     @Test
@@ -53,8 +53,8 @@ class CausalDependenciesTest {
 
     @Test
     void serialisationRoundTrips() {
-        CausalDependencies clock = CausalDependencies.empty().advance(PRICES_ID, 0, 42).advance(ORDERS_ID, 0, 7);
-        assertEquals(clock, CausalDependencies.fromBytes(clock.toBytes()));
+        CausalDependencies deps = CausalDependencies.empty().advance(PRICES_ID, 0, 42).advance(ORDERS_ID, 0, 7);
+        assertEquals(deps, CausalDependencies.fromBytes(deps.toBytes()));
     }
 
     @Test
@@ -77,11 +77,11 @@ class CausalDependenciesTest {
 
     @Test
     void fromHeadersReadsTheStampedClock() {
-        CausalDependencies clock = CausalDependencies.empty().advance(PRICES_ID, 0, 12).advance(ORDERS_ID, 0, 4);
+        CausalDependencies deps = CausalDependencies.empty().advance(PRICES_ID, 0, 12).advance(ORDERS_ID, 0, 4);
         Headers headers = new RecordHeaders();
-        headers.add(new RecordHeader(ParsleyAttributes.CAUSAL_DEPENDENCIES, clock.toBytes()));
+        headers.add(new RecordHeader(ParsleyAttributes.CAUSAL_DEPENDENCIES, deps.toBytes()));
 
-        assertEquals(Optional.of(clock), CausalDependencies.fromHeaders(headers));
+        assertEquals(Optional.of(deps), CausalDependencies.fromHeaders(headers));
     }
 
     @Test
@@ -94,11 +94,11 @@ class CausalDependenciesTest {
 
     @Test
     void fromRecordReadsTheStampedClock() {
-        CausalDependencies clock = CausalDependencies.empty().advance(PRICES_ID, 0, 27);
+        CausalDependencies deps = CausalDependencies.empty().advance(PRICES_ID, 0, 27);
         ConsumerRecord<String, String> record = new ConsumerRecord<>("orders", 0, 5L, "k", "v");
-        record.headers().add(new RecordHeader(ParsleyAttributes.CAUSAL_DEPENDENCIES, clock.toBytes()));
+        record.headers().add(new RecordHeader(ParsleyAttributes.CAUSAL_DEPENDENCIES, deps.toBytes()));
 
-        assertEquals(Optional.of(clock), CausalDependencies.fromRecord(record));
+        assertEquals(Optional.of(deps), CausalDependencies.fromRecord(record));
     }
 
     @Test
@@ -148,40 +148,40 @@ class CausalDependenciesTest {
 
     @Test
     void withoutSelfReference_stripsEntryAtExactSelfOffset() {
-        CausalDependencies clock = CausalDependencies.empty().advance(PRICES_ID, 0, 3);
-        CausalDependencies stripped = clock.withoutSelfReference(PRICES_ID, 0, 3);
+        CausalDependencies deps = CausalDependencies.empty().advance(PRICES_ID, 0, 3);
+        CausalDependencies stripped = deps.withoutSelfReference(PRICES_ID, 0, 3);
         assertEquals(CausalDependencies.empty(), stripped,
                 "entry at req==selfOffset is a self-reference and must be removed");
     }
 
     @Test
     void withoutSelfReference_stripsEntryAtFutureOffset() {
-        CausalDependencies clock = CausalDependencies.empty().advance(PRICES_ID, 0, 10);
-        CausalDependencies stripped = clock.withoutSelfReference(PRICES_ID, 0, 3);
+        CausalDependencies deps = CausalDependencies.empty().advance(PRICES_ID, 0, 10);
+        CausalDependencies stripped = deps.withoutSelfReference(PRICES_ID, 0, 3);
         assertEquals(CausalDependencies.empty(), stripped,
                 "entry at req>selfOffset is also circular (requires a future record) and must be removed");
     }
 
     @Test
     void withoutSelfReference_preservesEntryAtPriorOffset() {
-        CausalDependencies clock = CausalDependencies.empty().advance(PRICES_ID, 0, 2);
-        assertSame(clock, clock.withoutSelfReference(PRICES_ID, 0, 3),
+        CausalDependencies deps = CausalDependencies.empty().advance(PRICES_ID, 0, 2);
+        assertSame(deps, deps.withoutSelfReference(PRICES_ID, 0, 3),
                 "dep on a prior record is satisfiable and must not be stripped");
     }
 
     @Test
     void withoutSelfReference_returnsUnchangedWhenCoordinateAbsent() {
-        CausalDependencies clock = CausalDependencies.empty().advance(ORDERS_ID, 0, 5);
-        assertSame(clock, clock.withoutSelfReference(PRICES_ID, 0, 3),
+        CausalDependencies deps = CausalDependencies.empty().advance(ORDERS_ID, 0, 5);
+        assertSame(deps, deps.withoutSelfReference(PRICES_ID, 0, 3),
                 "no entry for (topicId, partition) — nothing to strip");
     }
 
     @Test
     void withoutSelfReference_preservesUnrelatedEntries() {
-        CausalDependencies clock = CausalDependencies.empty()
+        CausalDependencies deps = CausalDependencies.empty()
                 .advance(PRICES_ID, 0, 3)
                 .advance(ORDERS_ID, 0, 7);
-        CausalDependencies stripped = clock.withoutSelfReference(PRICES_ID, 0, 3);
+        CausalDependencies stripped = deps.withoutSelfReference(PRICES_ID, 0, 3);
         assertEquals(CausalDependencies.empty().advance(ORDERS_ID, 0, 7), stripped,
                 "only the self-referential entry is removed; other entries survive");
     }

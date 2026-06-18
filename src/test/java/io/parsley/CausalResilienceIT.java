@@ -53,8 +53,8 @@ class CausalResilienceIT {
      * {@link ParsleyEngine} ParsleyWaitIndex re-seeding from the restored buffer.
      *
      * <p>Both the producer and the consumer use the same name-derived UUID for PRICES (via
-     * {@link MockAdminClient} and {@link CausalPosition#deriveUuid}), so the stamped clock matches
-     * the consumer's frontier — enabling natural causal drain rather than eviction.
+     * {@link MockAdminClient} and {@link CausalPosition#deriveUuid}), so the stamped dependencies
+     * match the consumer's frontier — enabling natural causal drain rather than eviction.
      */
     @Test
     void restartWithBufferedRecord_resumesDrainAfterRecovery() throws Exception {

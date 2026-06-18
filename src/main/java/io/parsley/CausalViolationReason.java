@@ -8,7 +8,7 @@ package io.parsley;
  *
  * <ul>
  *   <li>{@link #MISSING_HEADER} — the record carried no {@code parsley-causal-dependencies} attribute
- *   <li>{@link #UNRESOLVABLE_CLOCK} — the attribute was present but could not be decoded
+ *   <li>{@link #UNRESOLVABLE_DEPENDENCIES} — the attribute was present but could not be decoded
  *   <li>{@link #LIMIT_REACHED} — the record was evicted because a {@link CausalBufferLimit} fired
  * </ul>
  */
@@ -26,7 +26,7 @@ public enum CausalViolationReason {
      * deserialised into a {@link CausalDependencies}. The record was forwarded immediately.
      * This may indicate a version mismatch between producer and consumer.
      */
-    UNRESOLVABLE_CLOCK,
+    UNRESOLVABLE_DEPENDENCIES,
 
     /**
      * The record's causal dependencies were not satisfied before the {@link CausalBufferLimit}

@@ -23,7 +23,7 @@ class ParsleySerializerTest {
     private final ParsleySerializer<String, String> serializer =
             new ParsleySerializer<>(new ParsleyResolver<>(topic -> Serdes.String(), topic -> Serdes.String()));
 
-    /** Builds a record with the given user headers plus the required internal coordinate/clock headers. */
+    /** Builds a record with the given user headers plus the required internal coordinate and dependency headers. */
     private static ParsleyRecord<String, String> rec(String key, String value, long timestamp,
                                                       TopicPartition tp, long offset,
                                                       CausalDependencies deps,
@@ -61,7 +61,7 @@ class ParsleySerializerTest {
         assertEquals("h2", out.headers().get(1).key());
         assertNull(out.headers().get(1).value());
         assertEquals(deps, CausalDependencies.fromBytes(out.encodedDependencies()),
-                "the dependency clock is recovered by decoding the restored encodedDependencies");
+                "the dependencies are recovered by decoding the restored encodedDependencies");
     }
 
     @Test

@@ -28,5 +28,5 @@ final class ParsleyAttributes {
      * {@code ParsleyConsumer.poll()} so that {@link CausalDependencies#fromRecord} still returns the
      * upstream producer's causal intent, not the delivery-time frontier.
      */
-    static final String ORIG_CLOCK    = "_parsley_orig_clock";
+    static final String ORIGINAL_DEPENDENCIES = "_parsley_original_dependencies";
 }

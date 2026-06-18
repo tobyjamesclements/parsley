@@ -10,7 +10,7 @@
  *   <li>{@link io.parsley.CausalConsumer} &mdash; {@code CausalConsumers.builder(...).build()} delivers
  *       records in causal order over a {@code poll()} API</li>
  *   <li>{@link io.parsley.CausalProducer} &mdash; {@code CausalProducers.builder(...).build()} stamps the
- *       causal clock onto produced records</li>
+ *       causal dependencies onto produced records</li>
  * </ul>
  *
  * <h2>Key value types</h2>

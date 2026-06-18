@@ -19,7 +19,7 @@ import static java.nio.charset.StandardCharsets.UTF_8;
  *
  * <p>The processor feeds incoming records to {@link #onRecord} and forwards the returned
  * records downstream, in order. The engine classifies each record (missing or unresolvable
- * dependency clock → violation; dependencies satisfied → forward; otherwise → buffer),
+ * missing or unresolvable dependencies → violation; dependencies satisfied → forward; otherwise → buffer),
  * advances the causal frontier, and cascades releases from the buffer as the frontier moves.
  *
  * <p>The engine also owns policy-driven eviction: when a {@link CausalBufferLimit} fires it surrenders the
@@ -117,7 +117,7 @@ final class ParsleyEngine<K, V> {
         try {
             dependencies = CausalDependencies.fromBytes(encoded);
         } catch (Exception e) {
-            violate(record, CausalViolationReason.UNRESOLVABLE_CLOCK, CausalDependencies.empty());
+            violate(record, CausalViolationReason.UNRESOLVABLE_DEPENDENCIES, CausalDependencies.empty());
             advanceFrontier(record);
             out.add(record);
             drainInto(out, record.sourceTopicId(), record.sourcePartitionIndex());
@@ -284,7 +284,7 @@ final class ParsleyEngine<K, V> {
         List<ParsleyHeader> h = new ArrayList<>(record.headers());
         h.add(new ParsleyHeader(CausalViolation.DLQ_REASON_HEADER,
                 CausalViolationReason.LIMIT_REACHED.name().getBytes(UTF_8)));
-        h.add(new ParsleyHeader(CausalViolation.DLQ_REQUIRED_CLOCK_HEADER, required.toBytes()));
+        h.add(new ParsleyHeader(CausalViolation.DLQ_REQUIRED_DEPENDENCIES_HEADER, required.toBytes()));
         h.add(new ParsleyHeader(CausalViolation.DLQ_GAP_HEADER, gapAsDeps.toBytes()));
         return new ParsleyRecord<>(record.key(), record.value(), record.timestamp(), h);
     }

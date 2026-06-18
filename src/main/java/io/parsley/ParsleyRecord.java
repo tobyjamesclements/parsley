@@ -17,7 +17,7 @@ import java.util.List;
 import java.util.Optional;
 
 /**
- * The internal envelope the engine processes: a record whose source coordinate and dependency clock
+ * The internal envelope the engine processes: a record whose source coordinate and dependencies
  * are carried as internal headers ({@link ParsleyAttributes#SRC_TOPIC},
  * {@link ParsleyAttributes#SRC_TOPIC_ID}, {@link ParsleyAttributes#SRC_PARTITION},
  * {@link ParsleyAttributes#SRC_OFFSET}, {@link ParsleyAttributes#CAUSAL_DEPENDENCIES}) alongside any user
@@ -28,7 +28,7 @@ import java.util.Optional;
  * @param key       the record key; may be {@code null}
  * @param value     the record value; may be {@code null}
  * @param timestamp the record's broker timestamp (epoch milliseconds)
- * @param headers   all headers — user headers plus internal {@code _parsley_*} and clock headers
+ * @param headers   all headers — user headers plus internal {@code _parsley_*} headers
  */
 record ParsleyRecord<K, V>(K key, V value, long timestamp, List<ParsleyHeader> headers) {
 
@@ -41,7 +41,7 @@ record ParsleyRecord<K, V>(K key, V value, long timestamp, List<ParsleyHeader> h
 
     /**
      * Builds an envelope from an inbound Kafka Streams {@link Record} and its source coordinate,
-     * using the provided Kafka topic UUID as the stable clock key. Writes
+     * using the provided Kafka topic UUID as the stable identity key. Writes
      * {@link ParsleyAttributes#SRC_TOPIC_ID} so downstream steps (engine, serializer) can recover
      * the UUID without an AdminClient call.
      *

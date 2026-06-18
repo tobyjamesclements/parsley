@@ -19,8 +19,8 @@ class ParsleyBufferStoreTest {
 
     private final ParsleyBufferStore<String, String> store = new MockBufferStore<>();
 
-    // The record's CAUSAL_DEPENDENCIES header carries the dependency clock; the store derives the decoded
-    // clock from it, so build the record with the clock it depends on.
+    // The record's CAUSAL_DEPENDENCIES header carries the dependencies; the store derives the decoded
+    // dependencies from it, so build the record with the dependencies it requires.
     private static ParsleyRecord<String, String> rec(TopicPartition tp, long offset, CausalDependencies deps) {
         return new ParsleyRecord<>("k", "v", 0L, List.of(
                 new ParsleyHeader(ParsleyAttributes.CAUSAL_DEPENDENCIES, deps.toBytes()),

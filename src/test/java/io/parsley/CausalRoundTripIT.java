@@ -92,7 +92,7 @@ class CausalRoundTripIT {
                         ? CausalDependencies.empty()
                         : CausalDependencies.empty().advance(topicId, 0, (long) (i - 1));
                 assertEquals(Optional.of(expected), CausalDependencies.fromRecord(received.get(i)),
-                        "record " + i + " should carry its producer's clock");
+                        "record " + i + " should carry its producer's dependencies");
             }
         }
     }
@@ -100,7 +100,7 @@ class CausalRoundTripIT {
     @Test
     void fullFactoryHonoursTheViolationHandlerAndCustomStoreName() throws Exception {
         String bootstrap = kafka.getBootstrapServers();
-        String topic = "no-clock-events";
+        String topic = "no-deps-events";
         createTopic(bootstrap, topic);
 
         // The handler runs on the Streams thread, so capture must be thread-safe.
@@ -115,12 +115,12 @@ class CausalRoundTripIT {
                 .storeName("custom-store")                         // custom state-store namespace
                 .build()) {
 
-            // A plain producer sends a record with NO causal clock header → a MISSING_HEADER violation.
+            // A plain producer sends a record with NO causal dependencies header → a MISSING_HEADER violation.
             try (KafkaProducer<String, String> raw = new KafkaProducer<>(Map.of(
                     ProducerConfig.BOOTSTRAP_SERVERS_CONFIG, bootstrap,
                     ProducerConfig.KEY_SERIALIZER_CLASS_CONFIG, StringSerializer.class.getName(),
                     ProducerConfig.VALUE_SERIALIZER_CLASS_CONFIG, StringSerializer.class.getName()))) {
-                raw.send(new ProducerRecord<>(topic, "k", "no-clock")).get();
+                raw.send(new ProducerRecord<>(topic, "k", "no-deps")).get();
             }
 
             // The record is still delivered (missing-header records are forwarded)...
@@ -129,7 +129,7 @@ class CausalRoundTripIT {
                 consumer.poll(Duration.ofMillis(500)).forEach(received::add);
                 return !received.isEmpty();
             });
-            assertEquals(List.of("no-clock"), received.stream().map(ConsumerRecord::value).toList());
+            assertEquals(List.of("no-deps"), received.stream().map(ConsumerRecord::value).toList());
 
             // ...and the user's violation handler — not a hidden no-op — was invoked, despite the
             // custom store namespace driving the (custom-store-frontier) frontier store.

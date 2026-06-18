@@ -95,13 +95,13 @@ class CausalProcessorsAvroTopologyTest {
 
             // The order depends on prices-0@0, which has not arrived: it is held (Avro-serialised
             // into the buffer store), not delivered.
-            orders.pipeInput(new TestRecord<>("k", order, clockHeader(CausalDependencies.empty().advance(PRICES_ID, 0, 0))));
+            orders.pipeInput(new TestRecord<>("k", order, depsHeader(CausalDependencies.empty().advance(PRICES_ID, 0, 0))));
             assertTrue(processed.isEmpty(), "held record must not reach the delegate");
             assertEquals(1, storeSize(bufferStore), "held record must be persisted (Avro bytes) to the buffer store");
 
             // The price arrives and advances the frontier, draining the order back through the codec.
             Price price = new Price("ACME", 42.5);
-            prices.pipeInput(new TestRecord<>("k", price, clockHeader(CausalDependencies.empty())));
+            prices.pipeInput(new TestRecord<>("k", price, depsHeader(CausalDependencies.empty())));
 
             assertEquals(List.of(price, order), processed,
                     "the price is admitted, then the order drains as an Avro Order equal to the original");
@@ -164,9 +164,9 @@ class CausalProcessorsAvroTopologyTest {
         return props;
     }
 
-    private static Headers clockHeader(CausalDependencies clock) {
+    private static Headers depsHeader(CausalDependencies deps) {
         Headers headers = new RecordHeaders();
-        headers.add(new RecordHeader("parsley-causal-dependencies", clock.toBytes()));
+        headers.add(new RecordHeader("parsley-causal-dependencies", deps.toBytes()));
         return headers;
     }
 
