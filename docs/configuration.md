@@ -72,7 +72,7 @@ out-of-order delivery. Each routed record receives three additional headers:
 | Header | Content |
 |---|---|
 | `parsley-dlq-reason` | `LIMIT_REACHED` (UTF-8) |
-| `parsley-dlq-required-clock` | The required `CausalDependencies` at eviction time (serialised) |
+| `parsley-dlq-required-dependencies` | The required `CausalDependencies` at eviction time (serialised) |
 | `parsley-dlq-gap` | The per-coordinate shortfall (serialised as `CausalDependencies`) |
 
 The gap headers allow an operator to reconstruct exactly which offsets were missing when the
@@ -92,9 +92,9 @@ CausalProcessors.builder(user, policy)
 `CausalViolationHandler` receives a `CausalViolation` for every record that cannot be delivered
 in causal order. The violation includes:
 
-- `reason()` — `MISSING_HEADER`, `UNRESOLVABLE_CLOCK`, or `LIMIT_REACHED`
+- `reason()` — `MISSING_HEADER`, `UNRESOLVABLE_DEPENDENCIES`, or `LIMIT_REACHED`
 - `frontier()` — the consumer's frontier at the time of the violation
-- `required()` — the clock the record carried (empty for `MISSING_HEADER`/`UNRESOLVABLE_CLOCK`)
+- `required()` — the dependencies the record carried (empty for `MISSING_HEADER`/`UNRESOLVABLE_DEPENDENCIES`)
 - `gap()` — per-coordinate shortfall list (empty if already above the frontier)
 - `record()` — the underlying `ConsumerRecord`
 
@@ -104,7 +104,7 @@ is not an error in isolation, but their *frequency* and *gap size* are the key s
 
 ---
 
-## Clock size
+## Header size
 
 The serialised `parsley-causal-dependencies` header is `5 + 28 × entries` bytes. It counts against
 Kafka's record-size limit (`message.max.bytes` / `max.request.size`, ~1 MB default — there is no
@@ -118,5 +118,5 @@ separate header budget).
 - **`CausalDependencies.fromRecord(trigger)`** carries only the partitions the upstream producer
   depended on. Prefer it over `frontier()` when the causal context is a single upstream record.
 
-Parsley never truncates a clock — truncation would silently break the guarantee. Keep the
+Parsley never truncates the dependencies header — truncation would silently break the guarantee. Keep the
 relevant-partition count within your record-size budget.

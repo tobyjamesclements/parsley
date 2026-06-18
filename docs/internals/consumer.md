@@ -8,7 +8,7 @@
 input topics (byte[], byte[])
   -> ParsleyProcessor
        causal engine (buffer / cascade / evict)
-       outbox delegate: saves ORIG_CLOCK, forwards to outbox
+       outbox delegate: saves ORIGINAL_DEPENDENCIES, forwards to outbox
   -> outbox topic (byte[], byte[])
      subscribed by internal KafkaConsumer
        poll() reconstructs ConsumerRecord<K,V>
@@ -29,10 +29,10 @@ The internal `KafkaConsumer` that reads the outbox is configured with:
 A second processor node sits between `ParsleyProcessor` and the outbox sink. It runs inside the Streams task before `ParsleyProcessorContext` stamps the frontier:
 
 1. Read `parsley-causal-dependencies` from the inbound record headers.
-2. Copy the bytes to `_parsley_orig_clock`.
+2. Copy the bytes to `_parsley_original_dependencies`.
 3. Forward (at which point `ParsleyProcessorContext.forward()` overwrites `parsley-causal-dependencies` with the delivery-time frontier).
 
-The result in the outbox: both the delivery-time frontier (as `parsley-causal-dependencies`) and the original producer clock (as `_parsley_orig_clock`) are present on the record.
+The result in the outbox: both the delivery-time frontier (as `parsley-causal-dependencies`) and the original producer dependencies (as `_parsley_original_dependencies`) are present on the record.
 
 ## `poll()` path
 
@@ -41,14 +41,14 @@ The result in the outbox: both the delivery-time frontier (as `parsley-causal-de
     - Read `_parsley_src_topic`, `_parsley_src_partition`, `_parsley_src_offset` headers.
     - Resolve `Serde<K>` and `Serde<V>` by source topic.
     - Deserialise key and value.
-    - Call `restoreOriginalClock(headers)`:
+    - Call `restoreOriginalDependencies(headers)`:
         - Strip all headers with keys starting with `_parsley_`.
-        - If `_parsley_orig_clock` was present, add it back as `parsley-causal-dependencies`.
+        - If `_parsley_original_dependencies` was present, add it back as `parsley-causal-dependencies`.
     - Construct `ConsumerRecord<K,V>` at the source partition and offset.
 3. Group records by source `TopicPartition`.
 4. Return as `ConsumerRecords<K,V>`.
 
-The returned record's `headers()` contain the original producer clock (not the delivery-time frontier). `CausalDependencies.fromRecord(record)` on a record returned by `poll()` therefore returns the producer's causal intent.
+The returned record's `headers()` contain the original producer dependencies (not the delivery-time frontier). `CausalDependencies.fromRecord(record)` on a record returned by `poll()` therefore returns the producer's causal intent.
 
 ## Frontier merging
 

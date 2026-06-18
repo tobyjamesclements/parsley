@@ -73,7 +73,7 @@ CausalProducer<String, Event> producer = CausalProducers.<String, Event>builder(
 ```
 
 When sending, pass the dependencies that represent the causal premise of the record. The right
-choice for most cases is the clock carried by the message that triggered this send — it is bounded
+choice for most cases is the dependencies carried by the message that triggered this send — bounded
 by that hop's fan-in and transitively carries its own dependencies:
 
 ```java
@@ -84,16 +84,16 @@ producer.send(new ProducerRecord<>("orders", key, value), context);
 
 Use `consumer.frontier()` only when the record genuinely depends on *everything* the consumer has
 processed (for example, an aggregator whose output is affected by every record it has ever consumed).
-`frontier()` carries every partition ever seen, which can make the clock large — see the
-[clock size note](configuration.md#clock-size) in Configuration.
+`frontier()` carries every partition ever seen, which can make the dependencies header large — see the
+[header size note](configuration.md#header-size) in Configuration.
 
 ## Propagating causal context across services
 
 A `CausalDependencies` value is a portable causal token. To gate a read in a downstream service on
-what the current service has observed, serialise the clock and send it over your transport:
+what the current service has observed, serialise the dependencies and send them over your transport:
 
 ```java
-// Sender — extract the relevant clock and serialise it
+// Sender — extract the relevant dependencies and serialise them
 CausalDependencies context = CausalDependencies.fromRecord(consumedRecord)
         .orElseGet(consumer::frontier);
 byte[] token = context.toBytes();

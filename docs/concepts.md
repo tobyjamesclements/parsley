@@ -6,11 +6,11 @@
 from `(topicId, partition)` to the highest offset seen on that coordinate. Parsley serialises this
 as a compact binary header (`parsley-causal-dependencies`) attached to every outgoing record.
 
-On the consumer side, the clock is decoded into a `CausalDependencies` value: the minimum frontier
+On the consumer side, it is decoded into a `CausalDependencies` value: the minimum frontier
 a downstream consumer must have reached before the record may be delivered. A record is **causally
 ready** when `CausalDependencies.isSatisfiedBy(frontier)` returns `true`.
 
-Clock keys are Kafka **topic UUIDs**, not topic names. UUID-keyed clocks survive topic deletion and
+Keys are Kafka **topic UUIDs**, not topic names. UUID-keyed dependencies survive topic deletion and
 recreation: a new incarnation of `prices` gets a new UUID and is treated as a distinct dependency,
 so records stamped against the old `prices` are never accidentally satisfied by the new one.
 
@@ -62,10 +62,10 @@ be upheld for a specific record. Three reasons exist:
 | Reason | Meaning |
 |---|---|
 | `MISSING_HEADER` | The record carries no `parsley-causal-dependencies` header (not stamped by Parsley) |
-| `UNRESOLVABLE_CLOCK` | The header is present but cannot be deserialised (corrupt or unsupported wire version) |
+| `UNRESOLVABLE_DEPENDENCIES` | The header is present but cannot be deserialised (corrupt or unsupported wire version) |
 | `LIMIT_REACHED` | The record was evicted from the buffer because a limit fired |
 
-Records with `MISSING_HEADER` or `UNRESOLVABLE_CLOCK` are **forwarded immediately** — Parsley
+Records with `MISSING_HEADER` or `UNRESOLVABLE_DEPENDENCIES` are **forwarded immediately** — Parsley
 cannot reason about their ordering and treats them permissively rather than blocking delivery.
 
 Each violation includes the current frontier, the required dependencies, and the **causal gap**:

@@ -63,9 +63,9 @@ These headers are added by `ParsleyProcessor` at ingest time and stripped before
 | `_parsley_src_topic_id` | 16 bytes: `topicId.MSB` then `topicId.LSB` |
 | `_parsley_src_partition` | 4-byte big-endian int |
 | `_parsley_src_offset` | 8-byte big-endian long |
-| `_parsley_orig_clock` | Same encoding as `parsley-causal-dependencies` |
+| `_parsley_original_dependencies` | Same encoding as `parsley-causal-dependencies` |
 
-`_parsley_orig_clock` holds a copy of the producer's original clock saved before `ParsleyProcessorContext` overwrites `parsley-causal-dependencies` with the delivery-time frontier. `ParsleyConsumer.poll()` uses it to restore the producer's intent before returning records to the application.
+`_parsley_original_dependencies` holds a copy of the producer's original dependencies saved before `ParsleyProcessorContext` overwrites `parsley-causal-dependencies` with the delivery-time frontier. `ParsleyConsumer.poll()` uses it to restore the producer's intent before returning records to the application.
 
 ## State store names and serdes
 

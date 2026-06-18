@@ -19,7 +19,7 @@ load-dependent latency cost.
 ## How it works
 
 Every message carries the producer's **causal dependencies** as a header. When a message arrives, the
-consumer checks whether its **frontier** already satisfies that clock; if so it forwards
+consumer checks whether its **frontier** already satisfies those dependencies; if so it forwards
 immediately, otherwise it holds the message in a **causal buffer** until the frontier catches up.
 
 If the frontier never catches up, a configurable **buffering policy** forwards out-of-order, drops,

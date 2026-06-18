@@ -16,11 +16,11 @@ All three share a common set of value types and a single causal engine.
 
 | Class | Role |
 |---|---|
-| `CausalDependencies` | Immutable clock stamped by the producer onto each record |
+| `CausalDependencies` | Immutable set of causal requirements stamped by the producer onto each record |
 | `CausalFrontier` | Immutable per-consumer horizon: highest observed offset per (topicId, partition) |
 | `CausalPosition` | A single coordinate: `(topicId, partition, offset)` |
-| `CausalViolation` | Snapshot of a violation: reason, frontier, required clock, gap |
-| `CausalViolationReason` | Enum: `MISSING_HEADER`, `UNRESOLVABLE_CLOCK`, `LIMIT_REACHED` |
+| `CausalViolation` | Snapshot of a violation: reason, frontier, required dependencies, gap |
+| `CausalViolationReason` | Enum: `MISSING_HEADER`, `UNRESOLVABLE_DEPENDENCIES`, `LIMIT_REACHED` |
 
 ### Package-private implementation
 
@@ -42,7 +42,7 @@ All three share a common set of value types and a single causal engine.
 
 ```
 Producer
-  ParsleyProducer.send(record, clock)
+  ParsleyProducer.send(record, deps)
     -> stamps parsley-causal-dependencies header
     -> sends to Kafka
 
@@ -53,16 +53,16 @@ Consumer (CausalConsumer path)
       -> gate:   ParsleyEngine.onRecord()
                    satisfied   -> advance frontier, drain cascade
                    unsatisfied -> buffer (RocksBufferStore) + index (RocksWaitIndex)
-                   no clock    -> MISSING_HEADER violation, forward immediately
+                   no header   -> MISSING_HEADER violation, forward immediately
       -> deliver: for each admitted record
                    stamp frontier onto parsley-causal-dependencies
-                   save ORIG_CLOCK, forward to outbox topic
+                   save ORIGINAL_DEPENDENCIES, forward to outbox topic
 
   Outbox topic (internal, bytes)
 
   ParsleyConsumer.poll()
     -> reads from outbox topic
-    -> restores original producer clock from ORIG_CLOCK
+    -> restores original producer dependencies from ORIGINAL_DEPENDENCIES
     -> deserialises key/value by source topic
     -> reconstructs ConsumerRecord at source partition/offset
     -> returns ConsumerRecords grouped by source TopicPartition
@@ -70,7 +70,7 @@ Consumer (CausalConsumer path)
 CausalProcessorSupplier path (Streams-native)
   Same ParsleyProcessor; no outbox topic
   User processor receives records via ParsleyProcessorContext
-  Forwarded records carry stamped frontier clock
+  Forwarded records carry stamped frontier dependencies
 ```
 
 ## Further reading

@@ -17,12 +17,12 @@
 
 1. Decode `parsley-causal-dependencies` header.
     - Missing: report `MISSING_HEADER` violation, advance frontier, forward.
-    - Undecodable: report `UNRESOLVABLE_CLOCK` violation, advance frontier, forward.
+    - Undecodable: report `UNRESOLVABLE_DEPENDENCIES` violation, advance frontier, forward.
 2. Strip self-referential entries from the decoded dependencies. A `(topicId, partition)` entry whose required offset is >= the record's own source offset on that coordinate is removed. This prevents a record from blocking on its own position in the log.
 3. If `deps.isSatisfiedBy(frontier)`: advance frontier, add record to output, call `drainInto()`.
 4. Otherwise: add record to buffer (assigned an insertion sequence), index unsatisfied coordinates in the wait index. If buffer depth >= `sizeLimit`, call `evictNow()`.
 
-Records with missing or undecodable clocks are forwarded immediately: Parsley cannot reason about their ordering.
+Records with missing or undecodable dependency headers are forwarded immediately: Parsley cannot reason about their ordering.
 
 ## Drain cascade (`drainInto`)
 
@@ -66,7 +66,7 @@ DLQ headers added per evicted record:
 | Header | Content |
 |---|---|
 | `parsley-dlq-reason` | `LIMIT_REACHED` (UTF-8) |
-| `parsley-dlq-required-clock` | Serialised `CausalDependencies` the record required |
+| `parsley-dlq-required-dependencies` | Serialised `CausalDependencies` the record required |
 | `parsley-dlq-gap` | Per-position shortfall encoded as `CausalDependencies` |
 
 The gap encodes the shortfall, not the absolute required offset. Each `CausalPosition.offset()` in the gap is `required - observed` at eviction time.

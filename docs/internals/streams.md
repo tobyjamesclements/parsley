@@ -47,14 +47,14 @@ process(Record<KIn,VIn>)
 
   deliver(admittedRecords, snapshots)
     for each (record, snapshot):
-      set stampClock = snapshot
+      set stampFrontier = snapshot
       set deliveryMetadata = record's source coordinate
       delegate.process(record.toConsumerRecord() as Record)
-    restore stampClock = engine.frontier()
+    restore stampFrontier = engine.frontier()
     clear deliveryMetadata
 ```
 
-The snapshot list collects the frontier state after each individual advance inside `engine.onRecord()`. During delivery, each admitted record is paired with its corresponding snapshot so that the stamped clock reflects the frontier at the exact moment the record was admitted, not the final post-cascade frontier.
+The snapshot list collects the frontier state after each individual advance inside `engine.onRecord()`. During delivery, each admitted record is paired with its corresponding snapshot so that the stamped dependencies reflect the frontier at the exact moment the record was admitted, not the final post-cascade frontier.
 
 ## `ParsleyProcessorContext`
 
