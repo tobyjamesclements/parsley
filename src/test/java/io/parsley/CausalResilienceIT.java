@@ -57,7 +57,7 @@ class CausalResilienceIT {
      * match the consumer's frontier — enabling natural causal drain rather than eviction.
      */
     @Test
-    void restartWithBufferedRecord_resumesDrainAfterRecovery() throws Exception {
+    void restartedConsumerResumesAndDrainsBufferedRecordAfterRecovery() throws Exception {
         String bootstrap = kafka.getBootstrapServers();
         createTopic(bootstrap, PRICES, 1);
         createTopic(bootstrap, ORDERS, 1);
@@ -131,7 +131,7 @@ class CausalResilienceIT {
      * confirms no concurrency issues arise with {@code num.stream.threads=2}.
      */
     @Test
-    void multipleStreamThreads_deliverAllRecordsWithoutDeadlock() throws Exception {
+    void multipleStreamThreadsDeliverAllRecordsWithoutDeadlock() throws Exception {
         String bootstrap = kafka.getBootstrapServers();
         createTopic(bootstrap, EVENTS, 2);
 

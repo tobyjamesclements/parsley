@@ -95,7 +95,7 @@ class CausalConcurrentProducersIT {
      * {@code poll()}).
      */
     @Test
-    void twoIndependentProducers_concurrentSendsWithDifferentClocks_consumerDeliversOnceDepsSatisfied()
+    void twoIndependentProducersDrainIndependentlyOnceEachSourceIsStaged()
             throws Exception {
         String bootstrap = kafka.getBootstrapServers();
         createTopics(bootstrap);

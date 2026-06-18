@@ -45,6 +45,17 @@ class CausalRoundTripIT {
 
     private static final String TOPIC = "events";
 
+    /**
+     * Five records forming a causal chain (each depending on the previous one) are produced and
+     * then consumed; the consumer must deliver them in causal order with an advancing frontier.
+     *
+     * <p>Each delivered record still carries the producer's original causal-dependencies header,
+     * accessible via {@link CausalDependencies#fromRecord}, so downstream services can propagate
+     * causal context to their own clients.
+     *
+     * Asserts that all five values arrive in order, the frontier is non-empty and covers partition 0,
+     * and every record decodes to its producer's original dependencies.
+     */
     @Test
     void producedRecordsAreDeliveredInCausalOrderWithAdvancingFrontier() throws Exception {
         String bootstrap = kafka.getBootstrapServers();
@@ -97,6 +108,18 @@ class CausalRoundTripIT {
         }
     }
 
+    /**
+     * A {@link CausalConsumer} built with a custom store name and a user-provided violation handler
+     * delivers records that lack the causal-dependencies header (under {@code forwardUnsafe} policy)
+     * and invokes the handler rather than the built-in no-op.
+     *
+     * <p>A plain {@link org.apache.kafka.clients.producer.KafkaProducer} sends a record with no
+     * Parsley header, triggering a {@link CausalViolationReason#MISSING_HEADER} violation. The
+     * custom store name exercises the frontier store rename path.
+     *
+     * Asserts that the record is delivered, the violation handler is invoked with reason
+     * {@code MISSING_HEADER}, and the frontier under the custom store name is non-empty.
+     */
     @Test
     void fullFactoryHonoursTheViolationHandlerAndCustomStoreName() throws Exception {
         String bootstrap = kafka.getBootstrapServers();

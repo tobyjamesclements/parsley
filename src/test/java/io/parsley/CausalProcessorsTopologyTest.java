@@ -49,10 +49,13 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  */
 class CausalProcessorsTopologyTest {
 
-    private static final Uuid IN_ID     = CausalPosition.deriveUuid("in");
-    private static final Uuid PRICES_ID = CausalPosition.deriveUuid("prices");
-    private static final Uuid ORDERS_ID = CausalPosition.deriveUuid("orders");
-    private static final Uuid QUOTES_ID = CausalPosition.deriveUuid("quotes");
+    // Topic name → topic-id constant mapping used across tests.
+    // t1 = default single-input topic; t2/t3 = two-source tests; t4 = materialized derived topic;
+    // t5 = independent sidecar topic.
+    private static final Uuid T1_ID = CausalPosition.deriveUuid("t1");
+    private static final Uuid T2_ID = CausalPosition.deriveUuid("t2");
+    private static final Uuid T3_ID = CausalPosition.deriveUuid("t3");
+    private static final Uuid T4_ID = CausalPosition.deriveUuid("t4");
 
     private final List<String> processed = new ArrayList<>();
     private final List<CausalViolation> violations = new ArrayList<>();
@@ -111,89 +114,124 @@ class CausalProcessorsTopologyTest {
 
     // --- tests ---------------------------------------------------------------------------------
 
+    /**
+     * A record with satisfied dependencies is admitted immediately: the delegate processor runs,
+     * transforms the value, and the output record is stamped with the updated frontier.
+     *
+     * Asserts that the delegate runs exactly once, the value is transformed, the emitted record
+     * carries the frontier as the dependency stamp, and no violation is reported.
+     */
     @Test
     void admittedRecordRunsDelegateAndStampsTheMergedClock() {
         Topology topology = topology(
                 CausalProcessors.builder(upperCaser(), CausalBufferPolicy.drop(CausalBufferLimit.ofSize(100)))
                         .serdes(Serdes.String(), Serdes.String()).onViolation(onViolation).build(),
-                List.of("in"));
+                List.of("t1"));
 
         try (TopologyTestDriver driver = new TopologyTestDriver(topology, config(null))) {
-            TestInputTopic<String, String> in =
-                    driver.createInputTopic("in", new StringSerializer(), new StringSerializer());
+            TestInputTopic<String, String> t1 =
+                    driver.createInputTopic("t1", new StringSerializer(), new StringSerializer());
             TestOutputTopic<String, String> out =
                     driver.createOutputTopic("out", new StringDeserializer(), new StringDeserializer());
 
-            in.pipeInput(new TestRecord<>("k", "hello", depsHeader(CausalDependencies.empty())));
+            t1.pipeInput(new TestRecord<>("k", "hello", depsHeader(CausalDependencies.empty())));
 
             assertEquals(List.of("hello"), processed, "delegate.process must run for an admitted record");
             TestRecord<String, String> emitted = out.readRecord();
             assertEquals("HELLO", emitted.value(), "delegate's transform must be applied");
-            assertEquals(CausalDependencies.builder().require(new CausalPosition(IN_ID, 0, 0)).build(), outDeps(emitted),
+            assertEquals(CausalDependencies.builder().require(new CausalPosition(T1_ID, 0, 0)).build(), outDeps(emitted),
                     "forward must be stamped with the frontier as of admission");
-            assertTrue(violations.isEmpty());
+            assertTrue(violations.isEmpty(), "no violation must be reported for an admitted record");
         }
     }
 
+    /**
+     * A record whose dependencies are not yet satisfied is buffered. When the satisfying record
+     * arrives, the engine releases the buffered record through the delegate in causal order.
+     *
+     * <p>The buffer store must hold the record while it is waiting and be empty after drain.
+     *
+     * Asserts that the buffered record is not delivered until the dependency arrives, and that
+     * both records flow through the delegate in order after the dependency is satisfied.
+     */
     @Test
     void heldRecordIsBufferedThenDrainedThroughDelegate() {
         Topology topology = topology(
                 CausalProcessors.builder(upperCaser(), CausalBufferPolicy.drop(CausalBufferLimit.ofSize(100)))
                         .serdes(Serdes.String(), Serdes.String()).onViolation(onViolation).build(),
-                List.of("prices", "orders"));
+                List.of("t2", "t3"));
 
         try (TopologyTestDriver driver = new TopologyTestDriver(topology, config(null))) {
-            TestInputTopic<String, String> prices =
-                    driver.createInputTopic("prices", new StringSerializer(), new StringSerializer());
-            TestInputTopic<String, String> orders =
-                    driver.createInputTopic("orders", new StringSerializer(), new StringSerializer());
+            TestInputTopic<String, String> t2 =
+                    driver.createInputTopic("t2", new StringSerializer(), new StringSerializer());
+            TestInputTopic<String, String> t3 =
+                    driver.createInputTopic("t3", new StringSerializer(), new StringSerializer());
             TestOutputTopic<String, String> out =
                     driver.createOutputTopic("out", new StringDeserializer(), new StringDeserializer());
             KeyValueStore<String, byte[]> bufferStore = driver.getKeyValueStore("parsley-buffer");
 
-            // Order depends on prices-0 offset 0, which hasn't arrived: held, not delivered.
-            orders.pipeInput(new TestRecord<>("k", "order",
-                    depsHeader(CausalDependencies.builder().require(new CausalPosition(PRICES_ID, 0, 0)).build())));
+            // t3-record depends on t2-0 offset 0, which hasn't arrived: held, not delivered.
+            t3.pipeInput(new TestRecord<>("k", "t3-val",
+                    depsHeader(CausalDependencies.builder().require(new CausalPosition(T2_ID, 0, 0)).build())));
             assertTrue(processed.isEmpty(), "held record must not reach the delegate");
-            assertTrue(out.isEmpty());
+            assertTrue(out.isEmpty(), "held record must not appear in the output topic");
             assertEquals(1, storeSize(bufferStore), "held record must be persisted to the buffer store");
 
-            // Price arrives and advances the frontier, draining the order through the delegate.
-            prices.pipeInput(new TestRecord<>("k", "price", depsHeader(CausalDependencies.empty())));
+            // t2-record arrives and advances the frontier, draining the t3-record through the delegate.
+            t2.pipeInput(new TestRecord<>("k", "t2-val", depsHeader(CausalDependencies.empty())));
 
-            assertEquals(List.of("price", "order"), processed);
-            assertEquals(List.of("PRICE", "ORDER"), out.readValuesToList());
+            assertEquals(List.of("t2-val", "t3-val"), processed,
+                    "delegate must see both records in causal order after the dependency arrives");
+            assertEquals(List.of("T2-VAL", "T3-VAL"), out.readValuesToList(),
+                    "both transformed values must appear in the output in order");
             assertEquals(0, storeSize(bufferStore), "drained record must be removed from the buffer store");
         }
     }
 
+    /**
+     * Under the drop policy with a size limit of 1, a record whose dependency cannot be
+     * satisfied is evicted immediately, the delegate never runs, and a
+     * {@link CausalViolationReason#LIMIT_REACHED} violation is reported with the correct gap.
+     *
+     * Asserts that no record reaches the delegate or the output, exactly one violation is
+     * reported, and the gap reflects the shortfall between the required offset and the frontier.
+     */
     @Test
     void strictDropDoesNotInvokeDelegateAndReportsTheGap() {
         Topology topology = topology(
                 CausalProcessors.builder(upperCaser(), CausalBufferPolicy.drop(CausalBufferLimit.ofSize(1)))
                         .serdes(Serdes.String(), Serdes.String()).onViolation(onViolation).build(),
-                List.of("orders"));
+                List.of("t3"));
 
         try (TopologyTestDriver driver = new TopologyTestDriver(topology, config(null))) {
-            TestInputTopic<String, String> orders =
-                    driver.createInputTopic("orders", new StringSerializer(), new StringSerializer());
+            TestInputTopic<String, String> t3 =
+                    driver.createInputTopic("t3", new StringSerializer(), new StringSerializer());
             TestOutputTopic<String, String> out =
                     driver.createOutputTopic("out", new StringDeserializer(), new StringDeserializer());
 
-            // Depends on a price that never arrives; size limit 1 evicts immediately.
-            orders.pipeInput(new TestRecord<>("k", "order",
-                    depsHeader(CausalDependencies.builder().require(new CausalPosition(PRICES_ID, 0, 99)).build())));
+            // Depends on a t2 record that never arrives; size limit 1 evicts immediately.
+            t3.pipeInput(new TestRecord<>("k", "t3-val",
+                    depsHeader(CausalDependencies.builder().require(new CausalPosition(T2_ID, 0, 99)).build())));
 
-            assertTrue(processed.isEmpty(), "strict policy must never run the delegate for an un-satisfiable record");
-            assertTrue(out.isEmpty());
-            assertEquals(1, violations.size());
+            assertTrue(processed.isEmpty(), "strict policy must never run the delegate for an unsatisfiable record");
+            assertTrue(out.isEmpty(), "dropped record must not appear in the output topic");
+            assertEquals(1, violations.size(), "exactly one violation must be reported");
             CausalViolation violation = violations.get(0);
-            assertEquals(CausalViolationReason.LIMIT_REACHED, violation.reason());
-            assertEquals(List.of(new CausalPosition(CausalPosition.deriveUuid("prices"), 0, 100L)), violation.gap(),
+            assertEquals(CausalViolationReason.LIMIT_REACHED, violation.reason(),
+                    "violation reason must be LIMIT_REACHED");
+            assertEquals(List.of(new CausalPosition(CausalPosition.deriveUuid("t2"), 0, 100L)), violation.gap(),
                     "gap is required(99) minus offsetFor(absent=-1) = 100");
         }
     }
 
+    /**
+     * Under the dead-letter policy, a record that cannot be satisfied within the buffer
+     * limit is routed to the configured dead-letter sink, the delegate never runs, and a
+     * violation is reported.
+     *
+     * Asserts that nothing reaches the main output, the record reaches the dead-letter sink,
+     * and a LIMIT_REACHED violation is reported.
+     */
     @Test
     void deadLetterRoutesToSinkAndDoesNotInvokeDelegate() {
         List<String> deadLettered = new ArrayList<>();
@@ -202,50 +240,71 @@ class CausalProcessorsTopologyTest {
                 CausalProcessors.builder(upperCaser(), policy)
                         .serdes(Serdes.String(), Serdes.String()).onViolation(onViolation)
                         .deadLetterSink(cr -> deadLettered.add(cr.value())).build(),
-                List.of("orders"));
+                List.of("t3"));
 
         try (TopologyTestDriver driver = new TopologyTestDriver(topology, config(null))) {
-            TestInputTopic<String, String> orders =
-                    driver.createInputTopic("orders", new StringSerializer(), new StringSerializer());
+            TestInputTopic<String, String> t3 =
+                    driver.createInputTopic("t3", new StringSerializer(), new StringSerializer());
             TestOutputTopic<String, String> out =
                     driver.createOutputTopic("out", new StringDeserializer(), new StringDeserializer());
 
-            orders.pipeInput(new TestRecord<>("k", "order",
-                    depsHeader(CausalDependencies.builder().require(new CausalPosition(PRICES_ID, 0, 99)).build())));
+            t3.pipeInput(new TestRecord<>("k", "t3-val",
+                    depsHeader(CausalDependencies.builder().require(new CausalPosition(T2_ID, 0, 99)).build())));
 
-            assertTrue(processed.isEmpty(), "strict policy must never run the delegate");
-            assertTrue(out.isEmpty());
-            assertEquals(List.of("order"), deadLettered);
-            assertEquals(1, violations.size());
-            assertEquals(CausalViolationReason.LIMIT_REACHED, violations.get(0).reason());
+            assertTrue(processed.isEmpty(), "dead-letter policy must never run the delegate");
+            assertTrue(out.isEmpty(), "dead-lettered record must not appear in the main output");
+            assertEquals(List.of("t3-val"), deadLettered,
+                    "dead-lettered record must reach the configured sink");
+            assertEquals(1, violations.size(), "exactly one violation must be reported");
+            assertEquals(CausalViolationReason.LIMIT_REACHED, violations.get(0).reason(),
+                    "violation reason must be LIMIT_REACHED");
         }
     }
 
+    /**
+     * Under the forward-unsafe policy with a size limit of 1, a record that cannot be satisfied
+     * within the buffer limit is forwarded to the delegate immediately (causal ordering is
+     * abandoned), and a violation is reported.
+     *
+     * Asserts that the record reaches the delegate and the output, and a LIMIT_REACHED violation
+     * is reported with the expected gap.
+     */
     @Test
     void forwardUnsafeRunsDelegateUnderLagAndFlagsTheViolation() {
         Topology topology = topology(
                 CausalProcessors.builder(upperCaser(), CausalBufferPolicy.forwardUnsafe(CausalBufferLimit.ofSize(1)))
                         .serdes(Serdes.String(), Serdes.String()).onViolation(onViolation).build(),
-                List.of("orders"));
+                List.of("t3"));
 
         try (TopologyTestDriver driver = new TopologyTestDriver(topology, config(null))) {
-            TestInputTopic<String, String> orders =
-                    driver.createInputTopic("orders", new StringSerializer(), new StringSerializer());
+            TestInputTopic<String, String> t3 =
+                    driver.createInputTopic("t3", new StringSerializer(), new StringSerializer());
             TestOutputTopic<String, String> out =
                     driver.createOutputTopic("out", new StringDeserializer(), new StringDeserializer());
 
-            orders.pipeInput(new TestRecord<>("k", "order",
-                    depsHeader(CausalDependencies.builder().require(new CausalPosition(PRICES_ID, 0, 99)).build())));
+            t3.pipeInput(new TestRecord<>("k", "t3-val",
+                    depsHeader(CausalDependencies.builder().require(new CausalPosition(T2_ID, 0, 99)).build())));
 
-            assertEquals(List.of("order"), processed,
-                    "lenient policy delivers the un-satisfied record to the delegate");
-            assertEquals(List.of("ORDER"), out.readValuesToList());
-            assertEquals(1, violations.size());
-            assertEquals(CausalViolationReason.LIMIT_REACHED, violations.get(0).reason());
-            assertEquals(List.of(new CausalPosition(CausalPosition.deriveUuid("prices"), 0, 100L)), violations.get(0).gap());
+            assertEquals(List.of("t3-val"), processed,
+                    "forward-unsafe policy delivers the unsatisfied record to the delegate");
+            assertEquals(List.of("T3-VAL"), out.readValuesToList(),
+                    "forward-unsafe eviction forwards the record to the output");
+            assertEquals(1, violations.size(), "exactly one violation must be reported");
+            assertEquals(CausalViolationReason.LIMIT_REACHED, violations.get(0).reason(),
+                    "violation reason must be LIMIT_REACHED");
+            assertEquals(List.of(new CausalPosition(CausalPosition.deriveUuid("t2"), 0, 100L)), violations.get(0).gap(),
+                    "gap must reflect the shortfall: required 99, frontier absent → gap 100");
         }
     }
 
+    /**
+     * When the user processor forwards a record that already carries a stale
+     * causal-dependencies header, the Parsley wrapper replaces it with the current frontier
+     * stamp (idempotent stamping). User headers unrelated to Parsley are preserved.
+     *
+     * Asserts that the output carries exactly one dependencies header with the frontier value,
+     * and that the user's own headers are intact.
+     */
     @Test
     void stampingIsIdempotentAndPreservesUserHeaders() {
         ProcessorSupplier<String, String, String, String> user = () -> new Processor<>() {
@@ -262,33 +321,40 @@ class CausalProcessorsTopologyTest {
                 headers.add(new RecordHeader("user-h", "keep".getBytes()));
                 // A stale dependencies header the user happens to carry — stamping must replace, not duplicate it.
                 headers.add(new RecordHeader("parsley-causal-dependencies",
-                        CausalDependencies.builder().require(new CausalPosition(PRICES_ID, 0, 5)).build().toBytes()));
+                        CausalDependencies.builder().require(new CausalPosition(T2_ID, 0, 5)).build().toBytes()));
                 ctx.forward(record.withHeaders(headers));
             }
         };
         Topology topology = topology(
                 CausalProcessors.builder(user, CausalBufferPolicy.drop(CausalBufferLimit.ofSize(100)))
                         .serdes(Serdes.String(), Serdes.String()).onViolation(onViolation).build(),
-                List.of("in"));
+                List.of("t1"));
 
         try (TopologyTestDriver driver = new TopologyTestDriver(topology, config(null))) {
-            TestInputTopic<String, String> in =
-                    driver.createInputTopic("in", new StringSerializer(), new StringSerializer());
+            TestInputTopic<String, String> t1 =
+                    driver.createInputTopic("t1", new StringSerializer(), new StringSerializer());
             TestOutputTopic<String, String> out =
                     driver.createOutputTopic("out", new StringDeserializer(), new StringDeserializer());
 
-            in.pipeInput(new TestRecord<>("k", "v", depsHeader(CausalDependencies.empty())));
+            t1.pipeInput(new TestRecord<>("k", "v", depsHeader(CausalDependencies.empty())));
 
             TestRecord<String, String> emitted = out.readRecord();
             assertEquals(1, count(emitted.headers(), "parsley-causal-dependencies"),
-                    "exactly one dependencies header — stamping is idempotent");
-            assertEquals(CausalDependencies.builder().require(new CausalPosition(IN_ID, 0, 0)).build(), outDeps(emitted),
-                    "the stamped dependencies are the frontier, not the user's stale value");
+                    "exactly one dependencies header — stamping must replace, not duplicate");
+            assertEquals(CausalDependencies.builder().require(new CausalPosition(T1_ID, 0, 0)).build(), outDeps(emitted),
+                    "the stamped dependencies must be the frontier, not the user's stale value");
             assertEquals("keep", new String(emitted.headers().lastHeader("user-h").value()),
-                    "user headers are preserved");
+                    "user headers must be preserved");
         }
     }
 
+    /**
+     * Records forwarded by a user-registered punctuator are stamped with the frontier that
+     * is live at the time the punctuator fires, not with a stale or empty frontier.
+     *
+     * Asserts that the punctuator's output carries the frontier that was current after the
+     * last admitted record.
+     */
     @Test
     void userPunctuatorForwardsAreStampedWithTheLiveFrontier() {
         ProcessorSupplier<String, String, String, String> user = () -> new Processor<>() {
@@ -309,25 +375,33 @@ class CausalProcessorsTopologyTest {
         Topology topology = topology(
                 CausalProcessors.builder(user, CausalBufferPolicy.drop(CausalBufferLimit.ofSize(100)))
                         .serdes(Serdes.String(), Serdes.String()).onViolation(onViolation).build(),
-                List.of("in"));
+                List.of("t1"));
 
         try (TopologyTestDriver driver = new TopologyTestDriver(topology, config(null))) {
-            TestInputTopic<String, String> in =
-                    driver.createInputTopic("in", new StringSerializer(), new StringSerializer());
+            TestInputTopic<String, String> t1 =
+                    driver.createInputTopic("t1", new StringSerializer(), new StringSerializer());
             TestOutputTopic<String, String> out =
                     driver.createOutputTopic("out", new StringDeserializer(), new StringDeserializer());
 
-            in.pipeInput(new TestRecord<>("k", "v", depsHeader(CausalDependencies.empty())));
+            t1.pipeInput(new TestRecord<>("k", "v", depsHeader(CausalDependencies.empty())));
             out.readRecord(); // the live record
             driver.advanceWallClockTime(Duration.ofSeconds(1));
 
             TestRecord<String, String> punctuated = out.readRecord();
-            assertEquals("punct", punctuated.value());
-            assertEquals(CausalDependencies.builder().require(new CausalPosition(IN_ID, 0, 0)).build(), outDeps(punctuated),
-                    "punctuator forwards are stamped with the live frontier");
+            assertEquals("punct", punctuated.value(), "punctuator output must reach the topic");
+            assertEquals(CausalDependencies.builder().require(new CausalPosition(T1_ID, 0, 0)).build(), outDeps(punctuated),
+                    "punctuator forwards must be stamped with the live frontier");
         }
     }
 
+    /**
+     * The delegate processor receives a working {@link ProcessorContext} that exposes both
+     * its registered state stores and the originating record's metadata (topic, partition,
+     * offset) via {@code recordMetadata()}.
+     *
+     * Asserts that a state-store write is visible after processing, and that
+     * {@code recordMetadata().topic()} returns the source topic name.
+     */
     @Test
     void delegateSeesAWorkingStateStoreAndRecordMetadata() {
         ProcessorSupplier<String, String, String, String> user = new ProcessorSupplier<>() {
@@ -361,156 +435,194 @@ class CausalProcessorsTopologyTest {
         Topology topology = topology(
                 CausalProcessors.builder(user, CausalBufferPolicy.drop(CausalBufferLimit.ofSize(100)))
                         .serdes(Serdes.String(), Serdes.String()).onViolation(onViolation).build(),
-                List.of("in"));
+                List.of("t1"));
 
         try (TopologyTestDriver driver = new TopologyTestDriver(topology, config(null))) {
-            TestInputTopic<String, String> in =
-                    driver.createInputTopic("in", new StringSerializer(), new StringSerializer());
+            TestInputTopic<String, String> t1 =
+                    driver.createInputTopic("t1", new StringSerializer(), new StringSerializer());
             TestOutputTopic<String, String> out =
                     driver.createOutputTopic("out", new StringDeserializer(), new StringDeserializer());
 
-            in.pipeInput(new TestRecord<>("k", "v", depsHeader(CausalDependencies.empty())));
+            t1.pipeInput(new TestRecord<>("k", "v", depsHeader(CausalDependencies.empty())));
 
-            assertEquals("v@in", out.readValue(), "getStateStore and recordMetadata pass through the proxy");
+            assertEquals("v@t1", out.readValue(),
+                    "getStateStore and recordMetadata must pass through the proxy context");
             assertEquals("v", driver.<String, String>getKeyValueStore("u-state").get("k"),
-                    "the user's store write is visible");
+                    "the user's state-store write must be visible via the driver");
         }
     }
 
-    // Note: restart/restoration is covered by ParsleySerializerTest (envelope round-trip) and
-    // ParsleyEngineTest#recordsAlreadyInTheBufferDrainWhenTheFrontierCatchesUp (the buffer store is
-    // the source of truth, so held records are simply already present after a restart).
-    // TopologyTestDriver does not persist state-store contents across driver instances, so a
-    // genuine cross-restart test cannot be expressed against it.
-
+    /**
+     * The buffer serializer resolves the key and value serdes using the buffered record's source
+     * topic — not the changelog topic name of the buffer state store.
+     *
+     * <p>This matters for topic-specific serdes such as schema-registry Avro serdes, which must
+     * use the original source topic as the schema-registry subject.
+     *
+     * Asserts that the value serde is invoked with the source topic name of the buffered record.
+     */
     @Test
     void bufferSerdesAreResolvedAndInvokedWithTheSourceTopic() {
         SpyStringSerde valueSpy = new SpyStringSerde();
         Topology topology = topology(
                 CausalProcessors.builder(upperCaser(), CausalBufferPolicy.drop(CausalBufferLimit.ofSize(100)))
                         .serdesByTopic(t -> Serdes.String(), t -> valueSpy).onViolation(onViolation).build(),
-                List.of("prices", "orders"));
+                List.of("t2", "t3"));
 
         try (TopologyTestDriver driver = new TopologyTestDriver(topology, config(null))) {
-            TestInputTopic<String, String> orders =
-                    driver.createInputTopic("orders", new StringSerializer(), new StringSerializer());
+            TestInputTopic<String, String> t3 =
+                    driver.createInputTopic("t3", new StringSerializer(), new StringSerializer());
 
-            // An unmet dependency forces the order to be buffered, which serialises it.
-            orders.pipeInput(new TestRecord<>("k", "order",
-                    depsHeader(CausalDependencies.builder().require(new CausalPosition(PRICES_ID, 0, 5)).build())));
+            // An unmet dependency forces the t3-record to be buffered, which serialises it.
+            t3.pipeInput(new TestRecord<>("k", "t3-val",
+                    depsHeader(CausalDependencies.builder().require(new CausalPosition(T2_ID, 0, 5)).build())));
 
-            assertTrue(valueSpy.serializeTopics.contains("orders"),
+            assertTrue(valueSpy.serializeTopics.contains("t3"),
                     "the buffer value serde must be invoked with the record's source topic, not the changelog name");
-            assertEquals(List.of("orders"), valueSpy.serializeTopics.stream().distinct().toList(),
-                    "only the source topic 'orders' is used to serialise the held record");
+            assertEquals(List.of("t3"), valueSpy.serializeTopics.stream().distinct().toList(),
+                    "only the source topic 't3' is used to serialise the held record");
         }
     }
 
+    /**
+     * Two {@link CausalProcessors} instances in the same topology, each with a distinct
+     * {@code storeName}, coexist without state-store conflicts and maintain independent
+     * frontiers.
+     *
+     * <p>Without distinct store names, Kafka Streams would reject the topology with a
+     * duplicate-store error.
+     *
+     * Asserts that both processors independently forward their records, and that each
+     * maintains its own frontier state under its own namespace.
+     */
     @Test
     void twoDecoratorsWithDistinctStoreNamesCoexistAndKeepIsolatedFrontiers() {
-        // Two causal decorators in one topology. With the default storeName both would register
-        // "parsley-frontier"/"parsley-buffer" and Kafka Streams would reject the topology; distinct
-        // namespaces are what make multiple decorators possible.
         StreamsBuilder builder = new StreamsBuilder();
-        builder.stream("orders", Consumed.with(Serdes.String(), Serdes.String()))
+        builder.stream("t3", Consumed.with(Serdes.String(), Serdes.String()))
                 .process(CausalProcessors.builder(upperCaser(), CausalBufferPolicy.drop(CausalBufferLimit.ofSize(100)))
-                        .serdesByTopic(t -> Serdes.String(), t -> Serdes.String()).onViolation(onViolation).storeName("orders").build())
-                .to("orders-out", Produced.with(Serdes.String(), Serdes.String()));
-        builder.stream("prices", Consumed.with(Serdes.String(), Serdes.String()))
+                        .serdesByTopic(t -> Serdes.String(), t -> Serdes.String()).onViolation(onViolation).storeName("t3").build())
+                .to("t3-out", Produced.with(Serdes.String(), Serdes.String()));
+        builder.stream("t2", Consumed.with(Serdes.String(), Serdes.String()))
                 .process(CausalProcessors.builder(upperCaser(), CausalBufferPolicy.drop(CausalBufferLimit.ofSize(100)))
-                        .serdesByTopic(t -> Serdes.String(), t -> Serdes.String()).onViolation(onViolation).storeName("prices").build())
-                .to("prices-out", Produced.with(Serdes.String(), Serdes.String()));
+                        .serdesByTopic(t -> Serdes.String(), t -> Serdes.String()).onViolation(onViolation).storeName("t2").build())
+                .to("t2-out", Produced.with(Serdes.String(), Serdes.String()));
 
         try (TopologyTestDriver driver = new TopologyTestDriver(builder.build(), config(null))) {
-            TestInputTopic<String, String> orders =
-                    driver.createInputTopic("orders", new StringSerializer(), new StringSerializer());
-            TestInputTopic<String, String> prices =
-                    driver.createInputTopic("prices", new StringSerializer(), new StringSerializer());
-            TestOutputTopic<String, String> ordersOut =
-                    driver.createOutputTopic("orders-out", new StringDeserializer(), new StringDeserializer());
-            TestOutputTopic<String, String> pricesOut =
-                    driver.createOutputTopic("prices-out", new StringDeserializer(), new StringDeserializer());
+            TestInputTopic<String, String> t3 =
+                    driver.createInputTopic("t3", new StringSerializer(), new StringSerializer());
+            TestInputTopic<String, String> t2 =
+                    driver.createInputTopic("t2", new StringSerializer(), new StringSerializer());
+            TestOutputTopic<String, String> t3Out =
+                    driver.createOutputTopic("t3-out", new StringDeserializer(), new StringDeserializer());
+            TestOutputTopic<String, String> t2Out =
+                    driver.createOutputTopic("t2-out", new StringDeserializer(), new StringDeserializer());
 
-            orders.pipeInput(new TestRecord<>("k", "order", depsHeader(CausalDependencies.empty())));
-            prices.pipeInput(new TestRecord<>("k", "price", depsHeader(CausalDependencies.empty())));
+            t3.pipeInput(new TestRecord<>("k", "t3-val", depsHeader(CausalDependencies.empty())));
+            t2.pipeInput(new TestRecord<>("k", "t2-val", depsHeader(CausalDependencies.empty())));
 
-            assertEquals(List.of("ORDER"), ordersOut.readValuesToList());
-            assertEquals(List.of("PRICE"), pricesOut.readValuesToList());
+            assertEquals(List.of("T3-VAL"), t3Out.readValuesToList(),
+                    "t3 processor must forward to its own output topic");
+            assertEquals(List.of("T2-VAL"), t2Out.readValuesToList(),
+                    "t2 processor must forward to its own output topic");
 
             // Each decorator persisted only its own branch's frontier under its own namespace.
-            assertEquals(CausalFrontier.empty().observe(new CausalPosition(ORDERS_ID, 0, 0)), frontierIn(driver, "orders-frontier"));
-            assertEquals(CausalFrontier.empty().observe(new CausalPosition(PRICES_ID, 0, 0)), frontierIn(driver, "prices-frontier"));
+            assertEquals(CausalFrontier.empty().observe(new CausalPosition(T3_ID, 0, 0)),
+                    frontierIn(driver, "t3-frontier"),
+                    "t3 frontier must reflect only t3's source coordinate");
+            assertEquals(CausalFrontier.empty().observe(new CausalPosition(T2_ID, 0, 0)),
+                    frontierIn(driver, "t2-frontier"),
+                    "t2 frontier must reflect only t2's source coordinate");
         }
     }
 
+    /**
+     * The {@link CausalFrontierListener} is invoked once at startup with the restored frontier
+     * (empty on a cold start), and once before each subsequent forward.
+     *
+     * Asserts that the listener receives the restored frontier at init, followed by one
+     * snapshot per admitted record in admission order.
+     */
     @Test
     void frontierListenerPublishesRestoredThenAdvancingFrontiers() {
-        List<CausalFrontier> offsetFor = new ArrayList<>();
-        CausalFrontierListener listener = offsetFor::add;
+        List<CausalFrontier> snapshots = new ArrayList<>();
+        CausalFrontierListener listener = snapshots::add;
         Topology topology = topology(
                 CausalProcessors.builder(upperCaser(), CausalBufferPolicy.drop(CausalBufferLimit.ofSize(100)))
-                        .serdesByTopic(t -> Serdes.String(), t -> Serdes.String()).onViolation(onViolation).storeName("in").frontierListener(listener).build(),
-                List.of("in"));
+                        .serdesByTopic(t -> Serdes.String(), t -> Serdes.String()).onViolation(onViolation).storeName("t1").frontierListener(listener).build(),
+                List.of("t1"));
 
         try (TopologyTestDriver driver = new TopologyTestDriver(topology, config(null))) {
-            TestInputTopic<String, String> in =
-                    driver.createInputTopic("in", new StringSerializer(), new StringSerializer());
+            TestInputTopic<String, String> t1 =
+                    driver.createInputTopic("t1", new StringSerializer(), new StringSerializer());
 
             // The processor publishes its restored frontier at init — empty on a cold start — so an
             // observer's view is correct before the first record is admitted.
-            assertEquals(List.of(CausalFrontier.empty()), offsetFor,
-                    "the restored frontier is published once at startup");
+            assertEquals(List.of(CausalFrontier.empty()), snapshots,
+                    "the restored frontier must be published once at startup");
 
-            in.pipeInput(new TestRecord<>("k", "a", depsHeader(CausalDependencies.empty())));
-            in.pipeInput(new TestRecord<>("k", "b", depsHeader(CausalDependencies.empty())));
+            t1.pipeInput(new TestRecord<>("k", "a", depsHeader(CausalDependencies.empty())));
+            t1.pipeInput(new TestRecord<>("k", "b", depsHeader(CausalDependencies.empty())));
 
             assertEquals(
                     List.of(CausalFrontier.empty(),
-                            CausalFrontier.empty().observe(new CausalPosition(IN_ID, 0, 0)),
-                            CausalFrontier.empty().observe(new CausalPosition(IN_ID, 0, 1))),
-                    offsetFor,
-                    "every frontier advance is published, in admission order");
+                            CausalFrontier.empty().observe(new CausalPosition(T1_ID, 0, 0)),
+                            CausalFrontier.empty().observe(new CausalPosition(T1_ID, 0, 1))),
+                    snapshots,
+                    "every frontier advance must be published in admission order");
         }
     }
 
+    /**
+     * The automatically stamped dependency clock on output records reflects only the
+     * per-task frontier, whose width is bounded by the number of source topics in the
+     * subtopology — not by the number of records processed.
+     *
+     * <p>This pins the O(#input topics) header-size guarantee documented for the Streams path.
+     *
+     * Asserts that after processing 150 records across 3 source topics, the frontier contains
+     * exactly 3 entries.
+     */
     @Test
     void automaticStampFrontierIsBoundedByInputTopicCountNotRecordCount() {
-        // The automatically stamped dependencies reflect the per-task frontier, which advances only
-        // by each record's own source coordinate (one partition per source topic) — so its size is
-        // bounded by the number of source topics in the subtopology, never by the number of records.
-        // This pins the O(#input topics) envelope the docs promise for the Streams path.
         Topology topology = topology(
                 CausalProcessors.builder(upperCaser(), CausalBufferPolicy.drop(CausalBufferLimit.ofSize(1000)))
                         .serdes(Serdes.String(), Serdes.String()).onViolation(onViolation).build(),
-                List.of("a", "b", "c"));
+                List.of("t1", "t2", "t3"));
 
         try (TopologyTestDriver driver = new TopologyTestDriver(topology, config(null))) {
-            TestInputTopic<String, String> a =
-                    driver.createInputTopic("a", new StringSerializer(), new StringSerializer());
-            TestInputTopic<String, String> b =
-                    driver.createInputTopic("b", new StringSerializer(), new StringSerializer());
-            TestInputTopic<String, String> c =
-                    driver.createInputTopic("c", new StringSerializer(), new StringSerializer());
+            TestInputTopic<String, String> t1 =
+                    driver.createInputTopic("t1", new StringSerializer(), new StringSerializer());
+            TestInputTopic<String, String> t2 =
+                    driver.createInputTopic("t2", new StringSerializer(), new StringSerializer());
+            TestInputTopic<String, String> t3 =
+                    driver.createInputTopic("t3", new StringSerializer(), new StringSerializer());
 
             for (int i = 0; i < 50; i++) {
-                a.pipeInput(new TestRecord<>("k", "v" + i, depsHeader(CausalDependencies.empty())));
-                b.pipeInput(new TestRecord<>("k", "v" + i, depsHeader(CausalDependencies.empty())));
-                c.pipeInput(new TestRecord<>("k", "v" + i, depsHeader(CausalDependencies.empty())));
+                t1.pipeInput(new TestRecord<>("k", "v" + i, depsHeader(CausalDependencies.empty())));
+                t2.pipeInput(new TestRecord<>("k", "v" + i, depsHeader(CausalDependencies.empty())));
+                t3.pipeInput(new TestRecord<>("k", "v" + i, depsHeader(CausalDependencies.empty())));
             }
 
             CausalFrontier frontier = frontierIn(driver, "parsley-frontier");
             assertEquals(3, frontier.positions().size(),
-                    "the stamped frontier is bounded by the number of source topics, not record count");
+                    "the stamped frontier width must equal the number of source topics, not the record count");
         }
     }
 
+    /**
+     * Inbound dependency entries are used only to gate admissibility; they are never merged
+     * into the frontier or re-stamped onto the output record.
+     *
+     * <p>This is the most important regression guard: a record carrying dependencies over
+     * hundreds of unrelated partitions, force-forwarded under the forward-unsafe policy, must
+     * still carry only its own source coordinate on the output. The inbound deps must not
+     * amplify the output header size.
+     *
+     * Asserts that a record with 500 inbound dependency entries produces an output stamped
+     * with exactly one dependency (the record's own source coordinate).
+     */
     @Test
     void aLargeInboundDependencySetIsNeverFoldedIntoTheStampedOutput() {
-        // The most important regression guard: inbound dependencies are used only to gate the record;
-        // they must never be merged into the frontier and re-stamped. A record carrying dependencies
-        // over hundreds of (unrelated) partitions, force-forwarded under forwardUnsafe, must still be
-        // stamped with only its own source coordinate — proving the inbound dependencies cannot
-        // amplify the stamped output and breach the header-size budget.
         CausalDependencies.Builder bigBuilder = CausalDependencies.builder();
         for (int p = 0; p < 500; p++) {
             bigBuilder.require(new CausalPosition(CausalPosition.deriveUuid("ghost"), p, 1_000 + p));
@@ -520,41 +632,49 @@ class CausalProcessorsTopologyTest {
         Topology topology = topology(
                 CausalProcessors.builder(upperCaser(), CausalBufferPolicy.forwardUnsafe(CausalBufferLimit.ofSize(1)))
                         .serdes(Serdes.String(), Serdes.String()).onViolation(onViolation).build(),
-                List.of("in"));
+                List.of("t1"));
 
         try (TopologyTestDriver driver = new TopologyTestDriver(topology, config(null))) {
-            TestInputTopic<String, String> in =
-                    driver.createInputTopic("in", new StringSerializer(), new StringSerializer());
+            TestInputTopic<String, String> t1 =
+                    driver.createInputTopic("t1", new StringSerializer(), new StringSerializer());
             TestOutputTopic<String, String> out =
                     driver.createOutputTopic("out", new StringDeserializer(), new StringDeserializer());
 
-            in.pipeInput(new TestRecord<>("k", "v", depsHeader(big)));
+            t1.pipeInput(new TestRecord<>("k", "v", depsHeader(big)));
 
             CausalDependencies stamped = outDeps(out.readRecord());
-            assertEquals(CausalDependencies.builder().require(new CausalPosition(IN_ID, 0, 0)).build(), stamped,
+            assertEquals(CausalDependencies.builder().require(new CausalPosition(T1_ID, 0, 0)).build(), stamped,
                     "a 500-partition inbound dependency set must not enlarge the stamped output");
-            assertEquals(1, stamped.dependencies().size(), "the stamped output carries only the source coordinate");
+            assertEquals(1, stamped.dependencies().size(),
+                    "the stamped output must carry only the source coordinate");
         }
     }
 
+    /**
+     * The Kafka Streams metrics sensors registered by Parsley are populated after buffering
+     * and drain events. The {@code records-buffered-total}, {@code records-released-total},
+     * and {@code buffer-depth} sensors reflect the correct values after one buffer/drain cycle.
+     *
+     * Asserts that each sensor holds the expected value after the cycle.
+     */
     @Test
     void streamsMetricsSensorsArePopulatedAfterBufferingAndRelease() {
         Topology topology = topology(
                 CausalProcessors.builder(upperCaser(), CausalBufferPolicy.drop(CausalBufferLimit.ofSize(100)))
                         .serdes(Serdes.String(), Serdes.String()).onViolation(onViolation).build(),
-                List.of("prices", "orders"));
+                List.of("t2", "t3"));
 
         try (TopologyTestDriver driver = new TopologyTestDriver(topology, config(null))) {
-            TestInputTopic<String, String> prices =
-                    driver.createInputTopic("prices", new StringSerializer(), new StringSerializer());
-            TestInputTopic<String, String> orders =
-                    driver.createInputTopic("orders", new StringSerializer(), new StringSerializer());
+            TestInputTopic<String, String> t2 =
+                    driver.createInputTopic("t2", new StringSerializer(), new StringSerializer());
+            TestInputTopic<String, String> t3 =
+                    driver.createInputTopic("t3", new StringSerializer(), new StringSerializer());
 
-            // Buffer one order (depends on prices-0 offset 0, not yet arrived).
-            orders.pipeInput(new TestRecord<>("k", "order",
-                    depsHeader(CausalDependencies.builder().require(new CausalPosition(PRICES_ID, 0, 0)).build())));
-            // Release it (the price arrives and advances the frontier).
-            prices.pipeInput(new TestRecord<>("k", "price", depsHeader(CausalDependencies.empty())));
+            // Buffer one t3-record (depends on t2-0 offset 0, not yet arrived).
+            t3.pipeInput(new TestRecord<>("k", "t3-val",
+                    depsHeader(CausalDependencies.builder().require(new CausalPosition(T2_ID, 0, 0)).build())));
+            // Release it (the t2-record arrives and advances the frontier).
+            t2.pipeInput(new TestRecord<>("k", "t2-val", depsHeader(CausalDependencies.empty())));
 
             assertEquals(1.0, parsleyMetric(driver, "records-buffered-total"), 0.001,
                     "one record was added to the buffer");
@@ -566,50 +686,58 @@ class CausalProcessorsTopologyTest {
     }
 
     /**
-     * A record whose dependencies contain its own source coordinate is forwarded immediately: the
-     * self-referential entry is stripped at admission, leaving empty dependencies (satisfied).
+     * A record whose dependencies contain its own source coordinate is forwarded immediately:
+     * the self-referential entry is stripped at admission, leaving empty effective dependencies.
      *
      * <p>The buffer size limit is set to 1 so any attempt to buffer the record would fire
      * {@link CausalViolationReason#LIMIT_REACHED} immediately — proving the record never
      * entered the buffer path.
+     *
+     * Asserts that the record is forwarded without entering the buffer and without a violation.
      */
     @Test
-    void selfReferentialDependency_isStrippedAndForwardedImmediately() {
+    void stripSelfReferentialDependencyAndForwardImmediately() {
         Topology topology = topology(
                 CausalProcessors.builder(upperCaser(), CausalBufferPolicy.drop(CausalBufferLimit.ofSize(1)))
                         .serdes(Serdes.String(), Serdes.String()).onViolation(onViolation).build(),
-                List.of("in"));
+                List.of("t1"));
 
         try (TopologyTestDriver driver = new TopologyTestDriver(topology, config(null))) {
-            TestInputTopic<String, String> in =
-                    driver.createInputTopic("in", new StringSerializer(), new StringSerializer());
+            TestInputTopic<String, String> t1 =
+                    driver.createInputTopic("t1", new StringSerializer(), new StringSerializer());
             TestOutputTopic<String, String> out =
                     driver.createOutputTopic("out", new StringDeserializer(), new StringDeserializer());
             KeyValueStore<String, byte[]> bufferStore = driver.getKeyValueStore("parsley-buffer");
 
-            // Dependencies require IN_ID/0@0 — exactly the record's own source coordinate.
-            in.pipeInput(new TestRecord<>("k", "hello",
-                    depsHeader(CausalDependencies.builder().require(new CausalPosition(IN_ID, 0, 0)).build())));
+            // Dependencies require T1_ID/0@0 — exactly the record's own source coordinate.
+            t1.pipeInput(new TestRecord<>("k", "hello",
+                    depsHeader(CausalDependencies.builder().require(new CausalPosition(T1_ID, 0, 0)).build())));
 
             assertEquals(List.of("HELLO"), out.readValuesToList(),
-                    "self-dep stripped → empty dependencies → forwarded immediately");
-            assertTrue(violations.isEmpty(), "no violation: the circular entry is silently removed");
+                    "self-dep stripped → effective dependencies empty → forwarded immediately");
+            assertTrue(violations.isEmpty(), "self-reference stripping must not produce a violation");
             assertEquals(0, storeSize(bufferStore),
                     "record must never enter the buffer even with size limit 1");
         }
     }
 
     /**
-     * Verifies that a fused two-processor chain (no intermediate Kafka topic) does not deadlock
-     * when proc1's frontier stamp includes the current record's own source coordinate.
+     * In a fused two-processor chain (no intermediate Kafka topic), proc1's frontier stamp
+     * includes the current record's own source coordinate. Without self-reference stripping,
+     * proc2 would hold every forwarded record indefinitely (circular dependency).
      *
-     * <p>In a fused topology, proc2's {@code context.recordMetadata()} returns the original source
-     * metadata, so the forwarded record has the same source coordinate as its dependency entry.
-     * Without the self-reference strip this would cause every forwarded record to be held
-     * indefinitely in proc2's buffer.
+     * <p>With stripping, proc2 recognises the self-reference and immediately admits the record.
+     *
+     * <p>Topology:
+     * <pre>
+     *   "t1" ──→ proc1("node1") ──→ (fused) ──→ proc2("node2") ──→ "out"
+     * </pre>
+     *
+     * Asserts that the record flows through both processors, neither violates, and proc2's
+     * buffer is empty at the end.
      */
     @Test
-    void fusedChain_proc1StampDoesNotCircularlyBlockProc2() {
+    void proc1StampDoesNotCircularlyBlockDownstreamInFusedChain() {
         StreamsBuilder builder = new StreamsBuilder();
         Consumed<String, String> consumed = Consumed.with(Serdes.String(), Serdes.String());
         Produced<String, String> produced = Produced.with(Serdes.String(), Serdes.String());
@@ -619,417 +747,424 @@ class CausalProcessorsTopologyTest {
         // Fused chain: proc1 → proc2, no .to("intermediate") between them.
         // proc1 admits the record, stamps its frontier (which now contains the source coord), and
         // forwards. proc2 receives the stamped record; because the topology is fused,
-        // context.recordMetadata() still returns the original "in" metadata → self-reference dep.
-        builder.stream("in", consumed)
+        // context.recordMetadata() still returns the original "t1" metadata → self-reference dep.
+        builder.stream("t1", consumed)
                 .process(CausalProcessors.builder(upperCaser(),
                                 CausalBufferPolicy.drop(CausalBufferLimit.ofSize(100)))
                         .serdes(Serdes.String(), Serdes.String())
                         .onViolation(proc1Violations::add)
-                        .storeName("first").build())
+                        .storeName("node1").build())
                 .process(CausalProcessors.builder(upperCaser(),
                                 CausalBufferPolicy.drop(CausalBufferLimit.ofSize(100)))
                         .serdes(Serdes.String(), Serdes.String())
                         .onViolation(proc2Violations::add)
-                        .storeName("second").build())
+                        .storeName("node2").build())
                 .to("out", produced);
 
         try (TopologyTestDriver driver = new TopologyTestDriver(builder.build(), config(null))) {
-            TestInputTopic<String, String> in =
-                    driver.createInputTopic("in", new StringSerializer(), new StringSerializer());
+            TestInputTopic<String, String> t1 =
+                    driver.createInputTopic("t1", new StringSerializer(), new StringSerializer());
             TestOutputTopic<String, String> out =
                     driver.createOutputTopic("out", new StringDeserializer(), new StringDeserializer());
 
-            in.pipeInput(new TestRecord<>("k", "hello", depsHeader(CausalDependencies.empty())));
+            t1.pipeInput(new TestRecord<>("k", "hello", depsHeader(CausalDependencies.empty())));
 
             assertEquals(List.of("HELLO"), out.readValuesToList(),
                     "record must flow through both processors and reach the output");
             assertTrue(proc1Violations.isEmpty(), "proc1 must not violate");
             assertTrue(proc2Violations.isEmpty(),
                     "proc2 must not violate: self-dep is stripped before evaluation");
-            assertEquals(0, storeSize(driver.getKeyValueStore("second-buffer")),
+            assertEquals(0, storeSize(driver.getKeyValueStore("node2-buffer")),
                     "proc2 buffer must be empty — record was never held");
         }
     }
 
     /**
-     * Verifies that two {@link CausalProcessors} instances chained via a materialized Kafka topic
-     * each enforce causal ordering independently, with full drainage at both layers (backlog #14).
+     * Verifies that two {@link CausalProcessors} instances chained via a materialized Kafka
+     * topic each enforce causal ordering independently, with full drainage at both layers.
      *
      * <h2>Topology</h2>
      * <pre>
-     *   [prices, orders] ──→ proc1("first") ──→ "quotes" (materialized)
-     *                                                   ↓
-     *   [prices, orders] ──────────────────────→ proc2("second") ──→ out
+     *   [t2, t3] ──→ proc1("node1") ──→ "t4" (materialized)
+     *                                          ↓
+     *   [t2, t3] ──────────────────→ proc2("node2") ──→ "out"
      * </pre>
-     * Proc2 subscribes to "quotes" (proc1's derived output) AND to "prices"/"orders" directly.
+     * proc2 subscribes to "t4" (proc1's derived output) AND to "t2"/"t3" directly.
      *
      * <h2>Why materialization is required</h2>
-     * Without {@code .to("quotes")} the chain is fused: {@code recordMetadata().topic()} in
-     * proc2 returns the original Kafka source topic, so every forwarded record's dep includes its
-     * own source coordinate. Self-referential entries are stripped at engine admission time, so the
-     * forwarded record is forwarded immediately rather than held indefinitely — but with
-     * materialization, quotes records have source {@code QUOTES_ID} and deps
-     * {@code {PRICES_ID@x, ORDERS_ID@y}}: no self-reference at all, and the causal ordering across
-     * two layers is preserved. See {@code fusedChain_proc1StampDoesNotCircularlyBlockProc2} for
-     * the targeted regression guard.
+     * Without {@code .to("t4")} the chain is fused: {@code recordMetadata().topic()} in proc2
+     * returns the original Kafka source topic, so every forwarded record's dep includes its own
+     * source coordinate — stripped at engine admission. With materialization, t4 records have
+     * source {@code T4_ID} and deps {@code {T2_ID@x, T3_ID@y}}: no self-reference at all, and
+     * the causal ordering across two layers is preserved.
      *
      * <h2>Why distinct {@code storeName} values are required</h2>
-     * Each {@code CausalProcessorSupplier} registers three KeyValueStores
-     * ({@code {name}-frontier}, {@code {name}-buffer}, {@code {name}-wait-index}). Without
-     * distinct names Kafka Streams rejects the topology with a duplicate-store error.
+     * Each {@link CausalProcessorSupplier} registers three KeyValueStores. Without distinct names
+     * Kafka Streams rejects the topology with a duplicate-store error.
      *
      * <h2>How proc2 bootstraps without circular dependency</h2>
-     * Direct "prices" and "orders" subscriptions advance proc2's frontier on {@code PRICES_ID}
-     * and {@code ORDERS_ID}. Once both dimensions are satisfied, proc2 drains the buffered
-     * quotes records. Both buffer stores are empty at the end.
+     * Direct "t2" and "t3" subscriptions advance proc2's frontier. Once both dimensions are
+     * satisfied, proc2 drains the buffered t4 records.
      */
     @Test
-    void chainedProcessors_materializationEnablesFullDrainAtBothLayers() {
+    void materializedChainEnablesFullDrainAtBothProcessorLayers() {
         StreamsBuilder builder = new StreamsBuilder();
         Consumed<String, String>  consumed = Consumed.with(Serdes.String(), Serdes.String());
         Produced<String, String>  produced = Produced.with(Serdes.String(), Serdes.String());
         List<CausalViolation> proc1Violations = new ArrayList<>();
         List<CausalViolation> proc2Violations = new ArrayList<>();
 
-        // Each source topic is declared once; the DSL branches the node when the same KStream
-        // object appears in multiple merge() calls. Declaring separate builder.stream() calls
-        // for the same topic would create overlapping source nodes, which Kafka Streams rejects.
-        // Each source topic is declared once; the DSL branches the node when the same KStream
-        // object appears in multiple merge() calls. Declaring separate builder.stream() calls
-        // for the same topic would create overlapping source nodes, which Kafka Streams rejects.
-        var pricesSrc = builder.stream("prices", consumed);
-        var ordersSrc = builder.stream("orders", consumed);
-        var quotesSrc = builder.stream("quotes",  consumed);
+        var t2Src = builder.stream("t2", consumed);
+        var t3Src = builder.stream("t3", consumed);
+        var t4Src = builder.stream("t4",  consumed);
 
-        // Proc1: holds orders (dep on prices) until prices arrive. Output materializes to "quotes"
-        // — a new derived event type. Quotes records carry dep {PRICES_ID@x, ORDERS_ID@y} from
-        // proc1's frontier stamp; their source is QUOTES_ID (not self-stamped).
-        pricesSrc.merge(ordersSrc)
+        // proc1: holds t3-records (dep on t2) until t2 arrives. Output materializes to "t4".
+        t2Src.merge(t3Src)
                 .process(CausalProcessors.builder(upperCaser(),
                              CausalBufferPolicy.drop(CausalBufferLimit.ofSize(100)))
                         .serdesByTopic(t -> Serdes.String(), t -> Serdes.String())
                         .onViolation(proc1Violations::add)
-                        .storeName("first").build())
-                .to("quotes", produced);
+                        .storeName("node1").build())
+                .to("t4", produced);
 
-        // Proc2: receives "quotes" (proc1's derived output) AND "prices"/"orders" directly
-        // (the same source KStream objects, branched by the DSL). Direct prices/orders bootstrap
-        // proc2's frontier on PRICES_ID and ORDERS_ID. Once satisfied, proc2 drains the buffered
-        // quotes records without any circular dependency.
-        quotesSrc.merge(pricesSrc).merge(ordersSrc)
+        // proc2: receives "t4" (proc1's derived output) AND direct t2/t3 feeds to bootstrap its frontier.
+        t4Src.merge(t2Src).merge(t3Src)
                 .process(CausalProcessors.builder(upperCaser(),
                              CausalBufferPolicy.drop(CausalBufferLimit.ofSize(100)))
                         .serdesByTopic(t -> Serdes.String(), t -> Serdes.String())
                         .onViolation(proc2Violations::add)
-                        .storeName("second").build())
+                        .storeName("node2").build())
                 .to("out", produced);
 
         try (TopologyTestDriver driver = new TopologyTestDriver(builder.build(), config(null))) {
-            TestInputTopic<String, String> prices =
-                    driver.createInputTopic("prices", new StringSerializer(), new StringSerializer());
-            TestInputTopic<String, String> orders =
-                    driver.createInputTopic("orders", new StringSerializer(), new StringSerializer());
+            TestInputTopic<String, String> t2 =
+                    driver.createInputTopic("t2", new StringSerializer(), new StringSerializer());
+            TestInputTopic<String, String> t3 =
+                    driver.createInputTopic("t3", new StringSerializer(), new StringSerializer());
             TestOutputTopic<String, String> out =
                     driver.createOutputTopic("out", new StringDeserializer(), new StringDeserializer());
 
-            // Phase 1: orders arrive before prices; held at proc1 AND at proc2 (direct subscription).
-            orders.pipeInput(new TestRecord<>("k", "order",
-                    depsHeader(CausalDependencies.builder().require(new CausalPosition(PRICES_ID, 0, 0)).build())));
-            assertTrue(out.isEmpty(), "orders must be held before prices arrive");
-            assertEquals(1, storeSize(driver.getKeyValueStore("first-buffer")),
-                    "proc1 must buffer the order");
-            assertEquals(1, storeSize(driver.getKeyValueStore("second-buffer")),
-                    "proc2 must buffer the direct order");
+            // Phase 1: t3-records arrive before t2; held at proc1 AND at proc2 (direct subscription).
+            t3.pipeInput(new TestRecord<>("k", "t3-val",
+                    depsHeader(CausalDependencies.builder().require(new CausalPosition(T2_ID, 0, 0)).build())));
+            assertTrue(out.isEmpty(), "t3-records must be held before t2 arrives");
+            assertEquals(1, storeSize(driver.getKeyValueStore("node1-buffer")),
+                    "proc1 must buffer the t3-record");
+            assertEquals(1, storeSize(driver.getKeyValueStore("node2-buffer")),
+                    "proc2 must buffer the direct t3-record");
 
-            // Phase 2: prices arrives — proc1 drains and materializes two quotes records, then
-            // proc2 bootstraps its frontier from the direct prices/orders and drains both quotes.
-            prices.pipeInput(new TestRecord<>("k", "price",
+            // Phase 2: t2-record arrives — proc1 drains and materializes two t4-records, then
+            // proc2 bootstraps its frontier from the direct t2/t3 and drains both t4-records.
+            t2.pipeInput(new TestRecord<>("k", "t2-val",
                     depsHeader(CausalDependencies.empty())));
 
             // Both layers drained completely; no records stuck in either buffer.
-            assertEquals(0, storeSize(driver.getKeyValueStore("first-buffer")));
-            assertEquals(0, storeSize(driver.getKeyValueStore("second-buffer")));
+            assertEquals(0, storeSize(driver.getKeyValueStore("node1-buffer")),
+                    "node1 buffer must be empty after drain");
+            assertEquals(0, storeSize(driver.getKeyValueStore("node2-buffer")),
+                    "node2 buffer must be empty after drain");
 
-            // "out" has 4 records: direct price, direct order (proc2's own admissions) plus
-            // the proc1-forwarded price and order (arriving via "quotes"). Exact ordering is
-            // TopologyTestDriver-dependent; assert the value multiset.
+            // "out" has 4 records: direct t2-val, direct t3-val (proc2's own admissions) plus
+            // the proc1-forwarded t2-val and t3-val (arriving via "t4").
             List<String> outValues = out.readValuesToList();
-            assertEquals(4, outValues.size());
-            assertEquals(2, outValues.stream().filter("PRICE"::equals).count(),
-                    "two PRICE records: direct and via quotes");
-            assertEquals(2, outValues.stream().filter("ORDER"::equals).count(),
-                    "two ORDER records: direct and via quotes");
+            assertEquals(4, outValues.size(), "four records must reach the output");
+            assertEquals(2, outValues.stream().filter("T2-VAL"::equals).count(),
+                    "two T2-VAL records: direct and via t4");
+            assertEquals(2, outValues.stream().filter("T3-VAL"::equals).count(),
+                    "two T3-VAL records: direct and via t4");
 
-            // Proc1's frontier spans both source topics after draining.
-            assertEquals(CausalFrontier.empty().observe(new CausalPosition(PRICES_ID, 0, 0)).observe(new CausalPosition(ORDERS_ID, 0, 0)),
-                    frontierIn(driver, "first-frontier"));
+            // proc1's frontier spans both source topics after draining.
+            assertEquals(
+                    CausalFrontier.empty()
+                            .observe(new CausalPosition(T2_ID, 0, 0))
+                            .observe(new CausalPosition(T3_ID, 0, 0)),
+                    frontierIn(driver, "node1-frontier"),
+                    "proc1 frontier must span both t2 and t3 after drain");
 
-            // Proc2's frontier spans prices and orders (from direct admissions) plus quotes@1
-            // (the last quotes record proc2 drained).
-            CausalFrontier f2 = frontierIn(driver, "second-frontier");
-            assertEquals(0L, f2.offsetFor(PRICES_ID, 0), "proc2 saw prices directly");
-            assertEquals(0L, f2.offsetFor(ORDERS_ID, 0), "proc2 saw orders directly");
-            assertEquals(1L, f2.offsetFor(QUOTES_ID, 0), "proc2 drained both quotes records");
+            // proc2's frontier spans t2 and t3 (from direct admissions) plus t4@1 (last t4-record drained).
+            CausalFrontier f2 = frontierIn(driver, "node2-frontier");
+            assertEquals(0L, f2.offsetFor(T2_ID, 0), "proc2 must have seen t2 directly");
+            assertEquals(0L, f2.offsetFor(T3_ID, 0), "proc2 must have seen t3 directly");
+            assertEquals(1L, f2.offsetFor(T4_ID, 0), "proc2 must have drained both t4-records");
 
             assertTrue(proc1Violations.isEmpty(),
-                    "proc1 must not violate: prices has empty dependencies, orders has real dependencies");
+                    "proc1 must not violate: t2 has empty dependencies, t3 has real dependencies");
             assertTrue(proc2Violations.isEmpty(),
                     "proc2 must not violate: all records carry valid dependencies");
         }
     }
 
     /**
-     * Materialized chain where proc2 also consumes a genuinely independent third topic
-     * ("discounts") whose records carry a causal dep on the derived "quotes" topic.
+     * Materialized chain: a clocked sidecar record ("t5") whose dependency points to the
+     * derived topic ("t4") is buffered in proc2 until proc1 materializes that record.
      *
      * <h2>Topology</h2>
      * <pre>
-     *   "prices" ──→ proc1("first") ──→ "quotes" (materialized)
-     *                                          ↓
-     *   "prices" ─────────────────────→ proc2("second") ──→ "out"
-     *   "discounts" ──────────────────→ proc2("second")
+     *   "t2" ──→ proc1("node1") ──→ "t4" (materialized)
+     *                                       ↓
+     *   "t2" ─────────────────────→ proc2("node2") ──→ "out"
+     *   "t5" ─────────────────────→ proc2("node2")
      * </pre>
-     * The discount record arrives at proc2 before "quotes" has been produced, so it is buffered.
-     * Once proc1 materialises quotes@0, proc2's frontier advances through PRICES (direct) and then
-     * QUOTES (quotes@0 drains), satisfying the discount's dep and releasing it last.
+     *
+     * Asserts that the sidecar is held while t4@0 is absent from proc2's frontier, and
+     * released (last, in causal order) once the dependency is satisfied.
      */
     @Test
-    void materializationChain_clockedSidecar_bufferedUntilDerivedTopicArrives() {
+    void bufferClockedSidecarUntilDerivedTopicArrivesInMaterializedChain() {
         StreamsBuilder builder = new StreamsBuilder();
         Consumed<String, String> consumed = Consumed.with(Serdes.String(), Serdes.String());
         Produced<String, String> produced = Produced.with(Serdes.String(), Serdes.String());
         List<CausalViolation> proc1Violations = new ArrayList<>();
         List<CausalViolation> proc2Violations = new ArrayList<>();
 
-        var pricesSrc    = builder.stream("prices",    consumed);
-        var quotesSrc    = builder.stream("quotes",    consumed);
-        var discountsSrc = builder.stream("discounts", consumed);
+        var t2Src    = builder.stream("t2",    consumed);
+        var t4Src    = builder.stream("t4",    consumed);
+        var t5Src = builder.stream("t5", consumed);
 
-        pricesSrc
+        t2Src
                 .process(CausalProcessors.builder(upperCaser(),
                                 CausalBufferPolicy.drop(CausalBufferLimit.ofSize(100)))
                         .serdes(Serdes.String(), Serdes.String())
                         .onViolation(proc1Violations::add)
-                        .storeName("first").build())
-                .to("quotes", produced);
+                        .storeName("node1").build())
+                .to("t4", produced);
 
-        // proc2 takes proc1's materialised output, the original prices (to bootstrap PRICES
-        // frontier), and the independent "discounts" stream.
-        quotesSrc.merge(pricesSrc).merge(discountsSrc)
+        // proc2 takes proc1's materialised output, the original t2 (to bootstrap T2 frontier),
+        // and the independent "t5" stream.
+        t4Src.merge(t2Src).merge(t5Src)
                 .process(CausalProcessors.builder(upperCaser(),
                                 CausalBufferPolicy.drop(CausalBufferLimit.ofSize(100)))
                         .serdes(Serdes.String(), Serdes.String())
                         .onViolation(proc2Violations::add)
-                        .storeName("second").build())
+                        .storeName("node2").build())
                 .to("out", produced);
 
         try (TopologyTestDriver driver = new TopologyTestDriver(builder.build(), config(null))) {
-            TestInputTopic<String, String> prices =
-                    driver.createInputTopic("prices", new StringSerializer(), new StringSerializer());
-            TestInputTopic<String, String> discounts =
-                    driver.createInputTopic("discounts", new StringSerializer(), new StringSerializer());
+            TestInputTopic<String, String> t2 =
+                    driver.createInputTopic("t2", new StringSerializer(), new StringSerializer());
+            TestInputTopic<String, String> t5 =
+                    driver.createInputTopic("t5", new StringSerializer(), new StringSerializer());
             TestOutputTopic<String, String> out =
                     driver.createOutputTopic("out", new StringDeserializer(), new StringDeserializer());
 
-            // Discount arrives before quotes@0 has been produced — must be buffered.
-            discounts.pipeInput(new TestRecord<>("k", "discount",
-                    depsHeader(CausalDependencies.builder().require(new CausalPosition(QUOTES_ID, 0, 0)).build())));
-            assertTrue(out.isEmpty(), "discount must be held: quotes@0 not yet in proc2's frontier");
-            assertEquals(1, storeSize(driver.getKeyValueStore("second-buffer")));
+            // t5-record (sidecar) arrives before t4@0 has been produced — must be buffered.
+            t5.pipeInput(new TestRecord<>("k", "t5-val",
+                    depsHeader(CausalDependencies.builder().require(new CausalPosition(T4_ID, 0, 0)).build())));
+            assertTrue(out.isEmpty(), "sidecar must be held: t4@0 not yet in proc2's frontier");
+            assertEquals(1, storeSize(driver.getKeyValueStore("node2-buffer")),
+                    "sidecar must be in proc2's buffer");
 
-            // Price arrives: proc1 materialises quotes@0 (stamped {PRICES_ID@0}).
-            // Proc2's direct price subscription advances its PRICES frontier, allowing it to admit
-            // quotes@0, which advances its QUOTES frontier and drains the discount.
-            prices.pipeInput(new TestRecord<>("k", "price", depsHeader(CausalDependencies.empty())));
+            // t2-record arrives: proc1 materialises t4@0 (stamped {T2_ID@0}).
+            // proc2's direct t2 subscription advances its T2 frontier, allowing it to admit
+            // t4@0, which advances its T4 frontier and drains the sidecar.
+            t2.pipeInput(new TestRecord<>("k", "t2-val", depsHeader(CausalDependencies.empty())));
 
-            assertEquals(0, storeSize(driver.getKeyValueStore("second-buffer")),
-                    "discount must have drained once quotes@0 was admitted");
+            assertEquals(0, storeSize(driver.getKeyValueStore("node2-buffer")),
+                    "sidecar must have drained once t4@0 was admitted by proc2");
             List<String> values = out.readValuesToList();
-            assertEquals(3, values.size(), "price (direct), price (via quotes), and discount");
-            assertEquals(2, values.stream().filter("PRICE"::equals).count());
-            assertEquals(1, values.stream().filter("DISCOUNT"::equals).count());
-            assertEquals("DISCOUNT", values.get(values.size() - 1),
-                    "discount is last: buffered until quotes@0 advanced the QUOTES frontier");
-            assertTrue(proc1Violations.isEmpty());
-            assertTrue(proc2Violations.isEmpty());
+            assertEquals(3, values.size(), "t2-val (direct), t2-val (via t4), and t5-val");
+            assertEquals(2, values.stream().filter("T2-VAL"::equals).count(),
+                    "two T2-VAL records: direct and via t4");
+            assertEquals(1, values.stream().filter("T5-VAL"::equals).count(),
+                    "one T5-VAL record released after t4@0 satisfied its dependency");
+            assertEquals("T5-VAL", values.get(values.size() - 1),
+                    "sidecar must be last: buffered until t4@0 advanced the T4 frontier");
+            assertTrue(proc1Violations.isEmpty(), "proc1 must not violate");
+            assertTrue(proc2Violations.isEmpty(), "proc2 must not violate");
         }
     }
 
     /**
-     * Fused chain where proc2 also consumes a clocked independent topic ("discounts") whose
-     * records carry a dep on the original "in" source.
+     * Fused chain: a clocked sidecar record ("t5") whose dependency points to the upstream
+     * source ("t1") is buffered in proc2 until proc1 processes a "t1" record and fuses to proc2.
      *
      * <h2>Topology</h2>
      * <pre>
-     *   "in"        ──→ proc1("first") ──→ (fused) ──→ proc2("second") ──→ "out"
-     *   "discounts" ──────────────────────────────────→ proc2("second")
+     *   "t1"  ──→ proc1("node1") ──→ (fused) ──→ proc2("node2") ──→ "out"
+     *   "t5" ──────────────────────────────────→ proc2("node2")
      * </pre>
-     * The discount arrives before proc1 has seen "in"@0, so proc2 buffers it. When proc1 processes
-     * "in"@0 and fuses to proc2, the self-dep is stripped and proc2 admits the "in" record,
-     * advancing its IN_ID frontier. The discount then drains immediately.
      *
-     * <p>This proves the self-dep strip does not prevent the frontier from advancing for IN_ID:
-     * proc2 correctly recognises that IN_ID@0 is now satisfied and releases the discount.
+     * <p>This proves that self-dep stripping does not prevent proc2's T1_ID frontier from
+     * advancing: proc2 correctly recognises that T1_ID@0 is now satisfied and releases the sidecar.
+     *
+     * Asserts that the sidecar is held while T1_ID@0 is absent from proc2's frontier, and
+     * released immediately after proc1 processes the "t1" record.
      */
     @Test
-    void fusedChain_clockedSidecar_bufferedUntilFusedOutputAdvancesFrontier() {
+    void bufferClockedSidecarUntilFusedOutputAdvancesFrontierInFusedChain() {
         StreamsBuilder builder = new StreamsBuilder();
         Consumed<String, String> consumed = Consumed.with(Serdes.String(), Serdes.String());
         Produced<String, String> produced = Produced.with(Serdes.String(), Serdes.String());
         List<CausalViolation> proc1Violations = new ArrayList<>();
         List<CausalViolation> proc2Violations = new ArrayList<>();
 
-        var discountsSrc = builder.stream("discounts", consumed);
+        var t5Src = builder.stream("t5", consumed);
 
-        // proc1 fused directly into proc2 (no .to("intermediate")); discounts also merge into proc2.
-        builder.stream("in", consumed)
+        // proc1 fused directly into proc2 (no .to("intermediate")); t5 also merges into proc2.
+        builder.stream("t1", consumed)
                 .process(CausalProcessors.builder(upperCaser(),
                                 CausalBufferPolicy.drop(CausalBufferLimit.ofSize(100)))
                         .serdes(Serdes.String(), Serdes.String())
                         .onViolation(proc1Violations::add)
-                        .storeName("first").build())
-                .merge(discountsSrc)
+                        .storeName("node1").build())
+                .merge(t5Src)
                 .process(CausalProcessors.builder(upperCaser(),
                                 CausalBufferPolicy.drop(CausalBufferLimit.ofSize(100)))
                         .serdes(Serdes.String(), Serdes.String())
                         .onViolation(proc2Violations::add)
-                        .storeName("second").build())
+                        .storeName("node2").build())
                 .to("out", produced);
 
         try (TopologyTestDriver driver = new TopologyTestDriver(builder.build(), config(null))) {
-            TestInputTopic<String, String> in =
-                    driver.createInputTopic("in", new StringSerializer(), new StringSerializer());
-            TestInputTopic<String, String> discounts =
-                    driver.createInputTopic("discounts", new StringSerializer(), new StringSerializer());
+            TestInputTopic<String, String> t1 =
+                    driver.createInputTopic("t1", new StringSerializer(), new StringSerializer());
+            TestInputTopic<String, String> t5 =
+                    driver.createInputTopic("t5", new StringSerializer(), new StringSerializer());
             TestOutputTopic<String, String> out =
                     driver.createOutputTopic("out", new StringDeserializer(), new StringDeserializer());
 
-            // Discount depends on in@0 which hasn't been processed yet — must be buffered.
-            discounts.pipeInput(new TestRecord<>("k", "discount",
-                    depsHeader(CausalDependencies.builder().require(new CausalPosition(IN_ID, 0, 0)).build())));
-            assertTrue(out.isEmpty(), "discount must be held: IN_ID@0 not yet in proc2's frontier");
-            assertEquals(1, storeSize(driver.getKeyValueStore("second-buffer")));
+            // t5-record depends on t1@0 which hasn't been processed yet — must be buffered.
+            t5.pipeInput(new TestRecord<>("k", "t5-val",
+                    depsHeader(CausalDependencies.builder().require(new CausalPosition(T1_ID, 0, 0)).build())));
+            assertTrue(out.isEmpty(), "sidecar must be held: T1_ID@0 not yet in proc2's frontier");
+            assertEquals(1, storeSize(driver.getKeyValueStore("node2-buffer")),
+                    "sidecar must be in proc2's buffer");
 
-            // "in"@0 arrives: proc1 admits it, stamps frontier {IN_ID@0}, fuses to proc2.
-            // Proc2's engine strips the self-dep → admits → frontier has IN_ID@0 → discount drains.
-            in.pipeInput(new TestRecord<>("k", "in-record", depsHeader(CausalDependencies.empty())));
+            // "t1"@0 arrives: proc1 admits it, stamps frontier {T1_ID@0}, fuses to proc2.
+            // proc2's engine strips the self-dep → admits → frontier has T1_ID@0 → sidecar drains.
+            t1.pipeInput(new TestRecord<>("k", "t1-val", depsHeader(CausalDependencies.empty())));
 
-            assertEquals(0, storeSize(driver.getKeyValueStore("second-buffer")));
-            assertEquals(List.of("IN-RECORD", "DISCOUNT"), out.readValuesToList(),
-                    "in-record admitted first (self-dep stripped), discount drains immediately after");
-            assertTrue(proc1Violations.isEmpty());
-            assertTrue(proc2Violations.isEmpty());
+            assertEquals(0, storeSize(driver.getKeyValueStore("node2-buffer")),
+                    "sidecar must have drained once T1_ID@0 was in proc2's frontier");
+            assertEquals(List.of("T1-VAL", "T5-VAL"), out.readValuesToList(),
+                    "t1-val admitted first (self-dep stripped), t5-val drains immediately after");
+            assertTrue(proc1Violations.isEmpty(), "proc1 must not violate");
+            assertTrue(proc2Violations.isEmpty(), "proc2 must not violate");
         }
     }
 
     /**
-     * Materialized chain: an unclocked sidecar record is admitted immediately with a
-     * {@link CausalViolationReason#MISSING_HEADER} violation and never enters the buffer,
-     * regardless of where the materialized chain's frontier stands.
+     * Materialized chain: an unclocked sidecar record (no causal-dependencies header) is
+     * admitted immediately with a {@link CausalViolationReason#MISSING_HEADER} violation and
+     * never enters the buffer, regardless of where the materialized chain's frontier stands.
+     *
+     * Asserts that the unclocked record is forwarded immediately, one MISSING_HEADER violation
+     * is reported, and the buffer remains empty.
      */
     @Test
-    void materializationChain_unclockedSidecar_admittedImmediately() {
+    void admitUnclockedSidecarImmediatelyInMaterializedChain() {
         StreamsBuilder builder = new StreamsBuilder();
         Consumed<String, String> consumed = Consumed.with(Serdes.String(), Serdes.String());
         Produced<String, String> produced = Produced.with(Serdes.String(), Serdes.String());
         List<CausalViolation> proc1Violations = new ArrayList<>();
         List<CausalViolation> proc2Violations = new ArrayList<>();
 
-        var pricesSrc    = builder.stream("prices",    consumed);
-        var quotesSrc    = builder.stream("quotes",    consumed);
-        var discountsSrc = builder.stream("discounts", consumed);
+        var t2Src    = builder.stream("t2",    consumed);
+        var t4Src    = builder.stream("t4",    consumed);
+        var t5Src = builder.stream("t5", consumed);
 
-        pricesSrc
+        t2Src
                 .process(CausalProcessors.builder(upperCaser(),
                                 CausalBufferPolicy.drop(CausalBufferLimit.ofSize(100)))
                         .serdes(Serdes.String(), Serdes.String())
                         .onViolation(proc1Violations::add)
-                        .storeName("first").build())
-                .to("quotes", produced);
+                        .storeName("node1").build())
+                .to("t4", produced);
 
-        quotesSrc.merge(pricesSrc).merge(discountsSrc)
+        t4Src.merge(t2Src).merge(t5Src)
                 .process(CausalProcessors.builder(upperCaser(),
                                 CausalBufferPolicy.forwardUnsafe(CausalBufferLimit.ofSize(100)))
                         .serdes(Serdes.String(), Serdes.String())
                         .onViolation(proc2Violations::add)
-                        .storeName("second").build())
+                        .storeName("node2").build())
                 .to("out", produced);
 
         try (TopologyTestDriver driver = new TopologyTestDriver(builder.build(), config(null))) {
-            TestInputTopic<String, String> prices =
-                    driver.createInputTopic("prices", new StringSerializer(), new StringSerializer());
-            TestInputTopic<String, String> discounts =
-                    driver.createInputTopic("discounts", new StringSerializer(), new StringSerializer());
+            TestInputTopic<String, String> t2 =
+                    driver.createInputTopic("t2", new StringSerializer(), new StringSerializer());
+            TestInputTopic<String, String> t5 =
+                    driver.createInputTopic("t5", new StringSerializer(), new StringSerializer());
             TestOutputTopic<String, String> out =
                     driver.createOutputTopic("out", new StringDeserializer(), new StringDeserializer());
 
-            // Unclocked discount: no parsley-causal-dependencies header → MISSING_HEADER → forwarded
-            // immediately (forwardUnsafe policy) even though the materialized chain hasn't produced anything yet.
-            discounts.pipeInput(new TestRecord<>("k", "discount"));
-            assertEquals(List.of("DISCOUNT"), out.readValuesToList(),
-                    "unclocked record must be forwarded immediately without buffering under forwardUnsafe policy");
-            assertEquals(1, proc2Violations.size());
-            assertEquals(CausalViolationReason.MISSING_HEADER, proc2Violations.get(0).reason());
-            assertEquals(0, storeSize(driver.getKeyValueStore("second-buffer")));
+            // Unclocked t5-record: no parsley-causal-dependencies header → MISSING_HEADER →
+            // forwarded immediately (forwardUnsafe policy) even though t4 hasn't produced anything.
+            t5.pipeInput(new TestRecord<>("k", "t5-val"));
+            assertEquals(List.of("T5-VAL"), out.readValuesToList(),
+                    "unclocked record must be forwarded immediately under forwardUnsafe policy");
+            assertEquals(1, proc2Violations.size(),
+                    "exactly one MISSING_HEADER violation must be reported");
+            assertEquals(CausalViolationReason.MISSING_HEADER, proc2Violations.get(0).reason(),
+                    "violation reason must be MISSING_HEADER");
+            assertEquals(0, storeSize(driver.getKeyValueStore("node2-buffer")),
+                    "unclocked record must never enter the buffer");
 
             // Normal materialized flow continues without interference from the unclocked record.
-            prices.pipeInput(new TestRecord<>("k", "price", depsHeader(CausalDependencies.empty())));
-            assertEquals(2, out.readValuesToList().size(), "price (direct) and quotes-derived");
-            assertEquals(1, proc2Violations.size(), "no new violations from clocked price/quotes");
-            assertTrue(proc1Violations.isEmpty());
+            t2.pipeInput(new TestRecord<>("k", "t2-val", depsHeader(CausalDependencies.empty())));
+            assertEquals(2, out.readValuesToList().size(),
+                    "t2-val direct and t4-derived must both appear after the unclocked record");
+            assertEquals(1, proc2Violations.size(), "no new violations from clocked t2/t4 records");
+            assertTrue(proc1Violations.isEmpty(), "proc1 must not violate");
         }
     }
 
     /**
-     * Fused chain: an unclocked sidecar record is admitted immediately with a
-     * {@link CausalViolationReason#MISSING_HEADER} violation, interleaved correctly alongside the
-     * fused proc1 output.
+     * Fused chain: an unclocked sidecar record (no causal-dependencies header) is admitted
+     * immediately with a {@link CausalViolationReason#MISSING_HEADER} violation, interleaved
+     * correctly alongside the fused proc1 output.
+     *
+     * Asserts that the unclocked record is forwarded immediately, one MISSING_HEADER violation
+     * is reported, and the buffer remains empty. Subsequent clocked records flow normally.
      */
     @Test
-    void fusedChain_unclockedSidecar_admittedImmediately() {
+    void admitUnclockedSidecarImmediatelyInFusedChain() {
         StreamsBuilder builder = new StreamsBuilder();
         Consumed<String, String> consumed = Consumed.with(Serdes.String(), Serdes.String());
         Produced<String, String> produced = Produced.with(Serdes.String(), Serdes.String());
         List<CausalViolation> proc1Violations = new ArrayList<>();
         List<CausalViolation> proc2Violations = new ArrayList<>();
 
-        var discountsSrc = builder.stream("discounts", consumed);
+        var t5Src = builder.stream("t5", consumed);
 
-        builder.stream("in", consumed)
+        builder.stream("t1", consumed)
                 .process(CausalProcessors.builder(upperCaser(),
                                 CausalBufferPolicy.drop(CausalBufferLimit.ofSize(100)))
                         .serdes(Serdes.String(), Serdes.String())
                         .onViolation(proc1Violations::add)
-                        .storeName("first").build())
-                .merge(discountsSrc)
+                        .storeName("node1").build())
+                .merge(t5Src)
                 .process(CausalProcessors.builder(upperCaser(),
                                 CausalBufferPolicy.forwardUnsafe(CausalBufferLimit.ofSize(100)))
                         .serdes(Serdes.String(), Serdes.String())
                         .onViolation(proc2Violations::add)
-                        .storeName("second").build())
+                        .storeName("node2").build())
                 .to("out", produced);
 
         try (TopologyTestDriver driver = new TopologyTestDriver(builder.build(), config(null))) {
-            TestInputTopic<String, String> in =
-                    driver.createInputTopic("in", new StringSerializer(), new StringSerializer());
-            TestInputTopic<String, String> discounts =
-                    driver.createInputTopic("discounts", new StringSerializer(), new StringSerializer());
+            TestInputTopic<String, String> t1 =
+                    driver.createInputTopic("t1", new StringSerializer(), new StringSerializer());
+            TestInputTopic<String, String> t5 =
+                    driver.createInputTopic("t5", new StringSerializer(), new StringSerializer());
             TestOutputTopic<String, String> out =
                     driver.createOutputTopic("out", new StringDeserializer(), new StringDeserializer());
 
-            // Unclocked discount forwarded immediately under forwardUnsafe policy, before proc1 has processed anything.
-            discounts.pipeInput(new TestRecord<>("k", "discount"));
-            assertEquals(List.of("DISCOUNT"), out.readValuesToList());
-            assertEquals(1, proc2Violations.size());
-            assertEquals(CausalViolationReason.MISSING_HEADER, proc2Violations.get(0).reason());
-            assertEquals(0, storeSize(driver.getKeyValueStore("second-buffer")),
+            // Unclocked t5-record forwarded immediately under forwardUnsafe policy.
+            t5.pipeInput(new TestRecord<>("k", "t5-val"));
+            assertEquals(List.of("T5-VAL"), out.readValuesToList(),
+                    "unclocked sidecar must be forwarded immediately");
+            assertEquals(1, proc2Violations.size(),
+                    "exactly one MISSING_HEADER violation must be reported");
+            assertEquals(CausalViolationReason.MISSING_HEADER, proc2Violations.get(0).reason(),
+                    "violation reason must be MISSING_HEADER");
+            assertEquals(0, storeSize(driver.getKeyValueStore("node2-buffer")),
                     "unclocked record must never enter the buffer");
 
             // Fused proc1 output flows through proc2 normally alongside the earlier unclocked record.
-            in.pipeInput(new TestRecord<>("k", "in-record", depsHeader(CausalDependencies.empty())));
-            assertEquals(List.of("IN-RECORD"), out.readValuesToList());
-            assertEquals(1, proc2Violations.size(), "no new violations from clocked in-record");
-            assertTrue(proc1Violations.isEmpty());
+            t1.pipeInput(new TestRecord<>("k", "t1-val", depsHeader(CausalDependencies.empty())));
+            assertEquals(List.of("T1-VAL"), out.readValuesToList(),
+                    "clocked t1-val must flow through both processors normally");
+            assertEquals(1, proc2Violations.size(), "no new violations from clocked t1-val");
+            assertTrue(proc1Violations.isEmpty(), "proc1 must not violate");
         }
     }
 

@@ -78,6 +78,17 @@ class CausalAvroSchemaRegistryIT {
                     .withEnv("SCHEMA_REGISTRY_LISTENERS", "http://0.0.0.0:8081")
                     .withEnv("SCHEMA_REGISTRY_KAFKASTORE_BOOTSTRAP_SERVERS", "PLAINTEXT://kafka:19092");
 
+    /**
+     * An {@link Order} and a {@link Price} — each Avro-serialised under its own Schema Registry
+     * subject — round-trip through a {@link CausalConsumer} that uses a {@link SpecificAvroSerde}
+     * as its default value serde.
+     *
+     * <p>Neither record declares a causal dependency, so both are admitted immediately. The
+     * concrete Avro types are reconstructed by the registry using {@code specific.avro.reader=true}.
+     *
+     * Asserts that the received {@code Order} and {@code Price} are field-for-field equal to the
+     * originals, and that the frontier covers partition 0 for both topics.
+     */
     @Test
     void avroRecordsAcrossTopicsRoundTripThroughTheCausalConsumer() throws Exception {
         String bootstrap = kafka.getBootstrapServers();
@@ -126,6 +137,18 @@ class CausalAvroSchemaRegistryIT {
         }
     }
 
+    /**
+     * An Avro {@link Order} buffered while waiting for a {@link Price} dependency is released in
+     * causal order once the Price arrives, and is deserialized under the {@code orders-value}
+     * Schema Registry subject rather than the buffer-store or changelog subject.
+     *
+     * <p>A drop policy with a short eviction window is used: if causal drain is broken the Order
+     * is evicted, the await fails, and the {@code onViolation} callback surfaces the cause.
+     *
+     * Asserts that Price is delivered first, the Order is delivered second with field-for-field
+     * equality to the original, and the buffered Order's header decodes to the producer's original
+     * dependencies — not the delivery-time frontier.
+     */
     @Test
     void bufferedAvroOrderIsReleasedByArrivingPriceAndDeserializesWithCorrectSchemaSubject() throws Exception {
         String bootstrap = kafka.getBootstrapServers();

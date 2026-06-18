@@ -67,6 +67,22 @@ class CausalProcessorsAvroTopologyTest {
         MockSchemaRegistry.dropScope(SCOPE);
     }
 
+    /**
+     * An Avro {@link Order} held in the buffer while waiting for a {@link Price} dependency is
+     * Avro-serialised into the store under the {@code orders-value} Schema Registry subject (its
+     * source topic), and is deserialized back to an equal {@code Order} when it drains — never
+     * under the buffer-store or changelog subject name.
+     *
+     * <p>The test uses a shared {@link SpecificAvroSerde} instance wired to an in-process
+     * {@link MockSchemaRegistry}, so every buffer read/write hits the same scope. The registered
+     * subjects are inspected directly after the driver closes to confirm subject isolation.
+     *
+     * Asserts that the held record is not delivered to the delegate before the Price arrives,
+     * the buffer store contains exactly one entry while held, and after the Price drains it both
+     * values arrive in causal order and the buffer is empty. Also asserts that {@code orders-value}
+     * and {@code prices-value} subjects are registered and no subject contains {@code buffer} or
+     * {@code changelog}.
+     */
     @Test
     void heldAvroRecordRoundTripsThroughTheBufferUnderItsSourceTopicSubject() {
         // One serde instance, shared by both the input deserialisation (Consumed) and Parsley's

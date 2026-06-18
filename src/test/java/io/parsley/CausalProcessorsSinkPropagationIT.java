@@ -57,6 +57,18 @@ class CausalProcessorsSinkPropagationIT {
     private static final String IN = "decorator-in";
     private static final String OUT = "decorator-out";
 
+    /**
+     * A record forwarded by the causal decorator carries Parsley's stamped causal-dependencies header
+     * through a Kafka Streams sink ({@code .to(topic)}) onto the output topic, so a downstream raw
+     * consumer can read the header without a {@code CausalProducer} on the egress path.
+     *
+     * <p>The decorator is wired with a drop policy; the input record carries empty dependencies so it
+     * is admitted immediately and the frontier advances. The output is read by a raw {@link
+     * org.apache.kafka.clients.consumer.KafkaConsumer} that only understands byte headers.
+     *
+     * Asserts that the value is the delegate's transform, and that the causal-dependencies header
+     * on the output record decodes to a position on {@code decorator-in} at offset 0.
+     */
     @Test
     void stampedClockSurvivesTheSinkToTheOutputTopic() throws Exception {
         String bootstrap = kafka.getBootstrapServers();
