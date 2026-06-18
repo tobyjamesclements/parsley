@@ -65,4 +65,7 @@ jobs:
               ${{ steps.ver.outputs.version }} ${{ steps.ver.outputs.alias }}
           if [[ "${{ steps.ver.outputs.alias }}" == "latest" ]]; then
             mike set-default --push latest
+          else
+            # Set dev as default only when no stable release exists yet
+            mike list | grep -q "latest" || mike set-default --push dev
           fi
