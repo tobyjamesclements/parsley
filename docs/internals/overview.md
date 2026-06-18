@@ -21,6 +21,7 @@ All three share a common set of value types and a single causal engine.
 | `CausalPosition` | A single coordinate: `(topicId, partition, offset)` |
 | `CausalViolation` | Snapshot of a violation: reason, frontier, required dependencies, gap |
 | `CausalViolationReason` | Enum: `MISSING_HEADER`, `UNRESOLVABLE_DEPENDENCIES`, `LIMIT_REACHED` |
+| `ViolationAction` | Enum: `FORWARD_UNSAFE`, `DROP`, `DEAD_LETTER` — the per-reason action a policy applies |
 
 ### Package-private implementation
 

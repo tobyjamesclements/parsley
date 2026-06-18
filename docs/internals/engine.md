@@ -56,10 +56,10 @@ Retrieves all buffer entries in insertion-sequence order. For each entry:
 
 1. Report `LIMIT_REACHED` violation via `CausalViolationHandler`.
 2. Remove from buffer and wait index.
-3. Apply policy:
-    - **ForwardUnsafe**: advance frontier, add to forward list.
-    - **Drop**: discard.
-    - **DeadLetter**: append DLQ headers, route to dead-letter sink.
+3. Apply `policy.actionFor(LIMIT_REACHED)`:
+    - **`FORWARD_UNSAFE`**: advance frontier, add to forward list.
+    - **`DROP`**: discard.
+    - **`DEAD_LETTER`**: append DLQ headers, route to dead-letter sink.
 
 DLQ headers added per evicted record:
 

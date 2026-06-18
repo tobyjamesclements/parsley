@@ -40,6 +40,7 @@ nav:
   - Getting started: getting-started.md
   - Streams integration: streams.md
   - Configuration: configuration.md
+  - Migration: migration.md
   - API reference: api/index.html
   - Internals:
     - Overview: internals/overview.md

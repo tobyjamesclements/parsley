@@ -16,7 +16,7 @@ ProcessorSupplier<String, Order, String, Enriched> user = new ProcessorSupplier<
 
 CausalProcessorSupplier<String, Order, String, Enriched> causal =
         CausalProcessors.builder(user,
-                        CausalBufferPolicy.deadLetter(limit, "parsley-dlq"))
+                        CausalBufferPolicy.deadLetter(limit))
                 .serdes(Serdes.String(), orderSerde)
                 .onViolation(myViolationHandler)
                 .deadLetterSink(dlqSink)

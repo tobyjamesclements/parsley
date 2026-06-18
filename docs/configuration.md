@@ -39,14 +39,15 @@ backstop.
 
 ## Buffer policies
 
-A `CausalBufferPolicy` pairs a limit with a handling strategy for evicted records. Every policy
-reports a `CausalViolation` for each evicted record.
+A `CausalBufferPolicy` pairs a limit with a handling strategy for evicted records via a
+`ViolationAction` (`FORWARD_UNSAFE`, `DROP`, or `DEAD_LETTER`). Every policy reports a
+`CausalViolation` for each evicted record.
 
-The policy governs what happens to **all** violation records — both records evicted from the
-buffer when a limit fires (`LIMIT_REACHED`) and records that arrive with missing or corrupt
-dependency headers (`MISSING_HEADER`, `UNRESOLVABLE_DEPENDENCIES`). The frontier always advances
-for violation records regardless of policy, so buffered records waiting on that coordinate are
-not permanently stalled.
+The policy applies to all three violation reasons: records evicted when a limit fires
+(`LIMIT_REACHED`) and records that arrive with missing or corrupt dependency headers
+(`MISSING_HEADER`, `UNRESOLVABLE_DEPENDENCIES`). The frontier always advances for violation
+records regardless of policy, so buffered records waiting on that coordinate are not permanently
+stalled.
 
 ### Forward unsafe
 
@@ -68,11 +69,11 @@ Discards violation records entirely. Strict: no out-of-order delivery, but recor
 ### Dead letter
 
 ```java
-CausalBufferPolicy.deadLetter(limit, "parsley-dlq")
+CausalBufferPolicy.deadLetter(limit)
 ```
 
-Routes violation records to a named dead-letter topic (via a sink you provide). Strict: no
-out-of-order delivery. Each routed record receives three additional headers:
+Routes violation records to a dead-letter sink you provide. Strict: no out-of-order delivery.
+Each routed record receives three additional headers:
 
 | Header | Content |
 |---|---|
@@ -82,6 +83,27 @@ out-of-order delivery. Each routed record receives three additional headers:
 
 The reason and gap headers allow an operator to distinguish eviction from header violations and
 reconstruct exactly which offsets were missing at eviction time.
+
+### Per-violation-type policy
+
+The convenience factories above apply the same action to every violation reason. The builder lets
+each reason carry its own `ViolationAction`:
+
+```java
+CausalBufferPolicy policy = CausalBufferPolicy.builder()
+        .onMissing(ViolationAction.FORWARD_UNSAFE)      // tolerate legacy (non-Parsley) producers
+        .onUnresolvable(ViolationAction.DROP)            // corrupt header → discard
+        .onLimit(ViolationAction.DEAD_LETTER)            // buffer overflow → DLQ
+        .setLimit(CausalBufferLimit.ofSize(1000))
+        .build();
+```
+
+All four settings (`onMissing`, `onUnresolvable`, `onLimit`, `setLimit`) are required; `build()`
+throws `IllegalStateException` if any are omitted. A dead-letter sink is required if any action
+is `DEAD_LETTER`, and forbidden otherwise.
+
+See [Migration](migration.md) for the typical use of this builder when integrating Parsley with
+an existing cluster.
 
 ---
 

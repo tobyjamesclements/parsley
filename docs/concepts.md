@@ -52,7 +52,7 @@ A `CausalBufferPolicy` determines what happens when the limit fires. **All polic
 |---|---|---|
 | Forward unsafe | `CausalBufferPolicy.forwardUnsafe(limit)` | Forwards the record out-of-order (lenient — delivery is preserved, ordering is not) |
 | Drop | `CausalBufferPolicy.drop(limit)` | Discards the record (strict — no out-of-order delivery) |
-| Dead letter | `CausalBufferPolicy.deadLetter(limit, topic)` | Routes the record to a dead-letter sink with additional headers describing the gap (strict) |
+| Dead letter | `CausalBufferPolicy.deadLetter(limit)` | Routes the record to a dead-letter sink with additional headers describing the gap (strict) |
 
 ## Causal violations
 
@@ -65,10 +65,12 @@ be upheld for a specific record. Three reasons exist:
 | `UNRESOLVABLE_DEPENDENCIES` | The header is present but cannot be deserialised (corrupt or unsupported wire version) |
 | `LIMIT_REACHED` | The record was evicted from the buffer because a limit fired |
 
-Records with `MISSING_HEADER` or `UNRESOLVABLE_DEPENDENCIES` are handled consistently with the
-configured buffer policy: `forwardUnsafe` forwards them immediately, `drop` discards them, and
-`deadLetter` routes them to the dead-letter sink. The frontier always advances regardless of policy,
-so records buffered downstream are not permanently stalled by the violation.
+The action taken for each violation reason is configured by the policy. The convenience factories
+(`forwardUnsafe`, `drop`, `deadLetter`) apply the same action to all three reasons. The
+`CausalBufferPolicy.builder()` lets each reason carry a distinct `ViolationAction` — for example,
+forwarding records with no Parsley header while dropping or dead-lettering records evicted from the
+buffer. The frontier always advances regardless of action, so records buffered downstream are not
+permanently stalled by the violation.
 
 Each violation includes the current frontier, the required dependencies, and the **causal gap**:
 a per-coordinate shortfall showing exactly how far the frontier was behind at the time of eviction.
