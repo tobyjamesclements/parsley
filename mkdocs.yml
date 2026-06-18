@@ -45,6 +45,7 @@ nav:
   - Getting started: getting-started.md
   - Streams integration: streams.md
   - Configuration: configuration.md
+  - Performance: performance.md
   - Migration: migration.md
   - API reference: api/index.html
   - Internals:
@@ -53,3 +54,4 @@ nav:
     - The engine: internals/engine.md
     - Streams integration: internals/streams.md
     - Consumer: internals/consumer.md
+    - Benchmarks: internals/benchmarks.md
