@@ -11,10 +11,9 @@ import java.util.Map;
  * A {@link ParsleyTopicAdmin} that substitutes deterministic name-derived UUIDs (via
  * {@link CausalPosition#deriveUuid}) for every topic's Kafka-assigned UUID.
  *
- * <p>This makes {@link CausalDependencies#advance(org.apache.kafka.common.TopicPartition, long)}
- * — which also uses {@code deriveUuid} internally — resolve to the same UUID that the consumer's
- * frontier uses, so cross-topic causal dependencies drain naturally in integration tests rather
- * than waiting for the eviction limit.
+ * <p>This ensures that UUIDs passed to {@link CausalDependencies#builder()} via
+ * {@link CausalPosition#deriveUuid} match the consumer's frontier, so cross-topic causal
+ * dependencies drain naturally in integration tests rather than waiting for the eviction limit.
  *
  * <h2>Constructors</h2>
  * <dl>

@@ -30,7 +30,7 @@ class CausalViolationHandlerTest {
     void lambdaReceivesTheViolationWithItsGap() {
         CausalViolation limit = new CausalViolation(
                 record, CausalViolationReason.LIMIT_REACHED,
-                CausalFrontier.empty(), CausalDependencies.empty().advance(CausalPosition.deriveUuid("prices"), 0, 4),
+                CausalFrontier.empty(), CausalDependencies.builder().require(new CausalPosition(CausalPosition.deriveUuid("prices"), 0, 4)).build(),
                 List.of(new CausalPosition(CausalPosition.deriveUuid("prices"), 0, 5L)));
 
         AtomicReference<CausalViolation> seen = new AtomicReference<>();

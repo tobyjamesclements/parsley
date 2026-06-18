@@ -15,9 +15,9 @@ import java.util.Map;
  *         Map.of(), streamsConfig).build();
  * }</pre>
  *
- * <p>{@link CausalBufferPolicy#deadLetter Dead-letter} policies are not supported by this facade —
- * there is no dead-letter sink — and are rejected by {@link Builder#build()}. To dead-letter evicted
- * records, build a custom topology with {@link CausalProcessors} instead.
+ * <p>Policies where any violation type uses {@link ViolationAction#DEAD_LETTER} are not supported
+ * by this facade — there is no dead-letter sink — and are rejected by {@link Builder#build()}.
+ * To dead-letter evicted records, build a custom topology with {@link CausalProcessors} instead.
  */
 public final class CausalConsumers {
 
@@ -29,8 +29,8 @@ public final class CausalConsumers {
      * @param <K>            the record key type
      * @param <V>            the record value type
      * @param topics         the Kafka topics to subscribe to; must not be empty
-     * @param policy         the buffering policy; must not be a
-     *                       {@link CausalBufferPolicy#deadLetter dead-letter} policy
+     * @param policy         the buffering policy; must not use {@link ViolationAction#DEAD_LETTER}
+     *                       for any violation type
      * @param consumerConfig additional consumer configuration (overrides defaults derived from
      *                       {@code streamsConfig})
      * @param streamsConfig  Kafka Streams configuration; must include at minimum

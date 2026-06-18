@@ -121,7 +121,7 @@ class CausalConcurrentProducersIT {
                 try {
                     for (int i = 0; i < 3; i++) {
                         producerA.send(new ProducerRecord<>(OUTPUT, "ka" + i, "a" + i),
-                                CausalDependencies.empty().advance(topicAId, 0, i)).get();
+                                CausalDependencies.builder().require(new CausalPosition(topicAId, 0, i)).build()).get();
                     }
                 } catch (Exception e) {
                     throw new RuntimeException(e);
@@ -131,7 +131,7 @@ class CausalConcurrentProducersIT {
                 try {
                     for (int i = 0; i < 3; i++) {
                         producerB.send(new ProducerRecord<>(OUTPUT, "kb" + i, "b" + i),
-                                CausalDependencies.empty().advance(topicBId, 0, i)).get();
+                                CausalDependencies.builder().require(new CausalPosition(topicBId, 0, i)).build()).get();
                     }
                 } catch (Exception e) {
                     throw new RuntimeException(e);
@@ -181,14 +181,14 @@ class CausalConcurrentProducersIT {
             ConsumerRecord<String, String> a0 = outputRecords(received).stream()
                     .filter(r -> r.value().equals("a0")).findFirst().orElseThrow();
             assertEquals(
-                    Optional.of(CausalDependencies.empty().advance(topicAId, 0, 0)),
+                    Optional.of(CausalDependencies.builder().require(new CausalPosition(topicAId, 0, 0)).build()),
                     CausalDependencies.fromRecord(a0),
                     "a0 must carry producer-A's original dependencies");
 
             ConsumerRecord<String, String> b0 = outputRecords(received).stream()
                     .filter(r -> r.value().equals("b0")).findFirst().orElseThrow();
             assertEquals(
-                    Optional.of(CausalDependencies.empty().advance(topicBId, 0, 0)),
+                    Optional.of(CausalDependencies.builder().require(new CausalPosition(topicBId, 0, 0)).build()),
                     CausalDependencies.fromRecord(b0),
                     "b0 must carry producer-B's original dependencies");
 

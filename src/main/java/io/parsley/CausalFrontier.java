@@ -18,10 +18,10 @@ import java.util.Objects;
  * topic-partition, keyed by the topic's Kafka UUID so that topic deletion and recreation produce a
  * different identity even when the name is reused.
  *
- * <p>Instances are immutable. {@link #advance} and {@link #merge} return new frontiers.
+ * <p>Instances are immutable. {@link #observe} and {@link #merge} return new frontiers.
  *
  * <p>For paths without a real AdminClient UUID, derive one via {@link CausalPosition#deriveUuid}
- * and call {@link #advance(Uuid, int, long)} directly.
+ * and call {@link #observe(CausalPosition)} directly.
  *
  * <h2>Converting to dependencies</h2>
  * Call {@link #toDependencies()} to turn the frontier into a {@link CausalDependencies} that can be
@@ -52,17 +52,14 @@ public final class CausalFrontier {
     }
 
     /**
-     * Returns a new frontier with {@code (topicId, partition)} advanced to
-     * {@code max(current, offset)}.
+     * Returns a new frontier with {@code pos} recorded at {@code max(current, pos.offset())}.
      *
-     * @param topicId   the topic UUID
-     * @param partition the partition index
-     * @param offset    the newly observed offset
+     * @param pos the observed position; must not be {@code null}
      * @return a new {@code CausalFrontier} with the updated position
      */
-    public CausalFrontier advance(Uuid topicId, int partition, long offset) {
+    public CausalFrontier observe(CausalPosition pos) {
         Map<Key, Long> next = new HashMap<>(offsetFor);
-        next.merge(new Key(topicId, partition), offset, Math::max);
+        next.merge(new Key(pos.topicId(), pos.partition()), pos.offset(), Math::max);
         return new CausalFrontier(Map.copyOf(next));
     }
 
@@ -86,11 +83,11 @@ public final class CausalFrontier {
      * @return a {@code CausalDependencies} equivalent to this frontier
      */
     public CausalDependencies toDependencies() {
-        CausalDependencies deps = CausalDependencies.empty();
-        for (Map.Entry<Key, Long> e : offsetFor.entrySet()) {
-            deps = deps.advance(e.getKey().topicId(), e.getKey().partition(), e.getValue());
+        CausalDependencies.Builder builder = CausalDependencies.builder();
+        for (CausalPosition pos : positions()) {
+            builder.require(pos);
         }
-        return deps;
+        return builder.build();
     }
 
     /**

@@ -18,7 +18,7 @@ import java.util.function.Function;
  *
  * <pre>{@code
  * builder.stream(List.of("prices", "orders"), Consumed.with(Serdes.String(), orderSerde))
- *        .process(CausalProcessors.builder(userSupplier, CausalBufferPolicy.deadLetter(limit, "dlq"))
+ *        .process(CausalProcessors.builder(userSupplier, CausalBufferPolicy.deadLetter(limit))
  *                .serdes(Serdes.String(), orderSerde)
  *                .onViolation(onViolation)
  *                .deadLetterSink(deadLetterSink)
@@ -182,21 +182,22 @@ public final class CausalProcessors {
          *
          * @return a decorated supplier ready for {@code stream(...).process(...)}
          * @throws IllegalStateException    if no serde pair was set
-         * @throws IllegalArgumentException if the policy is a DeadLetter policy and no sink was set,
-         *                                  or a sink was set with a non-DeadLetter policy
+         * @throws IllegalArgumentException if any violation type uses {@link ViolationAction#DEAD_LETTER}
+         *                                  and no sink was set, or a sink was set but no violation type
+         *                                  uses {@link ViolationAction#DEAD_LETTER}
          */
         public CausalProcessorSupplier<KIn, VIn, KOut, VOut> build() {
             if (keySerdeByTopic == null || valueSerdeByTopic == null) {
                 throw new IllegalStateException("serdes are required; call serdes(...) or serdesByTopic(...)");
             }
-            boolean isDeadLetter = policy instanceof ParsleyDeadLetterPolicy;
-            if (isDeadLetter && deadLetterSink == null) {
+            boolean needsSink = policy.requiresDeadLetterSink();
+            if (needsSink && deadLetterSink == null) {
                 throw new IllegalArgumentException(
-                        "DeadLetter policy requires a dead-letter sink — call deadLetterSink(...)");
+                        "Policy requires a dead-letter sink — call deadLetterSink(...)");
             }
-            if (!isDeadLetter && deadLetterSink != null) {
+            if (!needsSink && deadLetterSink != null) {
                 throw new IllegalArgumentException(
-                        "a dead-letter sink is only valid with a DeadLetter policy");
+                        "A dead-letter sink is only valid when at least one violation type uses DEAD_LETTER");
             }
             return new ParsleyProcessorSupplier<>(
                     userSupplier, policy, onViolation, deadLetterSink, keySerdeByTopic, valueSerdeByTopic,

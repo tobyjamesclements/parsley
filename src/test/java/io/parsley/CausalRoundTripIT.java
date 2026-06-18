@@ -68,7 +68,7 @@ class CausalRoundTripIT {
             for (int i = 0; i < 5; i++) {
                 CausalDependencies deps = i == 0
                         ? CausalDependencies.empty()
-                        : CausalDependencies.empty().advance(topicId, 0, (long) (i - 1));
+                        : CausalDependencies.builder().require(new CausalPosition(topicId, 0, (long) (i - 1))).build();
                 producer.send(new ProducerRecord<>(TOPIC, "k", "v" + i), deps);
             }
 
@@ -90,7 +90,7 @@ class CausalRoundTripIT {
             for (int i = 0; i < 5; i++) {
                 CausalDependencies expected = i == 0
                         ? CausalDependencies.empty()
-                        : CausalDependencies.empty().advance(topicId, 0, (long) (i - 1));
+                        : CausalDependencies.builder().require(new CausalPosition(topicId, 0, (long) (i - 1))).build();
                 assertEquals(Optional.of(expected), CausalDependencies.fromRecord(received.get(i)),
                         "record " + i + " should carry its producer's dependencies");
             }

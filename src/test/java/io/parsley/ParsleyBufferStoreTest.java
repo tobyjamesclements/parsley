@@ -31,14 +31,14 @@ class ParsleyBufferStoreTest {
 
     @Test
     void entriesAreReturnedInInsertionOrderWithTheirDependencies() {
-        store.add(rec(ORDERS, 0, CausalDependencies.empty().advance(PRICES_ID, 0, 9)));
-        store.add(rec(ORDERS, 1, CausalDependencies.empty().advance(PRICES_ID, 0, 3)));
+        store.add(rec(ORDERS, 0, CausalDependencies.builder().require(new CausalPosition(PRICES_ID, 0, 9)).build()));
+        store.add(rec(ORDERS, 1, CausalDependencies.builder().require(new CausalPosition(PRICES_ID, 0, 3)).build()));
 
         List<ParsleyBufferStore.Entry<String, String>> entries = store.entries();
 
         assertEquals(2, entries.size());
         assertEquals(0L, entries.get(0).record().sourceOffset());
-        assertEquals(CausalDependencies.empty().advance(PRICES_ID, 0, 9), entries.get(0).dependencies());
+        assertEquals(CausalDependencies.builder().require(new CausalPosition(PRICES_ID, 0, 9)).build(), entries.get(0).dependencies());
         assertEquals(1L, entries.get(1).record().sourceOffset());
         assertTrue(entries.get(0).sequence() < entries.get(1).sequence(),
                 "earlier-added entry must carry the lower sequence");
@@ -46,8 +46,8 @@ class ParsleyBufferStoreTest {
 
     @Test
     void removeDropsTheEntryAndDecrementsSize() {
-        store.add(rec(ORDERS, 0, CausalDependencies.empty().advance(PRICES_ID, 0, 1)));
-        store.add(rec(ORDERS, 1, CausalDependencies.empty().advance(PRICES_ID, 0, 5)));
+        store.add(rec(ORDERS, 0, CausalDependencies.builder().require(new CausalPosition(PRICES_ID, 0, 1)).build()));
+        store.add(rec(ORDERS, 1, CausalDependencies.builder().require(new CausalPosition(PRICES_ID, 0, 5)).build()));
         assertEquals(2, store.size());
 
         long firstSeq = store.entries().get(0).sequence();

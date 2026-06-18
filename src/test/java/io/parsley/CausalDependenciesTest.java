@@ -25,35 +25,35 @@ class CausalDependenciesTest {
     @Test
     void emptyClockIsSatisfiedByAnything() {
         assertTrue(CausalDependencies.empty().isSatisfiedBy(CausalFrontier.empty()));
-        assertTrue(CausalDependencies.empty().isSatisfiedBy(CausalFrontier.empty().advance(PRICES_ID, 0, 7)));
+        assertTrue(CausalDependencies.empty().isSatisfiedBy(CausalFrontier.empty().observe(new CausalPosition(PRICES_ID, 0, 7))));
     }
 
     @Test
     void advanceTakesTheMaximum() {
-        CausalDependencies deps = CausalDependencies.empty().advance(PRICES_ID, 0, 5).advance(PRICES_ID, 0, 2);
-        assertEquals(CausalDependencies.empty().advance(PRICES_ID, 0, 5), deps);
+        CausalDependencies deps = CausalDependencies.builder().require(new CausalPosition(PRICES_ID, 0, 5)).require(new CausalPosition(PRICES_ID, 0, 2)).build();
+        assertEquals(CausalDependencies.builder().require(new CausalPosition(PRICES_ID, 0, 5)).build(), deps);
     }
 
     @Test
     void satisfiedByRequiresEveryPartitionToBeCaughtUp() {
-        CausalDependencies required = CausalDependencies.empty().advance(PRICES_ID, 0, 3);
+        CausalDependencies required = CausalDependencies.builder().require(new CausalPosition(PRICES_ID, 0, 3)).build();
         assertFalse(required.isSatisfiedBy(CausalFrontier.empty()));
-        assertFalse(required.isSatisfiedBy(CausalFrontier.empty().advance(PRICES_ID, 0, 2)));
-        assertTrue(required.isSatisfiedBy(CausalFrontier.empty().advance(PRICES_ID, 0, 3)));
-        assertTrue(required.isSatisfiedBy(CausalFrontier.empty().advance(PRICES_ID, 0, 4)));
+        assertFalse(required.isSatisfiedBy(CausalFrontier.empty().observe(new CausalPosition(PRICES_ID, 0, 2))));
+        assertTrue(required.isSatisfiedBy(CausalFrontier.empty().observe(new CausalPosition(PRICES_ID, 0, 3))));
+        assertTrue(required.isSatisfiedBy(CausalFrontier.empty().observe(new CausalPosition(PRICES_ID, 0, 4))));
     }
 
     @Test
     void frontierMergeTakesPerPartitionMaximum() {
-        CausalFrontier a = CausalFrontier.empty().advance(PRICES_ID, 0, 3).advance(ORDERS_ID, 0, 1);
-        CausalFrontier b = CausalFrontier.empty().advance(PRICES_ID, 0, 1).advance(ORDERS_ID, 0, 9);
+        CausalFrontier a = CausalFrontier.empty().observe(new CausalPosition(PRICES_ID, 0, 3)).observe(new CausalPosition(ORDERS_ID, 0, 1));
+        CausalFrontier b = CausalFrontier.empty().observe(new CausalPosition(PRICES_ID, 0, 1)).observe(new CausalPosition(ORDERS_ID, 0, 9));
         CausalFrontier merged = a.merge(b);
-        assertEquals(CausalFrontier.empty().advance(PRICES_ID, 0, 3).advance(ORDERS_ID, 0, 9), merged);
+        assertEquals(CausalFrontier.empty().observe(new CausalPosition(PRICES_ID, 0, 3)).observe(new CausalPosition(ORDERS_ID, 0, 9)), merged);
     }
 
     @Test
     void serialisationRoundTrips() {
-        CausalDependencies deps = CausalDependencies.empty().advance(PRICES_ID, 0, 42).advance(ORDERS_ID, 0, 7);
+        CausalDependencies deps = CausalDependencies.builder().require(new CausalPosition(PRICES_ID, 0, 42)).require(new CausalPosition(ORDERS_ID, 0, 7)).build();
         assertEquals(deps, CausalDependencies.fromBytes(deps.toBytes()));
     }
 
@@ -77,7 +77,7 @@ class CausalDependenciesTest {
 
     @Test
     void fromHeadersReadsTheStampedClock() {
-        CausalDependencies deps = CausalDependencies.empty().advance(PRICES_ID, 0, 12).advance(ORDERS_ID, 0, 4);
+        CausalDependencies deps = CausalDependencies.builder().require(new CausalPosition(PRICES_ID, 0, 12)).require(new CausalPosition(ORDERS_ID, 0, 4)).build();
         Headers headers = new RecordHeaders();
         headers.add(new RecordHeader(ParsleyAttributes.CAUSAL_DEPENDENCIES, deps.toBytes()));
 
@@ -94,7 +94,7 @@ class CausalDependenciesTest {
 
     @Test
     void fromRecordReadsTheStampedClock() {
-        CausalDependencies deps = CausalDependencies.empty().advance(PRICES_ID, 0, 27);
+        CausalDependencies deps = CausalDependencies.builder().require(new CausalPosition(PRICES_ID, 0, 27)).build();
         ConsumerRecord<String, String> record = new ConsumerRecord<>("orders", 0, 5L, "k", "v");
         record.headers().add(new RecordHeader(ParsleyAttributes.CAUSAL_DEPENDENCIES, deps.toBytes()));
 
@@ -109,17 +109,17 @@ class CausalDependenciesTest {
 
     @Test
     void missingAgainstIsEmptyWhenTheFrontierSatisfiesTheClock() {
-        CausalDependencies required = CausalDependencies.empty().advance(PRICES_ID, 0, 3);
-        assertTrue(required.findMissing(CausalFrontier.empty().advance(PRICES_ID, 0, 3)).isEmpty());
-        assertTrue(required.findMissing(CausalFrontier.empty().advance(PRICES_ID, 0, 9)).isEmpty());
+        CausalDependencies required = CausalDependencies.builder().require(new CausalPosition(PRICES_ID, 0, 3)).build();
+        assertTrue(required.findMissing(CausalFrontier.empty().observe(new CausalPosition(PRICES_ID, 0, 3))).isEmpty());
+        assertTrue(required.findMissing(CausalFrontier.empty().observe(new CausalPosition(PRICES_ID, 0, 9))).isEmpty());
         assertTrue(CausalDependencies.empty().findMissing(CausalFrontier.empty()).isEmpty());
     }
 
     @Test
     void missingAgainstReportsThePerPartitionShortfall() {
-        CausalDependencies required = CausalDependencies.empty().advance(PRICES_ID, 0, 5).advance(ORDERS_ID, 0, 2);
+        CausalDependencies required = CausalDependencies.builder().require(new CausalPosition(PRICES_ID, 0, 5)).require(new CausalPosition(ORDERS_ID, 0, 2)).build();
         // P0: required 5, offsetFor 1 → gap 4. O0: required 2, offsetFor absent(-1) → gap 3.
-        List<CausalPosition> gap = required.findMissing(CausalFrontier.empty().advance(PRICES_ID, 0, 1));
+        List<CausalPosition> gap = required.findMissing(CausalFrontier.empty().observe(new CausalPosition(PRICES_ID, 0, 1)));
         assertEquals(Set.of(
                 new CausalPosition(CausalPosition.deriveUuid("prices"), 0, 4L),
                 new CausalPosition(CausalPosition.deriveUuid("orders"), 0, 3L)),
@@ -128,7 +128,7 @@ class CausalDependenciesTest {
 
     @Test
     void missingAgainstCountsAnAbsentPositionAsMinusOne() {
-        CausalDependencies required = CausalDependencies.empty().advance(PRICES_ID, 0, 0);
+        CausalDependencies required = CausalDependencies.builder().require(new CausalPosition(PRICES_ID, 0, 0)).build();
         List<CausalPosition> gap = required.findMissing(CausalFrontier.empty());
         assertEquals(List.of(new CausalPosition(CausalPosition.deriveUuid("prices"), 0, 1L)), gap,
                 "requiring offset 0 against an unseen partition is a gap of 1");
@@ -137,18 +137,18 @@ class CausalDependenciesTest {
     @Test
     void frontierAndDependenciesShareWireFormat() {
         // A frontier serialised with toBytes() must be decodable as CausalDependencies and vice versa.
-        CausalFrontier frontier = CausalFrontier.empty().advance(PRICES_ID, 0, 5).advance(ORDERS_ID, 0, 2);
+        CausalFrontier frontier = CausalFrontier.empty().observe(new CausalPosition(PRICES_ID, 0, 5)).observe(new CausalPosition(ORDERS_ID, 0, 2));
         CausalDependencies decoded = CausalDependencies.fromBytes(frontier.toBytes());
         assertEquals(frontier.toDependencies(), decoded);
 
-        CausalDependencies deps = CausalDependencies.empty().advance(PRICES_ID, 0, 5).advance(ORDERS_ID, 0, 2);
+        CausalDependencies deps = CausalDependencies.builder().require(new CausalPosition(PRICES_ID, 0, 5)).require(new CausalPosition(ORDERS_ID, 0, 2)).build();
         CausalFrontier frontierDecoded = CausalFrontier.fromBytes(deps.toBytes());
         assertEquals(frontier, frontierDecoded);
     }
 
     @Test
     void withoutSelfReference_stripsEntryAtExactSelfOffset() {
-        CausalDependencies deps = CausalDependencies.empty().advance(PRICES_ID, 0, 3);
+        CausalDependencies deps = CausalDependencies.builder().require(new CausalPosition(PRICES_ID, 0, 3)).build();
         CausalDependencies stripped = deps.withoutSelfReference(PRICES_ID, 0, 3);
         assertEquals(CausalDependencies.empty(), stripped,
                 "entry at req==selfOffset is a self-reference and must be removed");
@@ -156,7 +156,7 @@ class CausalDependenciesTest {
 
     @Test
     void withoutSelfReference_stripsEntryAtFutureOffset() {
-        CausalDependencies deps = CausalDependencies.empty().advance(PRICES_ID, 0, 10);
+        CausalDependencies deps = CausalDependencies.builder().require(new CausalPosition(PRICES_ID, 0, 10)).build();
         CausalDependencies stripped = deps.withoutSelfReference(PRICES_ID, 0, 3);
         assertEquals(CausalDependencies.empty(), stripped,
                 "entry at req>selfOffset is also circular (requires a future record) and must be removed");
@@ -164,25 +164,26 @@ class CausalDependenciesTest {
 
     @Test
     void withoutSelfReference_preservesEntryAtPriorOffset() {
-        CausalDependencies deps = CausalDependencies.empty().advance(PRICES_ID, 0, 2);
+        CausalDependencies deps = CausalDependencies.builder().require(new CausalPosition(PRICES_ID, 0, 2)).build();
         assertSame(deps, deps.withoutSelfReference(PRICES_ID, 0, 3),
                 "dep on a prior record is satisfiable and must not be stripped");
     }
 
     @Test
     void withoutSelfReference_returnsUnchangedWhenCoordinateAbsent() {
-        CausalDependencies deps = CausalDependencies.empty().advance(ORDERS_ID, 0, 5);
+        CausalDependencies deps = CausalDependencies.builder().require(new CausalPosition(ORDERS_ID, 0, 5)).build();
         assertSame(deps, deps.withoutSelfReference(PRICES_ID, 0, 3),
                 "no entry for (topicId, partition) — nothing to strip");
     }
 
     @Test
     void withoutSelfReference_preservesUnrelatedEntries() {
-        CausalDependencies deps = CausalDependencies.empty()
-                .advance(PRICES_ID, 0, 3)
-                .advance(ORDERS_ID, 0, 7);
+        CausalDependencies deps = CausalDependencies.builder()
+                .require(new CausalPosition(PRICES_ID, 0, 3))
+                .require(new CausalPosition(ORDERS_ID, 0, 7))
+                .build();
         CausalDependencies stripped = deps.withoutSelfReference(PRICES_ID, 0, 3);
-        assertEquals(CausalDependencies.empty().advance(ORDERS_ID, 0, 7), stripped,
+        assertEquals(CausalDependencies.builder().require(new CausalPosition(ORDERS_ID, 0, 7)).build(), stripped,
                 "only the self-referential entry is removed; other entries survive");
     }
 
@@ -191,11 +192,11 @@ class CausalDependenciesTest {
         Uuid oldUuid = new Uuid(0L, 1L);
         Uuid newUuid = new Uuid(0L, 2L);   // same name, different incarnation
 
-        CausalDependencies required = CausalDependencies.empty().advance(oldUuid, 0, 5L);
+        CausalDependencies required = CausalDependencies.builder().require(new CausalPosition(oldUuid, 0, 5L)).build();
 
-        assertFalse(required.isSatisfiedBy(CausalFrontier.empty().advance(newUuid, 0, 5L)),
+        assertFalse(required.isSatisfiedBy(CausalFrontier.empty().observe(new CausalPosition(newUuid, 0, 5L))),
                 "new-UUID frontier must not satisfy old-UUID dependency");
-        assertTrue(required.isSatisfiedBy(CausalFrontier.empty().advance(oldUuid, 0, 5L)),
+        assertTrue(required.isSatisfiedBy(CausalFrontier.empty().observe(new CausalPosition(oldUuid, 0, 5L))),
                 "old-UUID frontier at matching offset must satisfy the dependency");
     }
 }

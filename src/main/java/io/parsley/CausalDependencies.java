@@ -24,7 +24,7 @@ import java.util.Optional;
  * <p>Keys are Kafka topic UUIDs, so topic deletion and recreation produce a different identity
  * even when the name is reused.
  *
- * <p>Instances are immutable. {@link #advance} returns a new instance.
+ * <p>Use {@link #builder()} to construct instances.
  *
  * <h2>Propagating causal context across services</h2>
  * Use {@link #fromRecord(ConsumerRecord)} to read the upstream producer's dependencies off a
@@ -64,18 +64,57 @@ public final class CausalDependencies {
     }
 
     /**
-     * Returns a new instance with {@code (topicId, partition)} advanced to
-     * {@code max(current, offset)}.
+     * Returns a new builder for constructing a {@code CausalDependencies} instance.
      *
-     * @param topicId   the topic UUID
-     * @param partition the partition index
-     * @param offset    the required offset
-     * @return a new {@code CausalDependencies} with the updated position
+     * @return a new {@code Builder}
      */
-    public CausalDependencies advance(Uuid topicId, int partition, long offset) {
-        Map<Key, Long> next = new HashMap<>(required);
-        next.merge(new Key(topicId, partition), offset, Math::max);
-        return new CausalDependencies(Map.copyOf(next));
+    public static Builder builder() {
+        return new Builder();
+    }
+
+    /**
+     * Builder for {@link CausalDependencies}.
+     */
+    public static final class Builder {
+        private final Map<Key, Long> required = new HashMap<>();
+
+        private Builder() {}
+
+        /**
+         * Requires that {@code position} has been observed: the consumer must have seen at least
+         * {@code position.offset()} on {@code (position.topicId(), position.partition())}.
+         * If a requirement already exists for that coordinate, the higher offset wins.
+         *
+         * @param position the position to require; must not be {@code null}
+         * @return this builder
+         */
+        public Builder require(CausalPosition position) {
+            required.merge(new Key(position.topicId(), position.partition()), position.offset(), Math::max);
+            return this;
+        }
+
+        /**
+         * Merges all positions from {@code other} into this builder: for each coordinate in
+         * {@code other}, the higher offset wins.
+         *
+         * @param other the dependencies to merge; must not be {@code null}
+         * @return this builder
+         */
+        public Builder merge(CausalDependencies other) {
+            for (CausalPosition pos : other.dependencies()) {
+                require(pos);
+            }
+            return this;
+        }
+
+        /**
+         * Returns a new {@code CausalDependencies} from the positions accumulated so far.
+         *
+         * @return a new {@code CausalDependencies}
+         */
+        public CausalDependencies build() {
+            return new CausalDependencies(Map.copyOf(required));
+        }
     }
 
     /**

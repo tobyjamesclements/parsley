@@ -79,7 +79,7 @@ class CausalResilienceIT {
              CausalProducer<String, String> producer = causalProducer(bootstrap)) {
 
             producer.send(new ProducerRecord<>(ORDERS, "k", "order-1"),
-                    CausalDependencies.empty().advance(CausalPosition.deriveUuid(PRICES), 0, 0)).get();
+                    CausalDependencies.builder().require(new CausalPosition(CausalPosition.deriveUuid(PRICES), 0, 0)).build()).get();
 
             // Poll a few times — ORDERS should be buffered, not delivered.
             for (int i = 0; i < 3; i++) {

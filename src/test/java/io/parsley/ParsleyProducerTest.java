@@ -21,7 +21,7 @@ class ParsleyProducerTest {
     void sendAttachesTheCausalDependenciesHeader() {
         MockProducer<String, String> mock = mock();
         try (ParsleyProducer<String, String> producer = new ParsleyProducer<>(mock)) {
-            CausalDependencies deps = CausalDependencies.empty().advance(CausalPosition.deriveUuid("prices"), 0, 3);
+            CausalDependencies deps = CausalDependencies.builder().require(new CausalPosition(CausalPosition.deriveUuid("prices"), 0, 3)).build();
             producer.send(new ProducerRecord<>("orders", "k", "v"), deps);
 
             assertEquals(1, mock.history().size());

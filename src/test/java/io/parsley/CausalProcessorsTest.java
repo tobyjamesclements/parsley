@@ -31,7 +31,7 @@ class CausalProcessorsTest {
     @Test
     void deadLetterPolicyRequiresASink() {
         CausalProcessors.Builder<String, String, String, String> b =
-                builder(CausalBufferPolicy.deadLetter(CausalBufferLimit.ofSize(1), "dlq"))
+                builder(CausalBufferPolicy.deadLetter(CausalBufferLimit.ofSize(1)))
                         .serdes(Serdes.String(), Serdes.String());
         assertThrows(IllegalArgumentException.class, b::build);
     }
@@ -42,6 +42,19 @@ class CausalProcessorsTest {
                 builder(CausalBufferPolicy.drop(CausalBufferLimit.ofSize(1)))
                         .serdes(Serdes.String(), Serdes.String())
                         .deadLetterSink(cr -> {});
+        assertThrows(IllegalArgumentException.class, b::build);
+    }
+
+    @Test
+    void sinkRequiredWhenAnyViolationTypeUsesDeadLetter() {
+        CausalProcessors.Builder<String, String, String, String> b =
+                builder(CausalBufferPolicy.builder()
+                        .onMissing(ViolationAction.DEAD_LETTER)
+                        .onUnresolvable(ViolationAction.DROP)
+                        .onLimit(ViolationAction.DROP)
+                        .setLimit(CausalBufferLimit.ofSize(1))
+                        .build())
+                        .serdes(Serdes.String(), Serdes.String());
         assertThrows(IllegalArgumentException.class, b::build);
     }
 
