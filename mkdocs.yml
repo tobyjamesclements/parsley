@@ -34,6 +34,11 @@ markdown_extensions:
   - pymdownx.inlinehilite
   - tables
 
+extra:
+  version:
+    provider: mike
+    default: latest
+
 nav:
   - Home: index.md
   - Concepts: concepts.md

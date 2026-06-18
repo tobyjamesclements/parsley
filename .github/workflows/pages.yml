@@ -5,41 +5,64 @@ on:
     workflows: [CI]
     types: [completed]
     branches: [main]
+  push:
+    tags: ['v*']
   workflow_dispatch:
 
 permissions:
-  contents: read
-  pages: write
-  id-token: write
+  contents: write   # mike pushes versioned docs to the gh-pages branch
 
 jobs:
   deploy:
+    if: github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success'
     runs-on: ubuntu-latest
-    if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
     steps:
       - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0   # mike needs full history to manage gh-pages
+
       - uses: actions/setup-java@v5
         with:
           java-version: '25'
           distribution: 'temurin'
-          cache: 'maven'
+          cache: maven
+
       - uses: actions/setup-python@v5
         with:
           python-version: '3.x'
+
       - name: Build Javadoc
         run: ./mvnw javadoc:javadoc --no-transfer-progress -DskipTests
-      - name: Install MkDocs
-        run: pip install mkdocs-material
-      - name: Build docs site
-        run: mkdocs build
-      - name: Fold Javadoc into site
-        run: cp -r target/reports/apidocs site/api
-      - uses: actions/configure-pages@v4
-      - uses: actions/upload-pages-artifact@v4
-        with:
-          path: site
-      - uses: actions/deploy-pages@v4
-        id: deployment
+
+      - name: Stage Javadoc into docs source
+        run: |
+          mkdir -p docs/api
+          cp -r target/reports/apidocs/. docs/api/
+
+      - name: Install MkDocs + mike
+        run: pip install mkdocs-material mike
+
+      - name: Configure git identity
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Determine version and alias
+        id: ver
+        run: |
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            echo "version=${GITHUB_REF#refs/tags/v}" >> $GITHUB_OUTPUT
+            echo "alias=latest" >> $GITHUB_OUTPUT
+          else
+            POM_VER=$(./mvnw help:evaluate -Dexpression=project.version -q -DforceStdout)
+            echo "version=$POM_VER" >> $GITHUB_OUTPUT
+            echo "alias=dev" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Deploy versioned docs
+        run: |
+          mike deploy --push --update-aliases \
+              ${{ steps.ver.outputs.version }} ${{ steps.ver.outputs.alias }}
+          if [[ "${{ steps.ver.outputs.alias }}" == "latest" ]]; then
+            mike set-default --push latest
+          fi
