@@ -19,7 +19,7 @@ import static java.nio.charset.StandardCharsets.UTF_8;
  *
  * <p>The processor feeds incoming records to {@link #onRecord} and forwards the returned
  * records downstream, in order. The engine classifies each record (missing or unresolvable
- * missing or unresolvable dependencies → violation; dependencies satisfied → forward; otherwise → buffer),
+ * dependencies → violation + policy applied; dependencies satisfied → forward; otherwise → buffer),
  * advances the causal frontier, and cascades releases from the buffer as the frontier moves.
  *
  * <p>The engine also owns policy-driven eviction: when a {@link CausalBufferLimit} fires it surrenders the
@@ -108,7 +108,7 @@ final class ParsleyEngine<K, V> {
         if (encoded == null) {
             violate(record, CausalViolationReason.MISSING_HEADER, CausalDependencies.empty());
             advanceFrontier(record);
-            out.add(record);
+            applyPolicyForRecord(record, CausalDependencies.empty(), CausalViolationReason.MISSING_HEADER, out);
             drainInto(out, record.sourceTopicId(), record.sourcePartitionIndex());
             return out;
         }
@@ -119,7 +119,7 @@ final class ParsleyEngine<K, V> {
         } catch (Exception e) {
             violate(record, CausalViolationReason.UNRESOLVABLE_DEPENDENCIES, CausalDependencies.empty());
             advanceFrontier(record);
-            out.add(record);
+            applyPolicyForRecord(record, CausalDependencies.empty(), CausalViolationReason.UNRESOLVABLE_DEPENDENCIES, out);
             drainInto(out, record.sourceTopicId(), record.sourcePartitionIndex());
             return out;
         }
@@ -164,26 +164,16 @@ final class ParsleyEngine<K, V> {
             return List.of();
         }
         log.warn("Evicting {} held record(s) (policy: {})", evicted.size(), policy.getClass().getSimpleName());
+        List<ParsleyRecord<K, V>> toForward = new ArrayList<>();
         for (ParsleyBufferStore.Entry<K, V> entry : evicted) {
             violate(entry.record(), CausalViolationReason.LIMIT_REACHED, entry.dependencies());
             buffer.remove(entry.sequence());
+            if (policy instanceof ParsleyForwardUnsafePolicy) {
+                advanceFrontier(entry.record());
+            }
+            applyPolicyForRecord(entry.record(), entry.dependencies(), CausalViolationReason.LIMIT_REACHED, toForward);
         }
         metrics.recordEvicted(evicted.size());
-        List<ParsleyRecord<K, V>> toForward = new ArrayList<>();
-        switch (policy) {
-            case ParsleyForwardUnsafePolicy forwardUnsafe -> {
-                for (ParsleyBufferStore.Entry<K, V> entry : evicted) {
-                    advanceFrontier(entry.record());
-                    toForward.add(entry.record());
-                }
-            }
-            case ParsleyDropPolicy drop -> { /* discard the evicted records */ }
-            case ParsleyDeadLetterPolicy deadLetter -> {
-                for (ParsleyBufferStore.Entry<K, V> entry : evicted) {
-                    deadLetterSink.accept(withDlqHeaders(entry.record(), entry.dependencies()));
-                }
-            }
-        }
         return toForward;
     }
 
@@ -275,15 +265,24 @@ final class ParsleyEngine<K, V> {
         metrics.recordViolation();
     }
 
-    private ParsleyRecord<K, V> withDlqHeaders(ParsleyRecord<K, V> record, CausalDependencies required) {
+    private void applyPolicyForRecord(ParsleyRecord<K, V> record, CausalDependencies required,
+                                      CausalViolationReason reason, List<ParsleyRecord<K, V>> out) {
+        switch (policy) {
+            case ParsleyForwardUnsafePolicy ignored -> out.add(record);
+            case ParsleyDropPolicy ignored -> {}
+            case ParsleyDeadLetterPolicy ignored -> deadLetterSink.accept(withDlqHeaders(record, required, reason));
+        }
+    }
+
+    private ParsleyRecord<K, V> withDlqHeaders(ParsleyRecord<K, V> record, CausalDependencies required,
+                                                CausalViolationReason reason) {
         List<CausalPosition> gap = required.findMissing(frontier);
         CausalDependencies gapAsDeps = CausalDependencies.empty();
         for (CausalPosition p : gap) {
             gapAsDeps = gapAsDeps.advance(p.topicId(), p.partition(), p.offset());
         }
         List<ParsleyHeader> h = new ArrayList<>(record.headers());
-        h.add(new ParsleyHeader(CausalViolation.DLQ_REASON_HEADER,
-                CausalViolationReason.LIMIT_REACHED.name().getBytes(UTF_8)));
+        h.add(new ParsleyHeader(CausalViolation.DLQ_REASON_HEADER, reason.name().getBytes(UTF_8)));
         h.add(new ParsleyHeader(CausalViolation.DLQ_REQUIRED_DEPENDENCIES_HEADER, required.toBytes()));
         h.add(new ParsleyHeader(CausalViolation.DLQ_GAP_HEADER, gapAsDeps.toBytes()));
         return new ParsleyRecord<>(record.key(), record.value(), record.timestamp(), h);

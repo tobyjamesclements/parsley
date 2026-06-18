@@ -38,6 +38,31 @@ import java.util.concurrent.Future;
 public interface CausalProducer<K, V> extends AutoCloseable {
 
     /**
+     * Sends a record with no causal dependencies — a positive assertion that this record does not
+     * depend on any prior record. Stamps an empty {@code parsley-causal-dependencies} header.
+     *
+     * <p>Use this when the record is genuinely independent. To declare a dependency on prior work,
+     * use {@link #send(ProducerRecord, CausalDependencies)} instead.
+     *
+     * @param record the record to send; must not be {@code null}
+     * @return a {@link Future} for the {@link RecordMetadata} of the sent record
+     */
+    default Future<RecordMetadata> send(ProducerRecord<K, V> record) {
+        return send(record, CausalDependencies.empty());
+    }
+
+    /**
+     * Sends a record with no causal dependencies, invoking {@code callback} on completion.
+     *
+     * @param record   the record to send; must not be {@code null}
+     * @param callback the callback invoked on send completion or failure; may be {@code null}
+     * @return a {@link Future} for the {@link RecordMetadata} of the sent record
+     */
+    default Future<RecordMetadata> send(ProducerRecord<K, V> record, Callback callback) {
+        return send(record, CausalDependencies.empty(), callback);
+    }
+
+    /**
      * Sends a record with {@code dependencies} attached as a {@code parsley-causal-dependencies} header.
      *
      * @param record       the record to send; must not be {@code null}

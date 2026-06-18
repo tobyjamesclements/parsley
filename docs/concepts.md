@@ -65,8 +65,10 @@ be upheld for a specific record. Three reasons exist:
 | `UNRESOLVABLE_DEPENDENCIES` | The header is present but cannot be deserialised (corrupt or unsupported wire version) |
 | `LIMIT_REACHED` | The record was evicted from the buffer because a limit fired |
 
-Records with `MISSING_HEADER` or `UNRESOLVABLE_DEPENDENCIES` are **forwarded immediately** — Parsley
-cannot reason about their ordering and treats them permissively rather than blocking delivery.
+Records with `MISSING_HEADER` or `UNRESOLVABLE_DEPENDENCIES` are handled consistently with the
+configured buffer policy: `forwardUnsafe` forwards them immediately, `drop` discards them, and
+`deadLetter` routes them to the dead-letter sink. The frontier always advances regardless of policy,
+so records buffered downstream are not permanently stalled by the violation.
 
 Each violation includes the current frontier, the required dependencies, and the **causal gap**:
 a per-coordinate shortfall showing exactly how far the frontier was behind at the time of eviction.

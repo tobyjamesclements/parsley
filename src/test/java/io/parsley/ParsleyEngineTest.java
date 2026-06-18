@@ -134,20 +134,48 @@ class ParsleyEngineTest {
     }
 
     @Test
-    void missingHeaderForwardsWithViolation() {
-        ParsleyEngine<String, String> engine = engine(CausalBufferPolicy.drop(CausalBufferLimit.ofSize(100)));
+    void missingHeader_forwardUnsafePolicy_forwardsWithViolation() {
+        ParsleyEngine<String, String> engine = engine(CausalBufferPolicy.forwardUnsafe(CausalBufferLimit.ofSize(100)));
 
         onRecord(engine, rec(PRICES, 0, null));
 
         assertEquals(1, forwarded.size());
         assertEquals(List.of(CausalViolationReason.MISSING_HEADER), reasons());
         assertEquals(CausalFrontier.empty().advance(PRICES_ID, 0, 0), engine.frontier(),
-                "a forwarded missing-header record still advances the frontier");
+                "frontier always advances even for violation records");
     }
 
     @Test
-    void unresolvableClockForwardsWithViolation() {
+    void missingHeader_dropPolicy_isDiscarded() {
         ParsleyEngine<String, String> engine = engine(CausalBufferPolicy.drop(CausalBufferLimit.ofSize(100)));
+
+        onRecord(engine, rec(PRICES, 0, null));
+
+        assertTrue(forwarded.isEmpty(), "drop policy must not forward a missing-header record");
+        assertEquals(List.of(CausalViolationReason.MISSING_HEADER), reasons());
+        assertEquals(CausalFrontier.empty().advance(PRICES_ID, 0, 0), engine.frontier(),
+                "frontier still advances so downstream records aren't held forever");
+    }
+
+    @Test
+    void missingHeader_deadLetterPolicy_routesToSink() {
+        List<ParsleyRecord<String, String>> deadLettered = new ArrayList<>();
+        ParsleyEngine<String, String> engine = engine(
+                CausalBufferPolicy.deadLetter(CausalBufferLimit.ofSize(100), "dlq"), deadLettered::add);
+
+        onRecord(engine, rec(PRICES, 0, null));
+
+        assertTrue(forwarded.isEmpty());
+        assertEquals(1, deadLettered.size());
+        assertEquals(List.of(CausalViolationReason.MISSING_HEADER), reasons());
+        assertEquals("MISSING_HEADER",
+                new String(deadLettered.get(0).toConsumerRecord()
+                        .headers().lastHeader(CausalViolation.DLQ_REASON_HEADER).value(), UTF_8));
+    }
+
+    @Test
+    void unresolvableDependencies_forwardUnsafePolicy_forwardsWithViolation() {
+        ParsleyEngine<String, String> engine = engine(CausalBufferPolicy.forwardUnsafe(CausalBufferLimit.ofSize(100)));
 
         ParsleyRecord<String, String> garbage = new ParsleyRecord<>("k", "v", 0L, List.of(
                 new ParsleyHeader(ParsleyAttributes.CAUSAL_DEPENDENCIES, new byte[]{9, 9, 9}),
@@ -158,6 +186,22 @@ class ParsleyEngineTest {
 
         assertEquals(1, forwarded.size());
         assertEquals(List.of(CausalViolationReason.UNRESOLVABLE_DEPENDENCIES), reasons());
+    }
+
+    @Test
+    void unresolvableDependencies_dropPolicy_isDiscarded() {
+        ParsleyEngine<String, String> engine = engine(CausalBufferPolicy.drop(CausalBufferLimit.ofSize(100)));
+
+        ParsleyRecord<String, String> garbage = new ParsleyRecord<>("k", "v", 0L, List.of(
+                new ParsleyHeader(ParsleyAttributes.CAUSAL_DEPENDENCIES, new byte[]{9, 9, 9}),
+                new ParsleyHeader(ParsleyAttributes.SRC_TOPIC, PRICES.topic().getBytes(UTF_8)),
+                new ParsleyHeader(ParsleyAttributes.SRC_PARTITION, ParsleyRecord.intToBytes(PRICES.partition())),
+                new ParsleyHeader(ParsleyAttributes.SRC_OFFSET, ParsleyRecord.longToBytes(0L))));
+        onRecord(engine, garbage);
+
+        assertTrue(forwarded.isEmpty(), "drop policy must not forward an unresolvable-dependencies record");
+        assertEquals(List.of(CausalViolationReason.UNRESOLVABLE_DEPENDENCIES), reasons());
+        assertEquals(CausalFrontier.empty().advance(PRICES_ID, 0, 0), engine.frontier());
     }
 
     @Test

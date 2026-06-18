@@ -53,7 +53,7 @@ Consumer (CausalConsumer path)
       -> gate:   ParsleyEngine.onRecord()
                    satisfied   -> advance frontier, drain cascade
                    unsatisfied -> buffer (RocksBufferStore) + index (RocksWaitIndex)
-                   no header   -> MISSING_HEADER violation, forward immediately
+                   no header   -> MISSING_HEADER violation, apply policy
       -> deliver: for each admitted record
                    stamp frontier onto parsley-causal-dependencies
                    save ORIGINAL_DEPENDENCIES, forward to outbox topic

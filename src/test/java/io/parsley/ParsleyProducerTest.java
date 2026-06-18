@@ -6,6 +6,8 @@ import org.apache.kafka.common.header.Header;
 import org.apache.kafka.common.serialization.StringSerializer;
 import org.junit.jupiter.api.Test;
 
+import java.util.concurrent.atomic.AtomicReference;
+
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 
@@ -27,6 +29,34 @@ class ParsleyProducerTest {
             Header header = sent.headers().lastHeader(ParsleyAttributes.CAUSAL_DEPENDENCIES);
             assertNotNull(header, "causal-dependencies header must be present");
             assertEquals(deps, CausalDependencies.fromBytes(header.value()));
+        }
+    }
+
+    @Test
+    void sendWithoutDependenciesStampsEmptyHeader() {
+        MockProducer<String, String> mock = mock();
+        try (ParsleyProducer<String, String> producer = new ParsleyProducer<>(mock)) {
+            producer.send(new ProducerRecord<>("orders", "k", "v"));
+
+            ProducerRecord<String, String> sent = mock.history().get(0);
+            Header header = sent.headers().lastHeader(ParsleyAttributes.CAUSAL_DEPENDENCIES);
+            assertNotNull(header, "causal-dependencies header must be present even with no explicit dependencies");
+            assertEquals(CausalDependencies.empty(), CausalDependencies.fromBytes(header.value()));
+        }
+    }
+
+    @Test
+    void sendWithoutDependenciesWithCallbackStampsEmptyHeader() {
+        MockProducer<String, String> mock = mock();
+        try (ParsleyProducer<String, String> producer = new ParsleyProducer<>(mock)) {
+            AtomicReference<Exception> callbackError = new AtomicReference<>();
+            producer.send(new ProducerRecord<>("orders", "k", "v"), (metadata, ex) -> callbackError.set(ex));
+
+            ProducerRecord<String, String> sent = mock.history().get(0);
+            Header header = sent.headers().lastHeader(ParsleyAttributes.CAUSAL_DEPENDENCIES);
+            assertNotNull(header, "causal-dependencies header must be present");
+            assertEquals(CausalDependencies.empty(), CausalDependencies.fromBytes(header.value()));
+            assertEquals(null, callbackError.get(), "callback must have been invoked without error");
         }
     }
 

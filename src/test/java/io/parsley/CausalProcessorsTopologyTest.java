@@ -948,7 +948,7 @@ class CausalProcessorsTopologyTest {
 
         quotesSrc.merge(pricesSrc).merge(discountsSrc)
                 .process(CausalProcessors.builder(upperCaser(),
-                                CausalBufferPolicy.drop(CausalBufferLimit.ofSize(100)))
+                                CausalBufferPolicy.forwardUnsafe(CausalBufferLimit.ofSize(100)))
                         .serdes(Serdes.String(), Serdes.String())
                         .onViolation(proc2Violations::add)
                         .storeName("second").build())
@@ -962,11 +962,11 @@ class CausalProcessorsTopologyTest {
             TestOutputTopic<String, String> out =
                     driver.createOutputTopic("out", new StringDeserializer(), new StringDeserializer());
 
-            // Unclocked discount: no parsley-causal-dependencies header → MISSING_HEADER → admitted
-            // immediately even though the materialized chain hasn't produced anything yet.
+            // Unclocked discount: no parsley-causal-dependencies header → MISSING_HEADER → forwarded
+            // immediately (forwardUnsafe policy) even though the materialized chain hasn't produced anything yet.
             discounts.pipeInput(new TestRecord<>("k", "discount"));
             assertEquals(List.of("DISCOUNT"), out.readValuesToList(),
-                    "unclocked record must be forwarded immediately without buffering");
+                    "unclocked record must be forwarded immediately without buffering under forwardUnsafe policy");
             assertEquals(1, proc2Violations.size());
             assertEquals(CausalViolationReason.MISSING_HEADER, proc2Violations.get(0).reason());
             assertEquals(0, storeSize(driver.getKeyValueStore("second-buffer")));
@@ -1002,7 +1002,7 @@ class CausalProcessorsTopologyTest {
                         .storeName("first").build())
                 .merge(discountsSrc)
                 .process(CausalProcessors.builder(upperCaser(),
-                                CausalBufferPolicy.drop(CausalBufferLimit.ofSize(100)))
+                                CausalBufferPolicy.forwardUnsafe(CausalBufferLimit.ofSize(100)))
                         .serdes(Serdes.String(), Serdes.String())
                         .onViolation(proc2Violations::add)
                         .storeName("second").build())
@@ -1016,7 +1016,7 @@ class CausalProcessorsTopologyTest {
             TestOutputTopic<String, String> out =
                     driver.createOutputTopic("out", new StringDeserializer(), new StringDeserializer());
 
-            // Unclocked discount admitted immediately, before proc1 has processed anything.
+            // Unclocked discount forwarded immediately under forwardUnsafe policy, before proc1 has processed anything.
             discounts.pipeInput(new TestRecord<>("k", "discount"));
             assertEquals(List.of("DISCOUNT"), out.readValuesToList());
             assertEquals(1, proc2Violations.size());

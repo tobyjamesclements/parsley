@@ -15,16 +15,17 @@ package io.parsley;
 public enum CausalViolationReason {
 
     /**
-     * The incoming record had no {@code parsley-causal-dependencies} attribute. It was forwarded
-     * immediately without buffering. This typically indicates a producer that is not
-     * Parsley-aware.
+     * The incoming record carried no {@code parsley-causal-dependencies} header at all. This
+     * indicates a producer that is not Parsley-aware (e.g. a plain {@code KafkaProducer}).
+     * A {@link CausalProducer} that has no dependencies stamps an explicit empty header instead,
+     * which is not a violation.
      */
     MISSING_HEADER,
 
     /**
-     * The {@code parsley-causal-dependencies} attribute was present but its contents could not be
-     * deserialised into a {@link CausalDependencies}. The record was forwarded immediately.
-     * This may indicate a version mismatch between producer and consumer.
+     * The {@code parsley-causal-dependencies} header was present but its contents could not be
+     * deserialised into a {@link CausalDependencies}. This may indicate a version mismatch
+     * between producer and consumer.
      */
     UNRESOLVABLE_DEPENDENCIES,
 

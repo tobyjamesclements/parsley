@@ -108,7 +108,7 @@ class CausalRoundTripIT {
 
         try (CausalConsumer<String, String> consumer = CausalConsumers.<String, String>builder(
                 List.of(topic),
-                CausalBufferPolicy.drop(CausalBufferLimit.ofDuration(Duration.ofSeconds(5))),
+                CausalBufferPolicy.forwardUnsafe(CausalBufferLimit.ofDuration(Duration.ofSeconds(5))),
                 Map.of(ConsumerConfig.GROUP_ID_CONFIG, "rt-" + UUID.randomUUID()),
                 streamsConfig(bootstrap))
                 .onViolation(violations::add)                      // the override that was previously hidden
@@ -116,6 +116,7 @@ class CausalRoundTripIT {
                 .build()) {
 
             // A plain producer sends a record with NO causal dependencies header → a MISSING_HEADER violation.
+            // Under forwardUnsafe policy, violation records are still delivered.
             try (KafkaProducer<String, String> raw = new KafkaProducer<>(Map.of(
                     ProducerConfig.BOOTSTRAP_SERVERS_CONFIG, bootstrap,
                     ProducerConfig.KEY_SERIALIZER_CLASS_CONFIG, StringSerializer.class.getName(),
@@ -123,7 +124,7 @@ class CausalRoundTripIT {
                 raw.send(new ProducerRecord<>(topic, "k", "no-deps")).get();
             }
 
-            // The record is still delivered (missing-header records are forwarded)...
+            // The record is still delivered (forwardUnsafe policy forwards violation records)...
             List<ConsumerRecord<String, String>> received = new ArrayList<>();
             await().atMost(Duration.ofSeconds(60)).until(() -> {
                 consumer.poll(Duration.ofMillis(500)).forEach(received::add);

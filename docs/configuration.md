@@ -42,15 +42,20 @@ backstop.
 A `CausalBufferPolicy` pairs a limit with a handling strategy for evicted records. Every policy
 reports a `CausalViolation` for each evicted record.
 
+The policy governs what happens to **all** violation records — both records evicted from the
+buffer when a limit fires (`LIMIT_REACHED`) and records that arrive with missing or corrupt
+dependency headers (`MISSING_HEADER`, `UNRESOLVABLE_DEPENDENCIES`). The frontier always advances
+for violation records regardless of policy, so buffered records waiting on that coordinate are
+not permanently stalled.
+
 ### Forward unsafe
 
 ```java
 CausalBufferPolicy.forwardUnsafe(limit)
 ```
 
-Forwards evicted records out-of-order. Lenient: delivery is always preserved; causal ordering is
-suspended for the evicted batch. Each forwarded record is reported as a violation with reason
-`LIMIT_REACHED`.
+Forwards violation records out-of-order. Lenient: delivery is always preserved; causal ordering
+is suspended for the violating record.
 
 ### Drop
 
@@ -58,7 +63,7 @@ suspended for the evicted batch. Each forwarded record is reported as a violatio
 CausalBufferPolicy.drop(limit)
 ```
 
-Discards evicted records entirely. Strict: no out-of-order delivery, but records are lost.
+Discards violation records entirely. Strict: no out-of-order delivery, but records are lost.
 
 ### Dead letter
 
@@ -66,17 +71,17 @@ Discards evicted records entirely. Strict: no out-of-order delivery, but records
 CausalBufferPolicy.deadLetter(limit, "parsley-dlq")
 ```
 
-Routes evicted records to a named dead-letter topic (via a sink you provide). Strict: no
+Routes violation records to a named dead-letter topic (via a sink you provide). Strict: no
 out-of-order delivery. Each routed record receives three additional headers:
 
 | Header | Content |
 |---|---|
-| `parsley-dlq-reason` | `LIMIT_REACHED` (UTF-8) |
-| `parsley-dlq-required-dependencies` | The required `CausalDependencies` at eviction time (serialised) |
-| `parsley-dlq-gap` | The per-coordinate shortfall (serialised as `CausalDependencies`) |
+| `parsley-dlq-reason` | Violation reason (`LIMIT_REACHED`, `MISSING_HEADER`, or `UNRESOLVABLE_DEPENDENCIES`) (UTF-8) |
+| `parsley-dlq-required-dependencies` | The required `CausalDependencies` (serialised; empty for header violations) |
+| `parsley-dlq-gap` | The per-coordinate shortfall (serialised as `CausalDependencies`; empty for header violations) |
 
-The gap headers allow an operator to reconstruct exactly which offsets were missing when the
-record was evicted.
+The reason and gap headers allow an operator to distinguish eviction from header violations and
+reconstruct exactly which offsets were missing at eviction time.
 
 ---
 
