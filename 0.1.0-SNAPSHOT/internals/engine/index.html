@@ -1092,6 +1092,13 @@ equivalently by <code>bufferedAt</code>) and hand it to a shared <code>evictEntr
 <code>buffer.size() - sizeLimit + 1</code> entries — just enough to bring the buffer back under the limit —
 leaving younger records held. In the common case (depth checked after every single admission)
 this evicts exactly one record per overflow, sliding the window forward.</p>
+<p>Also called once by <code>ParsleyProcessor.init()</code>, immediately after construction, against whatever
+buffer was just restored from the changelog. This matters after a restart that follows a
+reconfiguration lowering <code>ofSize(...)</code>: the restored buffer can legitimately hold more entries than
+the new limit allows, and nothing would otherwise trim it back, since the inline check above only
+runs on the next admission — which may never come if the engine is now satisfying records
+immediately. The formula is unconditional on <em>when</em> it's called, so the same method serves both
+call sites without change.</p>
 <h3 id="evictexpired-duration-limit"><code>evictExpired()</code> — duration limit</h3>
 <p>Called by the processor's wall-clock punctuator at the configured interval. Walks <code>buffer.entries()</code>
 from the oldest, evicting every entry whose <code>bufferedAt</code> is older than <code>now - duration</code>, and stops
