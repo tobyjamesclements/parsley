@@ -170,7 +170,10 @@ final class ParsleyEngine<K, V> {
     /**
      * Evicts only the oldest buffered records needed to bring the buffer back under the
      * configured {@link ParsleySizeLimit}, leaving the rest held. Called inline from
-     * {@link #onRecord} once buffer depth reaches the limit.
+     * {@link #onRecord} once buffer depth reaches the limit, and once more by
+     * {@code ParsleyProcessor.init()} immediately after construction, to bring a buffer restored
+     * from a changelog back under the currently configured limit (relevant after a
+     * reconfiguration that lowers {@code ofSize(...)} before a restart).
      *
      * <p>Relies on {@link ParsleyBufferStore#entries()} being sorted oldest-first (see
      * {@link #evictExpired()}), so only the leading {@code buffer.size() - sizeLimit + 1}
@@ -179,7 +182,7 @@ final class ParsleyEngine<K, V> {
      * @return records to forward downstream out-of-order; non-empty only when the
      *         {@link CausalViolationReason#LIMIT_REACHED} action is {@link ViolationAction#FORWARD_UNSAFE}
      */
-    private List<ParsleyRecord<K, V>> evictOverflow() {
+    List<ParsleyRecord<K, V>> evictOverflow() {
         int overflow = buffer.size() - sizeLimit + 1;
         if (overflow <= 0) {
             return List.of();

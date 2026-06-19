@@ -135,6 +135,11 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
                 context, () -> stampFrontier, () -> Optional.ofNullable(deliveryMetadata));
         delegate.init(stamping);
 
+        // Enforce the size limit once against a buffer restored from a changelog (e.g. after a
+        // restart following a reconfiguration that lowered the limit); onRecord()'s inline check
+        // only fires on the next admission, which may never come.
+        deliver(evictRestoredOverflow());
+
         engine.evictionInterval().ifPresent(interval ->
                 context.schedule(interval, PunctuationType.WALL_CLOCK_TIME, timestamp -> deliver(evict())));
     }
@@ -185,6 +190,11 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
     private List<ParsleyRecord<KIn, VIn>> evict() {
         snapshots.clear();
         return engine.evictExpired();
+    }
+
+    private List<ParsleyRecord<KIn, VIn>> evictRestoredOverflow() {
+        snapshots.clear();
+        return engine.evictOverflow();
     }
 
     private void deliver(List<ParsleyRecord<KIn, VIn>> admitted) {
