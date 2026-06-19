@@ -15,6 +15,10 @@ Fires synchronously during `process()` — eviction happens in the same call tha
 over the limit, and evicts only the oldest records needed to bring the buffer back under the
 limit (typically one per call). Younger buffered records are left alone.
 
+The limit is also enforced once at startup, against whatever buffer was restored from the
+changelog — so lowering the limit and restarting evicts the oldest excess records immediately,
+rather than waiting for new traffic to retrigger the inline check above.
+
 ### Duration limit
 
 ```java

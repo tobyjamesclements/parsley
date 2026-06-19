@@ -123,6 +123,97 @@ class CausalResilienceIT {
     }
 
     /**
+     * Verifies that lowering {@code CausalBufferLimit.ofSize(...)} and restarting evicts the
+     * now-overflowing oldest records immediately on startup, rather than leaving the buffer above
+     * the new limit until unrelated traffic happens to retrigger {@code onRecord()}'s inline
+     * check.
+     *
+     * <p>Consumer-1 buffers three ORDERS records that never have their PRICES dependency
+     * satisfied, under a generous {@code ofSize(10)} limit — none are evicted. Consumer-2 restarts
+     * with the same {@code applicationId} (so the buffer state store is restored from its
+     * changelog) but a tighter {@code ofSize(2)} limit. {@link CausalConsumers} rejects
+     * dead-letter policies (no sink to route to), so {@code forwardUnsafe} is used instead: the
+     * fix under test — the {@code ParsleyEngine.evictOverflow()} call wired into
+     * {@code ParsleyProcessor.init()} — must forward the two oldest restored records
+     * out-of-order before consumer-2 ever polls for new input, leaving the third held.
+     */
+    @Test
+    void restartWithALoweredSizeLimitEvictsExcessRestoredRecordsOnInit() throws Exception {
+        String bootstrap = kafka.getBootstrapServers();
+        createTopic(bootstrap, PRICES, 1);
+        createTopic(bootstrap, ORDERS, 1);
+
+        String appId = "resilience-size-limit-restart-app";
+        CausalPosition neverArrives = new CausalPosition(CausalPosition.deriveUuid(PRICES), 0, 99);
+
+        // Phase 1: buffer three ORDERS records that depend on a PRICES offset that will never
+        // arrive, under a generous size limit — none are evicted.
+        try (CausalConsumer<String, String> consumer1 =
+                     CausalConsumers.<String, String>builder(
+                             List.of(PRICES, ORDERS),
+                             CausalBufferPolicy.drop(CausalBufferLimit.ofSize(10)),
+                             Map.of(),
+                             streamsConfig(bootstrap, appId))
+                             .topicAdmin(new MockAdminClient(ParsleyTopicAdmin.ofBootstrap(bootstrap)))
+                             .build();
+             CausalProducer<String, String> producer = causalProducer(bootstrap)) {
+
+            producer.send(new ProducerRecord<>(ORDERS, "k", "order-1"),
+                    CausalDependencies.builder().require(neverArrives).build()).get();
+            producer.send(new ProducerRecord<>(ORDERS, "k", "order-2"),
+                    CausalDependencies.builder().require(neverArrives).build()).get();
+            producer.send(new ProducerRecord<>(ORDERS, "k", "order-3"),
+                    CausalDependencies.builder().require(neverArrives).build()).get();
+
+            List<ConsumerRecord<String, String>> phase1 = new ArrayList<>();
+            for (int i = 0; i < 3; i++) {
+                consumer1.poll(Duration.ofMillis(500)).forEach(phase1::add);
+            }
+            assertTrue(phase1.isEmpty(), "all three ORDERS records must be buffered, not delivered, under the generous limit");
+
+            // Allow the 200ms commit interval to fire so the buffer state store is checkpointed
+            // to its changelog topic before the clean shutdown below.
+            Thread.sleep(400);
+        }
+
+        // Phase 2: new consumer, same applicationId, but a tighter size limit. Kafka Streams
+        // restores the buffer (3 entries) from changelog; the new limit is 2, so evictOverflow()
+        // must trim the two oldest entries on init, before consumer2 polls for anything new.
+        List<CausalViolation> violations = new ArrayList<>();
+        List<ConsumerRecord<String, String>> phase2 = new ArrayList<>();
+        try (CausalConsumer<String, String> consumer2 =
+                     CausalConsumers.<String, String>builder(
+                             List.of(PRICES, ORDERS),
+                             CausalBufferPolicy.forwardUnsafe(CausalBufferLimit.ofSize(2)),
+                             Map.of(),
+                             streamsConfig(bootstrap, appId))
+                             .topicAdmin(new MockAdminClient(ParsleyTopicAdmin.ofBootstrap(bootstrap)))
+                             .onViolation(violations::add)
+                             .build()) {
+
+            await().atMost(Duration.ofSeconds(60)).until(() -> {
+                consumer2.poll(Duration.ofMillis(500)).forEach(phase2::add);
+                return phase2.size() >= 2;
+            });
+
+            assertEquals(List.of("order-1", "order-2"), phase2.stream().map(ConsumerRecord::value).toList(),
+                    "the two oldest restored records must be forwarded out-of-order on restart, before any new input");
+            assertEquals(2, violations.size(),
+                    "one LIMIT_REACHED violation must be reported per record evicted on restart");
+            assertTrue(violations.stream().allMatch(v -> v.reason() == CausalViolationReason.LIMIT_REACHED),
+                    "every reported violation must be LIMIT_REACHED");
+
+            // The third record (order-3) must remain held: poll a few more times and confirm it
+            // never arrives, since its PRICES dependency is still unmet and the buffer is back
+            // under the limit.
+            for (int i = 0; i < 3; i++) {
+                consumer2.poll(Duration.ofMillis(500)).forEach(phase2::add);
+            }
+            assertEquals(2, phase2.size(), "the third restored record must remain buffered, not forwarded");
+        }
+    }
+
+    /**
      * Verifies that two stream threads processing two partitions in parallel deliver all records
      * without deadlock and maintain within-partition ordering.
      *

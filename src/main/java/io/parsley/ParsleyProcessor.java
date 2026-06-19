@@ -7,6 +7,7 @@ import org.apache.kafka.common.Uuid;
 import org.apache.kafka.common.metrics.Sensor;
 import org.apache.kafka.common.metrics.stats.Value;
 import org.apache.kafka.streams.StreamsMetrics;
+import org.apache.kafka.streams.processor.Cancellable;
 import org.apache.kafka.streams.processor.PunctuationType;
 import org.apache.kafka.streams.processor.api.Processor;
 import org.apache.kafka.streams.processor.api.ProcessorContext;
@@ -16,6 +17,7 @@ import org.apache.kafka.streams.state.KeyValueStore;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -68,6 +70,7 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
     // Read live by the stamping proxy; volatile as belt-and-suspenders (single task thread owns this).
     private volatile CausalFrontier stampFrontier = CausalFrontier.empty();
     private volatile RecordMetadata deliveryMetadata;
+    private Cancellable restoredOverflowSchedule;
 
     ParsleyProcessor(Processor<KIn, VIn, KOut, VOut> delegate,
                      CausalBufferPolicy policy,
@@ -135,6 +138,17 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
                 context, () -> stampFrontier, () -> Optional.ofNullable(deliveryMetadata));
         delegate.init(stamping);
 
+        // Enforce the size limit once against a buffer restored from a changelog (e.g. after a
+        // restart following a reconfiguration that lowered the limit); onRecord()'s inline check
+        // only fires on the next admission, which may never come. Must run as a punctuation, not
+        // inline here: Streams hasn't finished wiring the task's RecordCollector until every
+        // processor in the topology returns from init(), so forward() during init() throws NPE.
+        restoredOverflowSchedule = context.schedule(Duration.ofMillis(1), PunctuationType.WALL_CLOCK_TIME,
+                timestamp -> {
+                    restoredOverflowSchedule.cancel();
+                    deliver(evictRestoredOverflow());
+                });
+
         engine.evictionInterval().ifPresent(interval ->
                 context.schedule(interval, PunctuationType.WALL_CLOCK_TIME, timestamp -> deliver(evict())));
     }
@@ -185,6 +199,11 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
     private List<ParsleyRecord<KIn, VIn>> evict() {
         snapshots.clear();
         return engine.evictExpired();
+    }
+
+    private List<ParsleyRecord<KIn, VIn>> evictRestoredOverflow() {
+        snapshots.clear();
+        return engine.evictOverflow();
     }
 
     private void deliver(List<ParsleyRecord<KIn, VIn>> admitted) {

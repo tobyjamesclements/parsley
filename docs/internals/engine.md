@@ -69,6 +69,14 @@ Called inline from `onRecord()` once buffer depth reaches `sizeLimit`. Evicts on
 leaving younger records held. In the common case (depth checked after every single admission)
 this evicts exactly one record per overflow, sliding the window forward.
 
+Also called once by `ParsleyProcessor.init()`, immediately after construction, against whatever
+buffer was just restored from the changelog. This matters after a restart that follows a
+reconfiguration lowering `ofSize(...)`: the restored buffer can legitimately hold more entries than
+the new limit allows, and nothing would otherwise trim it back, since the inline check above only
+runs on the next admission — which may never come if the engine is now satisfying records
+immediately. The formula is unconditional on *when* it's called, so the same method serves both
+call sites without change.
+
 ### `evictExpired()` — duration limit
 
 Called by the processor's wall-clock punctuator at the configured interval. Walks `buffer.entries()`

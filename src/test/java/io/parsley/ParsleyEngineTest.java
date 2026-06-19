@@ -327,6 +327,50 @@ class ParsleyEngineTest {
     }
 
     /**
+     * Simulates a restart after the configured size limit was lowered: the buffer (e.g. restored
+     * from a changelog) already holds more records than the new limit allows, and nothing has
+     * trimmed it back yet because the inline check in {@code onRecord()} only fires on the next
+     * admission. {@code evictOverflow()} is invoked directly here, the same way
+     * {@code ParsleyProcessor.init()} invokes it once right after construction.
+     *
+     * Asserts that exactly the oldest excess records are evicted, in oldest-first order, leaving
+     * the buffer at exactly the new limit.
+     */
+    @Test
+    void evictOverflowTrimsARestoredBufferThatAlreadyExceedsTheLimit() {
+        CausalDependencies unmet = CausalDependencies.builder().require(new CausalPosition(T1_ID, 0, 99)).build();
+        buffer.add(incomingRecord(T2, 0, unmet), 0L);
+        buffer.add(incomingRecord(T2, 1, unmet), 1L);
+        buffer.add(incomingRecord(T2, 2, unmet), 2L);
+
+        ParsleyEngine<String, String> engine = engineWith(CausalBufferPolicy.forwardUnsafe(CausalBufferLimit.ofSize(2)));
+        forwarded.addAll(engine.evictOverflow());
+
+        assertEquals(List.of(0L, 1L), forwarded.stream().map(ParsleyRecord::sourceOffset).toList(),
+                "the two oldest excess records must be evicted, oldest-first");
+        assertEquals(2, reasons().size(), "one LIMIT_REACHED violation must be reported per evicted record");
+        assertEquals(1, buffer.size(), "the buffer must be trimmed down to exactly the new limit");
+    }
+
+    /**
+     * {@code evictOverflow()} must be a safe no-op when called on a buffer that is already at or
+     * under the configured limit — the call site added to {@code ParsleyProcessor.init()} invokes
+     * it unconditionally on every restart, including the common case where nothing needs trimming.
+     */
+    @Test
+    void evictOverflowIsANoOpWhenBufferIsNotOverTheLimit() {
+        CausalDependencies unmet = CausalDependencies.builder().require(new CausalPosition(T1_ID, 0, 99)).build();
+        buffer.add(incomingRecord(T2, 0, unmet), 0L);
+
+        ParsleyEngine<String, String> engine = engineWith(CausalBufferPolicy.forwardUnsafe(CausalBufferLimit.ofSize(2)));
+        List<ParsleyRecord<String, String>> result = engine.evictOverflow();
+
+        assertTrue(result.isEmpty(), "no eviction must occur while the buffer is within the limit");
+        assertTrue(violations.isEmpty(), "no violation must be reported when nothing is evicted");
+        assertEquals(1, buffer.size(), "the buffer must be left untouched");
+    }
+
+    /**
      * When the buffer is at its size limit and a new unsatisfied record arrives, the engine
      * evicts the oldest buffered record. Under the drop policy, the evicted record is
      * discarded and a violation is reported, but the frontier does not advance.
