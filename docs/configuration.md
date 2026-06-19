@@ -8,11 +8,12 @@ policy fires.
 ### Size limit
 
 ```java
-CausalBufferLimit.ofSize(500)  // evict when the buffer holds ≥ 500 records
+CausalBufferLimit.ofSize(500)  // evict the oldest record(s) once the buffer holds ≥ 500 records
 ```
 
-Fires synchronously during `process()` — the eviction happens in the same call that pushes the
-buffer over the limit.
+Fires synchronously during `process()` — eviction happens in the same call that pushes the buffer
+over the limit, and evicts only the oldest records needed to bring the buffer back under the
+limit (typically one per call). Younger buffered records are left alone.
 
 ### Duration limit
 
@@ -20,8 +21,9 @@ buffer over the limit.
 CausalBufferLimit.ofDuration(Duration.ofSeconds(30))
 ```
 
-Fires on a scheduled basis. The processor calls `evictNow()` at the configured interval; Parsley
-wires this schedule automatically when using `CausalProcessors`.
+Fires on a scheduled basis. The processor calls `evictExpired()` at the configured interval, which
+evicts only the records that have individually aged past `duration`, leaving younger records held;
+Parsley wires this schedule automatically when using `CausalProcessors`.
 
 ### First-of (composite)
 

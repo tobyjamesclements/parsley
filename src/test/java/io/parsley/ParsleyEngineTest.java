@@ -274,26 +274,56 @@ class ParsleyEngineTest {
     }
 
     /**
-     * When the buffer is at its size limit and a new unsatisfied record arrives, the engine
-     * evicts the oldest buffered record. Under the forward-unsafe policy, both the evicted
-     * record and any subsequently admitted records are forwarded, with violations reported.
+     * When the buffer reaches its size limit and a new unsatisfied record arrives, the engine
+     * evicts only the oldest buffered record needed to bring the buffer back under the limit,
+     * leaving the rest held. Under the forward-unsafe policy, the evicted record is forwarded
+     * with a violation reported.
      *
-     * Asserts that both evicted records are forwarded and the frontier advances through each.
+     * Asserts that only the oldest record is forwarded, exactly one violation is reported, the
+     * frontier advances only through the evicted record, and the younger record remains buffered.
      */
     @Test
-    void sizeLimitEvictsAndForwardsUnderForwardUnsafePolicy() {
+    void sizeLimitEvictsOnlyTheOldestRecordUnderForwardUnsafePolicy() {
         ParsleyEngine<String, String> engine = engineWith(CausalBufferPolicy.forwardUnsafe(CausalBufferLimit.ofSize(2)));
         CausalDependencies unmet = CausalDependencies.builder().require(new CausalPosition(T1_ID, 0, 99)).build();
 
         processRecord(engine, incomingRecord(T2, 0, unmet));
         assertTrue(forwarded.isEmpty(), "first record must be buffered while limit not yet reached");
-        processRecord(engine, incomingRecord(T2, 1, unmet)); // hits size 2 → evict both
+        processRecord(engine, incomingRecord(T2, 1, unmet)); // hits size 2 → evict only the oldest
 
-        assertEquals(2, forwarded.size(), "both evicted records must be forwarded under forward-unsafe policy");
-        assertEquals(List.of(CausalViolationReason.LIMIT_REACHED, CausalViolationReason.LIMIT_REACHED), reasons(),
-                "a LIMIT_REACHED violation must be reported for each evicted record");
-        assertEquals(CausalFrontier.empty().observe(new CausalPosition(T2_ID, 0, 1)), engine.frontier(),
-                "frontier must advance through each evicted record");
+        assertEquals(1, forwarded.size(), "only the oldest evicted record must be forwarded under forward-unsafe policy");
+        assertEquals(List.of(CausalViolationReason.LIMIT_REACHED), reasons(),
+                "exactly one LIMIT_REACHED violation must be reported");
+        assertEquals(CausalFrontier.empty().observe(new CausalPosition(T2_ID, 0, 0)), engine.frontier(),
+                "frontier must advance only through the evicted record");
+        assertEquals(1, buffer.size(), "the younger record must remain held in the buffer");
+    }
+
+    /**
+     * A size limit evicts the buffer's oldest record one at a time as new records keep arriving,
+     * sliding the window forward rather than discarding everything on each overflow.
+     *
+     * Asserts that each overflow evicts exactly one record, oldest-first, and the buffer never
+     * exceeds the configured size.
+     */
+    @Test
+    void sizeLimitSlidesTheWindowEvictingOneOldestRecordPerOverflow() {
+        ParsleyEngine<String, String> engine = engineWith(CausalBufferPolicy.forwardUnsafe(CausalBufferLimit.ofSize(2)));
+        CausalDependencies unmet = CausalDependencies.builder().require(new CausalPosition(T1_ID, 0, 99)).build();
+
+        processRecord(engine, incomingRecord(T2, 0, unmet)); // A: depth 1, no eviction
+        assertTrue(forwarded.isEmpty(), "no eviction while under the limit");
+
+        processRecord(engine, incomingRecord(T2, 1, unmet)); // B: depth 2 → evict A
+        assertEquals(List.of(0L), forwarded.stream().map(ParsleyRecord::sourceOffset).toList(),
+                "the first overflow must evict only the oldest record (A)");
+        assertEquals(1, buffer.size(), "buffer must hold exactly the size limit after eviction");
+
+        processRecord(engine, incomingRecord(T2, 2, unmet)); // C: depth 2 → evict B
+        assertEquals(List.of(0L, 1L), forwarded.stream().map(ParsleyRecord::sourceOffset).toList(),
+                "the second overflow must evict only the next-oldest record (B)");
+        assertEquals(1, buffer.size(), "buffer must never exceed the configured size limit");
+        assertEquals(2, reasons().size(), "exactly one LIMIT_REACHED violation must be reported per overflow");
     }
 
     /**
