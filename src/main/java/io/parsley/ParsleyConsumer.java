@@ -39,6 +39,7 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.Consumer;
 
 import static java.nio.charset.StandardCharsets.UTF_8;
 
@@ -87,7 +88,8 @@ final class ParsleyConsumer<K, V> implements CausalConsumer<K, V> {
             Map<String, Object> consumerConfig,
             Map<String, Object> streamsConfig,
             String storeName,
-            ParsleyTopicAdmin topicAdmin) {
+            ParsleyTopicAdmin topicAdmin,
+            Consumer<ConsumerRecord<K, V>> deadLetterSink) {
 
         Map<String, Object> merged = new HashMap<>();
         merged.put("processing.exception.handler.global.enabled", "true");
@@ -115,15 +117,26 @@ final class ParsleyConsumer<K, V> implements CausalConsumer<K, V> {
         }
 
         Serde<byte[]> bytes = Serdes.ByteArray();
-        StreamsBuilder builder = new StreamsBuilder();
-        builder.stream(topics, Consumed.with(bytes, bytes))
-                .process(CausalProcessors.builder(outboxDelegate(), policy)
+        CausalProcessors.Builder<byte[], byte[], byte[], byte[]> processorsBuilder =
+                CausalProcessors.builder(outboxDelegate(), policy)
                         .serdesByTopic(t -> bytes, t -> bytes)
                         .onViolation(onViolation)
                         .storeName(storeName)
                         .frontierListener(this::onFrontierAdvanced)
-                        .topicUuids(topicUuids)
-                        .build())
+                        .topicUuids(topicUuids);
+        if (deadLetterSink != null) {
+            // Dead-lettered records never reach outboxDelegate/ctx.forward(), so CAUSAL_DEPENDENCIES
+            // is never stamped with the delivery-time frontier here — it's still the producer's
+            // original value (plus the parsley-dlq-* headers stamped by the engine) and needs no
+            // restoring, just stripping of the internal _parsley_* source-coordinate headers.
+            processorsBuilder.deadLetterSink(r -> deadLetterSink.accept(
+                    toTypedRecord(r.topic(), r.partition(), r.offset(), r.timestamp(),
+                            r.key(), r.value(), stripInternalHeaders(r.headers()))));
+        }
+
+        StreamsBuilder builder = new StreamsBuilder();
+        builder.stream(topics, Consumed.with(bytes, bytes))
+                .process(processorsBuilder.build())
                 .to(outboxTopic, Produced.with(bytes, bytes));
 
         this.streams = new KafkaStreams(builder.build(), config);
@@ -180,17 +193,28 @@ final class ParsleyConsumer<K, V> implements CausalConsumer<K, V> {
             String srcTopic     = new String(r.headers().lastHeader(ParsleyAttributes.SRC_TOPIC).value(), UTF_8);
             int    srcPartition = intFromBytes(r.headers().lastHeader(ParsleyAttributes.SRC_PARTITION).value());
             long   srcOffset    = longFromBytes(r.headers().lastHeader(ParsleyAttributes.SRC_OFFSET).value());
-            K key   = keySerde.deserializer().deserialize(srcTopic, r.key());
-            V value = valueSerde.deserializer().deserialize(srcTopic, r.value());
             Headers headers = restoreOriginalDependencies(r.headers());
-            ConsumerRecord<K, V> cr = new ConsumerRecord<>(
-                    srcTopic, srcPartition, srcOffset,
-                    r.timestamp(), TimestampType.CREATE_TIME,
-                    -1, -1, key, value, headers, Optional.empty());
+            ConsumerRecord<K, V> cr = toTypedRecord(
+                    srcTopic, srcPartition, srcOffset, r.timestamp(), r.key(), r.value(), headers);
             byPartition.computeIfAbsent(new TopicPartition(srcTopic, srcPartition),
                     k -> new ArrayList<>()).add(cr);
         }
         return new ConsumerRecords<>(byPartition, Map.of());
+    }
+
+    /**
+     * Deserializes a raw record's key/value at {@code topic} and assembles a typed
+     * {@link ConsumerRecord} at the given source coordinate. {@code headers} must already be the
+     * caller's intended final headers — this method does no header massaging itself.
+     */
+    private ConsumerRecord<K, V> toTypedRecord(
+            String topic, int partition, long offset, long timestamp,
+            byte[] keyBytes, byte[] valueBytes, Headers headers) {
+        K key   = keySerde.deserializer().deserialize(topic, keyBytes);
+        V value = valueSerde.deserializer().deserialize(topic, valueBytes);
+        return new ConsumerRecord<>(
+                topic, partition, offset, timestamp, TimestampType.CREATE_TIME,
+                -1, -1, key, value, headers, Optional.empty());
     }
 
     @Override
@@ -256,6 +280,20 @@ final class ParsleyConsumer<K, V> implements CausalConsumer<K, V> {
         }
         if (originalDependencies != null) {
             out.add(new RecordHeader(ParsleyAttributes.CAUSAL_DEPENDENCIES, originalDependencies.value()));
+        }
+        return out;
+    }
+
+    /**
+     * Strips internal {@code _parsley_*} headers, leaving {@link ParsleyAttributes#CAUSAL_DEPENDENCIES}
+     * untouched. Unlike {@link #restoreOriginalDependencies}, used on the dead-letter path, where
+     * records never pass through the outbox delegate that stamps the delivery-time frontier — so
+     * {@code CAUSAL_DEPENDENCIES} is already the producer's original, unstamped value.
+     */
+    private static Headers stripInternalHeaders(Headers source) {
+        RecordHeaders out = new RecordHeaders();
+        for (Header h : source) {
+            if (!h.key().startsWith("_parsley_")) out.add(h);
         }
         return out;
     }

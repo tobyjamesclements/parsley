@@ -163,6 +163,66 @@ class CausalRoundTripIT {
         }
     }
 
+    /**
+     * A {@link CausalConsumer} built with a {@link CausalBufferPolicy#deadLetter dead-letter} policy
+     * routes a violating record to the configured {@link CausalConsumers.Builder#deadLetterSink sink}
+     * instead of ever delivering it via {@link CausalConsumer#poll}.
+     *
+     * <p>A plain {@link org.apache.kafka.clients.producer.KafkaProducer} sends a record with no
+     * Parsley header, triggering a {@link CausalViolationReason#MISSING_HEADER} violation, which the
+     * dead-letter policy routes to the sink.
+     *
+     * Asserts that the sink receives the record — deserialized to its typed key/value, at its
+     * original source topic/partition/offset, carrying the {@code parsley-dlq-*} headers — and that
+     * {@code poll()} never returns it.
+     */
+    @Test
+    void deadLetterPolicyRoutesViolatingRecordsToTheSinkInsteadOfDelivering() throws Exception {
+        String bootstrap = kafka.getBootstrapServers();
+        String topic = "dlq-events";
+        createTopic(bootstrap, topic);
+
+        List<ConsumerRecord<String, String>> deadLettered = new CopyOnWriteArrayList<>();
+
+        try (CausalConsumer<String, String> consumer = CausalConsumers.<String, String>builder(
+                List.of(topic),
+                CausalBufferPolicy.deadLetter(CausalBufferLimit.ofDuration(Duration.ofSeconds(5))),
+                Map.of(ConsumerConfig.GROUP_ID_CONFIG, "rt-" + UUID.randomUUID()),
+                streamsConfig(bootstrap))
+                .deadLetterSink(deadLettered::add)
+                .build()) {
+
+            // A plain producer sends a record with NO causal dependencies header → a MISSING_HEADER
+            // violation. Under a dead-letter policy, the record is routed to the sink, never delivered.
+            try (KafkaProducer<String, String> raw = new KafkaProducer<>(Map.of(
+                    ProducerConfig.BOOTSTRAP_SERVERS_CONFIG, bootstrap,
+                    ProducerConfig.KEY_SERIALIZER_CLASS_CONFIG, StringSerializer.class.getName(),
+                    ProducerConfig.VALUE_SERIALIZER_CLASS_CONFIG, StringSerializer.class.getName()))) {
+                raw.send(new ProducerRecord<>(topic, "k", "no-deps")).get();
+            }
+
+            await().atMost(Duration.ofSeconds(60)).until(() -> !deadLettered.isEmpty());
+            ConsumerRecord<String, String> dlq = deadLettered.get(0);
+            assertEquals("no-deps", dlq.value());
+            assertEquals("k", dlq.key());
+            assertEquals(topic, dlq.topic());
+            assertEquals(0, dlq.partition());
+            assertEquals(0L, dlq.offset());
+            assertEquals(CausalViolationReason.MISSING_HEADER.name(),
+                    new String(dlq.headers().lastHeader(CausalViolation.DLQ_REASON_HEADER).value()),
+                    "the dead-letter reason header identifies the violation");
+            assertTrue(dlq.headers().lastHeader(CausalViolation.DLQ_REQUIRED_DEPENDENCIES_HEADER) != null,
+                    "the dead-letter required-dependencies header is present");
+
+            // The record was never delivered via poll().
+            List<ConsumerRecord<String, String>> received = new ArrayList<>();
+            for (int i = 0; i < 5; i++) {
+                consumer.poll(Duration.ofMillis(200)).forEach(received::add);
+            }
+            assertTrue(received.isEmpty(), "a dead-lettered record must never be delivered via poll()");
+        }
+    }
+
     private static Map<String, Object> streamsConfig(String bootstrap) {
         return Map.of(
                 StreamsConfig.APPLICATION_ID_CONFIG, "rt-app-" + UUID.randomUUID(),
