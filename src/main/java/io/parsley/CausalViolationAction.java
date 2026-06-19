@@ -14,7 +14,7 @@ package io.parsley;
  *
  * <p>A {@link CausalViolationHandler} is always invoked regardless of which action is taken.
  */
-public enum ViolationAction {
+public enum CausalViolationAction {
     FORWARD_UNSAFE,
     DROP,
     DEAD_LETTER

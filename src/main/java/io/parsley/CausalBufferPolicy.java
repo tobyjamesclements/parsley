@@ -20,9 +20,9 @@ import java.util.Objects;
  *
  * <pre>{@code
  * CausalBufferPolicy.builder()
- *     .onMissing(ViolationAction.FORWARD_UNSAFE)   // legacy producers: forward regardless
- *     .onUnresolvable(ViolationAction.DROP)         // malformed header: discard
- *     .onLimit(ViolationAction.DEAD_LETTER)         // buffer overflow: route to DLQ
+ *     .onMissing(CausalViolationAction.FORWARD_UNSAFE)   // legacy producers: forward regardless
+ *     .onUnresolvable(CausalViolationAction.DROP)         // malformed header: discard
+ *     .onLimit(CausalViolationAction.DEAD_LETTER)         // buffer overflow: route to DLQ
  *     .setLimit(CausalBufferLimit.ofSize(1000))
  *     .build()
  * }</pre>
@@ -31,10 +31,10 @@ import java.util.Objects;
  */
 public final class CausalBufferPolicy {
 
-    private final Map<CausalViolationReason, ViolationAction> actions;
+    private final Map<CausalViolationReason, CausalViolationAction> actions;
     private final CausalBufferLimit limit;
 
-    private CausalBufferPolicy(EnumMap<CausalViolationReason, ViolationAction> actions, CausalBufferLimit limit) {
+    private CausalBufferPolicy(EnumMap<CausalViolationReason, CausalViolationAction> actions, CausalBufferLimit limit) {
         this.actions = Map.copyOf(actions);
         this.limit = limit;
     }
@@ -50,9 +50,9 @@ public final class CausalBufferPolicy {
      */
     public static CausalBufferPolicy forwardUnsafe(CausalBufferLimit limit) {
         return builder()
-                .onMissing(ViolationAction.FORWARD_UNSAFE)
-                .onUnresolvable(ViolationAction.FORWARD_UNSAFE)
-                .onLimit(ViolationAction.FORWARD_UNSAFE)
+                .onMissing(CausalViolationAction.FORWARD_UNSAFE)
+                .onUnresolvable(CausalViolationAction.FORWARD_UNSAFE)
+                .onLimit(CausalViolationAction.FORWARD_UNSAFE)
                 .setLimit(limit)
                 .build();
     }
@@ -66,9 +66,9 @@ public final class CausalBufferPolicy {
      */
     public static CausalBufferPolicy drop(CausalBufferLimit limit) {
         return builder()
-                .onMissing(ViolationAction.DROP)
-                .onUnresolvable(ViolationAction.DROP)
-                .onLimit(ViolationAction.DROP)
+                .onMissing(CausalViolationAction.DROP)
+                .onUnresolvable(CausalViolationAction.DROP)
+                .onLimit(CausalViolationAction.DROP)
                 .setLimit(limit)
                 .build();
     }
@@ -82,9 +82,9 @@ public final class CausalBufferPolicy {
      */
     public static CausalBufferPolicy deadLetter(CausalBufferLimit limit) {
         return builder()
-                .onMissing(ViolationAction.DEAD_LETTER)
-                .onUnresolvable(ViolationAction.DEAD_LETTER)
-                .onLimit(ViolationAction.DEAD_LETTER)
+                .onMissing(CausalViolationAction.DEAD_LETTER)
+                .onUnresolvable(CausalViolationAction.DEAD_LETTER)
+                .onLimit(CausalViolationAction.DEAD_LETTER)
                 .setLimit(limit)
                 .build();
     }
@@ -106,7 +106,7 @@ public final class CausalBufferPolicy {
      * @param reason the violation reason; must not be {@code null}
      * @return the configured action
      */
-    public ViolationAction actionFor(CausalViolationReason reason) {
+    public CausalViolationAction actionFor(CausalViolationReason reason) {
         return actions.get(reason);
     }
 
@@ -120,13 +120,13 @@ public final class CausalBufferPolicy {
     }
 
     /**
-     * Returns {@code true} if any violation type is configured with {@link ViolationAction#DEAD_LETTER},
+     * Returns {@code true} if any violation type is configured with {@link CausalViolationAction#DEAD_LETTER},
      * meaning a dead-letter sink must be supplied.
      *
      * @return whether a dead-letter sink is required
      */
     public boolean requiresDeadLetterSink() {
-        return actions.containsValue(ViolationAction.DEAD_LETTER);
+        return actions.containsValue(CausalViolationAction.DEAD_LETTER);
     }
 
     @Override
@@ -155,9 +155,9 @@ public final class CausalBufferPolicy {
      * throws {@link IllegalStateException} if any are missing.
      */
     public static final class Builder {
-        private ViolationAction onMissing;
-        private ViolationAction onUnresolvable;
-        private ViolationAction onLimit;
+        private CausalViolationAction onMissing;
+        private CausalViolationAction onUnresolvable;
+        private CausalViolationAction onLimit;
         private CausalBufferLimit limit;
 
         private Builder() {}
@@ -169,7 +169,7 @@ public final class CausalBufferPolicy {
          * @param action the action; must not be {@code null}
          * @return this builder
          */
-        public Builder onMissing(ViolationAction action) {
+        public Builder onMissing(CausalViolationAction action) {
             this.onMissing = Objects.requireNonNull(action, "action must not be null");
             return this;
         }
@@ -181,7 +181,7 @@ public final class CausalBufferPolicy {
          * @param action the action; must not be {@code null}
          * @return this builder
          */
-        public Builder onUnresolvable(ViolationAction action) {
+        public Builder onUnresolvable(CausalViolationAction action) {
             this.onUnresolvable = Objects.requireNonNull(action, "action must not be null");
             return this;
         }
@@ -193,7 +193,7 @@ public final class CausalBufferPolicy {
          * @param action the action; must not be {@code null}
          * @return this builder
          */
-        public Builder onLimit(ViolationAction action) {
+        public Builder onLimit(CausalViolationAction action) {
             this.onLimit = Objects.requireNonNull(action, "action must not be null");
             return this;
         }
@@ -220,7 +220,7 @@ public final class CausalBufferPolicy {
             if (onUnresolvable == null) throw new IllegalStateException("onUnresolvable action must be set");
             if (onLimit == null) throw new IllegalStateException("onLimit action must be set");
             if (limit == null) throw new IllegalStateException("setLimit must be called");
-            EnumMap<CausalViolationReason, ViolationAction> map = new EnumMap<>(CausalViolationReason.class);
+            EnumMap<CausalViolationReason, CausalViolationAction> map = new EnumMap<>(CausalViolationReason.class);
             map.put(CausalViolationReason.MISSING_HEADER, onMissing);
             map.put(CausalViolationReason.UNRESOLVABLE_DEPENDENCIES, onUnresolvable);
             map.put(CausalViolationReason.LIMIT_REACHED, onLimit);

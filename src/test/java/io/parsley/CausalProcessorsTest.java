@@ -76,9 +76,9 @@ class CausalProcessorsTest {
     void buildRejectsAnyDeadLetterActionWithoutSink() {
         CausalProcessors.Builder<String, String, String, String> b =
                 builderWith(CausalBufferPolicy.builder()
-                        .onMissing(ViolationAction.DEAD_LETTER)
-                        .onUnresolvable(ViolationAction.DROP)
-                        .onLimit(ViolationAction.DROP)
+                        .onMissing(CausalViolationAction.DEAD_LETTER)
+                        .onUnresolvable(CausalViolationAction.DROP)
+                        .onLimit(CausalViolationAction.DROP)
                         .setLimit(CausalBufferLimit.ofSize(1))
                         .build())
                         .serdes(Serdes.String(), Serdes.String());

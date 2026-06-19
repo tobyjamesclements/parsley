@@ -67,7 +67,7 @@ be upheld for a specific record. Three reasons exist:
 
 The action taken for each violation reason is configured by the policy. The convenience factories
 (`forwardUnsafe`, `drop`, `deadLetter`) apply the same action to all three reasons. The
-`CausalBufferPolicy.builder()` lets each reason carry a distinct `ViolationAction` — for example,
+`CausalBufferPolicy.builder()` lets each reason carry a distinct `CausalViolationAction` — for example,
 forwarding records with no Parsley header while dropping or dead-lettering records evicted from the
 buffer. The frontier always advances regardless of action, so records buffered downstream are not
 permanently stalled by the violation.

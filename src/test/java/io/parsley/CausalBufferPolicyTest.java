@@ -4,9 +4,9 @@ import org.junit.jupiter.api.Test;
 
 import java.time.Duration;
 
-import static io.parsley.ViolationAction.DEAD_LETTER;
-import static io.parsley.ViolationAction.DROP;
-import static io.parsley.ViolationAction.FORWARD_UNSAFE;
+import static io.parsley.CausalViolationAction.DEAD_LETTER;
+import static io.parsley.CausalViolationAction.DROP;
+import static io.parsley.CausalViolationAction.FORWARD_UNSAFE;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;

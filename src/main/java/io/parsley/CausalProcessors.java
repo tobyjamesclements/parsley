@@ -182,9 +182,9 @@ public final class CausalProcessors {
          *
          * @return a decorated supplier ready for {@code stream(...).process(...)}
          * @throws IllegalStateException    if no serde pair was set
-         * @throws IllegalArgumentException if any violation type uses {@link ViolationAction#DEAD_LETTER}
+         * @throws IllegalArgumentException if any violation type uses {@link CausalViolationAction#DEAD_LETTER}
          *                                  and no sink was set, or a sink was set but no violation type
-         *                                  uses {@link ViolationAction#DEAD_LETTER}
+         *                                  uses {@link CausalViolationAction#DEAD_LETTER}
          */
         public CausalProcessorSupplier<KIn, VIn, KOut, VOut> build() {
             if (keySerdeByTopic == null || valueSerdeByTopic == null) {

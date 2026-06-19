@@ -48,7 +48,7 @@ backstop.
 ## Buffer policies
 
 A `CausalBufferPolicy` pairs a limit with a handling strategy for evicted records via a
-`ViolationAction` (`FORWARD_UNSAFE`, `DROP`, or `DEAD_LETTER`). Every policy reports a
+`CausalViolationAction` (`FORWARD_UNSAFE`, `DROP`, or `DEAD_LETTER`). Every policy reports a
 `CausalViolation` for each evicted record.
 
 The policy applies to all three violation reasons: records evicted when a limit fires
@@ -95,13 +95,13 @@ reconstruct exactly which offsets were missing at eviction time.
 ### Per-violation-type policy
 
 The convenience factories above apply the same action to every violation reason. The builder lets
-each reason carry its own `ViolationAction`:
+each reason carry its own `CausalViolationAction`:
 
 ```java
 CausalBufferPolicy policy = CausalBufferPolicy.builder()
-        .onMissing(ViolationAction.FORWARD_UNSAFE)      // tolerate legacy (non-Parsley) producers
-        .onUnresolvable(ViolationAction.DROP)            // corrupt header → discard
-        .onLimit(ViolationAction.DEAD_LETTER)            // buffer overflow → DLQ
+        .onMissing(CausalViolationAction.FORWARD_UNSAFE)      // tolerate legacy (non-Parsley) producers
+        .onUnresolvable(CausalViolationAction.DROP)            // corrupt header → discard
+        .onLimit(CausalViolationAction.DEAD_LETTER)            // buffer overflow → DLQ
         .setLimit(CausalBufferLimit.ofSize(1000))
         .build();
 ```

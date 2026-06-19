@@ -179,7 +179,7 @@ final class ParsleyEngine<K, V> {
      * entries need to be evicted to fit the record just admitted.
      *
      * @return records to forward downstream out-of-order; non-empty only when the
-     *         {@link CausalViolationReason#LIMIT_REACHED} action is {@link ViolationAction#FORWARD_UNSAFE}
+     *         {@link CausalViolationReason#LIMIT_REACHED} action is {@link CausalViolationAction#FORWARD_UNSAFE}
      */
     List<ParsleyRecord<K, V>> evictOverflow() {
         int overflow = buffer.size() - sizeLimit + 1;
@@ -200,7 +200,7 @@ final class ParsleyEngine<K, V> {
      * thread), so the scan can stop at the first record that hasn't aged out yet.
      *
      * @return records to forward downstream out-of-order; non-empty only when the
-     *         {@link CausalViolationReason#LIMIT_REACHED} action is {@link ViolationAction#FORWARD_UNSAFE}
+     *         {@link CausalViolationReason#LIMIT_REACHED} action is {@link CausalViolationAction#FORWARD_UNSAFE}
      */
     List<ParsleyRecord<K, V>> evictExpired() {
         if (evictionInterval == null) {
@@ -224,7 +224,7 @@ final class ParsleyEngine<K, V> {
         for (ParsleyBufferStore.Entry<K, V> entry : evicted) {
             violate(entry.record(), CausalViolationReason.LIMIT_REACHED, entry.dependencies());
             buffer.remove(entry.sequence());
-            if (policy.actionFor(CausalViolationReason.LIMIT_REACHED) == ViolationAction.FORWARD_UNSAFE) {
+            if (policy.actionFor(CausalViolationReason.LIMIT_REACHED) == CausalViolationAction.FORWARD_UNSAFE) {
                 advanceFrontier(entry.record());
             }
             applyPolicyForRecord(entry.record(), entry.dependencies(), CausalViolationReason.LIMIT_REACHED, toForward);

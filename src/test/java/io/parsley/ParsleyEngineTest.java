@@ -8,7 +8,6 @@ import org.junit.jupiter.api.Test;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Map;
 import java.util.concurrent.atomic.AtomicLong;
 
 import static java.nio.charset.StandardCharsets.UTF_8;
@@ -772,9 +771,9 @@ class ParsleyEngineTest {
     @Test
     void discardRecordButAdvanceFrontierWhenHeaderMissingWithDropAction() {
         CausalBufferPolicy policy = CausalBufferPolicy.builder()
-                .onMissing(ViolationAction.DROP)
-                .onUnresolvable(ViolationAction.DROP)
-                .onLimit(ViolationAction.DROP)
+                .onMissing(CausalViolationAction.DROP)
+                .onUnresolvable(CausalViolationAction.DROP)
+                .onLimit(CausalViolationAction.DROP)
                 .setLimit(CausalBufferLimit.ofSize(100))
                 .build();
         ParsleyEngine<String, String> engine = engineWith(policy);
@@ -796,9 +795,9 @@ class ParsleyEngineTest {
     @Test
     void forwardMissingHeaderAndDropLimitReachedUnderMixedPolicy() {
         CausalBufferPolicy policy = CausalBufferPolicy.builder()
-                .onMissing(ViolationAction.FORWARD_UNSAFE)
-                .onUnresolvable(ViolationAction.DROP)
-                .onLimit(ViolationAction.DROP)
+                .onMissing(CausalViolationAction.FORWARD_UNSAFE)
+                .onUnresolvable(CausalViolationAction.DROP)
+                .onLimit(CausalViolationAction.DROP)
                 .setLimit(CausalBufferLimit.ofSize(1))
                 .build();
         ParsleyEngine<String, String> engine = engineWith(policy);
@@ -827,9 +826,9 @@ class ParsleyEngineTest {
     @Test
     void advanceFrontierWhenLimitReachedUnderForwardUnsafeAction() {
         CausalBufferPolicy policy = CausalBufferPolicy.builder()
-                .onMissing(ViolationAction.DROP)
-                .onUnresolvable(ViolationAction.DROP)
-                .onLimit(ViolationAction.FORWARD_UNSAFE)
+                .onMissing(CausalViolationAction.DROP)
+                .onUnresolvable(CausalViolationAction.DROP)
+                .onLimit(CausalViolationAction.FORWARD_UNSAFE)
                 .setLimit(CausalBufferLimit.ofSize(1))
                 .build();
         ParsleyEngine<String, String> engine = engineWith(policy);

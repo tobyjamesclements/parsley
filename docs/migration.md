@@ -18,9 +18,9 @@ records that do carry a Parsley header:
 
 ```java
 CausalBufferPolicy policy = CausalBufferPolicy.builder()
-        .onMissing(ViolationAction.FORWARD_UNSAFE)      // legacy producers pass through immediately
-        .onUnresolvable(ViolationAction.DROP)            // corrupt header is a bug, not a migration artefact
-        .onLimit(ViolationAction.DEAD_LETTER)            // buffer overflow → DLQ for investigation
+        .onMissing(CausalViolationAction.FORWARD_UNSAFE)      // legacy producers pass through immediately
+        .onUnresolvable(CausalViolationAction.DROP)            // corrupt header is a bug, not a migration artefact
+        .onLimit(CausalViolationAction.DEAD_LETTER)            // buffer overflow → DLQ for investigation
         .setLimit(CausalBufferLimit.first(
                 CausalBufferLimit.ofSize(10_000),
                 CausalBufferLimit.ofDuration(Duration.ofSeconds(60))))

@@ -20,7 +20,7 @@ import java.util.function.Consumer;
  *         .build();
  * }</pre>
  *
- * <p>Policies where any violation type uses {@link ViolationAction#DEAD_LETTER} require a
+ * <p>Policies where any violation type uses {@link CausalViolationAction#DEAD_LETTER} require a
  * {@link Builder#deadLetterSink(Consumer) dead-letter sink}; {@link Builder#build()} rejects a
  * dead-letter policy with no sink, and a sink set on a non-dead-letter policy.
  */
@@ -34,7 +34,7 @@ public final class CausalConsumers {
      * @param <K>            the record key type
      * @param <V>            the record value type
      * @param topics         the Kafka topics to subscribe to; must not be empty
-     * @param policy         the buffering policy; if it uses {@link ViolationAction#DEAD_LETTER}
+     * @param policy         the buffering policy; if it uses {@link CausalViolationAction#DEAD_LETTER}
      *                       for any violation type, {@link Builder#deadLetterSink} must be set
      * @param consumerConfig additional consumer configuration (overrides defaults derived from
      *                       {@code streamsConfig})
