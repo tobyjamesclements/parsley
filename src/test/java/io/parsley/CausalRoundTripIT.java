@@ -213,6 +213,9 @@ class CausalRoundTripIT {
                     "the dead-letter reason header identifies the violation");
             assertTrue(dlq.headers().lastHeader(CausalViolation.DLQ_REQUIRED_DEPENDENCIES_HEADER) != null,
                     "the dead-letter required-dependencies header is present");
+            // Internal _parsley_* source-coordinate headers must be stripped before the sink sees them.
+            dlq.headers().forEach(h -> assertFalse(h.key().startsWith("_parsley_"),
+                    "internal header leaked to the dead-letter sink: " + h.key()));
 
             // The record was never delivered via poll().
             List<ConsumerRecord<String, String>> received = new ArrayList<>();
@@ -220,6 +223,66 @@ class CausalRoundTripIT {
                 consumer.poll(Duration.ofMillis(200)).forEach(received::add);
             }
             assertTrue(received.isEmpty(), "a dead-lettered record must never be delivered via poll()");
+        }
+    }
+
+    /**
+     * A record evicted by a {@link CausalViolationReason#LIMIT_REACHED} eviction reaches the
+     * dead-letter sink still carrying the <em>producer's original, unstamped</em> causal
+     * dependencies — not the delivery-time frontier.
+     *
+     * <p>This is the property that distinguishes the dead-letter path from {@link CausalConsumer#poll}:
+     * dead-lettered records never pass through the outbox delegate that overwrites
+     * {@code parsley-causal-dependencies} with the frontier, so the consumer only strips internal
+     * {@code _parsley_*} headers ({@code stripInternalHeaders}) rather than restoring the original
+     * ({@code restoreOriginalDependencies}). The sibling {@code MISSING_HEADER} test cannot exercise
+     * this because there is no producer clock to preserve.
+     *
+     * <p>A {@link CausalProducer} sends a record depending on an offset that never arrives, so it
+     * buffers until the short duration limit fires and routes it to the sink.
+     *
+     * Asserts that {@link CausalDependencies#fromRecord} on the dead-lettered record equals the
+     * exact dependencies the producer stamped.
+     */
+    @Test
+    void deadLetteredRecordPreservesTheProducersOriginalDependencies() throws Exception {
+        String bootstrap = kafka.getBootstrapServers();
+        String topic = "dlq-limit-events";
+        createTopic(bootstrap, topic);
+
+        // Depend on a coordinate in an upstream topic the consumer never reads, so the dependency
+        // can never be satisfied — the record buffers and is evicted as LIMIT_REACHED once the
+        // duration limit fires. It must be a *different* topic: a dependency on the record's own
+        // source coordinate is stripped as a self-reference (ParsleyEngine.withoutSelfReference).
+        Uuid upstreamTopicId = CausalPosition.deriveUuid("never-produced-upstream");
+        CausalDependencies producerDeps = CausalDependencies.builder()
+                .require(new CausalPosition(upstreamTopicId, 0, 5L)).build();
+
+        List<ConsumerRecord<String, String>> deadLettered = new CopyOnWriteArrayList<>();
+
+        try (CausalProducer<String, String> producer = CausalProducers.<String, String>builder(Map.of(
+                ProducerConfig.BOOTSTRAP_SERVERS_CONFIG, bootstrap,
+                ProducerConfig.KEY_SERIALIZER_CLASS_CONFIG, StringSerializer.class.getName(),
+                ProducerConfig.VALUE_SERIALIZER_CLASS_CONFIG, StringSerializer.class.getName())).build();
+             CausalConsumer<String, String> consumer = CausalConsumers.<String, String>builder(
+                     List.of(topic),
+                     CausalBufferPolicy.deadLetter(CausalBufferLimit.ofDuration(Duration.ofSeconds(2))),
+                     Map.of(ConsumerConfig.GROUP_ID_CONFIG, "rt-" + UUID.randomUUID()),
+                     streamsConfig(bootstrap))
+                     .topicAdmin(new MockAdminClient())
+                     .deadLetterSink(deadLettered::add)
+                     .build()) {
+
+            producer.send(new ProducerRecord<>(topic, "k", "buffered-then-evicted"), producerDeps).get();
+
+            await().atMost(Duration.ofSeconds(60)).until(() -> !deadLettered.isEmpty());
+            ConsumerRecord<String, String> dlq = deadLettered.get(0);
+            assertEquals("buffered-then-evicted", dlq.value());
+            assertEquals(CausalViolationReason.LIMIT_REACHED.name(),
+                    new String(dlq.headers().lastHeader(CausalViolation.DLQ_REASON_HEADER).value()),
+                    "the record was evicted by the buffer limit");
+            assertEquals(Optional.of(producerDeps), CausalDependencies.fromRecord(dlq),
+                    "the dead-lettered record must carry the producer's original dependencies, unstamped");
         }
     }
 
