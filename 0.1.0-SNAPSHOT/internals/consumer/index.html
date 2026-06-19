@@ -743,6 +743,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#dead-letter-path" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Dead-letter path
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#frontier-merging" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -879,6 +890,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#dead-letter-path" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Dead-letter path
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#frontier-merging" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -964,6 +986,15 @@
 <li>Return as <code>ConsumerRecords&lt;K,V&gt;</code>.</li>
 </ol>
 <p>The returned record's <code>headers()</code> contain the original producer dependencies (not the delivery-time frontier). <code>CausalDependencies.fromRecord(record)</code> on a record returned by <code>poll()</code> therefore returns the producer's causal intent.</p>
+<h2 id="dead-letter-path">Dead-letter path</h2>
+<p>When the policy uses <code>DEAD_LETTER</code> for a violation type (<code>CausalConsumers.builder(...).deadLetterSink(...)</code>, see <a href="../../streams/">streams.md</a> for the equivalent <code>CausalProcessors</code> example), evicted records take a separate route and <strong>never reach the outbox, the internal consumer, or <code>poll()</code></strong>:</p>
+<ol>
+<li>The causal engine calls its <code>deadLetterSink</code> with the raw <code>byte[]</code> record (plus the <code>parsley-dlq-*</code> headers it stamped).</li>
+<li><code>ParsleyConsumer</code> adapts that raw record into a typed <code>ConsumerRecord&lt;K,V&gt;</code> via the same <code>toTypedRecord(...)</code> helper <code>poll()</code> uses — deserialising key and value at the source topic, at the original source topic/partition/offset.</li>
+<li>Headers are passed through <code>stripInternalHeaders(...)</code>, which removes the internal <code>_parsley_*</code> headers only. Unlike <code>restoreOriginalDependencies(...)</code> on the <code>poll()</code> path, it does <strong>not</strong> touch <code>parsley-causal-dependencies</code>: dead-lettered records never pass through the outbox delegate, so that header was never overwritten with the delivery-time frontier — it is still the producer's original value.</li>
+<li>The typed record is delivered to the user's sink.</li>
+</ol>
+<p>The sink runs on the internal Kafka Streams thread, so it must be thread-safe (the same caveat as the violation handler).</p>
 <h2 id="frontier-merging">Frontier merging</h2>
 <p>The Streams topology may assign multiple tasks to the same application instance, each with its own <code>ParsleyProcessor</code> and its own local frontier. Each processor fires the <code>CausalFrontierListener</code> callback whenever its frontier advances.</p>
 <p><code>ParsleyConsumer</code> holds an <code>AtomicReference&lt;CausalFrontier&gt;</code> initialised to <code>CausalFrontier.empty()</code>. The listener callback calls <code>ref.updateAndGet(existing -&gt; existing.merge(incoming))</code>. <code>frontier()</code> returns the current value of this reference.</p>

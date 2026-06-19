@@ -962,10 +962,11 @@ unmigrated:</p>
 <li><code>UNRESOLVABLE_DEPENDENCIES</code> is distinct from <code>MISSING_HEADER</code>: it means a header is present but
   cannot be deserialised. This is not expected during a migration and warrants a <code>DROP</code> or
   <code>DEAD_LETTER</code> action rather than <code>FORWARD_UNSAFE</code>.</li>
-<li>The per-violation-type policy works with both <code>CausalConsumers</code> and <code>CausalProcessors</code>.
-  <code>CausalConsumers</code> does not support <code>DEAD_LETTER</code> (no dead-letter sink); use <code>FORWARD_UNSAFE</code> or
-  <code>DROP</code> for <code>CausalConsumer</code>-based deployments during migration, or build a custom topology with
-  <code>CausalProcessors</code> if dead-lettering is needed.</li>
+<li>The per-violation-type policy works with both <code>CausalConsumers</code> and <code>CausalProcessors</code>. To
+  dead-letter on a <code>CausalConsumer</code>-based deployment, provide a sink via
+  <code>CausalConsumers.builder(...).deadLetterSink(...)</code> — required for any policy using <code>DEAD_LETTER</code>
+  and forbidden otherwise. The sink receives the evicted record as a typed <code>ConsumerRecord&lt;K,V&gt;</code>
+  carrying the <code>parsley-dlq-*</code> headers.</li>
 </ul>
 
 
