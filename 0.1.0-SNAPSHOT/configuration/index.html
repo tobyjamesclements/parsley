@@ -1057,15 +1057,17 @@
 <p>A <code>CausalBufferLimit</code> bounds how large or how long-lived the causal buffer may grow before the
 policy fires.</p>
 <h3 id="size-limit">Size limit</h3>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="n">CausalBufferLimit</span><span class="p">.</span><span class="na">ofSize</span><span class="p">(</span><span class="mi">500</span><span class="p">)</span><span class="w">  </span><span class="c1">// evict when the buffer holds ≥ 500 records</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="n">CausalBufferLimit</span><span class="p">.</span><span class="na">ofSize</span><span class="p">(</span><span class="mi">500</span><span class="p">)</span><span class="w">  </span><span class="c1">// evict the oldest record(s) once the buffer holds ≥ 500 records</span>
 </code></pre></div>
-<p>Fires synchronously during <code>process()</code> — the eviction happens in the same call that pushes the
-buffer over the limit.</p>
+<p>Fires synchronously during <code>process()</code> — eviction happens in the same call that pushes the buffer
+over the limit, and evicts only the oldest records needed to bring the buffer back under the
+limit (typically one per call). Younger buffered records are left alone.</p>
 <h3 id="duration-limit">Duration limit</h3>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="n">CausalBufferLimit</span><span class="p">.</span><span class="na">ofDuration</span><span class="p">(</span><span class="n">Duration</span><span class="p">.</span><span class="na">ofSeconds</span><span class="p">(</span><span class="mi">30</span><span class="p">))</span>
 </code></pre></div>
-<p>Fires on a scheduled basis. The processor calls <code>evictNow()</code> at the configured interval; Parsley
-wires this schedule automatically when using <code>CausalProcessors</code>.</p>
+<p>Fires on a scheduled basis. The processor calls <code>evictExpired()</code> at the configured interval, which
+evicts only the records that have individually aged past <code>duration</code>, leaving younger records held;
+Parsley wires this schedule automatically when using <code>CausalProcessors</code>.</p>
 <h3 id="first-of-composite">First-of (composite)</h3>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="n">CausalBufferLimit</span><span class="p">.</span><span class="na">first</span><span class="p">(</span>
 <a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="w">    </span><span class="n">CausalBufferLimit</span><span class="p">.</span><span class="na">ofSize</span><span class="p">(</span><span class="mi">1000</span><span class="p">),</span>

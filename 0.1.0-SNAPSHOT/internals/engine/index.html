@@ -676,13 +676,41 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#evictnow-algorithm" class="md-nav__link">
+  <a href="#eviction" class="md-nav__link">
     <span class="md-ellipsis">
       
-        evictNow() algorithm
+        Eviction
       
     </span>
   </a>
+  
+    <nav class="md-nav" aria-label="Eviction">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#evictoverflow-size-limit" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        evictOverflow() — size limit
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#evictexpired-duration-limit" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        evictExpired() — duration limit
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
   
 </li>
       
@@ -879,13 +907,41 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#evictnow-algorithm" class="md-nav__link">
+  <a href="#eviction" class="md-nav__link">
     <span class="md-ellipsis">
       
-        evictNow() algorithm
+        Eviction
       
     </span>
   </a>
+  
+    <nav class="md-nav" aria-label="Eviction">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#evictoverflow-size-limit" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        evictOverflow() — size limit
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#evictexpired-duration-limit" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        evictExpired() — duration limit
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
   
 </li>
       
@@ -995,7 +1051,7 @@
 </li>
 <li>Strip self-referential entries from the decoded dependencies. A <code>(topicId, partition)</code> entry whose required offset is &gt;= the record's own source offset on that coordinate is removed. This prevents a record from blocking on its own position in the log.</li>
 <li>If <code>deps.isSatisfiedBy(frontier)</code>: advance frontier, add record to output, call <code>drainInto()</code>.</li>
-<li>Otherwise: add record to buffer (assigned an insertion sequence), index unsatisfied coordinates in the wait index. If buffer depth &gt;= <code>sizeLimit</code>, call <code>evictNow()</code>.</li>
+<li>Otherwise: add record to buffer (assigned an insertion sequence and a <code>bufferedAt</code> timestamp), index unsatisfied coordinates in the wait index. If buffer depth &gt;= <code>sizeLimit</code>, call <code>evictOverflow()</code>.</li>
 </ol>
 <p>Records with missing or undecodable dependency headers are handled by the buffer policy (forward, drop, or dead-letter). The frontier always advances so buffered records waiting on that coordinate are not permanently stalled.</p>
 <h2 id="drain-cascade-draininto">Drain cascade (<code>drainInto</code>)</h2>
@@ -1018,8 +1074,9 @@
 </code></pre></div>
 <p>Each iteration finds records whose dependencies are now met after the most recent frontier advances. Those releases can in turn advance the frontier on further coordinates, triggering additional releases. The loop terminates when no new records become satisfiable.</p>
 <p>Wait-index entries for records that have already been released or evicted are discovered and pruned lazily during this scan rather than eagerly on removal.</p>
-<h2 id="evictnow-algorithm"><code>evictNow()</code> algorithm</h2>
-<p>Retrieves all buffer entries in insertion-sequence order. For each entry:</p>
+<h2 id="eviction">Eviction</h2>
+<p>Both eviction paths select a subset of <code>buffer.entries()</code> (oldest-first by insertion sequence,
+equivalently by <code>bufferedAt</code>) and hand it to a shared <code>evictEntries()</code> helper. For each selected entry:</p>
 <ol>
 <li>Report <code>LIMIT_REACHED</code> violation via <code>CausalViolationHandler</code>.</li>
 <li>Remove from buffer and wait index.</li>
@@ -1030,6 +1087,16 @@
 </ul>
 </li>
 </ol>
+<h3 id="evictoverflow-size-limit"><code>evictOverflow()</code> — size limit</h3>
+<p>Called inline from <code>onRecord()</code> once buffer depth reaches <code>sizeLimit</code>. Evicts only the oldest
+<code>buffer.size() - sizeLimit + 1</code> entries — just enough to bring the buffer back under the limit —
+leaving younger records held. In the common case (depth checked after every single admission)
+this evicts exactly one record per overflow, sliding the window forward.</p>
+<h3 id="evictexpired-duration-limit"><code>evictExpired()</code> — duration limit</h3>
+<p>Called by the processor's wall-clock punctuator at the configured interval. Walks <code>buffer.entries()</code>
+from the oldest, evicting every entry whose <code>bufferedAt</code> is older than <code>now - duration</code>, and stops
+at the first entry that hasn't aged out yet (everything after it is younger still). A no-op when no
+duration limit is configured.</p>
 <p>DLQ headers added per evicted record:</p>
 <table>
 <thead>
