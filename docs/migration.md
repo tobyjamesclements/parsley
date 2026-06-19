@@ -70,7 +70,8 @@ Or keep the asymmetric builder if you want different handling for different reas
 - `UNRESOLVABLE_DEPENDENCIES` is distinct from `MISSING_HEADER`: it means a header is present but
   cannot be deserialised. This is not expected during a migration and warrants a `DROP` or
   `DEAD_LETTER` action rather than `FORWARD_UNSAFE`.
-- The per-violation-type policy works with both `CausalConsumers` and `CausalProcessors`.
-  `CausalConsumers` does not support `DEAD_LETTER` (no dead-letter sink); use `FORWARD_UNSAFE` or
-  `DROP` for `CausalConsumer`-based deployments during migration, or build a custom topology with
-  `CausalProcessors` if dead-lettering is needed.
+- The per-violation-type policy works with both `CausalConsumers` and `CausalProcessors`. To
+  dead-letter on a `CausalConsumer`-based deployment, provide a sink via
+  `CausalConsumers.builder(...).deadLetterSink(...)` — required for any policy using `DEAD_LETTER`
+  and forbidden otherwise. The sink receives the evicted record as a typed `ConsumerRecord<K,V>`
+  carrying the `parsley-dlq-*` headers.
