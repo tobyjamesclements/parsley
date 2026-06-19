@@ -1064,7 +1064,9 @@ over the limit, and evicts only the oldest records needed to bring the buffer ba
 limit (typically one per call). Younger buffered records are left alone.</p>
 <p>The limit is also enforced once at startup, against whatever buffer was restored from the
 changelog — so lowering the limit and restarting evicts the oldest excess records immediately,
-rather than waiting for new traffic to retrigger the inline check above.</p>
+rather than waiting for new traffic to retrigger the inline check above. This enforcement happens
+shortly after startup, not necessarily before the very first record — but the buffer can't stay
+over the limit either way: a record admitted in that window trips the inline check above instead.</p>
 <h3 id="duration-limit">Duration limit</h3>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="n">CausalBufferLimit</span><span class="p">.</span><span class="na">ofDuration</span><span class="p">(</span><span class="n">Duration</span><span class="p">.</span><span class="na">ofSeconds</span><span class="p">(</span><span class="mi">30</span><span class="p">))</span>
 </code></pre></div>

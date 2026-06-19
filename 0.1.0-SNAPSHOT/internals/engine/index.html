@@ -1092,13 +1092,18 @@ equivalently by <code>bufferedAt</code>) and hand it to a shared <code>evictEntr
 <code>buffer.size() - sizeLimit + 1</code> entries — just enough to bring the buffer back under the limit —
 leaving younger records held. In the common case (depth checked after every single admission)
 this evicts exactly one record per overflow, sliding the window forward.</p>
-<p>Also called once by <code>ParsleyProcessor.init()</code>, immediately after construction, against whatever
-buffer was just restored from the changelog. This matters after a restart that follows a
-reconfiguration lowering <code>ofSize(...)</code>: the restored buffer can legitimately hold more entries than
-the new limit allows, and nothing would otherwise trim it back, since the inline check above only
-runs on the next admission — which may never come if the engine is now satisfying records
-immediately. The formula is unconditional on <em>when</em> it's called, so the same method serves both
-call sites without change.</p>
+<p>A second call site exists in <code>ParsleyProcessor.init()</code>, to enforce the limit once against a
+buffer restored from a changelog after a restart (relevant after a reconfiguration that lowers
+<code>ofSize(...)</code> before restarting — the restored buffer can legitimately hold more entries than the
+new limit allows, and the inline check above only runs on the next admission, which may never
+come). This can't happen synchronously inside <code>init()</code>: Kafka Streams hasn't finished wiring the
+task's <code>RecordCollector</code> until every processor in the topology returns from <code>init()</code>, so
+forwarding a <code>FORWARD_UNSAFE</code> eviction at that point throws an NPE. Instead, <code>init()</code> schedules a
+self-cancelling, one-shot <code>WALL_CLOCK_TIME</code> punctuation that calls <code>evictOverflow()</code> on its first
+firing and cancels itself immediately after. The formula is unconditional on <em>when</em> it's called,
+so the same method serves both call sites without change; if a new record is admitted via the
+inline path before the punctuation fires, that path's own overflow check already restores the
+invariant, and the punctuation's subsequent call is a no-op.</p>
 <h3 id="evictexpired-duration-limit"><code>evictExpired()</code> — duration limit</h3>
 <p>Called by the processor's wall-clock punctuator at the configured interval. Walks <code>buffer.entries()</code>
 from the oldest, evicting every entry whose <code>bufferedAt</code> is older than <code>now - duration</code>, and stops
