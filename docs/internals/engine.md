@@ -69,13 +69,18 @@ Called inline from `onRecord()` once buffer depth reaches `sizeLimit`. Evicts on
 leaving younger records held. In the common case (depth checked after every single admission)
 this evicts exactly one record per overflow, sliding the window forward.
 
-Also called once by `ParsleyProcessor.init()`, immediately after construction, against whatever
-buffer was just restored from the changelog. This matters after a restart that follows a
-reconfiguration lowering `ofSize(...)`: the restored buffer can legitimately hold more entries than
-the new limit allows, and nothing would otherwise trim it back, since the inline check above only
-runs on the next admission — which may never come if the engine is now satisfying records
-immediately. The formula is unconditional on *when* it's called, so the same method serves both
-call sites without change.
+A second call site exists in `ParsleyProcessor.init()`, to enforce the limit once against a
+buffer restored from a changelog after a restart (relevant after a reconfiguration that lowers
+`ofSize(...)` before restarting — the restored buffer can legitimately hold more entries than the
+new limit allows, and the inline check above only runs on the next admission, which may never
+come). This can't happen synchronously inside `init()`: Kafka Streams hasn't finished wiring the
+task's `RecordCollector` until every processor in the topology returns from `init()`, so
+forwarding a `FORWARD_UNSAFE` eviction at that point throws an NPE. Instead, `init()` schedules a
+self-cancelling, one-shot `WALL_CLOCK_TIME` punctuation that calls `evictOverflow()` on its first
+firing and cancels itself immediately after. The formula is unconditional on *when* it's called,
+so the same method serves both call sites without change; if a new record is admitted via the
+inline path before the punctuation fires, that path's own overflow check already restores the
+invariant, and the punctuation's subsequent call is a no-op.
 
 ### `evictExpired()` — duration limit
 

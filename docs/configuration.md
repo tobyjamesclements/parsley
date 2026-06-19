@@ -17,7 +17,9 @@ limit (typically one per call). Younger buffered records are left alone.
 
 The limit is also enforced once at startup, against whatever buffer was restored from the
 changelog — so lowering the limit and restarting evicts the oldest excess records immediately,
-rather than waiting for new traffic to retrigger the inline check above.
+rather than waiting for new traffic to retrigger the inline check above. This enforcement happens
+shortly after startup, not necessarily before the very first record — but the buffer can't stay
+over the limit either way: a record admitted in that window trips the inline check above instead.
 
 ### Duration limit
 
