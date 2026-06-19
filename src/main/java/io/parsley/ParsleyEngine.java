@@ -11,6 +11,7 @@ import java.util.List;
 import java.util.Optional;
 import java.util.Set;
 import java.util.function.Consumer;
+import java.util.function.LongSupplier;
 
 import static java.nio.charset.StandardCharsets.UTF_8;
 
@@ -63,6 +64,7 @@ final class ParsleyEngine<K, V> {
     private final ParsleyWaitIndex waitIndex;
     private final FrontierCallback frontierListener;
     private final ParsleyMetrics metrics;
+    private final LongSupplier clock;
 
     private CausalFrontier frontier;
     private int sizeLimit = Integer.MAX_VALUE;
@@ -76,6 +78,19 @@ final class ParsleyEngine<K, V> {
                  ParsleyBufferStore<K, V> buffer,
                  ParsleyWaitIndex waitIndex,
                  ParsleyMetrics metrics) {
+        this(policy, violationHandler, initialFrontier, deadLetterSink, frontierListener, buffer, waitIndex,
+                metrics, System::currentTimeMillis);
+    }
+
+    ParsleyEngine(CausalBufferPolicy policy,
+                 CausalViolationHandler violationHandler,
+                 CausalFrontier initialFrontier,
+                 Consumer<ParsleyRecord<K, V>> deadLetterSink,
+                 FrontierCallback frontierListener,
+                 ParsleyBufferStore<K, V> buffer,
+                 ParsleyWaitIndex waitIndex,
+                 ParsleyMetrics metrics,
+                 LongSupplier clock) {
         if (policy.requiresDeadLetterSink() && deadLetterSink == null) {
             throw new IllegalArgumentException("Policy requires a dead-letter sink");
         }
@@ -87,6 +102,7 @@ final class ParsleyEngine<K, V> {
         this.buffer = buffer;
         this.waitIndex = waitIndex;
         this.metrics = metrics;
+        this.clock = clock;
         configureLimits(policy.limit());
         // Populate the wait index for any records already in the buffer (e.g., restored from
         // a state store after a restart). This is a one-time O(n) pass at construction.
@@ -135,7 +151,7 @@ final class ParsleyEngine<K, V> {
             out.add(record);
             drainInto(out, record.sourceTopicId(), record.sourcePartitionIndex());
         } else {
-            long seq = buffer.add(record);
+            long seq = buffer.add(record, clock.getAsLong());
             waitIndex.index(seq, dependencies, frontier);
             int depth = buffer.size();
             if (log.isDebugEnabled()) {
@@ -152,14 +168,42 @@ final class ParsleyEngine<K, V> {
     }
 
     /**
-     * Evicts the buffer because a limit fired. Reports a {@link CausalViolation} per evicted
-     * record and applies the policy.
+     * Evicts the entire buffer because a size limit fired. Reports a {@link CausalViolation} per
+     * evicted record and applies the policy.
      *
      * @return records to forward downstream out-of-order; non-empty only when the
      *         {@link CausalViolationReason#LIMIT_REACHED} action is {@link ViolationAction#FORWARD_UNSAFE}
      */
     List<ParsleyRecord<K, V>> evictNow() {
-        List<ParsleyBufferStore.Entry<K, V>> evicted = buffer.entries();
+        return evictEntries(buffer.entries());
+    }
+
+    /**
+     * Evicts only the buffered records whose age exceeds the configured
+     * {@link ParsleyDurationLimit}, leaving younger records held. Called by the duration
+     * punctuator; a no-op when no duration limit is configured.
+     *
+     * <p>Relies on {@link ParsleyBufferStore#entries()} being sorted oldest-first (true for both
+     * implementations, since insertion sequence tracks buffer-admission time on the single owning
+     * thread), so the scan can stop at the first record that hasn't aged out yet.
+     *
+     * @return records to forward downstream out-of-order; non-empty only when the
+     *         {@link CausalViolationReason#LIMIT_REACHED} action is {@link ViolationAction#FORWARD_UNSAFE}
+     */
+    List<ParsleyRecord<K, V>> evictExpired() {
+        if (evictionInterval == null) {
+            return List.of();
+        }
+        long cutoff = clock.getAsLong() - evictionInterval.toMillis();
+        List<ParsleyBufferStore.Entry<K, V>> expired = new ArrayList<>();
+        for (ParsleyBufferStore.Entry<K, V> entry : buffer.entries()) {
+            if (entry.bufferedAt() > cutoff) break;
+            expired.add(entry);
+        }
+        return evictEntries(expired);
+    }
+
+    private List<ParsleyRecord<K, V>> evictEntries(List<ParsleyBufferStore.Entry<K, V>> evicted) {
         if (evicted.isEmpty()) {
             return List.of();
         }

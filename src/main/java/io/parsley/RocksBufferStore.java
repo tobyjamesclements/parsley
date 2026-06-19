@@ -3,7 +3,9 @@ package io.parsley;
 import org.apache.kafka.streams.state.KeyValueIterator;
 import org.apache.kafka.streams.state.KeyValueStore;
 
+import java.nio.ByteBuffer;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Comparator;
 import java.util.List;
 
@@ -45,9 +47,9 @@ final class RocksBufferStore<K, V> implements ParsleyBufferStore<K, V> {
     }
 
     @Override
-    public long add(ParsleyRecord<K, V> record) {
+    public long add(ParsleyRecord<K, V> record, long bufferedAt) {
         long seq = nextSequence++;
-        store.put(seq, serializer.serialize(record));
+        store.put(seq, pack(bufferedAt, serializer.serialize(record)));
         size++;
         return seq;
     }
@@ -56,8 +58,7 @@ final class RocksBufferStore<K, V> implements ParsleyBufferStore<K, V> {
     public Entry<K, V> get(long sequence) {
         byte[] value = store.get(sequence);
         if (value == null) return null;
-        ParsleyRecord<K, V> record = serializer.deserialize(value);
-        return new Entry<>(sequence, record, CausalDependencies.fromBytes(record.encodedDependencies()));
+        return toEntry(sequence, value);
     }
 
     @Override
@@ -66,14 +67,26 @@ final class RocksBufferStore<K, V> implements ParsleyBufferStore<K, V> {
         try (KeyValueIterator<Long, byte[]> all = store.all()) {
             while (all.hasNext()) {
                 var kv = all.next();
-                ParsleyRecord<K, V> record = serializer.deserialize(kv.value);
-                entries.add(new Entry<>(kv.key, record, CausalDependencies.fromBytes(record.encodedDependencies())));
+                entries.add(toEntry(kv.key, kv.value));
             }
         }
         // Iteration order across store implementations is not guaranteed to be key order, so sort by
         // sequence explicitly to hand back records in causal arrival order.
         entries.sort(Comparator.comparingLong(Entry::sequence));
         return entries;
+    }
+
+    private Entry<K, V> toEntry(long sequence, byte[] value) {
+        long bufferedAt = ByteBuffer.wrap(value, 0, 8).getLong();
+        ParsleyRecord<K, V> record = serializer.deserialize(Arrays.copyOfRange(value, 8, value.length));
+        return new Entry<>(sequence, bufferedAt, record, CausalDependencies.fromBytes(record.encodedDependencies()));
+    }
+
+    private static byte[] pack(long bufferedAt, byte[] serializedRecord) {
+        return ByteBuffer.allocate(8 + serializedRecord.length)
+                .putLong(bufferedAt)
+                .put(serializedRecord)
+                .array();
     }
 
     @Override

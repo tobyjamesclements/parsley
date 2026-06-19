@@ -129,7 +129,7 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
         ParsleyMetrics metrics = buildMetrics(context);
 
         this.engine = new ParsleyEngine<>(policy, onViolation, initialFrontier,
-                engineDeadLetter, listener, buffer, waitIndex, metrics);
+                engineDeadLetter, listener, buffer, waitIndex, metrics, context::currentSystemTimeMs);
 
         ProcessorContext<KOut, VOut> stamping = new ParsleyProcessorContext<>(
                 context, () -> stampFrontier, () -> Optional.ofNullable(deliveryMetadata));
@@ -184,7 +184,7 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
 
     private List<ParsleyRecord<KIn, VIn>> evict() {
         snapshots.clear();
-        return engine.evictNow();
+        return engine.evictExpired();
     }
 
     private void deliver(List<ParsleyRecord<KIn, VIn>> admitted) {

@@ -298,6 +298,53 @@ class CausalProcessorsTopologyTest {
     }
 
     /**
+     * Under a duration-based buffer limit, the eviction punctuator must only evict records that
+     * have individually aged past the configured duration — not the entire buffer, which was the
+     * bug being fixed here. Two records are buffered one duration-interval apart; when the
+     * punctuator fires at the older record's age boundary, only that older record must be
+     * evicted, leaving the younger one held.
+     *
+     * Asserts that after the punctuator fires, only the older record is dead-lettered and the
+     * younger record remains in the buffer store.
+     */
+    @Test
+    void durationEvictionOnlyEvictsRecordsThatHaveIndividuallyAgedOut() {
+        List<String> deadLettered = new ArrayList<>();
+        CausalBufferPolicy policy = CausalBufferPolicy.deadLetter(CausalBufferLimit.ofDuration(Duration.ofSeconds(2)));
+        Topology topology = topology(
+                CausalProcessors.builder(upperCaser(), policy)
+                        .serdes(Serdes.String(), Serdes.String()).onViolation(onViolation)
+                        .deadLetterSink(cr -> deadLettered.add(cr.value())).build(),
+                List.of("t3"));
+
+        try (TopologyTestDriver driver = new TopologyTestDriver(topology, config(null))) {
+            TestInputTopic<String, String> t3 =
+                    driver.createInputTopic("t3", new StringSerializer(), new StringSerializer());
+            KeyValueStore<String, byte[]> bufferStore = driver.getKeyValueStore("parsley-buffer");
+
+            // Record A is buffered first; it will be 2s old (the full duration) once we advance below.
+            t3.pipeInput(new TestRecord<>("k", "t3-val-A",
+                    depsHeader(CausalDependencies.builder().require(new CausalPosition(T2_ID, 0, 99)).build())));
+
+            driver.advanceWallClockTime(Duration.ofSeconds(1));
+            assertEquals(1, storeSize(bufferStore), "advancing by less than the duration must not fire eviction yet");
+            assertTrue(deadLettered.isEmpty(), "no record must be evicted before the duration elapses");
+
+            // Record B is buffered one second after A — only one second old at the next punctuation.
+            t3.pipeInput(new TestRecord<>("k", "t3-val-B",
+                    depsHeader(CausalDependencies.builder().require(new CausalPosition(T2_ID, 0, 99)).build())));
+
+            // Total elapsed since A was buffered is now 2s: the punctuator fires and A has aged out,
+            // but B (buffered 1s ago) has not.
+            driver.advanceWallClockTime(Duration.ofSeconds(1));
+
+            assertEquals(List.of("t3-val-A"), deadLettered,
+                    "only the record that has individually aged past the duration must be evicted");
+            assertEquals(1, storeSize(bufferStore), "the younger record must remain held in the buffer");
+        }
+    }
+
+    /**
      * When the user processor forwards a record that already carries a stale
      * causal-dependencies header, the Parsley wrapper replaces it with the current frontier
      * stamp (idempotent stamping). User headers unrelated to Parsley are preserved.

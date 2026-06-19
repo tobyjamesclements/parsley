@@ -9,6 +9,7 @@ import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.atomic.AtomicLong;
 
 import static java.nio.charset.StandardCharsets.UTF_8;
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -125,7 +126,7 @@ class ParsleyEngineTest {
      */
     @Test
     void recordsAlreadyInTheBufferDrainWhenTheFrontierCatchesUp() {
-        buffer.add(incomingRecord(T2, 0, CausalDependencies.builder().require(new CausalPosition(T1_ID, 0, 3)).build()));
+        buffer.add(incomingRecord(T2, 0, CausalDependencies.builder().require(new CausalPosition(T1_ID, 0, 3)).build()), 0L);
         ParsleyEngine<String, String> engine = engineWith(CausalBufferPolicy.drop(CausalBufferLimit.ofSize(100)));
         assertEquals(CausalFrontier.empty(), engine.frontier(), "pre-buffered records must not advance the frontier on construction");
         assertTrue(frontiers.isEmpty(), "pre-buffered records must not fire the frontier listener on construction");
@@ -398,6 +399,86 @@ class ParsleyEngineTest {
     }
 
     /**
+     * {@code evictExpired()} must leave a buffered record alone if it hasn't aged past the
+     * configured duration yet, even when the punctuator fires.
+     *
+     * Asserts that the record remains in the buffer and no violation is reported.
+     */
+    @Test
+    void evictExpiredLeavesRecordsYoungerThanTheDurationInTheBuffer() {
+        AtomicLong clock = new AtomicLong(0L);
+        ParsleyEngine<String, String> engine = engineWithClock(
+                CausalBufferPolicy.drop(CausalBufferLimit.ofDuration(Duration.ofMillis(200))), clock::get);
+
+        processRecord(engine, incomingRecord(T2, 0,
+                CausalDependencies.builder().require(new CausalPosition(T1_ID, 0, 99)).build()));
+        clock.set(150L);
+
+        List<ParsleyRecord<String, String>> forwardedOnEvict = engine.evictExpired();
+
+        assertTrue(forwardedOnEvict.isEmpty(), "a record younger than the duration must not be evicted");
+        assertEquals(1, buffer.size(), "the record must remain held in the buffer");
+        assertTrue(violations.isEmpty(), "no violation must be reported for a record that hasn't aged out");
+    }
+
+    /**
+     * {@code evictExpired()} evicts a buffered record once it has aged past the configured
+     * duration, reporting a {@link CausalViolationReason#LIMIT_REACHED} violation.
+     *
+     * Asserts that the record is removed from the buffer and a violation is reported.
+     */
+    @Test
+    void evictExpiredEvictsRecordsOlderThanTheDuration() {
+        AtomicLong clock = new AtomicLong(0L);
+        ParsleyEngine<String, String> engine = engineWithClock(
+                CausalBufferPolicy.drop(CausalBufferLimit.ofDuration(Duration.ofMillis(200))), clock::get);
+
+        processRecord(engine, incomingRecord(T2, 0,
+                CausalDependencies.builder().require(new CausalPosition(T1_ID, 0, 99)).build()));
+        clock.set(250L);
+
+        engine.evictExpired();
+
+        assertEquals(0, buffer.size(), "a record older than the duration must be evicted");
+        assertEquals(List.of(CausalViolationReason.LIMIT_REACHED), reasons(),
+                "evicting an aged-out record must report a LIMIT_REACHED violation");
+    }
+
+    /**
+     * When the buffer holds records admitted at different times, {@code evictExpired()} evicts
+     * only the ones old enough, in oldest-first order, leaving younger records held — it must
+     * not surrender the entire buffer the way a size-limit eviction would.
+     *
+     * Asserts that only the oldest record is evicted and the two younger records remain.
+     */
+    @Test
+    void evictExpiredOnlyEvictsAgedOutRecordsLeavingYoungerOnesHeld() {
+        AtomicLong clock = new AtomicLong(0L);
+        ParsleyEngine<String, String> engine = engineWithClock(
+                CausalBufferPolicy.drop(CausalBufferLimit.ofDuration(Duration.ofMillis(200))), clock::get);
+
+        clock.set(0L);
+        processRecord(engine, incomingRecord(T2, 0,
+                CausalDependencies.builder().require(new CausalPosition(T1_ID, 0, 99)).build()));
+        clock.set(100L);
+        processRecord(engine, incomingRecord(T2, 1,
+                CausalDependencies.builder().require(new CausalPosition(T1_ID, 0, 99)).build()));
+        clock.set(300L);
+        processRecord(engine, incomingRecord(T2, 2,
+                CausalDependencies.builder().require(new CausalPosition(T1_ID, 0, 99)).build()));
+
+        clock.set(250L); // only the record buffered at t=0 has aged past the 200ms duration
+        engine.evictExpired();
+
+        assertEquals(2, buffer.size(), "only the oldest record must be evicted; the two younger ones remain held");
+        assertEquals(List.of(CausalViolationReason.LIMIT_REACHED), reasons(),
+                "exactly one violation must be reported, for the single aged-out record");
+        List<Long> remainingOffsets = buffer.entries().stream()
+                .map(e -> e.record().sourceOffset()).sorted().toList();
+        assertEquals(List.of(1L, 2L), remainingOffsets, "the two younger records must still be held");
+    }
+
+    /**
      * The frontier listener is invoked before each record is forwarded, receiving the
      * frontier as it stands at the moment of forwarding.
      *
@@ -665,6 +746,12 @@ class ParsleyEngineTest {
                                                       java.util.function.Consumer<ParsleyRecord<String, String>> sink) {
         return new ParsleyEngine<>(policy, violations::add, CausalFrontier.empty(), sink, frontiers::add,
                 buffer, new MockWaitIndex(), ParsleyMetrics.NOOP);
+    }
+
+    private ParsleyEngine<String, String> engineWithClock(CausalBufferPolicy policy,
+                                                           java.util.function.LongSupplier clock) {
+        return new ParsleyEngine<>(policy, violations::add, CausalFrontier.empty(), null, frontiers::add,
+                buffer, new MockWaitIndex(), ParsleyMetrics.NOOP, clock);
     }
 
     private List<CausalViolationReason> reasons() {
