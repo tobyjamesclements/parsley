@@ -345,6 +345,43 @@ class CausalProcessorsTopologyTest {
     }
 
     /**
+     * When a size limit fires, only the oldest record needed to bring the buffer back under the
+     * limit is evicted, leaving younger records held — the same partial-eviction guarantee as
+     * the duration limit, but triggered synchronously by buffer depth instead of a punctuator.
+     *
+     * Asserts that after the second record overflows a size-2 limit, only the older record is
+     * dead-lettered and the younger record remains in the buffer store.
+     */
+    @Test
+    void sizeLimitEvictionOnlyEvictsTheOldestOverflowingRecord() {
+        List<String> deadLettered = new ArrayList<>();
+        CausalBufferPolicy policy = CausalBufferPolicy.deadLetter(CausalBufferLimit.ofSize(2));
+        Topology topology = topology(
+                CausalProcessors.builder(upperCaser(), policy)
+                        .serdes(Serdes.String(), Serdes.String()).onViolation(onViolation)
+                        .deadLetterSink(cr -> deadLettered.add(cr.value())).build(),
+                List.of("t3"));
+
+        try (TopologyTestDriver driver = new TopologyTestDriver(topology, config(null))) {
+            TestInputTopic<String, String> t3 =
+                    driver.createInputTopic("t3", new StringSerializer(), new StringSerializer());
+            KeyValueStore<String, byte[]> bufferStore = driver.getKeyValueStore("parsley-buffer");
+
+            t3.pipeInput(new TestRecord<>("k", "t3-val-A",
+                    depsHeader(CausalDependencies.builder().require(new CausalPosition(T2_ID, 0, 99)).build())));
+            assertEquals(1, storeSize(bufferStore), "buffering the first record must not fire eviction yet");
+            assertTrue(deadLettered.isEmpty(), "no record must be evicted before the limit is reached");
+
+            t3.pipeInput(new TestRecord<>("k", "t3-val-B",
+                    depsHeader(CausalDependencies.builder().require(new CausalPosition(T2_ID, 0, 99)).build())));
+
+            assertEquals(List.of("t3-val-A"), deadLettered,
+                    "only the oldest record must be evicted once the size limit is reached");
+            assertEquals(1, storeSize(bufferStore), "the younger record must remain held in the buffer");
+        }
+    }
+
+    /**
      * When the user processor forwards a record that already carries a stale
      * causal-dependencies header, the Parsley wrapper replaces it with the current frontier
      * stamp (idempotent stamping). User headers unrelated to Parsley are preserved.

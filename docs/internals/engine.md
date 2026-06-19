@@ -20,7 +20,7 @@
     - Undecodable: report `UNRESOLVABLE_DEPENDENCIES` violation, advance frontier, apply policy.
 2. Strip self-referential entries from the decoded dependencies. A `(topicId, partition)` entry whose required offset is >= the record's own source offset on that coordinate is removed. This prevents a record from blocking on its own position in the log.
 3. If `deps.isSatisfiedBy(frontier)`: advance frontier, add record to output, call `drainInto()`.
-4. Otherwise: add record to buffer (assigned an insertion sequence), index unsatisfied coordinates in the wait index. If buffer depth >= `sizeLimit`, call `evictNow()`.
+4. Otherwise: add record to buffer (assigned an insertion sequence and a `bufferedAt` timestamp), index unsatisfied coordinates in the wait index. If buffer depth >= `sizeLimit`, call `evictOverflow()`.
 
 Records with missing or undecodable dependency headers are handled by the buffer policy (forward, drop, or dead-letter). The frontier always advances so buffered records waiting on that coordinate are not permanently stalled.
 
@@ -50,9 +50,10 @@ Each iteration finds records whose dependencies are now met after the most recen
 
 Wait-index entries for records that have already been released or evicted are discovered and pruned lazily during this scan rather than eagerly on removal.
 
-## `evictNow()` algorithm
+## Eviction
 
-Retrieves all buffer entries in insertion-sequence order. For each entry:
+Both eviction paths select a subset of `buffer.entries()` (oldest-first by insertion sequence,
+equivalently by `bufferedAt`) and hand it to a shared `evictEntries()` helper. For each selected entry:
 
 1. Report `LIMIT_REACHED` violation via `CausalViolationHandler`.
 2. Remove from buffer and wait index.
@@ -60,6 +61,20 @@ Retrieves all buffer entries in insertion-sequence order. For each entry:
     - **`FORWARD_UNSAFE`**: advance frontier, add to forward list.
     - **`DROP`**: discard.
     - **`DEAD_LETTER`**: append DLQ headers, route to dead-letter sink.
+
+### `evictOverflow()` — size limit
+
+Called inline from `onRecord()` once buffer depth reaches `sizeLimit`. Evicts only the oldest
+`buffer.size() - sizeLimit + 1` entries — just enough to bring the buffer back under the limit —
+leaving younger records held. In the common case (depth checked after every single admission)
+this evicts exactly one record per overflow, sliding the window forward.
+
+### `evictExpired()` — duration limit
+
+Called by the processor's wall-clock punctuator at the configured interval. Walks `buffer.entries()`
+from the oldest, evicting every entry whose `bufferedAt` is older than `now - duration`, and stops
+at the first entry that hasn't aged out yet (everything after it is younger still). A no-op when no
+duration limit is configured.
 
 DLQ headers added per evicted record:
 

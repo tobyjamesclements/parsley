@@ -31,8 +31,9 @@ public sealed interface CausalBufferLimit permits ParsleyDurationLimit, ParsleyS
     }
 
     /**
-     * Creates a limit that evicts the buffer when it reaches {@code messages} entries (eviction
-     * releases <em>all</em> buffered records according to the {@link CausalBufferPolicy}).
+     * Creates a limit that evicts the oldest buffered records, one at a time, whenever the buffer
+     * reaches {@code messages} entries — just enough to bring the buffer back under the limit,
+     * according to the {@link CausalBufferPolicy}. Younger records remain held.
      *
      * @param messages the maximum buffer size in message count; must be positive
      * @return a new size limit

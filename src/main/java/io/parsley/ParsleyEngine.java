@@ -23,11 +23,11 @@ import static java.nio.charset.StandardCharsets.UTF_8;
  * dependencies → violation + policy applied; dependencies satisfied → forward; otherwise → buffer),
  * advances the causal frontier, and cascades releases from the buffer as the frontier moves.
  *
- * <p>The engine also owns policy-driven eviction: when a {@link CausalBufferLimit} fires it surrenders the
- * buffer and, per {@link CausalBufferPolicy}, forwards evicted records out-of-order, discards them,
- * or routes them to the dead-letter sink — reporting a {@link CausalViolation} (with the causal gap)
- * for each. The action is determined per {@link CausalViolationReason} via
- * {@link CausalBufferPolicy#actionFor}.
+ * <p>The engine also owns policy-driven eviction: when a {@link CausalBufferLimit} fires it surrenders
+ * the oldest buffered records needed to satisfy the limit and, per {@link CausalBufferPolicy}, forwards
+ * them out-of-order, discards them, or routes them to the dead-letter sink — reporting a
+ * {@link CausalViolation} (with the causal gap) for each. The action is determined per
+ * {@link CausalViolationReason} via {@link CausalBufferPolicy#actionFor}.
  *
  * <p><strong>Frontier persistence ordering:</strong> the {@link FrontierCallback} fires for
  * every frontier advancement <em>before</em> the corresponding record is returned for
@@ -161,21 +161,31 @@ final class ParsleyEngine<K, V> {
             }
             metrics.recordBuffered(depth);
             if (depth >= sizeLimit) {
-                out.addAll(evictNow());
+                out.addAll(evictOverflow());
             }
         }
         return out;
     }
 
     /**
-     * Evicts the entire buffer because a size limit fired. Reports a {@link CausalViolation} per
-     * evicted record and applies the policy.
+     * Evicts only the oldest buffered records needed to bring the buffer back under the
+     * configured {@link ParsleySizeLimit}, leaving the rest held. Called inline from
+     * {@link #onRecord} once buffer depth reaches the limit.
+     *
+     * <p>Relies on {@link ParsleyBufferStore#entries()} being sorted oldest-first (see
+     * {@link #evictExpired()}), so only the leading {@code buffer.size() - sizeLimit + 1}
+     * entries need to be evicted to fit the record just admitted.
      *
      * @return records to forward downstream out-of-order; non-empty only when the
      *         {@link CausalViolationReason#LIMIT_REACHED} action is {@link ViolationAction#FORWARD_UNSAFE}
      */
-    List<ParsleyRecord<K, V>> evictNow() {
-        return evictEntries(buffer.entries());
+    private List<ParsleyRecord<K, V>> evictOverflow() {
+        int overflow = buffer.size() - sizeLimit + 1;
+        if (overflow <= 0) {
+            return List.of();
+        }
+        List<ParsleyBufferStore.Entry<K, V>> all = buffer.entries();
+        return evictEntries(new ArrayList<>(all.subList(0, Math.min(overflow, all.size()))));
     }
 
     /**
@@ -231,7 +241,7 @@ final class ParsleyEngine<K, V> {
     }
 
     /**
-     * Returns the interval at which the processor must call {@link #evictNow}, if the policy's
+     * Returns the interval at which the processor must call {@link #evictExpired}, if the policy's
      * limit contains a {@link ParsleyDurationLimit ParsleyDurationLimit}.
      *
      * @return the eviction interval, or empty if no duration limit is configured
