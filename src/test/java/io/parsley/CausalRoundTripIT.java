@@ -253,7 +253,7 @@ class CausalRoundTripIT {
         // Depend on a coordinate in an upstream topic the consumer never reads, so the dependency
         // can never be satisfied — the record buffers and is evicted as LIMIT_REACHED once the
         // duration limit fires. It must be a *different* topic: a dependency on the record's own
-        // source coordinate is stripped as a self-reference (ParsleyEngine.withoutSelfReference).
+        // source coordinate is stripped as a self-reference (ParsleyEngine.effectiveDependencies).
         Uuid upstreamTopicId = CausalPosition.deriveUuid("never-produced-upstream");
         CausalDependencies producerDeps = CausalDependencies.builder()
                 .require(new CausalPosition(upstreamTopicId, 0, 5L)).build();

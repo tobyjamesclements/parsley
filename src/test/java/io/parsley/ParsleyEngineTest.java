@@ -679,6 +679,56 @@ class ParsleyEngineTest {
     }
 
     /**
+     * A dependency on a <em>higher</em> offset of the record's own partition is not a
+     * self-reference — it names a later record on that partition — so it is honoured, not stripped:
+     * the record waits until that later offset arrives and the frontier reaches it.
+     *
+     * Asserts the record is held while the forward dependency is unmet, then released after the
+     * later same-partition record advances the frontier.
+     */
+    @Test
+    void holdRecordUntilForwardSamePartitionDependencyArrives() {
+        ParsleyEngine<String, String> engine = engineWith(CausalBufferPolicy.drop(CausalBufferLimit.ofSize(100)));
+
+        // T1@3 depends on T1@5 — a later record on its own partition (forward dep, not a self-reference).
+        processRecord(engine, incomingRecord(T1, 3,
+                CausalDependencies.builder().require(new CausalPosition(T1_ID, 0, 5)).build()));
+        assertTrue(forwarded.isEmpty(), "forward same-partition dep must hold the record, not be stripped");
+        assertEquals(1, buffer.size(), "record must be buffered while the forward dependency is unmet");
+
+        // T1@5 arrives, advancing the frontier to 5 and satisfying the forward dependency.
+        processRecord(engine, incomingRecord(T1, 5, CausalDependencies.empty()));
+
+        assertEquals(2, forwarded.size(), "both records must be forwarded once the forward dependency arrives");
+        assertEquals(5L, forwarded.get(0).sourceOffset(), "the satisfying later record (offset 5) is forwarded first");
+        assertEquals(3L, forwarded.get(1).sourceOffset(), "the held record (offset 3) is released after its dependency");
+    }
+
+    /**
+     * A dependency on a <em>lower</em> offset of the record's own partition is satisfiable and
+     * honoured: the record waits until that earlier offset has been delivered.
+     *
+     * Asserts the record is held while the backward dependency is unmet, then released once the
+     * earlier same-partition record advances the frontier.
+     */
+    @Test
+    void holdRecordUntilBackwardSamePartitionDependencyArrives() {
+        ParsleyEngine<String, String> engine = engineWith(CausalBufferPolicy.drop(CausalBufferLimit.ofSize(100)));
+
+        // T1@5 depends on T1@3 — an earlier record on its own partition (backward dep, honoured).
+        processRecord(engine, incomingRecord(T1, 5,
+                CausalDependencies.builder().require(new CausalPosition(T1_ID, 0, 3)).build()));
+        assertTrue(forwarded.isEmpty(), "backward same-partition dep must hold the record until it is satisfied");
+        assertEquals(1, buffer.size(), "record must be buffered while the backward dependency is unmet");
+
+        processRecord(engine, incomingRecord(T1, 3, CausalDependencies.empty()));
+
+        assertEquals(2, forwarded.size(), "both records must be forwarded once the backward dependency arrives");
+        assertEquals(3L, forwarded.get(0).sourceOffset(), "the satisfying earlier record (offset 3) is forwarded first");
+        assertEquals(5L, forwarded.get(1).sourceOffset(), "the held record (offset 5) is released after its dependency");
+    }
+
+    /**
      * When a topic is recreated (same name and partition, different UUID), a record that
      * depends on an offset under the old incarnation is not satisfied by a record from the
      * new incarnation at the same offset. Only a record from the old incarnation unblocks it.

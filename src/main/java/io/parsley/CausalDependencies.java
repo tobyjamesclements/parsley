@@ -157,27 +157,6 @@ public final class CausalDependencies {
     }
 
     /**
-     * Returns a new instance with the entry for {@code (topicId, partition)} removed if its
-     * required offset is ≥ {@code selfOffset}; otherwise returns {@code this} unchanged.
-     *
-     * <p>Used by the engine to strip self-referential entries before evaluation: a record at
-     * offset {@code O} on partition {@code (T, P)} that requires {@code (T, P) ≥ O} can never be
-     * satisfied by any other record, so the entry is redundant and is removed.
-     *
-     * @param topicId    the source topic UUID
-     * @param partition  the source partition index
-     * @param selfOffset the source offset of the record being admitted
-     * @return a copy without the circular entry, or {@code this} if none was present
-     */
-    CausalDependencies withoutSelfReference(Uuid topicId, int partition, long selfOffset) {
-        Long req = required.get(new Key(topicId, partition));
-        if (req == null || req < selfOffset) return this;
-        Map<Key, Long> next = new HashMap<>(required);
-        next.remove(new Key(topicId, partition));
-        return new CausalDependencies(Map.copyOf(next));
-    }
-
-    /**
      * Returns the positions in these dependencies as an unordered list of {@link CausalPosition}s.
      *
      * @return the dependency positions; never {@code null}

@@ -13,7 +13,6 @@ import java.util.Set;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
-import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -292,79 +291,6 @@ class CausalDependenciesTest {
         CausalFrontier frontierDecoded = CausalFrontier.fromBytes(deps.toBytes());
         assertEquals(frontier, frontierDecoded,
                 "dependencies serialised as bytes must be decodable as a frontier");
-    }
-
-    /**
-     * {@code withoutSelfReference()} removes a dependency entry when the required offset is
-     * equal to the record's own offset, since the record cannot depend on itself.
-     *
-     * Asserts that the entry is stripped and the result is empty.
-     */
-    @Test
-    void stripSelfReferenceAtExactSelfOffset() {
-        CausalDependencies deps = CausalDependencies.builder().require(new CausalPosition(T1_ID, 0, 3)).build();
-        CausalDependencies stripped = deps.withoutSelfReference(T1_ID, 0, 3);
-        assertEquals(CausalDependencies.empty(), stripped,
-                "entry at req==selfOffset is a self-reference and must be removed");
-    }
-
-    /**
-     * {@code withoutSelfReference()} removes a dependency entry when the required offset is
-     * greater than the record's own offset, because that would require a record that has not
-     * yet been produced — a circular dependency.
-     *
-     * Asserts that the entry is stripped and the result is empty.
-     */
-    @Test
-    void stripSelfReferenceAtFutureOffset() {
-        CausalDependencies deps = CausalDependencies.builder().require(new CausalPosition(T1_ID, 0, 10)).build();
-        CausalDependencies stripped = deps.withoutSelfReference(T1_ID, 0, 3);
-        assertEquals(CausalDependencies.empty(), stripped,
-                "entry at req>selfOffset is also circular (requires a future record) and must be removed");
-    }
-
-    /**
-     * {@code withoutSelfReference()} preserves a dependency entry when the required offset
-     * is strictly less than the record's own offset, because a dependency on a prior record
-     * is causal and satisfiable.
-     *
-     * Asserts that the original instance is returned unchanged (no copy is made).
-     */
-    @Test
-    void preserveDependencyOnPriorOffsetAsSatisfiable() {
-        CausalDependencies deps = CausalDependencies.builder().require(new CausalPosition(T1_ID, 0, 2)).build();
-        assertSame(deps, deps.withoutSelfReference(T1_ID, 0, 3),
-                "dep on a prior record is satisfiable and must not be stripped");
-    }
-
-    /**
-     * {@code withoutSelfReference()} returns the original instance unchanged when the
-     * given (topicId, partition) pair has no entry in the dependency clock.
-     *
-     * Asserts that the same instance is returned (no copy is made).
-     */
-    @Test
-    void returnUnchangedWhenNoSelfReferenceToStrip() {
-        CausalDependencies deps = CausalDependencies.builder().require(new CausalPosition(T2_ID, 0, 5)).build();
-        assertSame(deps, deps.withoutSelfReference(T1_ID, 0, 3),
-                "no entry for (topicId, partition) — nothing to strip, must return the original instance");
-    }
-
-    /**
-     * {@code withoutSelfReference()} removes only the self-referential entry and leaves
-     * all other entries in the clock intact.
-     *
-     * Asserts that the stripped result contains only the non-self-referential entries.
-     */
-    @Test
-    void preserveUnrelatedEntriesWhenStrippingSelfReference() {
-        CausalDependencies deps = CausalDependencies.builder()
-                .require(new CausalPosition(T1_ID, 0, 3))
-                .require(new CausalPosition(T2_ID, 0, 7))
-                .build();
-        CausalDependencies stripped = deps.withoutSelfReference(T1_ID, 0, 3);
-        assertEquals(CausalDependencies.builder().require(new CausalPosition(T2_ID, 0, 7)).build(), stripped,
-                "only the self-referential entry is removed; other entries survive");
     }
 
     /**

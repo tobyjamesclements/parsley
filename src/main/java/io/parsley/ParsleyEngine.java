@@ -140,8 +140,7 @@ final class ParsleyEngine<K, V> {
             return out;
         }
 
-        dependencies = dependencies.withoutSelfReference(
-                record.sourceTopicId(), record.sourcePartitionIndex(), record.sourceOffset());
+        dependencies = effectiveDependencies(dependencies, record);
 
         if (dependencies.isSatisfiedBy(frontier)) {
             log.debug("Forwarding {}-{} @{} (satisfied immediately)",
@@ -276,10 +275,7 @@ final class ParsleyEngine<K, V> {
                     if (entry == null) {
                         stale.add(candidate);
                     } else {
-                        CausalDependencies deps = entry.dependencies().withoutSelfReference(
-                                entry.record().sourceTopicId(),
-                                entry.record().sourcePartitionIndex(),
-                                entry.record().sourceOffset());
+                        CausalDependencies deps = effectiveDependencies(entry.dependencies(), entry.record());
                         if (deps.isSatisfiedBy(frontier)) {
                             releasable.add(entry);
                         }
@@ -305,6 +301,30 @@ final class ParsleyEngine<K, V> {
             log.debug("Released {} record(s) from buffer (depth now {})", totalReleased, buffer.size());
             metrics.recordReleased(totalReleased, buffer.size());
         }
+    }
+
+    /**
+     * Returns {@code deps} with the record's <em>exact</em> source coordinate removed if present — a
+     * record depending on its own {@code (topicId, partition, offset)} has, by being delivered, met
+     * that dependency, so it must not wait on itself (this is what keeps the self-referential stamp on
+     * a fused chain from deadlocking). Any other same-partition entry is retained: a backward dep
+     * ({@code req < offset}) and a forward dep ({@code req > offset}, a later record on the partition)
+     * are both satisfiable by waiting, so they flow through the normal frontier check unchanged.
+     */
+    private CausalDependencies effectiveDependencies(CausalDependencies deps, ParsleyRecord<K, V> record) {
+        CausalPosition self = new CausalPosition(
+                record.sourceTopicId(), record.sourcePartitionIndex(), record.sourceOffset());
+        List<CausalPosition> all = deps.dependencies();
+        if (!all.contains(self)) {
+            return deps;
+        }
+        CausalDependencies.Builder builder = CausalDependencies.builder();
+        for (CausalPosition pos : all) {
+            if (!pos.equals(self)) {
+                builder.require(pos);
+            }
+        }
+        return builder.build();
     }
 
     private void advanceFrontier(ParsleyRecord<K, V> record) {
