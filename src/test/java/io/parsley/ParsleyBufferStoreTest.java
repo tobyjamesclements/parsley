@@ -26,8 +26,8 @@ class ParsleyBufferStoreTest {
      */
     @Test
     void entriesAreReturnedInInsertionOrderWithTheirDependencies() {
-        store.add(bufferedRecord(T1, 0, CausalDependencies.builder().require(new CausalPosition(T1_ID, 0, 9)).build()));
-        store.add(bufferedRecord(T1, 1, CausalDependencies.builder().require(new CausalPosition(T1_ID, 0, 3)).build()));
+        store.add(bufferedRecord(T1, 0, CausalDependencies.builder().require(new CausalPosition(T1_ID, 0, 9)).build()), 0L);
+        store.add(bufferedRecord(T1, 1, CausalDependencies.builder().require(new CausalPosition(T1_ID, 0, 3)).build()), 0L);
 
         List<ParsleyBufferStore.Entry<String, String>> entries = store.entries();
 
@@ -49,8 +49,8 @@ class ParsleyBufferStoreTest {
      */
     @Test
     void removeDropsTheEntryAndDecrementsSize() {
-        store.add(bufferedRecord(T1, 0, CausalDependencies.builder().require(new CausalPosition(T1_ID, 0, 1)).build()));
-        store.add(bufferedRecord(T1, 1, CausalDependencies.builder().require(new CausalPosition(T1_ID, 0, 5)).build()));
+        store.add(bufferedRecord(T1, 0, CausalDependencies.builder().require(new CausalPosition(T1_ID, 0, 1)).build()), 0L);
+        store.add(bufferedRecord(T1, 1, CausalDependencies.builder().require(new CausalPosition(T1_ID, 0, 5)).build()), 0L);
         assertEquals(2, store.size(), "both records must be in the store before removal");
 
         long firstSeq = store.entries().get(0).sequence();
@@ -70,6 +70,23 @@ class ParsleyBufferStoreTest {
     void emptyStoreHasNoEntries() {
         assertTrue(store.entries().isEmpty(), "new store must have no entries");
         assertEquals(0, store.size(), "new store must report size 0");
+    }
+
+    /**
+     * The {@code bufferedAt} timestamp passed to {@code add} is preserved and returned by both
+     * {@code get} and {@code entries}.
+     *
+     * Asserts that the stored entry's {@code bufferedAt} matches what was passed to {@code add}.
+     */
+    @Test
+    void bufferedAtRoundTripsThroughAddGetAndEntries() {
+        long bufferedAt = 12_345L;
+        long seq = store.add(bufferedRecord(T1, 0,
+                CausalDependencies.builder().require(new CausalPosition(T1_ID, 0, 1)).build()), bufferedAt);
+
+        assertEquals(bufferedAt, store.get(seq).bufferedAt(), "get() must return the bufferedAt passed to add()");
+        assertEquals(bufferedAt, store.entries().get(0).bufferedAt(),
+                "entries() must return the bufferedAt passed to add()");
     }
 
     // --- helpers --------------------------------------------------------------------------------

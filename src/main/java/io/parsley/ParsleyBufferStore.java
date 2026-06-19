@@ -19,18 +19,19 @@ interface ParsleyBufferStore<K, V> {
 
     /**
      * A buffered entry: its insertion sequence (an opaque handle for {@link #remove(long)}), the
-     * record, and its decoded dependencies.
+     * wall-clock time it was admitted to the buffer, the record, and its decoded dependencies.
      */
-    record Entry<K, V>(long sequence, ParsleyRecord<K, V> record, CausalDependencies dependencies) {}
+    record Entry<K, V>(long sequence, long bufferedAt, ParsleyRecord<K, V> record, CausalDependencies dependencies) {}
 
     /**
      * Buffers a record under the next insertion sequence and returns that sequence. The sequence
      * is the opaque handle used by {@link #get} and {@link #remove}.
      *
-     * @param record the record to hold; carries valid (decodable) dependencies
+     * @param record     the record to hold; carries valid (decodable) dependencies
+     * @param bufferedAt the wall-clock time (epoch millis) at which the record is admitted
      * @return the insertion sequence assigned to the buffered record
      */
-    long add(ParsleyRecord<K, V> record);
+    long add(ParsleyRecord<K, V> record, long bufferedAt);
 
     /**
      * Returns the buffered entry for the given insertion sequence, or {@code null} if no such
@@ -43,7 +44,10 @@ interface ParsleyBufferStore<K, V> {
     Entry<K, V> get(long sequence);
 
     /**
-     * Returns every buffered entry, in ascending insertion-sequence (causal arrival) order.
+     * Returns every buffered entry, in ascending insertion-sequence (causal arrival) order. Since
+     * entries are admitted in real-time order on a single owning thread, this is equivalently
+     * ascending {@code bufferedAt} (buffer-start-time) order — callers that need oldest-first
+     * iteration (e.g. duration-based eviction) can rely on this without a separate index.
      *
      * @return the buffered entries; empty if the buffer is empty
      */

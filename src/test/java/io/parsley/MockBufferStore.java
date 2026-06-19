@@ -15,28 +15,29 @@ import java.util.TreeMap;
  */
 final class MockBufferStore<K, V> implements ParsleyBufferStore<K, V> {
 
-    private final TreeMap<Long, ParsleyRecord<K, V>> buffer = new TreeMap<>();
+    private record Held<K, V>(ParsleyRecord<K, V> record, long bufferedAt) {}
+
+    private final TreeMap<Long, Held<K, V>> buffer = new TreeMap<>();
     private long sequence = 0;
 
     @Override
-    public long add(ParsleyRecord<K, V> record) {
+    public long add(ParsleyRecord<K, V> record, long bufferedAt) {
         long seq = sequence++;
-        buffer.put(seq, record);
+        buffer.put(seq, new Held<>(record, bufferedAt));
         return seq;
     }
 
     @Override
     public Entry<K, V> get(long sequence) {
-        ParsleyRecord<K, V> record = buffer.get(sequence);
-        if (record == null) return null;
-        return new Entry<>(sequence, record, CausalDependencies.fromBytes(record.encodedDependencies()));
+        Held<K, V> held = buffer.get(sequence);
+        if (held == null) return null;
+        return toEntry(sequence, held);
     }
 
     @Override
     public List<Entry<K, V>> entries() {
         List<Entry<K, V>> entries = new ArrayList<>(buffer.size());
-        buffer.forEach((seq, record) ->
-                entries.add(new Entry<>(seq, record, CausalDependencies.fromBytes(record.encodedDependencies()))));
+        buffer.forEach((seq, held) -> entries.add(toEntry(seq, held)));
         return entries;
     }
 
@@ -48,5 +49,10 @@ final class MockBufferStore<K, V> implements ParsleyBufferStore<K, V> {
     @Override
     public int size() {
         return buffer.size();
+    }
+
+    private Entry<K, V> toEntry(long sequence, Held<K, V> held) {
+        return new Entry<>(sequence, held.bufferedAt(), held.record(),
+                CausalDependencies.fromBytes(held.record().encodedDependencies()));
     }
 }
