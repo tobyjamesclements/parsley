@@ -71,7 +71,7 @@ class CausalRoundTripIT {
                      CausalBufferLimit.ofDuration(Duration.ofSeconds(5)),
                      Map.of(ConsumerConfig.GROUP_ID_CONFIG, "rt-" + UUID.randomUUID()),
                      streamsConfig(bootstrap))
-                     .topicAdmin(new MockAdminClient())
+                     .addCausalTopic(new CausalTopic(TOPIC, topicId))
                      .build()) {
 
             // Each record depends on the previous one, forming a causal chain.
@@ -133,6 +133,7 @@ class CausalRoundTripIT {
                 CausalBufferLimit.ofDuration(Duration.ofSeconds(5)),
                 Map.of(ConsumerConfig.GROUP_ID_CONFIG, "rt-" + UUID.randomUUID()),
                 streamsConfig(bootstrap))
+                .addCausalTopic(new CausalTopic(topic, CausalPosition.deriveUuid(topic)))
                 .build()) {
 
             try (KafkaProducer<String, String> raw = new KafkaProducer<>(Map.of(
@@ -175,6 +176,7 @@ class CausalRoundTripIT {
         Uuid upstreamTopicId = CausalPosition.deriveUuid("never-produced-upstream");
         CausalDependencies producerDeps = CausalDependencies.builder()
                 .require(new CausalPosition(upstreamTopicId, 0, 5L)).build();
+        Uuid topicId = CausalPosition.deriveUuid(topic);
 
         try (CausalProducer<String, String> producer = CausalProducers.<String, String>builder(Map.of(
                 ProducerConfig.BOOTSTRAP_SERVERS_CONFIG, bootstrap,
@@ -185,7 +187,7 @@ class CausalRoundTripIT {
                      CausalBufferLimit.ofDuration(Duration.ofSeconds(2)),
                      Map.of(ConsumerConfig.GROUP_ID_CONFIG, "rt-" + UUID.randomUUID()),
                      streamsConfig(bootstrap))
-                     .topicAdmin(new MockAdminClient())
+                     .addCausalTopic(new CausalTopic(topic, topicId))
                      .storeName("custom-store")
                      .build()) {
 

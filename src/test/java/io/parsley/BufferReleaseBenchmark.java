@@ -126,7 +126,9 @@ public class BufferReleaseBenchmark {
         StreamsBuilder builder = new StreamsBuilder();
         builder.stream("bench-in", Consumed.with(Serdes.String(), Serdes.String()))
                .process(CausalProcessors.builder(noOp, BENCH_LIMIT)
-                       .serdes(Serdes.String(), Serdes.String()).build())
+                       .serdes(Serdes.String(), Serdes.String())
+                       .addCausalTopic(new CausalTopic("bench-in", CausalPosition.deriveUuid("bench-in")))
+                       .build())
                .to("bench-out", Produced.with(Serdes.String(), Serdes.String()));
         // Unique state dir per trial so each trial starts with an empty RocksDB
         Path trialDir = Files.createTempDirectory(infra.stateDir(), label + "-");

@@ -43,7 +43,7 @@ record ParsleyRecord<K, V>(K key, V value, long timestamp, List<ParsleyHeader> h
      * Builds an envelope from an inbound Kafka Streams {@link Record} and its source coordinate,
      * using the provided Kafka topic UUID as the stable identity key. Writes
      * {@link ParsleyAttributes#SRC_TOPIC_ID} so downstream steps (engine, serializer) can recover
-     * the UUID without an AdminClient call.
+     * the UUID directly from headers, with no further lookup.
      *
      * @param record          the inbound Streams record
      * @param sourcePartition the topic-partition the record was read from
@@ -65,14 +65,6 @@ record ParsleyRecord<K, V>(K key, V value, long timestamp, List<ParsleyHeader> h
         headers.add(new ParsleyHeader(ParsleyAttributes.SRC_PARTITION, intToBytes(sourcePartition.partition())));
         headers.add(new ParsleyHeader(ParsleyAttributes.SRC_OFFSET, longToBytes(sourceOffset)));
         return new ParsleyRecord<>(record.key(), record.value(), record.timestamp(), headers);
-    }
-
-    /**
-     * Convenience overload that derives the topic UUID via {@link CausalPosition#deriveUuid}. Used
-     * in paths where no AdminClient UUID is available (tests, {@link org.apache.kafka.streams.TopologyTestDriver}).
-     */
-    static <K, V> ParsleyRecord<K, V> of(Record<K, V> record, TopicPartition sourcePartition, long sourceOffset) {
-        return of(record, sourcePartition, sourceOffset, CausalPosition.deriveUuid(sourcePartition.topic()));
     }
 
     /** The source topic, read from the {@link ParsleyAttributes#SRC_TOPIC} header. */

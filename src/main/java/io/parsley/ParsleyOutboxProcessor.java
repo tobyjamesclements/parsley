@@ -128,7 +128,12 @@ final class ParsleyOutboxProcessor implements Processor<byte[], byte[], byte[], 
         Optional<RecordMetadata> meta = context.recordMetadata();
         String topic = meta.map(RecordMetadata::topic).orElse("");
         TopicPartition source = new TopicPartition(topic, meta.map(RecordMetadata::partition).orElse(0));
-        Uuid topicId = topicUuids.getOrDefault(topic, CausalPosition.deriveUuid(topic));
+        Uuid topicId = topicUuids.get(topic);
+        if (topicId == null) {
+            throw new IllegalStateException(
+                    "no CausalTopic registered for topic '" + topic
+                            + "'; call addCausalTopic(...) on the CausalConsumers builder for every subscribed topic");
+        }
         return ParsleyRecord.of(record, source, meta.map(RecordMetadata::offset).orElse(0L), topicId);
     }
 

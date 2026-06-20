@@ -66,11 +66,10 @@ class CausalConcurrentProducersIT {
      * SOURCE_B, satisfying the buffered OUTPUT dependencies.
      *
      * <h2>UUID alignment</h2>
-     * Both producers and the consumer use {@link MockAdminClient} (no-arg), which substitutes
-     * deterministic name-derived UUIDs ({@link CausalPosition#deriveUuid}) for every topic. The
-     * test constructs producer dependencies with the same {@code deriveUuid} call, so the stamped
-     * dependency keys match the consumer's frontier keys and records drain naturally rather than
-     * waiting for the eviction limit.
+     * Both producers and the consumer register the same deterministic name-derived UUIDs
+     * ({@link CausalPosition#deriveUuid}) via {@link CausalTopic}. The test constructs producer
+     * dependencies with the same {@code deriveUuid} call, so the stamped dependency keys match the
+     * consumer's frontier keys and records drain naturally rather than waiting for the eviction limit.
      *
      * <h2>Protocol</h2>
      * <ol>
@@ -101,6 +100,7 @@ class CausalConcurrentProducersIT {
 
         Uuid topicAId = CausalPosition.deriveUuid(SOURCE_A);
         Uuid topicBId = CausalPosition.deriveUuid(SOURCE_B);
+        Uuid outputId = CausalPosition.deriveUuid(OUTPUT);
 
         List<ConsumerRecord<String, String>> received = new ArrayList<>();
 
@@ -109,7 +109,10 @@ class CausalConcurrentProducersIT {
                      CausalBufferLimit.ofDuration(Duration.ofMinutes(5)),
                      Map.of(),
                      streamsConfig(bootstrap))
-                     .topicAdmin(new MockAdminClient())
+                     .addCausalTopics(List.of(
+                             new CausalTopic(SOURCE_A, topicAId),
+                             new CausalTopic(SOURCE_B, topicBId),
+                             new CausalTopic(OUTPUT, outputId)))
                      .build();
              CausalProducer<String, String> producerA = causalProducer(bootstrap);
              CausalProducer<String, String> producerB = causalProducer(bootstrap)) {

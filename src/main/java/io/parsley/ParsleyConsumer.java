@@ -1,6 +1,5 @@
 package io.parsley;
 
-import org.apache.kafka.clients.admin.TopicDescription;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.apache.kafka.clients.consumer.ConsumerRecords;
 import org.apache.kafka.clients.consumer.KafkaConsumer;
@@ -77,7 +76,8 @@ final class ParsleyConsumer<K, V> implements CausalConsumer<K, V> {
             Map<String, Object> consumerConfig,
             Map<String, Object> streamsConfig,
             String storeName,
-            ParsleyTopicAdmin topicAdmin) {
+            ParsleyTopicAdmin topicAdmin,
+            Map<String, Uuid> topicUuids) {
 
         Map<String, Object> merged = new HashMap<>();
         merged.put("processing.exception.handler.global.enabled", "true");
@@ -97,9 +97,8 @@ final class ParsleyConsumer<K, V> implements CausalConsumer<K, V> {
         this.valueSerde = valueSerde;
 
         ParsleyTopicAdmin admin = (topicAdmin != null) ? topicAdmin : ParsleyTopicAdmin.ofBootstrap(bootstrap);
-        Map<String, Uuid> topicUuids;
         try {
-            topicUuids = setupOutbox(admin, topics, outboxTopic);
+            setupOutbox(admin, topics, outboxTopic);
         } finally {
             try { admin.close(); } catch (Exception ignored) {}
         }
@@ -181,18 +180,15 @@ final class ParsleyConsumer<K, V> implements CausalConsumer<K, V> {
     }
 
     /**
-     * Creates the outbox topic and returns the Kafka topic UUIDs for each input topic.
+     * Creates the outbox topic, sized to the maximum partition count among the input topics.
      */
-    private static Map<String, Uuid> setupOutbox(ParsleyTopicAdmin admin, Collection<String> inputTopics,
-                                                  String outboxTopic) {
+    private static void setupOutbox(ParsleyTopicAdmin admin, Collection<String> inputTopics,
+                                     String outboxTopic) {
         try {
-            Map<String, TopicDescription> descriptions = admin.describeTopics(new ArrayList<>(inputTopics));
+            Map<String, Integer> partitionCounts = admin.partitionCounts(new ArrayList<>(inputTopics));
 
-            Map<String, Uuid> topicUuids = new HashMap<>();
-            descriptions.forEach((topic, desc) -> topicUuids.put(topic, desc.topicId()));
-
-            int maxPartitions = descriptions.values().stream()
-                    .mapToInt(td -> td.partitions().size())
+            int maxPartitions = partitionCounts.values().stream()
+                    .mapToInt(Integer::intValue)
                     .max()
                     .orElse(1);
             try {
@@ -204,14 +200,13 @@ final class ParsleyConsumer<K, V> implements CausalConsumer<K, V> {
             } catch (Exception e) {
                 throw new RuntimeException("Failed to create outbox topic " + outboxTopic, e);
             }
-            return Map.copyOf(topicUuids);
         } catch (RuntimeException e) {
             throw e;
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             throw new RuntimeException(e);
         } catch (Exception e) {
-            throw new RuntimeException("Failed to describe input topics for outbox sizing", e);
+            throw new RuntimeException("Failed to read input topics' partition counts for outbox sizing", e);
         }
     }
 

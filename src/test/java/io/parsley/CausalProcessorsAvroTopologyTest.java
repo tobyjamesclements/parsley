@@ -56,6 +56,7 @@ class CausalProcessorsAvroTopologyTest {
     private static final String PRICES = "prices";
     private static final String ORDERS = "orders";
     private static final Uuid PRICES_ID = CausalPosition.deriveUuid(PRICES);
+    private static final Uuid ORDERS_ID = CausalPosition.deriveUuid(ORDERS);
 
     private final List<SpecificRecord> processed = new ArrayList<>();
 
@@ -94,6 +95,7 @@ class CausalProcessorsAvroTopologyTest {
                         user,
                         CausalBufferLimit.ofSize(100))
                         .serdesByTopic(topic -> Serdes.String(), topic -> avro)
+                        .addCausalTopics(List.of(new CausalTopic(PRICES, PRICES_ID), new CausalTopic(ORDERS, ORDERS_ID)))
                         .build());
         Topology topology = builder.build();
 

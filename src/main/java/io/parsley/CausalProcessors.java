@@ -4,6 +4,8 @@ import org.apache.kafka.common.Uuid;
 import org.apache.kafka.common.serialization.Serde;
 import org.apache.kafka.streams.processor.api.ProcessorSupplier;
 
+import java.util.Collection;
+import java.util.HashMap;
 import java.util.Map;
 import java.util.function.Function;
 
@@ -18,6 +20,8 @@ import java.util.function.Function;
  * builder.stream(List.of("prices", "orders"), Consumed.with(Serdes.String(), orderSerde))
  *        .process(CausalProcessors.builder(userSupplier, CausalBufferLimit.ofDuration(limit))
  *                .serdes(Serdes.String(), orderSerde)
+ *                .addCausalTopic(new CausalTopic("prices", pricesTopicId))
+ *                .addCausalTopic(new CausalTopic("orders", ordersTopicId))
  *                .build())
  *        .to("output-topic");
  * }</pre>
@@ -67,7 +71,7 @@ public final class CausalProcessors {
         private Function<String, Serde<VIn>> valueSerdeByTopic;
         private String storeName = "parsley";
         private CausalFrontierListener frontierListener = frontier -> {};
-        private Map<String, Uuid> topicUuids = Map.of();
+        private final Map<String, Uuid> topicUuids = new HashMap<>();
 
         private Builder(ProcessorSupplier<KIn, VIn, KOut, VOut> userSupplier, CausalBufferLimit limit) {
             this.userSupplier = userSupplier;
@@ -132,17 +136,31 @@ public final class CausalProcessors {
         }
 
         /**
-         * Provides the Kafka topic UUIDs for the input topics, keyed by topic name. Used as the
-         * stable partition identity so that topic deletion and recreation produce different
-         * identities. Topics absent from the map fall back to a deterministic name-derived UUID via
-         * {@link CausalPosition#deriveUuid}.
+         * Registers the stable causal identity for one input topic. Used as the stable partition
+         * identity so that topic deletion and recreation produce different identities. Required for
+         * every topic this processor will see; {@link #build()} requires at least one registration,
+         * and an unrecognised topic at runtime fails fast rather than silently degrading identity.
          *
-         * @param topicUuids topic-name → Kafka UUID map; typically from
-         *                   {@code AdminClient.describeTopics(topics)}
+         * @param stream the topic name and its Kafka UUID; typically sourced from
+         *               {@code AdminClient.describeTopics(topics)}; must not be {@code null}
          * @return this builder
          */
-        public Builder<KIn, VIn, KOut, VOut> topicUuids(Map<String, Uuid> topicUuids) {
-            this.topicUuids = Map.copyOf(topicUuids);
+        public Builder<KIn, VIn, KOut, VOut> addCausalTopic(CausalTopic stream) {
+            topicUuids.put(stream.topic(), stream.topicId());
+            return this;
+        }
+
+        /**
+         * Registers the stable causal identity for several input topics at once. Equivalent to
+         * calling {@link #addCausalTopic} for each element.
+         *
+         * @param streams the topic names and their Kafka UUIDs; must not be {@code null}
+         * @return this builder
+         */
+        public Builder<KIn, VIn, KOut, VOut> addCausalTopics(Collection<CausalTopic> streams) {
+            for (CausalTopic stream : streams) {
+                addCausalTopic(stream);
+            }
             return this;
         }
 
@@ -150,16 +168,21 @@ public final class CausalProcessors {
          * Builds the {@link CausalProcessorSupplier}.
          *
          * @return a decorated supplier ready for {@code stream(...).process(...)}
-         * @throws IllegalStateException if no serde pair was set
+         * @throws IllegalStateException if no serde pair was set, or no {@link CausalTopic} was
+         *                                registered via {@link #addCausalTopic}/{@link #addCausalTopics}
          */
         public CausalProcessorSupplier<KIn, VIn, KOut, VOut> build() {
             if (keySerdeByTopic == null || valueSerdeByTopic == null) {
                 throw new IllegalStateException("serdes are required; call serdes(...) or serdesByTopic(...)");
             }
+            if (topicUuids.isEmpty()) {
+                throw new IllegalStateException(
+                        "at least one CausalTopic is required; call addCausalTopic(...) for every input topic");
+            }
             return new ParsleyProcessorSupplier<>(
                     userSupplier, limit, keySerdeByTopic, valueSerdeByTopic,
                     storeName + "-frontier", storeName + "-buffer", storeName + "-position-index",
-                    frontierListener, topicUuids);
+                    frontierListener, Map.copyOf(topicUuids));
         }
     }
 }

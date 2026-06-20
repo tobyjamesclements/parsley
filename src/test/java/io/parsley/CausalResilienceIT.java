@@ -5,6 +5,7 @@ import org.apache.kafka.clients.admin.NewTopic;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.apache.kafka.clients.producer.ProducerConfig;
 import org.apache.kafka.clients.producer.ProducerRecord;
+import org.apache.kafka.common.Uuid;
 import org.apache.kafka.common.serialization.StringSerializer;
 import org.apache.kafka.streams.StreamsConfig;
 import org.junit.jupiter.api.Test;
@@ -53,8 +54,8 @@ class CausalResilienceIT {
      * {@link ParsleyEngine} ParsleyPositionIndex re-seeding from the restored buffer.
      *
      * <p>Both the producer and the consumer use the same name-derived UUID for PRICES (via
-     * {@link MockAdminClient} and {@link CausalPosition#deriveUuid}), so the stamped dependencies
-     * match the consumer's frontier — enabling natural causal drain rather than eviction.
+     * {@link CausalPosition#deriveUuid}, registered via {@link CausalTopic}), so the stamped
+     * dependencies match the consumer's frontier — enabling natural causal drain rather than eviction.
      */
     @Test
     void restartedConsumerResumesAndDrainsBufferedRecordAfterRecovery() throws Exception {
@@ -65,6 +66,8 @@ class CausalResilienceIT {
         // Fixed applicationId so Kafka Streams restores the frontier, buffer, and position-index
         // state stores from their changelog topics when consumer-2 starts.
         String appId = "resilience-restart-app";
+        Uuid pricesId = CausalPosition.deriveUuid(PRICES);
+        Uuid ordersId = CausalPosition.deriveUuid(ORDERS);
 
         // Phase 1: buffer an ORDERS record that depends on PRICES@0, then close.
         List<ConsumerRecord<String, String>> phase1 = new ArrayList<>();
@@ -74,12 +77,14 @@ class CausalResilienceIT {
                              CausalBufferLimit.ofDuration(Duration.ofMinutes(5)),
                              Map.of(),
                              streamsConfig(bootstrap, appId))
-                             .topicAdmin(new MockAdminClient(ParsleyTopicAdmin.ofBootstrap(bootstrap)))
+                             .addCausalTopics(List.of(
+                                     new CausalTopic(PRICES, pricesId),
+                                     new CausalTopic(ORDERS, ordersId)))
                              .build();
              CausalProducer<String, String> producer = causalProducer(bootstrap)) {
 
             producer.send(new ProducerRecord<>(ORDERS, "k", "order-1"),
-                    CausalDependencies.builder().require(new CausalPosition(CausalPosition.deriveUuid(PRICES), 0, 0)).build()).get();
+                    CausalDependencies.builder().require(new CausalPosition(pricesId, 0, 0)).build()).get();
 
             // Poll a few times — ORDERS should be buffered, not delivered.
             for (int i = 0; i < 3; i++) {
@@ -102,7 +107,9 @@ class CausalResilienceIT {
                              CausalBufferLimit.ofDuration(Duration.ofMinutes(5)),
                              Map.of(),
                              streamsConfig(bootstrap, appId))
-                             .topicAdmin(new MockAdminClient(ParsleyTopicAdmin.ofBootstrap(bootstrap)))
+                             .addCausalTopics(List.of(
+                                     new CausalTopic(PRICES, pricesId),
+                                     new CausalTopic(ORDERS, ordersId)))
                              .build();
              CausalProducer<String, String> producer = causalProducer(bootstrap)) {
 
@@ -144,7 +151,9 @@ class CausalResilienceIT {
         createTopic(bootstrap, ORDERS, 1);
 
         String appId = "resilience-size-limit-restart-app";
-        CausalPosition neverArrives = new CausalPosition(CausalPosition.deriveUuid(PRICES), 0, 99);
+        Uuid pricesId = CausalPosition.deriveUuid(PRICES);
+        Uuid ordersId = CausalPosition.deriveUuid(ORDERS);
+        CausalPosition neverArrives = new CausalPosition(pricesId, 0, 99);
 
         // Phase 1: buffer three ORDERS records that depend on a PRICES offset that will never
         // arrive, under a generous size limit — none are evicted.
@@ -154,7 +163,9 @@ class CausalResilienceIT {
                              CausalBufferLimit.ofSize(10),
                              Map.of(),
                              streamsConfig(bootstrap, appId))
-                             .topicAdmin(new MockAdminClient(ParsleyTopicAdmin.ofBootstrap(bootstrap)))
+                             .addCausalTopics(List.of(
+                                     new CausalTopic(PRICES, pricesId),
+                                     new CausalTopic(ORDERS, ordersId)))
                              .build();
              CausalProducer<String, String> producer = causalProducer(bootstrap)) {
 
@@ -186,7 +197,9 @@ class CausalResilienceIT {
                              CausalBufferLimit.ofSize(2),
                              Map.of(),
                              streamsConfig(bootstrap, appId))
-                             .topicAdmin(new MockAdminClient(ParsleyTopicAdmin.ofBootstrap(bootstrap)))
+                             .addCausalTopics(List.of(
+                                     new CausalTopic(PRICES, pricesId),
+                                     new CausalTopic(ORDERS, ordersId)))
                              .build()) {
 
             await().atMost(Duration.ofSeconds(60)).until(() -> {
@@ -228,7 +241,9 @@ class CausalResilienceIT {
                              List.of(EVENTS),
                              CausalBufferLimit.ofSize(100),
                              Map.of(),
-                             streamsConfigWithThreads(bootstrap, 2)).build();
+                             streamsConfigWithThreads(bootstrap, 2))
+                             .addCausalTopic(new CausalTopic(EVENTS, CausalPosition.deriveUuid(EVENTS)))
+                             .build();
              CausalProducer<String, String> producer = causalProducer(bootstrap)) {
 
             for (int i = 0; i < 5; i++) {

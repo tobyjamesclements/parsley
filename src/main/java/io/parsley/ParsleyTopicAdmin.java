@@ -4,25 +4,27 @@ import org.apache.kafka.clients.admin.Admin;
 import org.apache.kafka.clients.admin.NewTopic;
 import org.apache.kafka.clients.admin.TopicDescription;
 
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
 /**
  * Narrow abstraction over the two Kafka Admin operations that {@link ParsleyConsumer} uses at
- * startup: describing input topics (to read their UUIDs and partition counts) and creating the
- * outbox topic. Keeping the interface narrow lets tests supply a {@code MockAdminClient} without
- * implementing the full ~40-method {@link Admin} surface.
+ * startup: reading input topics' partition counts (to size the outbox topic) and creating the
+ * outbox topic. Topic identity (UUID) is not this interface's concern — callers supply that
+ * directly via {@link CausalConsumers.Builder#addCausalTopic}. Keeping the interface narrow lets
+ * tests implement it without the full ~40-method {@link Admin} surface.
  */
 interface ParsleyTopicAdmin extends AutoCloseable {
 
     /**
-     * Returns topic metadata keyed by topic name for each name in {@code topics}.
+     * Returns the partition count for each name in {@code topics}.
      *
-     * @param topics the topic names to describe
-     * @return metadata map; must include every requested topic
+     * @param topics the topic names to look up
+     * @return partition counts; must include every requested topic
      */
-    Map<String, TopicDescription> describeTopics(List<String> topics) throws Exception;
+    Map<String, Integer> partitionCounts(List<String> topics) throws Exception;
 
     /**
      * Creates a topic with the given name and partition count. Implementations may silently ignore
@@ -46,8 +48,11 @@ interface ParsleyTopicAdmin extends AutoCloseable {
         Admin admin = Admin.create(Map.of("bootstrap.servers", bootstrap));
         return new ParsleyTopicAdmin() {
             @Override
-            public Map<String, TopicDescription> describeTopics(List<String> topics) throws Exception {
-                return admin.describeTopics(topics).allTopicNames().get();
+            public Map<String, Integer> partitionCounts(List<String> topics) throws Exception {
+                Map<String, TopicDescription> descriptions = admin.describeTopics(topics).allTopicNames().get();
+                Map<String, Integer> counts = new HashMap<>();
+                descriptions.forEach((topic, desc) -> counts.put(topic, desc.partitions().size()));
+                return counts;
             }
 
             @Override

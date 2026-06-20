@@ -107,7 +107,9 @@ class CausalAvroSchemaRegistryIT {
                      CausalBufferLimit.ofDuration(Duration.ofSeconds(10)),
                      Map.of(ConsumerConfig.GROUP_ID_CONFIG, "avro-rt-" + UUID.randomUUID()),
                      streamsConfig(bootstrap, registryUrl))
-                     .topicAdmin(new MockAdminClient(ParsleyTopicAdmin.ofBootstrap(bootstrap)))
+                     .addCausalTopics(List.of(
+                             new CausalTopic(ORDERS, CausalPosition.deriveUuid(ORDERS)),
+                             new CausalTopic(PRICES, CausalPosition.deriveUuid(PRICES))))
                      .build()) {
 
             // Neither record has a causal dependency — both are admitted immediately.
@@ -172,7 +174,9 @@ class CausalAvroSchemaRegistryIT {
                      CausalBufferLimit.ofDuration(Duration.ofSeconds(5)),
                      Map.of(ConsumerConfig.GROUP_ID_CONFIG, "avro-buf-" + UUID.randomUUID()),
                      streamsConfig(bootstrap, registryUrl))
-                     .topicAdmin(new MockAdminClient(ParsleyTopicAdmin.ofBootstrap(bootstrap)))
+                     .addCausalTopics(List.of(
+                             new CausalTopic(ORDERS, CausalPosition.deriveUuid(ORDERS)),
+                             new CausalTopic(PRICES, pricesId)))
                      .build()) {
 
             // Order declares it has seen prices-0@0 — it will be buffered until Price arrives.
