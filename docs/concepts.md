@@ -35,7 +35,7 @@ until no further releases occur.
 
 ## Buffer limits
 
-A `CausalBufferLimit` bounds how long or how large the buffer may grow before a **policy** fires:
+A `CausalBufferLimit` bounds how long or how large the buffer may grow before eviction fires:
 
 | Limit | Factory | Description |
 |---|---|---|
@@ -43,37 +43,28 @@ A `CausalBufferLimit` bounds how long or how large the buffer may grow before a 
 | Duration | `CausalBufferLimit.ofDuration(d)` | Fire after the buffer has held records for `d` (time-based; requires the processor to call eviction on schedule) |
 | First-of | `CausalBufferLimit.first(a, b, ...)` | Fire when the first of several limits fires |
 
-## Buffer policies
+## Always-forward delivery
 
-A `CausalBufferPolicy` determines what happens when the limit fires. **All policies** report a
-`CausalViolation` for every evicted record.
+Parsley never drops or diverts a record. Every record reaches the user's `process()`/`poll()`
+exactly once, stamped under the `parsley-causal-result` header with a `CausalResult`:
 
-| Policy | Factory | On eviction |
-|---|---|---|
-| Forward unsafe | `CausalBufferPolicy.forwardUnsafe(limit)` | Forwards the record out-of-order (lenient — delivery is preserved, ordering is not) |
-| Drop | `CausalBufferPolicy.drop(limit)` | Discards the record (strict — no out-of-order delivery) |
-| Dead letter | `CausalBufferPolicy.deadLetter(limit)` | Routes the record to a dead-letter sink with additional headers describing the gap (strict) |
+| Result | Meaning |
+|---|---|
+| `SATISFIED` | The frontier had observed the record's dependencies by delivery time — whether immediately, after a wait, or trivially (no dependencies claimed, or an undecodable header, both treated as vacuously satisfied) |
+| `EVICTED` | The record was still waiting on unsatisfied dependencies when the configured `CausalBufferLimit` fired, and was forwarded anyway |
+
+Read the result with `CausalResult.fromRecord(record)` in your own `process()`/`poll()` code to
+react to an `EVICTED` delivery — there is no separate callback; the record itself is the signal.
+The frontier always advances on delivery, so records buffered downstream are not permanently
+stalled by an eviction.
 
 ## Causal violations
 
-A `CausalViolation` is reported via `CausalViolationHandler` whenever the causal guarantee cannot
-be upheld for a specific record. Three reasons exist:
-
-| Reason | Meaning |
-|---|---|
-| `MISSING_HEADER` | The record carries no `parsley-causal-dependencies` header (not stamped by Parsley) |
-| `UNRESOLVABLE_DEPENDENCIES` | The header is present but cannot be deserialised (corrupt or unsupported wire version) |
-| `LIMIT_REACHED` | The record was evicted from the buffer because a limit fired |
-
-The action taken for each violation reason is configured by the policy. The convenience factories
-(`forwardUnsafe`, `drop`, `deadLetter`) apply the same action to all three reasons. The
-`CausalBufferPolicy.builder()` lets each reason carry a distinct `CausalViolationAction` — for example,
-forwarding records with no Parsley header while dropping or dead-lettering records evicted from the
-buffer. The frontier always advances regardless of action, so records buffered downstream are not
-permanently stalled by the violation.
-
-Each violation includes the current frontier, the required dependencies, and the **causal gap**:
-a per-coordinate shortfall showing exactly how far the frontier was behind at the time of eviction.
+Every eviction is logged with the current frontier, the required dependencies, and the **causal
+gap** — a per-coordinate shortfall showing exactly how far the frontier was behind at the time of
+eviction — and counted via Parsley's eviction metric. This is diagnostic only; it is not exposed as
+a separate programmatic hook, since the `CausalResult` header already carries the actionable signal
+to the record's recipient.
 
 ## Co-partitioning
 

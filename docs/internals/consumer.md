@@ -50,16 +50,11 @@ The result in the outbox: both the delivery-time frontier (as `parsley-causal-de
 
 The returned record's `headers()` contain the original producer dependencies (not the delivery-time frontier). `CausalDependencies.fromRecord(record)` on a record returned by `poll()` therefore returns the producer's causal intent.
 
-## Dead-letter path
-
-When the policy uses `DEAD_LETTER` for a violation type (`CausalConsumers.builder(...).deadLetterSink(...)`, see [streams.md](../streams.md) for the equivalent `CausalProcessors` example), evicted records take a separate route and **never reach the outbox, the internal consumer, or `poll()`**:
-
-1. The causal engine calls its `deadLetterSink` with the raw `byte[]` record (plus the `parsley-dlq-*` headers it stamped).
-2. `ParsleyConsumer` adapts that raw record into a typed `ConsumerRecord<K,V>` via the same `toTypedRecord(...)` helper `poll()` uses — deserialising key and value at the source topic, at the original source topic/partition/offset.
-3. Headers are passed through `stripInternalHeaders(...)`, which removes the internal `_parsley_*` headers only. Unlike `restoreOriginalDependencies(...)` on the `poll()` path, it does **not** touch `parsley-causal-dependencies`: dead-lettered records never pass through the outbox delegate, so that header was never overwritten with the delivery-time frontier — it is still the producer's original value.
-4. The typed record is delivered to the user's sink.
-
-The sink runs on the internal Kafka Streams thread, so it must be thread-safe (the same caveat as the violation handler).
+An evicted record takes the same path as any other: it is stamped `EVICTED` under the
+`parsley-causal-result` header by the causal engine, flows through the outbox delegate and outbox
+topic like every other record, and is returned from `poll()` like every other record. Check
+`CausalResult.fromRecord(record)` on records returned by `poll()` to distinguish `EVICTED` from
+`SATISFIED`.
 
 ## Frontier merging
 

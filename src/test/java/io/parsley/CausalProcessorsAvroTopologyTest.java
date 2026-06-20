@@ -58,8 +58,6 @@ class CausalProcessorsAvroTopologyTest {
     private static final Uuid PRICES_ID = CausalPosition.deriveUuid(PRICES);
 
     private final List<SpecificRecord> processed = new ArrayList<>();
-    private final List<CausalViolation> violations = new ArrayList<>();
-    private final CausalViolationHandler onViolation = violations::add;
 
     @AfterEach
     void dropRegistryScope() {
@@ -96,7 +94,6 @@ class CausalProcessorsAvroTopologyTest {
                         user,
                         CausalBufferLimit.ofSize(100))
                         .serdesByTopic(topic -> Serdes.String(), topic -> avro)
-                        .onViolation(onViolation)
                         .build());
         Topology topology = builder.build();
 

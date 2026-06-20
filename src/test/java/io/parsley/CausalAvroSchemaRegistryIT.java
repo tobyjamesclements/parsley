@@ -30,7 +30,6 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
-import java.util.concurrent.atomic.AtomicReference;
 
 import java.util.Optional;
 
@@ -142,8 +141,9 @@ class CausalAvroSchemaRegistryIT {
      * causal order once the Price arrives, and is deserialized under the {@code orders-value}
      * Schema Registry subject rather than the buffer-store or changelog subject.
      *
-     * <p>A drop policy with a short eviction window is used: if causal drain is broken the Order
-     * is evicted, the await fails, and the {@code onViolation} callback surfaces the cause.
+     * <p>A short eviction window is used: if causal drain is broken the Order is evicted instead
+     * of drained, and the await fails by checking {@code CausalResult.fromRecord} on the records
+     * already being polled.
      *
      * Asserts that Price is delivered first, the Order is delivered second with field-for-field
      * equality to the original, and the buffered Order's header decodes to the producer's original
@@ -160,10 +160,6 @@ class CausalAvroSchemaRegistryIT {
         Order order = new Order("o-buf", "ACME", 10);
         Price price = new Price("ACME", 99.0);
 
-        // drop policy: if the Order is evicted instead of drained causally, it is lost and the
-        // await below fails — protecting against regressions where eviction masks a broken drain.
-        AtomicReference<CausalViolation> eviction = new AtomicReference<>();
-
         try (CausalProducer<String, SpecificRecord> producer = CausalProducers.<String, SpecificRecord>builder(Map.of(
                 ProducerConfig.BOOTSTRAP_SERVERS_CONFIG, bootstrap,
                 ProducerConfig.KEY_SERIALIZER_CLASS_CONFIG, StringSerializer.class.getName(),
@@ -171,12 +167,11 @@ class CausalAvroSchemaRegistryIT {
                 "schema.registry.url", registryUrl)).build();
              CausalConsumer<String, SpecificRecord> consumer = CausalConsumers.<String, SpecificRecord>builder(
                      List.of(ORDERS, PRICES),
-                     // Short eviction window with drop: if causal drain is broken the Order is lost,
-                     // the await fails, and onViolation surfaces a clear cause.
+                     // Short eviction window: if causal drain is broken the Order is evicted
+                     // instead of drained, and the await below fails fast on the stamped result.
                      CausalBufferLimit.ofDuration(Duration.ofSeconds(5)),
                      Map.of(ConsumerConfig.GROUP_ID_CONFIG, "avro-buf-" + UUID.randomUUID()),
                      streamsConfig(bootstrap, registryUrl))
-                     .onViolation(eviction::set)
                      .topicAdmin(new MockAdminClient(ParsleyTopicAdmin.ofBootstrap(bootstrap)))
                      .build()) {
 
@@ -198,10 +193,12 @@ class CausalAvroSchemaRegistryIT {
                     CausalDependencies.empty()).get();
 
             await().atMost(Duration.ofSeconds(30)).until(() -> {
-                consumer.poll(Duration.ofMillis(500)).forEach(received::add);
-                CausalViolation v = eviction.get();
-                if (v != null) throw new AssertionError(
-                        "Order was evicted instead of drained causally: " + v);
+                consumer.poll(Duration.ofMillis(500)).forEach(r -> {
+                    received.add(r);
+                    if (CausalResult.fromRecord(r).orElseThrow() == CausalResult.EVICTED) {
+                        throw new AssertionError("Order was evicted instead of drained causally: " + r);
+                    }
+                });
                 return received.size() >= 2;
             });
 

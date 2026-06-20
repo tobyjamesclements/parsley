@@ -91,7 +91,7 @@ class CausalProcessorsSinkPropagationIT {
         StreamsBuilder builder = new StreamsBuilder();
         builder.stream(IN, Consumed.with(Serdes.String(), Serdes.String()))
                 .process(CausalProcessors.builder(user, CausalBufferLimit.ofDuration(Duration.ofSeconds(5)))
-                        .serdes(Serdes.String(), Serdes.String()).onViolation(violation -> {}).build())
+                        .serdes(Serdes.String(), Serdes.String()).build())
                 .to(OUT, Produced.with(Serdes.String(), Serdes.String()));
 
         try (KafkaStreams streams = new KafkaStreams(builder.build(), streamsConfig(bootstrap))) {

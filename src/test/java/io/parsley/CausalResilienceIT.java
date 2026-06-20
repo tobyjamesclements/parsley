@@ -179,7 +179,6 @@ class CausalResilienceIT {
         // Phase 2: new consumer, same applicationId, but a tighter size limit. Kafka Streams
         // restores the buffer (3 entries) from changelog; the new limit is 2, so evictOverflow()
         // must trim the two oldest entries on init, before consumer2 polls for anything new.
-        List<CausalViolation> violations = new ArrayList<>();
         List<ConsumerRecord<String, String>> phase2 = new ArrayList<>();
         try (CausalConsumer<String, String> consumer2 =
                      CausalConsumers.<String, String>builder(
@@ -188,7 +187,6 @@ class CausalResilienceIT {
                              Map.of(),
                              streamsConfig(bootstrap, appId))
                              .topicAdmin(new MockAdminClient(ParsleyTopicAdmin.ofBootstrap(bootstrap)))
-                             .onViolation(violations::add)
                              .build()) {
 
             await().atMost(Duration.ofSeconds(60)).until(() -> {
@@ -198,8 +196,6 @@ class CausalResilienceIT {
 
             assertEquals(List.of("order-1", "order-2"), phase2.stream().map(ConsumerRecord::value).toList(),
                     "the two oldest restored records must be forwarded out-of-order on restart, before any new input");
-            assertEquals(2, violations.size(),
-                    "one violation must be reported per record evicted on restart");
             assertTrue(phase2.stream().allMatch(r -> CausalResult.fromRecord(r).orElseThrow() == CausalResult.EVICTED),
                     "every forwarded record must be stamped EVICTED");
 

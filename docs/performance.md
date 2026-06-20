@@ -139,7 +139,7 @@ this is **O(1)** — effectively constant regardless of buffer size:
 | 1 record | ~461 ns |
 | 1024 records | ~439 ns |
 
-**Buffer restore** scans every buffered record to rebuild the wait index. Benchmarking confirms
+**Buffer restore** scans every buffered record to rebuild the position index. Benchmarking confirms
 this is **O(n)** in the number of records held at the time of the crash or reassignment:
 
 | Records held at crash (n) | Buffer restore |

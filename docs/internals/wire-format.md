@@ -41,9 +41,9 @@ per header:
 
 All headers on the record (user headers plus `_parsley_*` internal headers) are serialised in order.
 
-## Wait-index key
+## Position-index key
 
-The `{ns}-wait-index` store maps coordinate+offset+recordId to an empty presence marker. The 36-byte key uses big-endian encoding throughout so that RocksDB lexicographic ordering produces a range scan for all records waiting on a given coordinate up to a given offset.
+The `{ns}-position-index` store maps coordinate+offset+recordId to an empty presence marker. The 36-byte key uses big-endian encoding throughout so that RocksDB lexicographic ordering produces a range scan for all records waiting on a given coordinate up to a given offset.
 
 ```
 [topicId MSB    :8]
@@ -75,7 +75,7 @@ The default namespace is `parsley`. It is configurable via `CausalProcessors.bui
 |---|---|---|---|
 | `{ns}-frontier` | `String` | `byte[]` | Single entry at key `"f"`: serialised `CausalFrontier` |
 | `{ns}-buffer` | `Long` | `byte[]` | Insertion sequence -> serialised `ParsleyRecord` |
-| `{ns}-wait-index` | `byte[]` | `byte[]` (empty) | 36-byte composite key -> presence marker |
+| `{ns}-position-index` | `byte[]` | `byte[]` (empty) | 36-byte composite key -> presence marker |
 
 All three stores are persistent and changelog-backed. Changelog topic names follow the Kafka Streams pattern: `{applicationId}-{storeName}-changelog`.
 

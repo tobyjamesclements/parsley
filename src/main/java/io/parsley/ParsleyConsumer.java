@@ -83,7 +83,6 @@ final class ParsleyConsumer<K, V> implements CausalConsumer<K, V> {
     ParsleyConsumer(
             Collection<String> topics,
             CausalBufferLimit limit,
-            CausalViolationHandler onViolation,
             Map<String, Object> consumerConfig,
             Map<String, Object> streamsConfig,
             String storeName,
@@ -118,7 +117,6 @@ final class ParsleyConsumer<K, V> implements CausalConsumer<K, V> {
         CausalProcessors.Builder<byte[], byte[], byte[], byte[]> processorsBuilder =
                 CausalProcessors.builder(outboxDelegate(), limit)
                         .serdesByTopic(t -> bytes, t -> bytes)
-                        .onViolation(onViolation)
                         .storeName(storeName)
                         .frontierListener(this::onFrontierAdvanced)
                         .topicUuids(topicUuids);

@@ -19,7 +19,7 @@ import org.apache.kafka.streams.processor.api.ProcessorSupplier;
  *
  * builder.stream(List.of("prices", "orders"), Consumed.with(Serdes.String(), orderSerde))
  *        .process(CausalProcessors.builder(user, CausalBufferLimit.ofDuration(limit))
- *                                .serdes(Serdes.String(), orderSerde).onViolation(onViolation)
+ *                                .serdes(Serdes.String(), orderSerde)
  *                                .build())
  *        .to("output-topic");
  * }</pre>
@@ -33,8 +33,8 @@ import org.apache.kafka.streams.processor.api.ProcessorSupplier;
  * wait, including trivially for records claiming none). A record delivered with
  * {@link CausalResult#EVICTED} — the configured {@link CausalBufferLimit} fired before its
  * dependencies were satisfied — suspends the guarantee for that one record; it is flagged via
- * the {@code parsley-causal-result} header (readable with {@link CausalResult#fromRecord}) and
- * reported to the configured {@link CausalViolationHandler}.
+ * the {@code parsley-causal-result} header, readable with {@link CausalResult#fromRecord} in your
+ * own {@code process()}, and logged with the causal gap.
  *
  * <p>The guarantee further depends on two preconditions that hold across the whole processor,
  * not per-record:

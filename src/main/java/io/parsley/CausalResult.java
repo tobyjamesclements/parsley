@@ -16,11 +16,10 @@ import static java.nio.charset.StandardCharsets.UTF_8;
  *   <li>{@link #SATISFIED} — the record's causal dependencies were satisfied by the frontier at
  *       delivery time, whether immediately, after a wait, or trivially (no dependencies claimed,
  *       or an undecodable dependencies header — both are treated as an empty, vacuously satisfied
- *       set; see {@link CausalViolationHandler} for the corrupt-header case, which is logged but
- *       not reported as a violation).
+ *       set; the corrupt-header case is logged but not treated as a violation).
  *   <li>{@link #EVICTED} — the record was still waiting on unsatisfied dependencies when the
- *       configured {@link CausalBufferLimit} fired, and was forwarded anyway. Reported to
- *       {@link CausalViolationHandler} via {@link CausalViolation}.
+ *       configured {@link CausalBufferLimit} fired, and was forwarded anyway. Logged with the
+ *       causal gap.
  * </ul>
  */
 public enum CausalResult {

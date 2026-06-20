@@ -95,7 +95,6 @@ public class BufferReleaseBenchmark {
                                                        ParsleySerializer<String, String> serializer) {
         return new ParsleyEngine<>(
                 BENCH_LIMIT,
-                v -> {},
                 CausalFrontier.empty(),
                 f -> {},
                 new RocksBufferStore<>(bufferKV, serializer),

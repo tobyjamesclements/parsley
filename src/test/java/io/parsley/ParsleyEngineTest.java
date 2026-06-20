@@ -23,7 +23,6 @@ class ParsleyEngineTest {
     private static final Uuid T2_ID = CausalPosition.deriveUuid(T2.topic());
 
     private final List<ParsleyRecord<String, String>> forwarded = new ArrayList<>();
-    private final List<CausalViolation> violations = new ArrayList<>();
     private final List<CausalFrontier> frontiers = new ArrayList<>();
     private final MockBufferStore<String, String> buffer = new MockBufferStore<>();
 
@@ -110,10 +109,9 @@ class ParsleyEngineTest {
      * When the buffer is at its size limit and a new unsatisfied record arrives, the engine
      * always evicts the oldest record needed to bring the buffer back under the limit and
      * forwards it — there is no drop/discard outcome anymore. The evicted record is stamped
-     * {@link CausalResult#EVICTED} and a violation is reported.
+     * {@link CausalResult#EVICTED}.
      *
-     * Asserts that the record is removed from the buffer, forwarded with the EVICTED result,
-     * and exactly one violation is reported.
+     * Asserts that the record is removed from the buffer and forwarded with the EVICTED result.
      */
     @Test
     void evictionRemovesTheRecordFromTheBufferAndForwardsItAnyway() {
@@ -125,7 +123,6 @@ class ParsleyEngineTest {
         assertEquals(1, forwarded.size(), "evicted record must still be forwarded — Parsley never drops");
         assertEquals(CausalResult.EVICTED, resultOf(forwarded.get(0)),
                 "evicted record must be stamped EVICTED");
-        assertEquals(1, violations.size(), "exactly one violation must be reported for the eviction");
     }
 
     /**
@@ -181,10 +178,10 @@ class ParsleyEngineTest {
     /**
      * A record with no causal-dependencies header has empty dependencies, which are trivially
      * satisfied by any frontier — it is forwarded immediately, just like a record that
-     * explicitly claims no dependencies, with no violation reported.
+     * explicitly claims no dependencies.
      *
-     * Asserts that the record is forwarded with the SATISFIED result, no violation is
-     * reported, and the frontier advances through the record's source coordinate.
+     * Asserts that the record is forwarded with the SATISFIED result and the frontier advances
+     * through the record's source coordinate.
      */
     @Test
     void headerMissingRecordIsForwardedAsTriviallySatisfied() {
@@ -195,18 +192,15 @@ class ParsleyEngineTest {
         assertEquals(1, forwarded.size(), "a missing-header record must still be forwarded");
         assertEquals(CausalResult.SATISFIED, resultOf(forwarded.get(0)),
                 "a missing-header record is trivially satisfied, not evicted");
-        assertTrue(violations.isEmpty(), "a missing header is benign — it must not report a violation");
         assertEquals(CausalFrontier.empty().observe(new CausalPosition(T1_ID, 0, 0)), engine.frontier(),
                 "frontier must advance through the forwarded record");
     }
 
     /**
      * A record whose causal-dependencies header cannot be parsed is treated the same as one
-     * with empty dependencies — trivially satisfied — and forwarded immediately with no
-     * violation reported.
+     * with empty dependencies — trivially satisfied — and forwarded immediately.
      *
-     * Asserts that the record is forwarded with the SATISFIED result and no violation is
-     * reported.
+     * Asserts that the record is forwarded with the SATISFIED result.
      */
     @Test
     void garbledDependenciesRecordIsForwardedAsTriviallySatisfied() {
@@ -217,17 +211,15 @@ class ParsleyEngineTest {
         assertEquals(1, forwarded.size(), "an unresolvable-dependencies record must still be forwarded");
         assertEquals(CausalResult.SATISFIED, resultOf(forwarded.get(0)),
                 "an unresolvable header is trivially satisfied, not evicted");
-        assertTrue(violations.isEmpty(), "an unresolvable header is non-blocking — it must not report a violation");
     }
 
     /**
      * When the buffer reaches its size limit and a new unsatisfied record arrives, the engine
      * evicts only the oldest buffered record needed to bring the buffer back under the limit,
-     * leaving the rest held. The evicted record is forwarded, stamped EVICTED, and a violation
-     * is reported.
+     * leaving the rest held. The evicted record is forwarded, stamped EVICTED.
      *
-     * Asserts that only the oldest record is forwarded, exactly one violation is reported, the
-     * frontier advances only through the evicted record, and the younger record remains buffered.
+     * Asserts that only the oldest record is forwarded, stamped EVICTED, the frontier advances
+     * only through the evicted record, and the younger record remains buffered.
      */
     @Test
     void sizeLimitEvictsOnlyTheOldestRecord() {
@@ -240,7 +232,6 @@ class ParsleyEngineTest {
 
         assertEquals(1, forwarded.size(), "only the oldest evicted record must be forwarded");
         assertEquals(CausalResult.EVICTED, resultOf(forwarded.get(0)), "the forwarded record must be stamped EVICTED");
-        assertEquals(1, violations.size(), "exactly one violation must be reported");
         assertEquals(CausalFrontier.empty().observe(new CausalPosition(T2_ID, 0, 0)), engine.frontier(),
                 "frontier must advance only through the evicted record");
         assertEquals(1, buffer.size(), "the younger record must remain held in the buffer");
@@ -270,7 +261,6 @@ class ParsleyEngineTest {
         assertEquals(List.of(0L, 1L), forwarded.stream().map(ParsleyRecord::sourceOffset).toList(),
                 "the second overflow must evict only the next-oldest record (B)");
         assertEquals(1, buffer.size(), "buffer must never exceed the configured size limit");
-        assertEquals(2, violations.size(), "exactly one violation must be reported per overflow");
     }
 
     /**
@@ -295,7 +285,6 @@ class ParsleyEngineTest {
 
         assertEquals(List.of(0L, 1L), forwarded.stream().map(ParsleyRecord::sourceOffset).toList(),
                 "the two oldest excess records must be evicted, oldest-first");
-        assertEquals(2, violations.size(), "one violation must be reported per evicted record");
         assertEquals(1, buffer.size(), "the buffer must be trimmed down to exactly the new limit");
     }
 
@@ -313,34 +302,7 @@ class ParsleyEngineTest {
         List<ParsleyRecord<String, String>> result = engine.evictOverflow();
 
         assertTrue(result.isEmpty(), "no eviction must occur while the buffer is within the limit");
-        assertTrue(violations.isEmpty(), "no violation must be reported when nothing is evicted");
         assertEquals(1, buffer.size(), "the buffer must be left untouched");
-    }
-
-    /**
-     * An eviction reports a {@link CausalViolation} carrying the frontier at eviction time, the
-     * evicted record's required dependencies, and the causal gap between them — even though the
-     * record is still forwarded (Parsley never drops a record outright).
-     *
-     * Asserts that the forwarded record is stamped EVICTED and the violation carries the
-     * expected frontier, required dependencies, and gap.
-     */
-    @Test
-    void evictionReportsTheFrontierRequiredAndGap() {
-        ParsleyEngine<String, String> engine = engineWith(CausalBufferLimit.ofSize(1));
-
-        processRecord(engine, incomingRecord(T2, 0, CausalDependencies.builder().require(new CausalPosition(T1_ID, 0, 99)).build()));
-
-        assertEquals(1, forwarded.size(), "an evicted record must still be forwarded");
-        assertEquals(CausalResult.EVICTED, resultOf(forwarded.get(0)), "the forwarded record must be stamped EVICTED");
-        assertEquals(1, violations.size(), "one violation must be reported");
-        CausalViolation violation = violations.get(0);
-        assertEquals(CausalFrontier.empty(), violation.frontier(),
-                "violation must carry the frontier at eviction time");
-        assertEquals(CausalDependencies.builder().require(new CausalPosition(T1_ID, 0, 99)).build(), violation.required(),
-                "violation must carry the evicted record's required dependencies");
-        assertEquals(List.of(new CausalPosition(CausalPosition.deriveUuid("t1"), 0, 100L)),
-                violation.gap(), "gap must reflect the shortfall: required 99, frontier at -1 → need 100");
     }
 
     /**
@@ -360,7 +322,7 @@ class ParsleyEngineTest {
      * {@code evictExpired()} must leave a buffered record alone if it hasn't aged past the
      * configured duration yet, even when the punctuator fires.
      *
-     * Asserts that the record remains in the buffer and no violation is reported.
+     * Asserts that the record remains in the buffer.
      */
     @Test
     void evictExpiredLeavesRecordsYoungerThanTheDurationInTheBuffer() {
@@ -375,14 +337,13 @@ class ParsleyEngineTest {
 
         assertTrue(forwardedOnEvict.isEmpty(), "a record younger than the duration must not be evicted");
         assertEquals(1, buffer.size(), "the record must remain held in the buffer");
-        assertTrue(violations.isEmpty(), "no violation must be reported for a record that hasn't aged out");
     }
 
     /**
      * {@code evictExpired()} evicts a buffered record once it has aged past the configured
-     * duration, forwarding it stamped EVICTED and reporting a violation.
+     * duration, forwarding it stamped EVICTED.
      *
-     * Asserts that the record is removed from the buffer, forwarded, and a violation is reported.
+     * Asserts that the record is removed from the buffer and forwarded, stamped EVICTED.
      */
     @Test
     void evictExpiredEvictsRecordsOlderThanTheDuration() {
@@ -398,7 +359,6 @@ class ParsleyEngineTest {
         assertEquals(0, buffer.size(), "a record older than the duration must be evicted");
         assertEquals(1, evicted.size(), "the aged-out record must be forwarded, not dropped");
         assertEquals(CausalResult.EVICTED, resultOf(evicted.get(0)), "the forwarded record must be stamped EVICTED");
-        assertEquals(1, violations.size(), "evicting an aged-out record must report one violation");
     }
 
     /**
@@ -427,7 +387,6 @@ class ParsleyEngineTest {
         engine.evictExpired();
 
         assertEquals(2, buffer.size(), "only the oldest record must be evicted; the two younger ones remain held");
-        assertEquals(1, violations.size(), "exactly one violation must be reported, for the single aged-out record");
         List<Long> remainingOffsets = buffer.entries().stream()
                 .map(e -> e.record().sourceOffset()).sorted().toList();
         assertEquals(List.of(1L, 2L), remainingOffsets, "the two younger records must still be held");
@@ -471,7 +430,7 @@ class ParsleyEngineTest {
         };
         ParsleyEngine<String, String> engine = new ParsleyEngine<>(
                 CausalBufferLimit.ofSize(100),
-                violations::add, CausalFrontier.empty(), frontiers::add, buffer,
+                CausalFrontier.empty(), frontiers::add, buffer,
                 new MockPositionIndex(), capturing);
 
         engine.onRecord(incomingRecord(T2, 0, CausalDependencies.builder().require(new CausalPosition(T1_ID, 0, 3)).build()));
@@ -500,7 +459,7 @@ class ParsleyEngineTest {
         };
         ParsleyEngine<String, String> engine = new ParsleyEngine<>(
                 CausalBufferLimit.ofSize(1),
-                violations::add, CausalFrontier.empty(), frontiers::add, buffer,
+                CausalFrontier.empty(), frontiers::add, buffer,
                 new MockPositionIndex(), capturing);
 
         engine.onRecord(incomingRecord(T2, 0, CausalDependencies.builder().require(new CausalPosition(T1_ID, 0, 99)).build()));
@@ -513,8 +472,8 @@ class ParsleyEngineTest {
      * its self-reference stripped before the admissibility check. After stripping, its
      * effective dependencies are empty, so it is forwarded immediately.
      *
-     * Asserts that the record is forwarded without entering the buffer, no violation is
-     * reported, and the frontier advances through the record.
+     * Asserts that the record is forwarded without entering the buffer, and the frontier
+     * advances through the record.
      */
     @Test
     void forwardImmediatelyWhenOnlySelfDependency() {
@@ -524,7 +483,6 @@ class ParsleyEngineTest {
         processRecord(engine, incomingRecord(T1, 3, CausalDependencies.builder().require(new CausalPosition(T1_ID, 0, 3)).build()));
 
         assertEquals(1, forwarded.size(), "self-dep is stripped → dependencies empty → forwarded immediately");
-        assertTrue(violations.isEmpty(), "self-reference stripping must not produce a violation");
         assertEquals(0, buffer.size(), "self-dep record must never enter the buffer");
         assertEquals(CausalFrontier.empty().observe(new CausalPosition(T1_ID, 0, 3)), engine.frontier(),
                 "frontier must advance through the forwarded record");
@@ -643,13 +601,13 @@ class ParsleyEngineTest {
     // --- helpers --------------------------------------------------------------------------------
 
     private ParsleyEngine<String, String> engineWith(CausalBufferLimit limit) {
-        return new ParsleyEngine<>(limit, violations::add, CausalFrontier.empty(), frontiers::add,
+        return new ParsleyEngine<>(limit, CausalFrontier.empty(), frontiers::add,
                 buffer, new MockPositionIndex(), ParsleyMetrics.NOOP);
     }
 
     private ParsleyEngine<String, String> engineWithClock(CausalBufferLimit limit,
                                                            java.util.function.LongSupplier clock) {
-        return new ParsleyEngine<>(limit, violations::add, CausalFrontier.empty(), frontiers::add,
+        return new ParsleyEngine<>(limit, CausalFrontier.empty(), frontiers::add,
                 buffer, new MockPositionIndex(), ParsleyMetrics.NOOP, clock);
     }
 

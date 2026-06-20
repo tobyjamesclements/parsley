@@ -25,7 +25,6 @@ final class ParsleyProcessorSupplier<KIn, VIn, KOut, VOut>
 
     private final ProcessorSupplier<KIn, VIn, KOut, VOut> userSupplier;
     private final CausalBufferLimit limit;
-    private final CausalViolationHandler onViolation;
     private final Function<String, Serde<KIn>> keySerdeByTopic;
     private final Function<String, Serde<VIn>> valueSerdeByTopic;
     private final String frontierStoreName;
@@ -36,7 +35,6 @@ final class ParsleyProcessorSupplier<KIn, VIn, KOut, VOut>
 
     ParsleyProcessorSupplier(ProcessorSupplier<KIn, VIn, KOut, VOut> userSupplier,
                                       CausalBufferLimit limit,
-                                      CausalViolationHandler onViolation,
                                       Function<String, Serde<KIn>> keySerdeByTopic,
                                       Function<String, Serde<VIn>> valueSerdeByTopic,
                                       String frontierStoreName,
@@ -46,7 +44,6 @@ final class ParsleyProcessorSupplier<KIn, VIn, KOut, VOut>
                                       Map<String, Uuid> topicUuids) {
         this.userSupplier = userSupplier;
         this.limit = limit;
-        this.onViolation = onViolation;
         this.keySerdeByTopic = keySerdeByTopic;
         this.valueSerdeByTopic = valueSerdeByTopic;
         this.frontierStoreName = frontierStoreName;
@@ -59,7 +56,7 @@ final class ParsleyProcessorSupplier<KIn, VIn, KOut, VOut>
     @Override
     public Processor<KIn, VIn, KOut, VOut> get() {
         return new ParsleyProcessor<>(
-                userSupplier.get(), limit, onViolation,
+                userSupplier.get(), limit,
                 new ParsleySerializer<>(new ParsleyResolver<>(keySerdeByTopic, valueSerdeByTopic)),
                 frontierStoreName, bufferStoreName, positionIndexStoreName, frontierListener, topicUuids);
     }

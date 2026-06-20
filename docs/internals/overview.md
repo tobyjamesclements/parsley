@@ -19,9 +19,8 @@ All three share a common set of value types and a single causal engine.
 | `CausalDependencies` | Immutable set of causal requirements stamped by the producer onto each record |
 | `CausalFrontier` | Immutable per-consumer horizon: highest observed offset per (topicId, partition) |
 | `CausalPosition` | A single coordinate: `(topicId, partition, offset)` |
-| `CausalViolation` | Snapshot of a violation: reason, frontier, required dependencies, gap |
-| `CausalViolationReason` | Enum: `MISSING_HEADER`, `UNRESOLVABLE_DEPENDENCIES`, `LIMIT_REACHED` |
-| `CausalViolationAction` | Enum: `FORWARD_UNSAFE`, `DROP`, `DEAD_LETTER` — the per-reason action a policy applies |
+| `CausalResult` | Enum stamped on every forwarded record: `SATISFIED` or `EVICTED` |
+| `CausalBufferLimit` | When to evict held records: `ofDuration`, `ofSize`, `first` |
 
 ### Package-private implementation
 
@@ -36,7 +35,7 @@ All three share a common set of value types and a single causal engine.
 | `ParsleyConsumer` | Poll-based consumer backed by a Streams topology and outbox topic |
 | `ParsleyProducer` | Decorator that stamps `parsley-causal-dependencies` on every send |
 | `ParsleyBufferStore` / `RocksBufferStore` | Durable buffer of held records |
-| `ParsleyWaitIndex` / `RocksWaitIndex` | Secondary index: coordinate -> candidate record IDs |
+| `ParsleyPositionIndex` / `RocksPositionIndex` | Secondary index: coordinate -> candidate record IDs |
 | `ParsleySerializer` | Binary serde for `ParsleyRecord` (buffer store wire format) |
 
 ## End-to-end flow
@@ -52,9 +51,9 @@ Consumer (CausalConsumer path)
     ParsleyProcessor.process(record)
       -> ingest: wrap in ParsleyRecord, embed source coordinates
       -> gate:   ParsleyEngine.onRecord()
-                   satisfied   -> advance frontier, drain cascade
-                   unsatisfied -> buffer (RocksBufferStore) + index (RocksWaitIndex)
-                   no header   -> MISSING_HEADER violation, apply policy
+                   satisfied   -> advance frontier, drain cascade, stamp SATISFIED
+                   unsatisfied -> buffer (RocksBufferStore) + index (RocksPositionIndex)
+                   no header   -> trivially satisfied (empty dependencies), stamp SATISFIED
       -> deliver: for each admitted record
                    stamp frontier onto parsley-causal-dependencies
                    save ORIGINAL_DEPENDENCIES, forward to outbox topic
@@ -77,6 +76,6 @@ CausalProcessorSupplier path (Streams-native)
 ## Further reading
 
 - [Wire format](wire-format.md) — binary layouts for all headers and state stores
-- [The engine](engine.md) — buffer, wait index, drain cascade, eviction
+- [The engine](engine.md) — buffer, position index, drain cascade, eviction
 - [Streams integration](streams.md) — processor init, state store wiring, stamping proxy
 - [Consumer](consumer.md) — outbox pattern, poll() path, frontier merging

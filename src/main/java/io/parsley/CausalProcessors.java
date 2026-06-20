@@ -18,7 +18,6 @@ import java.util.function.Function;
  * builder.stream(List.of("prices", "orders"), Consumed.with(Serdes.String(), orderSerde))
  *        .process(CausalProcessors.builder(userSupplier, CausalBufferLimit.ofDuration(limit))
  *                .serdes(Serdes.String(), orderSerde)
- *                .onViolation(onViolation)
  *                .build())
  *        .to("output-topic");
  * }</pre>
@@ -66,7 +65,6 @@ public final class CausalProcessors {
         private final CausalBufferLimit limit;
         private Function<String, Serde<KIn>> keySerdeByTopic;
         private Function<String, Serde<VIn>> valueSerdeByTopic;
-        private CausalViolationHandler onViolation = violation -> {};
         private String storeName = "parsley";
         private CausalFrontierListener frontierListener = frontier -> {};
         private Map<String, Uuid> topicUuids = Map.of();
@@ -103,18 +101,6 @@ public final class CausalProcessors {
                 Function<String, Serde<VIn>> valueSerdeByTopic) {
             this.keySerdeByTopic = keySerdeByTopic;
             this.valueSerdeByTopic = valueSerdeByTopic;
-            return this;
-        }
-
-        /**
-         * Sets the violation callback, invoked when a record is evicted from the buffer (default:
-         * ignore).
-         *
-         * @param onViolation the violation handler
-         * @return this builder
-         */
-        public Builder<KIn, VIn, KOut, VOut> onViolation(CausalViolationHandler onViolation) {
-            this.onViolation = onViolation;
             return this;
         }
 
@@ -171,7 +157,7 @@ public final class CausalProcessors {
                 throw new IllegalStateException("serdes are required; call serdes(...) or serdesByTopic(...)");
             }
             return new ParsleyProcessorSupplier<>(
-                    userSupplier, limit, onViolation, keySerdeByTopic, valueSerdeByTopic,
+                    userSupplier, limit, keySerdeByTopic, valueSerdeByTopic,
                     storeName + "-frontier", storeName + "-buffer", storeName + "-position-index",
                     frontierListener, topicUuids);
         }

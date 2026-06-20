@@ -55,7 +55,6 @@ public final class CausalConsumers {
         private final CausalBufferLimit limit;
         private final Map<String, Object> consumerConfig;
         private final Map<String, Object> streamsConfig;
-        private CausalViolationHandler onViolation = violation -> {};
         private String storeName = "parsley";
         private ParsleyTopicAdmin topicAdmin = null;
 
@@ -65,17 +64,6 @@ public final class CausalConsumers {
             this.limit = limit;
             this.consumerConfig = consumerConfig;
             this.streamsConfig = streamsConfig;
-        }
-
-        /**
-         * Sets the callback invoked when a record is evicted from the buffer (default: ignore).
-         *
-         * @param onViolation the violation handler
-         * @return this builder
-         */
-        public Builder<K, V> onViolation(CausalViolationHandler onViolation) {
-            this.onViolation = onViolation;
-            return this;
         }
 
         /**
@@ -113,7 +101,7 @@ public final class CausalConsumers {
          */
         public CausalConsumer<K, V> build() {
             return new ParsleyConsumer<>(
-                    topics, limit, onViolation, consumerConfig, streamsConfig, storeName, topicAdmin);
+                    topics, limit, consumerConfig, streamsConfig, storeName, topicAdmin);
         }
     }
 }

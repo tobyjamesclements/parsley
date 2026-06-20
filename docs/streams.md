@@ -15,11 +15,8 @@ ProcessorSupplier<String, Order, String, Enriched> user = new ProcessorSupplier<
 };
 
 CausalProcessorSupplier<String, Order, String, Enriched> causal =
-        CausalProcessors.builder(user,
-                        CausalBufferPolicy.deadLetter(limit))
+        CausalProcessors.builder(user, CausalBufferLimit.ofDuration(limit))
                 .serdes(Serdes.String(), orderSerde)
-                .onViolation(myViolationHandler)
-                .deadLetterSink(dlqSink)
                 .build();
 
 builder.stream(List.of("prices", "orders"), Consumed.with(Serdes.String(), orderSerde))
@@ -33,7 +30,7 @@ directly.
 
 ## Preconditions
 
-Three preconditions apply before the guarantee holds:
+Two preconditions apply before the guarantee holds:
 
 **1. Closed effects.** Your `Processor.process()` must produce all side effects through
 `ProcessorContext.forward()`. Any effect that escapes the processor (a direct database write, an
@@ -44,10 +41,10 @@ confirmed.
 instance owns the complete partition set for a related group. See
 [Co-partitioning](concepts.md#co-partitioning) in Concepts.
 
-**3. Policy acceptance.** The `forwardUnsafe` policy preserves delivery under sustained lag by
-forwarding unsatisfied records out-of-order. The guarantee holds for every *admitted* record under
-any policy, and for every record under a strict policy (`drop` or `deadLetter`). Choose the policy
-that matches your application's tolerance for out-of-order delivery vs. potential message loss.
+The guarantee holds for every record stamped `SATISFIED`. A record stamped `EVICTED` — the
+configured `CausalBufferLimit` fired before its dependencies were satisfied — is forwarded anyway;
+check `CausalResult.fromRecord(record)` in your own `process()` if your application needs to react
+to that case.
 
 ## Restart and recovery
 
@@ -64,5 +61,5 @@ The causal buffer and frontier are stored in durable state stores. On restart or
   topics, or multiple partitions on one instance). With a single partition from a single topic,
   Kafka already gives total order and Parsley only adds overhead.
 - Sustained buffer growth (records being held without release) suggests a lagging partition or a
-  co-partitioning issue. Each `CausalViolation` reported via `CausalViolationHandler` includes the
-  causal gap, which identifies the specific coordinate that was missing at eviction time.
+  co-partitioning issue. Each eviction is logged with the causal gap, which identifies the specific
+  coordinate that was missing at eviction time.

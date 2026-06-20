@@ -29,9 +29,9 @@
  *       before forwarding it anyway: {@code ofDuration}, {@code ofSize}, or {@code first}</li>
  *   <li>{@link io.parsley.CausalResult} &mdash; stamped on every record under the
  *       {@code parsley-causal-result} header: {@code SATISFIED} (delivered with its causal
- *       dependencies intact) or {@code EVICTED} (the buffer limit fired first)</li>
- *   <li>{@link io.parsley.CausalViolationHandler} &mdash; eviction callback, handed a
- *       {@link io.parsley.CausalViolation} carrying the causal gap</li>
+ *       dependencies intact) or {@code EVICTED} (the buffer limit fired first, logged with the
+ *       causal gap); read it with {@link io.parsley.CausalResult#fromRecord} to react in your own
+ *       {@code process()}/{@code poll()}</li>
  *   <li>{@link io.parsley.CausalFrontierListener} &mdash; frontier-advance callback, the public way to
  *       observe causal progress out of a {@link io.parsley.CausalProcessorSupplier}</li>
  * </ul>

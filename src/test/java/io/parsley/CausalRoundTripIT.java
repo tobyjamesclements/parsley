@@ -25,7 +25,6 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
-import java.util.concurrent.CopyOnWriteArrayList;
 
 import static org.awaitility.Awaitility.await;
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -116,29 +115,24 @@ class CausalRoundTripIT {
 
     /**
      * A record with no causal-dependencies header (sent by a plain, non-Parsley producer) is
-     * delivered like any other record — trivially satisfied, never buffered or violated — and the
-     * user's {@link CausalViolationHandler} is never invoked, since no eviction ever occurred.
+     * delivered like any other record — trivially satisfied, never buffered.
      *
      * <p>A plain {@link org.apache.kafka.clients.producer.KafkaProducer} sends a record with no
      * Parsley header, which the engine treats as {@link CausalDependencies#empty()}.
      *
-     * Asserts that the record is delivered, stamped {@code CausalResult.SATISFIED}, and that the
-     * violation handler is never called.
+     * Asserts that the record is delivered, stamped {@code CausalResult.SATISFIED}.
      */
     @Test
-    void recordWithMissingDependencyHeaderIsDeliveredAsSatisfiedWithoutViolation() throws Exception {
+    void recordWithMissingDependencyHeaderIsDeliveredAsSatisfied() throws Exception {
         String bootstrap = kafka.getBootstrapServers();
         String topic = "no-deps-events";
         createTopic(bootstrap, topic);
-
-        List<CausalViolation> violations = new CopyOnWriteArrayList<>();
 
         try (CausalConsumer<String, String> consumer = CausalConsumers.<String, String>builder(
                 List.of(topic),
                 CausalBufferLimit.ofDuration(Duration.ofSeconds(5)),
                 Map.of(ConsumerConfig.GROUP_ID_CONFIG, "rt-" + UUID.randomUUID()),
                 streamsConfig(bootstrap))
-                .onViolation(violations::add)
                 .build()) {
 
             try (KafkaProducer<String, String> raw = new KafkaProducer<>(Map.of(
@@ -156,10 +150,6 @@ class CausalRoundTripIT {
             assertEquals(List.of("no-deps"), received.stream().map(ConsumerRecord::value).toList());
             assertEquals(Optional.of(CausalResult.SATISFIED), CausalResult.fromRecord(received.get(0)),
                     "a record with no dependency claim is trivially satisfied");
-
-            // Give any (unexpected) async violation dispatch a moment to land before asserting absence.
-            Thread.sleep(200);
-            assertTrue(violations.isEmpty(), "a missing dependency header must never produce a violation");
         }
     }
 
@@ -167,19 +157,17 @@ class CausalRoundTripIT {
      * A record whose dependency is never satisfied is buffered until the configured
      * {@link CausalBufferLimit} fires, then forcibly evicted — but, per the always-forward model,
      * it is still delivered via {@link CausalConsumer#poll}, just stamped
-     * {@code CausalResult.EVICTED} instead of {@code SATISFIED}. The user's
-     * {@link CausalViolationHandler} is invoked, and a custom state-store name is honoured for the
-     * frontier store backing it.
+     * {@code CausalResult.EVICTED} instead of {@code SATISFIED}. A custom state-store name is
+     * honoured for the frontier store backing it.
      *
      * <p>A {@link CausalProducer} sends a record depending on an offset that never arrives, so it
      * buffers until the short duration limit fires.
      *
-     * Asserts that the record is still delivered via {@code poll()}, stamped {@code EVICTED}, that
-     * the violation handler — not the built-in no-op — was invoked, and that the frontier under the
-     * custom store name advanced.
+     * Asserts that the record is still delivered via {@code poll()}, stamped {@code EVICTED}, and
+     * that the frontier under the custom store name advanced.
      */
     @Test
-    void customStoreNameAndViolationHandlerAreHonouredOnEviction() throws Exception {
+    void customStoreNameIsHonouredOnEviction() throws Exception {
         String bootstrap = kafka.getBootstrapServers();
         String topic = "limit-events";
         createTopic(bootstrap, topic);
@@ -187,8 +175,6 @@ class CausalRoundTripIT {
         Uuid upstreamTopicId = CausalPosition.deriveUuid("never-produced-upstream");
         CausalDependencies producerDeps = CausalDependencies.builder()
                 .require(new CausalPosition(upstreamTopicId, 0, 5L)).build();
-
-        List<CausalViolation> violations = new CopyOnWriteArrayList<>();
 
         try (CausalProducer<String, String> producer = CausalProducers.<String, String>builder(Map.of(
                 ProducerConfig.BOOTSTRAP_SERVERS_CONFIG, bootstrap,
@@ -200,7 +186,6 @@ class CausalRoundTripIT {
                      Map.of(ConsumerConfig.GROUP_ID_CONFIG, "rt-" + UUID.randomUUID()),
                      streamsConfig(bootstrap))
                      .topicAdmin(new MockAdminClient())
-                     .onViolation(violations::add)
                      .storeName("custom-store")
                      .build()) {
 
@@ -216,7 +201,6 @@ class CausalRoundTripIT {
                     "an evicted record must still be delivered, never dropped");
             assertEquals(Optional.of(CausalResult.EVICTED), CausalResult.fromRecord(received.get(0)),
                     "an evicted record must be stamped EVICTED");
-            assertFalse(violations.isEmpty(), "the user-supplied violation handler must be invoked on eviction");
             assertFalse(consumer.frontier().positions().isEmpty(), "frontier under the custom store name advanced");
         }
     }

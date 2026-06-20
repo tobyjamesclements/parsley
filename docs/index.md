@@ -30,8 +30,8 @@ Every message carries the producer's **causal dependencies** as a header. When a
 consumer checks whether its **frontier** already satisfies those dependencies; if so it forwards
 immediately, otherwise it holds the message in a **causal buffer** until the frontier catches up.
 
-If the frontier never catches up, a configurable **buffering policy** forwards out-of-order, drops,
-or dead-letters the record — reporting a `CausalViolation` in each case.
+If the frontier never catches up, the configured `CausalBufferLimit` fires and the record is
+forwarded anyway, stamped `EVICTED` instead of `SATISFIED`.
 
 The library is a single jar with three entry points, sharing a common vocabulary of value types:
 
@@ -43,8 +43,8 @@ The library is a single jar with three entry points, sharing a common vocabulary
 
 ## Where to go next
 
-- [**Concepts**](concepts.md) — causal dependencies, frontiers, the buffer, violation policies
+- [**Concepts**](concepts.md) — causal dependencies, frontiers, the buffer, always-forward delivery
 - [**Getting started**](getting-started.md) — dependency setup, producer, and consumer examples
 - [**Streams integration**](streams.md) — wrapping a `Processor`, preconditions, recovery
-- [**Configuration**](configuration.md) — limits, policies, violation handler, DLQ headers
+- [**Configuration**](configuration.md) — buffer limits, `CausalResult`, header size
 - [**API reference**](api/index.html) — full Javadoc

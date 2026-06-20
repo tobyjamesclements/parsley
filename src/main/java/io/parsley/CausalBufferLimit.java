@@ -14,8 +14,7 @@ import java.util.List;
  * </ul>
  *
  * <p>When a limit fires, the evicted record is always forwarded to the user's processor — Parsley
- * never drops a record — stamped {@link CausalResult#EVICTED} and reported via
- * {@link CausalViolationHandler}.
+ * never drops a record — stamped {@link CausalResult#EVICTED} and logged with the causal gap.
  */
 public sealed interface CausalBufferLimit permits ParsleyDurationLimit, ParsleySizeLimit, ParsleyFirstLimit {
 

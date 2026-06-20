@@ -27,8 +27,7 @@ import static java.nio.charset.StandardCharsets.UTF_8;
  *
  * <p>The engine also owns limit-driven eviction: when a {@link CausalBufferLimit} fires it
  * surrenders the oldest buffered records needed to satisfy the limit, forwards them stamped
- * {@link CausalResult#EVICTED}, and reports a {@link CausalViolation} (with the causal gap) for
- * each via {@link CausalViolationHandler}.
+ * {@link CausalResult#EVICTED}, and logs the causal gap for each.
  *
  * <p><strong>Frontier persistence ordering:</strong> the {@link FrontierCallback} fires for
  * every frontier advancement <em>before</em> the corresponding record is returned for
@@ -59,7 +58,6 @@ final class ParsleyEngine<K, V> {
     private record ParsleyPartition(Uuid topicId, int partition) {}
 
     private final CausalBufferLimit limit;
-    private final CausalViolationHandler violationHandler;
     private final ParsleyBufferStore<K, V> buffer;
     private final ParsleyPositionIndex positionIndex;
     private final FrontierCallback frontierListener;
@@ -71,18 +69,16 @@ final class ParsleyEngine<K, V> {
     private Duration evictionInterval;
 
     ParsleyEngine(CausalBufferLimit limit,
-                 CausalViolationHandler violationHandler,
                  CausalFrontier initialFrontier,
                  FrontierCallback frontierListener,
                  ParsleyBufferStore<K, V> buffer,
                  ParsleyPositionIndex positionIndex,
                  ParsleyMetrics metrics) {
-        this(limit, violationHandler, initialFrontier, frontierListener, buffer, positionIndex,
+        this(limit, initialFrontier, frontierListener, buffer, positionIndex,
                 metrics, System::currentTimeMillis);
     }
 
     ParsleyEngine(CausalBufferLimit limit,
-                 CausalViolationHandler violationHandler,
                  CausalFrontier initialFrontier,
                  FrontierCallback frontierListener,
                  ParsleyBufferStore<K, V> buffer,
@@ -90,7 +86,6 @@ final class ParsleyEngine<K, V> {
                  ParsleyMetrics metrics,
                  LongSupplier clock) {
         this.limit = limit;
-        this.violationHandler = violationHandler;
         this.frontier = initialFrontier;
         this.frontierListener = frontierListener;
         this.buffer = buffer;
@@ -323,12 +318,9 @@ final class ParsleyEngine<K, V> {
     }
 
     private void reportEviction(ParsleyRecord<K, V> record, CausalDependencies required) {
-        CausalViolation violation = new CausalViolation(
-                record.toConsumerRecord(), frontier, required, required.findMissing(frontier));
         log.warn("Causal violation [EVICTED on {}-{} @{}] gap: {}",
                 record.sourcePartition().topic(), record.sourcePartition().partition(),
-                record.sourceOffset(), violation.gap());
-        violationHandler.onViolation(violation);
+                record.sourceOffset(), required.findMissing(frontier));
         metrics.recordViolation();
     }
 

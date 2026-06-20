@@ -47,7 +47,6 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
 
     private final Processor<KIn, VIn, KOut, VOut> delegate;
     private final CausalBufferLimit limit;
-    private final CausalViolationHandler onViolation;
     private final ParsleySerializer<KIn, VIn> serializer;
     private final String frontierStoreName;
     private final String bufferStoreName;
@@ -73,7 +72,6 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
 
     ParsleyProcessor(Processor<KIn, VIn, KOut, VOut> delegate,
                      CausalBufferLimit limit,
-                     CausalViolationHandler onViolation,
                      ParsleySerializer<KIn, VIn> serializer,
                      String frontierStoreName,
                      String bufferStoreName,
@@ -82,7 +80,6 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
                      Map<String, Uuid> topicUuids) {
         this.delegate = delegate;
         this.limit = limit;
-        this.onViolation = onViolation;
         this.serializer = serializer;
         this.frontierStoreName = frontierStoreName;
         this.bufferStoreName = bufferStoreName;
@@ -124,7 +121,7 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
 
         ParsleyMetrics metrics = buildMetrics(context);
 
-        this.engine = new ParsleyEngine<>(limit, onViolation, initialFrontier,
+        this.engine = new ParsleyEngine<>(limit, initialFrontier,
                 listener, buffer, positionIndex, metrics, context::currentSystemTimeMs);
 
         ProcessorContext<KOut, VOut> stamping = new ParsleyProcessorContext<>(

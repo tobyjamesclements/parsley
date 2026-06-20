@@ -2,8 +2,8 @@
 
 ## Buffer limits
 
-A `CausalBufferLimit` bounds how large or how long-lived the causal buffer may grow before the
-policy fires.
+A `CausalBufferLimit` bounds how large or how long-lived the causal buffer may grow before
+eviction fires.
 
 ### Size limit
 
@@ -45,97 +45,26 @@ backstop.
 
 ---
 
-## Buffer policies
+## Always-forward delivery
 
-A `CausalBufferPolicy` pairs a limit with a handling strategy for evicted records via a
-`CausalViolationAction` (`FORWARD_UNSAFE`, `DROP`, or `DEAD_LETTER`). Every policy reports a
-`CausalViolation` for each evicted record.
-
-The policy applies to all three violation reasons: records evicted when a limit fires
-(`LIMIT_REACHED`) and records that arrive with missing or corrupt dependency headers
-(`MISSING_HEADER`, `UNRESOLVABLE_DEPENDENCIES`). The frontier always advances for violation
-records regardless of policy, so buffered records waiting on that coordinate are not permanently
-stalled.
-
-### Forward unsafe
+Parsley never drops or diverts a record — there is no policy to configure for what happens on
+eviction. Every record reaches the user's `process()`/`poll()` exactly once, stamped under the
+`parsley-causal-result` header:
 
 ```java
-CausalBufferPolicy.forwardUnsafe(limit)
+CausalResult.fromRecord(record)  // Optional<CausalResult>: SATISFIED or EVICTED
 ```
 
-Forwards violation records out-of-order. Lenient: delivery is always preserved; causal ordering
-is suspended for the violating record.
+`SATISFIED` means the frontier had observed the record's dependencies by delivery time. `EVICTED`
+means the configured `CausalBufferLimit` fired before that happened, and the record was forwarded
+anyway. The frontier always advances on delivery, so buffered records waiting on that coordinate
+are not permanently stalled.
 
-### Drop
-
-```java
-CausalBufferPolicy.drop(limit)
-```
-
-Discards violation records entirely. Strict: no out-of-order delivery, but records are lost.
-
-### Dead letter
-
-```java
-CausalBufferPolicy.deadLetter(limit)
-```
-
-Routes violation records to a dead-letter sink you provide. Strict: no out-of-order delivery.
-Each routed record receives three additional headers:
-
-| Header | Content |
-|---|---|
-| `parsley-dlq-reason` | Violation reason (`LIMIT_REACHED`, `MISSING_HEADER`, or `UNRESOLVABLE_DEPENDENCIES`) (UTF-8) |
-| `parsley-dlq-required-dependencies` | The required `CausalDependencies` (serialised; empty for header violations) |
-| `parsley-dlq-gap` | The per-coordinate shortfall (serialised as `CausalDependencies`; empty for header violations) |
-
-The reason and gap headers allow an operator to distinguish eviction from header violations and
-reconstruct exactly which offsets were missing at eviction time.
-
-### Per-violation-type policy
-
-The convenience factories above apply the same action to every violation reason. The builder lets
-each reason carry its own `CausalViolationAction`:
-
-```java
-CausalBufferPolicy policy = CausalBufferPolicy.builder()
-        .onMissing(CausalViolationAction.FORWARD_UNSAFE)      // tolerate legacy (non-Parsley) producers
-        .onUnresolvable(CausalViolationAction.DROP)            // corrupt header → discard
-        .onLimit(CausalViolationAction.DEAD_LETTER)            // buffer overflow → DLQ
-        .setLimit(CausalBufferLimit.ofSize(1000))
-        .build();
-```
-
-All four settings (`onMissing`, `onUnresolvable`, `onLimit`, `setLimit`) are required; `build()`
-throws `IllegalStateException` if any are omitted. A dead-letter sink is required if any action
-is `DEAD_LETTER`, and forbidden otherwise.
-
-See [Migration](migration.md) for the typical use of this builder when integrating Parsley with
-an existing cluster.
-
----
-
-## Violation handler
-
-```java
-CausalProcessors.builder(user, policy)
-        .onViolation(violation -> myMetrics.increment("causal.violations",
-                "reason", violation.reason().name()))
-        ...
-```
-
-`CausalViolationHandler` receives a `CausalViolation` for every record that cannot be delivered
-in causal order. The violation includes:
-
-- `reason()` — `MISSING_HEADER`, `UNRESOLVABLE_DEPENDENCIES`, or `LIMIT_REACHED`
-- `frontier()` — the consumer's frontier at the time of the violation
-- `required()` — the dependencies the record carried (empty for `MISSING_HEADER`/`UNRESOLVABLE_DEPENDENCIES`)
-- `gap()` — per-coordinate shortfall list (empty if already above the frontier)
-- `record()` — the underlying `ConsumerRecord`
-
-The default handler logs at `WARN` level. Override it to integrate with your own metrics or
-alerting system. Violations are expected under sustained lag or misconfiguration — their presence
-is not an error in isolation, but their *frequency* and *gap size* are the key signals to watch.
+There is no separate violation callback to configure — react to an `EVICTED` delivery by checking
+the header in your own `process()`/`poll()` code (custom metrics, alerting, routing to your own
+dead-letter sink, etc.). Parsley itself logs every eviction at `WARN` with the causal gap (the
+per-coordinate shortfall between what was required and what the frontier had observed) and counts
+it via its eviction metric — useful for diagnosis, not for programmatic reaction.
 
 ---
 
