@@ -320,6 +320,17 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
+  <a href="#motivation" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Motivation
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#the-problem" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -798,6 +809,17 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
+  <a href="#motivation" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Motivation
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#the-problem" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -854,6 +876,10 @@
 <p>Causal consistency for Kafka — producers that encode causal dependencies onto every message,
 consumers that deliver multiple topics in causal order, and Kafka Streams topologies built from
 causally consistent processors.</p>
+<h2 id="motivation">Motivation</h2>
+<p>As event streaming systems increasingly derive decisions from events across multiple topics, Kafka's per-partition ordering guarantees may not be enough.</p>
+<p>Consider a stream processor processing order and discount events from different topics. The processor may process an order event before processing the discount event that was the premise upon which the order was placed. The discount event is said to have happened before the order event. A causally consistent order of events would respect this relationship and delay the processing of the order event until the discount event had been processed.</p>
+<p>Parsley provides causal producers, consumers and Kafka Streams processors that automatically track the happens-before relationship between events and deliver them in a causally consistent order, regardless of how many topics are involved.</p>
 <h2 id="the-problem">The problem</h2>
 <p>A consumer reads a price from <code>prices-0</code> at offset 27 and, on that basis, produces an order to
 <code>orders</code>. A downstream consumer of <code>orders</code> processes that order while its own <code>prices</code> consumer is
