@@ -4,6 +4,14 @@ Causal consistency for Kafka — producers that encode causal dependencies onto 
 consumers that deliver multiple topics in causal order, and Kafka Streams topologies built from
 causally consistent processors.
 
+## Motivation
+
+As event streaming systems increasingly derive decisions from events across multiple topics, Kafka's per-partition ordering guarantees may not be enough.
+
+Consider a stream processor processing order and discount events from different topics. The processor may process an order event before processing the discount event that was the premise upon which the order was placed. The discount event is said to have happened before the order event. A causally consistent order of events would respect this relationship and delay the processing of the order event until the discount event had been processed.
+
+Parsley provides causal producers, consumers and Kafka Streams processors that automatically track the happens-before relationship between events and deliver them in a causally consistent order, regardless of how many topics are involved.
+
 ## The problem
 
 A consumer reads a price from `prices-0` at offset 27 and, on that basis, produces an order to
