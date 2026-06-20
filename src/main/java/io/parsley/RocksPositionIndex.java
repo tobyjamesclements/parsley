@@ -9,7 +9,7 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * A {@link ParsleyWaitIndex} backed by a changelog-replicated Kafka {@link KeyValueStore}.
+ * A {@link ParsleyPositionIndex} backed by a changelog-replicated Kafka {@link KeyValueStore}.
  *
  * <h2>Key layout (36 bytes, all fields big-endian)</h2>
  * <pre>
@@ -24,14 +24,14 @@ import java.util.List;
  * reflects natural numeric order. A range scan of the form "coordinate C, requiredOffset ≤ N"
  * becomes {@code store.range(key(C, 0, 0), key(C, N, Long.MAX_VALUE))}.
  */
-final class RocksWaitIndex implements ParsleyWaitIndex {
+final class RocksPositionIndex implements ParsleyPositionIndex {
 
     private static final byte[] PRESENT = new byte[0];
     private static final int KEY_SIZE = 36;
 
     private final KeyValueStore<byte[], byte[]> store;
 
-    RocksWaitIndex(KeyValueStore<byte[], byte[]> store) {
+    RocksPositionIndex(KeyValueStore<byte[], byte[]> store) {
         this.store = store;
     }
 

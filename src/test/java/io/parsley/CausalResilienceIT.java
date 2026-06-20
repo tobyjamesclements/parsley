@@ -50,7 +50,7 @@ class CausalResilienceIT {
      * {@code applicationId}) and drained correctly once the dependency arrives.
      *
      * <p>This exercises the full state-store changelog restoration path and the
-     * {@link ParsleyEngine} ParsleyWaitIndex re-seeding from the restored buffer.
+     * {@link ParsleyEngine} ParsleyPositionIndex re-seeding from the restored buffer.
      *
      * <p>Both the producer and the consumer use the same name-derived UUID for PRICES (via
      * {@link MockAdminClient} and {@link CausalPosition#deriveUuid}), so the stamped dependencies
@@ -62,7 +62,7 @@ class CausalResilienceIT {
         createTopic(bootstrap, PRICES, 1);
         createTopic(bootstrap, ORDERS, 1);
 
-        // Fixed applicationId so Kafka Streams restores the frontier, buffer, and wait-index
+        // Fixed applicationId so Kafka Streams restores the frontier, buffer, and position-index
         // state stores from their changelog topics when consumer-2 starts.
         String appId = "resilience-restart-app";
 
@@ -93,8 +93,8 @@ class CausalResilienceIT {
         }
 
         // Phase 2: new consumer, same applicationId — Kafka Streams restores all three state
-        // stores (frontier, buffer, wait-index) from changelog. The ParsleyEngine constructor
-        // re-seeds the ParsleyWaitIndex from the restored buffer in an O(n) pass.
+        // stores (frontier, buffer, position-index) from changelog. The ParsleyEngine constructor
+        // re-seeds the ParsleyPositionIndex from the restored buffer in an O(n) pass.
         List<ConsumerRecord<String, String>> phase2 = new ArrayList<>();
         try (CausalConsumer<String, String> consumer2 =
                      CausalConsumers.<String, String>builder(

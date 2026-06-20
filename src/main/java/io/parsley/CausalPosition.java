@@ -5,9 +5,9 @@ import org.apache.kafka.common.Uuid;
 import java.nio.charset.StandardCharsets;
 
 /**
- * A neutral coordinate in the causal log: a topic (identified by its Kafka UUID), a partition, and
- * an offset. The same type serves as a frontier entry ("I have observed this far") and as a
- * dependency entry ("I require at least this position").
+ * A position in the causal log: a topic-partition (a topic, identified by its Kafka UUID, and a
+ * partition) plus an offset. The same type serves as a frontier entry ("I have observed this far")
+ * and as a dependency entry ("I require at least this position").
  *
  * <p>Topic UUIDs are the stable identity key across topic deletion and recreation. Use
  * {@link #deriveUuid(String)} to derive a deterministic UUID from a topic name when no live

@@ -46,11 +46,9 @@ public final class CausalDependencies {
     /** Leading byte of the wire format; shared with {@link CausalFrontier}. */
     private static final byte WIRE_VERSION = 1;
 
-    private record Key(Uuid topicId, int partition) {}
+    private final Map<ParsleyPartition, Long> required; // always immutable
 
-    private final Map<Key, Long> required; // always immutable
-
-    private CausalDependencies(Map<Key, Long> required) {
+    private CausalDependencies(Map<ParsleyPartition, Long> required) {
         this.required = required; // already immutable (Map.copyOf called by callers)
     }
 
@@ -76,7 +74,7 @@ public final class CausalDependencies {
      * Builder for {@link CausalDependencies}.
      */
     public static final class Builder {
-        private final Map<Key, Long> required = new HashMap<>();
+        private final Map<ParsleyPartition, Long> required = new HashMap<>();
 
         private Builder() {}
 
@@ -89,7 +87,7 @@ public final class CausalDependencies {
          * @return this builder
          */
         public Builder require(CausalPosition position) {
-            required.merge(new Key(position.topicId(), position.partition()), position.offset(), Math::max);
+            required.merge(new ParsleyPartition(position.topicId(), position.partition()), position.offset(), Math::max);
             return this;
         }
 
@@ -126,7 +124,7 @@ public final class CausalDependencies {
      * @return {@code true} if the frontier satisfies these dependencies
      */
     public boolean isSatisfiedBy(CausalFrontier frontier) {
-        for (Map.Entry<Key, Long> entry : required.entrySet()) {
+        for (Map.Entry<ParsleyPartition, Long> entry : required.entrySet()) {
             if (frontier.offsetFor(entry.getKey().topicId(), entry.getKey().partition()) < entry.getValue()) {
                 return false;
             }
@@ -146,7 +144,7 @@ public final class CausalDependencies {
      */
     public List<CausalPosition> findMissing(CausalFrontier frontier) {
         List<CausalPosition> gap = new ArrayList<>();
-        for (Map.Entry<Key, Long> entry : required.entrySet()) {
+        for (Map.Entry<ParsleyPartition, Long> entry : required.entrySet()) {
             long req = entry.getValue();
             long obs = frontier.offsetFor(entry.getKey().topicId(), entry.getKey().partition());
             if (obs < req) {
@@ -188,7 +186,7 @@ public final class CausalDependencies {
              DataOutputStream dos = new DataOutputStream(baos)) {
             dos.writeByte(WIRE_VERSION);
             dos.writeInt(required.size());
-            for (Map.Entry<Key, Long> entry : required.entrySet()) {
+            for (Map.Entry<ParsleyPartition, Long> entry : required.entrySet()) {
                 dos.writeLong(entry.getKey().topicId().getMostSignificantBits());
                 dos.writeLong(entry.getKey().topicId().getLeastSignificantBits());
                 dos.writeInt(entry.getKey().partition());
@@ -215,13 +213,13 @@ public final class CausalDependencies {
                         "unsupported CausalDependencies wire version: " + version + " (expected " + WIRE_VERSION + ")");
             }
             int count = dis.readInt();
-            Map<Key, Long> map = new HashMap<>(count);
+            Map<ParsleyPartition, Long> map = new HashMap<>(count);
             for (int i = 0; i < count; i++) {
                 long msb = dis.readLong();
                 long lsb = dis.readLong();
                 int partition = dis.readInt();
                 long offset = dis.readLong();
-                map.put(new Key(new Uuid(msb, lsb), partition), offset);
+                map.put(new ParsleyPartition(new Uuid(msb, lsb), partition), offset);
             }
             return new CausalDependencies(Map.copyOf(map));
         } catch (IOException e) {

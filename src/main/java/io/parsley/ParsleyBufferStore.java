@@ -35,7 +35,7 @@ interface ParsleyBufferStore<K, V> {
 
     /**
      * Returns the buffered entry for the given insertion sequence, or {@code null} if no such
-     * entry exists. Used by the drain path to verify that a wait-index candidate is still in the
+     * entry exists. Used by the drain path to verify that a position-index candidate is still in the
      * buffer before attempting release.
      *
      * @param sequence the sequence of an entry previously returned by {@link #add}

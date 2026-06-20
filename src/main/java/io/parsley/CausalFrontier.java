@@ -34,11 +34,9 @@ public final class CausalFrontier {
     /** Leading byte of the wire format; shared with {@link CausalDependencies}. */
     static final byte WIRE_VERSION = 1;
 
-    private record Key(Uuid topicId, int partition) {}
+    private final Map<ParsleyPartition, Long> offsetFor; // always immutable
 
-    private final Map<Key, Long> offsetFor; // always immutable
-
-    private CausalFrontier(Map<Key, Long> offsetFor) {
+    private CausalFrontier(Map<ParsleyPartition, Long> offsetFor) {
         this.offsetFor = offsetFor; // already immutable (Map.copyOf called by callers)
     }
 
@@ -58,8 +56,8 @@ public final class CausalFrontier {
      * @return a new {@code CausalFrontier} with the updated position
      */
     public CausalFrontier observe(CausalPosition pos) {
-        Map<Key, Long> next = new HashMap<>(offsetFor);
-        next.merge(new Key(pos.topicId(), pos.partition()), pos.offset(), Math::max);
+        Map<ParsleyPartition, Long> next = new HashMap<>(offsetFor);
+        next.merge(new ParsleyPartition(pos.topicId(), pos.partition()), pos.offset(), Math::max);
         return new CausalFrontier(Map.copyOf(next));
     }
 
@@ -70,7 +68,7 @@ public final class CausalFrontier {
      * @return a new {@code CausalFrontier} dominating both operands
      */
     public CausalFrontier merge(CausalFrontier other) {
-        Map<Key, Long> merged = new HashMap<>(offsetFor);
+        Map<ParsleyPartition, Long> merged = new HashMap<>(offsetFor);
         other.offsetFor.forEach((k, v) -> merged.merge(k, v, Math::max));
         return new CausalFrontier(Map.copyOf(merged));
     }
@@ -107,7 +105,7 @@ public final class CausalFrontier {
      * {@link CausalDependencies#isSatisfiedBy}.
      */
     long offsetFor(Uuid topicId, int partition) {
-        return offsetFor.getOrDefault(new Key(topicId, partition), -1L);
+        return offsetFor.getOrDefault(new ParsleyPartition(topicId, partition), -1L);
     }
 
     /**
@@ -132,7 +130,7 @@ public final class CausalFrontier {
              DataOutputStream dos = new DataOutputStream(baos)) {
             dos.writeByte(WIRE_VERSION);
             dos.writeInt(offsetFor.size());
-            for (Map.Entry<Key, Long> e : offsetFor.entrySet()) {
+            for (Map.Entry<ParsleyPartition, Long> e : offsetFor.entrySet()) {
                 dos.writeLong(e.getKey().topicId().getMostSignificantBits());
                 dos.writeLong(e.getKey().topicId().getLeastSignificantBits());
                 dos.writeInt(e.getKey().partition());
@@ -159,13 +157,13 @@ public final class CausalFrontier {
                         "unsupported CausalFrontier wire version: " + version + " (expected " + WIRE_VERSION + ")");
             }
             int count = dis.readInt();
-            Map<Key, Long> map = new HashMap<>(count);
+            Map<ParsleyPartition, Long> map = new HashMap<>(count);
             for (int i = 0; i < count; i++) {
                 long msb = dis.readLong();
                 long lsb = dis.readLong();
                 int partition = dis.readInt();
                 long offset = dis.readLong();
-                map.put(new Key(new Uuid(msb, lsb), partition), offset);
+                map.put(new ParsleyPartition(new Uuid(msb, lsb), partition), offset);
             }
             return new CausalFrontier(Map.copyOf(map));
         } catch (IOException ex) {

@@ -590,7 +590,7 @@ class ParsleyEngineTest {
         ParsleyEngine<String, String> engine = new ParsleyEngine<>(
                 CausalBufferPolicy.drop(CausalBufferLimit.ofSize(100)),
                 violations::add, CausalFrontier.empty(), null, frontiers::add, buffer,
-                new MockWaitIndex(), capturing);
+                new MockPositionIndex(), capturing);
 
         engine.onRecord(incomingRecord(T2, 0, CausalDependencies.builder().require(new CausalPosition(T1_ID, 0, 3)).build()));
         assertEquals(List.of(1), bufferedDepths, "recordBuffered must fire with the new buffer depth");
@@ -619,7 +619,7 @@ class ParsleyEngineTest {
         ParsleyEngine<String, String> engine = new ParsleyEngine<>(
                 CausalBufferPolicy.drop(CausalBufferLimit.ofSize(1)),
                 violations::add, CausalFrontier.empty(), null, frontiers::add, buffer,
-                new MockWaitIndex(), capturing);
+                new MockPositionIndex(), capturing);
 
         engine.onRecord(incomingRecord(T2, 0, CausalDependencies.builder().require(new CausalPosition(T1_ID, 0, 99)).build()));
 
@@ -868,13 +868,13 @@ class ParsleyEngineTest {
     private ParsleyEngine<String, String> engineWith(CausalBufferPolicy policy,
                                                       java.util.function.Consumer<ParsleyRecord<String, String>> sink) {
         return new ParsleyEngine<>(policy, violations::add, CausalFrontier.empty(), sink, frontiers::add,
-                buffer, new MockWaitIndex(), ParsleyMetrics.NOOP);
+                buffer, new MockPositionIndex(), ParsleyMetrics.NOOP);
     }
 
     private ParsleyEngine<String, String> engineWithClock(CausalBufferPolicy policy,
                                                            java.util.function.LongSupplier clock) {
         return new ParsleyEngine<>(policy, violations::add, CausalFrontier.empty(), null, frontiers::add,
-                buffer, new MockWaitIndex(), ParsleyMetrics.NOOP, clock);
+                buffer, new MockPositionIndex(), ParsleyMetrics.NOOP, clock);
     }
 
     private List<CausalViolationReason> reasons() {

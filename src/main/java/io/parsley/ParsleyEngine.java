@@ -34,7 +34,7 @@ import static java.nio.charset.StandardCharsets.UTF_8;
  * forwarding, so persisting the frontier in the listener is guaranteed to happen before the
  * record leaves the engine.
  *
- * <p><strong>Drain algorithm:</strong> the engine uses a {@link ParsleyWaitIndex} to avoid a full
+ * <p><strong>Drain algorithm:</strong> the engine uses a {@link ParsleyPositionIndex} to avoid a full
  * buffer scan on every frontier advance. When a coordinate advances, only records indexed on
  * that coordinate are checked for causal satisfaction. The cascade repeats for each newly
  * released record's source coordinate.
@@ -55,13 +55,13 @@ final class ParsleyEngine<K, V> {
         void frontierAdvanced(CausalFrontier frontier);
     }
 
-    private record CoordinateKey(Uuid topicId, int partition) {}
+    private record ParsleyPartition(Uuid topicId, int partition) {}
 
     private final CausalBufferPolicy policy;
     private final CausalViolationHandler violationHandler;
     private final Consumer<ParsleyRecord<K, V>> deadLetterSink;
     private final ParsleyBufferStore<K, V> buffer;
-    private final ParsleyWaitIndex waitIndex;
+    private final ParsleyPositionIndex positionIndex;
     private final FrontierCallback frontierListener;
     private final ParsleyMetrics metrics;
     private final LongSupplier clock;
@@ -76,9 +76,9 @@ final class ParsleyEngine<K, V> {
                  Consumer<ParsleyRecord<K, V>> deadLetterSink,
                  FrontierCallback frontierListener,
                  ParsleyBufferStore<K, V> buffer,
-                 ParsleyWaitIndex waitIndex,
+                 ParsleyPositionIndex positionIndex,
                  ParsleyMetrics metrics) {
-        this(policy, violationHandler, initialFrontier, deadLetterSink, frontierListener, buffer, waitIndex,
+        this(policy, violationHandler, initialFrontier, deadLetterSink, frontierListener, buffer, positionIndex,
                 metrics, System::currentTimeMillis);
     }
 
@@ -88,7 +88,7 @@ final class ParsleyEngine<K, V> {
                  Consumer<ParsleyRecord<K, V>> deadLetterSink,
                  FrontierCallback frontierListener,
                  ParsleyBufferStore<K, V> buffer,
-                 ParsleyWaitIndex waitIndex,
+                 ParsleyPositionIndex positionIndex,
                  ParsleyMetrics metrics,
                  LongSupplier clock) {
         if (policy.requiresDeadLetterSink() && deadLetterSink == null) {
@@ -100,14 +100,14 @@ final class ParsleyEngine<K, V> {
         this.deadLetterSink = deadLetterSink;
         this.frontierListener = frontierListener;
         this.buffer = buffer;
-        this.waitIndex = waitIndex;
+        this.positionIndex = positionIndex;
         this.metrics = metrics;
         this.clock = clock;
         configureLimits(policy.limit());
-        // Populate the wait index for any records already in the buffer (e.g., restored from
+        // Populate the position index for any records already in the buffer (e.g., restored from
         // a state store after a restart). This is a one-time O(n) pass at construction.
         for (ParsleyBufferStore.Entry<K, V> entry : buffer.entries()) {
-            waitIndex.index(entry.sequence(), entry.dependencies(), frontier);
+            positionIndex.index(entry.sequence(), entry.dependencies(), frontier);
         }
     }
 
@@ -151,7 +151,7 @@ final class ParsleyEngine<K, V> {
             drainInto(out, record.sourceTopicId(), record.sourcePartitionIndex());
         } else {
             long seq = buffer.add(record, clock.getAsLong());
-            waitIndex.index(seq, dependencies, frontier);
+            positionIndex.index(seq, dependencies, frontier);
             int depth = buffer.size();
             if (log.isDebugEnabled()) {
                 log.debug("Holding {}-{} @{} (buffer depth: {}, gap: {})",
@@ -258,18 +258,18 @@ final class ParsleyEngine<K, V> {
      * own source coordinate, which may unlock further records.
      */
     private void drainInto(List<ParsleyRecord<K, V>> out, Uuid topicId, int partition) {
-        Set<CoordinateKey> toScan = new HashSet<>();
-        toScan.add(new CoordinateKey(topicId, partition));
+        Set<ParsleyPartition> toScan = new HashSet<>();
+        toScan.add(new ParsleyPartition(topicId, partition));
         int totalReleased = 0;
 
         while (!toScan.isEmpty()) {
             Set<Long> seen = new HashSet<>();
             List<ParsleyBufferStore.Entry<K, V>> releasable = new ArrayList<>();
-            List<ParsleyWaitIndex.Candidate> stale = new ArrayList<>();
+            List<ParsleyPositionIndex.Candidate> stale = new ArrayList<>();
 
-            for (CoordinateKey coord : toScan) {
+            for (ParsleyPartition coord : toScan) {
                 long coordOffset = frontier.offsetFor(coord.topicId(), coord.partition());
-                for (ParsleyWaitIndex.Candidate candidate : waitIndex.findCandidates(coord.topicId(), coord.partition(), coordOffset)) {
+                for (ParsleyPositionIndex.Candidate candidate : positionIndex.findCandidates(coord.topicId(), coord.partition(), coordOffset)) {
                     if (!seen.add(candidate.recordId())) continue;
                     ParsleyBufferStore.Entry<K, V> entry = buffer.get(candidate.recordId());
                     if (entry == null) {
@@ -283,7 +283,7 @@ final class ParsleyEngine<K, V> {
                 }
             }
 
-            stale.forEach(waitIndex::prune);
+            stale.forEach(positionIndex::prune);
             toScan.clear();
 
             if (releasable.isEmpty()) break;
@@ -291,7 +291,7 @@ final class ParsleyEngine<K, V> {
             for (ParsleyBufferStore.Entry<K, V> entry : releasable) {
                 buffer.remove(entry.sequence());
                 advanceFrontier(entry.record());
-                toScan.add(new CoordinateKey(entry.record().sourceTopicId(), entry.record().sourcePartitionIndex()));
+                toScan.add(new ParsleyPartition(entry.record().sourceTopicId(), entry.record().sourcePartitionIndex()));
                 out.add(entry.record());
             }
             totalReleased += releasable.size();
