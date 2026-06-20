@@ -1,9 +1,18 @@
 package io.parsley;
 
+import org.apache.kafka.common.MetricName;
+import org.apache.kafka.common.metrics.Sensor;
+import org.apache.kafka.common.metrics.stats.Value;
+import org.apache.kafka.streams.StreamsMetrics;
+import org.apache.kafka.streams.processor.api.ProcessorContext;
+
+import java.util.List;
+import java.util.Map;
+
 /**
- * Callback interface through which {@link ParsleyEngine} reports observable events. The
- * {@link ParsleyProcessor} wires a Kafka Streams {@link org.apache.kafka.streams.StreamsMetrics}
- * backed implementation; callers that do not need metrics receive {@link #NOOP}.
+ * Callback interface through which {@link ParsleyEngine} reports observable events. Every causal
+ * processor node wires a {@link #wire} backed implementation; callers that do not need metrics
+ * receive {@link #NOOP}.
  */
 interface ParsleyMetrics {
 
@@ -38,4 +47,44 @@ interface ParsleyMetrics {
         @Override public void recordEvicted(int c) {}
         @Override public void recordViolation() {}
     };
+
+    /**
+     * A {@link ParsleyMetrics} implementation bundled with the {@link Sensor}s it registered, so the
+     * owning processor can remove them again on {@code close()}.
+     */
+    record Wired(ParsleyMetrics metrics, List<Sensor> sensors) {
+        void close(StreamsMetrics streamsMetrics) {
+            for (Sensor sensor : sensors) {
+                streamsMetrics.removeSensor(sensor);
+            }
+        }
+    }
+
+    /**
+     * Registers the Kafka Streams {@link Sensor}s backing a {@link ParsleyMetrics} for the task
+     * owning {@code context}, namespaced under {@code "parsley"} and the task ID.
+     */
+    static Wired wire(ProcessorContext<?, ?> context) {
+        StreamsMetrics sm = context.metrics();
+        String taskId = context.taskId().toString();
+
+        Sensor buffered  = sm.addRateTotalSensor("parsley", taskId, "records-buffered",  Sensor.RecordingLevel.INFO);
+        Sensor released  = sm.addRateTotalSensor("parsley", taskId, "records-released",  Sensor.RecordingLevel.INFO);
+        Sensor evicted   = sm.addRateTotalSensor("parsley", taskId, "records-evicted",   Sensor.RecordingLevel.INFO);
+        Sensor violation = sm.addRateTotalSensor("parsley", taskId, "violations",         Sensor.RecordingLevel.INFO);
+
+        Sensor depth = sm.addSensor("parsley-buffer-depth-" + taskId, Sensor.RecordingLevel.INFO);
+        depth.add(new MetricName("buffer-depth", "stream-parsley-metrics",
+                "Current number of records held in the causal buffer",
+                Map.of("parsley-id", taskId)), new Value());
+
+        ParsleyMetrics metrics = new ParsleyMetrics() {
+            @Override public void recordBuffered(int d)       { buffered.record();   depth.record(d); }
+            @Override public void recordReleased(int c, int d){ released.record(c);  depth.record(d); }
+            @Override public void recordEvicted(int c)        { evicted.record(c);   depth.record(0); }
+            @Override public void recordViolation()           { violation.record(); }
+        };
+
+        return new Wired(metrics, List.of(buffered, released, evicted, violation, depth));
+    }
 }

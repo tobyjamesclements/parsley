@@ -2,12 +2,9 @@ package io.parsley;
 
 import org.apache.kafka.common.Uuid;
 import org.apache.kafka.common.serialization.Serde;
-import org.apache.kafka.common.serialization.Serdes;
 import org.apache.kafka.streams.processor.api.Processor;
 import org.apache.kafka.streams.processor.api.ProcessorSupplier;
-import org.apache.kafka.streams.state.KeyValueStore;
 import org.apache.kafka.streams.state.StoreBuilder;
-import org.apache.kafka.streams.state.Stores;
 
 import java.util.HashSet;
 import java.util.Map;
@@ -68,30 +65,9 @@ final class ParsleyProcessorSupplier<KIn, VIn, KOut, VOut>
         if (userStores != null) {
             stores.addAll(userStores);
         }
-        stores.add(byteStore(frontierStoreName));
-        stores.add(bufferStore(bufferStoreName));
-        stores.add(positionIndexStore(positionIndexStoreName));
+        stores.add(ParsleyStores.frontierStore(frontierStoreName));
+        stores.add(ParsleyStores.bufferStore(bufferStoreName));
+        stores.add(ParsleyStores.positionIndexStore(positionIndexStoreName));
         return stores;
-    }
-
-    private static StoreBuilder<KeyValueStore<String, byte[]>> byteStore(String name) {
-        return Stores.keyValueStoreBuilder(
-                Stores.persistentKeyValueStore(name),
-                Serdes.String(),
-                Serdes.ByteArray());
-    }
-
-    private static StoreBuilder<KeyValueStore<Long, byte[]>> bufferStore(String name) {
-        return Stores.keyValueStoreBuilder(
-                Stores.persistentKeyValueStore(name),
-                Serdes.Long(),
-                Serdes.ByteArray());
-    }
-
-    private static StoreBuilder<KeyValueStore<byte[], byte[]>> positionIndexStore(String name) {
-        return Stores.keyValueStoreBuilder(
-                Stores.persistentKeyValueStore(name),
-                Serdes.ByteArray(),
-                Serdes.ByteArray());
     }
 }

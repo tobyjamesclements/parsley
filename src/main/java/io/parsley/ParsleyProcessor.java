@@ -1,11 +1,7 @@
 package io.parsley;
 
-import org.apache.kafka.common.MetricName;
 import org.apache.kafka.common.TopicPartition;
 import org.apache.kafka.common.Uuid;
-import org.apache.kafka.common.metrics.Sensor;
-import org.apache.kafka.common.metrics.stats.Value;
-import org.apache.kafka.streams.StreamsMetrics;
 import org.apache.kafka.streams.processor.Cancellable;
 import org.apache.kafka.streams.processor.PunctuationType;
 import org.apache.kafka.streams.processor.api.Processor;
@@ -64,7 +60,7 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
     private KeyValueStore<Long, byte[]> bufferStore;
     private KeyValueStore<byte[], byte[]> positionIndexStore;
     private ParsleyEngine<KIn, VIn> engine;
-    private List<Sensor> sensorsToClose = List.of();
+    private ParsleyMetrics.Wired wiredMetrics;
     // Read live by the stamping proxy; volatile as belt-and-suspenders (single task thread owns this).
     private volatile CausalFrontier stampFrontier = CausalFrontier.empty();
     private volatile RecordMetadata deliveryMetadata;
@@ -119,10 +115,10 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
         ParsleyBufferStore<KIn, VIn> buffer = new RocksBufferStore<>(bufferStore, serializer);
         ParsleyPositionIndex positionIndex = new RocksPositionIndex(positionIndexStore);
 
-        ParsleyMetrics metrics = buildMetrics(context);
+        this.wiredMetrics = ParsleyMetrics.wire(context);
 
         this.engine = new ParsleyEngine<>(limit, initialFrontier,
-                listener, buffer, positionIndex, metrics, context::currentSystemTimeMs);
+                listener, buffer, positionIndex, wiredMetrics.metrics(), context::currentSystemTimeMs);
 
         ProcessorContext<KOut, VOut> stamping = new ParsleyProcessorContext<>(
                 context, () -> stampFrontier, () -> Optional.ofNullable(deliveryMetadata));
@@ -152,33 +148,7 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
     public void close() {
         log.debug("Processor closing [task: {}]", context.taskId());
         delegate.close();
-        for (Sensor sensor : sensorsToClose) {
-            context.metrics().removeSensor(sensor);
-        }
-    }
-
-    private ParsleyMetrics buildMetrics(ProcessorContext<?, ?> ctx) {
-        StreamsMetrics sm = ctx.metrics();
-        String taskId = ctx.taskId().toString();
-
-        Sensor buffered  = sm.addRateTotalSensor("parsley", taskId, "records-buffered",  Sensor.RecordingLevel.INFO);
-        Sensor released  = sm.addRateTotalSensor("parsley", taskId, "records-released",  Sensor.RecordingLevel.INFO);
-        Sensor evicted   = sm.addRateTotalSensor("parsley", taskId, "records-evicted",   Sensor.RecordingLevel.INFO);
-        Sensor violation = sm.addRateTotalSensor("parsley", taskId, "violations",         Sensor.RecordingLevel.INFO);
-
-        Sensor depth = sm.addSensor("parsley-buffer-depth-" + taskId, Sensor.RecordingLevel.INFO);
-        depth.add(new MetricName("buffer-depth", "stream-parsley-metrics",
-                "Current number of records held in the causal buffer",
-                Map.of("parsley-id", taskId)), new Value());
-
-        sensorsToClose = List.of(buffered, released, evicted, violation, depth);
-
-        return new ParsleyMetrics() {
-            @Override public void recordBuffered(int d)       { buffered.record();   depth.record(d); }
-            @Override public void recordReleased(int c, int d){ released.record(c);  depth.record(d); }
-            @Override public void recordEvicted(int c)        { evicted.record(c);   depth.record(0); }
-            @Override public void recordViolation()           { violation.record(); }
-        };
+        wiredMetrics.close(context.metrics());
     }
 
     private List<ParsleyRecord<KIn, VIn>> gate(ParsleyRecord<KIn, VIn> record) {

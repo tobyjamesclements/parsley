@@ -25,11 +25,4 @@ final class ParsleyAttributes {
     static final String SRC_PARTITION = "_parsley_src_partition";
     /** Internal header: the source offset (8-byte big-endian long) of a record routed through the outbox path. */
     static final String SRC_OFFSET    = "_parsley_src_offset";
-    /**
-     * Internal header: a copy of the producer's original {@link #CAUSAL_DEPENDENCIES} header, saved before
-     * {@link ParsleyProcessorContext} stamps it with the frontier. Restored in
-     * {@code ParsleyConsumer.poll()} so that {@link CausalDependencies#fromRecord} still returns the
-     * upstream producer's causal intent, not the delivery-time frontier.
-     */
-    static final String ORIGINAL_DEPENDENCIES = "_parsley_original_dependencies";
 }

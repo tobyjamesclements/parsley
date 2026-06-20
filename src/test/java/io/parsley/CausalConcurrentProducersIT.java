@@ -90,9 +90,8 @@ class CausalConcurrentProducersIT {
      *
      * <h2>Dependency propagation spot-check</h2>
      * One record from each producer is verified with {@link CausalDependencies#fromRecord}: the
-     * original producer dependencies must survive the outbox path ({@code ParsleyConsumer} saves
-     * them under {@code ORIGINAL_DEPENDENCIES} before stamping, then restores them in
-     * {@code poll()}).
+     * original producer dependencies must survive the outbox path unchanged ({@code ParsleyConsumer}'s
+     * outbox processor never rewrites {@code CAUSAL_DEPENDENCIES}, unlike the streaming decorator).
      */
     @Test
     void twoIndependentProducersDrainIndependentlyOnceEachSourceIsStaged()

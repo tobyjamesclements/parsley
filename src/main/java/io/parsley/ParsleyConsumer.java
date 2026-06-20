@@ -9,7 +9,6 @@ import org.apache.kafka.common.Uuid;
 import org.apache.kafka.common.errors.TopicExistsException;
 import org.apache.kafka.common.header.Header;
 import org.apache.kafka.common.header.Headers;
-import org.apache.kafka.common.header.internals.RecordHeader;
 import org.apache.kafka.common.header.internals.RecordHeaders;
 import org.apache.kafka.common.record.TimestampType;
 import org.apache.kafka.common.serialization.ByteArrayDeserializer;
@@ -20,10 +19,7 @@ import org.apache.kafka.streams.StreamsBuilder;
 import org.apache.kafka.streams.StreamsConfig;
 import org.apache.kafka.streams.kstream.Consumed;
 import org.apache.kafka.streams.kstream.Produced;
-import org.apache.kafka.streams.processor.api.Processor;
-import org.apache.kafka.streams.processor.api.ProcessorContext;
 import org.apache.kafka.streams.processor.api.ProcessorSupplier;
-import org.apache.kafka.streams.processor.api.Record;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -43,11 +39,12 @@ import java.util.concurrent.atomic.AtomicReference;
 import static java.nio.charset.StandardCharsets.UTF_8;
 
 /**
- * Decorator over a Kafka Streams pipeline (built from {@link CausalProcessors}) exposing a
- * {@code poll()}-based consumer API. The causal ordering is performed by a
- * {@link CausalProcessorSupplier} node whose delegate embeds original source coordinates as
- * internal headers and forwards records into an internal Kafka outbox topic. The
- * {@link CausalConsumer#poll poll()} method delegates to an internal {@link KafkaConsumer}
+ * Decorator over a Kafka Streams pipeline exposing a {@code poll()}-based consumer API. The
+ * causal ordering is performed by a {@link ParsleyOutboxProcessor} node, which gates each record
+ * on {@link ParsleyEngine}, embeds its original source coordinate as internal headers, and
+ * forwards it into an internal Kafka outbox topic — headers otherwise untouched, so the producer's
+ * original {@link ParsleyAttributes#CAUSAL_DEPENDENCIES} header survives to {@code poll()} unchanged.
+ * The {@link CausalConsumer#poll poll()} method delegates to an internal {@link KafkaConsumer}
  * subscribed to that outbox topic, strips the internal headers, and reconstructs each record at
  * its original source coordinate.
  *
@@ -63,12 +60,6 @@ import static java.nio.charset.StandardCharsets.UTF_8;
  * are durable — they survive a consumer restart and will be re-delivered, giving
  * <strong>at-least-once</strong> semantics. Set {@code processing.guarantee=exactly_once_v2} in
  * {@code streamsConfig} for exactly-once.
- *
- * <p>Because {@link ParsleyProcessorContext} stamps the delivery-time frontier onto the
- * {@link ParsleyAttributes#CAUSAL_DEPENDENCIES} header when the outbox delegate calls
- * {@code ctx.forward()}, the original producer's dependencies are saved under
- * {@link ParsleyAttributes#ORIGINAL_DEPENDENCIES} before forwarding and restored in {@code poll()} so that
- * {@link CausalDependencies#fromRecord} still returns the upstream producer's causal intent.
  */
 final class ParsleyConsumer<K, V> implements CausalConsumer<K, V> {
 
@@ -114,16 +105,12 @@ final class ParsleyConsumer<K, V> implements CausalConsumer<K, V> {
         }
 
         Serde<byte[]> bytes = Serdes.ByteArray();
-        CausalProcessors.Builder<byte[], byte[], byte[], byte[]> processorsBuilder =
-                CausalProcessors.builder(outboxDelegate(), limit)
-                        .serdesByTopic(t -> bytes, t -> bytes)
-                        .storeName(storeName)
-                        .frontierListener(this::onFrontierAdvanced)
-                        .topicUuids(topicUuids);
+        ProcessorSupplier<byte[], byte[], byte[], byte[]> outboxProcessor = ParsleyOutboxProcessor.supplier(
+                limit, storeName, this::onFrontierAdvanced, topicUuids);
 
         StreamsBuilder builder = new StreamsBuilder();
         builder.stream(topics, Consumed.with(bytes, bytes))
-                .process(processorsBuilder.build())
+                .process(outboxProcessor)
                 .to(outboxTopic, Produced.with(bytes, bytes));
 
         this.streams = new KafkaStreams(builder.build(), config);
@@ -148,30 +135,6 @@ final class ParsleyConsumer<K, V> implements CausalConsumer<K, V> {
         frontierRef.updateAndGet(current -> current.merge(frontier));
     }
 
-    private ProcessorSupplier<byte[], byte[], byte[], byte[]> outboxDelegate() {
-        return () -> new Processor<>() {
-            private ProcessorContext<byte[], byte[]> ctx;
-
-            @Override
-            public void init(ProcessorContext<byte[], byte[]> context) {
-                this.ctx = context;
-            }
-
-            @Override
-            public void process(Record<byte[], byte[]> record) {
-                // SRC_TOPIC/SRC_TOPIC_ID/SRC_PARTITION/SRC_OFFSET are already on the record
-                // (written by ParsleyRecord.of() at ingest time). Just save the producer's dependencies
-                // before ParsleyProcessorContext.stamp() replaces them with the delivery-time frontier.
-                Header originalDependencies = record.headers().lastHeader(ParsleyAttributes.CAUSAL_DEPENDENCIES);
-                Headers h = new RecordHeaders(record.headers());
-                if (originalDependencies != null) {
-                    h.add(ParsleyAttributes.ORIGINAL_DEPENDENCIES, originalDependencies.value());
-                }
-                ctx.forward(new Record<>(record.key(), record.value(), record.timestamp(), h));
-            }
-        };
-    }
-
     @Override
     public ConsumerRecords<K, V> poll(Duration timeout) {
         ConsumerRecords<byte[], byte[]> raw = outboxConsumer.poll(timeout);
@@ -180,7 +143,7 @@ final class ParsleyConsumer<K, V> implements CausalConsumer<K, V> {
             String srcTopic     = new String(r.headers().lastHeader(ParsleyAttributes.SRC_TOPIC).value(), UTF_8);
             int    srcPartition = intFromBytes(r.headers().lastHeader(ParsleyAttributes.SRC_PARTITION).value());
             long   srcOffset    = longFromBytes(r.headers().lastHeader(ParsleyAttributes.SRC_OFFSET).value());
-            Headers headers = restoreOriginalDependencies(r.headers());
+            Headers headers = stripInternalHeaders(r.headers());
             ConsumerRecord<K, V> cr = toTypedRecord(
                     srcTopic, srcPartition, srcOffset, r.timestamp(), r.key(), r.value(), headers);
             byPartition.computeIfAbsent(new TopicPartition(srcTopic, srcPartition),
@@ -253,20 +216,15 @@ final class ParsleyConsumer<K, V> implements CausalConsumer<K, V> {
     }
 
     /**
-     * Strips all internal {@code _parsley_*} headers and restores the producer's original
-     * {@link ParsleyAttributes#CAUSAL_DEPENDENCIES} from {@link ParsleyAttributes#ORIGINAL_DEPENDENCIES}.
+     * Strips internal {@code _parsley_*} routing headers, leaving the producer's original
+     * {@link ParsleyAttributes#CAUSAL_DEPENDENCIES} (and every other header) untouched —
+     * {@link ParsleyOutboxProcessor} never rewrites it, so there is nothing to restore.
      */
-    private static Headers restoreOriginalDependencies(Headers source) {
-        Header originalDependencies = source.lastHeader(ParsleyAttributes.ORIGINAL_DEPENDENCIES);
+    private static Headers stripInternalHeaders(Headers source) {
         RecordHeaders out = new RecordHeaders();
         for (Header h : source) {
-            String key = h.key();
-            if (key.startsWith("_parsley_")) continue;
-            if (key.equals(ParsleyAttributes.CAUSAL_DEPENDENCIES)) continue;
+            if (h.key().startsWith("_parsley_")) continue;
             out.add(h);
-        }
-        if (originalDependencies != null) {
-            out.add(new RecordHeader(ParsleyAttributes.CAUSAL_DEPENDENCIES, originalDependencies.value()));
         }
         return out;
     }
