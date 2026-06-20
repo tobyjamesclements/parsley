@@ -1084,7 +1084,7 @@ backstop.</p>
 <hr />
 <h2 id="buffer-policies">Buffer policies</h2>
 <p>A <code>CausalBufferPolicy</code> pairs a limit with a handling strategy for evicted records via a
-<code>ViolationAction</code> (<code>FORWARD_UNSAFE</code>, <code>DROP</code>, or <code>DEAD_LETTER</code>). Every policy reports a
+<code>CausalViolationAction</code> (<code>FORWARD_UNSAFE</code>, <code>DROP</code>, or <code>DEAD_LETTER</code>). Every policy reports a
 <code>CausalViolation</code> for each evicted record.</p>
 <p>The policy applies to all three violation reasons: records evicted when a limit fires
 (<code>LIMIT_REACHED</code>) and records that arrive with missing or corrupt dependency headers
@@ -1131,11 +1131,11 @@ Each routed record receives three additional headers:</p>
 reconstruct exactly which offsets were missing at eviction time.</p>
 <h3 id="per-violation-type-policy">Per-violation-type policy</h3>
 <p>The convenience factories above apply the same action to every violation reason. The builder lets
-each reason carry its own <code>ViolationAction</code>:</p>
+each reason carry its own <code>CausalViolationAction</code>:</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a><span class="n">CausalBufferPolicy</span><span class="w"> </span><span class="n">policy</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">CausalBufferPolicy</span><span class="p">.</span><span class="na">builder</span><span class="p">()</span>
-<a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a><span class="w">        </span><span class="p">.</span><span class="na">onMissing</span><span class="p">(</span><span class="n">ViolationAction</span><span class="p">.</span><span class="na">FORWARD_UNSAFE</span><span class="p">)</span><span class="w">      </span><span class="c1">// tolerate legacy (non-Parsley) producers</span>
-<a id="__codelineno-6-3" name="__codelineno-6-3" href="#__codelineno-6-3"></a><span class="w">        </span><span class="p">.</span><span class="na">onUnresolvable</span><span class="p">(</span><span class="n">ViolationAction</span><span class="p">.</span><span class="na">DROP</span><span class="p">)</span><span class="w">            </span><span class="c1">// corrupt header → discard</span>
-<a id="__codelineno-6-4" name="__codelineno-6-4" href="#__codelineno-6-4"></a><span class="w">        </span><span class="p">.</span><span class="na">onLimit</span><span class="p">(</span><span class="n">ViolationAction</span><span class="p">.</span><span class="na">DEAD_LETTER</span><span class="p">)</span><span class="w">            </span><span class="c1">// buffer overflow → DLQ</span>
+<a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a><span class="w">        </span><span class="p">.</span><span class="na">onMissing</span><span class="p">(</span><span class="n">CausalViolationAction</span><span class="p">.</span><span class="na">FORWARD_UNSAFE</span><span class="p">)</span><span class="w">      </span><span class="c1">// tolerate legacy (non-Parsley) producers</span>
+<a id="__codelineno-6-3" name="__codelineno-6-3" href="#__codelineno-6-3"></a><span class="w">        </span><span class="p">.</span><span class="na">onUnresolvable</span><span class="p">(</span><span class="n">CausalViolationAction</span><span class="p">.</span><span class="na">DROP</span><span class="p">)</span><span class="w">            </span><span class="c1">// corrupt header → discard</span>
+<a id="__codelineno-6-4" name="__codelineno-6-4" href="#__codelineno-6-4"></a><span class="w">        </span><span class="p">.</span><span class="na">onLimit</span><span class="p">(</span><span class="n">CausalViolationAction</span><span class="p">.</span><span class="na">DEAD_LETTER</span><span class="p">)</span><span class="w">            </span><span class="c1">// buffer overflow → DLQ</span>
 <a id="__codelineno-6-5" name="__codelineno-6-5" href="#__codelineno-6-5"></a><span class="w">        </span><span class="p">.</span><span class="na">setLimit</span><span class="p">(</span><span class="n">CausalBufferLimit</span><span class="p">.</span><span class="na">ofSize</span><span class="p">(</span><span class="mi">1000</span><span class="p">))</span>
 <a id="__codelineno-6-6" name="__codelineno-6-6" href="#__codelineno-6-6"></a><span class="w">        </span><span class="p">.</span><span class="na">build</span><span class="p">();</span>
 </code></pre></div>
