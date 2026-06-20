@@ -81,6 +81,17 @@ All three stores are persistent and changelog-backed. Changelog topic names foll
 
 ## Topic UUIDs
 
-In a live topology, topic UUIDs are fetched from the Kafka broker via `AdminClient` at startup and passed to the processor via `CausalProcessors.builder(...).topicUuids(map)`.
+Topic UUIDs are not derived or guessed — each one must be registered explicitly via
+`CausalTopic(topic, uuid)`, passed to `CausalProcessors.builder(...)` /
+`CausalConsumers.builder(...)` / `CausalProducers.builder(...)` via `.addCausalTopic(s)(...)`. If a
+topic's UUID is not registered, resolution fails fast with `IllegalStateException` rather than
+falling back to a guess.
 
-`CausalPosition.deriveUuid(topicName)` is a fallback used in tests and `TopologyTestDriver`. It computes a deterministic UUID using `UUID.nameUUIDFromBytes(topicName.getBytes(UTF_8))` (UUID version 3). This is not the UUID Kafka assigns to the topic. A topic deleted and recreated with the same name produces the same derived UUID, which would cause records stamped against the old topic to appear satisfied by the new one.
+In a live topology, the UUID is typically resolved from the broker via `AdminClient` at startup
+(e.g. `CreateTopicsResult.topicId(topic)` or `DescribeTopicsResult`) — the real UUID Kafka assigned
+to the topic. A topic deleted and recreated with the same name gets a new UUID, so records stamped
+against the old incarnation correctly fail to satisfy dependencies on the new one.
+
+Tests without a live broker (`TopologyTestDriver`, unit tests) may use any stable `Uuid`, e.g.
+`Uuid.randomUuid()`, as long as the same value is used consistently wherever that topic's identity
+is referenced.

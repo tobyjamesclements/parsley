@@ -1,5 +1,6 @@
 package io.parsley;
 
+import org.apache.kafka.common.Uuid;
 import org.apache.kafka.common.serialization.Serdes;
 import org.apache.kafka.streams.StreamsBuilder;
 import org.apache.kafka.streams.TopologyTestDriver;
@@ -30,7 +31,9 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.Properties;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
 
 import static java.nio.charset.StandardCharsets.UTF_8;
@@ -80,11 +83,20 @@ public class BufferReleaseBenchmark {
     static final int FIXED_N = 128; // n held constant in the k-curve and r-curve benchmarks
     static final CausalBufferLimit BENCH_LIMIT = CausalBufferLimit.ofSize(Integer.MAX_VALUE / 2);
 
+    // A stable Uuid per synthetic topic name, so a record's own SRC_TOPIC_ID header matches the
+    // CausalPosition other records declare as a dependency on that same name (e.g. "trigger").
+    private static final Map<String, Uuid> TOPIC_IDS = new ConcurrentHashMap<>();
+
+    static Uuid topicId(String topic) {
+        return TOPIC_IDS.computeIfAbsent(topic, t -> Uuid.randomUuid());
+    }
+
     static ParsleyRecord<String, String> syntheticRecord(String srcTopic, int partition, long offset,
                                                           CausalDependencies deps) {
         List<ParsleyHeader> headers = new ArrayList<>();
         headers.add(new ParsleyHeader(ParsleyAttributes.CAUSAL_DEPENDENCIES, deps.toBytes()));
         headers.add(new ParsleyHeader(ParsleyAttributes.SRC_TOPIC, srcTopic.getBytes(UTF_8)));
+        headers.add(new ParsleyHeader(ParsleyAttributes.SRC_TOPIC_ID, ParsleyRecord.uuidToBytes(topicId(srcTopic))));
         headers.add(new ParsleyHeader(ParsleyAttributes.SRC_PARTITION, ParsleyRecord.intToBytes(partition)));
         headers.add(new ParsleyHeader(ParsleyAttributes.SRC_OFFSET, ParsleyRecord.longToBytes(offset)));
         return new ParsleyRecord<>("k", "v", 0L, headers);
@@ -127,7 +139,7 @@ public class BufferReleaseBenchmark {
         builder.stream("bench-in", Consumed.with(Serdes.String(), Serdes.String()))
                .process(CausalProcessors.builder(noOp, BENCH_LIMIT)
                        .serdes(Serdes.String(), Serdes.String())
-                       .addCausalTopic(new CausalTopic("bench-in", CausalPosition.deriveUuid("bench-in")))
+                       .addCausalTopic(new CausalTopic("bench-in", topicId("bench-in")))
                        .build())
                .to("bench-out", Produced.with(Serdes.String(), Serdes.String()));
         // Unique state dir per trial so each trial starts with an empty RocksDB
@@ -175,13 +187,13 @@ public class BufferReleaseBenchmark {
 
             // Record 0 waits on the trigger coordinate; only it is released when the trigger fires.
             CausalDependencies triggerDeps = CausalDependencies.builder()
-                    .require(new CausalPosition(CausalPosition.deriveUuid("trigger"), 0, 0L)).build();
+                    .require(new CausalPosition(topicId("trigger"), 0, 0L)).build();
             engine.onRecord(syntheticRecord("bench-0", 0, 0L, triggerDeps));
 
             // Records 1..n-1 each wait on a unique, never-satisfied coordinate.
             for (int i = 1; i < bench.n; i++) {
                 CausalDependencies deps = CausalDependencies.builder()
-                        .require(new CausalPosition(CausalPosition.deriveUuid("unique-" + i), 0, 0L)).build();
+                        .require(new CausalPosition(topicId("unique-" + i), 0, 0L)).build();
                 engine.onRecord(syntheticRecord("bench-" + i, 0, (long) i, deps));
             }
 
@@ -222,7 +234,7 @@ public class BufferReleaseBenchmark {
             clearWaitStore(waitKV);
             engine = freshEngine(bufferKV, waitKV, serializer);
 
-            CausalPosition triggerPos = new CausalPosition(CausalPosition.deriveUuid("trigger"), 0, 0L);
+            CausalPosition triggerPos = new CausalPosition(topicId("trigger"), 0, 0L);
             CausalDependencies triggerDeps = CausalDependencies.builder().require(triggerPos).build();
 
             // k records all waiting on the same trigger coordinate.
@@ -233,7 +245,7 @@ public class BufferReleaseBenchmark {
             // FIXED_N - k filler records each waiting on a unique, never-satisfied coordinate.
             for (int i = bench.k; i < FIXED_N; i++) {
                 CausalDependencies deps = CausalDependencies.builder()
-                        .require(new CausalPosition(CausalPosition.deriveUuid("unique-" + i), 0, 0L)).build();
+                        .require(new CausalPosition(topicId("unique-" + i), 0, 0L)).build();
                 engine.onRecord(syntheticRecord("filler-" + i, 0, (long) i, deps));
             }
 
@@ -276,19 +288,19 @@ public class BufferReleaseBenchmark {
             // This forms an r-hop chain: advancing the trigger releases record 0, which in turn
             // releases record 1, ..., which releases record r-1.
             CausalDependencies dep0 = CausalDependencies.builder()
-                    .require(new CausalPosition(CausalPosition.deriveUuid("trigger"), 0, 0L)).build();
+                    .require(new CausalPosition(topicId("trigger"), 0, 0L)).build();
             engine.onRecord(syntheticRecord("chain-0", 0, 0L, dep0));
 
             for (int i = 1; i < bench.r; i++) {
                 CausalDependencies dep = CausalDependencies.builder()
-                        .require(new CausalPosition(CausalPosition.deriveUuid("chain-" + (i - 1)), 0, (long) (i - 1))).build();
+                        .require(new CausalPosition(topicId("chain-" + (i - 1)), 0, (long) (i - 1))).build();
                 engine.onRecord(syntheticRecord("chain-" + i, 0, (long) i, dep));
             }
 
             // Filler records: FIXED_N - r records each waiting on a unique, never-satisfied coordinate.
             for (int i = bench.r; i < FIXED_N; i++) {
                 CausalDependencies deps = CausalDependencies.builder()
-                        .require(new CausalPosition(CausalPosition.deriveUuid("unique-" + i), 0, 0L)).build();
+                        .require(new CausalPosition(topicId("unique-" + i), 0, 0L)).build();
                 engine.onRecord(syntheticRecord("filler-" + i, 0, (long) i, deps));
             }
 

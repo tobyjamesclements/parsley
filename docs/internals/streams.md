@@ -37,7 +37,7 @@ All three are created with `Stores.persistentKeyValueStore(...)`, so they are ch
 process(Record<KIn,VIn>)
   ingest(record)
     reads source metadata from context.recordMetadata()
-    resolves topicId from topicUuids map or CausalPosition.deriveUuid()
+    resolves topicId from topicUuids map (registered via CausalTopic; throws IllegalStateException if absent)
     returns ParsleyRecord.of(record, source, offset, topicId)
 
   gate(parsleyRecord)

@@ -1,6 +1,7 @@
 package io.parsley;
 
 import org.apache.kafka.clients.admin.Admin;
+import org.apache.kafka.clients.admin.CreateTopicsResult;
 import org.apache.kafka.clients.admin.NewTopic;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.apache.kafka.clients.producer.ProducerConfig;
@@ -53,21 +54,19 @@ class CausalResilienceIT {
      * <p>This exercises the full state-store changelog restoration path and the
      * {@link ParsleyEngine} ParsleyPositionIndex re-seeding from the restored buffer.
      *
-     * <p>Both the producer and the consumer use the same name-derived UUID for PRICES (via
-     * {@link CausalPosition#deriveUuid}, registered via {@link CausalTopic}), so the stamped
+     * <p>Both the producer and the consumer use the same broker-assigned UUID for PRICES (resolved
+     * via {@link CreateTopicsResult#topicId}, registered via {@link CausalTopic}), so the stamped
      * dependencies match the consumer's frontier — enabling natural causal drain rather than eviction.
      */
     @Test
     void restartedConsumerResumesAndDrainsBufferedRecordAfterRecovery() throws Exception {
         String bootstrap = kafka.getBootstrapServers();
-        createTopic(bootstrap, PRICES, 1);
-        createTopic(bootstrap, ORDERS, 1);
+        Uuid pricesId = createTopic(bootstrap, PRICES, 1);
+        Uuid ordersId = createTopic(bootstrap, ORDERS, 1);
 
         // Fixed applicationId so Kafka Streams restores the frontier, buffer, and position-index
         // state stores from their changelog topics when consumer-2 starts.
         String appId = "resilience-restart-app";
-        Uuid pricesId = CausalPosition.deriveUuid(PRICES);
-        Uuid ordersId = CausalPosition.deriveUuid(ORDERS);
 
         // Phase 1: buffer an ORDERS record that depends on PRICES@0, then close.
         List<ConsumerRecord<String, String>> phase1 = new ArrayList<>();
@@ -147,12 +146,10 @@ class CausalResilienceIT {
     @Test
     void restartWithALoweredSizeLimitEvictsExcessRestoredRecordsOnInit() throws Exception {
         String bootstrap = kafka.getBootstrapServers();
-        createTopic(bootstrap, PRICES, 1);
-        createTopic(bootstrap, ORDERS, 1);
+        Uuid pricesId = createTopic(bootstrap, PRICES, 1);
+        Uuid ordersId = createTopic(bootstrap, ORDERS, 1);
 
         String appId = "resilience-size-limit-restart-app";
-        Uuid pricesId = CausalPosition.deriveUuid(PRICES);
-        Uuid ordersId = CausalPosition.deriveUuid(ORDERS);
         CausalPosition neverArrives = new CausalPosition(pricesId, 0, 99);
 
         // Phase 1: buffer three ORDERS records that depend on a PRICES offset that will never
@@ -233,7 +230,7 @@ class CausalResilienceIT {
     @Test
     void multipleStreamThreadsDeliverAllRecordsWithoutDeadlock() throws Exception {
         String bootstrap = kafka.getBootstrapServers();
-        createTopic(bootstrap, EVENTS, 2);
+        Uuid eventsId = createTopic(bootstrap, EVENTS, 2);
 
         List<ConsumerRecord<String, String>> received = new ArrayList<>();
         try (CausalConsumer<String, String> consumer =
@@ -242,7 +239,7 @@ class CausalResilienceIT {
                              CausalBufferLimit.ofSize(100),
                              Map.of(),
                              streamsConfigWithThreads(bootstrap, 2))
-                             .addCausalTopic(new CausalTopic(EVENTS, CausalPosition.deriveUuid(EVENTS)))
+                             .addCausalTopic(new CausalTopic(EVENTS, eventsId))
                              .build();
              CausalProducer<String, String> producer = causalProducer(bootstrap)) {
 
@@ -305,9 +302,11 @@ class CausalResilienceIT {
                 ProducerConfig.VALUE_SERIALIZER_CLASS_CONFIG, StringSerializer.class.getName())).build();
     }
 
-    private static void createTopic(String bootstrap, String topic, int partitions) throws Exception {
+    private static Uuid createTopic(String bootstrap, String topic, int partitions) throws Exception {
         try (Admin admin = Admin.create(Map.of("bootstrap.servers", bootstrap))) {
-            admin.createTopics(Set.of(new NewTopic(topic, partitions, (short) 1))).all().get();
+            CreateTopicsResult result = admin.createTopics(Set.of(new NewTopic(topic, partitions, (short) 1)));
+            result.all().get();
+            return result.topicId(topic).get();
         }
     }
 }

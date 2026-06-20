@@ -1,6 +1,7 @@
 package io.parsley;
 
 import org.apache.kafka.clients.admin.Admin;
+import org.apache.kafka.clients.admin.CreateTopicsResult;
 import org.apache.kafka.clients.admin.NewTopic;
 import org.apache.kafka.clients.consumer.ConsumerConfig;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
@@ -58,9 +59,7 @@ class CausalRoundTripIT {
     @Test
     void producedRecordsAreDeliveredInCausalOrderWithAdvancingFrontier() throws Exception {
         String bootstrap = kafka.getBootstrapServers();
-        createTopic(bootstrap, TOPIC);
-
-        Uuid topicId = CausalPosition.deriveUuid(TOPIC);
+        Uuid topicId = createTopic(bootstrap, TOPIC);
 
         try (CausalProducer<String, String> producer = CausalProducers.<String, String>builder(Map.of(
                 ProducerConfig.BOOTSTRAP_SERVERS_CONFIG, bootstrap,
@@ -126,14 +125,14 @@ class CausalRoundTripIT {
     void recordWithMissingDependencyHeaderIsDeliveredAsSatisfied() throws Exception {
         String bootstrap = kafka.getBootstrapServers();
         String topic = "no-deps-events";
-        createTopic(bootstrap, topic);
+        Uuid topicId = createTopic(bootstrap, topic);
 
         try (CausalConsumer<String, String> consumer = CausalConsumers.<String, String>builder(
                 List.of(topic),
                 CausalBufferLimit.ofDuration(Duration.ofSeconds(5)),
                 Map.of(ConsumerConfig.GROUP_ID_CONFIG, "rt-" + UUID.randomUUID()),
                 streamsConfig(bootstrap))
-                .addCausalTopic(new CausalTopic(topic, CausalPosition.deriveUuid(topic)))
+                .addCausalTopic(new CausalTopic(topic, topicId))
                 .build()) {
 
             try (KafkaProducer<String, String> raw = new KafkaProducer<>(Map.of(
@@ -171,12 +170,12 @@ class CausalRoundTripIT {
     void customStoreNameIsHonouredOnEviction() throws Exception {
         String bootstrap = kafka.getBootstrapServers();
         String topic = "limit-events";
-        createTopic(bootstrap, topic);
+        Uuid topicId = createTopic(bootstrap, topic);
 
-        Uuid upstreamTopicId = CausalPosition.deriveUuid("never-produced-upstream");
+        // Deliberately never created on the broker — must never match a real registration.
+        Uuid upstreamTopicId = Uuid.randomUuid();
         CausalDependencies producerDeps = CausalDependencies.builder()
                 .require(new CausalPosition(upstreamTopicId, 0, 5L)).build();
-        Uuid topicId = CausalPosition.deriveUuid(topic);
 
         try (CausalProducer<String, String> producer = CausalProducers.<String, String>builder(Map.of(
                 ProducerConfig.BOOTSTRAP_SERVERS_CONFIG, bootstrap,
@@ -218,9 +217,11 @@ class CausalRoundTripIT {
                 StreamsConfig.COMMIT_INTERVAL_MS_CONFIG, 200);
     }
 
-    private static void createTopic(String bootstrap, String topic) throws Exception {
+    private static Uuid createTopic(String bootstrap, String topic) throws Exception {
         try (Admin admin = Admin.create(Map.of("bootstrap.servers", bootstrap))) {
-            admin.createTopics(Set.of(new NewTopic(topic, 1, (short) 1))).all().get();
+            CreateTopicsResult result = admin.createTopics(Set.of(new NewTopic(topic, 1, (short) 1)));
+            result.all().get();
+            return result.topicId(topic).get();
         }
     }
 }

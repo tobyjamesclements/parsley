@@ -1,6 +1,7 @@
 package io.parsley;
 
 import org.apache.kafka.common.TopicPartition;
+import org.apache.kafka.common.Uuid;
 import org.apache.kafka.common.serialization.Deserializer;
 import org.apache.kafka.common.serialization.Serde;
 import org.apache.kafka.common.serialization.Serdes;
@@ -20,6 +21,7 @@ class ParsleySerializerTest {
 
     // Non-zero partition is deliberate: the round-trip test verifies the partition is preserved.
     private static final TopicPartition T1 = new TopicPartition("t1", 2);
+    private static final Uuid T1_ID = Uuid.randomUuid();
 
     private final ParsleySerializer<String, String> serializer =
             new ParsleySerializer<>(new ParsleyResolver<>(topic -> Serdes.String(), topic -> Serdes.String()));
@@ -34,7 +36,7 @@ class ParsleySerializerTest {
     @Test
     void roundTripsEveryField() {
         CausalDependencies deps = CausalDependencies.builder()
-                .require(new CausalPosition(CausalPosition.deriveUuid("t1"), 0, 4))
+                .require(new CausalPosition(Uuid.randomUuid(), 0, 4))
                 .build();
         List<ParsleyHeader> userHeaders = List.of(
                 new ParsleyHeader("h1", "a".getBytes()),
@@ -49,8 +51,8 @@ class ParsleySerializerTest {
         assertEquals(T1, out.sourcePartition(), "source partition (including non-zero partition number) must round-trip");
         assertEquals(7L, out.sourceOffset(), "source offset must round-trip");
         assertArrayEquals(deps.toBytes(), out.encodedDependencies(), "dependency bytes must round-trip");
-        // 2 user headers + CAUSAL_DEPENDENCIES + SRC_TOPIC + SRC_PARTITION + SRC_OFFSET = 6
-        assertEquals(6, out.headers().size(), "all six headers must be preserved");
+        // 2 user headers + CAUSAL_DEPENDENCIES + SRC_TOPIC + SRC_TOPIC_ID + SRC_PARTITION + SRC_OFFSET = 7
+        assertEquals(7, out.headers().size(), "all seven headers must be preserved");
         assertEquals("h1", out.headers().get(0).key(), "first user header key must round-trip");
         assertArrayEquals("a".getBytes(), out.headers().get(0).value(), "first user header value must round-trip");
         assertEquals("h2", out.headers().get(1).key(), "second user header key must round-trip");
@@ -127,6 +129,7 @@ class ParsleySerializerTest {
             headers.add(new ParsleyHeader(ParsleyAttributes.CAUSAL_DEPENDENCIES, deps.toBytes()));
         }
         headers.add(new ParsleyHeader(ParsleyAttributes.SRC_TOPIC, tp.topic().getBytes(UTF_8)));
+        headers.add(new ParsleyHeader(ParsleyAttributes.SRC_TOPIC_ID, ParsleyRecord.uuidToBytes(T1_ID)));
         headers.add(new ParsleyHeader(ParsleyAttributes.SRC_PARTITION, ParsleyRecord.intToBytes(tp.partition())));
         headers.add(new ParsleyHeader(ParsleyAttributes.SRC_OFFSET, ParsleyRecord.longToBytes(offset)));
         return new ParsleyRecord<>(key, value, timestamp, headers);

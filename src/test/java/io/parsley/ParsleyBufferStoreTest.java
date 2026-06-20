@@ -13,7 +13,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 class ParsleyBufferStoreTest {
 
     private static final TopicPartition T1 = new TopicPartition("t1", 0);
-    private static final Uuid T1_ID = CausalPosition.deriveUuid(T1.topic());
+    private static final Uuid T1_ID = Uuid.randomUuid();
 
     private final ParsleyBufferStore<String, String> store = new MockBufferStore<>();
 

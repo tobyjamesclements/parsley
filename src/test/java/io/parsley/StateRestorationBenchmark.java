@@ -1,5 +1,6 @@
 package io.parsley;
 
+import org.apache.kafka.common.Uuid;
 import org.apache.kafka.common.serialization.Serdes;
 import org.apache.kafka.streams.StreamsBuilder;
 import org.apache.kafka.streams.TopologyTestDriver;
@@ -83,7 +84,7 @@ public class StateRestorationBenchmark {
         builder.stream("bench-in", Consumed.with(Serdes.String(), Serdes.String()))
                .process(CausalProcessors.builder(noOp, limit)
                        .serdes(Serdes.String(), Serdes.String())
-                       .addCausalTopic(new CausalTopic("bench-in", CausalPosition.deriveUuid("bench-in")))
+                       .addCausalTopic(new CausalTopic("bench-in", Uuid.randomUuid()))
                        .build())
                .to("bench-out", Produced.with(Serdes.String(), Serdes.String()));
 
@@ -103,7 +104,7 @@ public class StateRestorationBenchmark {
         CausalFrontier frontier = CausalFrontier.empty();
         for (int i = 0; i < 4; i++) {
             frontier = frontier.observe(
-                    new CausalPosition(CausalPosition.deriveUuid("bench-" + i), 0, (long) i));
+                    new CausalPosition(Uuid.randomUuid(), 0, (long) i));
         }
         frontierKV.put(ParsleyAttributes.FRONTIER_KEY, frontier.toBytes());
 
@@ -115,7 +116,7 @@ public class StateRestorationBenchmark {
                 ParsleyMetrics.NOOP);
         for (int i = 0; i < bufferSize; i++) {
             CausalDependencies deps = CausalDependencies.builder()
-                    .require(new CausalPosition(CausalPosition.deriveUuid("never-" + i), 0, 0L)).build();
+                    .require(new CausalPosition(Uuid.randomUuid(), 0, 0L)).build();
             engine.onRecord(record("bench-" + i, 0, (long) i, deps));
         }
         // Discard the engine; benchmark methods will reconstruct it from RocksDB.
@@ -156,6 +157,7 @@ public class StateRestorationBenchmark {
         List<ParsleyHeader> headers = new ArrayList<>();
         headers.add(new ParsleyHeader(ParsleyAttributes.CAUSAL_DEPENDENCIES, deps.toBytes()));
         headers.add(new ParsleyHeader(ParsleyAttributes.SRC_TOPIC, srcTopic.getBytes(UTF_8)));
+        headers.add(new ParsleyHeader(ParsleyAttributes.SRC_TOPIC_ID, ParsleyRecord.uuidToBytes(Uuid.randomUuid())));
         headers.add(new ParsleyHeader(ParsleyAttributes.SRC_PARTITION, ParsleyRecord.intToBytes(partition)));
         headers.add(new ParsleyHeader(ParsleyAttributes.SRC_OFFSET, ParsleyRecord.longToBytes(offset)));
         return new ParsleyRecord<>("k", "v", 0L, headers);

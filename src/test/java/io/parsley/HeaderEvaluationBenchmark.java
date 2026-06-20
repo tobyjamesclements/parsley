@@ -1,5 +1,6 @@
 package io.parsley;
 
+import org.apache.kafka.common.Uuid;
 import org.openjdk.jmh.annotations.Benchmark;
 import org.openjdk.jmh.annotations.BenchmarkMode;
 import org.openjdk.jmh.annotations.Fork;
@@ -52,7 +53,7 @@ public class HeaderEvaluationBenchmark {
         CausalFrontier f = CausalFrontier.empty();
         CausalDependencies.Builder builder = CausalDependencies.builder();
         for (int i = 0; i < clockWidth; i++) {
-            CausalPosition pos = new CausalPosition(CausalPosition.deriveUuid("bench-" + i), 0, 1L);
+            CausalPosition pos = new CausalPosition(Uuid.randomUuid(), 0, 1L);
             f = f.observe(pos);
             builder.require(pos);
         }

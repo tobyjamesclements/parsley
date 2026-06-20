@@ -2,6 +2,7 @@ package io.parsley;
 
 import org.apache.kafka.clients.producer.MockProducer;
 import org.apache.kafka.clients.producer.ProducerRecord;
+import org.apache.kafka.common.Uuid;
 import org.apache.kafka.common.header.Header;
 import org.apache.kafka.common.serialization.StringSerializer;
 import org.junit.jupiter.api.Test;
@@ -25,7 +26,7 @@ class ParsleyProducerTest {
         MockProducer<String, String> mock = mockProducer();
         try (ParsleyProducer<String, String> producer = new ParsleyProducer<>(mock)) {
             CausalDependencies deps = CausalDependencies.builder()
-                    .require(new CausalPosition(CausalPosition.deriveUuid("t1"), 0, 3))
+                    .require(new CausalPosition(Uuid.randomUuid(), 0, 3))
                     .build();
             producer.send(new ProducerRecord<>("t2", "k", "v"), deps);
 

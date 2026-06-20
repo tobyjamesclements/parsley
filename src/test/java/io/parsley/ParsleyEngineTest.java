@@ -19,8 +19,8 @@ class ParsleyEngineTest {
 
     private static final TopicPartition T1 = new TopicPartition("t1", 0);
     private static final TopicPartition T2 = new TopicPartition("t2", 0);
-    private static final Uuid T1_ID = CausalPosition.deriveUuid(T1.topic());
-    private static final Uuid T2_ID = CausalPosition.deriveUuid(T2.topic());
+    private static final Uuid T1_ID = Uuid.randomUuid();
+    private static final Uuid T2_ID = Uuid.randomUuid();
 
     private final List<ParsleyRecord<String, String>> forwarded = new ArrayList<>();
     private final List<CausalFrontier> frontiers = new ArrayList<>();
@@ -164,8 +164,9 @@ class ParsleyEngineTest {
         ParsleyEngine<String, String> engine = engineWith(CausalBufferLimit.ofSize(1));
 
         CausalDependencies.Builder bigBuilder = CausalDependencies.builder();
+        Uuid ghostId = Uuid.randomUuid();
         for (int p = 0; p < 200; p++) {
-            bigBuilder.require(new CausalPosition(CausalPosition.deriveUuid("ghost"), p, 1_000 + p));
+            bigBuilder.require(new CausalPosition(ghostId, p, 1_000 + p));
         }
         processRecord(engine, incomingRecord(T2, 0, bigBuilder.build()));
 
@@ -583,7 +584,7 @@ class ParsleyEngineTest {
         Uuid newT1 = new Uuid(0L, 2L);   // recreated — different UUID, same name + partition
 
         // T2 depends on t1-0@5 under the OLD incarnation.
-        processRecord(engine, incomingRecordWithId(T2, 0, CausalPosition.deriveUuid(T2.topic()),
+        processRecord(engine, incomingRecordWithId(T2, 0, T2_ID,
                 CausalDependencies.builder().require(new CausalPosition(oldT1, 0, 5L)).build()));
         assertTrue(forwarded.isEmpty(), "T2 must be buffered: old-t1 dependency unsatisfied");
 
@@ -621,16 +622,15 @@ class ParsleyEngineTest {
         forwarded.addAll(engine.onRecord(record));
     }
 
+    private static Uuid idFor(TopicPartition tp) {
+        if (T1.topic().equals(tp.topic())) return T1_ID;
+        if (T2.topic().equals(tp.topic())) return T2_ID;
+        throw new IllegalArgumentException("no known id for topic " + tp.topic());
+    }
+
     private static ParsleyRecord<String, String> incomingRecord(TopicPartition tp, long offset,
                                                                   CausalDependencies deps) {
-        List<ParsleyHeader> headers = new ArrayList<>();
-        if (deps != null) {
-            headers.add(new ParsleyHeader(ParsleyAttributes.CAUSAL_DEPENDENCIES, deps.toBytes()));
-        }
-        headers.add(new ParsleyHeader(ParsleyAttributes.SRC_TOPIC, tp.topic().getBytes(UTF_8)));
-        headers.add(new ParsleyHeader(ParsleyAttributes.SRC_PARTITION, ParsleyRecord.intToBytes(tp.partition())));
-        headers.add(new ParsleyHeader(ParsleyAttributes.SRC_OFFSET, ParsleyRecord.longToBytes(offset)));
-        return new ParsleyRecord<>("k", "v", 0L, headers);
+        return incomingRecordWithId(tp, offset, idFor(tp), deps);
     }
 
     private static ParsleyRecord<String, String> incomingRecordWithId(TopicPartition tp, long offset,
@@ -652,6 +652,7 @@ class ParsleyEngineTest {
                 new ParsleyHeader(ParsleyAttributes.CAUSAL_DEPENDENCIES, new byte[]{9, 9, 9}),
                 new ParsleyHeader(ParsleyAttributes.SRC_TOPIC, tp.topic().getBytes(UTF_8)),
                 new ParsleyHeader(ParsleyAttributes.SRC_PARTITION, ParsleyRecord.intToBytes(tp.partition())),
-                new ParsleyHeader(ParsleyAttributes.SRC_OFFSET, ParsleyRecord.longToBytes(offset))));
+                new ParsleyHeader(ParsleyAttributes.SRC_OFFSET, ParsleyRecord.longToBytes(offset)),
+                new ParsleyHeader(ParsleyAttributes.SRC_TOPIC_ID, ParsleyRecord.uuidToBytes(idFor(tp)))));
     }
 }

@@ -1,5 +1,6 @@
 package io.parsley;
 
+import org.apache.kafka.common.Uuid;
 import org.apache.kafka.common.serialization.Serdes;
 import org.apache.kafka.streams.processor.api.Processor;
 import org.apache.kafka.streams.processor.api.ProcessorSupplier;
@@ -44,7 +45,7 @@ class CausalProcessorsTest {
         CausalProcessorSupplier<String, String, String, String> supplier =
                 builderWith(CausalBufferLimit.ofSize(1))
                         .serdes(Serdes.String(), Serdes.String())
-                        .addCausalTopic(new CausalTopic("t1", CausalPosition.deriveUuid("t1")))
+                        .addCausalTopic(new CausalTopic("t1", Uuid.randomUuid()))
                         .build();
         assertNotNull(supplier, "build() must return a non-null supplier");
         assertNotNull(supplier.get(), "supplier.get() must return a non-null processor");

@@ -55,11 +55,11 @@ class CausalProcessorsTopologyTest {
     // Topic name → topic-id constant mapping used across tests.
     // t1 = default single-input topic; t2/t3 = two-source tests; t4 = materialized derived topic;
     // t5 = independent sidecar topic.
-    private static final Uuid T1_ID = CausalPosition.deriveUuid("t1");
-    private static final Uuid T2_ID = CausalPosition.deriveUuid("t2");
-    private static final Uuid T3_ID = CausalPosition.deriveUuid("t3");
-    private static final Uuid T4_ID = CausalPosition.deriveUuid("t4");
-    private static final Uuid T5_ID = CausalPosition.deriveUuid("t5");
+    private static final Uuid T1_ID = Uuid.randomUuid();
+    private static final Uuid T2_ID = Uuid.randomUuid();
+    private static final Uuid T3_ID = Uuid.randomUuid();
+    private static final Uuid T4_ID = Uuid.randomUuid();
+    private static final Uuid T5_ID = Uuid.randomUuid();
 
     private final List<String> processed = new ArrayList<>();
 
@@ -655,8 +655,9 @@ class CausalProcessorsTopologyTest {
     @Test
     void aLargeInboundDependencySetIsNeverFoldedIntoTheStampedOutput() {
         CausalDependencies.Builder bigBuilder = CausalDependencies.builder();
+        Uuid ghostId = Uuid.randomUuid();
         for (int p = 0; p < 500; p++) {
-            bigBuilder.require(new CausalPosition(CausalPosition.deriveUuid("ghost"), p, 1_000 + p));
+            bigBuilder.require(new CausalPosition(ghostId, p, 1_000 + p));
         }
         CausalDependencies big = bigBuilder.build();
 

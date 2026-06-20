@@ -1,6 +1,7 @@
 package io.parsley;
 
 import org.apache.kafka.clients.admin.Admin;
+import org.apache.kafka.clients.admin.CreateTopicsResult;
 import org.apache.kafka.clients.admin.NewTopic;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.apache.kafka.clients.producer.KafkaProducer;
@@ -17,6 +18,7 @@ import org.testcontainers.utility.DockerImageName;
 
 import java.time.Duration;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -66,9 +68,9 @@ class CausalConcurrentProducersIT {
      * SOURCE_B, satisfying the buffered OUTPUT dependencies.
      *
      * <h2>UUID alignment</h2>
-     * Both producers and the consumer register the same deterministic name-derived UUIDs
-     * ({@link CausalPosition#deriveUuid}) via {@link CausalTopic}. The test constructs producer
-     * dependencies with the same {@code deriveUuid} call, so the stamped dependency keys match the
+     * Both producers and the consumer register the same broker-assigned UUIDs (resolved via
+     * {@link CreateTopicsResult#topicId}) via {@link CausalTopic}. The test constructs producer
+     * dependencies with the same resolved UUIDs, so the stamped dependency keys match the
      * consumer's frontier keys and records drain naturally rather than waiting for the eviction limit.
      *
      * <h2>Protocol</h2>
@@ -96,11 +98,11 @@ class CausalConcurrentProducersIT {
     void twoIndependentProducersDrainIndependentlyOnceEachSourceIsStaged()
             throws Exception {
         String bootstrap = kafka.getBootstrapServers();
-        createTopics(bootstrap);
+        Map<String, Uuid> topicIds = createTopics(bootstrap);
 
-        Uuid topicAId = CausalPosition.deriveUuid(SOURCE_A);
-        Uuid topicBId = CausalPosition.deriveUuid(SOURCE_B);
-        Uuid outputId = CausalPosition.deriveUuid(OUTPUT);
+        Uuid topicAId = topicIds.get(SOURCE_A);
+        Uuid topicBId = topicIds.get(SOURCE_B);
+        Uuid outputId = topicIds.get(OUTPUT);
 
         List<ConsumerRecord<String, String>> received = new ArrayList<>();
 
@@ -236,12 +238,18 @@ class CausalConcurrentProducersIT {
                 ProducerConfig.VALUE_SERIALIZER_CLASS_CONFIG, StringSerializer.class.getName()));
     }
 
-    private static void createTopics(String bootstrap) throws Exception {
+    private static Map<String, Uuid> createTopics(String bootstrap) throws Exception {
         try (Admin admin = Admin.create(Map.of("bootstrap.servers", bootstrap))) {
-            admin.createTopics(Set.of(
+            CreateTopicsResult result = admin.createTopics(Set.of(
                     new NewTopic(SOURCE_A, 1, (short) 1),
                     new NewTopic(SOURCE_B, 1, (short) 1),
-                    new NewTopic(OUTPUT,   1, (short) 1))).all().get();
+                    new NewTopic(OUTPUT,   1, (short) 1)));
+            result.all().get();
+            Map<String, Uuid> ids = new HashMap<>();
+            for (String topic : List.of(SOURCE_A, SOURCE_B, OUTPUT)) {
+                ids.put(topic, result.topicId(topic).get());
+            }
+            return ids;
         }
     }
 }

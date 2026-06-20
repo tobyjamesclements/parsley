@@ -20,8 +20,8 @@ import java.util.Objects;
  *
  * <p>Instances are immutable. {@link #observe} and {@link #merge} return new frontiers.
  *
- * <p>Tests without a real broker-resolved UUID may derive a stable one via
- * {@link CausalPosition#deriveUuid} and call {@link #observe(CausalPosition)} directly.
+ * <p>Tests without a real broker-resolved UUID may use any stable {@link Uuid} (e.g.
+ * {@link Uuid#randomUuid()}) and call {@link #observe(CausalPosition)} directly.
  *
  * <h2>Converting to dependencies</h2>
  * Call {@link #toDependencies()} to turn the frontier into a {@link CausalDependencies} that can be

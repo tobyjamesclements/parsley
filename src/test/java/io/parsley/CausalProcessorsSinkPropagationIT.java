@@ -1,7 +1,9 @@
 package io.parsley;
 
 import org.apache.kafka.clients.admin.Admin;
+import org.apache.kafka.clients.admin.CreateTopicsResult;
 import org.apache.kafka.clients.admin.NewTopic;
+import org.apache.kafka.common.Uuid;
 import org.apache.kafka.clients.consumer.ConsumerConfig;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.apache.kafka.clients.consumer.ConsumerRecords;
@@ -72,7 +74,8 @@ class CausalProcessorsSinkPropagationIT {
     @Test
     void stampedClockSurvivesTheSinkToTheOutputTopic() throws Exception {
         String bootstrap = kafka.getBootstrapServers();
-        createTopics(bootstrap, IN, OUT);
+        Map<String, Uuid> topicIds = createTopics(bootstrap, IN, OUT);
+        Uuid inId = topicIds.get(IN);
 
         ProcessorSupplier<String, String, String, String> user = () -> new Processor<>() {
             private ProcessorContext<String, String> ctx;
@@ -92,7 +95,7 @@ class CausalProcessorsSinkPropagationIT {
         builder.stream(IN, Consumed.with(Serdes.String(), Serdes.String()))
                 .process(CausalProcessors.builder(user, CausalBufferLimit.ofDuration(Duration.ofSeconds(5)))
                         .serdes(Serdes.String(), Serdes.String())
-                        .addCausalTopic(new CausalTopic(IN, CausalPosition.deriveUuid(IN)))
+                        .addCausalTopic(new CausalTopic(IN, inId))
                         .build())
                 .to(OUT, Produced.with(Serdes.String(), Serdes.String()));
 
@@ -121,7 +124,7 @@ class CausalProcessorsSinkPropagationIT {
                 assertEquals("HELLO", new String(out.value()), "the delegate's transform reached the sink");
 
                 Optional<CausalDependencies> stamped = CausalDependencies.fromHeaders(out.headers());
-                assertEquals(Optional.of(CausalDependencies.builder().require(new CausalPosition(CausalPosition.deriveUuid(IN), 0, 0)).build()), stamped,
+                assertEquals(Optional.of(CausalDependencies.builder().require(new CausalPosition(inId, 0, 0)).build()), stamped,
                         "the dependencies stamped at forward must survive the sink to the output topic");
             }
         }
@@ -151,13 +154,19 @@ class CausalProcessorsSinkPropagationIT {
         return props;
     }
 
-    private static void createTopics(String bootstrap, String... topics) throws Exception {
+    private static Map<String, Uuid> createTopics(String bootstrap, String... topics) throws Exception {
         try (Admin admin = Admin.create(Map.of("bootstrap.servers", bootstrap))) {
             Set<NewTopic> newTopics = new java.util.HashSet<>();
             for (String topic : topics) {
                 newTopics.add(new NewTopic(topic, 1, (short) 1));
             }
-            admin.createTopics(newTopics).all().get();
+            CreateTopicsResult result = admin.createTopics(newTopics);
+            result.all().get();
+            Map<String, Uuid> ids = new java.util.HashMap<>();
+            for (String topic : topics) {
+                ids.put(topic, result.topicId(topic).get());
+            }
+            return ids;
         }
     }
 }

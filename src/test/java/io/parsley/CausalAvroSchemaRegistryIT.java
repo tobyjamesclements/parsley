@@ -6,6 +6,7 @@ import io.parsley.avro.Order;
 import io.parsley.avro.Price;
 import org.apache.avro.specific.SpecificRecord;
 import org.apache.kafka.clients.admin.Admin;
+import org.apache.kafka.clients.admin.CreateTopicsResult;
 import org.apache.kafka.clients.admin.NewTopic;
 import org.apache.kafka.clients.consumer.ConsumerConfig;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
@@ -92,7 +93,7 @@ class CausalAvroSchemaRegistryIT {
     void avroRecordsAcrossTopicsRoundTripThroughTheCausalConsumer() throws Exception {
         String bootstrap = kafka.getBootstrapServers();
         String registryUrl = "http://" + schemaRegistry.getHost() + ":" + schemaRegistry.getMappedPort(8081);
-        createTopics(bootstrap, ORDERS, PRICES);
+        Map<String, Uuid> topicIds = createTopics(bootstrap, ORDERS, PRICES);
 
         Order order = new Order("o-1", "ACME", 5);
         Price price = new Price("ACME", 42.5);
@@ -108,8 +109,8 @@ class CausalAvroSchemaRegistryIT {
                      Map.of(ConsumerConfig.GROUP_ID_CONFIG, "avro-rt-" + UUID.randomUUID()),
                      streamsConfig(bootstrap, registryUrl))
                      .addCausalTopics(List.of(
-                             new CausalTopic(ORDERS, CausalPosition.deriveUuid(ORDERS)),
-                             new CausalTopic(PRICES, CausalPosition.deriveUuid(PRICES))))
+                             new CausalTopic(ORDERS, topicIds.get(ORDERS)),
+                             new CausalTopic(PRICES, topicIds.get(PRICES))))
                      .build()) {
 
             // Neither record has a causal dependency — both are admitted immediately.
@@ -155,9 +156,10 @@ class CausalAvroSchemaRegistryIT {
     void bufferedAvroOrderIsReleasedByArrivingPriceAndDeserializesWithCorrectSchemaSubject() throws Exception {
         String bootstrap = kafka.getBootstrapServers();
         String registryUrl = "http://" + schemaRegistry.getHost() + ":" + schemaRegistry.getMappedPort(8081);
-        createTopics(bootstrap, ORDERS, PRICES);
+        Map<String, Uuid> topicIds = createTopics(bootstrap, ORDERS, PRICES);
 
-        Uuid pricesId = CausalPosition.deriveUuid(PRICES);
+        Uuid ordersId = topicIds.get(ORDERS);
+        Uuid pricesId = topicIds.get(PRICES);
 
         Order order = new Order("o-buf", "ACME", 10);
         Price price = new Price("ACME", 99.0);
@@ -175,7 +177,7 @@ class CausalAvroSchemaRegistryIT {
                      Map.of(ConsumerConfig.GROUP_ID_CONFIG, "avro-buf-" + UUID.randomUUID()),
                      streamsConfig(bootstrap, registryUrl))
                      .addCausalTopics(List.of(
-                             new CausalTopic(ORDERS, CausalPosition.deriveUuid(ORDERS)),
+                             new CausalTopic(ORDERS, ordersId),
                              new CausalTopic(PRICES, pricesId)))
                      .build()) {
 
@@ -246,13 +248,19 @@ class CausalAvroSchemaRegistryIT {
         return config;
     }
 
-    private static void createTopics(String bootstrap, String... topics) throws Exception {
+    private static Map<String, Uuid> createTopics(String bootstrap, String... topics) throws Exception {
         try (Admin admin = Admin.create(Map.of("bootstrap.servers", bootstrap))) {
             List<NewTopic> newTopics = new ArrayList<>();
             for (String topic : topics) {
                 newTopics.add(new NewTopic(topic, 1, (short) 1));
             }
-            admin.createTopics(Set.copyOf(newTopics)).all().get();
+            CreateTopicsResult result = admin.createTopics(Set.copyOf(newTopics));
+            result.all().get();
+            Map<String, Uuid> ids = new HashMap<>();
+            for (String topic : topics) {
+                ids.put(topic, result.topicId(topic).get());
+            }
+            return ids;
         }
     }
 }

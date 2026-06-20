@@ -18,8 +18,8 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class CausalDependenciesTest {
 
-    private static final Uuid T1_ID = CausalPosition.deriveUuid("t1");
-    private static final Uuid T2_ID = CausalPosition.deriveUuid("t2");
+    private static final Uuid T1_ID = Uuid.randomUuid();
+    private static final Uuid T2_ID = Uuid.randomUuid();
 
     /**
      * An empty dependency clock carries no requirements and is therefore satisfied by any
@@ -247,8 +247,8 @@ class CausalDependenciesTest {
         // T1: required 5, frontier at 1 → gap 4. T2: required 2, frontier absent (-1) → gap 3.
         List<CausalPosition> gap = required.findMissing(CausalFrontier.empty().observe(new CausalPosition(T1_ID, 0, 1)));
         assertEquals(Set.of(
-                new CausalPosition(CausalPosition.deriveUuid("t1"), 0, 4L),
-                new CausalPosition(CausalPosition.deriveUuid("t2"), 0, 3L)),
+                new CausalPosition(T1_ID, 0, 4L),
+                new CausalPosition(T2_ID, 0, 3L)),
                 Set.copyOf(gap),
                 "gap must reflect the per-partition shortfall for each unsatisfied dependency");
     }
@@ -264,7 +264,7 @@ class CausalDependenciesTest {
     void findMissingCountsAbsentPartitionAsMinusOne() {
         CausalDependencies required = CausalDependencies.builder().require(new CausalPosition(T1_ID, 0, 0)).build();
         List<CausalPosition> gap = required.findMissing(CausalFrontier.empty());
-        assertEquals(List.of(new CausalPosition(CausalPosition.deriveUuid("t1"), 0, 1L)), gap,
+        assertEquals(List.of(new CausalPosition(T1_ID, 0, 1L)), gap,
                 "requiring offset 0 against an unseen partition is a gap of 1");
     }
 

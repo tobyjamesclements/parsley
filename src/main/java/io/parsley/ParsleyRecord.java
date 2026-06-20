@@ -75,12 +75,16 @@ record ParsleyRecord<K, V>(K key, V value, long timestamp, List<ParsleyHeader> h
 
     /**
      * The Kafka UUID of the source topic, read from the {@link ParsleyAttributes#SRC_TOPIC_ID}
-     * header. Falls back to {@link CausalPosition#deriveUuid} if the header is absent (e.g. records
-     * built in tests without an explicit UUID).
+     * header.
+     *
+     * @throws IllegalStateException if the header is absent
      */
     Uuid sourceTopicId() {
         ParsleyHeader h = findHeader(ParsleyAttributes.SRC_TOPIC_ID);
-        if (h == null) return CausalPosition.deriveUuid(sourceTopic());
+        if (h == null) {
+            throw new IllegalStateException(
+                    "record on topic " + sourceTopic() + " has no " + ParsleyAttributes.SRC_TOPIC_ID + " header");
+        }
         byte[] b = h.value();
         long msb = ByteBuffer.wrap(b, 0, 8).getLong();
         long lsb = ByteBuffer.wrap(b, 8, 8).getLong();

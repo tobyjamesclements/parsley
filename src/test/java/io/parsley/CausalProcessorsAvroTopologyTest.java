@@ -55,8 +55,8 @@ class CausalProcessorsAvroTopologyTest {
 
     private static final String PRICES = "prices";
     private static final String ORDERS = "orders";
-    private static final Uuid PRICES_ID = CausalPosition.deriveUuid(PRICES);
-    private static final Uuid ORDERS_ID = CausalPosition.deriveUuid(ORDERS);
+    private static final Uuid PRICES_ID = Uuid.randomUuid();
+    private static final Uuid ORDERS_ID = Uuid.randomUuid();
 
     private final List<SpecificRecord> processed = new ArrayList<>();
 
