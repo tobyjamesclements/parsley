@@ -13,8 +13,9 @@ import java.util.List;
  *   <li>{@link #first(CausalBufferLimit...)} — evict when the first of several limits fires
  * </ul>
  *
- * <p>A {@code CausalBufferLimit} is always paired with a {@link CausalBufferPolicy} that determines
- * <em>what</em> happens to evicted records (forward with a violation, drop, or dead-letter).
+ * <p>When a limit fires, the evicted record is always forwarded to the user's processor — Parsley
+ * never drops a record — stamped {@link CausalResult#EVICTED} and reported via
+ * {@link CausalViolationHandler}.
  */
 public sealed interface CausalBufferLimit permits ParsleyDurationLimit, ParsleySizeLimit, ParsleyFirstLimit {
 
@@ -32,8 +33,8 @@ public sealed interface CausalBufferLimit permits ParsleyDurationLimit, ParsleyS
 
     /**
      * Creates a limit that evicts the oldest buffered records, one at a time, whenever the buffer
-     * reaches {@code messages} entries — just enough to bring the buffer back under the limit,
-     * according to the {@link CausalBufferPolicy}. Younger records remain held.
+     * reaches {@code messages} entries — just enough to bring the buffer back under the limit.
+     * Younger records remain held.
      *
      * @param messages the maximum buffer size in message count; must be positive
      * @return a new size limit

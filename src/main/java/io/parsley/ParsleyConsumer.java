@@ -39,7 +39,6 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.atomic.AtomicReference;
-import java.util.function.Consumer;
 
 import static java.nio.charset.StandardCharsets.UTF_8;
 
@@ -83,13 +82,12 @@ final class ParsleyConsumer<K, V> implements CausalConsumer<K, V> {
 
     ParsleyConsumer(
             Collection<String> topics,
-            CausalBufferPolicy policy,
+            CausalBufferLimit limit,
             CausalViolationHandler onViolation,
             Map<String, Object> consumerConfig,
             Map<String, Object> streamsConfig,
             String storeName,
-            ParsleyTopicAdmin topicAdmin,
-            Consumer<ConsumerRecord<K, V>> deadLetterSink) {
+            ParsleyTopicAdmin topicAdmin) {
 
         Map<String, Object> merged = new HashMap<>();
         merged.put("processing.exception.handler.global.enabled", "true");
@@ -118,21 +116,12 @@ final class ParsleyConsumer<K, V> implements CausalConsumer<K, V> {
 
         Serde<byte[]> bytes = Serdes.ByteArray();
         CausalProcessors.Builder<byte[], byte[], byte[], byte[]> processorsBuilder =
-                CausalProcessors.builder(outboxDelegate(), policy)
+                CausalProcessors.builder(outboxDelegate(), limit)
                         .serdesByTopic(t -> bytes, t -> bytes)
                         .onViolation(onViolation)
                         .storeName(storeName)
                         .frontierListener(this::onFrontierAdvanced)
                         .topicUuids(topicUuids);
-        if (deadLetterSink != null) {
-            // Dead-lettered records never reach outboxDelegate/ctx.forward(), so CAUSAL_DEPENDENCIES
-            // is never stamped with the delivery-time frontier here — it's still the producer's
-            // original value (plus the parsley-dlq-* headers stamped by the engine) and needs no
-            // restoring, just stripping of the internal _parsley_* source-coordinate headers.
-            processorsBuilder.deadLetterSink(r -> deadLetterSink.accept(
-                    toTypedRecord(r.topic(), r.partition(), r.offset(), r.timestamp(),
-                            r.key(), r.value(), stripInternalHeaders(r.headers()))));
-        }
 
         StreamsBuilder builder = new StreamsBuilder();
         builder.stream(topics, Consumed.with(bytes, bytes))
@@ -280,20 +269,6 @@ final class ParsleyConsumer<K, V> implements CausalConsumer<K, V> {
         }
         if (originalDependencies != null) {
             out.add(new RecordHeader(ParsleyAttributes.CAUSAL_DEPENDENCIES, originalDependencies.value()));
-        }
-        return out;
-    }
-
-    /**
-     * Strips internal {@code _parsley_*} headers, leaving {@link ParsleyAttributes#CAUSAL_DEPENDENCIES}
-     * untouched. Unlike {@link #restoreOriginalDependencies}, used on the dead-letter path, where
-     * records never pass through the outbox delegate that stamps the delivery-time frontier — so
-     * {@code CAUSAL_DEPENDENCIES} is already the producer's original, unstamped value.
-     */
-    private static Headers stripInternalHeaders(Headers source) {
-        RecordHeaders out = new RecordHeaders();
-        for (Header h : source) {
-            if (!h.key().startsWith("_parsley_")) out.add(h);
         }
         return out;
     }

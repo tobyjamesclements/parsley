@@ -11,6 +11,9 @@ final class ParsleyAttributes {
     /** Header carrying a record's serialised {@code CausalDependencies}. */
     static final String CAUSAL_DEPENDENCIES = "parsley-causal-dependencies";
 
+    /** Header carrying the {@link CausalResult} a record was stamped with on delivery. */
+    static final String CAUSAL_RESULT = "parsley-causal-result";
+
     /** Key under which the frontier is stored in the processor's frontier state store. */
     static final String FRONTIER_KEY = "f";
 

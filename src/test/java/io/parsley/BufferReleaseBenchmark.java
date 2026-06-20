@@ -78,8 +78,7 @@ public class BufferReleaseBenchmark {
     // -------------------------------------------------------------------------
 
     static final int FIXED_N = 128; // n held constant in the k-curve and r-curve benchmarks
-    static final CausalBufferPolicy BENCH_POLICY =
-            CausalBufferPolicy.drop(CausalBufferLimit.ofSize(Integer.MAX_VALUE / 2));
+    static final CausalBufferLimit BENCH_LIMIT = CausalBufferLimit.ofSize(Integer.MAX_VALUE / 2);
 
     static ParsleyRecord<String, String> syntheticRecord(String srcTopic, int partition, long offset,
                                                           CausalDependencies deps) {
@@ -95,10 +94,9 @@ public class BufferReleaseBenchmark {
                                                        KeyValueStore<byte[], byte[]> waitKV,
                                                        ParsleySerializer<String, String> serializer) {
         return new ParsleyEngine<>(
-                BENCH_POLICY,
+                BENCH_LIMIT,
                 v -> {},
                 CausalFrontier.empty(),
-                null,
                 f -> {},
                 new RocksBufferStore<>(bufferKV, serializer),
                 new RocksPositionIndex(waitKV),
@@ -128,7 +126,7 @@ public class BufferReleaseBenchmark {
         };
         StreamsBuilder builder = new StreamsBuilder();
         builder.stream("bench-in", Consumed.with(Serdes.String(), Serdes.String()))
-               .process(CausalProcessors.builder(noOp, BENCH_POLICY)
+               .process(CausalProcessors.builder(noOp, BENCH_LIMIT)
                        .serdes(Serdes.String(), Serdes.String()).build())
                .to("bench-out", Produced.with(Serdes.String(), Serdes.String()));
         // Unique state dir per trial so each trial starts with an empty RocksDB

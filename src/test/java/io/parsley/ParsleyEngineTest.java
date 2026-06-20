@@ -2,7 +2,7 @@ package io.parsley;
 
 import org.apache.kafka.common.TopicPartition;
 import org.apache.kafka.common.Uuid;
-import org.apache.kafka.common.header.Headers;
+import org.apache.kafka.common.header.Header;
 import org.junit.jupiter.api.Test;
 
 import java.time.Duration;
@@ -33,18 +33,21 @@ class ParsleyEngineTest {
      * A record whose causal dependencies are already satisfied by the current frontier
      * is forwarded to the downstream processor immediately, without entering the buffer.
      *
-     * <p>The frontier is advanced to reflect the record's source coordinate on forward.
+     * <p>The frontier is advanced to reflect the record's source coordinate on forward, and
+     * the record is stamped {@link CausalResult#SATISFIED}.
      *
-     * Asserts that exactly one record is forwarded and the frontier reflects the admitted
-     * record's source offset.
+     * Asserts that exactly one record is forwarded, it carries the SATISFIED result, and the
+     * frontier reflects the admitted record's source offset.
      */
     @Test
     void satisfiedRecordForwardsImmediatelyAndAdvancesFrontier() {
-        ParsleyEngine<String, String> engine = engineWith(CausalBufferPolicy.drop(CausalBufferLimit.ofSize(100)));
+        ParsleyEngine<String, String> engine = engineWith(CausalBufferLimit.ofSize(100));
 
         processRecord(engine, incomingRecord(T1, 3, CausalDependencies.empty()));
 
         assertEquals(1, forwarded.size(), "satisfied record must be forwarded immediately");
+        assertEquals(CausalResult.SATISFIED, resultOf(forwarded.get(0)),
+                "immediately satisfied record must be stamped SATISFIED");
         assertEquals(CausalFrontier.empty().observe(new CausalPosition(T1_ID, 0, 3)), engine.frontier(),
                 "frontier must advance to the forwarded record's source offset");
     }
@@ -54,14 +57,16 @@ class ParsleyEngineTest {
      * frontier advances to cover the required coordinate.
      *
      * <p>When the dependency arrives, the engine releases the buffered record after the
-     * satisfying record and advances the frontier through both.
+     * satisfying record and advances the frontier through both. Both released records are
+     * stamped {@link CausalResult#SATISFIED} — the result reflects whether the engine ever
+     * had to forcibly evict, not how long a record waited.
      *
      * Asserts that the buffered record is released in causal order after the satisfying record,
-     * and that the frontier reflects both records' source offsets.
+     * both carry the SATISFIED result, and the frontier reflects both records' source offsets.
      */
     @Test
     void unsatisfiedRecordIsBufferedUntilFrontierCatchesUp() {
-        ParsleyEngine<String, String> engine = engineWith(CausalBufferPolicy.drop(CausalBufferLimit.ofSize(100)));
+        ParsleyEngine<String, String> engine = engineWith(CausalBufferLimit.ofSize(100));
 
         CausalDependencies deps = CausalDependencies.builder().require(new CausalPosition(T1_ID, 0, 3)).build();
         processRecord(engine, incomingRecord(T2, 0, deps));
@@ -72,6 +77,10 @@ class ParsleyEngineTest {
         assertEquals(2, forwarded.size(), "both records must be forwarded after the dependency arrives");
         assertEquals(T1, forwarded.get(0).sourcePartition(), "satisfying record must be forwarded first");
         assertEquals(T2, forwarded.get(1).sourcePartition(), "buffered record must be released second");
+        assertEquals(CausalResult.SATISFIED, resultOf(forwarded.get(0)),
+                "satisfying record must be stamped SATISFIED");
+        assertEquals(CausalResult.SATISFIED, resultOf(forwarded.get(1)),
+                "drained record must be stamped SATISFIED, not just the immediate one");
         assertEquals(
                 CausalFrontier.empty()
                         .observe(new CausalPosition(T1_ID, 0, 3))
@@ -88,7 +97,7 @@ class ParsleyEngineTest {
      */
     @Test
     void bufferHoldsAnUnsatisfiedRecordAndReleasesItOnDrain() {
-        ParsleyEngine<String, String> engine = engineWith(CausalBufferPolicy.drop(CausalBufferLimit.ofSize(100)));
+        ParsleyEngine<String, String> engine = engineWith(CausalBufferLimit.ofSize(100));
 
         engine.onRecord(incomingRecord(T2, 0, CausalDependencies.builder().require(new CausalPosition(T1_ID, 0, 3)).build()));
         assertEquals(1, buffer.size(), "unsatisfied record must be held in the buffer");
@@ -99,18 +108,24 @@ class ParsleyEngineTest {
 
     /**
      * When the buffer is at its size limit and a new unsatisfied record arrives, the engine
-     * applies the configured eviction policy. Under the drop policy, the record is discarded
-     * and removed from the buffer immediately.
+     * always evicts the oldest record needed to bring the buffer back under the limit and
+     * forwards it — there is no drop/discard outcome anymore. The evicted record is stamped
+     * {@link CausalResult#EVICTED} and a violation is reported.
      *
-     * Asserts that the buffer is empty after the eviction (the record never entered the buffer).
+     * Asserts that the record is removed from the buffer, forwarded with the EVICTED result,
+     * and exactly one violation is reported.
      */
     @Test
-    void strictEvictionRemovesTheRecordFromTheBuffer() {
-        ParsleyEngine<String, String> engine = engineWith(CausalBufferPolicy.drop(CausalBufferLimit.ofSize(1)));
+    void evictionRemovesTheRecordFromTheBufferAndForwardsItAnyway() {
+        ParsleyEngine<String, String> engine = engineWith(CausalBufferLimit.ofSize(1));
 
-        engine.onRecord(incomingRecord(T2, 0, CausalDependencies.builder().require(new CausalPosition(T1_ID, 0, 99)).build()));
+        processRecord(engine, incomingRecord(T2, 0, CausalDependencies.builder().require(new CausalPosition(T1_ID, 0, 99)).build()));
 
-        assertEquals(0, buffer.size(), "dropped record must never reside in the buffer");
+        assertEquals(0, buffer.size(), "evicted record must never remain in the buffer");
+        assertEquals(1, forwarded.size(), "evicted record must still be forwarded — Parsley never drops");
+        assertEquals(CausalResult.EVICTED, resultOf(forwarded.get(0)),
+                "evicted record must be stamped EVICTED");
+        assertEquals(1, violations.size(), "exactly one violation must be reported for the eviction");
     }
 
     /**
@@ -126,7 +141,7 @@ class ParsleyEngineTest {
     @Test
     void recordsAlreadyInTheBufferDrainWhenTheFrontierCatchesUp() {
         buffer.add(incomingRecord(T2, 0, CausalDependencies.builder().require(new CausalPosition(T1_ID, 0, 3)).build()), 0L);
-        ParsleyEngine<String, String> engine = engineWith(CausalBufferPolicy.drop(CausalBufferLimit.ofSize(100)));
+        ParsleyEngine<String, String> engine = engineWith(CausalBufferLimit.ofSize(100));
         assertEquals(CausalFrontier.empty(), engine.frontier(), "pre-buffered records must not advance the frontier on construction");
         assertTrue(frontiers.isEmpty(), "pre-buffered records must not fire the frontier listener on construction");
 
@@ -149,7 +164,7 @@ class ParsleyEngineTest {
      */
     @Test
     void inboundClockIsNeverFoldedIntoTheFrontier() {
-        ParsleyEngine<String, String> engine = engineWith(CausalBufferPolicy.forwardUnsafe(CausalBufferLimit.ofSize(1)));
+        ParsleyEngine<String, String> engine = engineWith(CausalBufferLimit.ofSize(1));
 
         CausalDependencies.Builder bigBuilder = CausalDependencies.builder();
         for (int p = 0; p < 200; p++) {
@@ -164,135 +179,68 @@ class ParsleyEngineTest {
     }
 
     /**
-     * A record with no causal-dependencies header is a protocol violation. Under the
-     * forward-unsafe policy, the engine forwards it immediately and reports the violation.
+     * A record with no causal-dependencies header has empty dependencies, which are trivially
+     * satisfied by any frontier — it is forwarded immediately, just like a record that
+     * explicitly claims no dependencies, with no violation reported.
      *
-     * Asserts that the record is forwarded, the violation list contains one MISSING_HEADER
-     * entry, and the frontier advances through the record's source coordinate.
+     * Asserts that the record is forwarded with the SATISFIED result, no violation is
+     * reported, and the frontier advances through the record's source coordinate.
      */
     @Test
-    void forwardRecordWithViolationWhenHeaderMissingUnderForwardUnsafePolicy() {
-        ParsleyEngine<String, String> engine = engineWith(CausalBufferPolicy.forwardUnsafe(CausalBufferLimit.ofSize(100)));
+    void headerMissingRecordIsForwardedAsTriviallySatisfied() {
+        ParsleyEngine<String, String> engine = engineWith(CausalBufferLimit.ofSize(100));
 
         processRecord(engine, incomingRecord(T1, 0, null));
 
-        assertEquals(1, forwarded.size(), "forward-unsafe policy must forward the missing-header record");
-        assertEquals(List.of(CausalViolationReason.MISSING_HEADER), reasons(),
-                "a MISSING_HEADER violation must be reported");
+        assertEquals(1, forwarded.size(), "a missing-header record must still be forwarded");
+        assertEquals(CausalResult.SATISFIED, resultOf(forwarded.get(0)),
+                "a missing-header record is trivially satisfied, not evicted");
+        assertTrue(violations.isEmpty(), "a missing header is benign — it must not report a violation");
         assertEquals(CausalFrontier.empty().observe(new CausalPosition(T1_ID, 0, 0)), engine.frontier(),
-                "frontier must advance even for violation records");
+                "frontier must advance through the forwarded record");
     }
 
     /**
-     * A record with no causal-dependencies header is a protocol violation. Under the drop
-     * policy, the engine silently discards it and reports the violation, but still advances
-     * the frontier so downstream records are not held indefinitely.
+     * A record whose causal-dependencies header cannot be parsed is treated the same as one
+     * with empty dependencies — trivially satisfied — and forwarded immediately with no
+     * violation reported.
      *
-     * Asserts that nothing is forwarded, a MISSING_HEADER violation is reported, and the
-     * frontier reflects the dropped record's source offset.
-     */
-    @Test
-    void discardRecordWhenHeaderMissingUnderDropPolicy() {
-        ParsleyEngine<String, String> engine = engineWith(CausalBufferPolicy.drop(CausalBufferLimit.ofSize(100)));
-
-        processRecord(engine, incomingRecord(T1, 0, null));
-
-        assertTrue(forwarded.isEmpty(), "drop policy must not forward a missing-header record");
-        assertEquals(List.of(CausalViolationReason.MISSING_HEADER), reasons(),
-                "a MISSING_HEADER violation must be reported");
-        assertEquals(CausalFrontier.empty().observe(new CausalPosition(T1_ID, 0, 0)), engine.frontier(),
-                "frontier must still advance so downstream records are not blocked");
-    }
-
-    /**
-     * A record with no causal-dependencies header is a protocol violation. Under the
-     * dead-letter policy, the engine routes it to the configured sink and reports the
-     * violation.
-     *
-     * Asserts that nothing is forwarded downstream, one record reaches the dead-letter sink,
-     * and the sink record carries a MISSING_HEADER reason header.
-     */
-    @Test
-    void routeToDeadLetterWhenHeaderMissingUnderDeadLetterPolicy() {
-        List<ParsleyRecord<String, String>> deadLettered = new ArrayList<>();
-        ParsleyEngine<String, String> engine = engineWith(
-                CausalBufferPolicy.deadLetter(CausalBufferLimit.ofSize(100)), deadLettered::add);
-
-        processRecord(engine, incomingRecord(T1, 0, null));
-
-        assertTrue(forwarded.isEmpty(), "dead-letter policy must not forward a missing-header record downstream");
-        assertEquals(1, deadLettered.size(), "missing-header record must reach the dead-letter sink");
-        assertEquals(List.of(CausalViolationReason.MISSING_HEADER), reasons(),
-                "a MISSING_HEADER violation must be reported");
-        assertEquals("MISSING_HEADER",
-                new String(deadLettered.get(0).toConsumerRecord()
-                        .headers().lastHeader(CausalViolation.DLQ_REASON_HEADER).value(), UTF_8),
-                "dead-letter record must carry the MISSING_HEADER reason header");
-    }
-
-    /**
-     * A record whose causal-dependencies header cannot be parsed is a protocol violation.
-     * Under the forward-unsafe policy, the engine forwards it immediately and reports the
-     * violation.
-     *
-     * Asserts that the record is forwarded and an UNRESOLVABLE_DEPENDENCIES violation is
+     * Asserts that the record is forwarded with the SATISFIED result and no violation is
      * reported.
      */
     @Test
-    void forwardRecordWithViolationWhenDependenciesUnresolvableUnderForwardUnsafePolicy() {
-        ParsleyEngine<String, String> engine = engineWith(CausalBufferPolicy.forwardUnsafe(CausalBufferLimit.ofSize(100)));
+    void garbledDependenciesRecordIsForwardedAsTriviallySatisfied() {
+        ParsleyEngine<String, String> engine = engineWith(CausalBufferLimit.ofSize(100));
 
-        ParsleyRecord<String, String> garbage = garbledRecord(T1, 0);
-        processRecord(engine, garbage);
+        processRecord(engine, garbledRecord(T1, 0));
 
-        assertEquals(1, forwarded.size(), "forward-unsafe policy must forward the unresolvable-dependencies record");
-        assertEquals(List.of(CausalViolationReason.UNRESOLVABLE_DEPENDENCIES), reasons(),
-                "an UNRESOLVABLE_DEPENDENCIES violation must be reported");
-    }
-
-    /**
-     * A record whose causal-dependencies header cannot be parsed is a protocol violation.
-     * Under the drop policy, the engine discards it, reports the violation, and advances
-     * the frontier.
-     *
-     * Asserts that nothing is forwarded, an UNRESOLVABLE_DEPENDENCIES violation is reported,
-     * and the frontier reflects the dropped record's source offset.
-     */
-    @Test
-    void discardRecordWhenDependenciesUnresolvableUnderDropPolicy() {
-        ParsleyEngine<String, String> engine = engineWith(CausalBufferPolicy.drop(CausalBufferLimit.ofSize(100)));
-
-        ParsleyRecord<String, String> garbage = garbledRecord(T1, 0);
-        processRecord(engine, garbage);
-
-        assertTrue(forwarded.isEmpty(), "drop policy must not forward an unresolvable-dependencies record");
-        assertEquals(List.of(CausalViolationReason.UNRESOLVABLE_DEPENDENCIES), reasons(),
-                "an UNRESOLVABLE_DEPENDENCIES violation must be reported");
-        assertEquals(CausalFrontier.empty().observe(new CausalPosition(T1_ID, 0, 0)), engine.frontier(),
-                "frontier must still advance for the dropped record");
+        assertEquals(1, forwarded.size(), "an unresolvable-dependencies record must still be forwarded");
+        assertEquals(CausalResult.SATISFIED, resultOf(forwarded.get(0)),
+                "an unresolvable header is trivially satisfied, not evicted");
+        assertTrue(violations.isEmpty(), "an unresolvable header is non-blocking — it must not report a violation");
     }
 
     /**
      * When the buffer reaches its size limit and a new unsatisfied record arrives, the engine
      * evicts only the oldest buffered record needed to bring the buffer back under the limit,
-     * leaving the rest held. Under the forward-unsafe policy, the evicted record is forwarded
-     * with a violation reported.
+     * leaving the rest held. The evicted record is forwarded, stamped EVICTED, and a violation
+     * is reported.
      *
      * Asserts that only the oldest record is forwarded, exactly one violation is reported, the
      * frontier advances only through the evicted record, and the younger record remains buffered.
      */
     @Test
-    void sizeLimitEvictsOnlyTheOldestRecordUnderForwardUnsafePolicy() {
-        ParsleyEngine<String, String> engine = engineWith(CausalBufferPolicy.forwardUnsafe(CausalBufferLimit.ofSize(2)));
+    void sizeLimitEvictsOnlyTheOldestRecord() {
+        ParsleyEngine<String, String> engine = engineWith(CausalBufferLimit.ofSize(2));
         CausalDependencies unmet = CausalDependencies.builder().require(new CausalPosition(T1_ID, 0, 99)).build();
 
         processRecord(engine, incomingRecord(T2, 0, unmet));
         assertTrue(forwarded.isEmpty(), "first record must be buffered while limit not yet reached");
         processRecord(engine, incomingRecord(T2, 1, unmet)); // hits size 2 → evict only the oldest
 
-        assertEquals(1, forwarded.size(), "only the oldest evicted record must be forwarded under forward-unsafe policy");
-        assertEquals(List.of(CausalViolationReason.LIMIT_REACHED), reasons(),
-                "exactly one LIMIT_REACHED violation must be reported");
+        assertEquals(1, forwarded.size(), "only the oldest evicted record must be forwarded");
+        assertEquals(CausalResult.EVICTED, resultOf(forwarded.get(0)), "the forwarded record must be stamped EVICTED");
+        assertEquals(1, violations.size(), "exactly one violation must be reported");
         assertEquals(CausalFrontier.empty().observe(new CausalPosition(T2_ID, 0, 0)), engine.frontier(),
                 "frontier must advance only through the evicted record");
         assertEquals(1, buffer.size(), "the younger record must remain held in the buffer");
@@ -307,7 +255,7 @@ class ParsleyEngineTest {
      */
     @Test
     void sizeLimitSlidesTheWindowEvictingOneOldestRecordPerOverflow() {
-        ParsleyEngine<String, String> engine = engineWith(CausalBufferPolicy.forwardUnsafe(CausalBufferLimit.ofSize(2)));
+        ParsleyEngine<String, String> engine = engineWith(CausalBufferLimit.ofSize(2));
         CausalDependencies unmet = CausalDependencies.builder().require(new CausalPosition(T1_ID, 0, 99)).build();
 
         processRecord(engine, incomingRecord(T2, 0, unmet)); // A: depth 1, no eviction
@@ -322,7 +270,7 @@ class ParsleyEngineTest {
         assertEquals(List.of(0L, 1L), forwarded.stream().map(ParsleyRecord::sourceOffset).toList(),
                 "the second overflow must evict only the next-oldest record (B)");
         assertEquals(1, buffer.size(), "buffer must never exceed the configured size limit");
-        assertEquals(2, reasons().size(), "exactly one LIMIT_REACHED violation must be reported per overflow");
+        assertEquals(2, violations.size(), "exactly one violation must be reported per overflow");
     }
 
     /**
@@ -342,12 +290,12 @@ class ParsleyEngineTest {
         buffer.add(incomingRecord(T2, 1, unmet), 1L);
         buffer.add(incomingRecord(T2, 2, unmet), 2L);
 
-        ParsleyEngine<String, String> engine = engineWith(CausalBufferPolicy.forwardUnsafe(CausalBufferLimit.ofSize(2)));
+        ParsleyEngine<String, String> engine = engineWith(CausalBufferLimit.ofSize(2));
         forwarded.addAll(engine.evictOverflow());
 
         assertEquals(List.of(0L, 1L), forwarded.stream().map(ParsleyRecord::sourceOffset).toList(),
                 "the two oldest excess records must be evicted, oldest-first");
-        assertEquals(2, reasons().size(), "one LIMIT_REACHED violation must be reported per evicted record");
+        assertEquals(2, violations.size(), "one violation must be reported per evicted record");
         assertEquals(1, buffer.size(), "the buffer must be trimmed down to exactly the new limit");
     }
 
@@ -361,7 +309,7 @@ class ParsleyEngineTest {
         CausalDependencies unmet = CausalDependencies.builder().require(new CausalPosition(T1_ID, 0, 99)).build();
         buffer.add(incomingRecord(T2, 0, unmet), 0L);
 
-        ParsleyEngine<String, String> engine = engineWith(CausalBufferPolicy.forwardUnsafe(CausalBufferLimit.ofSize(2)));
+        ParsleyEngine<String, String> engine = engineWith(CausalBufferLimit.ofSize(2));
         List<ParsleyRecord<String, String>> result = engine.evictOverflow();
 
         assertTrue(result.isEmpty(), "no eviction must occur while the buffer is within the limit");
@@ -370,24 +318,23 @@ class ParsleyEngineTest {
     }
 
     /**
-     * When the buffer is at its size limit and a new unsatisfied record arrives, the engine
-     * evicts the oldest buffered record. Under the drop policy, the evicted record is
-     * discarded and a violation is reported, but the frontier does not advance.
+     * An eviction reports a {@link CausalViolation} carrying the frontier at eviction time, the
+     * evicted record's required dependencies, and the causal gap between them — even though the
+     * record is still forwarded (Parsley never drops a record outright).
      *
-     * Asserts that nothing is forwarded, one LIMIT_REACHED violation is reported, the
-     * violation carries the expected frontier and gap, and the frontier remains unchanged.
+     * Asserts that the forwarded record is stamped EVICTED and the violation carries the
+     * expected frontier, required dependencies, and gap.
      */
     @Test
-    void dropPolicyDiscardsOnEvictionAndReportsTheGap() {
-        ParsleyEngine<String, String> engine = engineWith(CausalBufferPolicy.drop(CausalBufferLimit.ofSize(1)));
+    void evictionReportsTheFrontierRequiredAndGap() {
+        ParsleyEngine<String, String> engine = engineWith(CausalBufferLimit.ofSize(1));
 
         processRecord(engine, incomingRecord(T2, 0, CausalDependencies.builder().require(new CausalPosition(T1_ID, 0, 99)).build()));
 
-        assertTrue(forwarded.isEmpty(), "drop policy must not forward evicted records");
-        assertEquals(1, violations.size(), "one LIMIT_REACHED violation must be reported");
+        assertEquals(1, forwarded.size(), "an evicted record must still be forwarded");
+        assertEquals(CausalResult.EVICTED, resultOf(forwarded.get(0)), "the forwarded record must be stamped EVICTED");
+        assertEquals(1, violations.size(), "one violation must be reported");
         CausalViolation violation = violations.get(0);
-        assertEquals(CausalViolationReason.LIMIT_REACHED, violation.reason(),
-                "violation reason must be LIMIT_REACHED");
         assertEquals(CausalFrontier.empty(), violation.frontier(),
                 "violation must carry the frontier at eviction time");
         assertEquals(CausalDependencies.builder().require(new CausalPosition(T1_ID, 0, 99)).build(), violation.required(),
@@ -397,76 +344,14 @@ class ParsleyEngineTest {
     }
 
     /**
-     * Under the dead-letter policy, records evicted from the buffer are routed to the
-     * configured dead-letter sink rather than forwarded downstream.
-     *
-     * Asserts that nothing is forwarded, the evicted record reaches the dead-letter sink,
-     * and a LIMIT_REACHED violation is reported.
-     */
-    @Test
-    void deadLetterPolicyRoutesEvictedRecordsToSink() {
-        List<ParsleyRecord<String, String>> deadLettered = new ArrayList<>();
-        ParsleyEngine<String, String> engine = engineWith(
-                CausalBufferPolicy.deadLetter(CausalBufferLimit.ofSize(1)), deadLettered::add);
-
-        processRecord(engine, incomingRecord(T2, 0, CausalDependencies.builder().require(new CausalPosition(T1_ID, 0, 99)).build()));
-
-        assertTrue(forwarded.isEmpty(), "dead-letter policy must not forward evicted records downstream");
-        assertEquals(1, deadLettered.size(), "evicted record must reach the dead-letter sink");
-        assertEquals(List.of(CausalViolationReason.LIMIT_REACHED), reasons(),
-                "a LIMIT_REACHED violation must be reported");
-    }
-
-    /**
-     * A record routed to the dead-letter sink carries three causal-context headers:
-     * the reason code, the required dependencies at the time of eviction, and the gap
-     * between the required and satisfied state.
-     *
-     * Asserts that all three headers are present and decode to the expected values.
-     */
-    @Test
-    void deadLetteredRecordCarriesCausalContextHeaders() {
-        List<ParsleyRecord<String, String>> deadLettered = new ArrayList<>();
-        CausalDependencies required = CausalDependencies.builder().require(new CausalPosition(T1_ID, 0, 5L)).build();
-
-        ParsleyEngine<String, String> engine = engineWith(
-                CausalBufferPolicy.deadLetter(CausalBufferLimit.ofSize(1)), deadLettered::add);
-        processRecord(engine, incomingRecord(T2, 0, required));
-
-        assertEquals(1, deadLettered.size(), "evicted record must reach the dead-letter sink");
-        Headers headers = deadLettered.get(0).toConsumerRecord().headers();
-
-        assertNotNull(headers.lastHeader(CausalViolation.DLQ_REASON_HEADER),
-                "dead-letter record must carry the reason header");
-        assertEquals("LIMIT_REACHED",
-                new String(headers.lastHeader(CausalViolation.DLQ_REASON_HEADER).value(), UTF_8),
-                "reason header must encode LIMIT_REACHED");
-
-        assertNotNull(headers.lastHeader(CausalViolation.DLQ_REQUIRED_DEPENDENCIES_HEADER),
-                "dead-letter record must carry the required-dependencies header");
-        assertEquals(required,
-                CausalDependencies.fromBytes(headers.lastHeader(CausalViolation.DLQ_REQUIRED_DEPENDENCIES_HEADER).value()),
-                "required-dependencies header must round-trip the original dependencies");
-
-        assertNotNull(headers.lastHeader(CausalViolation.DLQ_GAP_HEADER),
-                "dead-letter record must carry the gap header");
-        CausalDependencies decodedGap =
-                CausalDependencies.fromBytes(headers.lastHeader(CausalViolation.DLQ_GAP_HEADER).value());
-        assertTrue(decodedGap.dependencies().stream()
-                        .anyMatch(p -> p.topicId().equals(CausalPosition.deriveUuid("t1")) && p.partition() == 0),
-                "gap header must cover the unsatisfied partition");
-    }
-
-    /**
      * When the buffer limit is duration-based, the engine exposes the configured eviction
      * interval so callers can schedule punctuators.
      *
      * Asserts that {@code evictionInterval()} returns the configured duration.
      */
     @Test
-    void durationPolicyExposesEvictionInterval() {
-        ParsleyEngine<String, String> engine =
-                engineWith(CausalBufferPolicy.drop(CausalBufferLimit.ofDuration(Duration.ofSeconds(5))));
+    void durationLimitExposesEvictionInterval() {
+        ParsleyEngine<String, String> engine = engineWith(CausalBufferLimit.ofDuration(Duration.ofSeconds(5)));
         assertEquals(Duration.ofSeconds(5), engine.evictionInterval().orElseThrow(),
                 "eviction interval must match the configured duration");
     }
@@ -480,8 +365,7 @@ class ParsleyEngineTest {
     @Test
     void evictExpiredLeavesRecordsYoungerThanTheDurationInTheBuffer() {
         AtomicLong clock = new AtomicLong(0L);
-        ParsleyEngine<String, String> engine = engineWithClock(
-                CausalBufferPolicy.drop(CausalBufferLimit.ofDuration(Duration.ofMillis(200))), clock::get);
+        ParsleyEngine<String, String> engine = engineWithClock(CausalBufferLimit.ofDuration(Duration.ofMillis(200)), clock::get);
 
         processRecord(engine, incomingRecord(T2, 0,
                 CausalDependencies.builder().require(new CausalPosition(T1_ID, 0, 99)).build()));
@@ -496,25 +380,25 @@ class ParsleyEngineTest {
 
     /**
      * {@code evictExpired()} evicts a buffered record once it has aged past the configured
-     * duration, reporting a {@link CausalViolationReason#LIMIT_REACHED} violation.
+     * duration, forwarding it stamped EVICTED and reporting a violation.
      *
-     * Asserts that the record is removed from the buffer and a violation is reported.
+     * Asserts that the record is removed from the buffer, forwarded, and a violation is reported.
      */
     @Test
     void evictExpiredEvictsRecordsOlderThanTheDuration() {
         AtomicLong clock = new AtomicLong(0L);
-        ParsleyEngine<String, String> engine = engineWithClock(
-                CausalBufferPolicy.drop(CausalBufferLimit.ofDuration(Duration.ofMillis(200))), clock::get);
+        ParsleyEngine<String, String> engine = engineWithClock(CausalBufferLimit.ofDuration(Duration.ofMillis(200)), clock::get);
 
         processRecord(engine, incomingRecord(T2, 0,
                 CausalDependencies.builder().require(new CausalPosition(T1_ID, 0, 99)).build()));
         clock.set(250L);
 
-        engine.evictExpired();
+        List<ParsleyRecord<String, String>> evicted = engine.evictExpired();
 
         assertEquals(0, buffer.size(), "a record older than the duration must be evicted");
-        assertEquals(List.of(CausalViolationReason.LIMIT_REACHED), reasons(),
-                "evicting an aged-out record must report a LIMIT_REACHED violation");
+        assertEquals(1, evicted.size(), "the aged-out record must be forwarded, not dropped");
+        assertEquals(CausalResult.EVICTED, resultOf(evicted.get(0)), "the forwarded record must be stamped EVICTED");
+        assertEquals(1, violations.size(), "evicting an aged-out record must report one violation");
     }
 
     /**
@@ -527,8 +411,7 @@ class ParsleyEngineTest {
     @Test
     void evictExpiredOnlyEvictsAgedOutRecordsLeavingYoungerOnesHeld() {
         AtomicLong clock = new AtomicLong(0L);
-        ParsleyEngine<String, String> engine = engineWithClock(
-                CausalBufferPolicy.drop(CausalBufferLimit.ofDuration(Duration.ofMillis(200))), clock::get);
+        ParsleyEngine<String, String> engine = engineWithClock(CausalBufferLimit.ofDuration(Duration.ofMillis(200)), clock::get);
 
         clock.set(0L);
         processRecord(engine, incomingRecord(T2, 0,
@@ -544,8 +427,7 @@ class ParsleyEngineTest {
         engine.evictExpired();
 
         assertEquals(2, buffer.size(), "only the oldest record must be evicted; the two younger ones remain held");
-        assertEquals(List.of(CausalViolationReason.LIMIT_REACHED), reasons(),
-                "exactly one violation must be reported, for the single aged-out record");
+        assertEquals(1, violations.size(), "exactly one violation must be reported, for the single aged-out record");
         List<Long> remainingOffsets = buffer.entries().stream()
                 .map(e -> e.record().sourceOffset()).sorted().toList();
         assertEquals(List.of(1L, 2L), remainingOffsets, "the two younger records must still be held");
@@ -560,7 +442,7 @@ class ParsleyEngineTest {
      */
     @Test
     void frontierListenerFiresBeforeEachForward() {
-        ParsleyEngine<String, String> engine = engineWith(CausalBufferPolicy.drop(CausalBufferLimit.ofSize(100)));
+        ParsleyEngine<String, String> engine = engineWith(CausalBufferLimit.ofSize(100));
 
         processRecord(engine, incomingRecord(T1, 3, CausalDependencies.empty()));
 
@@ -588,8 +470,8 @@ class ParsleyEngineTest {
             @Override public void recordViolation()                {}
         };
         ParsleyEngine<String, String> engine = new ParsleyEngine<>(
-                CausalBufferPolicy.drop(CausalBufferLimit.ofSize(100)),
-                violations::add, CausalFrontier.empty(), null, frontiers::add, buffer,
+                CausalBufferLimit.ofSize(100),
+                violations::add, CausalFrontier.empty(), frontiers::add, buffer,
                 new MockPositionIndex(), capturing);
 
         engine.onRecord(incomingRecord(T2, 0, CausalDependencies.builder().require(new CausalPosition(T1_ID, 0, 3)).build()));
@@ -617,8 +499,8 @@ class ParsleyEngineTest {
             @Override public void recordViolation()            {}
         };
         ParsleyEngine<String, String> engine = new ParsleyEngine<>(
-                CausalBufferPolicy.drop(CausalBufferLimit.ofSize(1)),
-                violations::add, CausalFrontier.empty(), null, frontiers::add, buffer,
+                CausalBufferLimit.ofSize(1),
+                violations::add, CausalFrontier.empty(), frontiers::add, buffer,
                 new MockPositionIndex(), capturing);
 
         engine.onRecord(incomingRecord(T2, 0, CausalDependencies.builder().require(new CausalPosition(T1_ID, 0, 99)).build()));
@@ -636,7 +518,7 @@ class ParsleyEngineTest {
      */
     @Test
     void forwardImmediatelyWhenOnlySelfDependency() {
-        ParsleyEngine<String, String> engine = engineWith(CausalBufferPolicy.drop(CausalBufferLimit.ofSize(100)));
+        ParsleyEngine<String, String> engine = engineWith(CausalBufferLimit.ofSize(100));
 
         // Record at T1/0@3 whose dependencies require T1/0@3 — exactly itself.
         processRecord(engine, incomingRecord(T1, 3, CausalDependencies.builder().require(new CausalPosition(T1_ID, 0, 3)).build()));
@@ -658,7 +540,7 @@ class ParsleyEngineTest {
      */
     @Test
     void bufferOnRealDependencyWhenMixedWithSelfDependency() {
-        ParsleyEngine<String, String> engine = engineWith(CausalBufferPolicy.drop(CausalBufferLimit.ofSize(100)));
+        ParsleyEngine<String, String> engine = engineWith(CausalBufferLimit.ofSize(100));
 
         // T2/0@0 has a self-dep on T2_ID/0@0 AND a real dep on T1_ID/0@5.
         // After stripping the self-ref, the effective dependencies are {T1_ID/0@5}: still unsatisfied.
@@ -687,7 +569,7 @@ class ParsleyEngineTest {
      */
     @Test
     void holdRecordUntilForwardSamePartitionDependencyArrives() {
-        ParsleyEngine<String, String> engine = engineWith(CausalBufferPolicy.drop(CausalBufferLimit.ofSize(100)));
+        ParsleyEngine<String, String> engine = engineWith(CausalBufferLimit.ofSize(100));
 
         // T1@3 depends on T1@5 — a later record on its own partition (forward dep, not a self-reference).
         processRecord(engine, incomingRecord(T1, 3,
@@ -712,7 +594,7 @@ class ParsleyEngineTest {
      */
     @Test
     void holdRecordUntilBackwardSamePartitionDependencyArrives() {
-        ParsleyEngine<String, String> engine = engineWith(CausalBufferPolicy.drop(CausalBufferLimit.ofSize(100)));
+        ParsleyEngine<String, String> engine = engineWith(CausalBufferLimit.ofSize(100));
 
         // T1@5 depends on T1@3 — an earlier record on its own partition (backward dep, honoured).
         processRecord(engine, incomingRecord(T1, 5,
@@ -737,8 +619,7 @@ class ParsleyEngineTest {
      */
     @Test
     void recreatedTopicDoesNotSatisfyDependencyOnOldIncarnation() {
-        ParsleyEngine<String, String> engine =
-                engineWith(CausalBufferPolicy.drop(CausalBufferLimit.ofSize(100)));
+        ParsleyEngine<String, String> engine = engineWith(CausalBufferLimit.ofSize(100));
 
         Uuid oldT1 = new Uuid(0L, 1L);
         Uuid newT1 = new Uuid(0L, 2L);   // recreated — different UUID, same name + partition
@@ -759,126 +640,23 @@ class ParsleyEngineTest {
         assertEquals(T2, forwarded.get(2).sourcePartition(), "T2 must be released after old-t1 arrives");
     }
 
-    // --- per-violation-type policy tests --------------------------------------------------------
-
-    /**
-     * Under a policy with per-type DROP action for MISSING_HEADER, a record without a
-     * causal-dependencies header is discarded. The frontier still advances through the
-     * record's source coordinate so downstream records are not held indefinitely.
-     *
-     * Asserts that nothing is forwarded and the frontier reflects the dropped record's offset.
-     */
-    @Test
-    void discardRecordButAdvanceFrontierWhenHeaderMissingWithDropAction() {
-        CausalBufferPolicy policy = CausalBufferPolicy.builder()
-                .onMissing(CausalViolationAction.DROP)
-                .onUnresolvable(CausalViolationAction.DROP)
-                .onLimit(CausalViolationAction.DROP)
-                .setLimit(CausalBufferLimit.ofSize(100))
-                .build();
-        ParsleyEngine<String, String> engine = engineWith(policy);
-
-        processRecord(engine, incomingRecord(T1, 0, null));
-
-        assertTrue(forwarded.isEmpty(), "DROP action must not forward the missing-header record");
-        assertEquals(CausalFrontier.empty().observe(new CausalPosition(T1_ID, 0, 0)), engine.frontier(),
-                "frontier must advance for MISSING_HEADER regardless of DROP action");
-    }
-
-    /**
-     * A mixed per-type policy can forward missing-header records under FORWARD_UNSAFE while
-     * dropping records that exceed the buffer limit under DROP, in a single engine instance.
-     *
-     * Asserts that the missing-header record is forwarded, the limit-reached record is not,
-     * and both violations are reported in order.
-     */
-    @Test
-    void forwardMissingHeaderAndDropLimitReachedUnderMixedPolicy() {
-        CausalBufferPolicy policy = CausalBufferPolicy.builder()
-                .onMissing(CausalViolationAction.FORWARD_UNSAFE)
-                .onUnresolvable(CausalViolationAction.DROP)
-                .onLimit(CausalViolationAction.DROP)
-                .setLimit(CausalBufferLimit.ofSize(1))
-                .build();
-        ParsleyEngine<String, String> engine = engineWith(policy);
-
-        // Legacy record (no header) → forwarded under FORWARD_UNSAFE
-        processRecord(engine, incomingRecord(T1, 0, null));
-        assertEquals(1, forwarded.size(), "MISSING_HEADER with FORWARD_UNSAFE must be forwarded");
-
-        // Parsley record that exceeds the buffer limit → dropped under DROP
-        processRecord(engine, incomingRecord(T2, 0, CausalDependencies.builder()
-                .require(new CausalPosition(T1_ID, 0, 99)).build()));
-        assertEquals(1, forwarded.size(), "LIMIT_REACHED with DROP must not forward the evicted record");
-        assertEquals(2, violations.size(), "both violations must be reported");
-        assertEquals(CausalViolationReason.MISSING_HEADER, violations.get(0).reason(),
-                "first violation must be MISSING_HEADER");
-        assertEquals(CausalViolationReason.LIMIT_REACHED, violations.get(1).reason(),
-                "second violation must be LIMIT_REACHED");
-    }
-
-    /**
-     * Under a policy with FORWARD_UNSAFE action for LIMIT_REACHED, records evicted from the
-     * buffer are forwarded and the frontier advances through their source coordinates.
-     *
-     * Asserts that the evicted record is forwarded and the frontier reflects its offset.
-     */
-    @Test
-    void advanceFrontierWhenLimitReachedUnderForwardUnsafeAction() {
-        CausalBufferPolicy policy = CausalBufferPolicy.builder()
-                .onMissing(CausalViolationAction.DROP)
-                .onUnresolvable(CausalViolationAction.DROP)
-                .onLimit(CausalViolationAction.FORWARD_UNSAFE)
-                .setLimit(CausalBufferLimit.ofSize(1))
-                .build();
-        ParsleyEngine<String, String> engine = engineWith(policy);
-
-        processRecord(engine, incomingRecord(T2, 0, CausalDependencies.builder()
-                .require(new CausalPosition(T1_ID, 0, 99)).build()));
-
-        assertEquals(1, forwarded.size(), "FORWARD_UNSAFE eviction must forward the record");
-        assertEquals(CausalFrontier.empty().observe(new CausalPosition(T2_ID, 0, 0)), engine.frontier(),
-                "frontier must advance when eviction action is FORWARD_UNSAFE");
-    }
-
-    /**
-     * Under a policy with DROP action for LIMIT_REACHED, records evicted from the buffer are
-     * discarded and the frontier does not advance through them.
-     *
-     * Asserts that nothing is forwarded and the frontier remains empty.
-     */
-    @Test
-    void doNotAdvanceFrontierWhenLimitReachedUnderDropAction() {
-        ParsleyEngine<String, String> engine = engineWith(CausalBufferPolicy.drop(CausalBufferLimit.ofSize(1)));
-
-        processRecord(engine, incomingRecord(T2, 0, CausalDependencies.builder()
-                .require(new CausalPosition(T1_ID, 0, 99)).build()));
-
-        assertTrue(forwarded.isEmpty(), "DROP eviction must not forward the record");
-        assertEquals(CausalFrontier.empty(), engine.frontier(),
-                "frontier must not advance when eviction action is DROP");
-    }
-
     // --- helpers --------------------------------------------------------------------------------
 
-    private ParsleyEngine<String, String> engineWith(CausalBufferPolicy policy) {
-        return engineWith(policy, null);
-    }
-
-    private ParsleyEngine<String, String> engineWith(CausalBufferPolicy policy,
-                                                      java.util.function.Consumer<ParsleyRecord<String, String>> sink) {
-        return new ParsleyEngine<>(policy, violations::add, CausalFrontier.empty(), sink, frontiers::add,
+    private ParsleyEngine<String, String> engineWith(CausalBufferLimit limit) {
+        return new ParsleyEngine<>(limit, violations::add, CausalFrontier.empty(), frontiers::add,
                 buffer, new MockPositionIndex(), ParsleyMetrics.NOOP);
     }
 
-    private ParsleyEngine<String, String> engineWithClock(CausalBufferPolicy policy,
+    private ParsleyEngine<String, String> engineWithClock(CausalBufferLimit limit,
                                                            java.util.function.LongSupplier clock) {
-        return new ParsleyEngine<>(policy, violations::add, CausalFrontier.empty(), null, frontiers::add,
+        return new ParsleyEngine<>(limit, violations::add, CausalFrontier.empty(), frontiers::add,
                 buffer, new MockPositionIndex(), ParsleyMetrics.NOOP, clock);
     }
 
-    private List<CausalViolationReason> reasons() {
-        return violations.stream().map(CausalViolation::reason).toList();
+    private static CausalResult resultOf(ParsleyRecord<String, String> record) {
+        Header header = record.toConsumerRecord().headers().lastHeader(ParsleyAttributes.CAUSAL_RESULT);
+        assertNotNull(header, "record must carry a " + ParsleyAttributes.CAUSAL_RESULT + " header");
+        return CausalResult.valueOf(new String(header.value(), UTF_8));
     }
 
     private void processRecord(ParsleyEngine<String, String> engine, ParsleyRecord<String, String> record) {

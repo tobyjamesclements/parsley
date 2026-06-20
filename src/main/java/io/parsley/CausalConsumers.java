@@ -1,28 +1,20 @@
 package io.parsley;
 
-import org.apache.kafka.clients.consumer.ConsumerRecord;
-
 import java.util.Collection;
 import java.util.Map;
-import java.util.function.Consumer;
 
 /**
  * Factory for {@link CausalConsumer}. Obtain a {@link Builder} with
- * {@link #builder(Collection, CausalBufferPolicy, Map, Map)}, set any optional fields, and call
+ * {@link #builder(Collection, CausalBufferLimit, Map, Map)}, set any optional fields, and call
  * {@link Builder#build()}:
  *
  * <pre>{@code
  * CausalConsumer<String, Order> consumer = CausalConsumers.<String, Order>builder(
  *         List.of("prices", "orders"),
- *         CausalBufferPolicy.deadLetter(CausalBufferLimit.ofDuration(Duration.ofSeconds(30))),
+ *         CausalBufferLimit.ofDuration(Duration.ofSeconds(30)),
  *         Map.of(), streamsConfig)
- *         .deadLetterSink(deadLetterSink)
  *         .build();
  * }</pre>
- *
- * <p>Policies where any violation type uses {@link CausalViolationAction#DEAD_LETTER} require a
- * {@link Builder#deadLetterSink(Consumer) dead-letter sink}; {@link Builder#build()} rejects a
- * dead-letter policy with no sink, and a sink set on a non-dead-letter policy.
  */
 public final class CausalConsumers {
 
@@ -34,8 +26,9 @@ public final class CausalConsumers {
      * @param <K>            the record key type
      * @param <V>            the record value type
      * @param topics         the Kafka topics to subscribe to; must not be empty
-     * @param policy         the buffering policy; if it uses {@link CausalViolationAction#DEAD_LETTER}
-     *                       for any violation type, {@link Builder#deadLetterSink} must be set
+     * @param limit          the buffer eviction trigger — how long to wait for a record's
+     *                       dependencies before delivering it anyway, stamped
+     *                       {@link CausalResult#EVICTED}
      * @param consumerConfig additional consumer configuration (overrides defaults derived from
      *                       {@code streamsConfig})
      * @param streamsConfig  Kafka Streams configuration; must include at minimum
@@ -44,10 +37,10 @@ public final class CausalConsumers {
      */
     public static <K, V> Builder<K, V> builder(
             Collection<String> topics,
-            CausalBufferPolicy policy,
+            CausalBufferLimit limit,
             Map<String, Object> consumerConfig,
             Map<String, Object> streamsConfig) {
-        return new Builder<>(topics, policy, consumerConfig, streamsConfig);
+        return new Builder<>(topics, limit, consumerConfig, streamsConfig);
     }
 
     /**
@@ -59,24 +52,23 @@ public final class CausalConsumers {
     public static final class Builder<K, V> {
 
         private final Collection<String> topics;
-        private final CausalBufferPolicy policy;
+        private final CausalBufferLimit limit;
         private final Map<String, Object> consumerConfig;
         private final Map<String, Object> streamsConfig;
         private CausalViolationHandler onViolation = violation -> {};
         private String storeName = "parsley";
         private ParsleyTopicAdmin topicAdmin = null;
-        private Consumer<ConsumerRecord<K, V>> deadLetterSink = null;
 
-        private Builder(Collection<String> topics, CausalBufferPolicy policy,
+        private Builder(Collection<String> topics, CausalBufferLimit limit,
                         Map<String, Object> consumerConfig, Map<String, Object> streamsConfig) {
             this.topics = topics;
-            this.policy = policy;
+            this.limit = limit;
             this.consumerConfig = consumerConfig;
             this.streamsConfig = streamsConfig;
         }
 
         /**
-         * Sets the callback invoked when a record cannot be delivered in causal order (default: ignore).
+         * Sets the callback invoked when a record is evicted from the buffer (default: ignore).
          *
          * @param onViolation the violation handler
          * @return this builder
@@ -115,45 +107,13 @@ public final class CausalConsumers {
         }
 
         /**
-         * Sets the sink that receives records evicted under a
-         * {@link CausalBufferPolicy#deadLetter dead-letter} policy, delivered as typed
-         * {@link ConsumerRecord}s — deserialized with the same key/value serdes as
-         * {@link CausalConsumer#poll}, at the record's original source topic/partition/offset, and
-         * carrying the {@code parsley-dlq-*} headers described in {@link CausalViolation}. Required
-         * for a dead-letter policy and illegal for any other.
-         *
-         * <p>Runs on the internal Kafka Streams thread, so the sink must be thread-safe — the same
-         * caveat as {@link #onViolation}.
-         *
-         * @param deadLetterSink the dead-letter sink
-         * @return this builder
-         */
-        public Builder<K, V> deadLetterSink(Consumer<ConsumerRecord<K, V>> deadLetterSink) {
-            this.deadLetterSink = deadLetterSink;
-            return this;
-        }
-
-        /**
          * Builds and starts the {@link CausalConsumer}.
          *
          * @return a new, running {@code CausalConsumer}
-         * @throws IllegalArgumentException if {@code policy} is a
-         *                                  {@link CausalBufferPolicy#deadLetter dead-letter} policy
-         *                                  and no sink was set via {@link #deadLetterSink}, or a sink
-         *                                  was set but {@code policy} is not a dead-letter policy
          */
         public CausalConsumer<K, V> build() {
-            boolean needsSink = policy.requiresDeadLetterSink();
-            if (needsSink && deadLetterSink == null) {
-                throw new IllegalArgumentException(
-                        "Policy requires a dead-letter sink — call deadLetterSink(...)");
-            }
-            if (!needsSink && deadLetterSink != null) {
-                throw new IllegalArgumentException(
-                        "A dead-letter sink is only valid when at least one violation type uses DEAD_LETTER");
-            }
             return new ParsleyConsumer<>(
-                    topics, policy, onViolation, consumerConfig, streamsConfig, storeName, topicAdmin, deadLetterSink);
+                    topics, limit, onViolation, consumerConfig, streamsConfig, storeName, topicAdmin);
         }
     }
 }

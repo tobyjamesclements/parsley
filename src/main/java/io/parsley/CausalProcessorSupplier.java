@@ -18,16 +18,26 @@ import org.apache.kafka.streams.processor.api.ProcessorSupplier;
  * };
  *
  * builder.stream(List.of("prices", "orders"), Consumed.with(Serdes.String(), orderSerde))
- *        .process(CausalProcessors.builder(user, CausalBufferPolicy.deadLetter(limit, "parsley-dlq"))
+ *        .process(CausalProcessors.builder(user, CausalBufferLimit.ofDuration(limit))
  *                                .serdes(Serdes.String(), orderSerde).onViolation(onViolation)
- *                                .deadLetterSink(deadLetterSink).build())
+ *                                .build())
  *        .to("output-topic");
  * }</pre>
  *
  * <h2>The guarantee</h2>
- * Within the user's {@code process()}, every state read reflects all causally-prior writes, every
- * state write and every {@code forward} is a causally-ordered, dependency-stamped event —
- * <strong>provided</strong> three preconditions hold:
+ * Every record reaches the user's {@code process()} exactly once — Parsley never drops or
+ * diverts a record. Within {@code process()}, every state read reflects all causally-prior
+ * writes, and every state write and {@code forward} is a causally-ordered, dependency-stamped
+ * event, <strong>provided</strong> the record was delivered with {@link CausalResult#SATISFIED}
+ * (the common case: dependencies were observed before delivery, whether immediately or after a
+ * wait, including trivially for records claiming none). A record delivered with
+ * {@link CausalResult#EVICTED} — the configured {@link CausalBufferLimit} fired before its
+ * dependencies were satisfied — suspends the guarantee for that one record; it is flagged via
+ * the {@code parsley-causal-result} header (readable with {@link CausalResult#fromRecord}) and
+ * reported to the configured {@link CausalViolationHandler}.
+ *
+ * <p>The guarantee further depends on two preconditions that hold across the whole processor,
+ * not per-record:
  *
  * <ol>
  *   <li><strong>Closed effects.</strong> The processor's only side effects are reads/writes to its
@@ -39,13 +49,6 @@ import org.apache.kafka.streams.processor.api.ProcessorSupplier;
  *       co-partitioned so each instance owns the complete partition set for the causally-related
  *       events. Parsley does not detect or enforce this (consistent with existing library
  *       behaviour) — a misconfigured topology silently evaluates against an incomplete frontier.
- *   <li><strong>Accepted buffering policy.</strong> The user accepts the chosen
- *       {@link CausalBufferPolicy}'s behaviour under sustained lag. <strong>Strict</strong> policies
- *       ({@code deadLetter}, {@code drop}) divert un-satisfiable records away from {@code process()}
- *       — the guarantee holds unconditionally for every record that reaches {@code process()}, at
- *       the cost of delivery. The <strong>lenient</strong> policy ({@code forwardUnsafe}) preserves
- *       delivery by admitting un-satisfied records, which suspends the guarantee for exactly those
- *       records; they are flagged via the {@link CausalViolationHandler}.
  * </ol>
  *
  * <p>Outgoing messages are stamped with the current frontier transparently as they are forwarded —

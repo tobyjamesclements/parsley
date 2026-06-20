@@ -1,32 +1,29 @@
 package io.parsley;
 
-import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.apache.kafka.common.Uuid;
 import org.apache.kafka.common.serialization.Serde;
 import org.apache.kafka.streams.processor.api.ProcessorSupplier;
 
 import java.util.Map;
-import java.util.function.Consumer;
 import java.util.function.Function;
 
 /**
  * Factory for {@link CausalProcessorSupplier} — the decorating causal processor you drop into a Kafka
  * Streams topology with {@code stream(...).process(...)}.
  *
- * <p>Obtain a {@link Builder} with {@link #builder(ProcessorSupplier, CausalBufferPolicy)}, set the
+ * <p>Obtain a {@link Builder} with {@link #builder(ProcessorSupplier, CausalBufferLimit)}, set the
  * required serdes and any optional fields, then call {@link Builder#build()}:
  *
  * <pre>{@code
  * builder.stream(List.of("prices", "orders"), Consumed.with(Serdes.String(), orderSerde))
- *        .process(CausalProcessors.builder(userSupplier, CausalBufferPolicy.deadLetter(limit))
+ *        .process(CausalProcessors.builder(userSupplier, CausalBufferLimit.ofDuration(limit))
  *                .serdes(Serdes.String(), orderSerde)
  *                .onViolation(onViolation)
- *                .deadLetterSink(deadLetterSink)
  *                .build())
  *        .to("output-topic");
  * }</pre>
  *
- * <p>See {@link CausalProcessorSupplier} for the causal guarantee and its three preconditions.
+ * <p>See {@link CausalProcessorSupplier} for the causal guarantee and its preconditions.
  */
 public final class CausalProcessors {
 
@@ -38,9 +35,9 @@ public final class CausalProcessors {
      *
      * @param userSupplier the user's processor supplier (its declared state stores are unioned with
      *                     Parsley's internal frontier and buffer stores)
-     * @param policy       the buffering policy; if it is a
-     *                     {@link CausalBufferPolicy#deadLetter dead-letter} policy, a
-     *                     {@link Builder#deadLetterSink(Consumer) dead-letter sink} is required
+     * @param limit        the buffer eviction trigger — how long to wait for a record's
+     *                     dependencies before forwarding it anyway, stamped
+     *                     {@link CausalResult#EVICTED}
      * @param <KIn>        the input key type
      * @param <VIn>        the input value type
      * @param <KOut>       the forwarded key type
@@ -49,15 +46,14 @@ public final class CausalProcessors {
      */
     public static <KIn, VIn, KOut, VOut> Builder<KIn, VIn, KOut, VOut> builder(
             ProcessorSupplier<KIn, VIn, KOut, VOut> userSupplier,
-            CausalBufferPolicy policy) {
-        return new Builder<>(userSupplier, policy);
+            CausalBufferLimit limit) {
+        return new Builder<>(userSupplier, limit);
     }
 
     /**
      * Builder for a {@link CausalProcessorSupplier}. A serde pair is required (via {@link #serdes} or
      * {@link #serdesByTopic}); the violation handler, store namespace, and frontier listener are
-     * optional; a dead-letter sink is required exactly when the policy is a
-     * {@link CausalBufferPolicy#deadLetter dead-letter} policy.
+     * optional.
      *
      * @param <KIn>  the input key type
      * @param <VIn>  the input value type
@@ -67,18 +63,17 @@ public final class CausalProcessors {
     public static final class Builder<KIn, VIn, KOut, VOut> {
 
         private final ProcessorSupplier<KIn, VIn, KOut, VOut> userSupplier;
-        private final CausalBufferPolicy policy;
+        private final CausalBufferLimit limit;
         private Function<String, Serde<KIn>> keySerdeByTopic;
         private Function<String, Serde<VIn>> valueSerdeByTopic;
         private CausalViolationHandler onViolation = violation -> {};
         private String storeName = "parsley";
         private CausalFrontierListener frontierListener = frontier -> {};
-        private Consumer<ConsumerRecord<KIn, VIn>> deadLetterSink;
         private Map<String, Uuid> topicUuids = Map.of();
 
-        private Builder(ProcessorSupplier<KIn, VIn, KOut, VOut> userSupplier, CausalBufferPolicy policy) {
+        private Builder(ProcessorSupplier<KIn, VIn, KOut, VOut> userSupplier, CausalBufferLimit limit) {
             this.userSupplier = userSupplier;
-            this.policy = policy;
+            this.limit = limit;
         }
 
         /**
@@ -112,7 +107,8 @@ public final class CausalProcessors {
         }
 
         /**
-         * Sets the violation callback (default: ignore).
+         * Sets the violation callback, invoked when a record is evicted from the buffer (default:
+         * ignore).
          *
          * @param onViolation the violation handler
          * @return this builder
@@ -150,19 +146,6 @@ public final class CausalProcessors {
         }
 
         /**
-         * Sets the sink that receives evicted records under a
-         * {@link CausalBufferPolicy#deadLetter dead-letter} policy. Required for a dead-letter policy
-         * and illegal for any other.
-         *
-         * @param deadLetterSink the dead-letter sink
-         * @return this builder
-         */
-        public Builder<KIn, VIn, KOut, VOut> deadLetterSink(Consumer<ConsumerRecord<KIn, VIn>> deadLetterSink) {
-            this.deadLetterSink = deadLetterSink;
-            return this;
-        }
-
-        /**
          * Provides the Kafka topic UUIDs for the input topics, keyed by topic name. Used as the
          * stable partition identity so that topic deletion and recreation produce different
          * identities. Topics absent from the map fall back to a deterministic name-derived UUID via
@@ -181,26 +164,14 @@ public final class CausalProcessors {
          * Builds the {@link CausalProcessorSupplier}.
          *
          * @return a decorated supplier ready for {@code stream(...).process(...)}
-         * @throws IllegalStateException    if no serde pair was set
-         * @throws IllegalArgumentException if any violation type uses {@link CausalViolationAction#DEAD_LETTER}
-         *                                  and no sink was set, or a sink was set but no violation type
-         *                                  uses {@link CausalViolationAction#DEAD_LETTER}
+         * @throws IllegalStateException if no serde pair was set
          */
         public CausalProcessorSupplier<KIn, VIn, KOut, VOut> build() {
             if (keySerdeByTopic == null || valueSerdeByTopic == null) {
                 throw new IllegalStateException("serdes are required; call serdes(...) or serdesByTopic(...)");
             }
-            boolean needsSink = policy.requiresDeadLetterSink();
-            if (needsSink && deadLetterSink == null) {
-                throw new IllegalArgumentException(
-                        "Policy requires a dead-letter sink — call deadLetterSink(...)");
-            }
-            if (!needsSink && deadLetterSink != null) {
-                throw new IllegalArgumentException(
-                        "A dead-letter sink is only valid when at least one violation type uses DEAD_LETTER");
-            }
             return new ParsleyProcessorSupplier<>(
-                    userSupplier, policy, onViolation, deadLetterSink, keySerdeByTopic, valueSerdeByTopic,
+                    userSupplier, limit, onViolation, keySerdeByTopic, valueSerdeByTopic,
                     storeName + "-frontier", storeName + "-buffer", storeName + "-position-index",
                     frontierListener, topicUuids);
         }

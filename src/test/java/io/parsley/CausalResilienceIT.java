@@ -71,7 +71,7 @@ class CausalResilienceIT {
         try (CausalConsumer<String, String> consumer1 =
                      CausalConsumers.<String, String>builder(
                              List.of(PRICES, ORDERS),
-                             CausalBufferPolicy.drop(CausalBufferLimit.ofDuration(Duration.ofMinutes(5))),
+                             CausalBufferLimit.ofDuration(Duration.ofMinutes(5)),
                              Map.of(),
                              streamsConfig(bootstrap, appId))
                              .topicAdmin(new MockAdminClient(ParsleyTopicAdmin.ofBootstrap(bootstrap)))
@@ -99,7 +99,7 @@ class CausalResilienceIT {
         try (CausalConsumer<String, String> consumer2 =
                      CausalConsumers.<String, String>builder(
                              List.of(PRICES, ORDERS),
-                             CausalBufferPolicy.drop(CausalBufferLimit.ofDuration(Duration.ofMinutes(5))),
+                             CausalBufferLimit.ofDuration(Duration.ofMinutes(5)),
                              Map.of(),
                              streamsConfig(bootstrap, appId))
                              .topicAdmin(new MockAdminClient(ParsleyTopicAdmin.ofBootstrap(bootstrap)))
@@ -131,11 +131,11 @@ class CausalResilienceIT {
      * <p>Consumer-1 buffers three ORDERS records that never have their PRICES dependency
      * satisfied, under a generous {@code ofSize(10)} limit — none are evicted. Consumer-2 restarts
      * with the same {@code applicationId} (so the buffer state store is restored from its
-     * changelog) but a tighter {@code ofSize(2)} limit. {@link CausalConsumers} rejects
-     * dead-letter policies (no sink to route to), so {@code forwardUnsafe} is used instead: the
-     * fix under test — the {@code ParsleyEngine.evictOverflow()} call wired into
-     * {@code ParsleyProcessor.init()} — must forward the two oldest restored records
-     * out-of-order before consumer-2 ever polls for new input, leaving the third held.
+     * changelog) but a tighter {@code ofSize(2)} limit: the fix under test — the
+     * {@code ParsleyEngine.evictOverflow()} call wired into {@code ParsleyProcessor.init()} —
+     * must forward the two oldest restored records out-of-order before consumer-2 ever polls for
+     * new input, leaving the third held. Every forwarded record is still delivered (Parsley never
+     * drops), but is stamped {@code CausalResult.EVICTED} rather than {@code SATISFIED}.
      */
     @Test
     void restartWithALoweredSizeLimitEvictsExcessRestoredRecordsOnInit() throws Exception {
@@ -151,7 +151,7 @@ class CausalResilienceIT {
         try (CausalConsumer<String, String> consumer1 =
                      CausalConsumers.<String, String>builder(
                              List.of(PRICES, ORDERS),
-                             CausalBufferPolicy.drop(CausalBufferLimit.ofSize(10)),
+                             CausalBufferLimit.ofSize(10),
                              Map.of(),
                              streamsConfig(bootstrap, appId))
                              .topicAdmin(new MockAdminClient(ParsleyTopicAdmin.ofBootstrap(bootstrap)))
@@ -184,7 +184,7 @@ class CausalResilienceIT {
         try (CausalConsumer<String, String> consumer2 =
                      CausalConsumers.<String, String>builder(
                              List.of(PRICES, ORDERS),
-                             CausalBufferPolicy.forwardUnsafe(CausalBufferLimit.ofSize(2)),
+                             CausalBufferLimit.ofSize(2),
                              Map.of(),
                              streamsConfig(bootstrap, appId))
                              .topicAdmin(new MockAdminClient(ParsleyTopicAdmin.ofBootstrap(bootstrap)))
@@ -199,9 +199,9 @@ class CausalResilienceIT {
             assertEquals(List.of("order-1", "order-2"), phase2.stream().map(ConsumerRecord::value).toList(),
                     "the two oldest restored records must be forwarded out-of-order on restart, before any new input");
             assertEquals(2, violations.size(),
-                    "one LIMIT_REACHED violation must be reported per record evicted on restart");
-            assertTrue(violations.stream().allMatch(v -> v.reason() == CausalViolationReason.LIMIT_REACHED),
-                    "every reported violation must be LIMIT_REACHED");
+                    "one violation must be reported per record evicted on restart");
+            assertTrue(phase2.stream().allMatch(r -> CausalResult.fromRecord(r).orElseThrow() == CausalResult.EVICTED),
+                    "every forwarded record must be stamped EVICTED");
 
             // The third record (order-3) must remain held: poll a few more times and confirm it
             // never arrives, since its PRICES dependency is still unmet and the buffer is back
@@ -230,7 +230,7 @@ class CausalResilienceIT {
         try (CausalConsumer<String, String> consumer =
                      CausalConsumers.<String, String>builder(
                              List.of(EVENTS),
-                             CausalBufferPolicy.drop(CausalBufferLimit.ofSize(100)),
+                             CausalBufferLimit.ofSize(100),
                              Map.of(),
                              streamsConfigWithThreads(bootstrap, 2)).build();
              CausalProducer<String, String> producer = causalProducer(bootstrap)) {

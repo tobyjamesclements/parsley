@@ -107,7 +107,7 @@ class CausalConcurrentProducersIT {
 
         try (CausalConsumer<String, String> consumer = CausalConsumers.<String, String>builder(
                      List.of(SOURCE_A, SOURCE_B, OUTPUT),
-                     CausalBufferPolicy.drop(CausalBufferLimit.ofDuration(Duration.ofMinutes(5))),
+                     CausalBufferLimit.ofDuration(Duration.ofMinutes(5)),
                      Map.of(),
                      streamsConfig(bootstrap))
                      .topicAdmin(new MockAdminClient())

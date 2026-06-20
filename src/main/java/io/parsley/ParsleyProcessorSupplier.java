@@ -1,6 +1,5 @@
 package io.parsley;
 
-import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.apache.kafka.common.Uuid;
 import org.apache.kafka.common.serialization.Serde;
 import org.apache.kafka.common.serialization.Serdes;
@@ -13,7 +12,6 @@ import org.apache.kafka.streams.state.Stores;
 import java.util.HashSet;
 import java.util.Map;
 import java.util.Set;
-import java.util.function.Consumer;
 import java.util.function.Function;
 
 /**
@@ -26,9 +24,8 @@ final class ParsleyProcessorSupplier<KIn, VIn, KOut, VOut>
         implements CausalProcessorSupplier<KIn, VIn, KOut, VOut> {
 
     private final ProcessorSupplier<KIn, VIn, KOut, VOut> userSupplier;
-    private final CausalBufferPolicy policy;
+    private final CausalBufferLimit limit;
     private final CausalViolationHandler onViolation;
-    private final Consumer<ConsumerRecord<KIn, VIn>> deadLetterSink;
     private final Function<String, Serde<KIn>> keySerdeByTopic;
     private final Function<String, Serde<VIn>> valueSerdeByTopic;
     private final String frontierStoreName;
@@ -38,9 +35,8 @@ final class ParsleyProcessorSupplier<KIn, VIn, KOut, VOut>
     private final Map<String, Uuid> topicUuids;
 
     ParsleyProcessorSupplier(ProcessorSupplier<KIn, VIn, KOut, VOut> userSupplier,
-                                      CausalBufferPolicy policy,
+                                      CausalBufferLimit limit,
                                       CausalViolationHandler onViolation,
-                                      Consumer<ConsumerRecord<KIn, VIn>> deadLetterSink,
                                       Function<String, Serde<KIn>> keySerdeByTopic,
                                       Function<String, Serde<VIn>> valueSerdeByTopic,
                                       String frontierStoreName,
@@ -49,9 +45,8 @@ final class ParsleyProcessorSupplier<KIn, VIn, KOut, VOut>
                                       CausalFrontierListener frontierListener,
                                       Map<String, Uuid> topicUuids) {
         this.userSupplier = userSupplier;
-        this.policy = policy;
+        this.limit = limit;
         this.onViolation = onViolation;
-        this.deadLetterSink = deadLetterSink;
         this.keySerdeByTopic = keySerdeByTopic;
         this.valueSerdeByTopic = valueSerdeByTopic;
         this.frontierStoreName = frontierStoreName;
@@ -64,7 +59,7 @@ final class ParsleyProcessorSupplier<KIn, VIn, KOut, VOut>
     @Override
     public Processor<KIn, VIn, KOut, VOut> get() {
         return new ParsleyProcessor<>(
-                userSupplier.get(), policy, onViolation, deadLetterSink,
+                userSupplier.get(), limit, onViolation,
                 new ParsleySerializer<>(new ParsleyResolver<>(keySerdeByTopic, valueSerdeByTopic)),
                 frontierStoreName, bufferStoreName, positionIndexStoreName, frontierListener, topicUuids);
     }

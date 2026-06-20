@@ -29,7 +29,7 @@ interface ParsleyMetrics {
      */
     void recordEvicted(int count);
 
-    /** A causal violation was detected (any {@link CausalViolationReason}). */
+    /** A record was evicted from the causal buffer before its dependencies were satisfied. */
     void recordViolation();
 
     ParsleyMetrics NOOP = new ParsleyMetrics() {

@@ -1,6 +1,5 @@
 package io.parsley;
 
-import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.apache.kafka.common.MetricName;
 import org.apache.kafka.common.TopicPartition;
 import org.apache.kafka.common.Uuid;
@@ -22,14 +21,15 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
-import java.util.function.Consumer;
 
 /**
  * Wraps a user {@link Processor} and gates delegation on the causal frontier: an incoming record is
- * delivered to {@code delegate.process(...)} only once the frontier dominates its causal dependencies
- * (or the policy forces it). State reads/writes the delegate performs and every record it forwards
- * are therefore causally ordered, and forwards are stamped with the current frontier by a
- * {@link ParsleyProcessorContext}.
+ * held until the frontier dominates its causal dependencies, or until the configured
+ * {@link CausalBufferLimit} forces delivery anyway. Every record reaches
+ * {@code delegate.process(...)} exactly once, stamped with the {@link CausalResult} that records
+ * whether the guarantee held. State reads/writes the delegate performs and every record it forwards
+ * are therefore causally ordered when {@link CausalResult#SATISFIED}, and forwards are stamped with
+ * the current frontier by a {@link ParsleyProcessorContext}.
  *
  * <p>Held records are persisted to a changelog-backed buffer store and restored on {@code init}, so
  * they survive a restart (a buffered record's source offset is committed past it, so it would
@@ -46,9 +46,8 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
     private static final Logger log = LoggerFactory.getLogger(ParsleyProcessor.class);
 
     private final Processor<KIn, VIn, KOut, VOut> delegate;
-    private final CausalBufferPolicy policy;
+    private final CausalBufferLimit limit;
     private final CausalViolationHandler onViolation;
-    private final Consumer<ConsumerRecord<KIn, VIn>> deadLetterSink;
     private final ParsleySerializer<KIn, VIn> serializer;
     private final String frontierStoreName;
     private final String bufferStoreName;
@@ -73,9 +72,8 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
     private Cancellable restoredOverflowSchedule;
 
     ParsleyProcessor(Processor<KIn, VIn, KOut, VOut> delegate,
-                     CausalBufferPolicy policy,
+                     CausalBufferLimit limit,
                      CausalViolationHandler onViolation,
-                     Consumer<ConsumerRecord<KIn, VIn>> deadLetterSink,
                      ParsleySerializer<KIn, VIn> serializer,
                      String frontierStoreName,
                      String bufferStoreName,
@@ -83,9 +81,8 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
                      CausalFrontierListener frontierListener,
                      Map<String, Uuid> topicUuids) {
         this.delegate = delegate;
-        this.policy = policy;
+        this.limit = limit;
         this.onViolation = onViolation;
-        this.deadLetterSink = deadLetterSink;
         this.serializer = serializer;
         this.frontierStoreName = frontierStoreName;
         this.bufferStoreName = bufferStoreName;
@@ -116,10 +113,6 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
         // Publish the restored frontier so an observer has a correct view before the first record.
         frontierListener.onFrontierAdvanced(initialFrontier);
 
-        Consumer<ParsleyRecord<KIn, VIn>> engineDeadLetter = deadLetterSink == null
-                ? null
-                : record -> deadLetterSink.accept(record.toConsumerRecord());
-
         ParsleyEngine.FrontierCallback listener = frontier -> {
             frontierStore.put(ParsleyAttributes.FRONTIER_KEY, frontier.toBytes());
             snapshots.add(frontier);
@@ -131,8 +124,8 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
 
         ParsleyMetrics metrics = buildMetrics(context);
 
-        this.engine = new ParsleyEngine<>(policy, onViolation, initialFrontier,
-                engineDeadLetter, listener, buffer, positionIndex, metrics, context::currentSystemTimeMs);
+        this.engine = new ParsleyEngine<>(limit, onViolation, initialFrontier,
+                listener, buffer, positionIndex, metrics, context::currentSystemTimeMs);
 
         ProcessorContext<KOut, VOut> stamping = new ParsleyProcessorContext<>(
                 context, () -> stampFrontier, () -> Optional.ofNullable(deliveryMetadata));

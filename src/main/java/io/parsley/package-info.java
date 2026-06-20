@@ -25,11 +25,12 @@
  *       {@code message.max.bytes}, so prefer {@link io.parsley.CausalDependencies#fromRecord
  *       fromRecord} over a wide {@code frontier().toDependencies()} when propagating across
  *       services</li>
- *   <li>{@link io.parsley.CausalBufferPolicy} &mdash; what to do when a buffer limit fires:
- *       {@code forwardUnsafe}, {@code drop}, or {@code deadLetter}</li>
- *   <li>{@link io.parsley.CausalBufferLimit} &mdash; when to stop waiting:
- *       {@code ofDuration}, {@code ofSize}, or {@code first}</li>
- *   <li>{@link io.parsley.CausalViolationHandler} &mdash; violation callback, handed a
+ *   <li>{@link io.parsley.CausalBufferLimit} &mdash; how long to wait for a record's dependencies
+ *       before forwarding it anyway: {@code ofDuration}, {@code ofSize}, or {@code first}</li>
+ *   <li>{@link io.parsley.CausalResult} &mdash; stamped on every record under the
+ *       {@code parsley-causal-result} header: {@code SATISFIED} (delivered with its causal
+ *       dependencies intact) or {@code EVICTED} (the buffer limit fired first)</li>
+ *   <li>{@link io.parsley.CausalViolationHandler} &mdash; eviction callback, handed a
  *       {@link io.parsley.CausalViolation} carrying the causal gap</li>
  *   <li>{@link io.parsley.CausalFrontierListener} &mdash; frontier-advance callback, the public way to
  *       observe causal progress out of a {@link io.parsley.CausalProcessorSupplier}</li>

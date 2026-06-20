@@ -105,7 +105,7 @@ class CausalAvroSchemaRegistryIT {
                 "schema.registry.url", registryUrl)).build();
              CausalConsumer<String, SpecificRecord> consumer = CausalConsumers.<String, SpecificRecord>builder(
                      List.of(ORDERS, PRICES),
-                     CausalBufferPolicy.drop(CausalBufferLimit.ofDuration(Duration.ofSeconds(10))),
+                     CausalBufferLimit.ofDuration(Duration.ofSeconds(10)),
                      Map.of(ConsumerConfig.GROUP_ID_CONFIG, "avro-rt-" + UUID.randomUUID()),
                      streamsConfig(bootstrap, registryUrl))
                      .topicAdmin(new MockAdminClient(ParsleyTopicAdmin.ofBootstrap(bootstrap)))
@@ -173,7 +173,7 @@ class CausalAvroSchemaRegistryIT {
                      List.of(ORDERS, PRICES),
                      // Short eviction window with drop: if causal drain is broken the Order is lost,
                      // the await fails, and onViolation surfaces a clear cause.
-                     CausalBufferPolicy.drop(CausalBufferLimit.ofDuration(Duration.ofSeconds(5))),
+                     CausalBufferLimit.ofDuration(Duration.ofSeconds(5)),
                      Map.of(ConsumerConfig.GROUP_ID_CONFIG, "avro-buf-" + UUID.randomUUID()),
                      streamsConfig(bootstrap, registryUrl))
                      .onViolation(eviction::set)

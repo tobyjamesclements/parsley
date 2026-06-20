@@ -69,7 +69,7 @@ public class StateRestorationBenchmark {
     private KeyValueStore<Long, byte[]> bufferKV;
     private KeyValueStore<byte[], byte[]> waitKV;
     private ParsleySerializer<String, String> serializer;
-    private CausalBufferPolicy policy;
+    private CausalBufferLimit limit;
 
     @Setup(Level.Trial)
     public void setUp(BenchmarkInfra infra) throws IOException {
@@ -77,11 +77,11 @@ public class StateRestorationBenchmark {
             @Override public void init(ProcessorContext<String, String> ctx) {}
             @Override public void process(Record<String, String> record) {}
         };
-        policy = CausalBufferPolicy.drop(CausalBufferLimit.ofSize(Integer.MAX_VALUE / 2));
+        limit = CausalBufferLimit.ofSize(Integer.MAX_VALUE / 2);
 
         StreamsBuilder builder = new StreamsBuilder();
         builder.stream("bench-in", Consumed.with(Serdes.String(), Serdes.String()))
-               .process(CausalProcessors.builder(noOp, policy)
+               .process(CausalProcessors.builder(noOp, limit)
                        .serdes(Serdes.String(), Serdes.String()).build())
                .to("bench-out", Produced.with(Serdes.String(), Serdes.String()));
 
@@ -108,7 +108,7 @@ public class StateRestorationBenchmark {
         // Pre-populate the buffer store with bufferSize records, each with an unsatisfied
         // dependency, as if a crash occurred with that many held records.
         ParsleyEngine<String, String> engine = new ParsleyEngine<>(
-                policy, v -> {}, CausalFrontier.empty(), null, f -> {},
+                limit, v -> {}, CausalFrontier.empty(), f -> {},
                 new RocksBufferStore<>(bufferKV, serializer), new RocksPositionIndex(waitKV),
                 ParsleyMetrics.NOOP);
         for (int i = 0; i < bufferSize; i++) {
@@ -145,7 +145,7 @@ public class StateRestorationBenchmark {
     public ParsleyEngine<String, String> bufferRestore() {
         RocksBufferStore<String, String> buf = new RocksBufferStore<>(bufferKV, serializer);
         RocksPositionIndex idx = new RocksPositionIndex(waitKV);
-        return new ParsleyEngine<>(policy, v -> {}, CausalFrontier.empty(), null, f -> {},
+        return new ParsleyEngine<>(limit, v -> {}, CausalFrontier.empty(), f -> {},
                 buf, idx, ParsleyMetrics.NOOP);
     }
 

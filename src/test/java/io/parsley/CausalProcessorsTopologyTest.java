@@ -3,6 +3,7 @@ package io.parsley;
 import org.apache.kafka.common.Metric;
 import org.apache.kafka.common.MetricName;
 import org.apache.kafka.common.Uuid;
+import org.apache.kafka.common.header.Header;
 import org.apache.kafka.common.header.Headers;
 import org.apache.kafka.common.header.internals.RecordHeader;
 import org.apache.kafka.common.header.internals.RecordHeaders;
@@ -40,7 +41,9 @@ import java.util.Map;
 import java.util.Properties;
 import java.util.Set;
 
+import static java.nio.charset.StandardCharsets.UTF_8;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
@@ -112,19 +115,27 @@ class CausalProcessorsTopologyTest {
         return CausalDependencies.fromHeaders(record.headers()).orElseThrow();
     }
 
+    private static CausalResult outResult(TestRecord<String, String> record) {
+        Header header = record.headers().lastHeader(ParsleyAttributes.CAUSAL_RESULT);
+        assertNotNull(header, "record must carry a " + ParsleyAttributes.CAUSAL_RESULT + " header");
+        return CausalResult.valueOf(new String(header.value(), UTF_8));
+    }
+
     // --- tests ---------------------------------------------------------------------------------
 
     /**
      * A record with satisfied dependencies is admitted immediately: the delegate processor runs,
-     * transforms the value, and the output record is stamped with the updated frontier.
+     * transforms the value, and the output record is stamped with the updated frontier and a
+     * {@code SATISFIED} result.
      *
      * Asserts that the delegate runs exactly once, the value is transformed, the emitted record
-     * carries the frontier as the dependency stamp, and no violation is reported.
+     * carries the frontier as the dependency stamp and a SATISFIED result, and no violation is
+     * reported.
      */
     @Test
     void admittedRecordRunsDelegateAndStampsTheMergedClock() {
         Topology topology = topology(
-                CausalProcessors.builder(upperCaser(), CausalBufferPolicy.drop(CausalBufferLimit.ofSize(100)))
+                CausalProcessors.builder(upperCaser(), CausalBufferLimit.ofSize(100))
                         .serdes(Serdes.String(), Serdes.String()).onViolation(onViolation).build(),
                 List.of("t1"));
 
@@ -141,6 +152,7 @@ class CausalProcessorsTopologyTest {
             assertEquals("HELLO", emitted.value(), "delegate's transform must be applied");
             assertEquals(CausalDependencies.builder().require(new CausalPosition(T1_ID, 0, 0)).build(), outDeps(emitted),
                     "forward must be stamped with the frontier as of admission");
+            assertEquals(CausalResult.SATISFIED, outResult(emitted), "an admitted record must be stamped SATISFIED");
             assertTrue(violations.isEmpty(), "no violation must be reported for an admitted record");
         }
     }
@@ -157,7 +169,7 @@ class CausalProcessorsTopologyTest {
     @Test
     void heldRecordIsBufferedThenDrainedThroughDelegate() {
         Topology topology = topology(
-                CausalProcessors.builder(upperCaser(), CausalBufferPolicy.drop(CausalBufferLimit.ofSize(100)))
+                CausalProcessors.builder(upperCaser(), CausalBufferLimit.ofSize(100))
                         .serdes(Serdes.String(), Serdes.String()).onViolation(onViolation).build(),
                 List.of("t2", "t3"));
 
@@ -189,17 +201,19 @@ class CausalProcessorsTopologyTest {
     }
 
     /**
-     * Under the drop policy with a size limit of 1, a record whose dependency cannot be
-     * satisfied is evicted immediately, the delegate never runs, and a
-     * {@link CausalViolationReason#LIMIT_REACHED} violation is reported with the correct gap.
+     * A record whose dependency cannot be satisfied within a buffer size limit of 1 is evicted —
+     * but per the always-forward model, the delegate still runs and the record still reaches the
+     * output, stamped {@code CausalResult.EVICTED} instead of {@code SATISFIED}. Exactly one
+     * violation is reported with the gap describing the shortfall.
      *
-     * Asserts that no record reaches the delegate or the output, exactly one violation is
-     * reported, and the gap reflects the shortfall between the required offset and the frontier.
+     * Asserts that the delegate runs, the transformed record reaches the output stamped EVICTED,
+     * exactly one violation is reported, and the gap reflects the shortfall between the required
+     * offset and the frontier.
      */
     @Test
-    void strictDropDoesNotInvokeDelegateAndReportsTheGap() {
+    void evictedRecordIsForwardedToDelegateAndReportsTheGap() {
         Topology topology = topology(
-                CausalProcessors.builder(upperCaser(), CausalBufferPolicy.drop(CausalBufferLimit.ofSize(1)))
+                CausalProcessors.builder(upperCaser(), CausalBufferLimit.ofSize(1))
                         .serdes(Serdes.String(), Serdes.String()).onViolation(onViolation).build(),
                 List.of("t3"));
 
@@ -213,87 +227,15 @@ class CausalProcessorsTopologyTest {
             t3.pipeInput(new TestRecord<>("k", "t3-val",
                     depsHeader(CausalDependencies.builder().require(new CausalPosition(T2_ID, 0, 99)).build())));
 
-            assertTrue(processed.isEmpty(), "strict policy must never run the delegate for an unsatisfiable record");
-            assertTrue(out.isEmpty(), "dropped record must not appear in the output topic");
+            assertEquals(List.of("t3-val"), processed,
+                    "eviction still runs the delegate — Parsley never drops a record");
+            TestRecord<String, String> emitted = out.readRecord();
+            assertEquals("T3-VAL", emitted.value(), "the evicted record's transform must still be applied");
+            assertEquals(CausalResult.EVICTED, outResult(emitted), "an evicted record must be stamped EVICTED");
             assertEquals(1, violations.size(), "exactly one violation must be reported");
             CausalViolation violation = violations.get(0);
-            assertEquals(CausalViolationReason.LIMIT_REACHED, violation.reason(),
-                    "violation reason must be LIMIT_REACHED");
             assertEquals(List.of(new CausalPosition(CausalPosition.deriveUuid("t2"), 0, 100L)), violation.gap(),
                     "gap is required(99) minus offsetFor(absent=-1) = 100");
-        }
-    }
-
-    /**
-     * Under the dead-letter policy, a record that cannot be satisfied within the buffer
-     * limit is routed to the configured dead-letter sink, the delegate never runs, and a
-     * violation is reported.
-     *
-     * Asserts that nothing reaches the main output, the record reaches the dead-letter sink,
-     * and a LIMIT_REACHED violation is reported.
-     */
-    @Test
-    void deadLetterRoutesToSinkAndDoesNotInvokeDelegate() {
-        List<String> deadLettered = new ArrayList<>();
-        CausalBufferPolicy policy = CausalBufferPolicy.deadLetter(CausalBufferLimit.ofSize(1));
-        Topology topology = topology(
-                CausalProcessors.builder(upperCaser(), policy)
-                        .serdes(Serdes.String(), Serdes.String()).onViolation(onViolation)
-                        .deadLetterSink(cr -> deadLettered.add(cr.value())).build(),
-                List.of("t3"));
-
-        try (TopologyTestDriver driver = new TopologyTestDriver(topology, config(null))) {
-            TestInputTopic<String, String> t3 =
-                    driver.createInputTopic("t3", new StringSerializer(), new StringSerializer());
-            TestOutputTopic<String, String> out =
-                    driver.createOutputTopic("out", new StringDeserializer(), new StringDeserializer());
-
-            t3.pipeInput(new TestRecord<>("k", "t3-val",
-                    depsHeader(CausalDependencies.builder().require(new CausalPosition(T2_ID, 0, 99)).build())));
-
-            assertTrue(processed.isEmpty(), "dead-letter policy must never run the delegate");
-            assertTrue(out.isEmpty(), "dead-lettered record must not appear in the main output");
-            assertEquals(List.of("t3-val"), deadLettered,
-                    "dead-lettered record must reach the configured sink");
-            assertEquals(1, violations.size(), "exactly one violation must be reported");
-            assertEquals(CausalViolationReason.LIMIT_REACHED, violations.get(0).reason(),
-                    "violation reason must be LIMIT_REACHED");
-        }
-    }
-
-    /**
-     * Under the forward-unsafe policy with a size limit of 1, a record that cannot be satisfied
-     * within the buffer limit is forwarded to the delegate immediately (causal ordering is
-     * abandoned), and a violation is reported.
-     *
-     * Asserts that the record reaches the delegate and the output, and a LIMIT_REACHED violation
-     * is reported with the expected gap.
-     */
-    @Test
-    void forwardUnsafeRunsDelegateUnderLagAndFlagsTheViolation() {
-        Topology topology = topology(
-                CausalProcessors.builder(upperCaser(), CausalBufferPolicy.forwardUnsafe(CausalBufferLimit.ofSize(1)))
-                        .serdes(Serdes.String(), Serdes.String()).onViolation(onViolation).build(),
-                List.of("t3"));
-
-        try (TopologyTestDriver driver = new TopologyTestDriver(topology, config(null))) {
-            TestInputTopic<String, String> t3 =
-                    driver.createInputTopic("t3", new StringSerializer(), new StringSerializer());
-            TestOutputTopic<String, String> out =
-                    driver.createOutputTopic("out", new StringDeserializer(), new StringDeserializer());
-
-            t3.pipeInput(new TestRecord<>("k", "t3-val",
-                    depsHeader(CausalDependencies.builder().require(new CausalPosition(T2_ID, 0, 99)).build())));
-
-            assertEquals(List.of("t3-val"), processed,
-                    "forward-unsafe policy delivers the unsatisfied record to the delegate");
-            assertEquals(List.of("T3-VAL"), out.readValuesToList(),
-                    "forward-unsafe eviction forwards the record to the output");
-            assertEquals(1, violations.size(), "exactly one violation must be reported");
-            assertEquals(CausalViolationReason.LIMIT_REACHED, violations.get(0).reason(),
-                    "violation reason must be LIMIT_REACHED");
-            assertEquals(List.of(new CausalPosition(CausalPosition.deriveUuid("t2"), 0, 100L)), violations.get(0).gap(),
-                    "gap must reflect the shortfall: required 99, frontier absent → gap 100");
         }
     }
 
@@ -302,24 +244,23 @@ class CausalProcessorsTopologyTest {
      * have individually aged past the configured duration — not the entire buffer, which was the
      * bug being fixed here. Two records are buffered one duration-interval apart; when the
      * punctuator fires at the older record's age boundary, only that older record must be
-     * evicted, leaving the younger one held.
+     * evicted (and forwarded), leaving the younger one held.
      *
-     * Asserts that after the punctuator fires, only the older record is dead-lettered and the
+     * Asserts that after the punctuator fires, only the older record reaches the output and the
      * younger record remains in the buffer store.
      */
     @Test
     void durationEvictionOnlyEvictsRecordsThatHaveIndividuallyAgedOut() {
-        List<String> deadLettered = new ArrayList<>();
-        CausalBufferPolicy policy = CausalBufferPolicy.deadLetter(CausalBufferLimit.ofDuration(Duration.ofSeconds(2)));
         Topology topology = topology(
-                CausalProcessors.builder(upperCaser(), policy)
-                        .serdes(Serdes.String(), Serdes.String()).onViolation(onViolation)
-                        .deadLetterSink(cr -> deadLettered.add(cr.value())).build(),
+                CausalProcessors.builder(upperCaser(), CausalBufferLimit.ofDuration(Duration.ofSeconds(2)))
+                        .serdes(Serdes.String(), Serdes.String()).onViolation(onViolation).build(),
                 List.of("t3"));
 
         try (TopologyTestDriver driver = new TopologyTestDriver(topology, config(null))) {
             TestInputTopic<String, String> t3 =
                     driver.createInputTopic("t3", new StringSerializer(), new StringSerializer());
+            TestOutputTopic<String, String> out =
+                    driver.createOutputTopic("out", new StringDeserializer(), new StringDeserializer());
             KeyValueStore<String, byte[]> bufferStore = driver.getKeyValueStore("parsley-buffer");
 
             // Record A is buffered first; it will be 2s old (the full duration) once we advance below.
@@ -328,7 +269,7 @@ class CausalProcessorsTopologyTest {
 
             driver.advanceWallClockTime(Duration.ofSeconds(1));
             assertEquals(1, storeSize(bufferStore), "advancing by less than the duration must not fire eviction yet");
-            assertTrue(deadLettered.isEmpty(), "no record must be evicted before the duration elapses");
+            assertTrue(out.isEmpty(), "no record must be evicted before the duration elapses");
 
             // Record B is buffered one second after A — only one second old at the next punctuation.
             t3.pipeInput(new TestRecord<>("k", "t3-val-B",
@@ -338,45 +279,45 @@ class CausalProcessorsTopologyTest {
             // but B (buffered 1s ago) has not.
             driver.advanceWallClockTime(Duration.ofSeconds(1));
 
-            assertEquals(List.of("t3-val-A"), deadLettered,
-                    "only the record that has individually aged past the duration must be evicted");
+            assertEquals(List.of("T3-VAL-A"), out.readValuesToList(),
+                    "only the record that has individually aged past the duration must be evicted and forwarded");
             assertEquals(1, storeSize(bufferStore), "the younger record must remain held in the buffer");
         }
     }
 
     /**
      * When a size limit fires, only the oldest record needed to bring the buffer back under the
-     * limit is evicted, leaving younger records held — the same partial-eviction guarantee as
-     * the duration limit, but triggered synchronously by buffer depth instead of a punctuator.
+     * limit is evicted (and forwarded), leaving younger records held — the same partial-eviction
+     * guarantee as the duration limit, but triggered synchronously by buffer depth instead of a
+     * punctuator.
      *
-     * Asserts that after the second record overflows a size-2 limit, only the older record is
-     * dead-lettered and the younger record remains in the buffer store.
+     * Asserts that after the second record overflows a size-2 limit, only the older record
+     * reaches the output and the younger record remains in the buffer store.
      */
     @Test
     void sizeLimitEvictionOnlyEvictsTheOldestOverflowingRecord() {
-        List<String> deadLettered = new ArrayList<>();
-        CausalBufferPolicy policy = CausalBufferPolicy.deadLetter(CausalBufferLimit.ofSize(2));
         Topology topology = topology(
-                CausalProcessors.builder(upperCaser(), policy)
-                        .serdes(Serdes.String(), Serdes.String()).onViolation(onViolation)
-                        .deadLetterSink(cr -> deadLettered.add(cr.value())).build(),
+                CausalProcessors.builder(upperCaser(), CausalBufferLimit.ofSize(2))
+                        .serdes(Serdes.String(), Serdes.String()).onViolation(onViolation).build(),
                 List.of("t3"));
 
         try (TopologyTestDriver driver = new TopologyTestDriver(topology, config(null))) {
             TestInputTopic<String, String> t3 =
                     driver.createInputTopic("t3", new StringSerializer(), new StringSerializer());
+            TestOutputTopic<String, String> out =
+                    driver.createOutputTopic("out", new StringDeserializer(), new StringDeserializer());
             KeyValueStore<String, byte[]> bufferStore = driver.getKeyValueStore("parsley-buffer");
 
             t3.pipeInput(new TestRecord<>("k", "t3-val-A",
                     depsHeader(CausalDependencies.builder().require(new CausalPosition(T2_ID, 0, 99)).build())));
             assertEquals(1, storeSize(bufferStore), "buffering the first record must not fire eviction yet");
-            assertTrue(deadLettered.isEmpty(), "no record must be evicted before the limit is reached");
+            assertTrue(out.isEmpty(), "no record must be evicted before the limit is reached");
 
             t3.pipeInput(new TestRecord<>("k", "t3-val-B",
                     depsHeader(CausalDependencies.builder().require(new CausalPosition(T2_ID, 0, 99)).build())));
 
-            assertEquals(List.of("t3-val-A"), deadLettered,
-                    "only the oldest record must be evicted once the size limit is reached");
+            assertEquals(List.of("T3-VAL-A"), out.readValuesToList(),
+                    "only the oldest record must be evicted and forwarded once the size limit is reached");
             assertEquals(1, storeSize(bufferStore), "the younger record must remain held in the buffer");
         }
     }
@@ -410,7 +351,7 @@ class CausalProcessorsTopologyTest {
             }
         };
         Topology topology = topology(
-                CausalProcessors.builder(user, CausalBufferPolicy.drop(CausalBufferLimit.ofSize(100)))
+                CausalProcessors.builder(user, CausalBufferLimit.ofSize(100))
                         .serdes(Serdes.String(), Serdes.String()).onViolation(onViolation).build(),
                 List.of("t1"));
 
@@ -457,7 +398,7 @@ class CausalProcessorsTopologyTest {
             }
         };
         Topology topology = topology(
-                CausalProcessors.builder(user, CausalBufferPolicy.drop(CausalBufferLimit.ofSize(100)))
+                CausalProcessors.builder(user, CausalBufferLimit.ofSize(100))
                         .serdes(Serdes.String(), Serdes.String()).onViolation(onViolation).build(),
                 List.of("t1"));
 
@@ -517,7 +458,7 @@ class CausalProcessorsTopologyTest {
             }
         };
         Topology topology = topology(
-                CausalProcessors.builder(user, CausalBufferPolicy.drop(CausalBufferLimit.ofSize(100)))
+                CausalProcessors.builder(user, CausalBufferLimit.ofSize(100))
                         .serdes(Serdes.String(), Serdes.String()).onViolation(onViolation).build(),
                 List.of("t1"));
 
@@ -549,7 +490,7 @@ class CausalProcessorsTopologyTest {
     void bufferSerdesAreResolvedAndInvokedWithTheSourceTopic() {
         SpyStringSerde valueSpy = new SpyStringSerde();
         Topology topology = topology(
-                CausalProcessors.builder(upperCaser(), CausalBufferPolicy.drop(CausalBufferLimit.ofSize(100)))
+                CausalProcessors.builder(upperCaser(), CausalBufferLimit.ofSize(100))
                         .serdesByTopic(t -> Serdes.String(), t -> valueSpy).onViolation(onViolation).build(),
                 List.of("t2", "t3"));
 
@@ -583,11 +524,11 @@ class CausalProcessorsTopologyTest {
     void twoDecoratorsWithDistinctStoreNamesCoexistAndKeepIsolatedFrontiers() {
         StreamsBuilder builder = new StreamsBuilder();
         builder.stream("t3", Consumed.with(Serdes.String(), Serdes.String()))
-                .process(CausalProcessors.builder(upperCaser(), CausalBufferPolicy.drop(CausalBufferLimit.ofSize(100)))
+                .process(CausalProcessors.builder(upperCaser(), CausalBufferLimit.ofSize(100))
                         .serdesByTopic(t -> Serdes.String(), t -> Serdes.String()).onViolation(onViolation).storeName("t3").build())
                 .to("t3-out", Produced.with(Serdes.String(), Serdes.String()));
         builder.stream("t2", Consumed.with(Serdes.String(), Serdes.String()))
-                .process(CausalProcessors.builder(upperCaser(), CausalBufferPolicy.drop(CausalBufferLimit.ofSize(100)))
+                .process(CausalProcessors.builder(upperCaser(), CausalBufferLimit.ofSize(100))
                         .serdesByTopic(t -> Serdes.String(), t -> Serdes.String()).onViolation(onViolation).storeName("t2").build())
                 .to("t2-out", Produced.with(Serdes.String(), Serdes.String()));
 
@@ -631,7 +572,7 @@ class CausalProcessorsTopologyTest {
         List<CausalFrontier> snapshots = new ArrayList<>();
         CausalFrontierListener listener = snapshots::add;
         Topology topology = topology(
-                CausalProcessors.builder(upperCaser(), CausalBufferPolicy.drop(CausalBufferLimit.ofSize(100)))
+                CausalProcessors.builder(upperCaser(), CausalBufferLimit.ofSize(100))
                         .serdesByTopic(t -> Serdes.String(), t -> Serdes.String()).onViolation(onViolation).storeName("t1").frontierListener(listener).build(),
                 List.of("t1"));
 
@@ -669,7 +610,7 @@ class CausalProcessorsTopologyTest {
     @Test
     void automaticStampFrontierIsBoundedByInputTopicCountNotRecordCount() {
         Topology topology = topology(
-                CausalProcessors.builder(upperCaser(), CausalBufferPolicy.drop(CausalBufferLimit.ofSize(1000)))
+                CausalProcessors.builder(upperCaser(), CausalBufferLimit.ofSize(1000))
                         .serdes(Serdes.String(), Serdes.String()).onViolation(onViolation).build(),
                 List.of("t1", "t2", "t3"));
 
@@ -698,9 +639,9 @@ class CausalProcessorsTopologyTest {
      * into the frontier or re-stamped onto the output record.
      *
      * <p>This is the most important regression guard: a record carrying dependencies over
-     * hundreds of unrelated partitions, force-forwarded under the forward-unsafe policy, must
-     * still carry only its own source coordinate on the output. The inbound deps must not
-     * amplify the output header size.
+     * hundreds of unrelated partitions, force-forwarded after an eviction, must still carry
+     * only its own source coordinate on the output. The inbound deps must not amplify the output
+     * header size.
      *
      * Asserts that a record with 500 inbound dependency entries produces an output stamped
      * with exactly one dependency (the record's own source coordinate).
@@ -714,7 +655,7 @@ class CausalProcessorsTopologyTest {
         CausalDependencies big = bigBuilder.build();
 
         Topology topology = topology(
-                CausalProcessors.builder(upperCaser(), CausalBufferPolicy.forwardUnsafe(CausalBufferLimit.ofSize(1)))
+                CausalProcessors.builder(upperCaser(), CausalBufferLimit.ofSize(1))
                         .serdes(Serdes.String(), Serdes.String()).onViolation(onViolation).build(),
                 List.of("t1"));
 
@@ -744,7 +685,7 @@ class CausalProcessorsTopologyTest {
     @Test
     void streamsMetricsSensorsArePopulatedAfterBufferingAndRelease() {
         Topology topology = topology(
-                CausalProcessors.builder(upperCaser(), CausalBufferPolicy.drop(CausalBufferLimit.ofSize(100)))
+                CausalProcessors.builder(upperCaser(), CausalBufferLimit.ofSize(100))
                         .serdes(Serdes.String(), Serdes.String()).onViolation(onViolation).build(),
                 List.of("t2", "t3"));
 
@@ -773,16 +714,15 @@ class CausalProcessorsTopologyTest {
      * A record whose dependencies contain its own source coordinate is forwarded immediately:
      * the self-referential entry is stripped at admission, leaving empty effective dependencies.
      *
-     * <p>The buffer size limit is set to 1 so any attempt to buffer the record would fire
-     * {@link CausalViolationReason#LIMIT_REACHED} immediately — proving the record never
-     * entered the buffer path.
+     * <p>The buffer size limit is set to 1 so any attempt to buffer the record would fire an
+     * eviction violation immediately — proving the record never entered the buffer path.
      *
      * Asserts that the record is forwarded without entering the buffer and without a violation.
      */
     @Test
     void stripSelfReferentialDependencyAndForwardImmediately() {
         Topology topology = topology(
-                CausalProcessors.builder(upperCaser(), CausalBufferPolicy.drop(CausalBufferLimit.ofSize(1)))
+                CausalProcessors.builder(upperCaser(), CausalBufferLimit.ofSize(1))
                         .serdes(Serdes.String(), Serdes.String()).onViolation(onViolation).build(),
                 List.of("t1"));
 
@@ -833,13 +773,11 @@ class CausalProcessorsTopologyTest {
         // forwards. proc2 receives the stamped record; because the topology is fused,
         // context.recordMetadata() still returns the original "t1" metadata → self-reference dep.
         builder.stream("t1", consumed)
-                .process(CausalProcessors.builder(upperCaser(),
-                                CausalBufferPolicy.drop(CausalBufferLimit.ofSize(100)))
+                .process(CausalProcessors.builder(upperCaser(), CausalBufferLimit.ofSize(100))
                         .serdes(Serdes.String(), Serdes.String())
                         .onViolation(proc1Violations::add)
                         .storeName("node1").build())
-                .process(CausalProcessors.builder(upperCaser(),
-                                CausalBufferPolicy.drop(CausalBufferLimit.ofSize(100)))
+                .process(CausalProcessors.builder(upperCaser(), CausalBufferLimit.ofSize(100))
                         .serdes(Serdes.String(), Serdes.String())
                         .onViolation(proc2Violations::add)
                         .storeName("node2").build())
@@ -904,8 +842,7 @@ class CausalProcessorsTopologyTest {
 
         // proc1: holds t3-records (dep on t2) until t2 arrives. Output materializes to "t4".
         t2Src.merge(t3Src)
-                .process(CausalProcessors.builder(upperCaser(),
-                             CausalBufferPolicy.drop(CausalBufferLimit.ofSize(100)))
+                .process(CausalProcessors.builder(upperCaser(), CausalBufferLimit.ofSize(100))
                         .serdesByTopic(t -> Serdes.String(), t -> Serdes.String())
                         .onViolation(proc1Violations::add)
                         .storeName("node1").build())
@@ -913,8 +850,7 @@ class CausalProcessorsTopologyTest {
 
         // proc2: receives "t4" (proc1's derived output) AND direct t2/t3 feeds to bootstrap its frontier.
         t4Src.merge(t2Src).merge(t3Src)
-                .process(CausalProcessors.builder(upperCaser(),
-                             CausalBufferPolicy.drop(CausalBufferLimit.ofSize(100)))
+                .process(CausalProcessors.builder(upperCaser(), CausalBufferLimit.ofSize(100))
                         .serdesByTopic(t -> Serdes.String(), t -> Serdes.String())
                         .onViolation(proc2Violations::add)
                         .storeName("node2").build())
@@ -1006,8 +942,7 @@ class CausalProcessorsTopologyTest {
         var t5Src = builder.stream("t5", consumed);
 
         t2Src
-                .process(CausalProcessors.builder(upperCaser(),
-                                CausalBufferPolicy.drop(CausalBufferLimit.ofSize(100)))
+                .process(CausalProcessors.builder(upperCaser(), CausalBufferLimit.ofSize(100))
                         .serdes(Serdes.String(), Serdes.String())
                         .onViolation(proc1Violations::add)
                         .storeName("node1").build())
@@ -1016,8 +951,7 @@ class CausalProcessorsTopologyTest {
         // proc2 takes proc1's materialised output, the original t2 (to bootstrap T2 frontier),
         // and the independent "t5" stream.
         t4Src.merge(t2Src).merge(t5Src)
-                .process(CausalProcessors.builder(upperCaser(),
-                                CausalBufferPolicy.drop(CausalBufferLimit.ofSize(100)))
+                .process(CausalProcessors.builder(upperCaser(), CausalBufferLimit.ofSize(100))
                         .serdes(Serdes.String(), Serdes.String())
                         .onViolation(proc2Violations::add)
                         .storeName("node2").build())
@@ -1086,14 +1020,12 @@ class CausalProcessorsTopologyTest {
 
         // proc1 fused directly into proc2 (no .to("intermediate")); t5 also merges into proc2.
         builder.stream("t1", consumed)
-                .process(CausalProcessors.builder(upperCaser(),
-                                CausalBufferPolicy.drop(CausalBufferLimit.ofSize(100)))
+                .process(CausalProcessors.builder(upperCaser(), CausalBufferLimit.ofSize(100))
                         .serdes(Serdes.String(), Serdes.String())
                         .onViolation(proc1Violations::add)
                         .storeName("node1").build())
                 .merge(t5Src)
-                .process(CausalProcessors.builder(upperCaser(),
-                                CausalBufferPolicy.drop(CausalBufferLimit.ofSize(100)))
+                .process(CausalProcessors.builder(upperCaser(), CausalBufferLimit.ofSize(100))
                         .serdes(Serdes.String(), Serdes.String())
                         .onViolation(proc2Violations::add)
                         .storeName("node2").build())
@@ -1128,12 +1060,13 @@ class CausalProcessorsTopologyTest {
     }
 
     /**
-     * Materialized chain: an unclocked sidecar record (no causal-dependencies header) is
-     * admitted immediately with a {@link CausalViolationReason#MISSING_HEADER} violation and
-     * never enters the buffer, regardless of where the materialized chain's frontier stands.
+     * Materialized chain: an unclocked sidecar record (no causal-dependencies header) is treated
+     * as trivially satisfied — {@code CausalDependencies.empty()} — so it is admitted immediately
+     * with no violation at all and never enters the buffer, regardless of where the materialized
+     * chain's frontier stands.
      *
-     * Asserts that the unclocked record is forwarded immediately, one MISSING_HEADER violation
-     * is reported, and the buffer remains empty.
+     * Asserts that the unclocked record is forwarded immediately, stamped SATISFIED, no
+     * violation is reported, and the buffer remains empty.
      */
     @Test
     void admitUnclockedSidecarImmediatelyInMaterializedChain() {
@@ -1148,16 +1081,14 @@ class CausalProcessorsTopologyTest {
         var t5Src = builder.stream("t5", consumed);
 
         t2Src
-                .process(CausalProcessors.builder(upperCaser(),
-                                CausalBufferPolicy.drop(CausalBufferLimit.ofSize(100)))
+                .process(CausalProcessors.builder(upperCaser(), CausalBufferLimit.ofSize(100))
                         .serdes(Serdes.String(), Serdes.String())
                         .onViolation(proc1Violations::add)
                         .storeName("node1").build())
                 .to("t4", produced);
 
         t4Src.merge(t2Src).merge(t5Src)
-                .process(CausalProcessors.builder(upperCaser(),
-                                CausalBufferPolicy.forwardUnsafe(CausalBufferLimit.ofSize(100)))
+                .process(CausalProcessors.builder(upperCaser(), CausalBufferLimit.ofSize(100))
                         .serdes(Serdes.String(), Serdes.String())
                         .onViolation(proc2Violations::add)
                         .storeName("node2").build())
@@ -1171,15 +1102,15 @@ class CausalProcessorsTopologyTest {
             TestOutputTopic<String, String> out =
                     driver.createOutputTopic("out", new StringDeserializer(), new StringDeserializer());
 
-            // Unclocked t5-record: no parsley-causal-dependencies header → MISSING_HEADER →
-            // forwarded immediately (forwardUnsafe policy) even though t4 hasn't produced anything.
+            // Unclocked t5-record: no parsley-causal-dependencies header → treated as
+            // CausalDependencies.empty() → trivially satisfied → forwarded immediately.
             t5.pipeInput(new TestRecord<>("k", "t5-val"));
-            assertEquals(List.of("T5-VAL"), out.readValuesToList(),
-                    "unclocked record must be forwarded immediately under forwardUnsafe policy");
-            assertEquals(1, proc2Violations.size(),
-                    "exactly one MISSING_HEADER violation must be reported");
-            assertEquals(CausalViolationReason.MISSING_HEADER, proc2Violations.get(0).reason(),
-                    "violation reason must be MISSING_HEADER");
+            TestRecord<String, String> emitted = out.readRecord();
+            assertEquals("T5-VAL", emitted.value(),
+                    "unclocked record must be forwarded immediately, trivially satisfied");
+            assertEquals(CausalResult.SATISFIED, outResult(emitted),
+                    "an unclocked record is trivially satisfied, never evicted");
+            assertTrue(proc2Violations.isEmpty(), "a missing dependency header must never produce a violation");
             assertEquals(0, storeSize(driver.getKeyValueStore("node2-buffer")),
                     "unclocked record must never enter the buffer");
 
@@ -1187,18 +1118,19 @@ class CausalProcessorsTopologyTest {
             t2.pipeInput(new TestRecord<>("k", "t2-val", depsHeader(CausalDependencies.empty())));
             assertEquals(2, out.readValuesToList().size(),
                     "t2-val direct and t4-derived must both appear after the unclocked record");
-            assertEquals(1, proc2Violations.size(), "no new violations from clocked t2/t4 records");
+            assertTrue(proc2Violations.isEmpty(), "no violations from clocked t2/t4 records either");
             assertTrue(proc1Violations.isEmpty(), "proc1 must not violate");
         }
     }
 
     /**
-     * Fused chain: an unclocked sidecar record (no causal-dependencies header) is admitted
-     * immediately with a {@link CausalViolationReason#MISSING_HEADER} violation, interleaved
-     * correctly alongside the fused proc1 output.
+     * Fused chain: an unclocked sidecar record (no causal-dependencies header) is treated as
+     * trivially satisfied and admitted immediately with no violation, interleaved correctly
+     * alongside the fused proc1 output.
      *
-     * Asserts that the unclocked record is forwarded immediately, one MISSING_HEADER violation
-     * is reported, and the buffer remains empty. Subsequent clocked records flow normally.
+     * Asserts that the unclocked record is forwarded immediately, stamped SATISFIED, no
+     * violation is reported, and the buffer remains empty. Subsequent clocked records flow
+     * normally.
      */
     @Test
     void admitUnclockedSidecarImmediatelyInFusedChain() {
@@ -1211,14 +1143,12 @@ class CausalProcessorsTopologyTest {
         var t5Src = builder.stream("t5", consumed);
 
         builder.stream("t1", consumed)
-                .process(CausalProcessors.builder(upperCaser(),
-                                CausalBufferPolicy.drop(CausalBufferLimit.ofSize(100)))
+                .process(CausalProcessors.builder(upperCaser(), CausalBufferLimit.ofSize(100))
                         .serdes(Serdes.String(), Serdes.String())
                         .onViolation(proc1Violations::add)
                         .storeName("node1").build())
                 .merge(t5Src)
-                .process(CausalProcessors.builder(upperCaser(),
-                                CausalBufferPolicy.forwardUnsafe(CausalBufferLimit.ofSize(100)))
+                .process(CausalProcessors.builder(upperCaser(), CausalBufferLimit.ofSize(100))
                         .serdes(Serdes.String(), Serdes.String())
                         .onViolation(proc2Violations::add)
                         .storeName("node2").build())
@@ -1232,14 +1162,13 @@ class CausalProcessorsTopologyTest {
             TestOutputTopic<String, String> out =
                     driver.createOutputTopic("out", new StringDeserializer(), new StringDeserializer());
 
-            // Unclocked t5-record forwarded immediately under forwardUnsafe policy.
+            // Unclocked t5-record forwarded immediately, trivially satisfied.
             t5.pipeInput(new TestRecord<>("k", "t5-val"));
-            assertEquals(List.of("T5-VAL"), out.readValuesToList(),
-                    "unclocked sidecar must be forwarded immediately");
-            assertEquals(1, proc2Violations.size(),
-                    "exactly one MISSING_HEADER violation must be reported");
-            assertEquals(CausalViolationReason.MISSING_HEADER, proc2Violations.get(0).reason(),
-                    "violation reason must be MISSING_HEADER");
+            TestRecord<String, String> emitted = out.readRecord();
+            assertEquals("T5-VAL", emitted.value(), "unclocked sidecar must be forwarded immediately");
+            assertEquals(CausalResult.SATISFIED, outResult(emitted),
+                    "an unclocked record is trivially satisfied, never evicted");
+            assertTrue(proc2Violations.isEmpty(), "a missing dependency header must never produce a violation");
             assertEquals(0, storeSize(driver.getKeyValueStore("node2-buffer")),
                     "unclocked record must never enter the buffer");
 
@@ -1247,7 +1176,7 @@ class CausalProcessorsTopologyTest {
             t1.pipeInput(new TestRecord<>("k", "t1-val", depsHeader(CausalDependencies.empty())));
             assertEquals(List.of("T1-VAL"), out.readValuesToList(),
                     "clocked t1-val must flow through both processors normally");
-            assertEquals(1, proc2Violations.size(), "no new violations from clocked t1-val");
+            assertTrue(proc2Violations.isEmpty(), "no violations from clocked t1-val either");
             assertTrue(proc1Violations.isEmpty(), "proc1 must not violate");
         }
     }

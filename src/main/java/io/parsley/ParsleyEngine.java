@@ -10,7 +10,6 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Optional;
 import java.util.Set;
-import java.util.function.Consumer;
 import java.util.function.LongSupplier;
 
 import static java.nio.charset.StandardCharsets.UTF_8;
@@ -19,15 +18,17 @@ import static java.nio.charset.StandardCharsets.UTF_8;
  * The causal buffering engine.
  *
  * <p>The processor feeds incoming records to {@link #onRecord} and forwards the returned
- * records downstream, in order. The engine classifies each record (missing or unresolvable
- * dependencies → violation + policy applied; dependencies satisfied → forward; otherwise → buffer),
- * advances the causal frontier, and cascades releases from the buffer as the frontier moves.
+ * records downstream, in order. Every record is delivered — there is no drop, no diversion — but
+ * each is stamped with a {@link CausalResult}: {@link CausalResult#SATISFIED} if the frontier
+ * satisfied its dependencies by delivery time (whether immediately, after a wait, or trivially —
+ * no dependencies claimed, or an undecodable header, both treated as an empty, vacuously
+ * satisfied set), or {@link CausalResult#EVICTED} if a {@link CausalBufferLimit} fired before
+ * that happened.
  *
- * <p>The engine also owns policy-driven eviction: when a {@link CausalBufferLimit} fires it surrenders
- * the oldest buffered records needed to satisfy the limit and, per {@link CausalBufferPolicy}, forwards
- * them out-of-order, discards them, or routes them to the dead-letter sink — reporting a
- * {@link CausalViolation} (with the causal gap) for each. The action is determined per
- * {@link CausalViolationReason} via {@link CausalBufferPolicy#actionFor}.
+ * <p>The engine also owns limit-driven eviction: when a {@link CausalBufferLimit} fires it
+ * surrenders the oldest buffered records needed to satisfy the limit, forwards them stamped
+ * {@link CausalResult#EVICTED}, and reports a {@link CausalViolation} (with the causal gap) for
+ * each via {@link CausalViolationHandler}.
  *
  * <p><strong>Frontier persistence ordering:</strong> the {@link FrontierCallback} fires for
  * every frontier advancement <em>before</em> the corresponding record is returned for
@@ -57,9 +58,8 @@ final class ParsleyEngine<K, V> {
 
     private record ParsleyPartition(Uuid topicId, int partition) {}
 
-    private final CausalBufferPolicy policy;
+    private final CausalBufferLimit limit;
     private final CausalViolationHandler violationHandler;
-    private final Consumer<ParsleyRecord<K, V>> deadLetterSink;
     private final ParsleyBufferStore<K, V> buffer;
     private final ParsleyPositionIndex positionIndex;
     private final FrontierCallback frontierListener;
@@ -70,40 +70,34 @@ final class ParsleyEngine<K, V> {
     private int sizeLimit = Integer.MAX_VALUE;
     private Duration evictionInterval;
 
-    ParsleyEngine(CausalBufferPolicy policy,
+    ParsleyEngine(CausalBufferLimit limit,
                  CausalViolationHandler violationHandler,
                  CausalFrontier initialFrontier,
-                 Consumer<ParsleyRecord<K, V>> deadLetterSink,
                  FrontierCallback frontierListener,
                  ParsleyBufferStore<K, V> buffer,
                  ParsleyPositionIndex positionIndex,
                  ParsleyMetrics metrics) {
-        this(policy, violationHandler, initialFrontier, deadLetterSink, frontierListener, buffer, positionIndex,
+        this(limit, violationHandler, initialFrontier, frontierListener, buffer, positionIndex,
                 metrics, System::currentTimeMillis);
     }
 
-    ParsleyEngine(CausalBufferPolicy policy,
+    ParsleyEngine(CausalBufferLimit limit,
                  CausalViolationHandler violationHandler,
                  CausalFrontier initialFrontier,
-                 Consumer<ParsleyRecord<K, V>> deadLetterSink,
                  FrontierCallback frontierListener,
                  ParsleyBufferStore<K, V> buffer,
                  ParsleyPositionIndex positionIndex,
                  ParsleyMetrics metrics,
                  LongSupplier clock) {
-        if (policy.requiresDeadLetterSink() && deadLetterSink == null) {
-            throw new IllegalArgumentException("Policy requires a dead-letter sink");
-        }
-        this.policy = policy;
+        this.limit = limit;
         this.violationHandler = violationHandler;
         this.frontier = initialFrontier;
-        this.deadLetterSink = deadLetterSink;
         this.frontierListener = frontierListener;
         this.buffer = buffer;
         this.positionIndex = positionIndex;
         this.metrics = metrics;
         this.clock = clock;
-        configureLimits(policy.limit());
+        configureLimits(limit);
         // Populate the position index for any records already in the buffer (e.g., restored from
         // a state store after a restart). This is a one-time O(n) pass at construction.
         for (ParsleyBufferStore.Entry<K, V> entry : buffer.entries()) {
@@ -120,24 +114,22 @@ final class ParsleyEngine<K, V> {
     List<ParsleyRecord<K, V>> onRecord(ParsleyRecord<K, V> record) {
         List<ParsleyRecord<K, V>> out = new ArrayList<>();
 
+        CausalDependencies dependencies;
         byte[] encoded = record.encodedDependencies();
         if (encoded == null) {
-            violate(record, CausalViolationReason.MISSING_HEADER, CausalDependencies.empty());
-            advanceFrontier(record);
-            applyPolicyForRecord(record, CausalDependencies.empty(), CausalViolationReason.MISSING_HEADER, out);
-            drainInto(out, record.sourceTopicId(), record.sourcePartitionIndex());
-            return out;
-        }
-
-        CausalDependencies dependencies;
-        try {
-            dependencies = CausalDependencies.fromBytes(encoded);
-        } catch (Exception e) {
-            violate(record, CausalViolationReason.UNRESOLVABLE_DEPENDENCIES, CausalDependencies.empty());
-            advanceFrontier(record);
-            applyPolicyForRecord(record, CausalDependencies.empty(), CausalViolationReason.UNRESOLVABLE_DEPENDENCIES, out);
-            drainInto(out, record.sourceTopicId(), record.sourcePartitionIndex());
-            return out;
+            log.debug("No causal-dependencies header on {}-{} @{} — trivially satisfied",
+                    record.sourcePartition().topic(), record.sourcePartition().partition(),
+                    record.sourceOffset());
+            dependencies = CausalDependencies.empty();
+        } else {
+            try {
+                dependencies = CausalDependencies.fromBytes(encoded);
+            } catch (Exception e) {
+                log.warn("Unresolvable causal-dependencies header on {}-{} @{} — treating as trivially satisfied",
+                        record.sourcePartition().topic(), record.sourcePartition().partition(),
+                        record.sourceOffset());
+                dependencies = CausalDependencies.empty();
+            }
         }
 
         dependencies = effectiveDependencies(dependencies, record);
@@ -147,7 +139,7 @@ final class ParsleyEngine<K, V> {
                     record.sourcePartition().topic(), record.sourcePartition().partition(),
                     record.sourceOffset());
             advanceFrontier(record);
-            out.add(record);
+            out.add(stamp(record, CausalResult.SATISFIED));
             drainInto(out, record.sourceTopicId(), record.sourcePartitionIndex());
         } else {
             long seq = buffer.add(record, clock.getAsLong());
@@ -178,8 +170,8 @@ final class ParsleyEngine<K, V> {
      * {@link #evictExpired()}), so only the leading {@code buffer.size() - sizeLimit + 1}
      * entries need to be evicted to fit the record just admitted.
      *
-     * @return records to forward downstream out-of-order; non-empty only when the
-     *         {@link CausalViolationReason#LIMIT_REACHED} action is {@link CausalViolationAction#FORWARD_UNSAFE}
+     * @return the evicted records, stamped {@link CausalResult#EVICTED}, to forward downstream
+     *         out-of-order
      */
     List<ParsleyRecord<K, V>> evictOverflow() {
         int overflow = buffer.size() - sizeLimit + 1;
@@ -199,8 +191,8 @@ final class ParsleyEngine<K, V> {
      * implementations, since insertion sequence tracks buffer-admission time on the single owning
      * thread), so the scan can stop at the first record that hasn't aged out yet.
      *
-     * @return records to forward downstream out-of-order; non-empty only when the
-     *         {@link CausalViolationReason#LIMIT_REACHED} action is {@link CausalViolationAction#FORWARD_UNSAFE}
+     * @return the evicted records, stamped {@link CausalResult#EVICTED}, to forward downstream
+     *         out-of-order
      */
     List<ParsleyRecord<K, V>> evictExpired() {
         if (evictionInterval == null) {
@@ -219,15 +211,13 @@ final class ParsleyEngine<K, V> {
         if (evicted.isEmpty()) {
             return List.of();
         }
-        log.warn("Evicting {} held record(s) (policy: {})", evicted.size(), policy);
+        log.warn("Evicting {} held record(s) (limit: {})", evicted.size(), limit);
         List<ParsleyRecord<K, V>> toForward = new ArrayList<>();
         for (ParsleyBufferStore.Entry<K, V> entry : evicted) {
-            violate(entry.record(), CausalViolationReason.LIMIT_REACHED, entry.dependencies());
+            reportEviction(entry.record(), entry.dependencies());
             buffer.remove(entry.sequence());
-            if (policy.actionFor(CausalViolationReason.LIMIT_REACHED) == CausalViolationAction.FORWARD_UNSAFE) {
-                advanceFrontier(entry.record());
-            }
-            applyPolicyForRecord(entry.record(), entry.dependencies(), CausalViolationReason.LIMIT_REACHED, toForward);
+            advanceFrontier(entry.record());
+            toForward.add(stamp(entry.record(), CausalResult.EVICTED));
         }
         metrics.recordEvicted(evicted.size());
         return toForward;
@@ -243,8 +233,8 @@ final class ParsleyEngine<K, V> {
     }
 
     /**
-     * Returns the interval at which the processor must call {@link #evictExpired}, if the policy's
-     * limit contains a {@link ParsleyDurationLimit ParsleyDurationLimit}.
+     * Returns the interval at which the processor must call {@link #evictExpired}, if the
+     * configured {@link CausalBufferLimit} contains a {@link ParsleyDurationLimit ParsleyDurationLimit}.
      *
      * @return the eviction interval, or empty if no duration limit is configured
      */
@@ -292,7 +282,7 @@ final class ParsleyEngine<K, V> {
                 buffer.remove(entry.sequence());
                 advanceFrontier(entry.record());
                 toScan.add(new ParsleyPartition(entry.record().sourceTopicId(), entry.record().sourcePartitionIndex()));
-                out.add(entry.record());
+                out.add(stamp(entry.record(), CausalResult.SATISFIED));
             }
             totalReleased += releasable.size();
         }
@@ -332,37 +322,19 @@ final class ParsleyEngine<K, V> {
         frontierListener.frontierAdvanced(frontier);
     }
 
-    private void violate(ParsleyRecord<K, V> record, CausalViolationReason reason, CausalDependencies required) {
+    private void reportEviction(ParsleyRecord<K, V> record, CausalDependencies required) {
         CausalViolation violation = new CausalViolation(
-                record.toConsumerRecord(), reason, frontier, required, required.findMissing(frontier));
-        log.warn("Causal violation [{} on {}-{} @{}] gap: {}",
-                reason, record.sourcePartition().topic(), record.sourcePartition().partition(),
+                record.toConsumerRecord(), frontier, required, required.findMissing(frontier));
+        log.warn("Causal violation [EVICTED on {}-{} @{}] gap: {}",
+                record.sourcePartition().topic(), record.sourcePartition().partition(),
                 record.sourceOffset(), violation.gap());
         violationHandler.onViolation(violation);
         metrics.recordViolation();
     }
 
-    private void applyPolicyForRecord(ParsleyRecord<K, V> record, CausalDependencies required,
-                                      CausalViolationReason reason, List<ParsleyRecord<K, V>> out) {
-        switch (policy.actionFor(reason)) {
-            case FORWARD_UNSAFE -> out.add(record);
-            case DROP           -> {}
-            case DEAD_LETTER    -> deadLetterSink.accept(withDlqHeaders(record, required, reason));
-        }
-    }
-
-    private ParsleyRecord<K, V> withDlqHeaders(ParsleyRecord<K, V> record, CausalDependencies required,
-                                                CausalViolationReason reason) {
-        List<CausalPosition> gap = required.findMissing(frontier);
-        CausalDependencies.Builder gapBuilder = CausalDependencies.builder();
-        for (CausalPosition p : gap) {
-            gapBuilder.require(p);
-        }
-        CausalDependencies gapAsDeps = gapBuilder.build();
+    private ParsleyRecord<K, V> stamp(ParsleyRecord<K, V> record, CausalResult result) {
         List<ParsleyHeader> h = new ArrayList<>(record.headers());
-        h.add(new ParsleyHeader(CausalViolation.DLQ_REASON_HEADER, reason.name().getBytes(UTF_8)));
-        h.add(new ParsleyHeader(CausalViolation.DLQ_REQUIRED_DEPENDENCIES_HEADER, required.toBytes()));
-        h.add(new ParsleyHeader(CausalViolation.DLQ_GAP_HEADER, gapAsDeps.toBytes()));
+        h.add(new ParsleyHeader(ParsleyAttributes.CAUSAL_RESULT, result.name().getBytes(UTF_8)));
         return new ParsleyRecord<>(record.key(), record.value(), record.timestamp(), h);
     }
 
