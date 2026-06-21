@@ -5,7 +5,6 @@ import org.apache.kafka.clients.producer.KafkaProducer;
 import org.apache.kafka.clients.producer.Producer;
 import org.apache.kafka.clients.producer.ProducerRecord;
 import org.apache.kafka.clients.producer.RecordMetadata;
-import org.apache.kafka.common.header.internals.RecordHeader;
 
 import java.util.Map;
 import java.util.concurrent.Future;
@@ -44,7 +43,7 @@ final class ParsleyProducer<K, V> implements CausalProducer<K, V> {
         ProducerRecord<K, V> enriched = new ProducerRecord<>(
                 record.topic(), record.partition(), record.timestamp(),
                 record.key(), record.value(), record.headers());
-        enriched.headers().add(new RecordHeader(ParsleyHeader.CAUSAL_DEPENDENCIES, dependencies.toBytes()));
+        enriched.headers().add(ParsleyHeader.CAUSAL_DEPENDENCIES, dependencies.toBytes());
         return enriched;
     }
 }

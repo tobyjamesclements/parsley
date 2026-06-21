@@ -5,8 +5,6 @@ import org.apache.kafka.common.TopicPartition;
 import org.apache.kafka.common.Uuid;
 import org.apache.kafka.common.header.Header;
 import org.apache.kafka.common.header.Headers;
-import org.apache.kafka.common.header.internals.RecordHeader;
-import org.apache.kafka.common.header.internals.RecordHeaders;
 import org.apache.kafka.streams.processor.api.Record;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -90,7 +88,7 @@ record ParsleyMessage<K, V>(String topic, Uuid topicId, int partition, long offs
      */
     Headers headersWithDependencies() {
         Headers out = userHeadersView();
-        out.add(new RecordHeader(ParsleyHeader.CAUSAL_DEPENDENCIES, dependencies.toBytes()));
+        out.add(ParsleyHeader.CAUSAL_DEPENDENCIES, dependencies.toBytes());
         return out;
     }
 
@@ -101,17 +99,17 @@ record ParsleyMessage<K, V>(String topic, Uuid topicId, int partition, long offs
      */
     Headers toForwardHeaders() {
         Headers out = headersWithDependencies();
-        out.add(new RecordHeader(ParsleyHeader.SRC_TOPIC, ParsleyHeader.srcTopic(topic).value()));
-        out.add(new RecordHeader(ParsleyHeader.SRC_TOPIC_ID, ParsleyHeader.uuidToBytes(topicId)));
-        out.add(new RecordHeader(ParsleyHeader.SRC_PARTITION, ParsleyHeader.intToBytes(partition)));
-        out.add(new RecordHeader(ParsleyHeader.SRC_OFFSET, ParsleyHeader.longToBytes(offset)));
+        out.add(ParsleyHeader.SRC_TOPIC, ParsleyHeader.srcTopic(topic).value());
+        out.add(ParsleyHeader.SRC_TOPIC_ID, ParsleyHeader.uuidToBytes(topicId));
+        out.add(ParsleyHeader.SRC_PARTITION, ParsleyHeader.intToBytes(partition));
+        out.add(ParsleyHeader.SRC_OFFSET, ParsleyHeader.longToBytes(offset));
         return out;
     }
 
     private Headers userHeadersView() {
-        Headers out = new RecordHeaders();
+        Headers out = ParsleyHeader.mutableHeaders();
         for (ParsleyHeader header : headers) {
-            out.add(new RecordHeader(header.key(), header.value()));
+            out.add(header.key(), header.value());
         }
         return out;
     }

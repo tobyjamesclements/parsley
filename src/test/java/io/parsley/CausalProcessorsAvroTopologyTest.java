@@ -9,8 +9,6 @@ import io.parsley.avro.Price;
 import org.apache.avro.specific.SpecificRecord;
 import org.apache.kafka.common.Uuid;
 import org.apache.kafka.common.header.Headers;
-import org.apache.kafka.common.header.internals.RecordHeader;
-import org.apache.kafka.common.header.internals.RecordHeaders;
 import org.apache.kafka.common.serialization.Serde;
 import org.apache.kafka.common.serialization.Serdes;
 import org.apache.kafka.common.serialization.StringSerializer;
@@ -180,8 +178,8 @@ class CausalProcessorsAvroTopologyTest {
     }
 
     private static Headers depsHeader(CausalDependencies deps) {
-        Headers headers = new RecordHeaders();
-        headers.add(new RecordHeader("parsley-causal-dependencies", deps.toBytes()));
+        Headers headers = ParsleyHeader.mutableHeaders();
+        headers.add("parsley-causal-dependencies", deps.toBytes());
         return headers;
     }
 

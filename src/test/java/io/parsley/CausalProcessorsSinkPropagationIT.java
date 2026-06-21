@@ -11,7 +11,6 @@ import org.apache.kafka.clients.consumer.KafkaConsumer;
 import org.apache.kafka.clients.producer.KafkaProducer;
 import org.apache.kafka.clients.producer.ProducerConfig;
 import org.apache.kafka.clients.producer.ProducerRecord;
-import org.apache.kafka.common.header.internals.RecordHeader;
 import org.apache.kafka.common.serialization.ByteArrayDeserializer;
 import org.apache.kafka.common.serialization.Serdes;
 import org.apache.kafka.common.serialization.StringDeserializer;
@@ -108,7 +107,7 @@ class CausalProcessorsSinkPropagationIT {
                     ProducerConfig.KEY_SERIALIZER_CLASS_CONFIG, StringSerializer.class.getName(),
                     ProducerConfig.VALUE_SERIALIZER_CLASS_CONFIG, StringSerializer.class.getName()))) {
                 ProducerRecord<String, String> record = new ProducerRecord<>(IN, "k", "hello");
-                record.headers().add(new RecordHeader("parsley-causal-dependencies", CausalDependencies.empty().toBytes()));
+                record.headers().add("parsley-causal-dependencies", CausalDependencies.empty().toBytes());
                 producer.send(record).get();
             }
 

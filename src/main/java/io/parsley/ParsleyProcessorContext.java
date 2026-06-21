@@ -2,8 +2,6 @@ package io.parsley;
 
 import org.apache.kafka.common.header.Header;
 import org.apache.kafka.common.header.Headers;
-import org.apache.kafka.common.header.internals.RecordHeader;
-import org.apache.kafka.common.header.internals.RecordHeaders;
 import org.apache.kafka.common.serialization.Serde;
 import org.apache.kafka.streams.StreamsMetrics;
 import org.apache.kafka.streams.processor.Cancellable;
@@ -71,13 +69,13 @@ final class ParsleyProcessorContext<KOut, VOut> implements ProcessorContext<KOut
     }
 
     private <K extends KOut, V extends VOut> Record<K, V> stamp(Record<K, V> record) {
-        Headers stamped = new RecordHeaders();
+        Headers stamped = ParsleyHeader.mutableHeaders();
         for (Header header : record.headers()) {
             if (!header.key().equals(ParsleyHeader.CAUSAL_DEPENDENCIES)) {
-                stamped.add(header);
+                stamped.add(header.key(), header.value());
             }
         }
-        stamped.add(new RecordHeader(ParsleyHeader.CAUSAL_DEPENDENCIES, frontier.get().toBytes()));
+        stamped.add(ParsleyHeader.CAUSAL_DEPENDENCIES, frontier.get().toBytes());
         return record.withHeaders(stamped);
     }
 

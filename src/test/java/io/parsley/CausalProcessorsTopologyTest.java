@@ -4,8 +4,6 @@ import org.apache.kafka.common.Metric;
 import org.apache.kafka.common.MetricName;
 import org.apache.kafka.common.Uuid;
 import org.apache.kafka.common.header.Headers;
-import org.apache.kafka.common.header.internals.RecordHeader;
-import org.apache.kafka.common.header.internals.RecordHeaders;
 import org.apache.kafka.common.serialization.Deserializer;
 import org.apache.kafka.common.serialization.Serde;
 import org.apache.kafka.common.serialization.Serdes;
@@ -78,8 +76,8 @@ class CausalProcessorsTopologyTest {
     }
 
     private static Headers depsHeader(CausalDependencies deps) {
-        Headers headers = new RecordHeaders();
-        headers.add(new RecordHeader("parsley-causal-dependencies", deps.toBytes()));
+        Headers headers = ParsleyHeader.mutableHeaders();
+        headers.add("parsley-causal-dependencies", deps.toBytes());
         return headers;
     }
 
@@ -328,11 +326,11 @@ class CausalProcessorsTopologyTest {
 
             @Override
             public void process(Record<String, String> record) {
-                Headers headers = new RecordHeaders();
-                headers.add(new RecordHeader("user-h", "keep".getBytes()));
+                Headers headers = ParsleyHeader.mutableHeaders();
+                headers.add("user-h", "keep".getBytes());
                 // A stale dependencies header the user happens to carry — stamping must replace, not duplicate it.
-                headers.add(new RecordHeader("parsley-causal-dependencies",
-                        CausalDependencies.builder().require(T2_TOPIC, 0, 5).build().toBytes()));
+                headers.add("parsley-causal-dependencies",
+                        CausalDependencies.builder().require(T2_TOPIC, 0, 5).build().toBytes());
                 ctx.forward(record.withHeaders(headers));
             }
         };

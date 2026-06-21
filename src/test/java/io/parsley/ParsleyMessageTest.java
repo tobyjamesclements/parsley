@@ -4,7 +4,6 @@ import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.apache.kafka.common.TopicPartition;
 import org.apache.kafka.common.Uuid;
 import org.apache.kafka.common.header.Headers;
-import org.apache.kafka.common.header.internals.RecordHeaders;
 import org.apache.kafka.streams.processor.api.Record;
 import org.junit.jupiter.api.Test;
 
@@ -33,7 +32,7 @@ class ParsleyMessageTest {
     @Test
     void fromDecodesDependenciesAndKeepsUserHeaders() {
         ParsleyClock deps = ParsleyClock.empty().observe(DEP_ID, 0, 5);
-        Headers headers = new RecordHeaders();
+        Headers headers = ParsleyHeader.mutableHeaders();
         headers.add("user", "u".getBytes());
         headers.add(ParsleyHeader.CAUSAL_DEPENDENCIES, deps.toBytes());
 
@@ -58,7 +57,7 @@ class ParsleyMessageTest {
     @Test
     void fromTreatsAbsentDependenciesAsEmpty() {
         ParsleyMessage<String, String> message =
-                ParsleyMessage.from(new Record<>("k", "v", 0L, new RecordHeaders()), T1, 0L, T1_ID);
+                ParsleyMessage.from(new Record<>("k", "v", 0L, ParsleyHeader.mutableHeaders()), T1, 0L, T1_ID);
         assertTrue(message.dependencies().isEmpty(), "absent dependencies must decode as empty");
     }
 
@@ -70,7 +69,7 @@ class ParsleyMessageTest {
      */
     @Test
     void fromTreatsGarbledDependenciesAsEmpty() {
-        Headers headers = new RecordHeaders();
+        Headers headers = ParsleyHeader.mutableHeaders();
         headers.add(ParsleyHeader.CAUSAL_DEPENDENCIES, new byte[]{9, 9, 9});
 
         ParsleyMessage<String, String> message =

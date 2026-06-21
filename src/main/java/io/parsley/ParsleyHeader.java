@@ -1,6 +1,8 @@
 package io.parsley;
 
 import org.apache.kafka.common.Uuid;
+import org.apache.kafka.common.header.Headers;
+import org.apache.kafka.clients.producer.ProducerRecord;
 
 import java.nio.ByteBuffer;
 import java.util.Objects;
@@ -45,6 +47,16 @@ record ParsleyHeader(String key, byte[] value) {
     /** Returns {@code true} if this is a Parsley-internal routing header (the {@code _parsley_} prefix). */
     boolean isInternal() {
         return key.startsWith(INTERNAL_PREFIX);
+    }
+
+    /**
+     * Returns a fresh, empty, mutable {@link Headers} to populate via {@code add(String, byte[])}.
+     * Kafka exposes no public {@code Headers} factory and its only implementation lives in an
+     * {@code internals} package; a throwaway {@link ProducerRecord} hands back an empty mutable
+     * instance through the public API, which is what we want without depending on that internals type.
+     */
+    static Headers mutableHeaders() {
+        return new ProducerRecord<byte[], byte[]>("", null, null).headers();
     }
 
     static ParsleyHeader srcTopic(String topic)        { return new ParsleyHeader(SRC_TOPIC, topic.getBytes(UTF_8)); }

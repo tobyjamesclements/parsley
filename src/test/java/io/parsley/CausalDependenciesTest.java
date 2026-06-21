@@ -3,8 +3,6 @@ package io.parsley;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.apache.kafka.common.Uuid;
 import org.apache.kafka.common.header.Headers;
-import org.apache.kafka.common.header.internals.RecordHeader;
-import org.apache.kafka.common.header.internals.RecordHeaders;
 import org.junit.jupiter.api.Test;
 
 import java.util.Optional;
@@ -106,8 +104,8 @@ class CausalDependenciesTest {
                 .require(T1, 0, 12)
                 .require(T2, 0, 4)
                 .build();
-        Headers headers = new RecordHeaders();
-        headers.add(new RecordHeader(ParsleyHeader.CAUSAL_DEPENDENCIES, deps.toBytes()));
+        Headers headers = ParsleyHeader.mutableHeaders();
+        headers.add(ParsleyHeader.CAUSAL_DEPENDENCIES, deps.toBytes());
 
         assertEquals(Optional.of(deps), CausalDependencies.fromHeaders(headers),
                 "fromHeaders must decode the dependency header");
@@ -122,8 +120,8 @@ class CausalDependenciesTest {
      */
     @Test
     void fromHeadersIsEmptyWhenNoClockHeaderPresent() {
-        Headers headers = new RecordHeaders();
-        headers.add(new RecordHeader("trace-id", "abc".getBytes()));
+        Headers headers = ParsleyHeader.mutableHeaders();
+        headers.add("trace-id", "abc".getBytes());
 
         assertEquals(Optional.empty(), CausalDependencies.fromHeaders(headers),
                 "fromHeaders must return empty when no dependency header is present");
@@ -139,7 +137,7 @@ class CausalDependenciesTest {
     void fromRecordReadsTheStampedClock() {
         CausalDependencies deps = CausalDependencies.builder().require(T1, 0, 27).build();
         ConsumerRecord<String, String> record = new ConsumerRecord<>("t2", 0, 5L, "k", "v");
-        record.headers().add(new RecordHeader(ParsleyHeader.CAUSAL_DEPENDENCIES, deps.toBytes()));
+        record.headers().add(ParsleyHeader.CAUSAL_DEPENDENCIES, deps.toBytes());
 
         assertEquals(Optional.of(deps), CausalDependencies.fromRecord(record),
                 "fromRecord must decode the dependency header");
