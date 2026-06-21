@@ -26,7 +26,7 @@ class ParsleySerializerTest {
             new ParsleySerializer<>(new ParsleyResolver<>(topic -> Serdes.String(), topic -> Serdes.String()));
 
     /**
-     * Serialising and then deserialising a {@code ParsleyRecord} round-trips every field:
+     * Serialising and then deserialising a {@code ParsleyMessage} round-trips every field:
      * key, value, timestamp, source partition (including non-zero partition number), source
      * offset, dependency bytes, and user headers including headers with null values.
      *

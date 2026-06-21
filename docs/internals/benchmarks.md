@@ -49,7 +49,7 @@ reassignment:
 
 | Method | Operation | Expected complexity |
 |---|---|---|
-| `frontierRestore` | Single RocksDB point read + `CausalFrontier.fromBytes()` | O(1) |
+| `frontierRestore` | Single RocksDB point read + `ParsleyClock.fromBytes()` | O(1) |
 | `bufferRestore` | `RocksBufferStore` constructor scan + `ParsleyEngine` position-index rebuild | O(n) |
 
 ---

@@ -38,10 +38,9 @@ controlling per-record overhead.
 
 !!! tip "Controlling clock width"
     In Streams, Parsley stamps the per-task frontier automatically. The width is bounded by the
-    number of source partitions assigned to the task, which is usually small. The wider paths are
-    `consumer.frontier()` and `CausalFrontier.toDependencies()`, which carry every partition the
-    consumer has ever seen. Prefer `CausalDependencies.fromRecord(trigger)` when you only need to
-    express a dependency on a single upstream record — it carries a much narrower clock.
+    number of source partitions assigned to the task, which is usually small. Prefer
+    `CausalDependencies.fromRecord(trigger)` when you only need to express a dependency on a single
+    upstream record — it carries a much narrower clock than a manually built, wide dependency set.
 
 ---
 

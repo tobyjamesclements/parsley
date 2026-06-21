@@ -21,10 +21,9 @@ All three are created with `Stores.persistentKeyValueStore(...)`, so they are ch
 ## `ParsleyProcessor` init sequence
 
 1. Retrieve the three stores from the processor context by name.
-2. Read frontier from `{ns}-frontier` at key `"f"`. Start from `CausalFrontier.empty()` if absent.
-3. Publish the restored frontier to the `CausalFrontierListener`.
-4. Construct `ParsleyEngine` with:
-    - A `FrontierCallback` that writes the new frontier to the frontier store, appends a snapshot to a local list, and fires the `CausalFrontierListener`.
+2. Read frontier from `{ns}-frontier` at key `"f"`. Start from `ParsleyClock.empty()` if absent.
+3. Construct `ParsleyEngine` with:
+    - A `FrontierCallback` (internal) that writes the new frontier to the frontier store and appends a snapshot to a local list used for per-record delivery-time stamping.
     - A `RocksBufferStore` wrapping the buffer store and a `ParsleySerializer`.
     - A `RocksPositionIndex` wrapping the position-index store.
 5. Wrap the real context in a `ParsleyProcessorContext` (stamping proxy).
@@ -38,7 +37,7 @@ process(Record<KIn,VIn>)
   ingest(record)
     reads source metadata from context.recordMetadata()
     resolves topicId from topicUuids map (registered via CausalTopic; throws IllegalStateException if absent)
-    returns ParsleyRecord.of(record, source, offset, topicId)
+    returns ParsleyMessage.from(record, source, offset, topicId)
 
   gate(parsleyRecord)
     clears snapshot list
@@ -63,7 +62,7 @@ Wraps `ProcessorContext<KOut,VOut>`. Intercepts `forward()` to stamp the causal 
 **`forward(Record<K,V>)`:**
 
 1. Build a new `RecordHeaders` from the record's existing headers, excluding any `parsley-causal-dependencies` header.
-2. Add `parsley-causal-dependencies` from `frontier.get().toBytes()` (the `Supplier<CausalFrontier>` is read at call time).
+2. Add `parsley-causal-dependencies` from `frontier.get().toBytes()` (the `Supplier<ParsleyClock>` is read at call time).
 3. Call `delegate.forward(record.withHeaders(stamped))`.
 
 The original record object is never mutated. The frontier is read live: a `forward()` during admit sees the post-admit frontier; a `forward()` from a punctuator sees the frontier at punctuator fire time.

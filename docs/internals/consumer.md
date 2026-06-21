@@ -24,45 +24,37 @@ The internal `KafkaConsumer` that reads the outbox is configured with:
 - `isolation.level=read_committed`
 - `auto.offset.reset=earliest`
 
-## Outbox delegate processor
+## Outbox processor
 
-A second processor node sits between `ParsleyProcessor` and the outbox sink. It runs inside the Streams task before `ParsleyProcessorContext` stamps the frontier:
+`ParsleyOutboxProcessor` is the only node in the consumer topology. Unlike the Streams decorator
+(`ParsleyProcessor` + `ParsleyProcessorContext`), it has no user delegate and does no frontier
+stamping — it wants the application to see the producer's *original* dependencies, not a delivery-time
+frontier. For each record the engine admits, it forwards (via `ParsleyMessage.toForwardHeaders()`):
 
-1. Read `parsley-causal-dependencies` from the inbound record headers.
-2. Copy the bytes to `_parsley_original_dependencies`.
-3. Forward (at which point `ParsleyProcessorContext.forward()` overwrites `parsley-causal-dependencies` with the delivery-time frontier).
-
-The result in the outbox: both the delivery-time frontier (as `parsley-causal-dependencies`) and the original producer dependencies (as `_parsley_original_dependencies`) are present on the record.
+- the user headers and the producer's original `parsley-causal-dependencies`, untouched, and
+- the `_parsley_src_*` source coordinate, so the original topic/partition/offset can be reconstructed
+  on the far side (the outbox record's own coordinate is the outbox's, not the source's).
 
 ## `poll()` path
 
 1. Call `outboxConsumer.poll(timeout)` to get raw `ConsumerRecords<byte[],byte[]>`.
-2. For each raw record:
-    - Read `_parsley_src_topic`, `_parsley_src_partition`, `_parsley_src_offset` headers.
-    - Resolve `Serde<K>` and `Serde<V>` by source topic.
-    - Deserialise key and value.
-    - Call `restoreOriginalDependencies(headers)`:
-        - Strip all headers with keys starting with `_parsley_`.
-        - If `_parsley_original_dependencies` was present, add it back as `parsley-causal-dependencies`.
-    - Construct `ConsumerRecord<K,V>` at the source partition and offset.
-3. Group records by source `TopicPartition`.
-4. Return as `ConsumerRecords<K,V>`.
+2. For each raw record, `ParsleyMessage.fromOutboxRecord(record)`:
+    - reads the `_parsley_src_*` headers into the typed source coordinate,
+    - decodes `parsley-causal-dependencies` into the typed clock,
+    - keeps every other (user) header, dropping the internal `_parsley_*` ones.
+3. Resolve `Serde<K>`/`Serde<V>` by source topic and deserialise key/value.
+4. Construct `ConsumerRecord<K,V>` at the source partition and offset, with the user headers plus the
+   producer's `parsley-causal-dependencies` re-encoded from the typed clock.
+5. Group records by source `TopicPartition` and return as `ConsumerRecords<K,V>`.
 
-The returned record's `headers()` contain the original producer dependencies (not the delivery-time frontier). `CausalDependencies.fromRecord(record)` on a record returned by `poll()` therefore returns the producer's causal intent.
+The returned record's `headers()` carry the original producer dependencies (no internal `_parsley_*`
+headers). `CausalDependencies.fromRecord(record)` on a record returned by `poll()` therefore returns
+the producer's causal intent.
 
-An evicted record takes the same path as any other: it is stamped `EVICTED` under the
-`parsley-causal-result` header by the causal engine, flows through the outbox delegate and outbox
-topic like every other record, and is returned from `poll()` like every other record. Check
-`CausalResult.fromRecord(record)` on records returned by `poll()` to distinguish `EVICTED` from
-`SATISFIED`.
-
-## Frontier merging
-
-The Streams topology may assign multiple tasks to the same application instance, each with its own `ParsleyProcessor` and its own local frontier. Each processor fires the `CausalFrontierListener` callback whenever its frontier advances.
-
-`ParsleyConsumer` holds an `AtomicReference<CausalFrontier>` initialised to `CausalFrontier.empty()`. The listener callback calls `ref.updateAndGet(existing -> existing.merge(incoming))`. `frontier()` returns the current value of this reference.
-
-This is the only synchronisation point. Kafka Streams runs tasks on different threads; the atomic merge ensures `frontier()` is always a conservative upper bound across all active tasks.
+An evicted record takes the same path as any other: it flows through the outbox topic and is
+returned from `poll()` like every other record (delivered out of causal order). Eviction is not
+signalled on the record; the engine logs it with the causal gap and counts it via the violation
+metric.
 
 ## Multiple input topics
 

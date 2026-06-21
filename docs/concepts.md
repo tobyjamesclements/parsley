@@ -8,7 +8,8 @@ as a compact binary header (`parsley-causal-dependencies`) attached to every out
 
 On the consumer side, it is decoded into a `CausalDependencies` value: the minimum frontier
 a downstream consumer must have reached before the record may be delivered. A record is **causally
-ready** when `CausalDependencies.isSatisfiedBy(frontier)` returns `true`.
+ready** once the consumer's frontier has observed at least the offset its dependencies require on
+every coordinate.
 
 Keys are Kafka **topic UUIDs**, not topic names. UUID-keyed dependencies survive topic deletion and
 recreation: a new incarnation of `prices` gets a new UUID and is treated as a distinct dependency,
@@ -16,10 +17,11 @@ so records stamped against the old `prices` are never accidentally satisfied by 
 
 ## The frontier
 
-The **causal frontier** (`CausalFrontier`) tracks the highest offset
-it has successfully delivered on each `(topicId, partition)` coordinate. Every time a record is
-forwarded, the frontier advances. Frontiers from multiple sources can be merged with
-`CausalFrontier.merge`, taking the per-coordinate maximum.
+The **causal frontier** is the node's internal clock: the highest offset it has successfully
+delivered on each `(topicId, partition)` coordinate. Every time a record is forwarded, the frontier
+advances (taking the per-coordinate maximum). It is an implementation detail — there is no public
+frontier type; to propagate causal context downstream, read a consumed record's dependencies with
+`CausalDependencies.fromRecord(record)` and stamp them on what you produce.
 
 The frontier is **persisted** before each record is forwarded, so it survives restarts and rebalances.
 
@@ -46,25 +48,19 @@ A `CausalBufferLimit` bounds how long or how large the buffer may grow before ev
 ## Always-forward delivery
 
 Parsley never drops or diverts a record. Every record reaches the user's `process()`/`poll()`
-exactly once, stamped under the `parsley-causal-result` header with a `CausalResult`:
-
-| Result | Meaning |
-|---|---|
-| `SATISFIED` | The frontier had observed the record's dependencies by delivery time — whether immediately, after a wait, or trivially (no dependencies claimed, or an undecodable header, both treated as vacuously satisfied) |
-| `EVICTED` | The record was still waiting on unsatisfied dependencies when the configured `CausalBufferLimit` fired, and was forwarded anyway |
-
-Read the result with `CausalResult.fromRecord(record)` in your own `process()`/`poll()` code to
-react to an `EVICTED` delivery — there is no separate callback; the record itself is the signal.
-The frontier always advances on delivery, so records buffered downstream are not permanently
-stalled by an eviction.
+exactly once. In the common case it is delivered **in causal order** — the frontier had observed its
+dependencies by delivery time (immediately, after a wait, or trivially: no dependencies claimed, or
+an undecodable header, both treated as vacuously satisfied). The exception is **eviction**: when the
+configured `CausalBufferLimit` fires before a held record's dependencies are satisfied, the record is
+delivered anyway, out of causal order. The frontier always advances on delivery, so records buffered
+downstream are not permanently stalled by an eviction.
 
 ## Causal violations
 
 Every eviction is logged with the current frontier, the required dependencies, and the **causal
 gap** — a per-coordinate shortfall showing exactly how far the frontier was behind at the time of
-eviction — and counted via Parsley's eviction metric. This is diagnostic only; it is not exposed as
-a separate programmatic hook, since the `CausalResult` header already carries the actionable signal
-to the record's recipient.
+eviction — and counted via Parsley's eviction metric. Eviction is surfaced operationally (logs +
+metric), not as a per-record signal on the delivered record.
 
 ## Co-partitioning
 

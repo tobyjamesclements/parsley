@@ -46,5 +46,5 @@ The library is a single jar with three entry points, sharing a common vocabulary
 - [**Concepts**](concepts.md) — causal dependencies, frontiers, the buffer, always-forward delivery
 - [**Getting started**](getting-started.md) — dependency setup, producer, and consumer examples
 - [**Streams integration**](streams.md) — wrapping a `Processor`, preconditions, recovery
-- [**Configuration**](configuration.md) — buffer limits, `CausalResult`, header size
+- [**Configuration**](configuration.md) — buffer limits, eviction, header size
 - [**API reference**](api/index.html) — full Javadoc

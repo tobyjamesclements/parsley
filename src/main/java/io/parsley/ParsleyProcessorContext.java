@@ -33,7 +33,7 @@ import java.util.function.Supplier;
  * <p>The frontier is read <strong>live</strong> through a {@link Supplier} at stamp time, so a
  * forward during record admission sees the post-admit frontier and a forward from a punctuator sees
  * the frontier as of fire time. Stamping is idempotent — any existing
- * {@link ParsleyAttributes#CAUSAL_DEPENDENCIES} header is removed before the current frontier is written — and never
+ * {@link ParsleyHeader#CAUSAL_DEPENDENCIES} header is removed before the current frontier is written — and never
  * mutates the incoming record's headers (a fresh header set is built and applied via
  * {@link Record#withHeaders}).
  *

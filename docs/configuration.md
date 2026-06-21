@@ -48,23 +48,15 @@ backstop.
 ## Always-forward delivery
 
 Parsley never drops or diverts a record — there is no policy to configure for what happens on
-eviction. Every record reaches the user's `process()`/`poll()` exactly once, stamped under the
-`parsley-causal-result` header:
+eviction. Every record reaches the user's `process()`/`poll()` exactly once. In the common case it
+is delivered in causal order; the exception is **eviction**, when the configured `CausalBufferLimit`
+fires before a held record's dependencies are satisfied and the record is delivered anyway, out of
+order. The frontier always advances on delivery, so buffered records waiting on that coordinate are
+not permanently stalled.
 
-```java
-CausalResult.fromRecord(record)  // Optional<CausalResult>: SATISFIED or EVICTED
-```
-
-`SATISFIED` means the frontier had observed the record's dependencies by delivery time. `EVICTED`
-means the configured `CausalBufferLimit` fired before that happened, and the record was forwarded
-anyway. The frontier always advances on delivery, so buffered records waiting on that coordinate
-are not permanently stalled.
-
-There is no separate violation callback to configure — react to an `EVICTED` delivery by checking
-the header in your own `process()`/`poll()` code (custom metrics, alerting, routing to your own
-dead-letter sink, etc.). Parsley itself logs every eviction at `WARN` with the causal gap (the
-per-coordinate shortfall between what was required and what the frontier had observed) and counts
-it via its eviction metric — useful for diagnosis, not for programmatic reaction.
+Eviction is surfaced operationally, not as a per-record signal: Parsley logs every eviction at
+`WARN` with the causal gap (the per-coordinate shortfall between what was required and what the
+frontier had observed) and counts it via its eviction metric.
 
 ---
 
@@ -77,10 +69,10 @@ separate header budget).
 - **Automatic Streams stamping** stamps the per-task frontier, bounded by the number of source
   topics in the subtopology (one partition per topic per task). This stays small under normal
   topologies.
-- **`consumer.frontier()`** and **`CausalFrontier.toDependencies()`** carry every partition ever
-  seen by the consumer. Watch this path on wide-fan-in consumers or broad regex subscriptions.
 - **`CausalDependencies.fromRecord(trigger)`** carries only the partitions the upstream producer
-  depended on. Prefer it over `frontier()` when the causal context is a single upstream record.
+  depended on — the recommended way to propagate causal context.
+- **A manually built `CausalDependencies`** is as wide as the coordinates you `require(...)`. Watch
+  this on records that legitimately depend on many topic-partitions.
 
 Parsley never truncates the dependencies header — truncation would silently break the guarantee. Keep the
 relevant-partition count within your record-size budget.

@@ -36,7 +36,7 @@ import java.util.concurrent.ExecutionException;
  * causal ordering is performed by a {@link ParsleyOutboxProcessor} node, which gates each record
  * on {@link ParsleyEngine}, embeds its original source coordinate as internal headers, and
  * forwards it into an internal Kafka outbox topic — headers otherwise untouched, so the producer's
- * original {@link ParsleyAttributes#CAUSAL_DEPENDENCIES} header survives to {@code poll()} unchanged.
+ * original {@link ParsleyHeader#CAUSAL_DEPENDENCIES} header survives to {@code poll()} unchanged.
  * The {@link CausalConsumer#poll poll()} method delegates to an internal {@link KafkaConsumer}
  * subscribed to that outbox topic, strips the internal headers, and reconstructs each record at
  * its original source coordinate.

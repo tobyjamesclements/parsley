@@ -4,7 +4,8 @@ All binary encodings are big-endian. All lengths are in bytes.
 
 ## `parsley-causal-dependencies` header
 
-Same encoding used for both `CausalDependencies` and `CausalFrontier`.
+The public `CausalDependencies` facade and the internal `ParsleyClock` (node frontier) share this
+encoding.
 
 ```
 [version    :1]   0x01
@@ -20,15 +21,24 @@ Size: `5 + 28 × n` bytes. Wire version `0x01`; deserialization throws `IllegalS
 
 Topic IDs are Kafka `Uuid` values stored as two `long` fields (most-significant bits, then least-significant bits).
 
-## Buffer record (`ParsleySerializer` v2)
+## Buffer record (`ParsleySerializer` v3)
 
-Records held in the `{ns}-buffer` state store are serialised with `ParsleySerializer`. The key/value bytes are produced by the Serde resolved from the record's `_parsley_src_topic` header.
+Records held in the `{ns}-buffer` state store are serialised with `ParsleySerializer`. The source
+coordinate and dependency clock are written as typed fields (not headers); only the user's headers
+are carried. The key/value bytes are produced by the Serde resolved from the typed source topic.
 
 ```
-[version       :1]   0x02
+[version       :1]   0x03
 [timestamp     :8]
+[topic-len     :2]
+[topic         :topic-len]   UTF-8 source topic
+[topicId       :16]          topicId.MSB then topicId.LSB
+[partition     :4]
+[offset        :8]
+[deps-len      :4]   -1 if absent (the empty clock still encodes as 5 bytes)
+[deps          :deps-len]    parsley-causal-dependencies encoding
 [header-count  :4]
-per header:
+per user header:
   [key-len     :2]
   [key         :key-len]
   [value-len   :4]   -1 if value is null
@@ -38,8 +48,6 @@ per header:
 [value-len     :4]   -1 if value is null
 [value         :value-len]
 ```
-
-All headers on the record (user headers plus `_parsley_*` internal headers) are serialised in order.
 
 ## Position-index key
 
@@ -55,7 +63,11 @@ The `{ns}-position-index` store maps coordinate+offset+recordId to an empty pres
 
 ## Internal record headers
 
-These headers are added by `ParsleyProcessor` at ingest time and stripped before the record is returned to the application.
+These headers carry the source coordinate through the consumer's outbox topic. They are written by
+`ParsleyMessage.toForwardHeaders()` (only on the `ParsleyConsumer` outbox path, where the Kafka
+record's own topic/partition/offset are the outbox's, not the source's) and stripped by
+`ParsleyConsumer.poll()` before the record is returned to the application. The processor path never
+emits them.
 
 | Header | Encoding |
 |---|---|
@@ -63,9 +75,6 @@ These headers are added by `ParsleyProcessor` at ingest time and stripped before
 | `_parsley_src_topic_id` | 16 bytes: `topicId.MSB` then `topicId.LSB` |
 | `_parsley_src_partition` | 4-byte big-endian int |
 | `_parsley_src_offset` | 8-byte big-endian long |
-| `_parsley_original_dependencies` | Same encoding as `parsley-causal-dependencies` |
-
-`_parsley_original_dependencies` holds a copy of the producer's original dependencies saved before `ParsleyProcessorContext` overwrites `parsley-causal-dependencies` with the delivery-time frontier. `ParsleyConsumer.poll()` uses it to restore the producer's intent before returning records to the application.
 
 ## State store names and serdes
 
@@ -73,8 +82,8 @@ The default namespace is `parsley`. It is configurable via `CausalProcessors.bui
 
 | Store | Key serde | Value serde | Purpose |
 |---|---|---|---|
-| `{ns}-frontier` | `String` | `byte[]` | Single entry at key `"f"`: serialised `CausalFrontier` |
-| `{ns}-buffer` | `Long` | `byte[]` | Insertion sequence -> serialised `ParsleyRecord` |
+| `{ns}-frontier` | `String` | `byte[]` | Single entry at key `"f"`: serialised `ParsleyClock` |
+| `{ns}-buffer` | `Long` | `byte[]` | Insertion sequence -> serialised `ParsleyMessage` |
 | `{ns}-position-index` | `byte[]` | `byte[]` (empty) | 36-byte composite key -> presence marker |
 
 All three stores are persistent and changelog-backed. Changelog topic names follow the Kafka Streams pattern: `{applicationId}-{storeName}-changelog`.

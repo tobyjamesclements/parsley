@@ -78,30 +78,35 @@ by that hop's fan-in and transitively carries its own dependencies:
 
 ```java
 CausalDependencies context = CausalDependencies.fromRecord(trigger)
-        .orElseGet(consumer::frontier);
+        .orElse(CausalDependencies.empty());
 producer.send(new ProducerRecord<>("orders", key, value), context);
 ```
 
-Use `consumer.frontier()` only when the record genuinely depends on *everything* the consumer has
-processed (for example, an aggregator whose output is affected by every record it has ever consumed).
-`frontier()` carries every partition ever seen, which can make the dependencies header large — see the
+To declare a dependency on a specific upstream position, build one explicitly:
+
+```java
+CausalDependencies context = CausalDependencies.builder()
+        .require(pricesTopic, /* partition */ 0, /* offset */ 42)
+        .build();
+```
+
+The serialised dependencies header grows with the number of topic-partitions it names — see the
 [header size note](configuration.md#header-size) in Configuration.
 
 ## Propagating causal context across services
 
 A `CausalDependencies` value is a portable causal token. To gate a read in a downstream service on
-what the current service has observed, serialise the dependencies and send them over your transport:
+what an upstream record depended on, serialise the dependencies and send them over your transport:
 
 ```java
 // Sender — extract the relevant dependencies and serialise them
 CausalDependencies context = CausalDependencies.fromRecord(consumedRecord)
-        .orElseGet(consumer::frontier);
+        .orElse(CausalDependencies.empty());
 byte[] token = context.toBytes();
 // ... send token over HTTP, gRPC, etc. (apply your own encryption/transport)
 
-// Receiver — rebuild and check against local frontier
+// Receiver — rebuild the dependencies
 CausalDependencies required = CausalDependencies.fromBytes(receivedToken);
-boolean ready = required.isSatisfiedBy(localFrontier);
 ```
 
 Parsley ships no encryption or transport layer; securing and routing the token is the

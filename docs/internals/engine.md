@@ -6,7 +6,7 @@
 
 | Field | Type | Purpose |
 |---|---|---|
-| `frontier` | `CausalFrontier` | Highest admitted offset per `(topicId, partition)` |
+| `frontier` | `ParsleyClock` | Highest admitted offset per `(topicId, partition)` |
 | `buffer` | `ParsleyBufferStore<K,V>` | Durable set of held records |
 | `positionIndex` | `ParsleyPositionIndex` | Secondary index: coordinate -> candidate record IDs |
 | `sizeLimit` | `int` | Buffer depth at which eviction triggers |
@@ -14,11 +14,13 @@
 
 ## `onRecord()` algorithm
 
-1. Decode `parsley-causal-dependencies` header.
-    - Missing: logged at `DEBUG`, treated as an empty, vacuously satisfied dependency set.
-    - Undecodable: logged at `WARN`, also treated as an empty, vacuously satisfied dependency set.
-2. Strip self-referential entries from the decoded dependencies. A `(topicId, partition)` entry whose required offset is >= the record's own source offset on that coordinate is removed. This prevents a record from blocking on its own position in the log.
-3. If `deps.isSatisfiedBy(frontier)`: advance frontier, stamp the record `SATISFIED`, add it to output, call `drainInto()`.
+1. The dependency clock is decoded once at the boundary (`ParsleyMessage.from`): a missing header
+   (logged at `DEBUG`) or an undecodable one (logged at `WARN`) becomes an empty, vacuously
+   satisfied clock, so the engine always receives a typed `ParsleyClock`.
+2. Strip self-referential entries from the dependencies. A `(topicId, partition)` entry whose
+   required offset equals the record's own source offset on that coordinate is removed
+   (`ParsleyClock.without`). This prevents a record from blocking on its own position in the log.
+3. If `frontier.dominates(deps)`: advance frontier, add the record to output, call `drainInto()`.
 4. Otherwise: add record to buffer (assigned an insertion sequence and a `bufferedAt` timestamp), index unsatisfied coordinates in the position index. If buffer depth >= `sizeLimit`, call `evictOverflow()`.
 
 A missing or undecodable dependency header always falls into the satisfied branch (step 3) — it
@@ -37,7 +39,7 @@ while toScan not empty:
     for each candidate:
       entry = buffer.get(candidate.recordId)
       if entry == null: prune stale index entry, skip
-      if entry.dependencies.withoutSelfReference(...).isSatisfiedBy(frontier):
+      if frontier.dominates(entry.dependencies.without(self)):
         releasable.add(entry)
   toScan = {}
   for each releasable entry:
@@ -56,11 +58,11 @@ Wait-index entries for records that have already been released or evicted are di
 Both eviction paths select a subset of `buffer.entries()` (oldest-first by insertion sequence,
 equivalently by `bufferedAt`) and hand it to a shared `evictEntries()` helper. For each selected entry:
 
-1. Log the eviction at `WARN` with the causal gap (`required.findMissing(frontier)`) and call
+1. Log the eviction at `WARN` with the causal gap (`required.missing(frontier)`) and call
    `metrics.recordViolation()`.
 2. Remove from buffer and position index.
-3. Advance the frontier at the entry's source coordinate, stamp the record `EVICTED`, and add it to
-   the forward list — eviction never drops or diverts a record.
+3. Advance the frontier at the entry's source coordinate and add the record to the forward list —
+   eviction never drops or diverts a record, it just delivers it out of causal order.
 
 ### `evictOverflow()` — size limit
 
@@ -89,9 +91,9 @@ from the oldest, evicting every entry whose `bufferedAt` is older than `now - du
 at the first entry that hasn't aged out yet (everything after it is younger still). A no-op when no
 duration limit is configured.
 
-The causal gap logged for each eviction (`required.findMissing(frontier)`) encodes the shortfall,
-not the absolute required offset. Each `CausalPosition.offset()` in the gap is
-`required - observed` at eviction time.
+The causal gap logged for each eviction (`required.missing(frontier)`) encodes the shortfall,
+not the absolute required offset: each coordinate's value in the gap clock is `required - observed`
+at eviction time.
 
 ## Frontier persistence ordering
 
@@ -102,7 +104,7 @@ not the absolute required offset. Each `CausalPosition.offset()` in the gap is
 `ParsleyBufferStore<K,V>` is an interface with two implementations:
 
 - **`RocksBufferStore`** (production): wraps a `KeyValueStore<Long, byte[]>` backed by RocksDB and changelog-replicated. On construction, it makes a single pass over all existing keys to seed the monotonic `nextSequence` counter and the `size` field. No separate rehydration step is needed: the store is the buffer.
-- **`MockBufferStore`** (tests): wraps a `TreeMap<Long, ParsleyRecord<K,V>>` with equivalent semantics.
+- **`MockBufferStore`** (tests): wraps a `TreeMap<Long, ParsleyMessage<K,V>>` with equivalent semantics.
 
 ## Position index
 

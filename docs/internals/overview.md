@@ -16,10 +16,8 @@ All three share a common set of value types and a single causal engine.
 
 | Class | Role |
 |---|---|
-| `CausalDependencies` | Immutable set of causal requirements stamped by the producer onto each record |
-| `CausalFrontier` | Immutable per-consumer horizon: highest observed offset per (topicId, partition) |
-| `CausalPosition` | A single coordinate: `(topicId, partition, offset)` |
-| `CausalResult` | Enum stamped on every forwarded record: `SATISFIED` or `EVICTED` |
+| `CausalDependencies` | Public facade over a `ParsleyClock`: the causal requirements stamped by the producer onto each record |
+| `CausalTopic` | A topic's stable causal identity: name + Kafka UUID (used for registration and `require`) |
 | `CausalBufferLimit` | When to evict held records: `ofDuration`, `ofSize`, `first` |
 
 ### Package-private implementation
@@ -27,8 +25,9 @@ All three share a common set of value types and a single causal engine.
 | Class | Role |
 |---|---|
 | `ParsleyEngine` | Causal buffer engine: classify, buffer, cascade, evict |
-| `ParsleyRecord` | Internal record envelope carrying source coordinate and dependency headers |
-| `ParsleyAttributes` | String constants for all header keys and state-store keys |
+| `ParsleyClock` | The one vector clock: node frontier *and* dependency representation, keyed on `(Uuid, int)` primitives |
+| `ParsleyMessage` | Typed engine envelope: source coordinate + dependency clock as fields, user headers separate |
+| `ParsleyHeader` | A `(key, value)` header plus the header-key vocabulary (`_parsley_*`, reserved keys, factories) |
 | `ParsleyProcessor` | Kafka Streams processor wrapping the user processor and driving the engine |
 | `ParsleyProcessorSupplier` | Processor factory; registers the three Parsley state stores |
 | `ParsleyProcessorContext` | Stamping proxy: replaces the context given to the user processor |
@@ -36,7 +35,7 @@ All three share a common set of value types and a single causal engine.
 | `ParsleyProducer` | Decorator that stamps `parsley-causal-dependencies` on every send |
 | `ParsleyBufferStore` / `RocksBufferStore` | Durable buffer of held records |
 | `ParsleyPositionIndex` / `RocksPositionIndex` | Secondary index: coordinate -> candidate record IDs |
-| `ParsleySerializer` | Binary serde for `ParsleyRecord` (buffer store wire format) |
+| `ParsleySerializer` | Binary serde for `ParsleyMessage` (buffer store wire format) |
 
 ## End-to-end flow
 
@@ -49,11 +48,11 @@ Producer
 Consumer (CausalConsumer path)
   Kafka Streams topology
     ParsleyProcessor.process(record)
-      -> ingest: wrap in ParsleyRecord, embed source coordinates
+      -> ingest: wrap in ParsleyMessage, embed source coordinates
       -> gate:   ParsleyEngine.onRecord()
-                   satisfied   -> advance frontier, drain cascade, stamp SATISFIED
+                   satisfied   -> advance frontier, drain cascade
                    unsatisfied -> buffer (RocksBufferStore) + index (RocksPositionIndex)
-                   no header   -> trivially satisfied (empty dependencies), stamp SATISFIED
+                   no header   -> trivially satisfied (empty dependencies)
       -> deliver: for each admitted record
                    stamp frontier onto parsley-causal-dependencies
                    save ORIGINAL_DEPENDENCIES, forward to outbox topic

@@ -41,10 +41,10 @@ confirmed.
 instance owns the complete partition set for a related group. See
 [Co-partitioning](concepts.md#co-partitioning) in Concepts.
 
-The guarantee holds for every record stamped `SATISFIED`. A record stamped `EVICTED` — the
-configured `CausalBufferLimit` fired before its dependencies were satisfied — is forwarded anyway;
-check `CausalResult.fromRecord(record)` in your own `process()` if your application needs to react
-to that case.
+The guarantee holds for every record delivered in causal order. When the configured
+`CausalBufferLimit` fires before a held record's dependencies are satisfied, the record is forwarded
+anyway (out of order); this eviction is logged with the causal gap and counted by the violation
+metric rather than signalled on the record.
 
 ## Restart and recovery
 

@@ -31,7 +31,7 @@ import java.util.Set;
  * forward with the delivery-time frontier via {@link ParsleyProcessorContext}, so a downstream
  * causal consumer in the same topology sees the chain — this node has no delegate and does no
  * stamping. {@link ParsleyConsumer} wants the application to see the producer's original
- * {@link ParsleyAttributes#CAUSAL_DEPENDENCIES} header, not the delivery-time frontier, so
+ * {@link ParsleyHeader#CAUSAL_DEPENDENCIES} header, not the delivery-time frontier, so
  * forwarding the engine's output unmodified is exactly what's wanted.
  */
 final class ParsleyOutboxProcessor implements Processor<byte[], byte[], byte[], byte[]> {
