@@ -53,6 +53,6 @@ final class MockBufferStore<K, V> implements ParsleyBufferStore<K, V> {
 
     private Entry<K, V> toEntry(long sequence, Held<K, V> held) {
         return new Entry<>(sequence, held.bufferedAt(), held.record(),
-                CausalDependencies.fromBytes(held.record().encodedDependencies()));
+                ParsleyClock.fromBytes(held.record().encodedDependencies()));
     }
 }

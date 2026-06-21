@@ -24,14 +24,14 @@ final class MockPositionIndex implements ParsleyPositionIndex {
     private final Map<CoordKey, TreeMap<Long, Set<Long>>> index = new HashMap<>();
 
     @Override
-    public void index(long recordId, CausalDependencies required, CausalFrontier frontier) {
-        for (CausalPosition pos : required.dependencies()) {
-            if (frontier.offsetFor(pos.topicId(), pos.partition()) < pos.offset()) {
-                index.computeIfAbsent(new CoordKey(pos.topicId(), pos.partition()), k -> new TreeMap<>())
-                     .computeIfAbsent(pos.offset(), o -> new HashSet<>())
+    public void index(long recordId, ParsleyClock required, ParsleyClock frontier) {
+        required.forEach((topicId, partition, offset) -> {
+            if (frontier.offsetFor(topicId, partition) < offset) {
+                index.computeIfAbsent(new CoordKey(topicId, partition), k -> new TreeMap<>())
+                     .computeIfAbsent(offset, o -> new HashSet<>())
                      .add(recordId);
             }
-        }
+        });
     }
 
     @Override

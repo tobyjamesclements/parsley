@@ -110,7 +110,7 @@ class CausalProcessorsAvroTopologyTest {
 
             // The order depends on prices-0@0, which has not arrived: it is held (Avro-serialised
             // into the buffer store), not delivered.
-            orders.pipeInput(new TestRecord<>("k", order, depsHeader(CausalDependencies.builder().require(new CausalPosition(PRICES_ID, 0, 0)).build())));
+            orders.pipeInput(new TestRecord<>("k", order, depsHeader(CausalDependencies.builder().require(new CausalTopic(PRICES, PRICES_ID), 0, 0).build())));
             assertTrue(processed.isEmpty(), "held record must not reach the delegate");
             assertEquals(1, storeSize(bufferStore), "held record must be persisted (Avro bytes) to the buffer store");
 

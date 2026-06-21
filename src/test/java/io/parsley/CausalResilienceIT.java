@@ -83,7 +83,7 @@ class CausalResilienceIT {
              CausalProducer<String, String> producer = causalProducer(bootstrap)) {
 
             producer.send(new ProducerRecord<>(ORDERS, "k", "order-1"),
-                    CausalDependencies.builder().require(new CausalPosition(pricesId, 0, 0)).build()).get();
+                    CausalDependencies.builder().require(new CausalTopic(PRICES, pricesId), 0, 0).build()).get();
 
             // Poll a few times — ORDERS should be buffered, not delivered.
             for (int i = 0; i < 3; i++) {
@@ -150,7 +150,7 @@ class CausalResilienceIT {
         Uuid ordersId = createTopic(bootstrap, ORDERS, 1);
 
         String appId = "resilience-size-limit-restart-app";
-        CausalPosition neverArrives = new CausalPosition(pricesId, 0, 99);
+        CausalTopic pricesTopic = new CausalTopic(PRICES, pricesId);
 
         // Phase 1: buffer three ORDERS records that depend on a PRICES offset that will never
         // arrive, under a generous size limit — none are evicted.
@@ -167,11 +167,11 @@ class CausalResilienceIT {
              CausalProducer<String, String> producer = causalProducer(bootstrap)) {
 
             producer.send(new ProducerRecord<>(ORDERS, "k", "order-1"),
-                    CausalDependencies.builder().require(neverArrives).build()).get();
+                    CausalDependencies.builder().require(pricesTopic, 0, 99).build()).get();
             producer.send(new ProducerRecord<>(ORDERS, "k", "order-2"),
-                    CausalDependencies.builder().require(neverArrives).build()).get();
+                    CausalDependencies.builder().require(pricesTopic, 0, 99).build()).get();
             producer.send(new ProducerRecord<>(ORDERS, "k", "order-3"),
-                    CausalDependencies.builder().require(neverArrives).build()).get();
+                    CausalDependencies.builder().require(pricesTopic, 0, 99).build()).get();
 
             List<ConsumerRecord<String, String>> phase1 = new ArrayList<>();
             for (int i = 0; i < 3; i++) {

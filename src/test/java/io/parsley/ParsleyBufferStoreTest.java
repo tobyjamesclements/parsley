@@ -26,14 +26,14 @@ class ParsleyBufferStoreTest {
      */
     @Test
     void entriesAreReturnedInInsertionOrderWithTheirDependencies() {
-        store.add(bufferedRecord(T1, 0, CausalDependencies.builder().require(new CausalPosition(T1_ID, 0, 9)).build()), 0L);
-        store.add(bufferedRecord(T1, 1, CausalDependencies.builder().require(new CausalPosition(T1_ID, 0, 3)).build()), 0L);
+        store.add(bufferedRecord(T1, 0, ParsleyClock.empty().observe(T1_ID, 0, 9)), 0L);
+        store.add(bufferedRecord(T1, 1, ParsleyClock.empty().observe(T1_ID, 0, 3)), 0L);
 
         List<ParsleyBufferStore.Entry<String, String>> entries = store.entries();
 
         assertEquals(2, entries.size(), "store must return both added entries");
         assertEquals(0L, entries.get(0).record().sourceOffset(), "first entry must be the first added record");
-        assertEquals(CausalDependencies.builder().require(new CausalPosition(T1_ID, 0, 9)).build(),
+        assertEquals(ParsleyClock.empty().observe(T1_ID, 0, 9),
                 entries.get(0).dependencies(), "first entry must carry its original dependencies");
         assertEquals(1L, entries.get(1).record().sourceOffset(), "second entry must be the second added record");
         assertTrue(entries.get(0).sequence() < entries.get(1).sequence(),
@@ -49,8 +49,8 @@ class ParsleyBufferStoreTest {
      */
     @Test
     void removeDropsTheEntryAndDecrementsSize() {
-        store.add(bufferedRecord(T1, 0, CausalDependencies.builder().require(new CausalPosition(T1_ID, 0, 1)).build()), 0L);
-        store.add(bufferedRecord(T1, 1, CausalDependencies.builder().require(new CausalPosition(T1_ID, 0, 5)).build()), 0L);
+        store.add(bufferedRecord(T1, 0, ParsleyClock.empty().observe(T1_ID, 0, 1)), 0L);
+        store.add(bufferedRecord(T1, 1, ParsleyClock.empty().observe(T1_ID, 0, 5)), 0L);
         assertEquals(2, store.size(), "both records must be in the store before removal");
 
         long firstSeq = store.entries().get(0).sequence();
@@ -82,7 +82,7 @@ class ParsleyBufferStoreTest {
     void bufferedAtRoundTripsThroughAddGetAndEntries() {
         long bufferedAt = 12_345L;
         long seq = store.add(bufferedRecord(T1, 0,
-                CausalDependencies.builder().require(new CausalPosition(T1_ID, 0, 1)).build()), bufferedAt);
+                ParsleyClock.empty().observe(T1_ID, 0, 1)), bufferedAt);
 
         assertEquals(bufferedAt, store.get(seq).bufferedAt(), "get() must return the bufferedAt passed to add()");
         assertEquals(bufferedAt, store.entries().get(0).bufferedAt(),
@@ -92,7 +92,7 @@ class ParsleyBufferStoreTest {
     // --- helpers --------------------------------------------------------------------------------
 
     private static ParsleyRecord<String, String> bufferedRecord(TopicPartition tp, long offset,
-                                                                  CausalDependencies deps) {
+                                                                  ParsleyClock deps) {
         return new ParsleyRecord<>("k", "v", 0L, List.of(
                 new ParsleyHeader(ParsleyAttributes.CAUSAL_DEPENDENCIES, deps.toBytes()),
                 new ParsleyHeader(ParsleyAttributes.SRC_TOPIC, tp.topic().getBytes(UTF_8)),

@@ -68,10 +68,10 @@ final class ParsleyOutboxProcessor implements Processor<byte[], byte[], byte[], 
         KeyValueStore<Long, byte[]> bufferStore = context.getStateStore(bufferStoreName);
         KeyValueStore<byte[], byte[]> positionIndexStore = context.getStateStore(positionIndexStoreName);
 
-        CausalFrontier initialFrontier = CausalFrontier.empty();
+        ParsleyClock initialFrontier = ParsleyClock.empty();
         byte[] stored = frontierStore.get(ParsleyAttributes.FRONTIER_KEY);
         if (stored != null) {
-            initialFrontier = CausalFrontier.fromBytes(stored);
+            initialFrontier = ParsleyClock.fromBytes(stored);
         }
         log.debug("Outbox processor initialized [task: {}] — frontier: {}", context.taskId(), initialFrontier);
 

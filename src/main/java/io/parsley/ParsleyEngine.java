@@ -6,8 +6,10 @@ import org.slf4j.LoggerFactory;
 
 import java.time.Duration;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.function.LongSupplier;
@@ -48,10 +50,8 @@ final class ParsleyEngine<K, V> {
      */
     @FunctionalInterface
     interface FrontierCallback {
-        void frontierAdvanced(CausalFrontier frontier);
+        void frontierAdvanced(ParsleyClock frontier);
     }
-
-    private record ParsleyPartition(Uuid topicId, int partition) {}
 
     private final CausalBufferLimit limit;
     private final ParsleyBufferStore<K, V> buffer;
@@ -60,12 +60,12 @@ final class ParsleyEngine<K, V> {
     private final ParsleyMetrics metrics;
     private final LongSupplier clock;
 
-    private CausalFrontier frontier;
+    private ParsleyClock frontier;
     private int sizeLimit = Integer.MAX_VALUE;
     private Duration evictionInterval;
 
     ParsleyEngine(CausalBufferLimit limit,
-                 CausalFrontier initialFrontier,
+                 ParsleyClock initialFrontier,
                  FrontierCallback frontierListener,
                  ParsleyBufferStore<K, V> buffer,
                  ParsleyPositionIndex positionIndex,
@@ -75,7 +75,7 @@ final class ParsleyEngine<K, V> {
     }
 
     ParsleyEngine(CausalBufferLimit limit,
-                 CausalFrontier initialFrontier,
+                 ParsleyClock initialFrontier,
                  FrontierCallback frontierListener,
                  ParsleyBufferStore<K, V> buffer,
                  ParsleyPositionIndex positionIndex,
@@ -105,27 +105,27 @@ final class ParsleyEngine<K, V> {
     List<ParsleyRecord<K, V>> onRecord(ParsleyRecord<K, V> record) {
         List<ParsleyRecord<K, V>> out = new ArrayList<>();
 
-        CausalDependencies dependencies;
+        ParsleyClock dependencies;
         byte[] encoded = record.encodedDependencies();
         if (encoded == null) {
             log.debug("No causal-dependencies header on {}-{} @{} — trivially satisfied",
                     record.sourcePartition().topic(), record.sourcePartition().partition(),
                     record.sourceOffset());
-            dependencies = CausalDependencies.empty();
+            dependencies = ParsleyClock.empty();
         } else {
             try {
-                dependencies = CausalDependencies.fromBytes(encoded);
+                dependencies = ParsleyClock.fromBytes(encoded);
             } catch (Exception e) {
                 log.warn("Unresolvable causal-dependencies header on {}-{} @{} — treating as trivially satisfied",
                         record.sourcePartition().topic(), record.sourcePartition().partition(),
                         record.sourceOffset());
-                dependencies = CausalDependencies.empty();
+                dependencies = ParsleyClock.empty();
             }
         }
 
         dependencies = effectiveDependencies(dependencies, record);
 
-        if (dependencies.isSatisfiedBy(frontier)) {
+        if (frontier.dominates(dependencies)) {
             log.debug("Forwarding {}-{} @{} (satisfied immediately)",
                     record.sourcePartition().topic(), record.sourcePartition().partition(),
                     record.sourceOffset());
@@ -139,7 +139,7 @@ final class ParsleyEngine<K, V> {
             if (log.isDebugEnabled()) {
                 log.debug("Holding {}-{} @{} (buffer depth: {}, gap: {})",
                         record.sourcePartition().topic(), record.sourcePartition().partition(),
-                        record.sourceOffset(), depth, dependencies.findMissing(frontier));
+                        record.sourceOffset(), depth, dependencies.missing(frontier));
             }
             metrics.recordBuffered(depth);
             if (depth >= sizeLimit) {
@@ -217,7 +217,7 @@ final class ParsleyEngine<K, V> {
      *
      * @return the frontier
      */
-    CausalFrontier frontier() {
+    ParsleyClock frontier() {
         return frontier;
     }
 
@@ -237,8 +237,8 @@ final class ParsleyEngine<K, V> {
      * own source coordinate, which may unlock further records.
      */
     private void drainInto(List<ParsleyRecord<K, V>> out, Uuid topicId, int partition) {
-        Set<ParsleyPartition> toScan = new HashSet<>();
-        toScan.add(new ParsleyPartition(topicId, partition));
+        Map<Uuid, Set<Integer>> toScan = new HashMap<>();
+        toScan.computeIfAbsent(topicId, k -> new HashSet<>()).add(partition);
         int totalReleased = 0;
 
         while (!toScan.isEmpty()) {
@@ -246,31 +246,35 @@ final class ParsleyEngine<K, V> {
             List<ParsleyBufferStore.Entry<K, V>> releasable = new ArrayList<>();
             List<ParsleyPositionIndex.Candidate> stale = new ArrayList<>();
 
-            for (ParsleyPartition coord : toScan) {
-                long coordOffset = frontier.offsetFor(coord.topicId(), coord.partition());
-                for (ParsleyPositionIndex.Candidate candidate : positionIndex.findCandidates(coord.topicId(), coord.partition(), coordOffset)) {
-                    if (!seen.add(candidate.recordId())) continue;
-                    ParsleyBufferStore.Entry<K, V> entry = buffer.get(candidate.recordId());
-                    if (entry == null) {
-                        stale.add(candidate);
-                    } else {
-                        CausalDependencies deps = effectiveDependencies(entry.dependencies(), entry.record());
-                        if (deps.isSatisfiedBy(frontier)) {
-                            releasable.add(entry);
+            for (Map.Entry<Uuid, Set<Integer>> coord : toScan.entrySet()) {
+                Uuid coordTopicId = coord.getKey();
+                for (int coordPartition : coord.getValue()) {
+                    long coordOffset = frontier.offsetFor(coordTopicId, coordPartition);
+                    for (ParsleyPositionIndex.Candidate candidate : positionIndex.findCandidates(coordTopicId, coordPartition, coordOffset)) {
+                        if (!seen.add(candidate.recordId())) continue;
+                        ParsleyBufferStore.Entry<K, V> entry = buffer.get(candidate.recordId());
+                        if (entry == null) {
+                            stale.add(candidate);
+                        } else {
+                            ParsleyClock deps = effectiveDependencies(entry.dependencies(), entry.record());
+                            if (frontier.dominates(deps)) {
+                                releasable.add(entry);
+                            }
                         }
                     }
                 }
             }
 
             stale.forEach(positionIndex::prune);
-            toScan.clear();
+            toScan = new HashMap<>();
 
             if (releasable.isEmpty()) break;
 
             for (ParsleyBufferStore.Entry<K, V> entry : releasable) {
                 buffer.remove(entry.sequence());
                 advanceFrontier(entry.record());
-                toScan.add(new ParsleyPartition(entry.record().sourceTopicId(), entry.record().sourcePartitionIndex()));
+                toScan.computeIfAbsent(entry.record().sourceTopicId(), k -> new HashSet<>())
+                        .add(entry.record().sourcePartitionIndex());
                 out.add(entry.record());
             }
             totalReleased += releasable.size();
@@ -290,31 +294,22 @@ final class ParsleyEngine<K, V> {
      * ({@code req < offset}) and a forward dep ({@code req > offset}, a later record on the partition)
      * are both satisfiable by waiting, so they flow through the normal frontier check unchanged.
      */
-    private CausalDependencies effectiveDependencies(CausalDependencies deps, ParsleyRecord<K, V> record) {
-        CausalPosition self = new CausalPosition(
-                record.sourceTopicId(), record.sourcePartitionIndex(), record.sourceOffset());
-        List<CausalPosition> all = deps.dependencies();
-        if (!all.contains(self)) {
-            return deps;
+    private ParsleyClock effectiveDependencies(ParsleyClock deps, ParsleyRecord<K, V> record) {
+        if (deps.offsetFor(record.sourceTopicId(), record.sourcePartitionIndex()) == record.sourceOffset()) {
+            return deps.without(record.sourceTopicId(), record.sourcePartitionIndex());
         }
-        CausalDependencies.Builder builder = CausalDependencies.builder();
-        for (CausalPosition pos : all) {
-            if (!pos.equals(self)) {
-                builder.require(pos);
-            }
-        }
-        return builder.build();
+        return deps;
     }
 
     private void advanceFrontier(ParsleyRecord<K, V> record) {
-        frontier = frontier.observe(new CausalPosition(record.sourceTopicId(), record.sourcePartitionIndex(), record.sourceOffset()));
+        frontier = frontier.observe(record.sourceTopicId(), record.sourcePartitionIndex(), record.sourceOffset());
         frontierListener.frontierAdvanced(frontier);
     }
 
-    private void reportEviction(ParsleyRecord<K, V> record, CausalDependencies required) {
+    private void reportEviction(ParsleyRecord<K, V> record, ParsleyClock required) {
         log.warn("Causal violation [EVICTED on {}-{} @{}] gap: {}",
                 record.sourcePartition().topic(), record.sourcePartition().partition(),
-                record.sourceOffset(), required.findMissing(frontier));
+                record.sourceOffset(), required.missing(frontier));
         metrics.recordViolation();
     }
 

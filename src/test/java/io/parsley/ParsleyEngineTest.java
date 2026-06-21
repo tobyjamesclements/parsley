@@ -21,7 +21,7 @@ class ParsleyEngineTest {
     private static final Uuid T2_ID = Uuid.randomUuid();
 
     private final List<ParsleyRecord<String, String>> forwarded = new ArrayList<>();
-    private final List<CausalFrontier> frontiers = new ArrayList<>();
+    private final List<ParsleyClock> frontiers = new ArrayList<>();
     private final MockBufferStore<String, String> buffer = new MockBufferStore<>();
 
     // --- test methods ---------------------------------------------------------------------------
@@ -40,10 +40,10 @@ class ParsleyEngineTest {
     void satisfiedRecordForwardsImmediatelyAndAdvancesFrontier() {
         ParsleyEngine<String, String> engine = engineWith(CausalBufferLimit.ofSize(100));
 
-        processRecord(engine, incomingRecord(T1, 3, CausalDependencies.empty()));
+        processRecord(engine, incomingRecord(T1, 3, ParsleyClock.empty()));
 
         assertEquals(1, forwarded.size(), "satisfied record must be forwarded immediately");
-        assertEquals(CausalFrontier.empty().observe(new CausalPosition(T1_ID, 0, 3)), engine.frontier(),
+        assertEquals(ParsleyClock.empty().observe(T1_ID, 0, 3), engine.frontier(),
                 "frontier must advance to the forwarded record's source offset");
     }
 
@@ -63,19 +63,19 @@ class ParsleyEngineTest {
     void unsatisfiedRecordIsBufferedUntilFrontierCatchesUp() {
         ParsleyEngine<String, String> engine = engineWith(CausalBufferLimit.ofSize(100));
 
-        CausalDependencies deps = CausalDependencies.builder().require(new CausalPosition(T1_ID, 0, 3)).build();
+        ParsleyClock deps = ParsleyClock.empty().observe(T1_ID, 0, 3);
         processRecord(engine, incomingRecord(T2, 0, deps));
         assertTrue(forwarded.isEmpty(), "unsatisfied record must be held in the buffer");
 
-        processRecord(engine, incomingRecord(T1, 3, CausalDependencies.empty()));
+        processRecord(engine, incomingRecord(T1, 3, ParsleyClock.empty()));
 
         assertEquals(2, forwarded.size(), "both records must be forwarded after the dependency arrives");
         assertEquals(T1, forwarded.get(0).sourcePartition(), "satisfying record must be forwarded first");
         assertEquals(T2, forwarded.get(1).sourcePartition(), "buffered record must be released second");
         assertEquals(
-                CausalFrontier.empty()
-                        .observe(new CausalPosition(T1_ID, 0, 3))
-                        .observe(new CausalPosition(T2_ID, 0, 0)),
+                ParsleyClock.empty()
+                        .observe(T1_ID, 0, 3)
+                        .observe(T2_ID, 0, 0),
                 engine.frontier(),
                 "frontier must reflect both records after drain");
     }
@@ -90,10 +90,10 @@ class ParsleyEngineTest {
     void bufferHoldsAnUnsatisfiedRecordAndReleasesItOnDrain() {
         ParsleyEngine<String, String> engine = engineWith(CausalBufferLimit.ofSize(100));
 
-        engine.onRecord(incomingRecord(T2, 0, CausalDependencies.builder().require(new CausalPosition(T1_ID, 0, 3)).build()));
+        engine.onRecord(incomingRecord(T2, 0, ParsleyClock.empty().observe(T1_ID, 0, 3)));
         assertEquals(1, buffer.size(), "unsatisfied record must be held in the buffer");
 
-        engine.onRecord(incomingRecord(T1, 3, CausalDependencies.empty()));
+        engine.onRecord(incomingRecord(T1, 3, ParsleyClock.empty()));
         assertEquals(0, buffer.size(), "drained record must be removed from the buffer");
     }
 
@@ -109,7 +109,7 @@ class ParsleyEngineTest {
     void evictionRemovesTheRecordFromTheBufferAndForwardsItAnyway() {
         ParsleyEngine<String, String> engine = engineWith(CausalBufferLimit.ofSize(1));
 
-        processRecord(engine, incomingRecord(T2, 0, CausalDependencies.builder().require(new CausalPosition(T1_ID, 0, 99)).build()));
+        processRecord(engine, incomingRecord(T2, 0, ParsleyClock.empty().observe(T1_ID, 0, 99)));
 
         assertEquals(0, buffer.size(), "evicted record must never remain in the buffer");
         assertEquals(1, forwarded.size(), "evicted record must still be forwarded — Parsley never drops");
@@ -127,12 +127,12 @@ class ParsleyEngineTest {
      */
     @Test
     void recordsAlreadyInTheBufferDrainWhenTheFrontierCatchesUp() {
-        buffer.add(incomingRecord(T2, 0, CausalDependencies.builder().require(new CausalPosition(T1_ID, 0, 3)).build()), 0L);
+        buffer.add(incomingRecord(T2, 0, ParsleyClock.empty().observe(T1_ID, 0, 3)), 0L);
         ParsleyEngine<String, String> engine = engineWith(CausalBufferLimit.ofSize(100));
-        assertEquals(CausalFrontier.empty(), engine.frontier(), "pre-buffered records must not advance the frontier on construction");
+        assertEquals(ParsleyClock.empty(), engine.frontier(), "pre-buffered records must not advance the frontier on construction");
         assertTrue(frontiers.isEmpty(), "pre-buffered records must not fire the frontier listener on construction");
 
-        processRecord(engine, incomingRecord(T1, 3, CausalDependencies.empty()));
+        processRecord(engine, incomingRecord(T1, 3, ParsleyClock.empty()));
 
         assertEquals(2, forwarded.size(), "satisfying record and pre-buffered record must both be forwarded");
         assertEquals(T1, forwarded.get(0).sourcePartition(), "satisfying record must be forwarded first");
@@ -153,16 +153,16 @@ class ParsleyEngineTest {
     void inboundClockIsNeverFoldedIntoTheFrontier() {
         ParsleyEngine<String, String> engine = engineWith(CausalBufferLimit.ofSize(1));
 
-        CausalDependencies.Builder bigBuilder = CausalDependencies.builder();
+        ParsleyClock big = ParsleyClock.empty();
         Uuid ghostId = Uuid.randomUuid();
         for (int p = 0; p < 200; p++) {
-            bigBuilder.require(new CausalPosition(ghostId, p, 1_000 + p));
+            big = big.observe(ghostId, p, 1_000 + p);
         }
-        processRecord(engine, incomingRecord(T2, 0, bigBuilder.build()));
+        processRecord(engine, incomingRecord(T2, 0, big));
 
-        assertEquals(CausalFrontier.empty().observe(new CausalPosition(T2_ID, 0, 0)), engine.frontier(),
+        assertEquals(ParsleyClock.empty().observe(T2_ID, 0, 0), engine.frontier(),
                 "frontier must contain only the record's own source coordinate");
-        assertEquals(1, engine.frontier().positions().size(),
+        assertEquals(1, engine.frontier().size(),
                 "inbound dependency entries must not widen the frontier");
     }
 
@@ -181,7 +181,7 @@ class ParsleyEngineTest {
         processRecord(engine, incomingRecord(T1, 0, null));
 
         assertEquals(1, forwarded.size(), "a missing-header record must still be forwarded");
-        assertEquals(CausalFrontier.empty().observe(new CausalPosition(T1_ID, 0, 0)), engine.frontier(),
+        assertEquals(ParsleyClock.empty().observe(T1_ID, 0, 0), engine.frontier(),
                 "frontier must advance through the forwarded record");
     }
 
@@ -211,14 +211,14 @@ class ParsleyEngineTest {
     @Test
     void sizeLimitEvictsOnlyTheOldestRecord() {
         ParsleyEngine<String, String> engine = engineWith(CausalBufferLimit.ofSize(2));
-        CausalDependencies unmet = CausalDependencies.builder().require(new CausalPosition(T1_ID, 0, 99)).build();
+        ParsleyClock unmet = ParsleyClock.empty().observe(T1_ID, 0, 99);
 
         processRecord(engine, incomingRecord(T2, 0, unmet));
         assertTrue(forwarded.isEmpty(), "first record must be buffered while limit not yet reached");
         processRecord(engine, incomingRecord(T2, 1, unmet)); // hits size 2 → evict only the oldest
 
         assertEquals(1, forwarded.size(), "only the oldest evicted record must be forwarded");
-        assertEquals(CausalFrontier.empty().observe(new CausalPosition(T2_ID, 0, 0)), engine.frontier(),
+        assertEquals(ParsleyClock.empty().observe(T2_ID, 0, 0), engine.frontier(),
                 "frontier must advance only through the evicted record");
         assertEquals(1, buffer.size(), "the younger record must remain held in the buffer");
     }
@@ -233,7 +233,7 @@ class ParsleyEngineTest {
     @Test
     void sizeLimitSlidesTheWindowEvictingOneOldestRecordPerOverflow() {
         ParsleyEngine<String, String> engine = engineWith(CausalBufferLimit.ofSize(2));
-        CausalDependencies unmet = CausalDependencies.builder().require(new CausalPosition(T1_ID, 0, 99)).build();
+        ParsleyClock unmet = ParsleyClock.empty().observe(T1_ID, 0, 99);
 
         processRecord(engine, incomingRecord(T2, 0, unmet)); // A: depth 1, no eviction
         assertTrue(forwarded.isEmpty(), "no eviction while under the limit");
@@ -261,7 +261,7 @@ class ParsleyEngineTest {
      */
     @Test
     void evictOverflowTrimsARestoredBufferThatAlreadyExceedsTheLimit() {
-        CausalDependencies unmet = CausalDependencies.builder().require(new CausalPosition(T1_ID, 0, 99)).build();
+        ParsleyClock unmet = ParsleyClock.empty().observe(T1_ID, 0, 99);
         buffer.add(incomingRecord(T2, 0, unmet), 0L);
         buffer.add(incomingRecord(T2, 1, unmet), 1L);
         buffer.add(incomingRecord(T2, 2, unmet), 2L);
@@ -281,7 +281,7 @@ class ParsleyEngineTest {
      */
     @Test
     void evictOverflowIsANoOpWhenBufferIsNotOverTheLimit() {
-        CausalDependencies unmet = CausalDependencies.builder().require(new CausalPosition(T1_ID, 0, 99)).build();
+        ParsleyClock unmet = ParsleyClock.empty().observe(T1_ID, 0, 99);
         buffer.add(incomingRecord(T2, 0, unmet), 0L);
 
         ParsleyEngine<String, String> engine = engineWith(CausalBufferLimit.ofSize(2));
@@ -316,7 +316,7 @@ class ParsleyEngineTest {
         ParsleyEngine<String, String> engine = engineWithClock(CausalBufferLimit.ofDuration(Duration.ofMillis(200)), clock::get);
 
         processRecord(engine, incomingRecord(T2, 0,
-                CausalDependencies.builder().require(new CausalPosition(T1_ID, 0, 99)).build()));
+                ParsleyClock.empty().observe(T1_ID, 0, 99)));
         clock.set(150L);
 
         List<ParsleyRecord<String, String>> forwardedOnEvict = engine.evictExpired();
@@ -337,7 +337,7 @@ class ParsleyEngineTest {
         ParsleyEngine<String, String> engine = engineWithClock(CausalBufferLimit.ofDuration(Duration.ofMillis(200)), clock::get);
 
         processRecord(engine, incomingRecord(T2, 0,
-                CausalDependencies.builder().require(new CausalPosition(T1_ID, 0, 99)).build()));
+                ParsleyClock.empty().observe(T1_ID, 0, 99)));
         clock.set(250L);
 
         List<ParsleyRecord<String, String>> evicted = engine.evictExpired();
@@ -360,13 +360,13 @@ class ParsleyEngineTest {
 
         clock.set(0L);
         processRecord(engine, incomingRecord(T2, 0,
-                CausalDependencies.builder().require(new CausalPosition(T1_ID, 0, 99)).build()));
+                ParsleyClock.empty().observe(T1_ID, 0, 99)));
         clock.set(100L);
         processRecord(engine, incomingRecord(T2, 1,
-                CausalDependencies.builder().require(new CausalPosition(T1_ID, 0, 99)).build()));
+                ParsleyClock.empty().observe(T1_ID, 0, 99)));
         clock.set(300L);
         processRecord(engine, incomingRecord(T2, 2,
-                CausalDependencies.builder().require(new CausalPosition(T1_ID, 0, 99)).build()));
+                ParsleyClock.empty().observe(T1_ID, 0, 99)));
 
         clock.set(250L); // only the record buffered at t=0 has aged past the 200ms duration
         engine.evictExpired();
@@ -388,7 +388,7 @@ class ParsleyEngineTest {
     void frontierListenerFiresBeforeEachForward() {
         ParsleyEngine<String, String> engine = engineWith(CausalBufferLimit.ofSize(100));
 
-        processRecord(engine, incomingRecord(T1, 3, CausalDependencies.empty()));
+        processRecord(engine, incomingRecord(T1, 3, ParsleyClock.empty()));
 
         assertEquals(engine.frontier(), frontiers.get(frontiers.size() - 1),
                 "frontier listener must receive the current frontier before each forward");
@@ -415,14 +415,14 @@ class ParsleyEngineTest {
         };
         ParsleyEngine<String, String> engine = new ParsleyEngine<>(
                 CausalBufferLimit.ofSize(100),
-                CausalFrontier.empty(), frontiers::add, buffer,
+                ParsleyClock.empty(), frontiers::add, buffer,
                 new MockPositionIndex(), capturing);
 
-        engine.onRecord(incomingRecord(T2, 0, CausalDependencies.builder().require(new CausalPosition(T1_ID, 0, 3)).build()));
+        engine.onRecord(incomingRecord(T2, 0, ParsleyClock.empty().observe(T1_ID, 0, 3)));
         assertEquals(List.of(1), bufferedDepths, "recordBuffered must fire with the new buffer depth");
         assertTrue(releasedCounts.isEmpty(), "recordReleased must not fire while record is buffered");
 
-        engine.onRecord(incomingRecord(T1, 3, CausalDependencies.empty()));
+        engine.onRecord(incomingRecord(T1, 3, ParsleyClock.empty()));
         assertEquals(List.of(1), releasedCounts, "recordReleased must fire with the count of drained records");
         assertEquals(List.of(0), releasedDepths, "recordReleased must report the post-drain buffer depth");
     }
@@ -444,10 +444,10 @@ class ParsleyEngineTest {
         };
         ParsleyEngine<String, String> engine = new ParsleyEngine<>(
                 CausalBufferLimit.ofSize(1),
-                CausalFrontier.empty(), frontiers::add, buffer,
+                ParsleyClock.empty(), frontiers::add, buffer,
                 new MockPositionIndex(), capturing);
 
-        engine.onRecord(incomingRecord(T2, 0, CausalDependencies.builder().require(new CausalPosition(T1_ID, 0, 99)).build()));
+        engine.onRecord(incomingRecord(T2, 0, ParsleyClock.empty().observe(T1_ID, 0, 99)));
 
         assertEquals(List.of(1), evictedCounts, "recordEvicted must fire with the count of evicted records");
     }
@@ -465,11 +465,11 @@ class ParsleyEngineTest {
         ParsleyEngine<String, String> engine = engineWith(CausalBufferLimit.ofSize(100));
 
         // Record at T1/0@3 whose dependencies require T1/0@3 — exactly itself.
-        processRecord(engine, incomingRecord(T1, 3, CausalDependencies.builder().require(new CausalPosition(T1_ID, 0, 3)).build()));
+        processRecord(engine, incomingRecord(T1, 3, ParsleyClock.empty().observe(T1_ID, 0, 3)));
 
         assertEquals(1, forwarded.size(), "self-dep is stripped → dependencies empty → forwarded immediately");
         assertEquals(0, buffer.size(), "self-dep record must never enter the buffer");
-        assertEquals(CausalFrontier.empty().observe(new CausalPosition(T1_ID, 0, 3)), engine.frontier(),
+        assertEquals(ParsleyClock.empty().observe(T1_ID, 0, 3), engine.frontier(),
                 "frontier must advance through the forwarded record");
     }
 
@@ -487,16 +487,15 @@ class ParsleyEngineTest {
 
         // T2/0@0 has a self-dep on T2_ID/0@0 AND a real dep on T1_ID/0@5.
         // After stripping the self-ref, the effective dependencies are {T1_ID/0@5}: still unsatisfied.
-        CausalDependencies mixed = CausalDependencies.builder()
-                .require(new CausalPosition(T2_ID, 0, 0))
-                .require(new CausalPosition(T1_ID, 0, 5))
-                .build();
+        ParsleyClock mixed = ParsleyClock.empty()
+                .observe(T2_ID, 0, 0)
+                .observe(T1_ID, 0, 5);
         processRecord(engine, incomingRecord(T2, 0, mixed));
         assertTrue(forwarded.isEmpty(), "real dep on T1@5 must still hold the record in the buffer");
         assertEquals(1, buffer.size(), "record must be in the buffer while real dep is unmet");
 
         // T1@5 arrives — satisfies the real dep; T2 drains.
-        processRecord(engine, incomingRecord(T1, 5, CausalDependencies.empty()));
+        processRecord(engine, incomingRecord(T1, 5, ParsleyClock.empty()));
         assertEquals(2, forwarded.size(), "satisfying record and buffered record must both be forwarded");
         assertEquals(T1, forwarded.get(0).sourcePartition(), "satisfying record must be forwarded first");
         assertEquals(T2, forwarded.get(1).sourcePartition(), "buffered record must be released second");
@@ -516,12 +515,12 @@ class ParsleyEngineTest {
 
         // T1@3 depends on T1@5 — a later record on its own partition (forward dep, not a self-reference).
         processRecord(engine, incomingRecord(T1, 3,
-                CausalDependencies.builder().require(new CausalPosition(T1_ID, 0, 5)).build()));
+                ParsleyClock.empty().observe(T1_ID, 0, 5)));
         assertTrue(forwarded.isEmpty(), "forward same-partition dep must hold the record, not be stripped");
         assertEquals(1, buffer.size(), "record must be buffered while the forward dependency is unmet");
 
         // T1@5 arrives, advancing the frontier to 5 and satisfying the forward dependency.
-        processRecord(engine, incomingRecord(T1, 5, CausalDependencies.empty()));
+        processRecord(engine, incomingRecord(T1, 5, ParsleyClock.empty()));
 
         assertEquals(2, forwarded.size(), "both records must be forwarded once the forward dependency arrives");
         assertEquals(5L, forwarded.get(0).sourceOffset(), "the satisfying later record (offset 5) is forwarded first");
@@ -541,11 +540,11 @@ class ParsleyEngineTest {
 
         // T1@5 depends on T1@3 — an earlier record on its own partition (backward dep, honoured).
         processRecord(engine, incomingRecord(T1, 5,
-                CausalDependencies.builder().require(new CausalPosition(T1_ID, 0, 3)).build()));
+                ParsleyClock.empty().observe(T1_ID, 0, 3)));
         assertTrue(forwarded.isEmpty(), "backward same-partition dep must hold the record until it is satisfied");
         assertEquals(1, buffer.size(), "record must be buffered while the backward dependency is unmet");
 
-        processRecord(engine, incomingRecord(T1, 3, CausalDependencies.empty()));
+        processRecord(engine, incomingRecord(T1, 3, ParsleyClock.empty()));
 
         assertEquals(2, forwarded.size(), "both records must be forwarded once the backward dependency arrives");
         assertEquals(3L, forwarded.get(0).sourceOffset(), "the satisfying earlier record (offset 3) is forwarded first");
@@ -569,16 +568,16 @@ class ParsleyEngineTest {
 
         // T2 depends on t1-0@5 under the OLD incarnation.
         processRecord(engine, incomingRecordWithId(T2, 0, T2_ID,
-                CausalDependencies.builder().require(new CausalPosition(oldT1, 0, 5L)).build()));
+                ParsleyClock.empty().observe(oldT1, 0, 5L)));
         assertTrue(forwarded.isEmpty(), "T2 must be buffered: old-t1 dependency unsatisfied");
 
         // A record from the NEW t1 incarnation at the same offset must NOT unblock T2.
-        processRecord(engine, incomingRecordWithId(T1, 5, newT1, CausalDependencies.empty()));
+        processRecord(engine, incomingRecordWithId(T1, 5, newT1, ParsleyClock.empty()));
         assertEquals(1, forwarded.size(), "only the new-t1 record must be forwarded; T2 stays buffered");
         assertEquals(T1, forwarded.get(0).sourcePartition(), "new-incarnation record must be forwarded");
 
         // A record from the OLD t1 incarnation arrives — dependency now satisfied.
-        processRecord(engine, incomingRecordWithId(T1, 5, oldT1, CausalDependencies.empty()));
+        processRecord(engine, incomingRecordWithId(T1, 5, oldT1, ParsleyClock.empty()));
         assertEquals(3, forwarded.size(), "old-t1 record forwarded, then buffered T2 released");
         assertEquals(T2, forwarded.get(2).sourcePartition(), "T2 must be released after old-t1 arrives");
     }
@@ -586,13 +585,13 @@ class ParsleyEngineTest {
     // --- helpers --------------------------------------------------------------------------------
 
     private ParsleyEngine<String, String> engineWith(CausalBufferLimit limit) {
-        return new ParsleyEngine<>(limit, CausalFrontier.empty(), frontiers::add,
+        return new ParsleyEngine<>(limit, ParsleyClock.empty(), frontiers::add,
                 buffer, new MockPositionIndex(), ParsleyMetrics.NOOP);
     }
 
     private ParsleyEngine<String, String> engineWithClock(CausalBufferLimit limit,
                                                            java.util.function.LongSupplier clock) {
-        return new ParsleyEngine<>(limit, CausalFrontier.empty(), frontiers::add,
+        return new ParsleyEngine<>(limit, ParsleyClock.empty(), frontiers::add,
                 buffer, new MockPositionIndex(), ParsleyMetrics.NOOP, clock);
     }
 
@@ -607,13 +606,13 @@ class ParsleyEngineTest {
     }
 
     private static ParsleyRecord<String, String> incomingRecord(TopicPartition tp, long offset,
-                                                                  CausalDependencies deps) {
+                                                                  ParsleyClock deps) {
         return incomingRecordWithId(tp, offset, idFor(tp), deps);
     }
 
     private static ParsleyRecord<String, String> incomingRecordWithId(TopicPartition tp, long offset,
                                                                         Uuid topicId,
-                                                                        CausalDependencies deps) {
+                                                                        ParsleyClock deps) {
         List<ParsleyHeader> headers = new ArrayList<>();
         if (deps != null) {
             headers.add(new ParsleyHeader(ParsleyAttributes.CAUSAL_DEPENDENCIES, deps.toBytes()));

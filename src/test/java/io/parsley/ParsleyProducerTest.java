@@ -26,7 +26,7 @@ class ParsleyProducerTest {
         MockProducer<String, String> mock = mockProducer();
         try (ParsleyProducer<String, String> producer = new ParsleyProducer<>(mock)) {
             CausalDependencies deps = CausalDependencies.builder()
-                    .require(new CausalPosition(Uuid.randomUuid(), 0, 3))
+                    .require(new CausalTopic("upstream", Uuid.randomUuid()), 0, 3)
                     .build();
             producer.send(new ProducerRecord<>("t2", "k", "v"), deps);
 

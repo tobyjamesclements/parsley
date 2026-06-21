@@ -36,12 +36,12 @@ final class RocksPositionIndex implements ParsleyPositionIndex {
     }
 
     @Override
-    public void index(long recordId, CausalDependencies required, CausalFrontier frontier) {
-        for (CausalPosition pos : required.dependencies()) {
-            if (frontier.offsetFor(pos.topicId(), pos.partition()) < pos.offset()) {
-                store.put(key(pos.topicId(), pos.partition(), pos.offset(), recordId), PRESENT);
+    public void index(long recordId, ParsleyClock required, ParsleyClock frontier) {
+        required.forEach((topicId, partition, offset) -> {
+            if (frontier.offsetFor(topicId, partition) < offset) {
+                store.put(key(topicId, partition, offset, recordId), PRESENT);
             }
-        }
+        });
     }
 
     @Override

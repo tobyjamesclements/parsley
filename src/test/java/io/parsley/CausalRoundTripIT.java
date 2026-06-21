@@ -77,7 +77,7 @@ class CausalRoundTripIT {
             for (int i = 0; i < 5; i++) {
                 CausalDependencies deps = i == 0
                         ? CausalDependencies.empty()
-                        : CausalDependencies.builder().require(new CausalPosition(topicId, 0, (long) (i - 1))).build();
+                        : CausalDependencies.builder().require(new CausalTopic(TOPIC, topicId), 0, (long) (i - 1)).build();
                 producer.send(new ProducerRecord<>(TOPIC, "k", "v" + i), deps);
             }
 
@@ -96,7 +96,7 @@ class CausalRoundTripIT {
             for (int i = 0; i < 5; i++) {
                 CausalDependencies expected = i == 0
                         ? CausalDependencies.empty()
-                        : CausalDependencies.builder().require(new CausalPosition(topicId, 0, (long) (i - 1))).build();
+                        : CausalDependencies.builder().require(new CausalTopic(TOPIC, topicId), 0, (long) (i - 1)).build();
                 assertEquals(Optional.of(expected), CausalDependencies.fromRecord(received.get(i)),
                         "record " + i + " should carry its producer's dependencies");
             }
@@ -163,7 +163,7 @@ class CausalRoundTripIT {
         // Deliberately never created on the broker — must never match a real registration.
         Uuid upstreamTopicId = Uuid.randomUuid();
         CausalDependencies producerDeps = CausalDependencies.builder()
-                .require(new CausalPosition(upstreamTopicId, 0, 5L)).build();
+                .require(new CausalTopic("upstream", upstreamTopicId), 0, 5L).build();
 
         try (CausalProducer<String, String> producer = CausalProducers.<String, String>builder(Map.of(
                 ProducerConfig.BOOTSTRAP_SERVERS_CONFIG, bootstrap,

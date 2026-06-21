@@ -174,7 +174,7 @@ class CausalAvroSchemaRegistryIT {
 
             // Order declares it has seen prices-0@0 — it will be buffered until Price arrives.
             producer.send(new ProducerRecord<>(ORDERS, "o-buf", order),
-                    CausalDependencies.builder().require(new CausalPosition(pricesId, 0, 0)).build()).get();
+                    CausalDependencies.builder().require(new CausalTopic(PRICES, pricesId), 0, 0).build()).get();
 
             // Poll briefly to confirm the Order is buffered and not yet delivered.
             List<ConsumerRecord<String, SpecificRecord>> received = new ArrayList<>();
@@ -207,7 +207,7 @@ class CausalAvroSchemaRegistryIT {
             assertEquals(order, receivedOrder, "Order round-trips through Avro buffer path");
 
             // The buffered Order's original producer dependencies must be restored (not replaced by frontier).
-            assertEquals(Optional.of(CausalDependencies.builder().require(new CausalPosition(pricesId, 0, 0)).build()),
+            assertEquals(Optional.of(CausalDependencies.builder().require(new CausalTopic(PRICES, pricesId), 0, 0).build()),
                     CausalDependencies.fromRecord(received.get(1)),
                     "Order must carry the producer's original dependencies, not the delivery-time frontier");
         }

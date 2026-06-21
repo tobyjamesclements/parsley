@@ -15,16 +15,14 @@
  *
  * <h2>Key value types</h2>
  * <ul>
- *   <li>{@link io.parsley.CausalFrontier} &mdash; the highest offset observed per topic UUID;
- *       combine two frontiers with {@link io.parsley.CausalFrontier#merge merge} and convert to
- *       dependencies with {@link io.parsley.CausalFrontier#toDependencies toDependencies}</li>
  *   <li>{@link io.parsley.CausalDependencies} &mdash; the causal requirements stamped on a record
- *       (what the consumer must have observed before the record may be delivered); test readiness
- *       with {@link io.parsley.CausalDependencies#isSatisfiedBy isSatisfiedBy}. Its serialised size
- *       grows with the number of relevant topic-partitions and counts against Kafka's
- *       {@code message.max.bytes}; read a consumed record's dependencies with
- *       {@link io.parsley.CausalDependencies#fromRecord fromRecord} when propagating across
- *       services</li>
+ *       (what the consumer must have observed before the record may be delivered); build one from the
+ *       {@link io.parsley.CausalTopic} identities you register, or read a consumed record's
+ *       dependencies with {@link io.parsley.CausalDependencies#fromRecord fromRecord} when
+ *       propagating across services. Its serialised size grows with the number of relevant
+ *       topic-partitions and counts against Kafka's {@code message.max.bytes}</li>
+ *   <li>{@link io.parsley.CausalTopic} &mdash; a topic's stable causal identity (name + Kafka UUID),
+ *       supplied to the builders and used when declaring dependencies</li>
  *   <li>{@link io.parsley.CausalBufferLimit} &mdash; how long to wait for a record's dependencies
  *       before forwarding it anyway: {@code ofDuration}, {@code ofSize}, or {@code first}</li>
  * </ul>

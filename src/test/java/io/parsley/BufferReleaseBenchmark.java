@@ -92,7 +92,7 @@ public class BufferReleaseBenchmark {
     }
 
     static ParsleyRecord<String, String> syntheticRecord(String srcTopic, int partition, long offset,
-                                                          CausalDependencies deps) {
+                                                          ParsleyClock deps) {
         List<ParsleyHeader> headers = new ArrayList<>();
         headers.add(new ParsleyHeader(ParsleyAttributes.CAUSAL_DEPENDENCIES, deps.toBytes()));
         headers.add(new ParsleyHeader(ParsleyAttributes.SRC_TOPIC, srcTopic.getBytes(UTF_8)));
@@ -107,7 +107,7 @@ public class BufferReleaseBenchmark {
                                                        ParsleySerializer<String, String> serializer) {
         return new ParsleyEngine<>(
                 BENCH_LIMIT,
-                CausalFrontier.empty(),
+                ParsleyClock.empty(),
                 f -> {},
                 new RocksBufferStore<>(bufferKV, serializer),
                 new RocksPositionIndex(waitKV),
@@ -186,20 +186,18 @@ public class BufferReleaseBenchmark {
             engine = freshEngine(bufferKV, waitKV, serializer);
 
             // Record 0 waits on the trigger coordinate; only it is released when the trigger fires.
-            CausalDependencies triggerDeps = CausalDependencies.builder()
-                    .require(new CausalPosition(topicId("trigger"), 0, 0L)).build();
+            ParsleyClock triggerDeps = ParsleyClock.empty().observe(topicId("trigger"), 0, 0L);
             engine.onRecord(syntheticRecord("bench-0", 0, 0L, triggerDeps));
 
             // Records 1..n-1 each wait on a unique, never-satisfied coordinate.
             for (int i = 1; i < bench.n; i++) {
-                CausalDependencies deps = CausalDependencies.builder()
-                        .require(new CausalPosition(topicId("unique-" + i), 0, 0L)).build();
+                ParsleyClock deps = ParsleyClock.empty().observe(topicId("unique-" + i), 0, 0L);
                 engine.onRecord(syntheticRecord("bench-" + i, 0, (long) i, deps));
             }
 
             // Trigger: source=(trigger-topic, 0, 0), empty deps — forwarded immediately, advances
             // frontier on the trigger coordinate, causing record 0 to drain.
-            trigger = syntheticRecord("trigger", 0, 0L, CausalDependencies.empty());
+            trigger = syntheticRecord("trigger", 0, 0L, ParsleyClock.empty());
         }
     }
 
@@ -234,8 +232,7 @@ public class BufferReleaseBenchmark {
             clearWaitStore(waitKV);
             engine = freshEngine(bufferKV, waitKV, serializer);
 
-            CausalPosition triggerPos = new CausalPosition(topicId("trigger"), 0, 0L);
-            CausalDependencies triggerDeps = CausalDependencies.builder().require(triggerPos).build();
+            ParsleyClock triggerDeps = ParsleyClock.empty().observe(topicId("trigger"), 0, 0L);
 
             // k records all waiting on the same trigger coordinate.
             for (int i = 0; i < bench.k; i++) {
@@ -244,12 +241,11 @@ public class BufferReleaseBenchmark {
 
             // FIXED_N - k filler records each waiting on a unique, never-satisfied coordinate.
             for (int i = bench.k; i < FIXED_N; i++) {
-                CausalDependencies deps = CausalDependencies.builder()
-                        .require(new CausalPosition(topicId("unique-" + i), 0, 0L)).build();
+                ParsleyClock deps = ParsleyClock.empty().observe(topicId("unique-" + i), 0, 0L);
                 engine.onRecord(syntheticRecord("filler-" + i, 0, (long) i, deps));
             }
 
-            trigger = syntheticRecord("trigger", 0, 0L, CausalDependencies.empty());
+            trigger = syntheticRecord("trigger", 0, 0L, ParsleyClock.empty());
         }
     }
 
@@ -287,24 +283,21 @@ public class BufferReleaseBenchmark {
             // Record 0 depends on the trigger; record i depends on record (i-1)'s source coordinate.
             // This forms an r-hop chain: advancing the trigger releases record 0, which in turn
             // releases record 1, ..., which releases record r-1.
-            CausalDependencies dep0 = CausalDependencies.builder()
-                    .require(new CausalPosition(topicId("trigger"), 0, 0L)).build();
+            ParsleyClock dep0 = ParsleyClock.empty().observe(topicId("trigger"), 0, 0L);
             engine.onRecord(syntheticRecord("chain-0", 0, 0L, dep0));
 
             for (int i = 1; i < bench.r; i++) {
-                CausalDependencies dep = CausalDependencies.builder()
-                        .require(new CausalPosition(topicId("chain-" + (i - 1)), 0, (long) (i - 1))).build();
+                ParsleyClock dep = ParsleyClock.empty().observe(topicId("chain-" + (i - 1)), 0, (long) (i - 1));
                 engine.onRecord(syntheticRecord("chain-" + i, 0, (long) i, dep));
             }
 
             // Filler records: FIXED_N - r records each waiting on a unique, never-satisfied coordinate.
             for (int i = bench.r; i < FIXED_N; i++) {
-                CausalDependencies deps = CausalDependencies.builder()
-                        .require(new CausalPosition(topicId("unique-" + i), 0, 0L)).build();
+                ParsleyClock deps = ParsleyClock.empty().observe(topicId("unique-" + i), 0, 0L);
                 engine.onRecord(syntheticRecord("filler-" + i, 0, (long) i, deps));
             }
 
-            trigger = syntheticRecord("trigger", 0, 0L, CausalDependencies.empty());
+            trigger = syntheticRecord("trigger", 0, 0L, ParsleyClock.empty());
         }
     }
 

@@ -124,7 +124,7 @@ class CausalProcessorsSinkPropagationIT {
                 assertEquals("HELLO", new String(out.value()), "the delegate's transform reached the sink");
 
                 Optional<CausalDependencies> stamped = CausalDependencies.fromHeaders(out.headers());
-                assertEquals(Optional.of(CausalDependencies.builder().require(new CausalPosition(inId, 0, 0)).build()), stamped,
+                assertEquals(Optional.of(CausalDependencies.builder().require(new CausalTopic(IN, inId), 0, 0).build()), stamped,
                         "the dependencies stamped at forward must survive the sink to the output topic");
             }
         }

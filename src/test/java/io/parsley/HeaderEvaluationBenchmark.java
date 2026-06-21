@@ -42,23 +42,23 @@ public class HeaderEvaluationBenchmark {
     @Param({"1", "2", "4", "8", "16", "32", "64"})
     public int clockWidth;
 
-    private CausalFrontier frontier;
-    private CausalDependencies dependencies;
+    private ParsleyClock frontier;
+    private ParsleyClock dependencies;
     private byte[] headerBytes;
 
     @Setup(Level.Trial)
     public void setUp() {
         // Build a frontier and matching dependencies with exactly clockWidth entries.
-        // All entries have offset=1 so isSatisfiedBy always traverses every entry (worst-case path).
-        CausalFrontier f = CausalFrontier.empty();
-        CausalDependencies.Builder builder = CausalDependencies.builder();
+        // All entries have offset=1 so dominates() always traverses every entry (worst-case path).
+        ParsleyClock f = ParsleyClock.empty();
+        ParsleyClock deps = ParsleyClock.empty();
         for (int i = 0; i < clockWidth; i++) {
-            CausalPosition pos = new CausalPosition(Uuid.randomUuid(), 0, 1L);
-            f = f.observe(pos);
-            builder.require(pos);
+            Uuid topicId = Uuid.randomUuid();
+            f = f.observe(topicId, 0, 1L);
+            deps = deps.observe(topicId, 0, 1L);
         }
         frontier     = f;
-        dependencies = builder.build();
+        dependencies = deps;
         headerBytes  = dependencies.toBytes();
     }
 
@@ -67,8 +67,8 @@ public class HeaderEvaluationBenchmark {
      * arrives at a Parsley consumer.
      */
     @Benchmark
-    public CausalDependencies deserialize() {
-        return CausalDependencies.fromBytes(headerBytes);
+    public ParsleyClock deserialize() {
+        return ParsleyClock.fromBytes(headerBytes);
     }
 
     /**
@@ -77,7 +77,7 @@ public class HeaderEvaluationBenchmark {
      */
     @Benchmark
     public boolean dominanceCheck() {
-        return dependencies.isSatisfiedBy(frontier);
+        return frontier.dominates(dependencies);
     }
 
     /**

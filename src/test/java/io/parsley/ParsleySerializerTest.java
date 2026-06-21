@@ -35,9 +35,7 @@ class ParsleySerializerTest {
      */
     @Test
     void roundTripsEveryField() {
-        CausalDependencies deps = CausalDependencies.builder()
-                .require(new CausalPosition(Uuid.randomUuid(), 0, 4))
-                .build();
+        ParsleyClock deps = ParsleyClock.empty().observe(Uuid.randomUuid(), 0, 4);
         List<ParsleyHeader> userHeaders = List.of(
                 new ParsleyHeader("h1", "a".getBytes()),
                 new ParsleyHeader("h2", null));
@@ -57,7 +55,7 @@ class ParsleySerializerTest {
         assertArrayEquals("a".getBytes(), out.headers().get(0).value(), "first user header value must round-trip");
         assertEquals("h2", out.headers().get(1).key(), "second user header key must round-trip");
         assertNull(out.headers().get(1).value(), "null user header value must round-trip as null");
-        assertEquals(deps, CausalDependencies.fromBytes(out.encodedDependencies()),
+        assertEquals(deps, ParsleyClock.fromBytes(out.encodedDependencies()),
                 "decoded dependencies must equal the original");
     }
 
@@ -95,7 +93,7 @@ class ParsleySerializerTest {
         ParsleySerializer<String, String> spying =
                 new ParsleySerializer<>(new ParsleyResolver<>(topic -> keySpy, topic -> valueSpy));
         ParsleyRecord<String, String> record =
-                buildRecord("k", "v", 0L, T1, 1L, CausalDependencies.empty(), List.of());
+                buildRecord("k", "v", 0L, T1, 1L, ParsleyClock.empty(), List.of());
 
         spying.deserialize(spying.serialize(record));
 
@@ -122,7 +120,7 @@ class ParsleySerializerTest {
 
     private static ParsleyRecord<String, String> buildRecord(String key, String value, long timestamp,
                                                               TopicPartition tp, long offset,
-                                                              CausalDependencies deps,
+                                                              ParsleyClock deps,
                                                               List<ParsleyHeader> userHeaders) {
         List<ParsleyHeader> headers = new ArrayList<>(userHeaders);
         if (deps != null) {

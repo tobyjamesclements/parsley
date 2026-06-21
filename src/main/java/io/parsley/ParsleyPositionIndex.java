@@ -28,10 +28,10 @@ interface ParsleyPositionIndex {
      * Indexes every coordinate in {@code required} that is not yet satisfied by {@code frontier}.
      *
      * @param recordId the buffer sequence number of the buffered record
-     * @param required the record's causal dependencies
+     * @param required the record's causal dependency clock
      * @param frontier the frontier at the time of buffering; unsatisfied = required offset &gt; offsetFor
      */
-    void index(long recordId, CausalDependencies required, CausalFrontier frontier);
+    void index(long recordId, ParsleyClock required, ParsleyClock frontier);
 
     /**
      * Returns all index entries for {@code (topicId, partition)} whose required offset is ≤

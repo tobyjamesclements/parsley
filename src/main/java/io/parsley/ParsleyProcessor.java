@@ -52,7 +52,7 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
     // All mutable state below is confined to the single Kafka Streams thread that owns this task.
 
     // Frontier snapshots captured per-record-admission; zips 1:1 with engine.onRecord() returns.
-    private final List<CausalFrontier> snapshots = new ArrayList<>();
+    private final List<ParsleyClock> snapshots = new ArrayList<>();
 
     private ProcessorContext<KOut, VOut> context;
     private KeyValueStore<String, byte[]> frontierStore;
@@ -61,7 +61,7 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
     private ParsleyEngine<KIn, VIn> engine;
     private ParsleyMetrics.Wired wiredMetrics;
     // Read live by the stamping proxy; volatile as belt-and-suspenders (single task thread owns this).
-    private volatile CausalFrontier stampFrontier = CausalFrontier.empty();
+    private volatile ParsleyClock stampFrontier = ParsleyClock.empty();
     private volatile RecordMetadata deliveryMetadata;
     private Cancellable restoredOverflowSchedule;
 
@@ -88,10 +88,10 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
         this.bufferStore = context.getStateStore(bufferStoreName);
         this.positionIndexStore = context.getStateStore(positionIndexStoreName);
 
-        CausalFrontier initialFrontier = CausalFrontier.empty();
+        ParsleyClock initialFrontier = ParsleyClock.empty();
         byte[] stored = frontierStore.get(ParsleyAttributes.FRONTIER_KEY);
         if (stored != null) {
-            initialFrontier = CausalFrontier.fromBytes(stored);
+            initialFrontier = ParsleyClock.fromBytes(stored);
         }
         this.stampFrontier = initialFrontier;
         if (stored != null) {
