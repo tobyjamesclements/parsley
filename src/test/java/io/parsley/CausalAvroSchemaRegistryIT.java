@@ -128,14 +128,6 @@ class CausalAvroSchemaRegistryIT {
             Price receivedPrice = (Price) firstOfType(received, Price.class);
             assertEquals(order, receivedOrder, "the Order round-trips through Avro + Schema Registry");
             assertEquals(price, receivedPrice, "the Price round-trips through Avro + Schema Registry");
-
-            // The frontier advanced over both topic-partitions.
-            assertTrue(consumer.frontier().positions().stream()
-                    .anyMatch(p -> p.partition() == 0),
-                    "frontier covers orders-0");
-            assertTrue(consumer.frontier().positions().stream()
-                    .anyMatch(p -> p.partition() == 0),
-                    "frontier covers prices-0");
         }
     }
 

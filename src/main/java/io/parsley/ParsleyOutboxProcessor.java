@@ -42,7 +42,6 @@ final class ParsleyOutboxProcessor implements Processor<byte[], byte[], byte[], 
     private final String frontierStoreName;
     private final String bufferStoreName;
     private final String positionIndexStoreName;
-    private final CausalFrontierListener frontierListener;
     private final Map<String, Uuid> topicUuids;
 
     private ProcessorContext<byte[], byte[]> context;
@@ -54,13 +53,11 @@ final class ParsleyOutboxProcessor implements Processor<byte[], byte[], byte[], 
                                     String frontierStoreName,
                                     String bufferStoreName,
                                     String positionIndexStoreName,
-                                    CausalFrontierListener frontierListener,
                                     Map<String, Uuid> topicUuids) {
         this.limit = limit;
         this.frontierStoreName = frontierStoreName;
         this.bufferStoreName = bufferStoreName;
         this.positionIndexStoreName = positionIndexStoreName;
-        this.frontierListener = frontierListener;
         this.topicUuids = topicUuids;
     }
 
@@ -78,13 +75,8 @@ final class ParsleyOutboxProcessor implements Processor<byte[], byte[], byte[], 
         }
         log.debug("Outbox processor initialized [task: {}] — frontier: {}", context.taskId(), initialFrontier);
 
-        // Publish the restored frontier so an observer has a correct view before the first record.
-        frontierListener.onFrontierAdvanced(initialFrontier);
-
-        ParsleyEngine.FrontierCallback listener = frontier -> {
-            frontierStore.put(ParsleyAttributes.FRONTIER_KEY, frontier.toBytes());
-            frontierListener.onFrontierAdvanced(frontier);
-        };
+        ParsleyEngine.FrontierCallback listener = frontier ->
+                frontierStore.put(ParsleyAttributes.FRONTIER_KEY, frontier.toBytes());
 
         ParsleySerializer<byte[], byte[]> serializer =
                 new ParsleySerializer<>(new ParsleyResolver<>(t -> Serdes.ByteArray(), t -> Serdes.ByteArray()));
@@ -143,8 +135,7 @@ final class ParsleyOutboxProcessor implements Processor<byte[], byte[], byte[], 
      * {@link CausalProcessors} so an existing deployment's state stores resolve to the same names.
      */
     static ProcessorSupplier<byte[], byte[], byte[], byte[]> supplier(
-            CausalBufferLimit limit, String storeName,
-            CausalFrontierListener frontierListener, Map<String, Uuid> topicUuids) {
+            CausalBufferLimit limit, String storeName, Map<String, Uuid> topicUuids) {
         String frontierStoreName = storeName + "-frontier";
         String bufferStoreName = storeName + "-buffer";
         String positionIndexStoreName = storeName + "-position-index";
@@ -152,7 +143,7 @@ final class ParsleyOutboxProcessor implements Processor<byte[], byte[], byte[], 
             @Override
             public Processor<byte[], byte[], byte[], byte[]> get() {
                 return new ParsleyOutboxProcessor(limit, frontierStoreName, bufferStoreName,
-                        positionIndexStoreName, frontierListener, topicUuids);
+                        positionIndexStoreName, topicUuids);
             }
 
             @Override

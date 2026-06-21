@@ -195,13 +195,6 @@ class CausalConcurrentProducersIT {
                     Optional.of(CausalDependencies.builder().require(new CausalPosition(topicBId, 0, 0)).build()),
                     CausalDependencies.fromRecord(b0),
                     "b0 must carry producer-B's original dependencies");
-
-            assertTrue(consumer.frontier().positions().stream()
-                            .anyMatch(p -> p.topicId().equals(topicAId)),
-                    "frontier must have advanced on SOURCE_A");
-            assertTrue(consumer.frontier().positions().stream()
-                            .anyMatch(p -> p.topicId().equals(topicBId)),
-                    "frontier must have advanced on SOURCE_B");
         }
     }
 

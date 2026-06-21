@@ -47,7 +47,6 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
     private final String frontierStoreName;
     private final String bufferStoreName;
     private final String positionIndexStoreName;
-    private final CausalFrontierListener frontierListener;
     private final Map<String, Uuid> topicUuids;
 
     // All mutable state below is confined to the single Kafka Streams thread that owns this task.
@@ -72,7 +71,6 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
                      String frontierStoreName,
                      String bufferStoreName,
                      String positionIndexStoreName,
-                     CausalFrontierListener frontierListener,
                      Map<String, Uuid> topicUuids) {
         this.delegate = delegate;
         this.limit = limit;
@@ -80,7 +78,6 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
         this.frontierStoreName = frontierStoreName;
         this.bufferStoreName = bufferStoreName;
         this.positionIndexStoreName = positionIndexStoreName;
-        this.frontierListener = frontierListener;
         this.topicUuids = topicUuids;
     }
 
@@ -103,13 +100,9 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
             log.debug("Processor initialized [task: {}] — frontier empty (fresh start)", context.taskId());
         }
 
-        // Publish the restored frontier so an observer has a correct view before the first record.
-        frontierListener.onFrontierAdvanced(initialFrontier);
-
         ParsleyEngine.FrontierCallback listener = frontier -> {
             frontierStore.put(ParsleyAttributes.FRONTIER_KEY, frontier.toBytes());
             snapshots.add(frontier);
-            frontierListener.onFrontierAdvanced(frontier);
         };
 
         ParsleyBufferStore<KIn, VIn> buffer = new RocksBufferStore<>(bufferStore, serializer);

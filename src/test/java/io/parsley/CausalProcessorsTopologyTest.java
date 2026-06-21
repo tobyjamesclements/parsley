@@ -550,44 +550,6 @@ class CausalProcessorsTopologyTest {
     }
 
     /**
-     * The {@link CausalFrontierListener} is invoked once at startup with the restored frontier
-     * (empty on a cold start), and once before each subsequent forward.
-     *
-     * Asserts that the listener receives the restored frontier at init, followed by one
-     * snapshot per admitted record in admission order.
-     */
-    @Test
-    void frontierListenerPublishesRestoredThenAdvancingFrontiers() {
-        List<CausalFrontier> snapshots = new ArrayList<>();
-        CausalFrontierListener listener = snapshots::add;
-        Topology topology = topology(
-                CausalProcessors.builder(upperCaser(), CausalBufferLimit.ofSize(100))
-                        .serdesByTopic(t -> Serdes.String(), t -> Serdes.String()).storeName("t1").frontierListener(listener)
-                        .addCausalTopic(new CausalTopic("t1", T1_ID)).build(),
-                List.of("t1"));
-
-        try (TopologyTestDriver driver = new TopologyTestDriver(topology, config(null))) {
-            TestInputTopic<String, String> t1 =
-                    driver.createInputTopic("t1", new StringSerializer(), new StringSerializer());
-
-            // The processor publishes its restored frontier at init — empty on a cold start — so an
-            // observer's view is correct before the first record is admitted.
-            assertEquals(List.of(CausalFrontier.empty()), snapshots,
-                    "the restored frontier must be published once at startup");
-
-            t1.pipeInput(new TestRecord<>("k", "a", depsHeader(CausalDependencies.empty())));
-            t1.pipeInput(new TestRecord<>("k", "b", depsHeader(CausalDependencies.empty())));
-
-            assertEquals(
-                    List.of(CausalFrontier.empty(),
-                            CausalFrontier.empty().observe(new CausalPosition(T1_ID, 0, 0)),
-                            CausalFrontier.empty().observe(new CausalPosition(T1_ID, 0, 1))),
-                    snapshots,
-                    "every frontier advance must be published in admission order");
-        }
-    }
-
-    /**
      * The automatically stamped dependency clock on output records reflects only the
      * per-task frontier, whose width is bounded by the number of source topics in the
      * subtopology — not by the number of records processed.

@@ -27,7 +27,6 @@ final class ParsleyProcessorSupplier<KIn, VIn, KOut, VOut>
     private final String frontierStoreName;
     private final String bufferStoreName;
     private final String positionIndexStoreName;
-    private final CausalFrontierListener frontierListener;
     private final Map<String, Uuid> topicUuids;
 
     ParsleyProcessorSupplier(ProcessorSupplier<KIn, VIn, KOut, VOut> userSupplier,
@@ -37,7 +36,6 @@ final class ParsleyProcessorSupplier<KIn, VIn, KOut, VOut>
                                       String frontierStoreName,
                                       String bufferStoreName,
                                       String positionIndexStoreName,
-                                      CausalFrontierListener frontierListener,
                                       Map<String, Uuid> topicUuids) {
         this.userSupplier = userSupplier;
         this.limit = limit;
@@ -46,7 +44,6 @@ final class ParsleyProcessorSupplier<KIn, VIn, KOut, VOut>
         this.frontierStoreName = frontierStoreName;
         this.bufferStoreName = bufferStoreName;
         this.positionIndexStoreName = positionIndexStoreName;
-        this.frontierListener = frontierListener;
         this.topicUuids = topicUuids;
     }
 
@@ -55,7 +52,7 @@ final class ParsleyProcessorSupplier<KIn, VIn, KOut, VOut>
         return new ParsleyProcessor<>(
                 userSupplier.get(), limit,
                 new ParsleySerializer<>(new ParsleyResolver<>(keySerdeByTopic, valueSerdeByTopic)),
-                frontierStoreName, bufferStoreName, positionIndexStoreName, frontierListener, topicUuids);
+                frontierStoreName, bufferStoreName, positionIndexStoreName, topicUuids);
     }
 
     @Override

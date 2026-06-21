@@ -70,7 +70,6 @@ public final class CausalProcessors {
         private Function<String, Serde<KIn>> keySerdeByTopic;
         private Function<String, Serde<VIn>> valueSerdeByTopic;
         private String storeName = "parsley";
-        private CausalFrontierListener frontierListener = frontier -> {};
         private final Map<String, Uuid> topicUuids = new HashMap<>();
 
         private Builder(ProcessorSupplier<KIn, VIn, KOut, VOut> userSupplier, CausalBufferLimit limit) {
@@ -123,19 +122,6 @@ public final class CausalProcessors {
         }
 
         /**
-         * Sets a callback invoked with the new frontier after every advance, and once with the
-         * restored frontier at startup (default: ignore). Must be thread-safe — see
-         * {@link CausalFrontierListener}.
-         *
-         * @param frontierListener the frontier listener
-         * @return this builder
-         */
-        public Builder<KIn, VIn, KOut, VOut> frontierListener(CausalFrontierListener frontierListener) {
-            this.frontierListener = frontierListener;
-            return this;
-        }
-
-        /**
          * Registers the stable causal identity for one input topic. Used as the stable partition
          * identity so that topic deletion and recreation produce different identities. Required for
          * every topic this processor will see; {@link #build()} requires at least one registration,
@@ -182,7 +168,7 @@ public final class CausalProcessors {
             return new ParsleyProcessorSupplier<>(
                     userSupplier, limit, keySerdeByTopic, valueSerdeByTopic,
                     storeName + "-frontier", storeName + "-buffer", storeName + "-position-index",
-                    frontierListener, Map.copyOf(topicUuids));
+                    Map.copyOf(topicUuids));
         }
     }
 }

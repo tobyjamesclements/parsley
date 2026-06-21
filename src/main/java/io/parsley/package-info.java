@@ -22,13 +22,11 @@
  *       (what the consumer must have observed before the record may be delivered); test readiness
  *       with {@link io.parsley.CausalDependencies#isSatisfiedBy isSatisfiedBy}. Its serialised size
  *       grows with the number of relevant topic-partitions and counts against Kafka's
- *       {@code message.max.bytes}, so prefer {@link io.parsley.CausalDependencies#fromRecord
- *       fromRecord} over a wide {@code frontier().toDependencies()} when propagating across
+ *       {@code message.max.bytes}; read a consumed record's dependencies with
+ *       {@link io.parsley.CausalDependencies#fromRecord fromRecord} when propagating across
  *       services</li>
  *   <li>{@link io.parsley.CausalBufferLimit} &mdash; how long to wait for a record's dependencies
  *       before forwarding it anyway: {@code ofDuration}, {@code ofSize}, or {@code first}</li>
- *   <li>{@link io.parsley.CausalFrontierListener} &mdash; frontier-advance callback, the public way to
- *       observe causal progress out of a {@link io.parsley.CausalProcessorSupplier}</li>
  * </ul>
  */
 package io.parsley;

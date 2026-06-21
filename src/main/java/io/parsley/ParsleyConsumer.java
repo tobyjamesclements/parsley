@@ -33,7 +33,6 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.ExecutionException;
-import java.util.concurrent.atomic.AtomicReference;
 
 import static java.nio.charset.StandardCharsets.UTF_8;
 
@@ -68,7 +67,6 @@ final class ParsleyConsumer<K, V> implements CausalConsumer<K, V> {
     private final KafkaConsumer<byte[], byte[]> outboxConsumer;
     private final Serde<K> keySerde;
     private final Serde<V> valueSerde;
-    private final AtomicReference<CausalFrontier> frontierRef = new AtomicReference<>(CausalFrontier.empty());
 
     ParsleyConsumer(
             Collection<String> topics,
@@ -105,7 +103,7 @@ final class ParsleyConsumer<K, V> implements CausalConsumer<K, V> {
 
         Serde<byte[]> bytes = Serdes.ByteArray();
         ProcessorSupplier<byte[], byte[], byte[], byte[]> outboxProcessor = ParsleyOutboxProcessor.supplier(
-                limit, storeName, this::onFrontierAdvanced, topicUuids);
+                limit, storeName, topicUuids);
 
         StreamsBuilder builder = new StreamsBuilder();
         builder.stream(topics, Consumed.with(bytes, bytes))
@@ -127,11 +125,6 @@ final class ParsleyConsumer<K, V> implements CausalConsumer<K, V> {
         log.info("ParsleyConsumer started [applicationId: {}, topics: {}, outbox: {}]",
                 applicationId, topics, outboxTopic);
         log.debug("Topic UUIDs: {}", topicUuids);
-    }
-
-    // Merge rather than overwrite so the frontier is correct across tasks/partitions/threads.
-    private void onFrontierAdvanced(CausalFrontier frontier) {
-        frontierRef.updateAndGet(current -> current.merge(frontier));
     }
 
     @Override
@@ -166,10 +159,6 @@ final class ParsleyConsumer<K, V> implements CausalConsumer<K, V> {
                 -1, -1, key, value, headers, Optional.empty());
     }
 
-    @Override
-    public CausalFrontier frontier() {
-        return frontierRef.get();
-    }
 
     @Override
     public void close() {

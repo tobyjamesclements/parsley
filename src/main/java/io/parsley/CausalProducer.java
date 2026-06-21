@@ -14,17 +14,16 @@ import java.util.concurrent.Future;
  * header to determine whether a record's causal dependencies have been satisfied.
  *
  * <h2>Usage</h2>
- * Prefer stamping the dependencies of the message that triggered this send — bounded by that
- * hop's fan-in and transitively carrying its own dependencies:
+ * Stamp the dependencies of the message that triggered this send — bounded by that hop's fan-in and
+ * transitively carrying its own dependencies:
  * <pre>{@code
  * CausalProducer<String, String> producer = CausalProducers.<String, String>builder(producerConfig).build();
- * CausalDependencies context = CausalDependencies.fromRecord(trigger).orElseGet(consumer::frontier);
+ * CausalDependencies context = CausalDependencies.fromRecord(trigger).orElse(CausalDependencies.empty());
  * producer.send(new ProducerRecord<>("orders", key, value), context);
  * }</pre>
- * Pass {@code consumer.frontier()} only when the produced record genuinely depends on everything the
- * consumer has read (e.g. an aggregator): the serialised size is proportional to the number of
- * relevant topic-partitions and counts against Kafka's record-size limit ({@code message.max.bytes}),
- * so a wide-fan-in frontier can grow large — see {@link CausalDependencies} for the size envelope.
+ * The serialised size is proportional to the number of relevant topic-partitions and counts against
+ * Kafka's record-size limit ({@code message.max.bytes}) — see {@link CausalDependencies} for the size
+ * envelope.
  *
  * <h2>Thread safety</h2>
  * A {@code CausalProducer} is thread-safe and a single instance can be shared across threads, like
