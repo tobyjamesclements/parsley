@@ -73,11 +73,11 @@ final class ParsleyProcessorContext<KOut, VOut> implements ProcessorContext<KOut
     private <K extends KOut, V extends VOut> Record<K, V> stamp(Record<K, V> record) {
         Headers stamped = new RecordHeaders();
         for (Header header : record.headers()) {
-            if (!header.key().equals(ParsleyAttributes.CAUSAL_DEPENDENCIES)) {
+            if (!header.key().equals(ParsleyHeader.CAUSAL_DEPENDENCIES)) {
                 stamped.add(header);
             }
         }
-        stamped.add(new RecordHeader(ParsleyAttributes.CAUSAL_DEPENDENCIES, frontier.get().toBytes()));
+        stamped.add(new RecordHeader(ParsleyHeader.CAUSAL_DEPENDENCIES, frontier.get().toBytes()));
         return record.withHeaders(stamped);
     }
 

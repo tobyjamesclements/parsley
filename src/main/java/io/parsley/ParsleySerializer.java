@@ -1,5 +1,7 @@
 package io.parsley;
 
+import org.apache.kafka.common.Uuid;
+
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.DataInputStream;
@@ -10,16 +12,17 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * Serialises a held {@link ParsleyRecord} to and from the byte value stored in the durable buffer
+ * Serialises a held {@link ParsleyMessage} to and from the byte value stored in the durable buffer
  * store (keyed by insertion sequence), so held records survive a restart.
  *
  * <p>Key and value bytes are produced/consumed with the serdes a {@link ParsleyResolver} resolves
- * from the record's own source topic (read from the {@link ParsleyAttributes#SRC_TOPIC} header).
- * Headers are written in full — they carry the source coordinate and dependencies — so the
- * serialised form is self-describing and no separate coordinate fields are needed.
+ * from the message's own source topic. The source coordinate and dependency clock are written as
+ * typed fields, not headers — only the user's headers are carried.
  *
- * <p>Format (v2): {@code [version:1][timestamp:8][header-count:4][headers...][key-len:4][key-bytes][value-len:4][value-bytes]}.
- * Each header: {@code [key-len:2][key-bytes][value-len:4][value-bytes|-1 for null]}.
+ * <p>Format (v3):
+ * {@code [version:1][timestamp:8][topic:str][topicId:16][partition:4][offset:8][deps:nullable]
+ * [header-count:4][user-headers...][key:nullable][value:nullable]}. Each header:
+ * {@code [key-len:2][key-bytes][value-len:4][value-bytes|-1 for null]}.
  *
  * @param <K> the record key type
  * @param <V> the record value type
@@ -27,7 +30,7 @@ import java.util.List;
 final class ParsleySerializer<K, V> {
 
     /** Leading byte of the buffer-store value format; lets the format evolve compatibly. */
-    private static final byte FORMAT_VERSION = 2;
+    private static final byte FORMAT_VERSION = 3;
 
     private final ParsleyResolver<K, V> resolver;
 
@@ -36,19 +39,24 @@ final class ParsleySerializer<K, V> {
     }
 
     /**
-     * Serialises a held record to bytes.
+     * Serialises a held message to bytes.
      */
-    byte[] serialize(ParsleyRecord<K, V> record) {
-        String topic = record.sourceTopic();
-        byte[] keyBytes = resolver.keySerde(topic).serializer().serialize(topic, record.key());
-        byte[] valueBytes = resolver.valueSerde(topic).serializer().serialize(topic, record.value());
+    byte[] serialize(ParsleyMessage<K, V> message) {
+        String topic = message.topic();
+        byte[] keyBytes = resolver.keySerde(topic).serializer().serialize(topic, message.key());
+        byte[] valueBytes = resolver.valueSerde(topic).serializer().serialize(topic, message.value());
 
         try (ByteArrayOutputStream baos = new ByteArrayOutputStream();
              DataOutputStream out = new DataOutputStream(baos)) {
             out.writeByte(FORMAT_VERSION);
-            out.writeLong(record.timestamp());
-            out.writeInt(record.headers().size());
-            for (ParsleyHeader header : record.headers()) {
+            out.writeLong(message.timestamp());
+            writeString(out, topic);
+            out.write(ParsleyHeader.uuidToBytes(message.topicId()));
+            out.writeInt(message.partition());
+            out.writeLong(message.offset());
+            writeNullable(out, message.dependencies().toBytes());
+            out.writeInt(message.headers().size());
+            for (ParsleyHeader header : message.headers()) {
                 writeString(out, header.key());
                 writeNullable(out, header.value());
             }
@@ -61,9 +69,9 @@ final class ParsleySerializer<K, V> {
     }
 
     /**
-     * Reconstructs a held record from {@link #serialize bytes}.
+     * Reconstructs a held message from {@link #serialize bytes}.
      */
-    ParsleyRecord<K, V> deserialize(byte[] bytes) {
+    ParsleyMessage<K, V> deserialize(byte[] bytes) {
         try (DataInputStream in = new DataInputStream(new ByteArrayInputStream(bytes))) {
             byte version = in.readByte();
             if (version != FORMAT_VERSION) {
@@ -71,6 +79,13 @@ final class ParsleySerializer<K, V> {
                         "unsupported buffered-record format version: " + version + " (expected " + FORMAT_VERSION + ")");
             }
             long timestamp = in.readLong();
+            String topic = readString(in);
+            byte[] topicIdBytes = new byte[16];
+            in.readFully(topicIdBytes);
+            Uuid topicId = ParsleyHeader.uuidFromBytes(topicIdBytes);
+            int partition = in.readInt();
+            long offset = in.readLong();
+            ParsleyClock dependencies = ParsleyClock.fromBytes(readNullable(in));
             int headerCount = in.readInt();
             List<ParsleyHeader> headers = new ArrayList<>(headerCount);
             for (int i = 0; i < headerCount; i++) {
@@ -78,7 +93,6 @@ final class ParsleySerializer<K, V> {
                 byte[] value = readNullable(in);
                 headers.add(new ParsleyHeader(key, value));
             }
-            String topic = findHeaderString(headers, ParsleyAttributes.SRC_TOPIC);
             byte[] keyBytes = readNullable(in);
             byte[] valueBytes = readNullable(in);
 
@@ -87,20 +101,11 @@ final class ParsleySerializer<K, V> {
             V value = valueBytes == null ? null
                     : resolver.valueSerde(topic).deserializer().deserialize(topic, valueBytes);
 
-            return new ParsleyRecord<>(key, value, timestamp, headers);
+            return new ParsleyMessage<>(topic, topicId, partition, offset, timestamp,
+                    key, value, headers, dependencies);
         } catch (IOException e) {
             throw new IllegalStateException("Buffered record deserialisation failed", e);
         }
-    }
-
-    private static String findHeaderString(List<ParsleyHeader> headers, String key) {
-        for (int i = headers.size() - 1; i >= 0; i--) {
-            if (key.equals(headers.get(i).key())) {
-                byte[] v = headers.get(i).value();
-                return v == null ? "" : new String(v, StandardCharsets.UTF_8);
-            }
-        }
-        return "";
     }
 
     private static void writeString(DataOutputStream out, String value) throws IOException {

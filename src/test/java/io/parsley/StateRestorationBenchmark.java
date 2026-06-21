@@ -105,7 +105,7 @@ public class StateRestorationBenchmark {
         for (int i = 0; i < 4; i++) {
             frontier = frontier.observe(Uuid.randomUuid(), 0, (long) i);
         }
-        frontierKV.put(ParsleyAttributes.FRONTIER_KEY, frontier.toBytes());
+        frontierKV.put(ParsleyStores.FRONTIER_KEY, frontier.toBytes());
 
         // Pre-populate the buffer store with bufferSize records, each with an unsatisfied
         // dependency, as if a crash occurred with that many held records.
@@ -132,7 +132,7 @@ public class StateRestorationBenchmark {
      */
     @Benchmark
     public ParsleyClock frontierRestore() {
-        return ParsleyClock.fromBytes(frontierKV.get(ParsleyAttributes.FRONTIER_KEY));
+        return ParsleyClock.fromBytes(frontierKV.get(ParsleyStores.FRONTIER_KEY));
     }
 
     /**
@@ -150,14 +150,8 @@ public class StateRestorationBenchmark {
                 buf, idx, ParsleyMetrics.NOOP);
     }
 
-    private static ParsleyRecord<String, String> record(String srcTopic, int partition, long offset,
+    private static ParsleyMessage<String, String> record(String srcTopic, int partition, long offset,
                                                          ParsleyClock deps) {
-        List<ParsleyHeader> headers = new ArrayList<>();
-        headers.add(new ParsleyHeader(ParsleyAttributes.CAUSAL_DEPENDENCIES, deps.toBytes()));
-        headers.add(new ParsleyHeader(ParsleyAttributes.SRC_TOPIC, srcTopic.getBytes(UTF_8)));
-        headers.add(new ParsleyHeader(ParsleyAttributes.SRC_TOPIC_ID, ParsleyRecord.uuidToBytes(Uuid.randomUuid())));
-        headers.add(new ParsleyHeader(ParsleyAttributes.SRC_PARTITION, ParsleyRecord.intToBytes(partition)));
-        headers.add(new ParsleyHeader(ParsleyAttributes.SRC_OFFSET, ParsleyRecord.longToBytes(offset)));
-        return new ParsleyRecord<>("k", "v", 0L, headers);
+        return new ParsleyMessage<>(srcTopic, Uuid.randomUuid(), partition, offset, 0L, "k", "v", List.of(), deps);
     }
 }

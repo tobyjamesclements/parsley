@@ -47,7 +47,7 @@ final class RocksBufferStore<K, V> implements ParsleyBufferStore<K, V> {
     }
 
     @Override
-    public long add(ParsleyRecord<K, V> record, long bufferedAt) {
+    public long add(ParsleyMessage<K, V> record, long bufferedAt) {
         long seq = nextSequence++;
         store.put(seq, pack(bufferedAt, serializer.serialize(record)));
         size++;
@@ -78,8 +78,8 @@ final class RocksBufferStore<K, V> implements ParsleyBufferStore<K, V> {
 
     private Entry<K, V> toEntry(long sequence, byte[] value) {
         long bufferedAt = ByteBuffer.wrap(value, 0, 8).getLong();
-        ParsleyRecord<K, V> record = serializer.deserialize(Arrays.copyOfRange(value, 8, value.length));
-        return new Entry<>(sequence, bufferedAt, record, ParsleyClock.fromBytes(record.encodedDependencies()));
+        ParsleyMessage<K, V> record = serializer.deserialize(Arrays.copyOfRange(value, 8, value.length));
+        return new Entry<>(sequence, bufferedAt, record, record.dependencies());
     }
 
     private static byte[] pack(long bufferedAt, byte[] serializedRecord) {

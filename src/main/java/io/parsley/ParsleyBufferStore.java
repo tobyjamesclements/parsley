@@ -21,7 +21,7 @@ interface ParsleyBufferStore<K, V> {
      * A buffered entry: its insertion sequence (an opaque handle for {@link #remove(long)}), the
      * wall-clock time it was admitted to the buffer, the record, and its decoded dependencies.
      */
-    record Entry<K, V>(long sequence, long bufferedAt, ParsleyRecord<K, V> record, ParsleyClock dependencies) {}
+    record Entry<K, V>(long sequence, long bufferedAt, ParsleyMessage<K, V> record, ParsleyClock dependencies) {}
 
     /**
      * Buffers a record under the next insertion sequence and returns that sequence. The sequence
@@ -31,7 +31,7 @@ interface ParsleyBufferStore<K, V> {
      * @param bufferedAt the wall-clock time (epoch millis) at which the record is admitted
      * @return the insertion sequence assigned to the buffered record
      */
-    long add(ParsleyRecord<K, V> record, long bufferedAt);
+    long add(ParsleyMessage<K, V> record, long bufferedAt);
 
     /**
      * Returns the buffered entry for the given insertion sequence, or {@code null} if no such

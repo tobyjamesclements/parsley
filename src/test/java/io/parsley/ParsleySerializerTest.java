@@ -11,7 +11,6 @@ import org.junit.jupiter.api.Test;
 import java.util.ArrayList;
 import java.util.List;
 
-import static java.nio.charset.StandardCharsets.UTF_8;
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
@@ -39,24 +38,22 @@ class ParsleySerializerTest {
         List<ParsleyHeader> userHeaders = List.of(
                 new ParsleyHeader("h1", "a".getBytes()),
                 new ParsleyHeader("h2", null));
-        ParsleyRecord<String, String> record = buildRecord("key", "value", 123L, T1, 7L, deps, userHeaders);
+        ParsleyMessage<String, String> record = buildRecord("key", "value", 123L, T1, 7L, deps, userHeaders);
 
-        ParsleyRecord<String, String> out = serializer.deserialize(serializer.serialize(record));
+        ParsleyMessage<String, String> out = serializer.deserialize(serializer.serialize(record));
 
         assertEquals("key", out.key(), "key must round-trip");
         assertEquals("value", out.value(), "value must round-trip");
         assertEquals(123L, out.timestamp(), "timestamp must round-trip");
-        assertEquals(T1, out.sourcePartition(), "source partition (including non-zero partition number) must round-trip");
-        assertEquals(7L, out.sourceOffset(), "source offset must round-trip");
-        assertArrayEquals(deps.toBytes(), out.encodedDependencies(), "dependency bytes must round-trip");
-        // 2 user headers + CAUSAL_DEPENDENCIES + SRC_TOPIC + SRC_TOPIC_ID + SRC_PARTITION + SRC_OFFSET = 7
-        assertEquals(7, out.headers().size(), "all seven headers must be preserved");
+        assertEquals(T1, new TopicPartition(out.topic(), out.partition()),
+                "source topic and partition (including non-zero partition number) must round-trip");
+        assertEquals(7L, out.offset(), "source offset must round-trip");
+        assertEquals(deps, out.dependencies(), "the dependency clock must round-trip");
+        assertEquals(2, out.headers().size(), "the user headers must be preserved (no internal headers)");
         assertEquals("h1", out.headers().get(0).key(), "first user header key must round-trip");
         assertArrayEquals("a".getBytes(), out.headers().get(0).value(), "first user header value must round-trip");
         assertEquals("h2", out.headers().get(1).key(), "second user header key must round-trip");
         assertNull(out.headers().get(1).value(), "null user header value must round-trip as null");
-        assertEquals(deps, ParsleyClock.fromBytes(out.encodedDependencies()),
-                "decoded dependencies must equal the original");
     }
 
     /**
@@ -67,13 +64,13 @@ class ParsleySerializerTest {
      */
     @Test
     void roundTripsNullKeyAndValue() {
-        ParsleyRecord<String, String> record = buildRecord(null, null, 0L, T1, 0L, null, List.of());
+        ParsleyMessage<String, String> record = buildRecord(null, null, 0L, T1, 0L, null, List.of());
 
-        ParsleyRecord<String, String> out = serializer.deserialize(serializer.serialize(record));
+        ParsleyMessage<String, String> out = serializer.deserialize(serializer.serialize(record));
 
         assertNull(out.key(), "null key must round-trip as null");
         assertNull(out.value(), "null value must round-trip as null");
-        assertNull(out.encodedDependencies(), "null dependency field must round-trip as null");
+        assertEquals(ParsleyClock.empty(), out.dependencies(), "empty dependencies must round-trip as empty");
     }
 
     /**
@@ -92,7 +89,7 @@ class ParsleySerializerTest {
         SpySerde valueSpy = new SpySerde();
         ParsleySerializer<String, String> spying =
                 new ParsleySerializer<>(new ParsleyResolver<>(topic -> keySpy, topic -> valueSpy));
-        ParsleyRecord<String, String> record =
+        ParsleyMessage<String, String> record =
                 buildRecord("k", "v", 0L, T1, 1L, ParsleyClock.empty(), List.of());
 
         spying.deserialize(spying.serialize(record));
@@ -118,19 +115,12 @@ class ParsleySerializerTest {
 
     // --- helpers --------------------------------------------------------------------------------
 
-    private static ParsleyRecord<String, String> buildRecord(String key, String value, long timestamp,
+    private static ParsleyMessage<String, String> buildRecord(String key, String value, long timestamp,
                                                               TopicPartition tp, long offset,
                                                               ParsleyClock deps,
                                                               List<ParsleyHeader> userHeaders) {
-        List<ParsleyHeader> headers = new ArrayList<>(userHeaders);
-        if (deps != null) {
-            headers.add(new ParsleyHeader(ParsleyAttributes.CAUSAL_DEPENDENCIES, deps.toBytes()));
-        }
-        headers.add(new ParsleyHeader(ParsleyAttributes.SRC_TOPIC, tp.topic().getBytes(UTF_8)));
-        headers.add(new ParsleyHeader(ParsleyAttributes.SRC_TOPIC_ID, ParsleyRecord.uuidToBytes(T1_ID)));
-        headers.add(new ParsleyHeader(ParsleyAttributes.SRC_PARTITION, ParsleyRecord.intToBytes(tp.partition())));
-        headers.add(new ParsleyHeader(ParsleyAttributes.SRC_OFFSET, ParsleyRecord.longToBytes(offset)));
-        return new ParsleyRecord<>(key, value, timestamp, headers);
+        return new ParsleyMessage<>(tp.topic(), T1_ID, tp.partition(), offset, timestamp,
+                key, value, userHeaders, deps == null ? ParsleyClock.empty() : deps);
     }
 
     /** A String serde that records the topic argument it was invoked with. */

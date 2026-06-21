@@ -123,7 +123,7 @@ public final class CausalDependencies {
      * @throws IllegalStateException if the header is present but malformed
      */
     public static Optional<CausalDependencies> fromHeaders(Headers headers) {
-        Header header = headers.lastHeader(ParsleyAttributes.CAUSAL_DEPENDENCIES);
+        Header header = headers.lastHeader(ParsleyHeader.CAUSAL_DEPENDENCIES);
         return header == null ? Optional.empty() : Optional.of(fromBytes(header.value()));
     }
 

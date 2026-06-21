@@ -69,14 +69,14 @@ final class ParsleyOutboxProcessor implements Processor<byte[], byte[], byte[], 
         KeyValueStore<byte[], byte[]> positionIndexStore = context.getStateStore(positionIndexStoreName);
 
         ParsleyClock initialFrontier = ParsleyClock.empty();
-        byte[] stored = frontierStore.get(ParsleyAttributes.FRONTIER_KEY);
+        byte[] stored = frontierStore.get(ParsleyStores.FRONTIER_KEY);
         if (stored != null) {
             initialFrontier = ParsleyClock.fromBytes(stored);
         }
         log.debug("Outbox processor initialized [task: {}] — frontier: {}", context.taskId(), initialFrontier);
 
         ParsleyEngine.FrontierCallback listener = frontier ->
-                frontierStore.put(ParsleyAttributes.FRONTIER_KEY, frontier.toBytes());
+                frontierStore.put(ParsleyStores.FRONTIER_KEY, frontier.toBytes());
 
         ParsleySerializer<byte[], byte[]> serializer =
                 new ParsleySerializer<>(new ParsleyResolver<>(t -> Serdes.ByteArray(), t -> Serdes.ByteArray()));
@@ -110,13 +110,16 @@ final class ParsleyOutboxProcessor implements Processor<byte[], byte[], byte[], 
         wiredMetrics.close(context.metrics());
     }
 
-    private void forward(List<ParsleyRecord<byte[], byte[]>> admitted) {
-        for (ParsleyRecord<byte[], byte[]> record : admitted) {
-            context.forward(new Record<>(record.key(), record.value(), record.timestamp(), record.toHeaders()));
+    private void forward(List<ParsleyMessage<byte[], byte[]>> admitted) {
+        for (ParsleyMessage<byte[], byte[]> message : admitted) {
+            // Re-encode the source coordinate as _parsley_src_* headers so it survives the outbox
+            // topic; ParsleyConsumer.poll reads them back and strips them before delivery.
+            context.forward(new Record<>(message.key(), message.value(), message.timestamp(),
+                    message.toForwardHeaders()));
         }
     }
 
-    private ParsleyRecord<byte[], byte[]> ingest(Record<byte[], byte[]> record) {
+    private ParsleyMessage<byte[], byte[]> ingest(Record<byte[], byte[]> record) {
         Optional<RecordMetadata> meta = context.recordMetadata();
         String topic = meta.map(RecordMetadata::topic).orElse("");
         TopicPartition source = new TopicPartition(topic, meta.map(RecordMetadata::partition).orElse(0));
@@ -126,7 +129,7 @@ final class ParsleyOutboxProcessor implements Processor<byte[], byte[], byte[], 
                     "no CausalTopic registered for topic '" + topic
                             + "'; call addCausalTopic(...) on the CausalConsumers builder for every subscribed topic");
         }
-        return ParsleyRecord.of(record, source, meta.map(RecordMetadata::offset).orElse(0L), topicId);
+        return ParsleyMessage.from(record, source, meta.map(RecordMetadata::offset).orElse(0L), topicId);
     }
 
     /**

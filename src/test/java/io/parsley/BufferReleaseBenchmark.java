@@ -91,15 +91,9 @@ public class BufferReleaseBenchmark {
         return TOPIC_IDS.computeIfAbsent(topic, t -> Uuid.randomUuid());
     }
 
-    static ParsleyRecord<String, String> syntheticRecord(String srcTopic, int partition, long offset,
+    static ParsleyMessage<String, String> syntheticRecord(String srcTopic, int partition, long offset,
                                                           ParsleyClock deps) {
-        List<ParsleyHeader> headers = new ArrayList<>();
-        headers.add(new ParsleyHeader(ParsleyAttributes.CAUSAL_DEPENDENCIES, deps.toBytes()));
-        headers.add(new ParsleyHeader(ParsleyAttributes.SRC_TOPIC, srcTopic.getBytes(UTF_8)));
-        headers.add(new ParsleyHeader(ParsleyAttributes.SRC_TOPIC_ID, ParsleyRecord.uuidToBytes(topicId(srcTopic))));
-        headers.add(new ParsleyHeader(ParsleyAttributes.SRC_PARTITION, ParsleyRecord.intToBytes(partition)));
-        headers.add(new ParsleyHeader(ParsleyAttributes.SRC_OFFSET, ParsleyRecord.longToBytes(offset)));
-        return new ParsleyRecord<>("k", "v", 0L, headers);
+        return new ParsleyMessage<>(srcTopic, topicId(srcTopic), partition, offset, 0L, "k", "v", List.of(), deps);
     }
 
     static ParsleyEngine<String, String> freshEngine(KeyValueStore<Long, byte[]> bufferKV,
@@ -166,7 +160,7 @@ public class BufferReleaseBenchmark {
         KeyValueStore<byte[], byte[]> waitKV;
         ParsleySerializer<String, String> serializer;
         ParsleyEngine<String, String> engine;
-        ParsleyRecord<String, String> trigger;
+        ParsleyMessage<String, String> trigger;
 
         @Setup(Level.Trial)
         public void setUpTrial(BenchmarkInfra infra) throws IOException {
@@ -213,7 +207,7 @@ public class BufferReleaseBenchmark {
         KeyValueStore<byte[], byte[]> waitKV;
         ParsleySerializer<String, String> serializer;
         ParsleyEngine<String, String> engine;
-        ParsleyRecord<String, String> trigger;
+        ParsleyMessage<String, String> trigger;
 
         @Setup(Level.Trial)
         public void setUpTrial(BenchmarkInfra infra) throws IOException {
@@ -261,7 +255,7 @@ public class BufferReleaseBenchmark {
         KeyValueStore<byte[], byte[]> waitKV;
         ParsleySerializer<String, String> serializer;
         ParsleyEngine<String, String> engine;
-        ParsleyRecord<String, String> trigger;
+        ParsleyMessage<String, String> trigger;
 
         @Setup(Level.Trial)
         public void setUpTrial(BenchmarkInfra infra) throws IOException {
@@ -310,7 +304,7 @@ public class BufferReleaseBenchmark {
      * One record is released per invocation; records 1..n-1 remain buffered.
      */
     @Benchmark
-    public List<ParsleyRecord<String, String>> bufferSize(SizeSetup s) {
+    public List<ParsleyMessage<String, String>> bufferSize(SizeSetup s) {
         return s.engine.onRecord(s.trigger);
     }
 
@@ -319,7 +313,7 @@ public class BufferReleaseBenchmark {
      * k records are released per invocation from a fixed-size (n=128) buffer.
      */
     @Benchmark
-    public List<ParsleyRecord<String, String>> positionalOccupancy(OccupancySetup s) {
+    public List<ParsleyMessage<String, String>> positionalOccupancy(OccupancySetup s) {
         return s.engine.onRecord(s.trigger);
     }
 
@@ -328,7 +322,7 @@ public class BufferReleaseBenchmark {
      * r records are released in a chain per invocation from a fixed-size (n=128) buffer.
      */
     @Benchmark
-    public List<ParsleyRecord<String, String>> cascadeDepth(CascadeSetup s) {
+    public List<ParsleyMessage<String, String>> cascadeDepth(CascadeSetup s) {
         return s.engine.onRecord(s.trigger);
     }
 }

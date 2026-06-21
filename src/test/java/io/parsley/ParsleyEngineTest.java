@@ -9,7 +9,6 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicLong;
 
-import static java.nio.charset.StandardCharsets.UTF_8;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -20,7 +19,7 @@ class ParsleyEngineTest {
     private static final Uuid T1_ID = Uuid.randomUuid();
     private static final Uuid T2_ID = Uuid.randomUuid();
 
-    private final List<ParsleyRecord<String, String>> forwarded = new ArrayList<>();
+    private final List<ParsleyMessage<String, String>> forwarded = new ArrayList<>();
     private final List<ParsleyClock> frontiers = new ArrayList<>();
     private final MockBufferStore<String, String> buffer = new MockBufferStore<>();
 
@@ -70,8 +69,8 @@ class ParsleyEngineTest {
         processRecord(engine, incomingRecord(T1, 3, ParsleyClock.empty()));
 
         assertEquals(2, forwarded.size(), "both records must be forwarded after the dependency arrives");
-        assertEquals(T1, forwarded.get(0).sourcePartition(), "satisfying record must be forwarded first");
-        assertEquals(T2, forwarded.get(1).sourcePartition(), "buffered record must be released second");
+        assertEquals(T1, tp(forwarded.get(0)), "satisfying record must be forwarded first");
+        assertEquals(T2, tp(forwarded.get(1)), "buffered record must be released second");
         assertEquals(
                 ParsleyClock.empty()
                         .observe(T1_ID, 0, 3)
@@ -135,8 +134,8 @@ class ParsleyEngineTest {
         processRecord(engine, incomingRecord(T1, 3, ParsleyClock.empty()));
 
         assertEquals(2, forwarded.size(), "satisfying record and pre-buffered record must both be forwarded");
-        assertEquals(T1, forwarded.get(0).sourcePartition(), "satisfying record must be forwarded first");
-        assertEquals(T2, forwarded.get(1).sourcePartition(), "pre-buffered record must be released second");
+        assertEquals(T1, tp(forwarded.get(0)), "satisfying record must be forwarded first");
+        assertEquals(T2, tp(forwarded.get(1)), "pre-buffered record must be released second");
     }
 
     /**
@@ -167,37 +166,22 @@ class ParsleyEngineTest {
     }
 
     /**
-     * A record with no causal-dependencies header has empty dependencies, which are trivially
-     * satisfied by any frontier — it is forwarded immediately, just like a record that
-     * explicitly claims no dependencies.
+     * A message with empty dependencies is trivially satisfied by any frontier — it is forwarded
+     * immediately and advances the frontier through its own source coordinate. (Absent and
+     * undecodable dependency headers are normalised to empty by {@link ParsleyMessage#from}, covered
+     * in {@link ParsleyMessageTest}.)
      *
-     * Asserts that the record is forwarded with the SATISFIED result and the frontier advances
-     * through the record's source coordinate.
+     * Asserts that the record is forwarded and the frontier advances through its source coordinate.
      */
     @Test
-    void headerMissingRecordIsForwardedAsTriviallySatisfied() {
+    void emptyDependenciesRecordIsForwardedAsTriviallySatisfied() {
         ParsleyEngine<String, String> engine = engineWith(CausalBufferLimit.ofSize(100));
 
-        processRecord(engine, incomingRecord(T1, 0, null));
+        processRecord(engine, incomingRecord(T1, 0, ParsleyClock.empty()));
 
-        assertEquals(1, forwarded.size(), "a missing-header record must still be forwarded");
+        assertEquals(1, forwarded.size(), "a trivially-satisfied record must be forwarded");
         assertEquals(ParsleyClock.empty().observe(T1_ID, 0, 0), engine.frontier(),
                 "frontier must advance through the forwarded record");
-    }
-
-    /**
-     * A record whose causal-dependencies header cannot be parsed is treated the same as one
-     * with empty dependencies — trivially satisfied — and forwarded immediately.
-     *
-     * Asserts that the record is forwarded with the SATISFIED result.
-     */
-    @Test
-    void garbledDependenciesRecordIsForwardedAsTriviallySatisfied() {
-        ParsleyEngine<String, String> engine = engineWith(CausalBufferLimit.ofSize(100));
-
-        processRecord(engine, garbledRecord(T1, 0));
-
-        assertEquals(1, forwarded.size(), "an unresolvable-dependencies record must still be forwarded");
     }
 
     /**
@@ -239,12 +223,12 @@ class ParsleyEngineTest {
         assertTrue(forwarded.isEmpty(), "no eviction while under the limit");
 
         processRecord(engine, incomingRecord(T2, 1, unmet)); // B: depth 2 → evict A
-        assertEquals(List.of(0L), forwarded.stream().map(ParsleyRecord::sourceOffset).toList(),
+        assertEquals(List.of(0L), forwarded.stream().map(ParsleyMessage::offset).toList(),
                 "the first overflow must evict only the oldest record (A)");
         assertEquals(1, buffer.size(), "buffer must hold exactly the size limit after eviction");
 
         processRecord(engine, incomingRecord(T2, 2, unmet)); // C: depth 2 → evict B
-        assertEquals(List.of(0L, 1L), forwarded.stream().map(ParsleyRecord::sourceOffset).toList(),
+        assertEquals(List.of(0L, 1L), forwarded.stream().map(ParsleyMessage::offset).toList(),
                 "the second overflow must evict only the next-oldest record (B)");
         assertEquals(1, buffer.size(), "buffer must never exceed the configured size limit");
     }
@@ -269,7 +253,7 @@ class ParsleyEngineTest {
         ParsleyEngine<String, String> engine = engineWith(CausalBufferLimit.ofSize(2));
         forwarded.addAll(engine.evictOverflow());
 
-        assertEquals(List.of(0L, 1L), forwarded.stream().map(ParsleyRecord::sourceOffset).toList(),
+        assertEquals(List.of(0L, 1L), forwarded.stream().map(ParsleyMessage::offset).toList(),
                 "the two oldest excess records must be evicted, oldest-first");
         assertEquals(1, buffer.size(), "the buffer must be trimmed down to exactly the new limit");
     }
@@ -285,7 +269,7 @@ class ParsleyEngineTest {
         buffer.add(incomingRecord(T2, 0, unmet), 0L);
 
         ParsleyEngine<String, String> engine = engineWith(CausalBufferLimit.ofSize(2));
-        List<ParsleyRecord<String, String>> result = engine.evictOverflow();
+        List<ParsleyMessage<String, String>> result = engine.evictOverflow();
 
         assertTrue(result.isEmpty(), "no eviction must occur while the buffer is within the limit");
         assertEquals(1, buffer.size(), "the buffer must be left untouched");
@@ -319,7 +303,7 @@ class ParsleyEngineTest {
                 ParsleyClock.empty().observe(T1_ID, 0, 99)));
         clock.set(150L);
 
-        List<ParsleyRecord<String, String>> forwardedOnEvict = engine.evictExpired();
+        List<ParsleyMessage<String, String>> forwardedOnEvict = engine.evictExpired();
 
         assertTrue(forwardedOnEvict.isEmpty(), "a record younger than the duration must not be evicted");
         assertEquals(1, buffer.size(), "the record must remain held in the buffer");
@@ -340,7 +324,7 @@ class ParsleyEngineTest {
                 ParsleyClock.empty().observe(T1_ID, 0, 99)));
         clock.set(250L);
 
-        List<ParsleyRecord<String, String>> evicted = engine.evictExpired();
+        List<ParsleyMessage<String, String>> evicted = engine.evictExpired();
 
         assertEquals(0, buffer.size(), "a record older than the duration must be evicted");
         assertEquals(1, evicted.size(), "the aged-out record must be forwarded, not dropped");
@@ -373,7 +357,7 @@ class ParsleyEngineTest {
 
         assertEquals(2, buffer.size(), "only the oldest record must be evicted; the two younger ones remain held");
         List<Long> remainingOffsets = buffer.entries().stream()
-                .map(e -> e.record().sourceOffset()).sorted().toList();
+                .map(e -> e.record().offset()).sorted().toList();
         assertEquals(List.of(1L, 2L), remainingOffsets, "the two younger records must still be held");
     }
 
@@ -497,8 +481,8 @@ class ParsleyEngineTest {
         // T1@5 arrives — satisfies the real dep; T2 drains.
         processRecord(engine, incomingRecord(T1, 5, ParsleyClock.empty()));
         assertEquals(2, forwarded.size(), "satisfying record and buffered record must both be forwarded");
-        assertEquals(T1, forwarded.get(0).sourcePartition(), "satisfying record must be forwarded first");
-        assertEquals(T2, forwarded.get(1).sourcePartition(), "buffered record must be released second");
+        assertEquals(T1, tp(forwarded.get(0)), "satisfying record must be forwarded first");
+        assertEquals(T2, tp(forwarded.get(1)), "buffered record must be released second");
     }
 
     /**
@@ -523,8 +507,8 @@ class ParsleyEngineTest {
         processRecord(engine, incomingRecord(T1, 5, ParsleyClock.empty()));
 
         assertEquals(2, forwarded.size(), "both records must be forwarded once the forward dependency arrives");
-        assertEquals(5L, forwarded.get(0).sourceOffset(), "the satisfying later record (offset 5) is forwarded first");
-        assertEquals(3L, forwarded.get(1).sourceOffset(), "the held record (offset 3) is released after its dependency");
+        assertEquals(5L, forwarded.get(0).offset(), "the satisfying later record (offset 5) is forwarded first");
+        assertEquals(3L, forwarded.get(1).offset(), "the held record (offset 3) is released after its dependency");
     }
 
     /**
@@ -547,8 +531,8 @@ class ParsleyEngineTest {
         processRecord(engine, incomingRecord(T1, 3, ParsleyClock.empty()));
 
         assertEquals(2, forwarded.size(), "both records must be forwarded once the backward dependency arrives");
-        assertEquals(3L, forwarded.get(0).sourceOffset(), "the satisfying earlier record (offset 3) is forwarded first");
-        assertEquals(5L, forwarded.get(1).sourceOffset(), "the held record (offset 5) is released after its dependency");
+        assertEquals(3L, forwarded.get(0).offset(), "the satisfying earlier record (offset 3) is forwarded first");
+        assertEquals(5L, forwarded.get(1).offset(), "the held record (offset 5) is released after its dependency");
     }
 
     /**
@@ -574,12 +558,12 @@ class ParsleyEngineTest {
         // A record from the NEW t1 incarnation at the same offset must NOT unblock T2.
         processRecord(engine, incomingRecordWithId(T1, 5, newT1, ParsleyClock.empty()));
         assertEquals(1, forwarded.size(), "only the new-t1 record must be forwarded; T2 stays buffered");
-        assertEquals(T1, forwarded.get(0).sourcePartition(), "new-incarnation record must be forwarded");
+        assertEquals(T1, tp(forwarded.get(0)), "new-incarnation record must be forwarded");
 
         // A record from the OLD t1 incarnation arrives — dependency now satisfied.
         processRecord(engine, incomingRecordWithId(T1, 5, oldT1, ParsleyClock.empty()));
         assertEquals(3, forwarded.size(), "old-t1 record forwarded, then buffered T2 released");
-        assertEquals(T2, forwarded.get(2).sourcePartition(), "T2 must be released after old-t1 arrives");
+        assertEquals(T2, tp(forwarded.get(2)), "T2 must be released after old-t1 arrives");
     }
 
     // --- helpers --------------------------------------------------------------------------------
@@ -595,8 +579,12 @@ class ParsleyEngineTest {
                 buffer, new MockPositionIndex(), ParsleyMetrics.NOOP, clock);
     }
 
-    private void processRecord(ParsleyEngine<String, String> engine, ParsleyRecord<String, String> record) {
-        forwarded.addAll(engine.onRecord(record));
+    private void processRecord(ParsleyEngine<String, String> engine, ParsleyMessage<String, String> message) {
+        forwarded.addAll(engine.onRecord(message));
+    }
+
+    private static TopicPartition tp(ParsleyMessage<String, String> m) {
+        return new TopicPartition(m.topic(), m.partition());
     }
 
     private static Uuid idFor(TopicPartition tp) {
@@ -605,31 +593,15 @@ class ParsleyEngineTest {
         throw new IllegalArgumentException("no known id for topic " + tp.topic());
     }
 
-    private static ParsleyRecord<String, String> incomingRecord(TopicPartition tp, long offset,
+    private static ParsleyMessage<String, String> incomingRecord(TopicPartition tp, long offset,
                                                                   ParsleyClock deps) {
         return incomingRecordWithId(tp, offset, idFor(tp), deps);
     }
 
-    private static ParsleyRecord<String, String> incomingRecordWithId(TopicPartition tp, long offset,
+    private static ParsleyMessage<String, String> incomingRecordWithId(TopicPartition tp, long offset,
                                                                         Uuid topicId,
                                                                         ParsleyClock deps) {
-        List<ParsleyHeader> headers = new ArrayList<>();
-        if (deps != null) {
-            headers.add(new ParsleyHeader(ParsleyAttributes.CAUSAL_DEPENDENCIES, deps.toBytes()));
-        }
-        headers.add(new ParsleyHeader(ParsleyAttributes.SRC_TOPIC, tp.topic().getBytes(UTF_8)));
-        headers.add(new ParsleyHeader(ParsleyAttributes.SRC_PARTITION, ParsleyRecord.intToBytes(tp.partition())));
-        headers.add(new ParsleyHeader(ParsleyAttributes.SRC_OFFSET, ParsleyRecord.longToBytes(offset)));
-        headers.add(new ParsleyHeader(ParsleyAttributes.SRC_TOPIC_ID, ParsleyRecord.uuidToBytes(topicId)));
-        return new ParsleyRecord<>("k", "v", 0L, headers);
-    }
-
-    private static ParsleyRecord<String, String> garbledRecord(TopicPartition tp, long offset) {
-        return new ParsleyRecord<>("k", "v", 0L, List.of(
-                new ParsleyHeader(ParsleyAttributes.CAUSAL_DEPENDENCIES, new byte[]{9, 9, 9}),
-                new ParsleyHeader(ParsleyAttributes.SRC_TOPIC, tp.topic().getBytes(UTF_8)),
-                new ParsleyHeader(ParsleyAttributes.SRC_PARTITION, ParsleyRecord.intToBytes(tp.partition())),
-                new ParsleyHeader(ParsleyAttributes.SRC_OFFSET, ParsleyRecord.longToBytes(offset)),
-                new ParsleyHeader(ParsleyAttributes.SRC_TOPIC_ID, ParsleyRecord.uuidToBytes(idFor(tp)))));
+        return new ParsleyMessage<>(tp.topic(), topicId, tp.partition(), offset, 0L,
+                "k", "v", List.of(), deps == null ? ParsleyClock.empty() : deps);
     }
 }

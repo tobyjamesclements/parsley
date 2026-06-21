@@ -11,6 +11,9 @@ import org.apache.kafka.streams.state.Stores;
  */
 final class ParsleyStores {
 
+    /** Key under which the frontier is stored in the processor's frontier state store. */
+    static final String FRONTIER_KEY = "f";
+
     private ParsleyStores() {}
 
     static StoreBuilder<KeyValueStore<String, byte[]>> frontierStore(String name) {

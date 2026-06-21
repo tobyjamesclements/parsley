@@ -89,7 +89,7 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
         this.positionIndexStore = context.getStateStore(positionIndexStoreName);
 
         ParsleyClock initialFrontier = ParsleyClock.empty();
-        byte[] stored = frontierStore.get(ParsleyAttributes.FRONTIER_KEY);
+        byte[] stored = frontierStore.get(ParsleyStores.FRONTIER_KEY);
         if (stored != null) {
             initialFrontier = ParsleyClock.fromBytes(stored);
         }
@@ -101,7 +101,7 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
         }
 
         ParsleyEngine.FrontierCallback listener = frontier -> {
-            frontierStore.put(ParsleyAttributes.FRONTIER_KEY, frontier.toBytes());
+            frontierStore.put(ParsleyStores.FRONTIER_KEY, frontier.toBytes());
             snapshots.add(frontier);
         };
 
@@ -144,34 +144,36 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
         wiredMetrics.close(context.metrics());
     }
 
-    private List<ParsleyRecord<KIn, VIn>> gate(ParsleyRecord<KIn, VIn> record) {
+    private List<ParsleyMessage<KIn, VIn>> gate(ParsleyMessage<KIn, VIn> record) {
         snapshots.clear();
         return engine.onRecord(record);
     }
 
-    private List<ParsleyRecord<KIn, VIn>> evict() {
+    private List<ParsleyMessage<KIn, VIn>> evict() {
         snapshots.clear();
         return engine.evictExpired();
     }
 
-    private List<ParsleyRecord<KIn, VIn>> evictRestoredOverflow() {
+    private List<ParsleyMessage<KIn, VIn>> evictRestoredOverflow() {
         snapshots.clear();
         return engine.evictOverflow();
     }
 
-    private void deliver(List<ParsleyRecord<KIn, VIn>> admitted) {
+    private void deliver(List<ParsleyMessage<KIn, VIn>> admitted) {
         for (int i = 0; i < admitted.size(); i++) {
-            ParsleyRecord<KIn, VIn> record = admitted.get(i);
+            ParsleyMessage<KIn, VIn> message = admitted.get(i);
             stampFrontier = snapshots.get(i);
-            deliveryMetadata = new ParsleyRecordMetadata(
-                    record.sourcePartition().topic(), record.sourcePartition().partition(), record.sourceOffset());
-            delegate.process(new Record<>(record.key(), record.value(), record.timestamp(), record.toHeaders()));
+            deliveryMetadata = new ParsleyRecordMetadata(message.topic(), message.partition(), message.offset());
+            // User headers + the producer's dependencies only; the source coordinate is surfaced via
+            // context.recordMetadata(), and ParsleyProcessorContext re-stamps the frontier on forward.
+            delegate.process(new Record<>(message.key(), message.value(), message.timestamp(),
+                    message.headersWithDependencies()));
         }
         deliveryMetadata = null;
         stampFrontier = engine.frontier();
     }
 
-    private ParsleyRecord<KIn, VIn> ingest(Record<KIn, VIn> record) {
+    private ParsleyMessage<KIn, VIn> ingest(Record<KIn, VIn> record) {
         Optional<RecordMetadata> meta = context.recordMetadata();
         String topic = meta.map(RecordMetadata::topic).orElse("");
         TopicPartition source = new TopicPartition(topic, meta.map(RecordMetadata::partition).orElse(0));
@@ -181,6 +183,6 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
                     "no CausalTopic registered for topic '" + topic
                             + "'; call addCausalTopic(...) on the CausalProcessors builder for every input topic");
         }
-        return ParsleyRecord.of(record, source, meta.map(RecordMetadata::offset).orElse(0L), topicId);
+        return ParsleyMessage.from(record, source, meta.map(RecordMetadata::offset).orElse(0L), topicId);
     }
 }

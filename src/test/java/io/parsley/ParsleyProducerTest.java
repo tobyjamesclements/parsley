@@ -32,7 +32,7 @@ class ParsleyProducerTest {
 
             assertEquals(1, mock.history().size(), "exactly one record must be produced");
             ProducerRecord<String, String> sent = mock.history().get(0);
-            Header header = sent.headers().lastHeader(ParsleyAttributes.CAUSAL_DEPENDENCIES);
+            Header header = sent.headers().lastHeader(ParsleyHeader.CAUSAL_DEPENDENCIES);
             assertNotNull(header, "causal-dependencies header must be present");
             assertEquals(deps, CausalDependencies.fromBytes(header.value()),
                     "causal-dependencies header must encode the provided deps");
@@ -53,7 +53,7 @@ class ParsleyProducerTest {
             producer.send(new ProducerRecord<>("t1", "k", "v"));
 
             ProducerRecord<String, String> sent = mock.history().get(0);
-            Header header = sent.headers().lastHeader(ParsleyAttributes.CAUSAL_DEPENDENCIES);
+            Header header = sent.headers().lastHeader(ParsleyHeader.CAUSAL_DEPENDENCIES);
             assertNotNull(header, "causal-dependencies header must be present even with no explicit dependencies");
             assertEquals(CausalDependencies.empty(), CausalDependencies.fromBytes(header.value()),
                     "causal-dependencies header must encode empty dependencies");
@@ -74,7 +74,7 @@ class ParsleyProducerTest {
             producer.send(new ProducerRecord<>("t1", "k", "v"), (metadata, ex) -> callbackError.set(ex));
 
             ProducerRecord<String, String> sent = mock.history().get(0);
-            Header header = sent.headers().lastHeader(ParsleyAttributes.CAUSAL_DEPENDENCIES);
+            Header header = sent.headers().lastHeader(ParsleyHeader.CAUSAL_DEPENDENCIES);
             assertNotNull(header, "causal-dependencies header must be present");
             assertEquals(CausalDependencies.empty(), CausalDependencies.fromBytes(header.value()),
                     "causal-dependencies header must encode empty dependencies");

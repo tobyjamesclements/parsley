@@ -107,7 +107,7 @@ class CausalDependenciesTest {
                 .require(T2, 0, 4)
                 .build();
         Headers headers = new RecordHeaders();
-        headers.add(new RecordHeader(ParsleyAttributes.CAUSAL_DEPENDENCIES, deps.toBytes()));
+        headers.add(new RecordHeader(ParsleyHeader.CAUSAL_DEPENDENCIES, deps.toBytes()));
 
         assertEquals(Optional.of(deps), CausalDependencies.fromHeaders(headers),
                 "fromHeaders must decode the dependency header");
@@ -139,7 +139,7 @@ class CausalDependenciesTest {
     void fromRecordReadsTheStampedClock() {
         CausalDependencies deps = CausalDependencies.builder().require(T1, 0, 27).build();
         ConsumerRecord<String, String> record = new ConsumerRecord<>("t2", 0, 5L, "k", "v");
-        record.headers().add(new RecordHeader(ParsleyAttributes.CAUSAL_DEPENDENCIES, deps.toBytes()));
+        record.headers().add(new RecordHeader(ParsleyHeader.CAUSAL_DEPENDENCIES, deps.toBytes()));
 
         assertEquals(Optional.of(deps), CausalDependencies.fromRecord(record),
                 "fromRecord must decode the dependency header");

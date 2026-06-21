@@ -15,13 +15,13 @@ import java.util.TreeMap;
  */
 final class MockBufferStore<K, V> implements ParsleyBufferStore<K, V> {
 
-    private record Held<K, V>(ParsleyRecord<K, V> record, long bufferedAt) {}
+    private record Held<K, V>(ParsleyMessage<K, V> record, long bufferedAt) {}
 
     private final TreeMap<Long, Held<K, V>> buffer = new TreeMap<>();
     private long sequence = 0;
 
     @Override
-    public long add(ParsleyRecord<K, V> record, long bufferedAt) {
+    public long add(ParsleyMessage<K, V> record, long bufferedAt) {
         long seq = sequence++;
         buffer.put(seq, new Held<>(record, bufferedAt));
         return seq;
@@ -53,6 +53,6 @@ final class MockBufferStore<K, V> implements ParsleyBufferStore<K, V> {
 
     private Entry<K, V> toEntry(long sequence, Held<K, V> held) {
         return new Entry<>(sequence, held.bufferedAt(), held.record(),
-                ParsleyClock.fromBytes(held.record().encodedDependencies()));
+                held.record().dependencies());
     }
 }

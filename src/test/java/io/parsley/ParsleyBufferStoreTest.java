@@ -6,7 +6,6 @@ import org.junit.jupiter.api.Test;
 
 import java.util.List;
 
-import static java.nio.charset.StandardCharsets.UTF_8;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -32,10 +31,10 @@ class ParsleyBufferStoreTest {
         List<ParsleyBufferStore.Entry<String, String>> entries = store.entries();
 
         assertEquals(2, entries.size(), "store must return both added entries");
-        assertEquals(0L, entries.get(0).record().sourceOffset(), "first entry must be the first added record");
+        assertEquals(0L, entries.get(0).record().offset(), "first entry must be the first added record");
         assertEquals(ParsleyClock.empty().observe(T1_ID, 0, 9),
                 entries.get(0).dependencies(), "first entry must carry its original dependencies");
-        assertEquals(1L, entries.get(1).record().sourceOffset(), "second entry must be the second added record");
+        assertEquals(1L, entries.get(1).record().offset(), "second entry must be the second added record");
         assertTrue(entries.get(0).sequence() < entries.get(1).sequence(),
                 "earlier-added entry must carry the lower sequence number");
     }
@@ -57,7 +56,7 @@ class ParsleyBufferStoreTest {
         store.remove(firstSeq);
 
         assertEquals(1, store.size(), "store size must decrement after removal");
-        assertEquals(1L, store.entries().get(0).record().sourceOffset(),
+        assertEquals(1L, store.entries().get(0).record().offset(),
                 "removing the first entry must leave the second");
     }
 
@@ -91,12 +90,8 @@ class ParsleyBufferStoreTest {
 
     // --- helpers --------------------------------------------------------------------------------
 
-    private static ParsleyRecord<String, String> bufferedRecord(TopicPartition tp, long offset,
+    private static ParsleyMessage<String, String> bufferedRecord(TopicPartition tp, long offset,
                                                                   ParsleyClock deps) {
-        return new ParsleyRecord<>("k", "v", 0L, List.of(
-                new ParsleyHeader(ParsleyAttributes.CAUSAL_DEPENDENCIES, deps.toBytes()),
-                new ParsleyHeader(ParsleyAttributes.SRC_TOPIC, tp.topic().getBytes(UTF_8)),
-                new ParsleyHeader(ParsleyAttributes.SRC_PARTITION, ParsleyRecord.intToBytes(tp.partition())),
-                new ParsleyHeader(ParsleyAttributes.SRC_OFFSET, ParsleyRecord.longToBytes(offset))));
+        return new ParsleyMessage<>(tp.topic(), T1_ID, tp.partition(), offset, 0L, "k", "v", List.of(), deps);
     }
 }

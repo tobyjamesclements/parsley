@@ -6,9 +6,6 @@ import org.apache.kafka.clients.consumer.KafkaConsumer;
 import org.apache.kafka.common.TopicPartition;
 import org.apache.kafka.common.Uuid;
 import org.apache.kafka.common.errors.TopicExistsException;
-import org.apache.kafka.common.header.Header;
-import org.apache.kafka.common.header.Headers;
-import org.apache.kafka.common.header.internals.RecordHeaders;
 import org.apache.kafka.common.record.TimestampType;
 import org.apache.kafka.common.serialization.ByteArrayDeserializer;
 import org.apache.kafka.common.serialization.Serde;
@@ -23,7 +20,6 @@ import org.apache.kafka.streams.processor.api.ProcessorSupplier;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import java.nio.ByteBuffer;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Collection;
@@ -34,7 +30,6 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.ExecutionException;
 
-import static java.nio.charset.StandardCharsets.UTF_8;
 
 /**
  * Decorator over a Kafka Streams pipeline exposing a {@code poll()}-based consumer API. The
@@ -132,31 +127,19 @@ final class ParsleyConsumer<K, V> implements CausalConsumer<K, V> {
         ConsumerRecords<byte[], byte[]> raw = outboxConsumer.poll(timeout);
         Map<TopicPartition, List<ConsumerRecord<K, V>>> byPartition = new LinkedHashMap<>();
         for (ConsumerRecord<byte[], byte[]> r : raw) {
-            String srcTopic     = new String(r.headers().lastHeader(ParsleyAttributes.SRC_TOPIC).value(), UTF_8);
-            int    srcPartition = intFromBytes(r.headers().lastHeader(ParsleyAttributes.SRC_PARTITION).value());
-            long   srcOffset    = longFromBytes(r.headers().lastHeader(ParsleyAttributes.SRC_OFFSET).value());
-            Headers headers = stripInternalHeaders(r.headers());
-            ConsumerRecord<K, V> cr = toTypedRecord(
-                    srcTopic, srcPartition, srcOffset, r.timestamp(), r.key(), r.value(), headers);
-            byPartition.computeIfAbsent(new TopicPartition(srcTopic, srcPartition),
+            // Decode the outbox record back to its original source coordinate and user headers; the
+            // internal _parsley_src_* routing headers are dropped, the causal-dependencies clock kept.
+            ParsleyMessage<byte[], byte[]> message = ParsleyMessage.fromOutboxRecord(r);
+            K key   = keySerde.deserializer().deserialize(message.topic(), message.key());
+            V value = valueSerde.deserializer().deserialize(message.topic(), message.value());
+            ConsumerRecord<K, V> cr = new ConsumerRecord<>(
+                    message.topic(), message.partition(), message.offset(), message.timestamp(),
+                    TimestampType.CREATE_TIME, -1, -1, key, value,
+                    message.headersWithDependencies(), Optional.empty());
+            byPartition.computeIfAbsent(new TopicPartition(message.topic(), message.partition()),
                     k -> new ArrayList<>()).add(cr);
         }
         return new ConsumerRecords<>(byPartition, Map.of());
-    }
-
-    /**
-     * Deserializes a raw record's key/value at {@code topic} and assembles a typed
-     * {@link ConsumerRecord} at the given source coordinate. {@code headers} must already be the
-     * caller's intended final headers — this method does no header massaging itself.
-     */
-    private ConsumerRecord<K, V> toTypedRecord(
-            String topic, int partition, long offset, long timestamp,
-            byte[] keyBytes, byte[] valueBytes, Headers headers) {
-        K key   = keySerde.deserializer().deserialize(topic, keyBytes);
-        V value = valueSerde.deserializer().deserialize(topic, valueBytes);
-        return new ConsumerRecord<>(
-                topic, partition, offset, timestamp, TimestampType.CREATE_TIME,
-                -1, -1, key, value, headers, Optional.empty());
     }
 
 
@@ -199,20 +182,4 @@ final class ParsleyConsumer<K, V> implements CausalConsumer<K, V> {
         }
     }
 
-    /**
-     * Strips internal {@code _parsley_*} routing headers, leaving the producer's original
-     * {@link ParsleyAttributes#CAUSAL_DEPENDENCIES} (and every other header) untouched —
-     * {@link ParsleyOutboxProcessor} never rewrites it, so there is nothing to restore.
-     */
-    private static Headers stripInternalHeaders(Headers source) {
-        RecordHeaders out = new RecordHeaders();
-        for (Header h : source) {
-            if (h.key().startsWith("_parsley_")) continue;
-            out.add(h);
-        }
-        return out;
-    }
-
-    private static int intFromBytes(byte[] b)   { return ByteBuffer.wrap(b).getInt(); }
-    private static long longFromBytes(byte[] b) { return ByteBuffer.wrap(b).getLong(); }
 }
