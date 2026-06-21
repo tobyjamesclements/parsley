@@ -28,13 +28,12 @@ import org.apache.kafka.streams.processor.api.ProcessorSupplier;
  * Every record reaches the user's {@code process()} exactly once — Parsley never drops or
  * diverts a record. Within {@code process()}, every state read reflects all causally-prior
  * writes, and every state write and {@code forward} is a causally-ordered, dependency-stamped
- * event, <strong>provided</strong> the record was delivered with {@link CausalResult#SATISFIED}
- * (the common case: dependencies were observed before delivery, whether immediately or after a
- * wait, including trivially for records claiming none). A record delivered with
- * {@link CausalResult#EVICTED} — the configured {@link CausalBufferLimit} fired before its
- * dependencies were satisfied — suspends the guarantee for that one record; it is flagged via
- * the {@code parsley-causal-result} header, readable with {@link CausalResult#fromRecord} in your
- * own {@code process()}, and logged with the causal gap.
+ * event, in the common case: the record's dependencies were observed before delivery, whether
+ * immediately or after a wait, including trivially for records claiming none. The exception is
+ * eviction — when the configured {@link CausalBufferLimit} fires before a held record's
+ * dependencies are satisfied, the record is delivered anyway (out of causal order), suspending the
+ * guarantee for that one record. Evictions are not signalled per-record; they are logged with the
+ * causal gap and counted by the buffer's violation metric.
  *
  * <p>The guarantee further depends on two preconditions that hold across the whole processor,
  * not per-record:

@@ -3,7 +3,6 @@ package io.parsley;
 import org.apache.kafka.common.Metric;
 import org.apache.kafka.common.MetricName;
 import org.apache.kafka.common.Uuid;
-import org.apache.kafka.common.header.Header;
 import org.apache.kafka.common.header.Headers;
 import org.apache.kafka.common.header.internals.RecordHeader;
 import org.apache.kafka.common.header.internals.RecordHeaders;
@@ -41,9 +40,7 @@ import java.util.Map;
 import java.util.Properties;
 import java.util.Set;
 
-import static java.nio.charset.StandardCharsets.UTF_8;
 import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
@@ -114,21 +111,14 @@ class CausalProcessorsTopologyTest {
         return CausalDependencies.fromHeaders(record.headers()).orElseThrow();
     }
 
-    private static CausalResult outResult(TestRecord<String, String> record) {
-        Header header = record.headers().lastHeader(ParsleyAttributes.CAUSAL_RESULT);
-        assertNotNull(header, "record must carry a " + ParsleyAttributes.CAUSAL_RESULT + " header");
-        return CausalResult.valueOf(new String(header.value(), UTF_8));
-    }
-
     // --- tests ---------------------------------------------------------------------------------
 
     /**
      * A record with satisfied dependencies is admitted immediately: the delegate processor runs,
-     * transforms the value, and the output record is stamped with the updated frontier and a
-     * {@code SATISFIED} result.
+     * transforms the value, and the output record is stamped with the updated frontier.
      *
      * Asserts that the delegate runs exactly once, the value is transformed, and the emitted
-     * record carries the frontier as the dependency stamp and a SATISFIED result.
+     * record carries the frontier as the dependency stamp.
      */
     @Test
     void admittedRecordRunsDelegateAndStampsTheMergedClock() {
@@ -151,7 +141,6 @@ class CausalProcessorsTopologyTest {
             assertEquals("HELLO", emitted.value(), "delegate's transform must be applied");
             assertEquals(CausalDependencies.builder().require(new CausalPosition(T1_ID, 0, 0)).build(), outDeps(emitted),
                     "forward must be stamped with the frontier as of admission");
-            assertEquals(CausalResult.SATISFIED, outResult(emitted), "an admitted record must be stamped SATISFIED");
         }
     }
 
@@ -202,13 +191,12 @@ class CausalProcessorsTopologyTest {
     /**
      * A record whose dependency cannot be satisfied within a buffer size limit of 1 is evicted —
      * but per the always-forward model, the delegate still runs and the record still reaches the
-     * output, stamped {@code CausalResult.EVICTED} instead of {@code SATISFIED}.
+     * output (delivered out of causal order).
      *
-     * Asserts that the delegate runs and the transformed record reaches the output stamped
-     * EVICTED.
+     * Asserts that the delegate runs and the transformed record reaches the output.
      */
     @Test
-    void evictedRecordIsForwardedToDelegateStampedEvicted() {
+    void evictedRecordIsForwardedToDelegate() {
         Topology topology = topology(
                 CausalProcessors.builder(upperCaser(), CausalBufferLimit.ofSize(1))
                         .serdes(Serdes.String(), Serdes.String())
@@ -229,7 +217,6 @@ class CausalProcessorsTopologyTest {
                     "eviction still runs the delegate — Parsley never drops a record");
             TestRecord<String, String> emitted = out.readRecord();
             assertEquals("T3-VAL", emitted.value(), "the evicted record's transform must still be applied");
-            assertEquals(CausalResult.EVICTED, outResult(emitted), "an evicted record must be stamped EVICTED");
         }
     }
 
@@ -1100,8 +1087,6 @@ class CausalProcessorsTopologyTest {
             TestRecord<String, String> emitted = out.readRecord();
             assertEquals("T5-VAL", emitted.value(),
                     "unclocked record must be forwarded immediately, trivially satisfied");
-            assertEquals(CausalResult.SATISFIED, outResult(emitted),
-                    "an unclocked record is trivially satisfied, never evicted");
             assertEquals(0, storeSize(driver.getKeyValueStore("node2-buffer")),
                     "unclocked record must never enter the buffer");
 
@@ -1117,8 +1102,8 @@ class CausalProcessorsTopologyTest {
      * trivially satisfied and admitted immediately, interleaved correctly alongside the fused
      * proc1 output.
      *
-     * Asserts that the unclocked record is forwarded immediately, stamped SATISFIED, and the
-     * buffer remains empty. Subsequent clocked records flow normally.
+     * Asserts that the unclocked record is forwarded immediately and the buffer remains empty.
+     * Subsequent clocked records flow normally.
      */
     @Test
     void admitUnclockedSidecarImmediatelyInFusedChain() {
@@ -1152,8 +1137,6 @@ class CausalProcessorsTopologyTest {
             t5.pipeInput(new TestRecord<>("k", "t5-val"));
             TestRecord<String, String> emitted = out.readRecord();
             assertEquals("T5-VAL", emitted.value(), "unclocked sidecar must be forwarded immediately");
-            assertEquals(CausalResult.SATISFIED, outResult(emitted),
-                    "an unclocked record is trivially satisfied, never evicted");
             assertEquals(0, storeSize(driver.getKeyValueStore("node2-buffer")),
                     "unclocked record must never enter the buffer");
 

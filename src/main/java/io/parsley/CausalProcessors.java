@@ -39,8 +39,8 @@ public final class CausalProcessors {
      * @param userSupplier the user's processor supplier (its declared state stores are unioned with
      *                     Parsley's internal frontier and buffer stores)
      * @param limit        the buffer eviction trigger — how long to wait for a record's
-     *                     dependencies before forwarding it anyway, stamped
-     *                     {@link CausalResult#EVICTED}
+     *                     dependencies before forwarding it anyway (out of causal order, logged and
+     *                     counted by the violation metric)
      * @param <KIn>        the input key type
      * @param <VIn>        the input value type
      * @param <KOut>       the forwarded key type

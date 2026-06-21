@@ -141,7 +141,7 @@ class CausalResilienceIT {
      * {@code ParsleyEngine.evictOverflow()} call wired into {@code ParsleyProcessor.init()} —
      * must forward the two oldest restored records out-of-order before consumer-2 ever polls for
      * new input, leaving the third held. Every forwarded record is still delivered (Parsley never
-     * drops), but is stamped {@code CausalResult.EVICTED} rather than {@code SATISFIED}.
+     * drops), just out of causal order.
      */
     @Test
     void restartWithALoweredSizeLimitEvictsExcessRestoredRecordsOnInit() throws Exception {
@@ -206,8 +206,6 @@ class CausalResilienceIT {
 
             assertEquals(List.of("order-1", "order-2"), phase2.stream().map(ConsumerRecord::value).toList(),
                     "the two oldest restored records must be forwarded out-of-order on restart, before any new input");
-            assertTrue(phase2.stream().allMatch(r -> CausalResult.fromRecord(r).orElseThrow() == CausalResult.EVICTED),
-                    "every forwarded record must be stamped EVICTED");
 
             // The third record (order-3) must remain held: poll a few more times and confirm it
             // never arrives, since its PRICES dependency is still unmet and the buffer is back

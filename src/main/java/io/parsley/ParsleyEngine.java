@@ -12,22 +12,18 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.function.LongSupplier;
 
-import static java.nio.charset.StandardCharsets.UTF_8;
-
 /**
  * The causal buffering engine.
  *
  * <p>The processor feeds incoming records to {@link #onRecord} and forwards the returned
- * records downstream, in order. Every record is delivered — there is no drop, no diversion — but
- * each is stamped with a {@link CausalResult}: {@link CausalResult#SATISFIED} if the frontier
- * satisfied its dependencies by delivery time (whether immediately, after a wait, or trivially —
- * no dependencies claimed, or an undecodable header, both treated as an empty, vacuously
- * satisfied set), or {@link CausalResult#EVICTED} if a {@link CausalBufferLimit} fired before
- * that happened.
+ * records downstream, in order. Every record is delivered — there is no drop, no diversion. A
+ * record is delivered in causal order once the frontier satisfies its dependencies (whether
+ * immediately, after a wait, or trivially — no dependencies claimed, or an undecodable header, both
+ * treated as an empty, vacuously satisfied set).
  *
  * <p>The engine also owns limit-driven eviction: when a {@link CausalBufferLimit} fires it
- * surrenders the oldest buffered records needed to satisfy the limit, forwards them stamped
- * {@link CausalResult#EVICTED}, and logs the causal gap for each.
+ * surrenders the oldest buffered records needed to satisfy the limit and forwards them anyway (out
+ * of causal order), logging the causal gap and counting a violation metric for each.
  *
  * <p><strong>Frontier persistence ordering:</strong> the {@link FrontierCallback} fires for
  * every frontier advancement <em>before</em> the corresponding record is returned for
@@ -134,7 +130,7 @@ final class ParsleyEngine<K, V> {
                     record.sourcePartition().topic(), record.sourcePartition().partition(),
                     record.sourceOffset());
             advanceFrontier(record);
-            out.add(stamp(record, CausalResult.SATISFIED));
+            out.add(record);
             drainInto(out, record.sourceTopicId(), record.sourcePartitionIndex());
         } else {
             long seq = buffer.add(record, clock.getAsLong());
@@ -165,8 +161,7 @@ final class ParsleyEngine<K, V> {
      * {@link #evictExpired()}), so only the leading {@code buffer.size() - sizeLimit + 1}
      * entries need to be evicted to fit the record just admitted.
      *
-     * @return the evicted records, stamped {@link CausalResult#EVICTED}, to forward downstream
-     *         out-of-order
+     * @return the evicted records, to forward downstream out-of-order
      */
     List<ParsleyRecord<K, V>> evictOverflow() {
         int overflow = buffer.size() - sizeLimit + 1;
@@ -186,8 +181,7 @@ final class ParsleyEngine<K, V> {
      * implementations, since insertion sequence tracks buffer-admission time on the single owning
      * thread), so the scan can stop at the first record that hasn't aged out yet.
      *
-     * @return the evicted records, stamped {@link CausalResult#EVICTED}, to forward downstream
-     *         out-of-order
+     * @return the evicted records, to forward downstream out-of-order
      */
     List<ParsleyRecord<K, V>> evictExpired() {
         if (evictionInterval == null) {
@@ -212,7 +206,7 @@ final class ParsleyEngine<K, V> {
             reportEviction(entry.record(), entry.dependencies());
             buffer.remove(entry.sequence());
             advanceFrontier(entry.record());
-            toForward.add(stamp(entry.record(), CausalResult.EVICTED));
+            toForward.add(entry.record());
         }
         metrics.recordEvicted(evicted.size());
         return toForward;
@@ -277,7 +271,7 @@ final class ParsleyEngine<K, V> {
                 buffer.remove(entry.sequence());
                 advanceFrontier(entry.record());
                 toScan.add(new ParsleyPartition(entry.record().sourceTopicId(), entry.record().sourcePartitionIndex()));
-                out.add(stamp(entry.record(), CausalResult.SATISFIED));
+                out.add(entry.record());
             }
             totalReleased += releasable.size();
         }
@@ -322,12 +316,6 @@ final class ParsleyEngine<K, V> {
                 record.sourcePartition().topic(), record.sourcePartition().partition(),
                 record.sourceOffset(), required.findMissing(frontier));
         metrics.recordViolation();
-    }
-
-    private ParsleyRecord<K, V> stamp(ParsleyRecord<K, V> record, CausalResult result) {
-        List<ParsleyHeader> h = new ArrayList<>(record.headers());
-        h.add(new ParsleyHeader(ParsleyAttributes.CAUSAL_RESULT, result.name().getBytes(UTF_8)));
-        return new ParsleyRecord<>(record.key(), record.value(), record.timestamp(), h);
     }
 
     private void configureLimits(CausalBufferLimit limit) {

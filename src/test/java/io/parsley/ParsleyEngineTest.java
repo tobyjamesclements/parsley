@@ -2,7 +2,6 @@ package io.parsley;
 
 import org.apache.kafka.common.TopicPartition;
 import org.apache.kafka.common.Uuid;
-import org.apache.kafka.common.header.Header;
 import org.junit.jupiter.api.Test;
 
 import java.time.Duration;
@@ -12,7 +11,6 @@ import java.util.concurrent.atomic.AtomicLong;
 
 import static java.nio.charset.StandardCharsets.UTF_8;
 import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class ParsleyEngineTest {
@@ -33,7 +31,7 @@ class ParsleyEngineTest {
      * is forwarded to the downstream processor immediately, without entering the buffer.
      *
      * <p>The frontier is advanced to reflect the record's source coordinate on forward, and
-     * the record is stamped {@link CausalResult#SATISFIED}.
+     * the record is stamped in causal order.
      *
      * Asserts that exactly one record is forwarded, it carries the SATISFIED result, and the
      * frontier reflects the admitted record's source offset.
@@ -45,8 +43,6 @@ class ParsleyEngineTest {
         processRecord(engine, incomingRecord(T1, 3, CausalDependencies.empty()));
 
         assertEquals(1, forwarded.size(), "satisfied record must be forwarded immediately");
-        assertEquals(CausalResult.SATISFIED, resultOf(forwarded.get(0)),
-                "immediately satisfied record must be stamped SATISFIED");
         assertEquals(CausalFrontier.empty().observe(new CausalPosition(T1_ID, 0, 3)), engine.frontier(),
                 "frontier must advance to the forwarded record's source offset");
     }
@@ -57,7 +53,7 @@ class ParsleyEngineTest {
      *
      * <p>When the dependency arrives, the engine releases the buffered record after the
      * satisfying record and advances the frontier through both. Both released records are
-     * stamped {@link CausalResult#SATISFIED} — the result reflects whether the engine ever
+     * stamped in causal order — the result reflects whether the engine ever
      * had to forcibly evict, not how long a record waited.
      *
      * Asserts that the buffered record is released in causal order after the satisfying record,
@@ -76,10 +72,6 @@ class ParsleyEngineTest {
         assertEquals(2, forwarded.size(), "both records must be forwarded after the dependency arrives");
         assertEquals(T1, forwarded.get(0).sourcePartition(), "satisfying record must be forwarded first");
         assertEquals(T2, forwarded.get(1).sourcePartition(), "buffered record must be released second");
-        assertEquals(CausalResult.SATISFIED, resultOf(forwarded.get(0)),
-                "satisfying record must be stamped SATISFIED");
-        assertEquals(CausalResult.SATISFIED, resultOf(forwarded.get(1)),
-                "drained record must be stamped SATISFIED, not just the immediate one");
         assertEquals(
                 CausalFrontier.empty()
                         .observe(new CausalPosition(T1_ID, 0, 3))
@@ -109,7 +101,7 @@ class ParsleyEngineTest {
      * When the buffer is at its size limit and a new unsatisfied record arrives, the engine
      * always evicts the oldest record needed to bring the buffer back under the limit and
      * forwards it — there is no drop/discard outcome anymore. The evicted record is stamped
-     * {@link CausalResult#EVICTED}.
+     * out of causal order (evicted).
      *
      * Asserts that the record is removed from the buffer and forwarded with the EVICTED result.
      */
@@ -121,8 +113,6 @@ class ParsleyEngineTest {
 
         assertEquals(0, buffer.size(), "evicted record must never remain in the buffer");
         assertEquals(1, forwarded.size(), "evicted record must still be forwarded — Parsley never drops");
-        assertEquals(CausalResult.EVICTED, resultOf(forwarded.get(0)),
-                "evicted record must be stamped EVICTED");
     }
 
     /**
@@ -191,8 +181,6 @@ class ParsleyEngineTest {
         processRecord(engine, incomingRecord(T1, 0, null));
 
         assertEquals(1, forwarded.size(), "a missing-header record must still be forwarded");
-        assertEquals(CausalResult.SATISFIED, resultOf(forwarded.get(0)),
-                "a missing-header record is trivially satisfied, not evicted");
         assertEquals(CausalFrontier.empty().observe(new CausalPosition(T1_ID, 0, 0)), engine.frontier(),
                 "frontier must advance through the forwarded record");
     }
@@ -210,8 +198,6 @@ class ParsleyEngineTest {
         processRecord(engine, garbledRecord(T1, 0));
 
         assertEquals(1, forwarded.size(), "an unresolvable-dependencies record must still be forwarded");
-        assertEquals(CausalResult.SATISFIED, resultOf(forwarded.get(0)),
-                "an unresolvable header is trivially satisfied, not evicted");
     }
 
     /**
@@ -232,7 +218,6 @@ class ParsleyEngineTest {
         processRecord(engine, incomingRecord(T2, 1, unmet)); // hits size 2 → evict only the oldest
 
         assertEquals(1, forwarded.size(), "only the oldest evicted record must be forwarded");
-        assertEquals(CausalResult.EVICTED, resultOf(forwarded.get(0)), "the forwarded record must be stamped EVICTED");
         assertEquals(CausalFrontier.empty().observe(new CausalPosition(T2_ID, 0, 0)), engine.frontier(),
                 "frontier must advance only through the evicted record");
         assertEquals(1, buffer.size(), "the younger record must remain held in the buffer");
@@ -359,7 +344,6 @@ class ParsleyEngineTest {
 
         assertEquals(0, buffer.size(), "a record older than the duration must be evicted");
         assertEquals(1, evicted.size(), "the aged-out record must be forwarded, not dropped");
-        assertEquals(CausalResult.EVICTED, resultOf(evicted.get(0)), "the forwarded record must be stamped EVICTED");
     }
 
     /**
@@ -610,12 +594,6 @@ class ParsleyEngineTest {
                                                            java.util.function.LongSupplier clock) {
         return new ParsleyEngine<>(limit, CausalFrontier.empty(), frontiers::add,
                 buffer, new MockPositionIndex(), ParsleyMetrics.NOOP, clock);
-    }
-
-    private static CausalResult resultOf(ParsleyRecord<String, String> record) {
-        Header header = record.toConsumerRecord().headers().lastHeader(ParsleyAttributes.CAUSAL_RESULT);
-        assertNotNull(header, "record must carry a " + ParsleyAttributes.CAUSAL_RESULT + " header");
-        return CausalResult.valueOf(new String(header.value(), UTF_8));
     }
 
     private void processRecord(ParsleyEngine<String, String> engine, ParsleyRecord<String, String> record) {

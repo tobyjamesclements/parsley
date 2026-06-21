@@ -145,8 +145,7 @@ class CausalAvroSchemaRegistryIT {
      * Schema Registry subject rather than the buffer-store or changelog subject.
      *
      * <p>A short eviction window is used: if causal drain is broken the Order is evicted instead
-     * of drained, and the await fails by checking {@code CausalResult.fromRecord} on the records
-     * already being polled.
+     * of drained and delivered out of order, which the causal-order assertion below catches.
      *
      * Asserts that Price is delivered first, the Order is delivered second with field-for-field
      * equality to the original, and the buffered Order's header decodes to the producer's original
@@ -172,7 +171,7 @@ class CausalAvroSchemaRegistryIT {
              CausalConsumer<String, SpecificRecord> consumer = CausalConsumers.<String, SpecificRecord>builder(
                      List.of(ORDERS, PRICES),
                      // Short eviction window: if causal drain is broken the Order is evicted
-                     // instead of drained, and the await below fails fast on the stamped result.
+                     // instead of drained and delivered out of order (caught by the order assertion).
                      CausalBufferLimit.ofDuration(Duration.ofSeconds(5)),
                      Map.of(ConsumerConfig.GROUP_ID_CONFIG, "avro-buf-" + UUID.randomUUID()),
                      streamsConfig(bootstrap, registryUrl))
@@ -199,12 +198,7 @@ class CausalAvroSchemaRegistryIT {
                     CausalDependencies.empty()).get();
 
             await().atMost(Duration.ofSeconds(30)).until(() -> {
-                consumer.poll(Duration.ofMillis(500)).forEach(r -> {
-                    received.add(r);
-                    if (CausalResult.fromRecord(r).orElseThrow() == CausalResult.EVICTED) {
-                        throw new AssertionError("Order was evicted instead of drained causally: " + r);
-                    }
-                });
+                consumer.poll(Duration.ofMillis(500)).forEach(received::add);
                 return received.size() >= 2;
             });
 

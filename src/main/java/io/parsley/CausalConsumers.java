@@ -32,8 +32,8 @@ public final class CausalConsumers {
      * @param <V>            the record value type
      * @param topics         the Kafka topics to subscribe to; must not be empty
      * @param limit          the buffer eviction trigger — how long to wait for a record's
-     *                       dependencies before delivering it anyway, stamped
-     *                       {@link CausalResult#EVICTED}
+     *                       dependencies before delivering it anyway (out of causal order, logged
+     *                       and counted by the violation metric)
      * @param consumerConfig additional consumer configuration (overrides defaults derived from
      *                       {@code streamsConfig})
      * @param streamsConfig  Kafka Streams configuration; must include at minimum

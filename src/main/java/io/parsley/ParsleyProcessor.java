@@ -22,10 +22,10 @@ import java.util.Optional;
  * Wraps a user {@link Processor} and gates delegation on the causal frontier: an incoming record is
  * held until the frontier dominates its causal dependencies, or until the configured
  * {@link CausalBufferLimit} forces delivery anyway. Every record reaches
- * {@code delegate.process(...)} exactly once, stamped with the {@link CausalResult} that records
- * whether the guarantee held. State reads/writes the delegate performs and every record it forwards
- * are therefore causally ordered when {@link CausalResult#SATISFIED}, and forwards are stamped with
- * the current frontier by a {@link ParsleyProcessorContext}.
+ * {@code delegate.process(...)} exactly once. State reads/writes the delegate performs and every
+ * record it forwards are causally ordered unless the record was force-delivered by an eviction
+ * (logged and counted by the violation metric); forwards are stamped with the current frontier by a
+ * {@link ParsleyProcessorContext}.
  *
  * <p>Held records are persisted to a changelog-backed buffer store and restored on {@code init}, so
  * they survive a restart (a buffered record's source offset is committed past it, so it would

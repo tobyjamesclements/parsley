@@ -104,11 +104,6 @@ class CausalRoundTripIT {
                         "record " + i + " should carry its producer's dependencies");
             }
 
-            // Every record was trivially or causally satisfied — none were ever forcibly evicted.
-            for (ConsumerRecord<String, String> record : received) {
-                assertEquals(Optional.of(CausalResult.SATISFIED), CausalResult.fromRecord(record),
-                        "record must be stamped SATISFIED");
-            }
         }
     }
 
@@ -119,7 +114,7 @@ class CausalRoundTripIT {
      * <p>A plain {@link org.apache.kafka.clients.producer.KafkaProducer} sends a record with no
      * Parsley header, which the engine treats as {@link CausalDependencies#empty()}.
      *
-     * Asserts that the record is delivered, stamped {@code CausalResult.SATISFIED}.
+     * Asserts that the record is delivered.
      */
     @Test
     void recordWithMissingDependencyHeaderIsDeliveredAsSatisfied() throws Exception {
@@ -148,23 +143,20 @@ class CausalRoundTripIT {
                 return !received.isEmpty();
             });
             assertEquals(List.of("no-deps"), received.stream().map(ConsumerRecord::value).toList());
-            assertEquals(Optional.of(CausalResult.SATISFIED), CausalResult.fromRecord(received.get(0)),
-                    "a record with no dependency claim is trivially satisfied");
         }
     }
 
     /**
      * A record whose dependency is never satisfied is buffered until the configured
      * {@link CausalBufferLimit} fires, then forcibly evicted — but, per the always-forward model,
-     * it is still delivered via {@link CausalConsumer#poll}, just stamped
-     * {@code CausalResult.EVICTED} instead of {@code SATISFIED}. A custom state-store name is
-     * honoured for the frontier store backing it.
+     * it is still delivered via {@link CausalConsumer#poll} (out of causal order). A custom
+     * state-store name is honoured for the frontier store backing it.
      *
      * <p>A {@link CausalProducer} sends a record depending on an offset that never arrives, so it
      * buffers until the short duration limit fires.
      *
-     * Asserts that the record is still delivered via {@code poll()}, stamped {@code EVICTED}, and
-     * that the frontier under the custom store name advanced.
+     * Asserts that the record is still delivered via {@code poll()} and that the frontier under the
+     * custom store name advanced.
      */
     @Test
     void customStoreNameIsHonouredOnEviction() throws Exception {
@@ -200,8 +192,6 @@ class CausalRoundTripIT {
 
             assertEquals(List.of("buffered-then-evicted"), received.stream().map(ConsumerRecord::value).toList(),
                     "an evicted record must still be delivered, never dropped");
-            assertEquals(Optional.of(CausalResult.EVICTED), CausalResult.fromRecord(received.get(0)),
-                    "an evicted record must be stamped EVICTED");
             assertFalse(consumer.frontier().positions().isEmpty(), "frontier under the custom store name advanced");
         }
     }
