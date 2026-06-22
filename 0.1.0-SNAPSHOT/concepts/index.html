@@ -788,34 +788,6 @@
   
   
     <li class="md-nav__item">
-      <a href="../internals/consumer/" class="md-nav__link">
-        
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    Consumer
-  
-
-    
-  </span>
-  
-  
-
-      </a>
-    </li>
-  
-
-              
-            
-              
-                
-  
-  
-  
-  
-    <li class="md-nav__item">
       <a href="../internals/benchmarks/" class="md-nav__link">
         
   
@@ -1022,7 +994,7 @@ until no further releases occur.</p>
 </tbody>
 </table>
 <h2 id="always-forward-delivery">Always-forward delivery</h2>
-<p>Parsley never drops or diverts a record. Every record reaches the user's <code>process()</code>/<code>poll()</code>
+<p>Parsley never drops or diverts a record. Every record reaches the user's <code>process()</code>
 exactly once. In the common case it is delivered <strong>in causal order</strong> — the frontier had observed its
 dependencies by delivery time (immediately, after a wait, or trivially: no dependencies claimed, or
 an undecodable header, both treated as vacuously satisfied). The exception is <strong>eviction</strong>: when the

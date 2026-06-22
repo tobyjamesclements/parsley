@@ -764,10 +764,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#position-index" class="md-nav__link">
+  <a href="#candidate-index" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Position index
+        Candidate index
       
     </span>
   </a>
@@ -798,34 +798,6 @@
     
   
     Streams integration
-  
-
-    
-  </span>
-  
-  
-
-      </a>
-    </li>
-  
-
-              
-            
-              
-                
-  
-  
-  
-  
-    <li class="md-nav__item">
-      <a href="../consumer/" class="md-nav__link">
-        
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    Consumer
   
 
     
@@ -995,10 +967,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#position-index" class="md-nav__link">
+  <a href="#candidate-index" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Position index
+        Candidate index
       
     </span>
   </a>
@@ -1048,8 +1020,8 @@
 <td>Durable set of held records</td>
 </tr>
 <tr>
-<td><code>positionIndex</code></td>
-<td><code>ParsleyPositionIndex</code></td>
+<td><code>candidateIndex</code></td>
+<td><code>ParsleyCandidateIndex</code></td>
 <td>Secondary index: coordinate -&gt; candidate record IDs</td>
 </tr>
 <tr>
@@ -1073,7 +1045,7 @@
    required offset equals the record's own source offset on that coordinate is removed
    (<code>ParsleyClock.without</code>). This prevents a record from blocking on its own position in the log.</li>
 <li>If <code>frontier.dominates(deps)</code>: advance frontier, add the record to output, call <code>drainInto()</code>.</li>
-<li>Otherwise: add record to buffer (assigned an insertion sequence and a <code>bufferedAt</code> timestamp), index unsatisfied coordinates in the position index. If buffer depth &gt;= <code>sizeLimit</code>, call <code>evictOverflow()</code>.</li>
+<li>Otherwise: add record to buffer (assigned an insertion sequence and a <code>bufferedAt</code> timestamp), index unsatisfied coordinates in the candidate index. If buffer depth &gt;= <code>sizeLimit</code>, call <code>evictOverflow()</code>.</li>
 </ol>
 <p>A missing or undecodable dependency header always falls into the satisfied branch (step 3) — it
 never reaches the buffer. The frontier still advances on these records, so buffered records
@@ -1083,7 +1055,7 @@ waiting on that coordinate are not permanently stalled.</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>toScan = {C}
 <a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>while toScan not empty:
 <a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a>  for each coordinate in toScan:
-<a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a>    candidates = positionIndex.findCandidates(topicId, partition, newOffset)
+<a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a>    candidates = candidateIndex.findCandidates(topicId, partition, newOffset)
 <a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a>    for each candidate:
 <a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a>      entry = buffer.get(candidate.recordId)
 <a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a>      if entry == null: prune stale index entry, skip
@@ -1104,7 +1076,7 @@ equivalently by <code>bufferedAt</code>) and hand it to a shared <code>evictEntr
 <ol>
 <li>Log the eviction at <code>WARN</code> with the causal gap (<code>required.missing(frontier)</code>) and call
    <code>metrics.recordViolation()</code>.</li>
-<li>Remove from buffer and position index.</li>
+<li>Remove from buffer and candidate index.</li>
 <li>Advance the frontier at the entry's source coordinate and add the record to the forward list —
    eviction never drops or diverts a record, it just delivers it out of causal order.</li>
 </ol>
@@ -1141,10 +1113,10 @@ at eviction time.</p>
 <li><strong><code>RocksBufferStore</code></strong> (production): wraps a <code>KeyValueStore&lt;Long, byte[]&gt;</code> backed by RocksDB and changelog-replicated. On construction, it makes a single pass over all existing keys to seed the monotonic <code>nextSequence</code> counter and the <code>size</code> field. No separate rehydration step is needed: the store is the buffer.</li>
 <li><strong><code>MockBufferStore</code></strong> (tests): wraps a <code>TreeMap&lt;Long, ParsleyMessage&lt;K,V&gt;&gt;</code> with equivalent semantics.</li>
 </ul>
-<h2 id="position-index">Position index</h2>
-<p><code>ParsleyPositionIndex</code> is backed by <code>RocksPositionIndex</code>, which wraps a <code>KeyValueStore&lt;byte[], byte[]&gt;</code>. The 36-byte composite key (topicId + partition + requiredOffset + recordId) sorts lexicographically in RocksDB, enabling a bounded range scan to find all records waiting on a given coordinate up to the new frontier offset.</p>
+<h2 id="candidate-index">Candidate index</h2>
+<p><code>ParsleyCandidateIndex</code> is backed by <code>RocksCandidateIndex</code>, which wraps a <code>KeyValueStore&lt;byte[], byte[]&gt;</code>. The 36-byte composite key (topicId + partition + requiredOffset + recordId) sorts lexicographically in RocksDB, enabling a bounded range scan to find all records waiting on a given coordinate up to the new frontier offset.</p>
 <p>The store value is always an empty byte array (<code>PRESENT</code> marker). The key encodes everything needed to find and validate a candidate.</p>
-<p>On engine construction, if the buffer is non-empty (restart recovery), the engine makes a single pass over all buffer entries to populate the position index. This rebuilds the secondary index from the authoritative buffer state.</p>
+<p>On engine construction, if the buffer is non-empty (restart recovery), the engine makes a single pass over all buffer entries to populate the candidate index. This rebuilds the secondary index from the authoritative buffer state.</p>
 
 
 

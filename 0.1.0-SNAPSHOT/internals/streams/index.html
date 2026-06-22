@@ -14,7 +14,7 @@
         <link rel="prev" href="../engine/">
       
       
-        <link rel="next" href="../consumer/">
+        <link rel="next" href="../benchmarks/">
       
       
         
@@ -768,34 +768,6 @@
   
   
     <li class="md-nav__item">
-      <a href="../consumer/" class="md-nav__link">
-        
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    Consumer
-  
-
-    
-  </span>
-  
-  
-
-      </a>
-    </li>
-  
-
-              
-            
-              
-                
-  
-  
-  
-  
-    <li class="md-nav__item">
       <a href="../benchmarks/" class="md-nav__link">
         
   
@@ -951,7 +923,7 @@
 <td><code>byte[]</code></td>
 </tr>
 <tr>
-<td><code>{ns}-position-index</code></td>
+<td><code>{ns}-candidate-index</code></td>
 <td><code>byte[]</code></td>
 <td><code>byte[]</code></td>
 </tr>
@@ -966,7 +938,7 @@
 <li>Construct <code>ParsleyEngine</code> with:<ul>
 <li>A <code>FrontierCallback</code> (internal) that writes the new frontier to the frontier store and appends a snapshot to a local list used for per-record delivery-time stamping.</li>
 <li>A <code>RocksBufferStore</code> wrapping the buffer store and a <code>ParsleySerializer</code>.</li>
-<li>A <code>RocksPositionIndex</code> wrapping the position-index store.</li>
+<li>A <code>RocksCandidateIndex</code> wrapping the candidate-index store.</li>
 </ul>
 </li>
 <li>Wrap the real context in a <code>ParsleyProcessorContext</code> (stamping proxy).</li>
@@ -1006,7 +978,7 @@
 <p><strong><code>recordMetadata()</code>:</strong> Returns the source coordinate metadata of the record currently being delivered (set by <code>deliver()</code> above) when inside a delivery call. Returns the delegate's <code>recordMetadata()</code> otherwise. This gives the user processor access to the causal position of the triggering record.</p>
 <p>All other <code>ProcessorContext</code> methods delegate verbatim.</p>
 <h2 id="state-store-namespace">State store namespace</h2>
-<p>The default namespace is <code>"parsley"</code>. Set it with <code>CausalProcessors.builder(...).storeName(ns)</code>. Use a unique namespace per <code>CausalProcessorSupplier</code> instance within a topology that contains more than one. The store names are embedded in the changelog topic names, so they must be stable across deployments.</p>
+<p>The namespace is the <code>name</code> passed to <code>CausalProcessors.builder(...).addBufferStore(name, limit)</code>. Use a unique namespace per <code>CausalProcessorSupplier</code> instance within a topology that contains more than one. The store names are embedded in the changelog topic names, so they must be stable across deployments.</p>
 
 
 
@@ -1059,13 +1031,13 @@
         
         
           
-          <a href="../consumer/" class="md-footer__link md-footer__link--next" aria-label="Next: Consumer">
+          <a href="../benchmarks/" class="md-footer__link md-footer__link--next" aria-label="Next: Benchmarks">
             <div class="md-footer__title">
               <span class="md-footer__direction">
                 Next
               </span>
               <div class="md-ellipsis">
-                Consumer
+                Benchmarks
               </div>
             </div>
             <div class="md-footer__button md-icon">

@@ -833,34 +833,6 @@
   
   
     <li class="md-nav__item">
-      <a href="../internals/consumer/" class="md-nav__link">
-        
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    Consumer
-  
-
-    
-  </span>
-  
-  
-
-      </a>
-    </li>
-  
-
-              
-            
-              
-                
-  
-  
-  
-  
-    <li class="md-nav__item">
       <a href="../internals/benchmarks/" class="md-nav__link">
         
   
@@ -1286,7 +1258,7 @@ this is <strong>O(1)</strong> — effectively constant regardless of buffer size
 </tr>
 </tbody>
 </table>
-<p><strong>Buffer restore</strong> scans every buffered record to rebuild the position index. Benchmarking confirms
+<p><strong>Buffer restore</strong> scans every buffered record to rebuild the candidate index. Benchmarking confirms
 this is <strong>O(n)</strong> in the number of records held at the time of the crash or reassignment:</p>
 <table>
 <thead>

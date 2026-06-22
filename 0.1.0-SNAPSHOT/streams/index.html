@@ -755,34 +755,6 @@
   
   
     <li class="md-nav__item">
-      <a href="../internals/consumer/" class="md-nav__link">
-        
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    Consumer
-  
-
-    
-  </span>
-  
-  
-
-      </a>
-    </li>
-  
-
-              
-            
-              
-                
-  
-  
-  
-  
-    <li class="md-nav__item">
       <a href="../internals/benchmarks/" class="md-nav__link">
         
   
@@ -903,8 +875,8 @@
 
 <h1 id="streams-integration">Streams integration</h1>
 <p><code>CausalProcessors</code> wraps a standard Kafka Streams <code>Processor</code> so that its state-store reads,
-writes, and <code>forward</code> calls all execute behind the causal guarantee — transparently, with no
-<code>CausalProducer</code> on egress (Streams sinks carry the stamped header out to the topic).</p>
+writes, and <code>forward</code> calls all execute behind the causal guarantee — transparently, with nothing
+extra on egress (Streams sinks carry the stamped header out to the topic).</p>
 <h2 id="building-a-causal-processor">Building a causal processor</h2>
 <p>Write an ordinary <code>Processor&lt;K, V, KOut, VOut&gt;</code> and wrap its supplier with <code>CausalProcessors.builder</code>:</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="n">ProcessorSupplier</span><span class="o">&lt;</span><span class="n">String</span><span class="p">,</span><span class="w"> </span><span class="n">Order</span><span class="p">,</span><span class="w"> </span><span class="n">String</span><span class="p">,</span><span class="w"> </span><span class="n">Enriched</span><span class="o">&gt;</span><span class="w"> </span><span class="n">user</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">new</span><span class="w"> </span><span class="n">ProcessorSupplier</span><span class="o">&lt;&gt;</span><span class="p">()</span><span class="w"> </span><span class="p">{</span>
@@ -913,18 +885,27 @@ writes, and <code>forward</code> calls all execute behind the causal guarantee �
 <a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a><span class="p">};</span>
 <a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a>
 <a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a><span class="n">CausalProcessorSupplier</span><span class="o">&lt;</span><span class="n">String</span><span class="p">,</span><span class="w"> </span><span class="n">Order</span><span class="p">,</span><span class="w"> </span><span class="n">String</span><span class="p">,</span><span class="w"> </span><span class="n">Enriched</span><span class="o">&gt;</span><span class="w"> </span><span class="n">causal</span><span class="w"> </span><span class="o">=</span>
-<a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a><span class="w">        </span><span class="n">CausalProcessors</span><span class="p">.</span><span class="na">builder</span><span class="p">(</span><span class="n">user</span><span class="p">,</span><span class="w"> </span><span class="n">CausalBufferLimit</span><span class="p">.</span><span class="na">ofDuration</span><span class="p">(</span><span class="n">limit</span><span class="p">))</span>
-<a id="__codelineno-0-8" name="__codelineno-0-8" href="#__codelineno-0-8"></a><span class="w">                </span><span class="p">.</span><span class="na">addBuffers</span><span class="p">(</span><span class="n">List</span><span class="p">.</span><span class="na">of</span><span class="p">(</span><span class="s">&quot;prices&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;orders&quot;</span><span class="p">),</span><span class="w"> </span><span class="n">Serdes</span><span class="p">.</span><span class="na">String</span><span class="p">(),</span><span class="w"> </span><span class="n">orderSerde</span><span class="p">)</span>
-<a id="__codelineno-0-9" name="__codelineno-0-9" href="#__codelineno-0-9"></a><span class="w">                </span><span class="p">.</span><span class="na">build</span><span class="p">();</span>
-<a id="__codelineno-0-10" name="__codelineno-0-10" href="#__codelineno-0-10"></a>
-<a id="__codelineno-0-11" name="__codelineno-0-11" href="#__codelineno-0-11"></a><span class="n">builder</span><span class="p">.</span><span class="na">stream</span><span class="p">(</span><span class="n">List</span><span class="p">.</span><span class="na">of</span><span class="p">(</span><span class="s">&quot;prices&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;orders&quot;</span><span class="p">),</span><span class="w"> </span><span class="n">Consumed</span><span class="p">.</span><span class="na">with</span><span class="p">(</span><span class="n">Serdes</span><span class="p">.</span><span class="na">String</span><span class="p">(),</span><span class="w"> </span><span class="n">orderSerde</span><span class="p">))</span>
-<a id="__codelineno-0-12" name="__codelineno-0-12" href="#__codelineno-0-12"></a><span class="w">       </span><span class="p">.</span><span class="na">process</span><span class="p">(</span><span class="n">causal</span><span class="p">)</span>
-<a id="__codelineno-0-13" name="__codelineno-0-13" href="#__codelineno-0-13"></a><span class="w">       </span><span class="p">.</span><span class="na">to</span><span class="p">(</span><span class="s">&quot;output-topic&quot;</span><span class="p">);</span>
+<a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a><span class="w">        </span><span class="n">CausalProcessors</span><span class="p">.</span><span class="na">builder</span><span class="p">(</span><span class="n">user</span><span class="p">)</span>
+<a id="__codelineno-0-8" name="__codelineno-0-8" href="#__codelineno-0-8"></a><span class="w">                </span><span class="p">.</span><span class="na">addBufferStore</span><span class="p">(</span><span class="s">&quot;parsley&quot;</span><span class="p">,</span><span class="w"> </span><span class="n">CausalBufferLimit</span><span class="p">.</span><span class="na">ofDuration</span><span class="p">(</span><span class="n">limit</span><span class="p">))</span>
+<a id="__codelineno-0-9" name="__codelineno-0-9" href="#__codelineno-0-9"></a><span class="w">                </span><span class="p">.</span><span class="na">addBuffers</span><span class="p">(</span><span class="n">List</span><span class="p">.</span><span class="na">of</span><span class="p">(</span><span class="s">&quot;prices&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;orders&quot;</span><span class="p">),</span><span class="w"> </span><span class="n">Serdes</span><span class="p">.</span><span class="na">String</span><span class="p">(),</span><span class="w"> </span><span class="n">orderSerde</span><span class="p">)</span>
+<a id="__codelineno-0-10" name="__codelineno-0-10" href="#__codelineno-0-10"></a><span class="w">                </span><span class="p">.</span><span class="na">build</span><span class="p">();</span>
+<a id="__codelineno-0-11" name="__codelineno-0-11" href="#__codelineno-0-11"></a>
+<a id="__codelineno-0-12" name="__codelineno-0-12" href="#__codelineno-0-12"></a><span class="n">builder</span><span class="p">.</span><span class="na">stream</span><span class="p">(</span><span class="n">List</span><span class="p">.</span><span class="na">of</span><span class="p">(</span><span class="s">&quot;prices&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;orders&quot;</span><span class="p">),</span><span class="w"> </span><span class="n">Consumed</span><span class="p">.</span><span class="na">with</span><span class="p">(</span><span class="n">Serdes</span><span class="p">.</span><span class="na">String</span><span class="p">(),</span><span class="w"> </span><span class="n">orderSerde</span><span class="p">))</span>
+<a id="__codelineno-0-13" name="__codelineno-0-13" href="#__codelineno-0-13"></a><span class="w">       </span><span class="p">.</span><span class="na">process</span><span class="p">(</span><span class="n">causal</span><span class="p">)</span>
+<a id="__codelineno-0-14" name="__codelineno-0-14" href="#__codelineno-0-14"></a><span class="w">       </span><span class="p">.</span><span class="na">to</span><span class="p">(</span><span class="s">&quot;output-topic&quot;</span><span class="p">);</span>
 </code></pre></div>
+<p><code>addBufferStore(name, limit)</code> declares the buffer state store — <code>name</code> is the state-store namespace
+(see below) and <code>limit</code> is the eviction trigger — mirroring how Kafka Streams names and sizes a store
+in one place.</p>
 <p>Each input topic is registered as a <code>CausalBuffer</code> carrying the serdes the buffer round-trips held
 records with; the topic's stable UUID is resolved from the broker automatically at startup. For
 per-topic serdes (e.g. mixed Avro types), use <code>.addBuffer(CausalBuffer.of(topic, keySerde, valueSerde))</code>
 once per topic instead of the shared <code>addBuffers(topics, key, value)</code> convenience.</p>
+<p>Parsley's own configuration is supplied on the builder the same way Kafka Streams config is —
+<code>.withConfig(key, value)</code>, <code>.withConfigs(Map)</code>, or <code>.withConfig(Properties)</code> — and is overlaid on top
+of any <code>parsley.properties</code> classpath resource. For example:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="w">        </span><span class="p">.</span><span class="na">withConfig</span><span class="p">(</span><span class="s">&quot;parsley.buffer.deserialization.failure.policy&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;continue&quot;</span><span class="p">)</span>
+</code></pre></div>
 <p>Parsley registers its own internal state stores (causal buffer, frontier store) alongside any
 stores declared by your <code>ProcessorSupplier.stores()</code>. You never interact with these stores
 directly.</p>

@@ -398,10 +398,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#consuming-in-causal-order" class="md-nav__link">
+  <a href="#ordering-records-causally" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Consuming in causal order
+        Ordering records causally
       
     </span>
   </a>
@@ -409,10 +409,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#producing-with-causal-context" class="md-nav__link">
+  <a href="#stamping-causal-context-onto-produced-records" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Producing with causal context
+        Stamping causal context onto produced records
       
     </span>
   </a>
@@ -766,34 +766,6 @@
   
   
     <li class="md-nav__item">
-      <a href="../internals/consumer/" class="md-nav__link">
-        
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    Consumer
-  
-
-    
-  </span>
-  
-  
-
-      </a>
-    </li>
-  
-
-              
-            
-              
-                
-  
-  
-  
-  
-    <li class="md-nav__item">
       <a href="../internals/benchmarks/" class="md-nav__link">
         
   
@@ -871,10 +843,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#consuming-in-causal-order" class="md-nav__link">
+  <a href="#ordering-records-causally" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Consuming in causal order
+        Ordering records causally
       
     </span>
   </a>
@@ -882,10 +854,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#producing-with-causal-context" class="md-nav__link">
+  <a href="#stamping-causal-context-onto-produced-records" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Producing with causal context
+        Stamping causal context onto produced records
       
     </span>
   </a>
@@ -959,53 +931,45 @@ Add your credentials to <code>~/.m2/settings.xml</code>:</p>
 <a id="__codelineno-1-12" name="__codelineno-1-12" href="#__codelineno-1-12"></a><span class="nt">&lt;/dependency&gt;</span>
 </code></pre></div>
 <p><code>parsley</code> pulls in <code>kafka-streams</code> and <code>kafka-clients</code> transitively.</p>
-<h2 id="consuming-in-causal-order">Consuming in causal order</h2>
-<p><code>CausalConsumer</code> is a drop-in replacement for a plain Kafka consumer. It delivers records from all
-subscribed topics in causal order, holding any record whose dependencies have not yet been observed:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="k">try</span><span class="w"> </span><span class="p">(</span><span class="n">CausalConsumer</span><span class="o">&lt;</span><span class="n">String</span><span class="p">,</span><span class="w"> </span><span class="n">Order</span><span class="o">&gt;</span><span class="w"> </span><span class="n">consumer</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">CausalConsumers</span><span class="p">.</span><span class="o">&lt;</span><span class="n">String</span><span class="p">,</span><span class="w"> </span><span class="n">Order</span><span class="o">&gt;</span><span class="n">builder</span><span class="p">(</span>
-<a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="w">        </span><span class="n">CausalBufferLimit</span><span class="p">.</span><span class="na">ofDuration</span><span class="p">(</span><span class="n">Duration</span><span class="p">.</span><span class="na">ofSeconds</span><span class="p">(</span><span class="mi">30</span><span class="p">)),</span>
-<a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a><span class="w">        </span><span class="n">Map</span><span class="p">.</span><span class="na">of</span><span class="p">(</span><span class="n">ConsumerConfig</span><span class="p">.</span><span class="na">GROUP_ID_CONFIG</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;my-group&quot;</span><span class="p">),</span>
-<a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a><span class="w">        </span><span class="n">Map</span><span class="p">.</span><span class="na">of</span><span class="p">(</span><span class="n">StreamsConfig</span><span class="p">.</span><span class="na">APPLICATION_ID_CONFIG</span><span class="p">,</span><span class="w">    </span><span class="s">&quot;my-app&quot;</span><span class="p">,</span>
-<a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a><span class="w">               </span><span class="n">StreamsConfig</span><span class="p">.</span><span class="na">BOOTSTRAP_SERVERS_CONFIG</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;localhost:9092&quot;</span><span class="p">))</span>
-<a id="__codelineno-2-6" name="__codelineno-2-6" href="#__codelineno-2-6"></a><span class="w">        </span><span class="p">.</span><span class="na">addBuffers</span><span class="p">(</span><span class="n">List</span><span class="p">.</span><span class="na">of</span><span class="p">(</span><span class="s">&quot;prices&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;orders&quot;</span><span class="p">),</span><span class="w"> </span><span class="n">Serdes</span><span class="p">.</span><span class="na">String</span><span class="p">(),</span><span class="w"> </span><span class="n">orderSerde</span><span class="p">)</span>
-<a id="__codelineno-2-7" name="__codelineno-2-7" href="#__codelineno-2-7"></a><span class="w">        </span><span class="p">.</span><span class="na">build</span><span class="p">())</span><span class="w"> </span><span class="p">{</span>
-<a id="__codelineno-2-8" name="__codelineno-2-8" href="#__codelineno-2-8"></a>
-<a id="__codelineno-2-9" name="__codelineno-2-9" href="#__codelineno-2-9"></a><span class="w">    </span><span class="k">while</span><span class="w"> </span><span class="p">(</span><span class="n">running</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
-<a id="__codelineno-2-10" name="__codelineno-2-10" href="#__codelineno-2-10"></a><span class="w">        </span><span class="n">ConsumerRecords</span><span class="o">&lt;</span><span class="n">String</span><span class="p">,</span><span class="w"> </span><span class="n">Order</span><span class="o">&gt;</span><span class="w"> </span><span class="n">records</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">consumer</span><span class="p">.</span><span class="na">poll</span><span class="p">(</span><span class="n">Duration</span><span class="p">.</span><span class="na">ofMillis</span><span class="p">(</span><span class="mi">100</span><span class="p">));</span>
-<a id="__codelineno-2-11" name="__codelineno-2-11" href="#__codelineno-2-11"></a><span class="w">        </span><span class="n">records</span><span class="p">.</span><span class="na">forEach</span><span class="p">(</span><span class="k">this</span><span class="p">::</span><span class="n">process</span><span class="p">);</span>
-<a id="__codelineno-2-12" name="__codelineno-2-12" href="#__codelineno-2-12"></a><span class="w">    </span><span class="p">}</span>
-<a id="__codelineno-2-13" name="__codelineno-2-13" href="#__codelineno-2-13"></a><span class="p">}</span>
+<h2 id="ordering-records-causally">Ordering records causally</h2>
+<p>Parsley delivers records in causal order <strong>inside a Kafka Streams topology</strong>. Wrap your own processor
+with <code>CausalProcessors</code> and it holds any record whose dependencies have not yet been observed,
+releasing it once the frontier catches up. See <a href="../streams/">Streams integration</a> for the full setup.</p>
+<h2 id="stamping-causal-context-onto-produced-records">Stamping causal context onto produced records</h2>
+<p>At the edges of a topology — where plain Kafka producers feed records in — attach the causal
+dependencies as a header with <code>CausalDependencies.stamp</code>. Resolve topic UUIDs once through a
+<code>CausalTopics</code> backed by an <code>Admin</code> you own (Parsley never closes it):</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="n">CausalTopics</span><span class="w"> </span><span class="n">topics</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">CausalTopics</span><span class="p">.</span><span class="na">of</span><span class="p">(</span><span class="n">admin</span><span class="p">);</span>
+<a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a>
+<a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a><span class="c1">// trigger&#39;s own dependencies plus its own position</span>
+<a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a><span class="n">CausalDependencies</span><span class="w"> </span><span class="n">deps</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">CausalDependencies</span><span class="p">.</span><span class="na">from</span><span class="p">(</span><span class="n">topics</span><span class="p">,</span><span class="w"> </span><span class="n">trigger</span><span class="p">);</span>
+<a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a><span class="n">producer</span><span class="p">.</span><span class="na">send</span><span class="p">(</span><span class="n">deps</span><span class="p">.</span><span class="na">stamp</span><span class="p">(</span><span class="k">new</span><span class="w"> </span><span class="n">ProducerRecord</span><span class="o">&lt;&gt;</span><span class="p">(</span><span class="s">&quot;orders&quot;</span><span class="p">,</span><span class="w"> </span><span class="n">key</span><span class="p">,</span><span class="w"> </span><span class="n">value</span><span class="p">)));</span>
 </code></pre></div>
-<h2 id="producing-with-causal-context">Producing with causal context</h2>
-<p><code>CausalProducer</code> wraps a standard Kafka producer and attaches the current causal dependencies as a
-header on every record it sends:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="n">CausalProducer</span><span class="o">&lt;</span><span class="n">String</span><span class="p">,</span><span class="w"> </span><span class="n">Event</span><span class="o">&gt;</span><span class="w"> </span><span class="n">producer</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">CausalProducers</span><span class="p">.</span><span class="o">&lt;</span><span class="n">String</span><span class="p">,</span><span class="w"> </span><span class="n">Event</span><span class="o">&gt;</span><span class="n">builder</span><span class="p">(</span><span class="n">producerConfig</span><span class="p">).</span><span class="na">build</span><span class="p">();</span>
+<p><code>from</code> carries the dependencies the triggering record arrived with <strong>and</strong> its own position, so a
+downstream causal processor waits until it has observed <code>trigger</code> before delivering anything stamped
+here. Combine several with <code>merge</code> for a fan-in:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="n">CausalDependencies</span><span class="w"> </span><span class="n">deps</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">CausalDependencies</span><span class="p">.</span><span class="na">from</span><span class="p">(</span><span class="n">topics</span><span class="p">,</span><span class="w"> </span><span class="n">priceUpdate</span><span class="p">)</span>
+<a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a><span class="w">        </span><span class="p">.</span><span class="na">merge</span><span class="p">(</span><span class="n">CausalDependencies</span><span class="p">.</span><span class="na">from</span><span class="p">(</span><span class="n">topics</span><span class="p">,</span><span class="w"> </span><span class="n">inventoryChange</span><span class="p">));</span>
+<a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a><span class="n">producer</span><span class="p">.</span><span class="na">send</span><span class="p">(</span><span class="n">deps</span><span class="p">.</span><span class="na">stamp</span><span class="p">(</span><span class="n">record</span><span class="p">));</span>
 </code></pre></div>
-<p>When sending, pass the dependencies that represent the causal premise of the record. The right
-choice for most cases is the dependencies carried by the message that triggered this send — bounded
-by that hop's fan-in and transitively carries its own dependencies:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a><span class="n">CausalDependencies</span><span class="w"> </span><span class="n">context</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">CausalDependencies</span><span class="p">.</span><span class="na">fromRecord</span><span class="p">(</span><span class="n">trigger</span><span class="p">)</span>
-<a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a><span class="w">        </span><span class="p">.</span><span class="na">orElse</span><span class="p">(</span><span class="n">CausalDependencies</span><span class="p">.</span><span class="na">empty</span><span class="p">());</span>
-<a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a><span class="n">producer</span><span class="p">.</span><span class="na">send</span><span class="p">(</span><span class="k">new</span><span class="w"> </span><span class="n">ProducerRecord</span><span class="o">&lt;&gt;</span><span class="p">(</span><span class="s">&quot;orders&quot;</span><span class="p">,</span><span class="w"> </span><span class="n">key</span><span class="p">,</span><span class="w"> </span><span class="n">value</span><span class="p">),</span><span class="w"> </span><span class="n">context</span><span class="p">);</span>
-</code></pre></div>
-<p>To declare a dependency on a specific upstream position, build one explicitly:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a><span class="n">CausalDependencies</span><span class="w"> </span><span class="n">context</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">CausalDependencies</span><span class="p">.</span><span class="na">builder</span><span class="p">()</span>
-<a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a><span class="w">        </span><span class="p">.</span><span class="na">require</span><span class="p">(</span><span class="n">pricesTopic</span><span class="p">,</span><span class="w"> </span><span class="cm">/* partition */</span><span class="w"> </span><span class="mi">0</span><span class="p">,</span><span class="w"> </span><span class="cm">/* offset */</span><span class="w"> </span><span class="mi">42</span><span class="p">)</span>
-<a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a><span class="w">        </span><span class="p">.</span><span class="na">build</span><span class="p">();</span>
+<p>To declare a dependency on a specific upstream position you did not consume, build one explicitly:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a><span class="n">CausalDependencies</span><span class="w"> </span><span class="n">deps</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">CausalDependencies</span><span class="p">.</span><span class="na">builder</span><span class="p">(</span><span class="n">topics</span><span class="p">)</span>
+<a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a><span class="w">        </span><span class="p">.</span><span class="na">require</span><span class="p">(</span><span class="s">&quot;prices&quot;</span><span class="p">,</span><span class="w"> </span><span class="cm">/* partition */</span><span class="w"> </span><span class="mi">0</span><span class="p">,</span><span class="w"> </span><span class="cm">/* offset */</span><span class="w"> </span><span class="mi">42</span><span class="p">)</span>
+<a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a><span class="w">        </span><span class="p">.</span><span class="na">build</span><span class="p">();</span>
 </code></pre></div>
 <p>The serialised dependencies header grows with the number of topic-partitions it names — see the
 <a href="../configuration/#header-size">header size note</a> in Configuration.</p>
 <h2 id="propagating-causal-context-across-services">Propagating causal context across services</h2>
 <p>A <code>CausalDependencies</code> value is a portable causal token. To gate a read in a downstream service on
 what an upstream record depended on, serialise the dependencies and send them over your transport:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a><span class="c1">// Sender — extract the relevant dependencies and serialise them</span>
-<a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a><span class="n">CausalDependencies</span><span class="w"> </span><span class="n">context</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">CausalDependencies</span><span class="p">.</span><span class="na">fromRecord</span><span class="p">(</span><span class="n">consumedRecord</span><span class="p">)</span>
-<a id="__codelineno-6-3" name="__codelineno-6-3" href="#__codelineno-6-3"></a><span class="w">        </span><span class="p">.</span><span class="na">orElse</span><span class="p">(</span><span class="n">CausalDependencies</span><span class="p">.</span><span class="na">empty</span><span class="p">());</span>
-<a id="__codelineno-6-4" name="__codelineno-6-4" href="#__codelineno-6-4"></a><span class="kt">byte</span><span class="o">[]</span><span class="w"> </span><span class="n">token</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">context</span><span class="p">.</span><span class="na">toBytes</span><span class="p">();</span>
-<a id="__codelineno-6-5" name="__codelineno-6-5" href="#__codelineno-6-5"></a><span class="c1">// ... send token over HTTP, gRPC, etc. (apply your own encryption/transport)</span>
-<a id="__codelineno-6-6" name="__codelineno-6-6" href="#__codelineno-6-6"></a>
-<a id="__codelineno-6-7" name="__codelineno-6-7" href="#__codelineno-6-7"></a><span class="c1">// Receiver — rebuild the dependencies</span>
-<a id="__codelineno-6-8" name="__codelineno-6-8" href="#__codelineno-6-8"></a><span class="n">CausalDependencies</span><span class="w"> </span><span class="n">required</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">CausalDependencies</span><span class="p">.</span><span class="na">fromBytes</span><span class="p">(</span><span class="n">receivedToken</span><span class="p">);</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a><span class="c1">// Sender — extract the relevant dependencies and serialise them</span>
+<a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a><span class="n">CausalDependencies</span><span class="w"> </span><span class="n">context</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">CausalDependencies</span><span class="p">.</span><span class="na">fromRecord</span><span class="p">(</span><span class="n">consumedRecord</span><span class="p">)</span>
+<a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a><span class="w">        </span><span class="p">.</span><span class="na">orElse</span><span class="p">(</span><span class="n">CausalDependencies</span><span class="p">.</span><span class="na">empty</span><span class="p">());</span>
+<a id="__codelineno-5-4" name="__codelineno-5-4" href="#__codelineno-5-4"></a><span class="kt">byte</span><span class="o">[]</span><span class="w"> </span><span class="n">token</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">context</span><span class="p">.</span><span class="na">toBytes</span><span class="p">();</span>
+<a id="__codelineno-5-5" name="__codelineno-5-5" href="#__codelineno-5-5"></a><span class="c1">// ... send token over HTTP, gRPC, etc. (apply your own encryption/transport)</span>
+<a id="__codelineno-5-6" name="__codelineno-5-6" href="#__codelineno-5-6"></a>
+<a id="__codelineno-5-7" name="__codelineno-5-7" href="#__codelineno-5-7"></a><span class="c1">// Receiver — rebuild the dependencies</span>
+<a id="__codelineno-5-8" name="__codelineno-5-8" href="#__codelineno-5-8"></a><span class="n">CausalDependencies</span><span class="w"> </span><span class="n">required</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">CausalDependencies</span><span class="p">.</span><span class="na">fromBytes</span><span class="p">(</span><span class="n">receivedToken</span><span class="p">);</span>
 </code></pre></div>
 <p>Parsley ships no encryption or transport layer; securing and routing the token is the
 application's responsibility.</p>

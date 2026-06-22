@@ -774,34 +774,6 @@
   
   
     <li class="md-nav__item">
-      <a href="../consumer/" class="md-nav__link">
-        
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    Consumer
-  
-
-    
-  </span>
-  
-  
-
-      </a>
-    </li>
-  
-
-              
-            
-              
-                
-  
-  
-  
-  
-    <li class="md-nav__item">
       <a href="../benchmarks/" class="md-nav__link">
         
   
@@ -938,30 +910,32 @@
 
 
 <h1 id="internals-overview">Internals overview</h1>
-<p>Parsley has three public entry points backed by a shared internal implementation.</p>
+<p>Parsley is built around one public entry point — the Streams causal processor — plus stateless edge
+operations for stamping and propagating dependencies from plain Kafka clients, all backed by a shared
+internal implementation.</p>
 <table>
 <thead>
 <tr>
-<th>Entry point</th>
+<th>API</th>
 <th>Backed by</th>
 </tr>
 </thead>
 <tbody>
 <tr>
-<td><code>CausalProducer</code></td>
-<td><code>ParsleyProducer</code></td>
-</tr>
-<tr>
-<td><code>CausalConsumer</code></td>
-<td><code>ParsleyConsumer</code> + Kafka Streams + outbox topic</td>
-</tr>
-<tr>
 <td><code>CausalProcessorSupplier</code></td>
 <td><code>ParsleyProcessorSupplier</code> + <code>ParsleyProcessor</code></td>
 </tr>
+<tr>
+<td><code>CausalDependencies</code> edge ops (<code>stamp</code> / <code>from</code> / <code>merge</code>)</td>
+<td><code>ParsleyClock</code> (no wrapper objects)</td>
+</tr>
+<tr>
+<td><code>CausalTopics</code></td>
+<td>A caller-owned Kafka <code>Admin</code> (name → UUID, cached)</td>
+</tr>
 </tbody>
 </table>
-<p>All three share a common set of value types and a single causal engine.</p>
+<p>All share a common set of value types and a single causal engine.</p>
 <h2 id="class-map">Class map</h2>
 <h3 id="public-api">Public API</h3>
 <table>
@@ -974,15 +948,15 @@
 <tbody>
 <tr>
 <td><code>CausalDependencies</code></td>
-<td>Public facade over a <code>ParsleyClock</code>: the causal requirements stamped by the producer onto each record</td>
+<td>Public facade over a <code>ParsleyClock</code>: the causal requirements stamped onto each record, plus the <code>stamp</code>/<code>from</code>/<code>merge</code> edge operations</td>
+</tr>
+<tr>
+<td><code>CausalTopics</code></td>
+<td>Resolves topic names to their stable Kafka UUIDs through a caller-owned <code>Admin</code> (used to build <code>CausalDependencies</code>)</td>
 </tr>
 <tr>
 <td><code>CausalBuffer</code></td>
-<td>Registers one causal source on a builder: topic name + the serdes the buffer round-trips held records with (the topic's UUID is resolved from the broker)</td>
-</tr>
-<tr>
-<td><code>CausalTopic</code></td>
-<td>A topic's stable causal identity: name + Kafka UUID (used to build <code>CausalDependencies.require</code>)</td>
+<td>Registers one causal source on the processor builder: topic name + the serdes the buffer round-trips held records with (the topic's UUID is resolved from the broker)</td>
 </tr>
 <tr>
 <td><code>CausalBufferLimit</code></td>
@@ -1028,19 +1002,11 @@
 <td>Stamping proxy: replaces the context given to the user processor</td>
 </tr>
 <tr>
-<td><code>ParsleyConsumer</code></td>
-<td>Poll-based consumer backed by a Streams topology and outbox topic</td>
-</tr>
-<tr>
-<td><code>ParsleyProducer</code></td>
-<td>Decorator that stamps <code>parsley-causal-dependencies</code> on every send</td>
-</tr>
-<tr>
 <td><code>ParsleyBufferStore</code> / <code>RocksBufferStore</code></td>
 <td>Durable buffer of held records</td>
 </tr>
 <tr>
-<td><code>ParsleyPositionIndex</code> / <code>RocksPositionIndex</code></td>
+<td><code>ParsleyCandidateIndex</code> / <code>RocksCandidateIndex</code></td>
 <td>Secondary index: coordinate -&gt; candidate record IDs</td>
 </tr>
 <tr>
@@ -1050,43 +1016,28 @@
 </tbody>
 </table>
 <h2 id="end-to-end-flow">End-to-end flow</h2>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>Producer
-<a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>  ParsleyProducer.send(record, deps)
-<a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a>    -&gt; stamps parsley-causal-dependencies header
-<a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a>    -&gt; sends to Kafka
-<a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a>
-<a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a>Consumer (CausalConsumer path)
-<a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a>  Kafka Streams topology
-<a id="__codelineno-0-8" name="__codelineno-0-8" href="#__codelineno-0-8"></a>    ParsleyProcessor.process(record)
-<a id="__codelineno-0-9" name="__codelineno-0-9" href="#__codelineno-0-9"></a>      -&gt; ingest: wrap in ParsleyMessage, embed source coordinates
-<a id="__codelineno-0-10" name="__codelineno-0-10" href="#__codelineno-0-10"></a>      -&gt; gate:   ParsleyEngine.onRecord()
-<a id="__codelineno-0-11" name="__codelineno-0-11" href="#__codelineno-0-11"></a>                   satisfied   -&gt; advance frontier, drain cascade
-<a id="__codelineno-0-12" name="__codelineno-0-12" href="#__codelineno-0-12"></a>                   unsatisfied -&gt; buffer (RocksBufferStore) + index (RocksPositionIndex)
-<a id="__codelineno-0-13" name="__codelineno-0-13" href="#__codelineno-0-13"></a>                   no header   -&gt; trivially satisfied (empty dependencies)
-<a id="__codelineno-0-14" name="__codelineno-0-14" href="#__codelineno-0-14"></a>      -&gt; deliver: for each admitted record
-<a id="__codelineno-0-15" name="__codelineno-0-15" href="#__codelineno-0-15"></a>                   stamp frontier onto parsley-causal-dependencies
-<a id="__codelineno-0-16" name="__codelineno-0-16" href="#__codelineno-0-16"></a>                   save ORIGINAL_DEPENDENCIES, forward to outbox topic
-<a id="__codelineno-0-17" name="__codelineno-0-17" href="#__codelineno-0-17"></a>
-<a id="__codelineno-0-18" name="__codelineno-0-18" href="#__codelineno-0-18"></a>  Outbox topic (internal, bytes)
-<a id="__codelineno-0-19" name="__codelineno-0-19" href="#__codelineno-0-19"></a>
-<a id="__codelineno-0-20" name="__codelineno-0-20" href="#__codelineno-0-20"></a>  ParsleyConsumer.poll()
-<a id="__codelineno-0-21" name="__codelineno-0-21" href="#__codelineno-0-21"></a>    -&gt; reads from outbox topic
-<a id="__codelineno-0-22" name="__codelineno-0-22" href="#__codelineno-0-22"></a>    -&gt; restores original producer dependencies from ORIGINAL_DEPENDENCIES
-<a id="__codelineno-0-23" name="__codelineno-0-23" href="#__codelineno-0-23"></a>    -&gt; deserialises key/value by source topic
-<a id="__codelineno-0-24" name="__codelineno-0-24" href="#__codelineno-0-24"></a>    -&gt; reconstructs ConsumerRecord at source partition/offset
-<a id="__codelineno-0-25" name="__codelineno-0-25" href="#__codelineno-0-25"></a>    -&gt; returns ConsumerRecords grouped by source TopicPartition
-<a id="__codelineno-0-26" name="__codelineno-0-26" href="#__codelineno-0-26"></a>
-<a id="__codelineno-0-27" name="__codelineno-0-27" href="#__codelineno-0-27"></a>CausalProcessorSupplier path (Streams-native)
-<a id="__codelineno-0-28" name="__codelineno-0-28" href="#__codelineno-0-28"></a>  Same ParsleyProcessor; no outbox topic
-<a id="__codelineno-0-29" name="__codelineno-0-29" href="#__codelineno-0-29"></a>  User processor receives records via ParsleyProcessorContext
-<a id="__codelineno-0-30" name="__codelineno-0-30" href="#__codelineno-0-30"></a>  Forwarded records carry stamped frontier dependencies
+<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>Edge (plain Kafka producer)
+<a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>  CausalDependencies.from(topics, trigger) / .merge(...) / .builder(topics).require(...)
+<a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a>    -&gt; CausalDependencies.stamp(record)
+<a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a>         -&gt; stamps parsley-causal-dependencies header
+<a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a>    -&gt; producer.send(record)
+<a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a>
+<a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a>Causal processor (Streams)
+<a id="__codelineno-0-8" name="__codelineno-0-8" href="#__codelineno-0-8"></a>  ParsleyProcessor.process(record)
+<a id="__codelineno-0-9" name="__codelineno-0-9" href="#__codelineno-0-9"></a>    -&gt; ingest: wrap in ParsleyMessage, embed source coordinates
+<a id="__codelineno-0-10" name="__codelineno-0-10" href="#__codelineno-0-10"></a>    -&gt; gate:   ParsleyEngine.onRecord()
+<a id="__codelineno-0-11" name="__codelineno-0-11" href="#__codelineno-0-11"></a>                 satisfied   -&gt; advance frontier, drain cascade
+<a id="__codelineno-0-12" name="__codelineno-0-12" href="#__codelineno-0-12"></a>                 unsatisfied -&gt; buffer (RocksBufferStore) + index (RocksCandidateIndex)
+<a id="__codelineno-0-13" name="__codelineno-0-13" href="#__codelineno-0-13"></a>                 no header   -&gt; trivially satisfied (empty dependencies)
+<a id="__codelineno-0-14" name="__codelineno-0-14" href="#__codelineno-0-14"></a>    -&gt; deliver: user processor receives records via ParsleyProcessorContext
+<a id="__codelineno-0-15" name="__codelineno-0-15" href="#__codelineno-0-15"></a>                forwarded records carry the stamped frontier dependencies
+<a id="__codelineno-0-16" name="__codelineno-0-16" href="#__codelineno-0-16"></a>                (Streams sinks carry the header out to the output topic)
 </code></pre></div>
 <h2 id="further-reading">Further reading</h2>
 <ul>
 <li><a href="../wire-format/">Wire format</a> — binary layouts for all headers and state stores</li>
-<li><a href="../engine/">The engine</a> — buffer, position index, drain cascade, eviction</li>
+<li><a href="../engine/">The engine</a> — buffer, candidate index, drain cascade, eviction</li>
 <li><a href="../streams/">Streams integration</a> — processor init, state store wiring, stamping proxy</li>
-<li><a href="../consumer/">Consumer</a> — outbox pattern, poll() path, frontier merging</li>
 </ul>
 
 

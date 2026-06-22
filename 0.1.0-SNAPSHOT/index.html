@@ -753,34 +753,6 @@
   
   
     <li class="md-nav__item">
-      <a href="internals/consumer/" class="md-nav__link">
-        
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    Consumer
-  
-
-    
-  </span>
-  
-  
-
-      </a>
-    </li>
-  
-
-              
-            
-              
-                
-  
-  
-  
-  
-    <li class="md-nav__item">
       <a href="internals/benchmarks/" class="md-nav__link">
         
   
@@ -900,13 +872,13 @@
 
 
 <h1 id="parsley">Parsley</h1>
-<p>Causal consistency for Kafka — producers that encode causal dependencies onto every message,
-consumers that deliver multiple topics in causal order, and Kafka Streams topologies built from
-causally consistent processors.</p>
+<p>Causal consistency for Kafka — a stream-processing library that builds Kafka Streams topologies from
+causally consistent processors, with edge operations to stamp and propagate causal dependencies
+to and from plain Kafka clients.</p>
 <h2 id="motivation">Motivation</h2>
 <p>As event streaming systems increasingly derive decisions from events across multiple topics, Kafka's per-partition ordering guarantees may not be enough.</p>
 <p>Consider a stream processor processing order and discount events from different topics. The processor may process an order event before processing the discount event that was the premise upon which the order was placed. The discount event is said to have happened before the order event. A causally consistent order of events would respect this relationship and delay the processing of the order event until the discount event had been processed.</p>
-<p>Parsley provides causal producers, consumers and Kafka Streams processors that automatically track the happens-before relationship between events and deliver them in a causally consistent order, regardless of how many topics are involved.</p>
+<p>Parsley provides causally consistent Kafka Streams processors that automatically track the happens-before relationship between events and deliver them in a causally consistent order, regardless of how many topics are involved.</p>
 <h2 id="the-problem">The problem</h2>
 <p>A consumer reads a price from <code>prices-0</code> at offset 27 and, on that basis, produces an order to
 <code>orders</code>. A downstream consumer of <code>orders</code> processes that order while its own <code>prices</code> consumer is
@@ -922,33 +894,34 @@ consumer checks whether its <strong>frontier</strong> already satisfies those de
 immediately, otherwise it holds the message in a <strong>causal buffer</strong> until the frontier catches up.</p>
 <p>If the frontier never catches up, the configured <code>CausalBufferLimit</code> fires and the record is
 forwarded anyway, stamped <code>EVICTED</code> instead of <code>SATISFIED</code>.</p>
-<p>The library is a single jar with three entry points, sharing a common vocabulary of value types:</p>
+<p>The library is a single jar built around one entry point and a set of edge operations, sharing a
+common vocabulary of value types:</p>
 <table>
 <thead>
 <tr>
-<th>Entry point</th>
+<th>API</th>
 <th>Purpose</th>
 </tr>
 </thead>
 <tbody>
 <tr>
-<td><code>CausalProducer</code></td>
-<td>Stamps the current causal context onto every record it sends</td>
-</tr>
-<tr>
-<td><code>CausalConsumer</code></td>
-<td>A <code>poll()</code>-based consumer that delivers records in causal order</td>
-</tr>
-<tr>
 <td><code>CausalProcessorSupplier</code></td>
-<td>Wraps a Kafka Streams <code>Processor</code> behind the causal guarantee</td>
+<td>Wraps a Kafka Streams <code>Processor</code> behind the causal guarantee — the core</td>
+</tr>
+<tr>
+<td><code>CausalDependencies.stamp</code> / <code>from</code> / <code>merge</code></td>
+<td>Stamp and propagate causal context to and from plain Kafka clients at the topology edge</td>
+</tr>
+<tr>
+<td><code>CausalTopics</code></td>
+<td>Resolves topic names to their stable Kafka UUIDs for building dependencies</td>
 </tr>
 </tbody>
 </table>
 <h2 id="where-to-go-next">Where to go next</h2>
 <ul>
 <li><a href="concepts/"><strong>Concepts</strong></a> — causal dependencies, frontiers, the buffer, always-forward delivery</li>
-<li><a href="getting-started/"><strong>Getting started</strong></a> — dependency setup, producer, and consumer examples</li>
+<li><a href="getting-started/"><strong>Getting started</strong></a> — installation and stamping causal context at the edge</li>
 <li><a href="streams/"><strong>Streams integration</strong></a> — wrapping a <code>Processor</code>, preconditions, recovery</li>
 <li><a href="configuration/"><strong>Configuration</strong></a> — buffer limits, eviction, header size</li>
 <li><a href="api/"><strong>API reference</strong></a> — full Javadoc</li>
