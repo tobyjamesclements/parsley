@@ -1,8 +1,8 @@
 # Streams integration
 
 `CausalProcessors` wraps a standard Kafka Streams `Processor` so that its state-store reads,
-writes, and `forward` calls all execute behind the causal guarantee — transparently, with no
-`CausalProducer` on egress (Streams sinks carry the stamped header out to the topic).
+writes, and `forward` calls all execute behind the causal guarantee — transparently, with nothing
+extra on egress (Streams sinks carry the stamped header out to the topic).
 
 ## Building a causal processor
 

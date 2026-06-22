@@ -61,21 +61,6 @@ The `{ns}-position-index` store maps coordinate+offset+recordId to an empty pres
 [recordId       :8]   buffer insertion sequence
 ```
 
-## Internal record headers
-
-These headers carry the source coordinate through the consumer's outbox topic. They are written by
-`ParsleyMessage.toForwardHeaders()` (only on the `ParsleyConsumer` outbox path, where the Kafka
-record's own topic/partition/offset are the outbox's, not the source's) and stripped by
-`ParsleyConsumer.poll()` before the record is returned to the application. The processor path never
-emits them.
-
-| Header | Encoding |
-|---|---|
-| `_parsley_src_topic` | UTF-8 string |
-| `_parsley_src_topic_id` | 16 bytes: `topicId.MSB` then `topicId.LSB` |
-| `_parsley_src_partition` | 4-byte big-endian int |
-| `_parsley_src_offset` | 8-byte big-endian long |
-
 ## State store names and serdes
 
 The namespace is the `name` passed to `CausalProcessors.builder(...).addBufferStore(name, limit)`.
@@ -90,20 +75,19 @@ All three stores are persistent and changelog-backed. Changelog topic names foll
 
 ## Topic UUIDs
 
-Topic UUIDs are not derived or guessed — they are resolved from the broker via `AdminClient` at
-startup, for every topic registered as a `CausalBuffer` on `CausalProcessors.builder(...)` /
-`CausalConsumers.builder(...)` (the processor resolves them at `init()` from the task's
-`appConfigs()`; the consumer resolves them when it starts). If a registered topic does not exist on
-the broker, resolution fails fast with `IllegalStateException` rather than falling back to a guess.
+Topic UUIDs are not derived or guessed — they are resolved from the broker via `AdminClient`. The
+processor resolves them at `init()` from the task's `appConfigs()` for every topic registered as a
+`CausalBuffer` on `CausalProcessors.builder(...)`. If a registered topic does not exist on the
+broker, resolution fails fast with `IllegalStateException` rather than falling back to a guess.
 
 The real UUID Kafka assigned to the topic is what's used. A topic deleted and recreated with the
 same name gets a new UUID, so records stamped against the old incarnation correctly fail to satisfy
 dependencies on the new one.
 
-When building `CausalDependencies` explicitly (the producer side), the topic identity is still
-supplied as a `CausalTopic(topic, uuid)` — there the UUID names a coordinate in the dependency
-clock and is not resolved from a broker.
+When building `CausalDependencies` explicitly at the edge, topic names are resolved to UUIDs through
+a `CausalTopics` (backed by a caller-owned `Admin`), which caches each lookup. The UUID names a
+coordinate in the dependency clock.
 
 Tests without a live broker (`TopologyTestDriver`, unit tests) may use any stable `Uuid`, e.g.
-`Uuid.randomUuid()`, as long as the same value is used consistently wherever that topic's identity
-is referenced.
+`Uuid.randomUuid()` via `CausalTopics.of(Map.of(...))`, as long as the same value is used
+consistently wherever that topic's identity is referenced.

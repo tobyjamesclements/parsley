@@ -54,5 +54,4 @@ nav:
     - Wire format: internals/wire-format.md
     - The engine: internals/engine.md
     - Streams integration: internals/streams.md
-    - Consumer: internals/consumer.md
     - Benchmarks: internals/benchmarks.md

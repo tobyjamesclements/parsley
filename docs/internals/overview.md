@@ -1,14 +1,16 @@
 # Internals overview
 
-Parsley has three public entry points backed by a shared internal implementation.
+Parsley is built around one public entry point — the Streams causal processor — plus stateless edge
+operations for stamping and propagating dependencies from plain Kafka clients, all backed by a shared
+internal implementation.
 
-| Entry point | Backed by |
+| API | Backed by |
 |---|---|
-| `CausalProducer` | `ParsleyProducer` |
-| `CausalConsumer` | `ParsleyConsumer` + Kafka Streams + outbox topic |
 | `CausalProcessorSupplier` | `ParsleyProcessorSupplier` + `ParsleyProcessor` |
+| `CausalDependencies` edge ops (`stamp` / `from` / `merge`) | `ParsleyClock` (no wrapper objects) |
+| `CausalTopics` | A caller-owned Kafka `Admin` (name → UUID, cached) |
 
-All three share a common set of value types and a single causal engine.
+All share a common set of value types and a single causal engine.
 
 ## Class map
 
@@ -16,9 +18,9 @@ All three share a common set of value types and a single causal engine.
 
 | Class | Role |
 |---|---|
-| `CausalDependencies` | Public facade over a `ParsleyClock`: the causal requirements stamped by the producer onto each record |
-| `CausalBuffer` | Registers one causal source on a builder: topic name + the serdes the buffer round-trips held records with (the topic's UUID is resolved from the broker) |
-| `CausalTopic` | A topic's stable causal identity: name + Kafka UUID (used to build `CausalDependencies.require`) |
+| `CausalDependencies` | Public facade over a `ParsleyClock`: the causal requirements stamped onto each record, plus the `stamp`/`from`/`merge` edge operations |
+| `CausalTopics` | Resolves topic names to their stable Kafka UUIDs through a caller-owned `Admin` (used to build `CausalDependencies`) |
+| `CausalBuffer` | Registers one causal source on the processor builder: topic name + the serdes the buffer round-trips held records with (the topic's UUID is resolved from the broker) |
 | `CausalBufferLimit` | When to evict held records: `ofDuration`, `ofSize`, `first` |
 
 ### Package-private implementation
@@ -32,8 +34,6 @@ All three share a common set of value types and a single causal engine.
 | `ParsleyProcessor` | Kafka Streams processor wrapping the user processor and driving the engine |
 | `ParsleyProcessorSupplier` | Processor factory; registers the three Parsley state stores |
 | `ParsleyProcessorContext` | Stamping proxy: replaces the context given to the user processor |
-| `ParsleyConsumer` | Poll-based consumer backed by a Streams topology and outbox topic |
-| `ParsleyProducer` | Decorator that stamps `parsley-causal-dependencies` on every send |
 | `ParsleyBufferStore` / `RocksBufferStore` | Durable buffer of held records |
 | `ParsleyPositionIndex` / `RocksPositionIndex` | Secondary index: coordinate -> candidate record IDs |
 | `ParsleySerializer` | Binary serde for `ParsleyMessage` (buffer store wire format) |
@@ -41,36 +41,22 @@ All three share a common set of value types and a single causal engine.
 ## End-to-end flow
 
 ```
-Producer
-  ParsleyProducer.send(record, deps)
-    -> stamps parsley-causal-dependencies header
-    -> sends to Kafka
+Edge (plain Kafka producer)
+  CausalDependencies.from(topics, trigger) / .merge(...) / .builder(topics).require(...)
+    -> CausalDependencies.stamp(record)
+         -> stamps parsley-causal-dependencies header
+    -> producer.send(record)
 
-Consumer (CausalConsumer path)
-  Kafka Streams topology
-    ParsleyProcessor.process(record)
-      -> ingest: wrap in ParsleyMessage, embed source coordinates
-      -> gate:   ParsleyEngine.onRecord()
-                   satisfied   -> advance frontier, drain cascade
-                   unsatisfied -> buffer (RocksBufferStore) + index (RocksPositionIndex)
-                   no header   -> trivially satisfied (empty dependencies)
-      -> deliver: for each admitted record
-                   stamp frontier onto parsley-causal-dependencies
-                   save ORIGINAL_DEPENDENCIES, forward to outbox topic
-
-  Outbox topic (internal, bytes)
-
-  ParsleyConsumer.poll()
-    -> reads from outbox topic
-    -> restores original producer dependencies from ORIGINAL_DEPENDENCIES
-    -> deserialises key/value by source topic
-    -> reconstructs ConsumerRecord at source partition/offset
-    -> returns ConsumerRecords grouped by source TopicPartition
-
-CausalProcessorSupplier path (Streams-native)
-  Same ParsleyProcessor; no outbox topic
-  User processor receives records via ParsleyProcessorContext
-  Forwarded records carry stamped frontier dependencies
+Causal processor (Streams)
+  ParsleyProcessor.process(record)
+    -> ingest: wrap in ParsleyMessage, embed source coordinates
+    -> gate:   ParsleyEngine.onRecord()
+                 satisfied   -> advance frontier, drain cascade
+                 unsatisfied -> buffer (RocksBufferStore) + index (RocksPositionIndex)
+                 no header   -> trivially satisfied (empty dependencies)
+    -> deliver: user processor receives records via ParsleyProcessorContext
+                forwarded records carry the stamped frontier dependencies
+                (Streams sinks carry the header out to the output topic)
 ```
 
 ## Further reading
@@ -78,4 +64,3 @@ CausalProcessorSupplier path (Streams-native)
 - [Wire format](wire-format.md) — binary layouts for all headers and state stores
 - [The engine](engine.md) — buffer, position index, drain cascade, eviction
 - [Streams integration](streams.md) — processor init, state store wiring, stamping proxy
-- [Consumer](consumer.md) — outbox pattern, poll() path, frontier merging

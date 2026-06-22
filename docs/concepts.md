@@ -47,7 +47,7 @@ A `CausalBufferLimit` bounds how long or how large the buffer may grow before ev
 
 ## Always-forward delivery
 
-Parsley never drops or diverts a record. Every record reaches the user's `process()`/`poll()`
+Parsley never drops or diverts a record. Every record reaches the user's `process()`
 exactly once. In the common case it is delivered **in causal order** — the frontier had observed its
 dependencies by delivery time (immediately, after a wait, or trivially: no dependencies claimed, or
 an undecodable header, both treated as vacuously satisfied). The exception is **eviction**: when the

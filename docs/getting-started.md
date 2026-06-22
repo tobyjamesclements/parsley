@@ -43,51 +43,41 @@ Then declare the repository and dependency in your `pom.xml`:
 
 `parsley` pulls in `kafka-streams` and `kafka-clients` transitively.
 
-## Consuming in causal order
+## Ordering records causally
 
-`CausalConsumer` is a drop-in replacement for a plain Kafka consumer. It delivers records from all
-subscribed topics in causal order, holding any record whose dependencies have not yet been observed:
+Parsley delivers records in causal order **inside a Kafka Streams topology**. Wrap your own processor
+with `CausalProcessors` and it holds any record whose dependencies have not yet been observed,
+releasing it once the frontier catches up. See [Streams integration](streams.md) for the full setup.
+
+## Stamping causal context onto produced records
+
+At the edges of a topology — where plain Kafka producers feed records in — attach the causal
+dependencies as a header with `CausalDependencies.stamp`. Resolve topic UUIDs once through a
+`CausalTopics` backed by an `Admin` you own (Parsley never closes it):
 
 ```java
-try (CausalConsumer<String, Order> consumer = CausalConsumers.<String, Order>builder(
-        CausalBufferLimit.ofDuration(Duration.ofSeconds(30)),
-        Map.of(ConsumerConfig.GROUP_ID_CONFIG, "my-group"),
-        Map.of(StreamsConfig.APPLICATION_ID_CONFIG,    "my-app",
-               StreamsConfig.BOOTSTRAP_SERVERS_CONFIG, "localhost:9092"))
-        .addBuffers(List.of("prices", "orders"), Serdes.String(), orderSerde)
-        .build()) {
+CausalTopics topics = CausalTopics.of(admin);
 
-    while (running) {
-        ConsumerRecords<String, Order> records = consumer.poll(Duration.ofMillis(100));
-        records.forEach(this::process);
-    }
-}
+// trigger's own dependencies plus its own position
+CausalDependencies deps = CausalDependencies.from(topics, trigger);
+producer.send(deps.stamp(new ProducerRecord<>("orders", key, value)));
 ```
 
-## Producing with causal context
-
-`CausalProducer` wraps a standard Kafka producer and attaches the current causal dependencies as a
-header on every record it sends:
+`from` carries the dependencies the triggering record arrived with **and** its own position, so a
+downstream causal processor waits until it has observed `trigger` before delivering anything stamped
+here. Combine several with `merge` for a fan-in:
 
 ```java
-CausalProducer<String, Event> producer = CausalProducers.<String, Event>builder(producerConfig).build();
+CausalDependencies deps = CausalDependencies.from(topics, priceUpdate)
+        .merge(CausalDependencies.from(topics, inventoryChange));
+producer.send(deps.stamp(record));
 ```
 
-When sending, pass the dependencies that represent the causal premise of the record. The right
-choice for most cases is the dependencies carried by the message that triggered this send — bounded
-by that hop's fan-in and transitively carries its own dependencies:
+To declare a dependency on a specific upstream position you did not consume, build one explicitly:
 
 ```java
-CausalDependencies context = CausalDependencies.fromRecord(trigger)
-        .orElse(CausalDependencies.empty());
-producer.send(new ProducerRecord<>("orders", key, value), context);
-```
-
-To declare a dependency on a specific upstream position, build one explicitly:
-
-```java
-CausalDependencies context = CausalDependencies.builder()
-        .require(pricesTopic, /* partition */ 0, /* offset */ 42)
+CausalDependencies deps = CausalDependencies.builder(topics)
+        .require("prices", /* partition */ 0, /* offset */ 42)
         .build();
 ```
 

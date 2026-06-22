@@ -1,8 +1,8 @@
 # Parsley
 
-Causal consistency for Kafka — producers that encode causal dependencies onto every message,
-consumers that deliver multiple topics in causal order, and Kafka Streams topologies built from
-causally consistent processors.
+Causal consistency for Kafka — a stream-processing library that builds Kafka Streams topologies from
+causally consistent processors, with edge operations to stamp and propagate causal dependencies
+to and from plain Kafka clients.
 
 ## Motivation
 
@@ -10,7 +10,7 @@ As event streaming systems increasingly derive decisions from events across mult
 
 Consider a stream processor processing order and discount events from different topics. The processor may process an order event before processing the discount event that was the premise upon which the order was placed. The discount event is said to have happened before the order event. A causally consistent order of events would respect this relationship and delay the processing of the order event until the discount event had been processed.
 
-Parsley provides causal producers, consumers and Kafka Streams processors that automatically track the happens-before relationship between events and deliver them in a causally consistent order, regardless of how many topics are involved.
+Parsley provides causally consistent Kafka Streams processors that automatically track the happens-before relationship between events and deliver them in a causally consistent order, regardless of how many topics are involved.
 
 ## The problem
 
@@ -33,18 +33,19 @@ immediately, otherwise it holds the message in a **causal buffer** until the fro
 If the frontier never catches up, the configured `CausalBufferLimit` fires and the record is
 forwarded anyway, stamped `EVICTED` instead of `SATISFIED`.
 
-The library is a single jar with three entry points, sharing a common vocabulary of value types:
+The library is a single jar built around one entry point and a set of edge operations, sharing a
+common vocabulary of value types:
 
-| Entry point | Purpose |
+| API | Purpose |
 |---|---|
-| `CausalProducer` | Stamps the current causal context onto every record it sends |
-| `CausalConsumer` | A `poll()`-based consumer that delivers records in causal order |
-| `CausalProcessorSupplier` | Wraps a Kafka Streams `Processor` behind the causal guarantee |
+| `CausalProcessorSupplier` | Wraps a Kafka Streams `Processor` behind the causal guarantee — the core |
+| `CausalDependencies.stamp` / `from` / `merge` | Stamp and propagate causal context to and from plain Kafka clients at the topology edge |
+| `CausalTopics` | Resolves topic names to their stable Kafka UUIDs for building dependencies |
 
 ## Where to go next
 
 - [**Concepts**](concepts.md) — causal dependencies, frontiers, the buffer, always-forward delivery
-- [**Getting started**](getting-started.md) — dependency setup, producer, and consumer examples
+- [**Getting started**](getting-started.md) — installation and stamping causal context at the edge
 - [**Streams integration**](streams.md) — wrapping a `Processor`, preconditions, recovery
 - [**Configuration**](configuration.md) — buffer limits, eviction, header size
 - [**API reference**](api/index.html) — full Javadoc
