@@ -17,11 +17,8 @@ import java.util.Optional;
  * carries the upstream's dependencies <em>and</em> the consumed record's own position — combine
  * several with {@link #merge(CausalDependencies)} for a fan-in, then attach them to the outbound
  * record with {@link #stamp(ProducerRecord)}. To assert a dependency you did not consume, build one
- * with {@link #builder(CausalTopics)}. Serialise with {@link #toBytes()} / {@link #fromBytes(byte[])}.
+ * with {@link #builder(CausalTopics)}. Serialise with {@link #toBytes()} / {@link #fromBytes(byte[])}.</p>
  *
- * <p>This is the public face of an internal {@link ParsleyClock}; the two share a wire format.
- *
- * <h2>Serialised size and the {@code message.max.bytes} ceiling</h2>
  * The {@link #toBytes() serialised} form is {@code 5 + 28 × coordinates} bytes. An instance spanning
  * many partitions can breach Kafka's record-size limit ({@code message.max.bytes}, ~1&nbsp;MB by
  * default); the figure to watch is a wide-fan-in record that depends on many topic-partitions.

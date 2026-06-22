@@ -6,8 +6,12 @@ import org.apache.kafka.common.metrics.stats.Value;
 import org.apache.kafka.streams.StreamsMetrics;
 import org.apache.kafka.streams.processor.api.ProcessorContext;
 
+import java.time.Duration;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
+import java.util.OptionalLong;
 
 /**
  * Callback interface through which {@link ParsleyEngine} reports observable events. Every causal
@@ -16,20 +20,15 @@ import java.util.Map;
  */
 interface ParsleyMetrics {
 
-    /**
-     * A record was added to the causal buffer.
-     *
-     * @param newBufferDepth the buffer depth after the add
-     */
-    void recordBuffered(int newBufferDepth);
+    /** A record was added to the causal buffer. */
+    void recordBuffered();
 
     /**
      * One or more records were released from the buffer (their dependencies are now satisfied).
      *
-     * @param count          the number of records released in this drain pass
-     * @param newBufferDepth the buffer depth after the release
+     * @param count the number of records released in this drain pass
      */
-    void recordReleased(int count, int newBufferDepth);
+    void recordReleased(int count);
 
     /**
      * One or more records were evicted because a {@link CausalBufferLimit} fired.
@@ -48,12 +47,24 @@ interface ParsleyMetrics {
      */
     void recordDeserializationError();
 
+    /**
+     * Reports the buffer's current observable state. Called after every depth-changing event and,
+     * independently, on a periodic refresh tick — so the oldest-record gauge stays current even on a
+     * buffer that is idle (no admits, releases, or evictions) between ticks.
+     *
+     * @param depth             the current number of records held in the buffer
+     * @param oldestBufferedAtMs the oldest held record's buffer-admission time (epoch millis), or
+     *                          empty if the buffer is empty
+     */
+    void reportState(int depth, OptionalLong oldestBufferedAtMs);
+
     ParsleyMetrics NOOP = new ParsleyMetrics() {
-        @Override public void recordBuffered(int d) {}
-        @Override public void recordReleased(int c, int d) {}
+        @Override public void recordBuffered() {}
+        @Override public void recordReleased(int c) {}
         @Override public void recordEvicted(int c) {}
         @Override public void recordViolation() {}
         @Override public void recordDeserializationError() {}
+        @Override public void reportState(int depth, OptionalLong oldestBufferedAtMs) {}
     };
 
     /**
@@ -71,8 +82,15 @@ interface ParsleyMetrics {
     /**
      * Registers the Kafka Streams {@link Sensor}s backing a {@link ParsleyMetrics} for the task
      * owning {@code context}, namespaced under {@code "parsley"} and the task ID.
+     *
+     * <p>{@code sizeLimit} and {@code durationLimit} are the buffer's configured {@link
+     * CausalBufferLimit}, resolved by the caller before the {@link ParsleyEngine} exists (so they are
+     * known to {@link ParsleyEngine#sizeLimitOf} / {@link ParsleyEngine#durationLimitOf}). Each is
+     * registered as a constant gauge only when that limit kind is actually configured, so a gap to a
+     * limit can be computed downstream (e.g. {@code buffer-size-limit - buffer-depth}) without pushing
+     * a precomputed value that goes stale the instant after it is recorded.
      */
-    static Wired wire(ProcessorContext<?, ?> context) {
+    static Wired wire(ProcessorContext<?, ?> context, Optional<Integer> sizeLimit, Optional<Duration> durationLimit) {
         StreamsMetrics sm = context.metrics();
         String taskId = context.taskId().toString();
 
@@ -82,19 +100,46 @@ interface ParsleyMetrics {
         Sensor violation = sm.addRateTotalSensor("parsley", taskId, "violations",         Sensor.RecordingLevel.INFO);
         Sensor deserErr  = sm.addRateTotalSensor("parsley", taskId, "deserialization-errors", Sensor.RecordingLevel.INFO);
 
-        Sensor depth = sm.addSensor("parsley-buffer-depth-" + taskId, Sensor.RecordingLevel.INFO);
-        depth.add(new MetricName("buffer-depth", "stream-parsley-metrics",
-                "Current number of records held in the causal buffer",
-                Map.of("parsley-id", taskId)), new Value());
+        Sensor depth = gauge(sm, taskId, "buffer-depth",
+                "Current number of records held in the causal buffer");
+        Sensor oldestBufferedAt = gauge(sm, taskId, "buffer-oldest-buffered-at-ms",
+                "Buffer-admission time (epoch millis) of the oldest held record, or 0 if the buffer is empty");
+
+        List<Sensor> sensors = new ArrayList<>(List.of(buffered, released, evicted, violation, deserErr,
+                depth, oldestBufferedAt));
+
+        sizeLimit.ifPresent(limit -> {
+            Sensor sizeLimitGauge = gauge(sm, taskId, "buffer-size-limit",
+                    "Configured maximum buffer size (message count) before the size limit evicts");
+            sizeLimitGauge.record(limit);
+            sensors.add(sizeLimitGauge);
+        });
+        durationLimit.ifPresent(duration -> {
+            Sensor durationLimitGauge = gauge(sm, taskId, "buffer-duration-limit-ms",
+                    "Configured maximum buffer duration (millis) before the duration limit evicts");
+            durationLimitGauge.record(duration.toMillis());
+            sensors.add(durationLimitGauge);
+        });
 
         ParsleyMetrics metrics = new ParsleyMetrics() {
-            @Override public void recordBuffered(int d)       { buffered.record();   depth.record(d); }
-            @Override public void recordReleased(int c, int d){ released.record(c);  depth.record(d); }
-            @Override public void recordEvicted(int c)        { evicted.record(c);   depth.record(0); }
-            @Override public void recordViolation()           { violation.record(); }
-            @Override public void recordDeserializationError(){ deserErr.record(); }
+            @Override public void recordBuffered()             { buffered.record(); }
+            @Override public void recordReleased(int c)        { released.record(c); }
+            @Override public void recordEvicted(int c)         { evicted.record(c); }
+            @Override public void recordViolation()            { violation.record(); }
+            @Override public void recordDeserializationError() { deserErr.record(); }
+            @Override public void reportState(int d, OptionalLong oldest) {
+                depth.record(d);
+                oldestBufferedAt.record(oldest.isPresent() ? oldest.getAsLong() : 0L);
+            }
         };
 
-        return new Wired(metrics, List.of(buffered, released, evicted, violation, deserErr, depth));
+        return new Wired(metrics, sensors);
+    }
+
+    private static Sensor gauge(StreamsMetrics sm, String taskId, String name, String description) {
+        Sensor sensor = sm.addSensor("parsley-" + name + "-" + taskId, Sensor.RecordingLevel.INFO);
+        sensor.add(new MetricName(name, "stream-parsley-metrics", description,
+                Map.of("parsley-id", taskId)), new Value());
+        return sensor;
     }
 }

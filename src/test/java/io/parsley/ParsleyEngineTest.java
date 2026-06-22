@@ -7,6 +7,7 @@ import org.junit.jupiter.api.Test;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.OptionalLong;
 import java.util.concurrent.atomic.AtomicLong;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -380,23 +381,26 @@ class ParsleyEngineTest {
 
     /**
      * The metrics callbacks fire at the correct lifecycle points: {@code recordBuffered}
-     * fires when a record enters the buffer, and {@code recordReleased} fires when it is
-     * drained, receiving the count of released records and the post-drain buffer depth.
+     * fires when a record enters the buffer, {@code recordReleased} fires when it is drained
+     * (receiving the count of released records), and {@code reportState} fires alongside both,
+     * receiving the buffer's depth after the change.
      *
-     * Asserts that {@code recordBuffered} fires with depth 1 on buffer, and
-     * {@code recordReleased} fires with count 1 and depth 0 on drain.
+     * Asserts that {@code recordBuffered} fires on buffer with {@code reportState} reporting
+     * depth 1, and {@code recordReleased} fires with count 1 on drain with {@code reportState}
+     * reporting depth 0.
      */
     @Test
     void metricsCallbacksFireOnBufferAndRelease() {
-        List<Integer> bufferedDepths = new ArrayList<>();
+        List<Integer> bufferedCounts = new ArrayList<>();
         List<Integer> releasedCounts = new ArrayList<>();
-        List<Integer> releasedDepths = new ArrayList<>();
+        List<Integer> reportedDepths = new ArrayList<>();
         ParsleyMetrics capturing = new ParsleyMetrics() {
-            @Override public void recordBuffered(int depth)        { bufferedDepths.add(depth); }
-            @Override public void recordReleased(int c, int depth) { releasedCounts.add(c); releasedDepths.add(depth); }
-            @Override public void recordEvicted(int c)             {}
-            @Override public void recordViolation()                {}
-            @Override public void recordDeserializationError()     {}
+            @Override public void recordBuffered()             { bufferedCounts.add(1); }
+            @Override public void recordReleased(int c)        { releasedCounts.add(c); }
+            @Override public void recordEvicted(int c)         {}
+            @Override public void recordViolation()             {}
+            @Override public void recordDeserializationError()  {}
+            @Override public void reportState(int depth, OptionalLong oldest) { reportedDepths.add(depth); }
         };
         ParsleyEngine<String, String> engine = new ParsleyEngine<>(
                 CausalBufferLimit.ofSize(100),
@@ -404,12 +408,13 @@ class ParsleyEngineTest {
                 new MockCandidateIndex(), capturing);
 
         engine.onRecord(incomingRecord(T2, 0, ParsleyClock.empty().observe(T1_ID, 0, 3)));
-        assertEquals(List.of(1), bufferedDepths, "recordBuffered must fire with the new buffer depth");
+        assertEquals(List.of(1), bufferedCounts, "recordBuffered must fire when a record enters the buffer");
+        assertEquals(List.of(1), reportedDepths, "reportState must fire with the new buffer depth");
         assertTrue(releasedCounts.isEmpty(), "recordReleased must not fire while record is buffered");
 
         engine.onRecord(incomingRecord(T1, 3, ParsleyClock.empty()));
         assertEquals(List.of(1), releasedCounts, "recordReleased must fire with the count of drained records");
-        assertEquals(List.of(0), releasedDepths, "recordReleased must report the post-drain buffer depth");
+        assertEquals(List.of(1, 0), reportedDepths, "reportState must report the post-drain buffer depth");
     }
 
     /**
@@ -422,11 +427,12 @@ class ParsleyEngineTest {
     void metricsCallbackFiresOnEviction() {
         List<Integer> evictedCounts = new ArrayList<>();
         ParsleyMetrics capturing = new ParsleyMetrics() {
-            @Override public void recordBuffered(int d)        {}
-            @Override public void recordReleased(int c, int d) {}
+            @Override public void recordBuffered()             {}
+            @Override public void recordReleased(int c)        {}
             @Override public void recordEvicted(int c)         { evictedCounts.add(c); }
             @Override public void recordViolation()            {}
             @Override public void recordDeserializationError() {}
+            @Override public void reportState(int depth, OptionalLong oldest) {}
         };
         ParsleyEngine<String, String> engine = new ParsleyEngine<>(
                 CausalBufferLimit.ofSize(1),

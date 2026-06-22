@@ -44,6 +44,8 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
 
     private static final Logger log = LoggerFactory.getLogger(ParsleyProcessor.class);
 
+    private static final Duration METRICS_REFRESH_INTERVAL = Duration.ofSeconds(5);
+
     private final Processor<KIn, VIn, KOut, VOut> delegate;
     private final CausalBufferLimit limit;
     private final ParsleySerializer<KIn, VIn> serializer;
@@ -122,7 +124,8 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
         ParsleyBufferStore<KIn, VIn> buffer = new RocksBufferStore<>(bufferStore, serializer);
         ParsleyCandidateIndex candidateIndex = new RocksCandidateIndex(candidateIndexStore);
 
-        this.wiredMetrics = ParsleyMetrics.wire(context);
+        this.wiredMetrics = ParsleyMetrics.wire(context,
+                ParsleyEngine.sizeLimitOf(limit), ParsleyEngine.durationLimitOf(limit));
 
         this.engine = new ParsleyEngine<>(limit, initialFrontier,
                 listener, buffer, candidateIndex, wiredMetrics.metrics(), context::currentSystemTimeMs,
@@ -145,6 +148,12 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
 
         engine.evictionInterval().ifPresent(interval ->
                 context.schedule(interval, PunctuationType.WALL_CLOCK_TIME, timestamp -> deliver(evict())));
+
+        // Refreshes the oldest-record gauge independent of buffer traffic, so it stays current on a
+        // buffer that sits idle between admits/releases/evictions (notably a size-only buffer, which
+        // has no other periodic tick at all).
+        context.schedule(METRICS_REFRESH_INTERVAL, PunctuationType.WALL_CLOCK_TIME,
+                timestamp -> engine.reportBufferState());
     }
 
     @Override

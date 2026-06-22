@@ -5,6 +5,7 @@ import org.apache.kafka.common.Uuid;
 import org.junit.jupiter.api.Test;
 
 import java.util.List;
+import java.util.OptionalLong;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -86,6 +87,47 @@ class ParsleyBufferStoreTest {
         assertEquals(bufferedAt, store.get(seq).bufferedAt(), "get() must return the bufferedAt passed to add()");
         assertEquals(bufferedAt, store.entries().get(0).bufferedAt(),
                 "entries() must return the bufferedAt passed to add()");
+    }
+
+    /**
+     * A freshly created buffer store has no oldest record to report.
+     *
+     * Asserts that {@code oldestBufferedAt()} is empty on an empty store.
+     */
+    @Test
+    void oldestBufferedAtIsEmptyWhenStoreIsEmpty() {
+        assertEquals(OptionalLong.empty(), store.oldestBufferedAt(),
+                "an empty store must report no oldest record");
+    }
+
+    /**
+     * {@code oldestBufferedAt()} tracks the lowest surviving insertion sequence's {@code
+     * bufferedAt}, not just the first record ever added: removing the current oldest must advance
+     * it to the next-oldest survivor, and removing a younger record must leave it unchanged.
+     *
+     * Asserts the oldest timestamp updates after the oldest entry is removed, and is unaffected
+     * by removing a younger entry.
+     */
+    @Test
+    void oldestBufferedAtTracksTheLowestSurvivingSequence() {
+        long firstSeq = store.add(bufferedRecord(T1, 0, ParsleyClock.empty()), 100L);
+        long secondSeq = store.add(bufferedRecord(T1, 1, ParsleyClock.empty()), 200L);
+        long thirdSeq = store.add(bufferedRecord(T1, 2, ParsleyClock.empty()), 300L);
+
+        assertEquals(OptionalLong.of(100L), store.oldestBufferedAt(),
+                "oldest must be the first-added record's bufferedAt");
+
+        store.remove(thirdSeq);
+        assertEquals(OptionalLong.of(100L), store.oldestBufferedAt(),
+                "removing a younger record must not change the oldest");
+
+        store.remove(firstSeq);
+        assertEquals(OptionalLong.of(200L), store.oldestBufferedAt(),
+                "removing the oldest record must advance to the next-oldest survivor");
+
+        store.remove(secondSeq);
+        assertEquals(OptionalLong.empty(), store.oldestBufferedAt(),
+                "removing the last record must leave no oldest record");
     }
 
     // --- helpers --------------------------------------------------------------------------------

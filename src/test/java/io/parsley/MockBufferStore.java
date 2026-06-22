@@ -2,6 +2,8 @@ package io.parsley;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
+import java.util.OptionalLong;
 import java.util.TreeMap;
 
 /**
@@ -56,6 +58,12 @@ final class MockBufferStore<K, V> implements ParsleyBufferStore<K, V> {
     @Override
     public int size() {
         return buffer.size();
+    }
+
+    @Override
+    public OptionalLong oldestBufferedAt() {
+        Map.Entry<Long, Held<K, V>> first = buffer.firstEntry();
+        return first == null ? OptionalLong.empty() : OptionalLong.of(first.getValue().bufferedAt());
     }
 
     private Entry<K, V> toEntry(long sequence, Held<K, V> held) {

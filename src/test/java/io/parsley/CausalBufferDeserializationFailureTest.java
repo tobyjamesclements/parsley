@@ -11,6 +11,7 @@ import org.junit.jupiter.api.Test;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.OptionalLong;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -209,11 +210,12 @@ class CausalBufferDeserializationFailureTest {
     private static final class CountingMetrics implements ParsleyMetrics {
         final AtomicInteger deserializationErrors = new AtomicInteger();
         final AtomicInteger violations = new AtomicInteger();
-        @Override public void recordBuffered(int d) {}
-        @Override public void recordReleased(int c, int d) {}
+        @Override public void recordBuffered() {}
+        @Override public void recordReleased(int c) {}
         @Override public void recordEvicted(int c) {}
         @Override public void recordViolation() { violations.incrementAndGet(); }
         @Override public void recordDeserializationError() { deserializationErrors.incrementAndGet(); }
+        @Override public void reportState(int depth, OptionalLong oldest) {}
     }
 
     /**
@@ -264,6 +266,13 @@ class CausalBufferDeserializationFailureTest {
 
         @Override public int size() {
             return (int) held.stream().filter(m -> m != null).count();
+        }
+
+        @Override public OptionalLong oldestBufferedAt() {
+            for (ParsleyMessage<K, V> m : held) {
+                if (m != null) return OptionalLong.of(0L);
+            }
+            return OptionalLong.empty();
         }
 
         private static ParsleyBufferDeserializationException poison(ParsleyMessage<?, ?> m) {

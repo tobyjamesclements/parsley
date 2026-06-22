@@ -9,6 +9,7 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Comparator;
 import java.util.List;
+import java.util.OptionalLong;
 
 /**
  * A {@link ParsleyBufferStore} backed by a changelog-replicated Kafka {@link KeyValueStore}, keyed by a
@@ -118,5 +119,19 @@ final class RocksBufferStore<K, V> implements ParsleyBufferStore<K, V> {
     @Override
     public int size() {
         return size;
+    }
+
+    @Override
+    public OptionalLong oldestBufferedAt() {
+        // A range seek to the lowest surviving sequence, not a full scan: RocksDB seeks directly to
+        // the start key, and only the 8-byte bufferedAt prefix is read — the record itself is never
+        // deserialised.
+        try (KeyValueIterator<Long, byte[]> oldest = store.range(0L, Long.MAX_VALUE)) {
+            if (!oldest.hasNext()) {
+                return OptionalLong.empty();
+            }
+            byte[] value = oldest.next().value;
+            return OptionalLong.of(ByteBuffer.wrap(value, 0, 8).getLong());
+        }
     }
 }

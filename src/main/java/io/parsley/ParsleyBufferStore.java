@@ -3,6 +3,7 @@ package io.parsley;
 import org.jspecify.annotations.Nullable;
 
 import java.util.List;
+import java.util.OptionalLong;
 
 /**
  * The held-record buffer: the single, authoritative store of records whose causal dependencies are
@@ -86,4 +87,14 @@ interface ParsleyBufferStore<K, V> {
      * @return the buffer size
      */
     int size();
+
+    /**
+     * Returns the buffer-admission time of the oldest currently-held record — the lowest surviving
+     * insertion sequence — or empty if the buffer holds nothing. Relies on insertion sequence order
+     * coinciding with {@code bufferedAt} order (see {@link #entries()}); since that ordering survives
+     * arbitrary removals, implementations can answer this without scanning the buffer.
+     *
+     * @return the oldest held record's buffer-admission time (epoch millis), or empty if empty
+     */
+    OptionalLong oldestBufferedAt();
 }
