@@ -89,9 +89,8 @@ class CausalProcessorsAvroTopologyTest {
         ProcessorSupplier<String, SpecificRecord, String, SpecificRecord> user = capturing();
         StreamsBuilder builder = new StreamsBuilder();
         builder.stream(List.of(PRICES, ORDERS), Consumed.with(Serdes.String(), avro))
-                .process(CausalProcessors.builder(
-                        user,
-                        CausalBufferLimit.ofSize(100))
+                .process(CausalProcessors.builder(user)
+                        .addBufferStore("parsley", CausalBufferLimit.ofSize(100))
                         .addBuffers(List.of(PRICES, ORDERS), Serdes.String(), avro)
                         .topicAdmin(TestTopicAdmin.of(Map.of(PRICES, PRICES_ID, ORDERS, ORDERS_ID)))
                         .build());
@@ -209,7 +208,7 @@ class CausalProcessorsAvroTopologyTest {
         };
         StreamsBuilder builder = new StreamsBuilder();
         builder.stream(List.of(PRICES, ORDERS), Consumed.with(Serdes.String(), avro))
-                .process(CausalProcessors.builder(capturing(), CausalBufferLimit.ofSize(100))
+                .process(CausalProcessors.builder(capturing()).addBufferStore("parsley", CausalBufferLimit.ofSize(100))
                         .addBuffer(CausalBuffer.of(PRICES, Serdes.String(), avro))
                         .addBuffer(CausalBuffer.of(ORDERS, Serdes.String(), undecodableOnRead))
                         .topicAdmin(TestTopicAdmin.of(Map.of(PRICES, PRICES_ID, ORDERS, ORDERS_ID)))

@@ -18,7 +18,8 @@ import org.apache.kafka.streams.processor.api.ProcessorSupplier;
  * };
  *
  * builder.stream(List.of("prices", "orders"), Consumed.with(Serdes.String(), orderSerde))
- *        .process(CausalProcessors.builder(user, CausalBufferLimit.ofDuration(limit))
+ *        .process(CausalProcessors.builder(user)
+ *                                .addBufferStore("parsley", CausalBufferLimit.ofDuration(limit))
  *                                .addBuffers(List.of("prices", "orders"), Serdes.String(), orderSerde)
  *                                .build())
  *        .to("output-topic");

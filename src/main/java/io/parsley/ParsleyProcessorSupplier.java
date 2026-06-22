@@ -60,6 +60,16 @@ final class ParsleyProcessorSupplier<KIn, VIn, KOut, VOut>
                 frontierStoreName, bufferStoreName, positionIndexStoreName, topics, adminFactory, config);
     }
 
+    /** The buffer eviction limit this supplier was built with. Package-private for tests. */
+    CausalBufferLimit limit() {
+        return limit;
+    }
+
+    /** The effective Parsley configuration this supplier was built with. Package-private for tests. */
+    ParsleyConfig config() {
+        return config;
+    }
+
     @Override
     public Set<StoreBuilder<?>> stores() {
         Set<StoreBuilder<?>> stores = new HashSet<>();

@@ -74,4 +74,4 @@ All other `ProcessorContext` methods delegate verbatim.
 
 ## State store namespace
 
-The default namespace is `"parsley"`. Set it with `CausalProcessors.builder(...).storeName(ns)`. Use a unique namespace per `CausalProcessorSupplier` instance within a topology that contains more than one. The store names are embedded in the changelog topic names, so they must be stable across deployments.
+The namespace is the `name` passed to `CausalProcessors.builder(...).addBufferStore(name, limit)`. Use a unique namespace per `CausalProcessorSupplier` instance within a topology that contains more than one. The store names are embedded in the changelog topic names, so they must be stable across deployments.

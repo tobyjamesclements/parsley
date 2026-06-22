@@ -78,7 +78,7 @@ emits them.
 
 ## State store names and serdes
 
-The default namespace is `parsley`. It is configurable via `CausalProcessors.builder(...).storeName(ns)`.
+The namespace is the `name` passed to `CausalProcessors.builder(...).addBufferStore(name, limit)`.
 
 | Store | Key serde | Value serde | Purpose |
 |---|---|---|---|

@@ -15,7 +15,8 @@ ProcessorSupplier<String, Order, String, Enriched> user = new ProcessorSupplier<
 };
 
 CausalProcessorSupplier<String, Order, String, Enriched> causal =
-        CausalProcessors.builder(user, CausalBufferLimit.ofDuration(limit))
+        CausalProcessors.builder(user)
+                .addBufferStore("parsley", CausalBufferLimit.ofDuration(limit))
                 .addBuffers(List.of("prices", "orders"), Serdes.String(), orderSerde)
                 .build();
 
@@ -24,10 +25,22 @@ builder.stream(List.of("prices", "orders"), Consumed.with(Serdes.String(), order
        .to("output-topic");
 ```
 
+`addBufferStore(name, limit)` declares the buffer state store — `name` is the state-store namespace
+(see below) and `limit` is the eviction trigger — mirroring how Kafka Streams names and sizes a store
+in one place.
+
 Each input topic is registered as a `CausalBuffer` carrying the serdes the buffer round-trips held
 records with; the topic's stable UUID is resolved from the broker automatically at startup. For
 per-topic serdes (e.g. mixed Avro types), use `.addBuffer(CausalBuffer.of(topic, keySerde, valueSerde))`
 once per topic instead of the shared `addBuffers(topics, key, value)` convenience.
+
+Parsley's own configuration is supplied on the builder the same way Kafka Streams config is —
+`.withConfig(key, value)`, `.withConfigs(Map)`, or `.withConfig(Properties)` — and is overlaid on top
+of any `parsley.properties` classpath resource. For example:
+
+```java
+        .withConfig("parsley.buffer.deserialization.failure.policy", "continue")
+```
 
 Parsley registers its own internal state stores (causal buffer, frontier store) alongside any
 stores declared by your `ProcessorSupplier.stores()`. You never interact with these stores

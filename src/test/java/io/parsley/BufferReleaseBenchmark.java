@@ -131,7 +131,7 @@ public class BufferReleaseBenchmark {
         };
         StreamsBuilder builder = new StreamsBuilder();
         builder.stream("bench-in", Consumed.with(Serdes.String(), Serdes.String()))
-               .process(CausalProcessors.builder(noOp, BENCH_LIMIT)
+               .process(CausalProcessors.builder(noOp).addBufferStore("parsley", BENCH_LIMIT)
                        .addBuffer(CausalBuffer.of("bench-in", Serdes.String(), Serdes.String()))
                        .topicAdmin(TestTopicAdmin.of(java.util.Map.of("bench-in", topicId("bench-in"))))
                        .build())

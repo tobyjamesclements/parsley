@@ -56,6 +56,15 @@ final class ParsleyConfig {
 
     /** Loads from the {@code parsley.properties} classpath resource, or defaults if it is absent. */
     static ParsleyConfig load() {
+        return from(loadProperties());
+    }
+
+    /**
+     * Reads the {@code parsley.properties} classpath resource into a {@link Properties}, or an empty
+     * one if the resource is absent. Exposed so callers can use the classpath file as a base layer and
+     * overlay explicit keys on top before calling {@link #from(Properties)}.
+     */
+    static Properties loadProperties() {
         Properties props = new Properties();
         try (InputStream in = ParsleyConfig.class.getClassLoader().getResourceAsStream(RESOURCE)) {
             if (in != null) {
@@ -65,7 +74,7 @@ final class ParsleyConfig {
         } catch (IOException e) {
             throw new IllegalStateException("failed to read " + RESOURCE + " from the classpath", e);
         }
-        return from(props);
+        return props;
     }
 
     /** Builds from explicit properties (programmatic override / tests). */

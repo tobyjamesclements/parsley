@@ -92,7 +92,7 @@ class CausalProcessorsSinkPropagationIT {
 
         StreamsBuilder builder = new StreamsBuilder();
         builder.stream(IN, Consumed.with(Serdes.String(), Serdes.String()))
-                .process(CausalProcessors.builder(user, CausalBufferLimit.ofDuration(Duration.ofSeconds(5)))
+                .process(CausalProcessors.builder(user).addBufferStore("parsley", CausalBufferLimit.ofDuration(Duration.ofSeconds(5)))
                         .addBuffer(CausalBuffer.of(IN, Serdes.String(), Serdes.String()))
                         .build())
                 .to(OUT, Produced.with(Serdes.String(), Serdes.String()));
