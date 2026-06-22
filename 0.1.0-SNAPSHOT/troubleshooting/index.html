@@ -11,28 +11,28 @@
       
       
       
-        <link rel="prev" href="../streams/">
+        <link rel="prev" href="../performance/">
       
       
-        <link rel="next" href="../benchmarks/">
+        <link rel="next" href="../migration/">
       
       
         
       
       
-      <link rel="icon" href="../../assets/images/favicon.png">
+      <link rel="icon" href="../assets/images/favicon.png">
       <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.6">
     
     
       
-        <title>Consumer - Parsley</title>
+        <title>Troubleshooting - Parsley</title>
       
     
     
-      <link rel="stylesheet" href="../../assets/stylesheets/main.484c7ddc.min.css">
+      <link rel="stylesheet" href="../assets/stylesheets/main.484c7ddc.min.css">
       
         
-        <link rel="stylesheet" href="../../assets/stylesheets/palette.ab4e12ef.min.css">
+        <link rel="stylesheet" href="../assets/stylesheets/palette.ab4e12ef.min.css">
       
       
 
@@ -51,7 +51,7 @@
       
     
     
-    <script>__md_scope=new URL("../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    <script>__md_scope=new URL("..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
     
       
 
@@ -76,7 +76,7 @@
     <div data-md-component="skip">
       
         
-        <a href="#consumer" class="md-skip">
+        <a href="#troubleshooting" class="md-skip">
           Skip to content
         </a>
       
@@ -96,7 +96,7 @@
 
 <header class="md-header md-header--shadow" data-md-component="header">
   <nav class="md-header__inner md-grid" aria-label="Header">
-    <a href="../.." title="Parsley" class="md-header__button md-logo" aria-label="Parsley" data-md-component="logo">
+    <a href=".." title="Parsley" class="md-header__button md-logo" aria-label="Parsley" data-md-component="logo">
       
   
   <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
@@ -116,7 +116,7 @@
         <div class="md-header__topic" data-md-component="header-topic">
           <span class="md-ellipsis">
             
-              Consumer
+              Troubleshooting
             
           </span>
         </div>
@@ -232,7 +232,7 @@
 
 <nav class="md-nav md-nav--primary" aria-label="Navigation" data-md-level="0">
   <label class="md-nav__title" for="__drawer">
-    <a href="../.." title="Parsley" class="md-nav__button md-logo" aria-label="Parsley" data-md-component="logo">
+    <a href=".." title="Parsley" class="md-nav__button md-logo" aria-label="Parsley" data-md-component="logo">
       
   
   <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
@@ -262,7 +262,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../.." class="md-nav__link">
+      <a href=".." class="md-nav__link">
         
   
   
@@ -289,7 +289,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../concepts/" class="md-nav__link">
+      <a href="../concepts/" class="md-nav__link">
         
   
   
@@ -316,7 +316,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../getting-started/" class="md-nav__link">
+      <a href="../getting-started/" class="md-nav__link">
         
   
   
@@ -343,7 +343,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../streams/" class="md-nav__link">
+      <a href="../streams/" class="md-nav__link">
         
   
   
@@ -370,7 +370,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../configuration/" class="md-nav__link">
+      <a href="../configuration/" class="md-nav__link">
         
   
   
@@ -397,7 +397,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../performance/" class="md-nav__link">
+      <a href="../performance/" class="md-nav__link">
         
   
   
@@ -421,10 +421,37 @@
       
   
   
+    
   
   
-    <li class="md-nav__item">
-      <a href="../../troubleshooting/" class="md-nav__link">
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Troubleshooting
+  
+
+    
+  </span>
+  
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
         
   
   
@@ -440,6 +467,76 @@
   
 
       </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#a-held-record-can-no-longer-be-deserialised-poison-record" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        A held record can no longer be deserialised (poison record)
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="A held record can no longer be deserialised (poison record)">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#what-parsley-does" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        What Parsley does
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#recovery-fail-fast-default" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Recovery (fail-fast / default)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#do-not-use-streams-exception-handlers-for-this" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Do not use Streams' exception handlers for this
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
     </li>
   
 
@@ -451,7 +548,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../migration/" class="md-nav__link">
+      <a href="../migration/" class="md-nav__link">
         
   
   
@@ -478,7 +575,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../api/" class="md-nav__link">
+      <a href="../api/" class="md-nav__link">
         
   
   
@@ -502,20 +599,18 @@
       
   
   
-    
   
   
-  
     
     
     
     
     
-    <li class="md-nav__item md-nav__item--active md-nav__item--nested">
+    <li class="md-nav__item md-nav__item--nested">
       
         
         
-        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_10" checked>
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_10" >
         
           
           <label class="md-nav__link" for="__nav_10" id="__nav_10_label" tabindex="0">
@@ -536,7 +631,7 @@
             <span class="md-nav__icon md-icon"></span>
           </label>
         
-        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_10_label" aria-expanded="true">
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_10_label" aria-expanded="false">
           <label class="md-nav__title" for="__nav_10">
             <span class="md-nav__icon md-icon"></span>
             
@@ -554,7 +649,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../overview/" class="md-nav__link">
+      <a href="../internals/overview/" class="md-nav__link">
         
   
   
@@ -582,7 +677,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../wire-format/" class="md-nav__link">
+      <a href="../internals/wire-format/" class="md-nav__link">
         
   
   
@@ -610,7 +705,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../engine/" class="md-nav__link">
+      <a href="../internals/engine/" class="md-nav__link">
         
   
   
@@ -638,7 +733,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../streams/" class="md-nav__link">
+      <a href="../internals/streams/" class="md-nav__link">
         
   
   
@@ -663,37 +758,10 @@
                 
   
   
-    
   
   
-  
-    <li class="md-nav__item md-nav__item--active">
-      
-      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
-      
-      
-        
-      
-      
-        <label class="md-nav__link md-nav__link--active" for="__toc">
-          
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    Consumer
-  
-
-    
-  </span>
-  
-  
-
-          <span class="md-nav__icon md-icon"></span>
-        </label>
-      
-      <a href="./" class="md-nav__link md-nav__link--active">
+    <li class="md-nav__item">
+      <a href="../internals/consumer/" class="md-nav__link">
         
   
   
@@ -709,81 +777,6 @@
   
 
       </a>
-      
-        
-
-<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
-  
-  
-  
-    
-  
-  
-    <label class="md-nav__title" for="__toc">
-      <span class="md-nav__icon md-icon"></span>
-      Table of contents
-    </label>
-    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
-      
-        <li class="md-nav__item">
-  <a href="#topology" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Topology
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#outbox-topic" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Outbox topic
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#outbox-processor" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Outbox processor
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#poll-path" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        poll() path
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#multiple-input-topics" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Multiple input topics
-      
-    </span>
-  </a>
-  
-</li>
-      
-    </ul>
-  
-</nav>
-      
     </li>
   
 
@@ -796,7 +789,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../benchmarks/" class="md-nav__link">
+      <a href="../internals/benchmarks/" class="md-nav__link">
         
   
   
@@ -851,57 +844,52 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
-  <a href="#topology" class="md-nav__link">
+  <a href="#a-held-record-can-no-longer-be-deserialised-poison-record" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Topology
+        A held record can no longer be deserialised (poison record)
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="A held record can no longer be deserialised (poison record)">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#what-parsley-does" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        What Parsley does
       
     </span>
   </a>
   
 </li>
-      
-        <li class="md-nav__item">
-  <a href="#outbox-topic" class="md-nav__link">
+        
+          <li class="md-nav__item">
+  <a href="#recovery-fail-fast-default" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Outbox topic
+        Recovery (fail-fast / default)
       
     </span>
   </a>
   
 </li>
-      
-        <li class="md-nav__item">
-  <a href="#outbox-processor" class="md-nav__link">
+        
+          <li class="md-nav__item">
+  <a href="#do-not-use-streams-exception-handlers-for-this" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Outbox processor
+        Do not use Streams' exception handlers for this
       
     </span>
   </a>
   
 </li>
-      
-        <li class="md-nav__item">
-  <a href="#poll-path" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        poll() path
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#multiple-input-topics" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Multiple input topics
-      
-    </span>
-  </a>
+        
+      </ul>
+    </nav>
   
 </li>
       
@@ -925,56 +913,84 @@
   
 
 
-<h1 id="consumer">Consumer</h1>
-<p><code>ParsleyConsumer&lt;K,V&gt;</code> implements <code>CausalConsumer&lt;K,V&gt;</code>. It drives a Kafka Streams topology internally and exposes a <code>poll()</code>-based API.</p>
-<h2 id="topology">Topology</h2>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>input topics (byte[], byte[])
-<a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>  -&gt; ParsleyProcessor
-<a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a>       causal engine (buffer / cascade / evict)
-<a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a>       outbox delegate: saves ORIGINAL_DEPENDENCIES, forwards to outbox
-<a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a>  -&gt; outbox topic (byte[], byte[])
-<a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a>     subscribed by internal KafkaConsumer
-<a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a>       poll() reconstructs ConsumerRecord&lt;K,V&gt;
+<h1 id="troubleshooting">Troubleshooting</h1>
+<h2 id="a-held-record-can-no-longer-be-deserialised-poison-record">A held record can no longer be deserialised (poison record)</h2>
+<p>Parsley persists records whose causal dependencies are not yet satisfied to a changelog-backed
+<strong>buffer store</strong>, serialised with the <code>CausalBuffer</code> serdes. When such a record is later forwarded
+(on drain, or on limit-driven eviction) Parsley deserialises it with that serde. If the serde now
+fails — most often a <strong>Schema Registry change while the record was buffered</strong> — the record is a
+<em>poison record</em>.</p>
+<p>How this arises (Avro / Schema Registry): the Confluent wire format embeds the <strong>writer schema id</strong>
+in the bytes, and decode fetches the writer schema <em>by id</em>, so registering an incompatible <em>new</em>
+version alone does <strong>not</strong> break a buffered record. Decode fails only when the writer schema id is
+hard-deleted, the redeployed reader schema is incompatible, or the deserializer resolves against the
+subject's <em>latest</em> schema.</p>
+<h3 id="what-parsley-does">What Parsley does</h3>
+<p>The behaviour is set by <strong><code>parsley.properties</code></strong> (a Parsley-specific config surface — this is <em>not</em>
+mapped from Streams' exception handlers, because dropping a buffered record has causal-frontier
+consequences a source-record skip does not):</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="c1"># parsley.properties (on the classpath)</span>
+<a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="na">parsley.buffer.deserialization.failure.policy</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s">fail   # or: continue</span>
 </code></pre></div>
-<p>The Streams topology never deserialises record keys or values. All records flow as <code>byte[]</code> from source to outbox. Deserialisation happens once, in <code>poll()</code>, using the Serde resolved by source topic.</p>
-<h2 id="outbox-topic">Outbox topic</h2>
-<p>Name: <code>{applicationId}-{storeName}-outbox</code>. Created at startup by <code>ParsleyTopicAdmin</code> with a partition count equal to the maximum partition count across the input topics.</p>
-<p>The internal <code>KafkaConsumer</code> that reads the outbox is configured with:
-- <code>isolation.level=read_committed</code>
-- <code>auto.offset.reset=earliest</code></p>
-<h2 id="outbox-processor">Outbox processor</h2>
-<p><code>ParsleyOutboxProcessor</code> is the only node in the consumer topology. Unlike the Streams decorator
-(<code>ParsleyProcessor</code> + <code>ParsleyProcessorContext</code>), it has no user delegate and does no frontier
-stamping — it wants the application to see the producer's <em>original</em> dependencies, not a delivery-time
-frontier. For each record the engine admits, it forwards (via <code>ParsleyMessage.toForwardHeaders()</code>):</p>
+<table>
+<thead>
+<tr>
+<th><code>parsley.buffer.deserialization.failure.policy</code></th>
+<th>Behaviour on a poison record</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>fail</code> (<strong>default</strong>)</td>
+<td><strong>Fail fast.</strong> The Streams client shuts down; the record stays in the buffer changelog for recovery.</td>
+</tr>
+<tr>
+<td><code>continue</code></td>
+<td><strong>Skip.</strong> The record is dropped, logged, and counted as a violation; processing continues.</td>
+</tr>
+</tbody>
+</table>
+<blockquote>
+<p><strong><code>continue</code> is best-effort and lossy (v1).</strong> The dropped record is gone, and because the frontier
+is a high-water mark, a <em>dependent</em> of the dropped record may later be delivered as if satisfied
+(the next offset on the partition dominates the dropped one) — i.e. on a premise that was never
+delivered. Prefer <code>fail</code> unless you specifically need liveness over correctness. A durable
+quarantine store plus operator-triggered redelivery is planned to supersede <code>continue</code>.</p>
+</blockquote>
+<p>Either way:</p>
 <ul>
-<li>the user headers and the producer's original <code>parsley-causal-dependencies</code>, untouched, and</li>
-<li>the <code>_parsley_src_*</code> source coordinate, so the original topic/partition/offset can be reconstructed
-  on the far side (the outbox record's own coordinate is the outbox's, not the source's).</li>
+<li>The JVM is <strong>never</strong> crashed — the error is a <code>RuntimeException</code> fatal only to the task.</li>
+<li><strong>Startup is never blocked</strong> — index restore decodes only Parsley's own framing, never your serde,
+  so a poison record can be restored and only fails when actually forwarded.</li>
+<li>An <code>ERROR</code> line is logged with the held record's <strong>metadata, never the payload bytes</strong>:</li>
 </ul>
-<h2 id="poll-path"><code>poll()</code> path</h2>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>Buffered record could not be deserialised (deserialization handler = fail); failing fast.
+<a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a>It remains in the buffer changelog for recovery. held record orders-0@42 (topicId C3o…, ts 178…);
+<a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a>schema id: 1; dependencies: ParsleyClock{Wvr…-0@0}; header keys: [...]; key bytes: 1; value bytes: 15
+</code></pre></div>
+<h3 id="recovery-fail-fast-default">Recovery (fail-fast / default)</h3>
 <ol>
-<li>Call <code>outboxConsumer.poll(timeout)</code> to get raw <code>ConsumerRecords&lt;byte[],byte[]&gt;</code>.</li>
-<li>For each raw record, <code>ParsleyMessage.fromOutboxRecord(record)</code>:<ul>
-<li>reads the <code>_parsley_src_*</code> headers into the typed source coordinate,</li>
-<li>decodes <code>parsley-causal-dependencies</code> into the typed clock,</li>
-<li>keeps every other (user) header, dropping the internal <code>_parsley_*</code> ones.</li>
-</ul>
-</li>
-<li>Resolve <code>Serde&lt;K&gt;</code>/<code>Serde&lt;V&gt;</code> by source topic and deserialise key/value.</li>
-<li>Construct <code>ConsumerRecord&lt;K,V&gt;</code> at the source partition and offset, with the user headers plus the
-   producer's <code>parsley-causal-dependencies</code> re-encoded from the typed clock.</li>
-<li>Group records by source <code>TopicPartition</code> and return as <code>ConsumerRecords&lt;K,V&gt;</code>.</li>
+<li>Read the <code>ERROR</code> line: it names the <strong>source coordinate</strong> (<code>orders-0@42</code>) and the <strong>writer schema
+   id</strong> that can no longer be decoded.</li>
+<li>Make the bytes decodable again — restore Schema Registry compatibility for the subject
+   (<code>&lt;topic&gt;-value</code>), or roll back the consumer/processor's reader schema to one compatible with that
+   writer schema id.</li>
+<li>Restart. Startup succeeds (restore is poison-immune); the record now decodes and drains normally.</li>
 </ol>
-<p>The returned record's <code>headers()</code> carry the original producer dependencies (no internal <code>_parsley_*</code>
-headers). <code>CausalDependencies.fromRecord(record)</code> on a record returned by <code>poll()</code> therefore returns
-the producer's causal intent.</p>
-<p>An evicted record takes the same path as any other: it flows through the outbox topic and is
-returned from <code>poll()</code> like every other record (delivered out of causal order). Eviction is not
-signalled on the record; the engine logs it with the causal gap and counts it via the violation
-metric.</p>
-<h2 id="multiple-input-topics">Multiple input topics</h2>
-<p>Each subscribed topic is registered as a <code>CausalBuffer</code> carrying its own serdes (<code>CausalConsumers.builder(...).addBuffer(CausalBuffer.of(topic, keySerde, valueSerde))</code>), so topics with different key or value types each resolve their own. All types co-exist in the single outbox topic as <code>byte[]</code>, so there is no schema registry conflict. Deserialisation is deferred to <code>poll()</code>, where each record is decoded with its source topic's registered serde.</p>
+<p>To inspect the exact bytes, read them from the buffer's changelog topic
+<code>{applicationId}-{storeName}-buffer-changelog</code> (default <code>storeName</code> is <code>parsley</code>) with a console
+consumer — Parsley never logs the payload itself.</p>
+<p>If the record is genuinely unrecoverable and you need liveness, set
+<code>parsley.buffer.deserialization.failure.policy = continue</code> and restart; Parsley will drop the poison
+record (logged + violation metric) and continue — accepting the lossiness noted above.</p>
+<h3 id="do-not-use-streams-exception-handlers-for-this">Do not use Streams' exception handlers for this</h3>
+<p>Setting <code>processing.exception.handler=CONTINUE</code> does <strong>not</strong> help: Streams routes the failure through
+that handler, but its <code>CONTINUE</code> mode skips the <em>innocent record currently being processed</em> — the one
+whose arrival triggered the drain — not the buffered poison record. The poison record stays, the next
+trigger hits it again, and the app sheds healthy records in a livelock. Likewise
+<code>deserialization.exception.handler</code> (<code>LogAndContinue</code>) does not apply — it covers <em>source-topic</em>
+consumption, not records decoded from Parsley's state store. Use
+<code>parsley.buffer.deserialization.failure.policy</code> instead.</p>
 
 
 
@@ -1010,7 +1026,7 @@ metric.</p>
       <nav class="md-footer__inner md-grid" aria-label="Footer" >
         
           
-          <a href="../streams/" class="md-footer__link md-footer__link--prev" aria-label="Previous: Streams integration">
+          <a href="../performance/" class="md-footer__link md-footer__link--prev" aria-label="Previous: Performance">
             <div class="md-footer__button md-icon">
               
               <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
@@ -1020,20 +1036,20 @@ metric.</p>
                 Previous
               </span>
               <div class="md-ellipsis">
-                Streams integration
+                Performance
               </div>
             </div>
           </a>
         
         
           
-          <a href="../benchmarks/" class="md-footer__link md-footer__link--next" aria-label="Next: Benchmarks">
+          <a href="../migration/" class="md-footer__link md-footer__link--next" aria-label="Next: Migration">
             <div class="md-footer__title">
               <span class="md-footer__direction">
                 Next
               </span>
               <div class="md-ellipsis">
-                Benchmarks
+                Migration
               </div>
             </div>
             <div class="md-footer__button md-icon">
@@ -1070,10 +1086,10 @@ metric.</p>
     
       
       
-      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.top", "navigation.footer", "search.highlight", "content.code.copy"], "search": "../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": {"default": "latest", "provider": "mike"}}</script>
+      <script id="__config" type="application/json">{"annotate": null, "base": "..", "features": ["navigation.top", "navigation.footer", "search.highlight", "content.code.copy"], "search": "../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": {"default": "latest", "provider": "mike"}}</script>
     
     
-      <script src="../../assets/javascripts/bundle.79ae519e.min.js"></script>
+      <script src="../assets/javascripts/bundle.79ae519e.min.js"></script>
       
     
   </body>

@@ -424,6 +424,33 @@
   
   
     <li class="md-nav__item">
+      <a href="../../troubleshooting/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Troubleshooting
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
       <a href="../../migration/" class="md-nav__link">
         
   
@@ -488,10 +515,10 @@
       
         
         
-        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_9" checked>
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_10" checked>
         
           
-          <label class="md-nav__link" for="__nav_9" id="__nav_9_label" tabindex="0">
+          <label class="md-nav__link" for="__nav_10" id="__nav_10_label" tabindex="0">
             
   
   
@@ -509,8 +536,8 @@
             <span class="md-nav__icon md-icon"></span>
           </label>
         
-        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_9_label" aria-expanded="true">
-          <label class="md-nav__title" for="__nav_9">
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_10_label" aria-expanded="true">
+          <label class="md-nav__title" for="__nav_10">
             <span class="md-nav__icon md-icon"></span>
             
   
@@ -737,10 +764,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#wait-index" class="md-nav__link">
+  <a href="#position-index" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Wait index
+        Position index
       
     </span>
   </a>
@@ -968,10 +995,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#wait-index" class="md-nav__link">
+  <a href="#position-index" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Wait index
+        Position index
       
     </span>
   </a>
@@ -1012,7 +1039,7 @@
 <tbody>
 <tr>
 <td><code>frontier</code></td>
-<td><code>CausalFrontier</code></td>
+<td><code>ParsleyClock</code></td>
 <td>Highest admitted offset per <code>(topicId, partition)</code></td>
 </tr>
 <tr>
@@ -1021,14 +1048,9 @@
 <td>Durable set of held records</td>
 </tr>
 <tr>
-<td><code>waitIndex</code></td>
-<td><code>ParsleyWaitIndex</code></td>
+<td><code>positionIndex</code></td>
+<td><code>ParsleyPositionIndex</code></td>
 <td>Secondary index: coordinate -&gt; candidate record IDs</td>
-</tr>
-<tr>
-<td><code>policy</code></td>
-<td><code>CausalBufferPolicy</code></td>
-<td>What to do when a limit fires</td>
 </tr>
 <tr>
 <td><code>sizeLimit</code></td>
@@ -1044,26 +1066,28 @@
 </table>
 <h2 id="onrecord-algorithm"><code>onRecord()</code> algorithm</h2>
 <ol>
-<li>Decode <code>parsley-causal-dependencies</code> header.<ul>
-<li>Missing: report <code>MISSING_HEADER</code> violation, advance frontier, apply policy.</li>
-<li>Undecodable: report <code>UNRESOLVABLE_DEPENDENCIES</code> violation, advance frontier, apply policy.</li>
-</ul>
-</li>
-<li>Strip self-referential entries from the decoded dependencies. A <code>(topicId, partition)</code> entry whose required offset is &gt;= the record's own source offset on that coordinate is removed. This prevents a record from blocking on its own position in the log.</li>
-<li>If <code>deps.isSatisfiedBy(frontier)</code>: advance frontier, add record to output, call <code>drainInto()</code>.</li>
-<li>Otherwise: add record to buffer (assigned an insertion sequence and a <code>bufferedAt</code> timestamp), index unsatisfied coordinates in the wait index. If buffer depth &gt;= <code>sizeLimit</code>, call <code>evictOverflow()</code>.</li>
+<li>The dependency clock is decoded once at the boundary (<code>ParsleyMessage.from</code>): a missing header
+   (logged at <code>DEBUG</code>) or an undecodable one (logged at <code>WARN</code>) becomes an empty, vacuously
+   satisfied clock, so the engine always receives a typed <code>ParsleyClock</code>.</li>
+<li>Strip self-referential entries from the dependencies. A <code>(topicId, partition)</code> entry whose
+   required offset equals the record's own source offset on that coordinate is removed
+   (<code>ParsleyClock.without</code>). This prevents a record from blocking on its own position in the log.</li>
+<li>If <code>frontier.dominates(deps)</code>: advance frontier, add the record to output, call <code>drainInto()</code>.</li>
+<li>Otherwise: add record to buffer (assigned an insertion sequence and a <code>bufferedAt</code> timestamp), index unsatisfied coordinates in the position index. If buffer depth &gt;= <code>sizeLimit</code>, call <code>evictOverflow()</code>.</li>
 </ol>
-<p>Records with missing or undecodable dependency headers are handled by the buffer policy (forward, drop, or dead-letter). The frontier always advances so buffered records waiting on that coordinate are not permanently stalled.</p>
+<p>A missing or undecodable dependency header always falls into the satisfied branch (step 3) — it
+never reaches the buffer. The frontier still advances on these records, so buffered records
+waiting on that coordinate are not permanently stalled.</p>
 <h2 id="drain-cascade-draininto">Drain cascade (<code>drainInto</code>)</h2>
 <p>When the frontier advances on coordinate <code>C</code>, <code>drainInto</code> uses a worklist algorithm to cascade releases without scanning the full buffer.</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>toScan = {C}
 <a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>while toScan not empty:
 <a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a>  for each coordinate in toScan:
-<a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a>    candidates = waitIndex.findCandidates(topicId, partition, newOffset)
+<a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a>    candidates = positionIndex.findCandidates(topicId, partition, newOffset)
 <a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a>    for each candidate:
 <a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a>      entry = buffer.get(candidate.recordId)
 <a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a>      if entry == null: prune stale index entry, skip
-<a id="__codelineno-0-8" name="__codelineno-0-8" href="#__codelineno-0-8"></a>      if entry.dependencies.withoutSelfReference(...).isSatisfiedBy(frontier):
+<a id="__codelineno-0-8" name="__codelineno-0-8" href="#__codelineno-0-8"></a>      if frontier.dominates(entry.dependencies.without(self)):
 <a id="__codelineno-0-9" name="__codelineno-0-9" href="#__codelineno-0-9"></a>        releasable.add(entry)
 <a id="__codelineno-0-10" name="__codelineno-0-10" href="#__codelineno-0-10"></a>  toScan = {}
 <a id="__codelineno-0-11" name="__codelineno-0-11" href="#__codelineno-0-11"></a>  for each releasable entry:
@@ -1078,14 +1102,11 @@
 <p>Both eviction paths select a subset of <code>buffer.entries()</code> (oldest-first by insertion sequence,
 equivalently by <code>bufferedAt</code>) and hand it to a shared <code>evictEntries()</code> helper. For each selected entry:</p>
 <ol>
-<li>Report <code>LIMIT_REACHED</code> violation via <code>CausalViolationHandler</code>.</li>
-<li>Remove from buffer and wait index.</li>
-<li>Apply <code>policy.actionFor(LIMIT_REACHED)</code>:<ul>
-<li><strong><code>FORWARD_UNSAFE</code></strong>: advance frontier, add to forward list.</li>
-<li><strong><code>DROP</code></strong>: discard.</li>
-<li><strong><code>DEAD_LETTER</code></strong>: append DLQ headers, route to dead-letter sink.</li>
-</ul>
-</li>
+<li>Log the eviction at <code>WARN</code> with the causal gap (<code>required.missing(frontier)</code>) and call
+   <code>metrics.recordViolation()</code>.</li>
+<li>Remove from buffer and position index.</li>
+<li>Advance the frontier at the entry's source coordinate and add the record to the forward list —
+   eviction never drops or diverts a record, it just delivers it out of causal order.</li>
 </ol>
 <h3 id="evictoverflow-size-limit"><code>evictOverflow()</code> — size limit</h3>
 <p>Called inline from <code>onRecord()</code> once buffer depth reaches <code>sizeLimit</code>. Evicts only the oldest
@@ -1109,42 +1130,21 @@ invariant, and the punctuation's subsequent call is a no-op.</p>
 from the oldest, evicting every entry whose <code>bufferedAt</code> is older than <code>now - duration</code>, and stops
 at the first entry that hasn't aged out yet (everything after it is younger still). A no-op when no
 duration limit is configured.</p>
-<p>DLQ headers added per evicted record:</p>
-<table>
-<thead>
-<tr>
-<th>Header</th>
-<th>Content</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td><code>parsley-dlq-reason</code></td>
-<td><code>LIMIT_REACHED</code> (UTF-8)</td>
-</tr>
-<tr>
-<td><code>parsley-dlq-required-dependencies</code></td>
-<td>Serialised <code>CausalDependencies</code> the record required</td>
-</tr>
-<tr>
-<td><code>parsley-dlq-gap</code></td>
-<td>Per-position shortfall encoded as <code>CausalDependencies</code></td>
-</tr>
-</tbody>
-</table>
-<p>The gap encodes the shortfall, not the absolute required offset. Each <code>CausalPosition.offset()</code> in the gap is <code>required - observed</code> at eviction time.</p>
+<p>The causal gap logged for each eviction (<code>required.missing(frontier)</code>) encodes the shortfall,
+not the absolute required offset: each coordinate's value in the gap clock is <code>required - observed</code>
+at eviction time.</p>
 <h2 id="frontier-persistence-ordering">Frontier persistence ordering</h2>
 <p><code>FrontierCallback</code> fires inside <code>advanceFrontier()</code>, before the record is added to the output list. The <code>ParsleyProcessor</code> persists the frontier to the state store inside this callback. This ordering guarantees that the changelog write for the frontier advance is durable before the record reaches the user processor.</p>
 <h2 id="buffer-store">Buffer store</h2>
 <p><code>ParsleyBufferStore&lt;K,V&gt;</code> is an interface with two implementations:</p>
 <ul>
 <li><strong><code>RocksBufferStore</code></strong> (production): wraps a <code>KeyValueStore&lt;Long, byte[]&gt;</code> backed by RocksDB and changelog-replicated. On construction, it makes a single pass over all existing keys to seed the monotonic <code>nextSequence</code> counter and the <code>size</code> field. No separate rehydration step is needed: the store is the buffer.</li>
-<li><strong><code>MockBufferStore</code></strong> (tests): wraps a <code>TreeMap&lt;Long, ParsleyRecord&lt;K,V&gt;&gt;</code> with equivalent semantics.</li>
+<li><strong><code>MockBufferStore</code></strong> (tests): wraps a <code>TreeMap&lt;Long, ParsleyMessage&lt;K,V&gt;&gt;</code> with equivalent semantics.</li>
 </ul>
-<h2 id="wait-index">Wait index</h2>
-<p><code>ParsleyWaitIndex</code> is backed by <code>RocksWaitIndex</code>, which wraps a <code>KeyValueStore&lt;byte[], byte[]&gt;</code>. The 36-byte composite key (topicId + partition + requiredOffset + recordId) sorts lexicographically in RocksDB, enabling a bounded range scan to find all records waiting on a given coordinate up to the new frontier offset.</p>
+<h2 id="position-index">Position index</h2>
+<p><code>ParsleyPositionIndex</code> is backed by <code>RocksPositionIndex</code>, which wraps a <code>KeyValueStore&lt;byte[], byte[]&gt;</code>. The 36-byte composite key (topicId + partition + requiredOffset + recordId) sorts lexicographically in RocksDB, enabling a bounded range scan to find all records waiting on a given coordinate up to the new frontier offset.</p>
 <p>The store value is always an empty byte array (<code>PRESENT</code> marker). The key encodes everything needed to find and validate a candidate.</p>
-<p>On engine construction, if the buffer is non-empty (restart recovery), the engine makes a single pass over all buffer entries to populate the wait index. This rebuilds the secondary index from the authoritative buffer state.</p>
+<p>On engine construction, if the buffer is non-empty (restart recovery), the engine makes a single pass over all buffer entries to populate the position index. This rebuilds the secondary index from the authoritative buffer state.</p>
 
 
 

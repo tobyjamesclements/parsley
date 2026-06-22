@@ -14,7 +14,7 @@
         <link rel="prev" href="../configuration/">
       
       
-        <link rel="next" href="../migration/">
+        <link rel="next" href="../troubleshooting/">
       
       
         
@@ -593,6 +593,33 @@
   
   
     <li class="md-nav__item">
+      <a href="../troubleshooting/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Troubleshooting
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
       <a href="../migration/" class="md-nav__link">
         
   
@@ -655,10 +682,10 @@
       
         
         
-        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_9" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_10" >
         
           
-          <label class="md-nav__link" for="__nav_9" id="__nav_9_label" tabindex="0">
+          <label class="md-nav__link" for="__nav_10" id="__nav_10_label" tabindex="0">
             
   
   
@@ -676,8 +703,8 @@
             <span class="md-nav__icon md-icon"></span>
           </label>
         
-        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_9_label" aria-expanded="false">
-          <label class="md-nav__title" for="__nav_9">
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_10_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_10">
             <span class="md-nav__icon md-icon"></span>
             
   
@@ -1092,10 +1119,9 @@ controlling per-record overhead.</p>
 <div class="admonition tip">
 <p class="admonition-title">Controlling clock width</p>
 <p>In Streams, Parsley stamps the per-task frontier automatically. The width is bounded by the
-number of source partitions assigned to the task, which is usually small. The wider paths are
-<code>consumer.frontier()</code> and <code>CausalFrontier.toDependencies()</code>, which carry every partition the
-consumer has ever seen. Prefer <code>CausalDependencies.fromRecord(trigger)</code> when you only need to
-express a dependency on a single upstream record — it carries a much narrower clock.</p>
+number of source partitions assigned to the task, which is usually small. Prefer
+<code>CausalDependencies.fromRecord(trigger)</code> when you only need to express a dependency on a single
+upstream record — it carries a much narrower clock than a manually built, wide dependency set.</p>
 </div>
 <hr />
 <h3 id="2-causal-buffering-latency">2. Causal buffering latency</h3>
@@ -1260,7 +1286,7 @@ this is <strong>O(1)</strong> — effectively constant regardless of buffer size
 </tr>
 </tbody>
 </table>
-<p><strong>Buffer restore</strong> scans every buffered record to rebuild the wait index. Benchmarking confirms
+<p><strong>Buffer restore</strong> scans every buffered record to rebuild the position index. Benchmarking confirms
 this is <strong>O(n)</strong> in the number of records held at the time of the crash or reassignment:</p>
 <table>
 <thead>
@@ -1427,13 +1453,13 @@ system property overrides, and instructions for running against your own Kafka c
         
         
           
-          <a href="../migration/" class="md-footer__link md-footer__link--next" aria-label="Next: Migration">
+          <a href="../troubleshooting/" class="md-footer__link md-footer__link--next" aria-label="Next: Troubleshooting">
             <div class="md-footer__title">
               <span class="md-footer__direction">
                 Next
               </span>
               <div class="md-ellipsis">
-                Migration
+                Troubleshooting
               </div>
             </div>
             <div class="md-footer__button md-icon">

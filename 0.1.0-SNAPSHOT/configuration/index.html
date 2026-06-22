@@ -480,71 +480,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#buffer-policies" class="md-nav__link">
+  <a href="#always-forward-delivery" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Buffer policies
-      
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="Buffer policies">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#forward-unsafe" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Forward unsafe
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#drop" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Drop
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#dead-letter" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Dead letter
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#per-violation-type-policy" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Per-violation-type policy
-      
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#violation-handler" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Violation handler
+        Always-forward delivery
       
     </span>
   </a>
@@ -556,6 +495,17 @@
     <span class="md-ellipsis">
       
         Header size
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#parsleyproperties" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        parsley.properties
       
     </span>
   </a>
@@ -585,6 +535,33 @@
     
   
     Performance
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../troubleshooting/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Troubleshooting
   
 
     
@@ -666,10 +643,10 @@
       
         
         
-        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_9" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_10" >
         
           
-          <label class="md-nav__link" for="__nav_9" id="__nav_9_label" tabindex="0">
+          <label class="md-nav__link" for="__nav_10" id="__nav_10_label" tabindex="0">
             
   
   
@@ -687,8 +664,8 @@
             <span class="md-nav__icon md-icon"></span>
           </label>
         
-        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_9_label" aria-expanded="false">
-          <label class="md-nav__title" for="__nav_9">
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_10_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_10">
             <span class="md-nav__icon md-icon"></span>
             
   
@@ -950,71 +927,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#buffer-policies" class="md-nav__link">
+  <a href="#always-forward-delivery" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Buffer policies
-      
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="Buffer policies">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#forward-unsafe" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Forward unsafe
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#drop" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Drop
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#dead-letter" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Dead letter
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#per-violation-type-policy" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Per-violation-type policy
-      
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#violation-handler" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Violation handler
+        Always-forward delivery
       
     </span>
   </a>
@@ -1026,6 +942,17 @@
     <span class="md-ellipsis">
       
         Header size
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#parsleyproperties" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        parsley.properties
       
     </span>
   </a>
@@ -1054,8 +981,8 @@
 
 <h1 id="configuration">Configuration</h1>
 <h2 id="buffer-limits">Buffer limits</h2>
-<p>A <code>CausalBufferLimit</code> bounds how large or how long-lived the causal buffer may grow before the
-policy fires.</p>
+<p>A <code>CausalBufferLimit</code> bounds how large or how long-lived the causal buffer may grow before
+eviction fires.</p>
 <h3 id="size-limit">Size limit</h3>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="n">CausalBufferLimit</span><span class="p">.</span><span class="na">ofSize</span><span class="p">(</span><span class="mi">500</span><span class="p">)</span><span class="w">  </span><span class="c1">// evict the oldest record(s) once the buffer holds ≥ 500 records</span>
 </code></pre></div>
@@ -1082,87 +1009,16 @@ Parsley wires this schedule automatically when using <code>CausalProcessors</cod
 <p>Fires when the first of several limits fires. Use this to combine a size cap with a time-based
 backstop.</p>
 <hr />
-<h2 id="buffer-policies">Buffer policies</h2>
-<p>A <code>CausalBufferPolicy</code> pairs a limit with a handling strategy for evicted records via a
-<code>CausalViolationAction</code> (<code>FORWARD_UNSAFE</code>, <code>DROP</code>, or <code>DEAD_LETTER</code>). Every policy reports a
-<code>CausalViolation</code> for each evicted record.</p>
-<p>The policy applies to all three violation reasons: records evicted when a limit fires
-(<code>LIMIT_REACHED</code>) and records that arrive with missing or corrupt dependency headers
-(<code>MISSING_HEADER</code>, <code>UNRESOLVABLE_DEPENDENCIES</code>). The frontier always advances for violation
-records regardless of policy, so buffered records waiting on that coordinate are not permanently
-stalled.</p>
-<h3 id="forward-unsafe">Forward unsafe</h3>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="n">CausalBufferPolicy</span><span class="p">.</span><span class="na">forwardUnsafe</span><span class="p">(</span><span class="n">limit</span><span class="p">)</span>
-</code></pre></div>
-<p>Forwards violation records out-of-order. Lenient: delivery is always preserved; causal ordering
-is suspended for the violating record.</p>
-<h3 id="drop">Drop</h3>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a><span class="n">CausalBufferPolicy</span><span class="p">.</span><span class="na">drop</span><span class="p">(</span><span class="n">limit</span><span class="p">)</span>
-</code></pre></div>
-<p>Discards violation records entirely. Strict: no out-of-order delivery, but records are lost.</p>
-<h3 id="dead-letter">Dead letter</h3>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a><span class="n">CausalBufferPolicy</span><span class="p">.</span><span class="na">deadLetter</span><span class="p">(</span><span class="n">limit</span><span class="p">)</span>
-</code></pre></div>
-<p>Routes violation records to a dead-letter sink you provide. Strict: no out-of-order delivery.
-Each routed record receives three additional headers:</p>
-<table>
-<thead>
-<tr>
-<th>Header</th>
-<th>Content</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td><code>parsley-dlq-reason</code></td>
-<td>Violation reason (<code>LIMIT_REACHED</code>, <code>MISSING_HEADER</code>, or <code>UNRESOLVABLE_DEPENDENCIES</code>) (UTF-8)</td>
-</tr>
-<tr>
-<td><code>parsley-dlq-required-dependencies</code></td>
-<td>The required <code>CausalDependencies</code> (serialised; empty for header violations)</td>
-</tr>
-<tr>
-<td><code>parsley-dlq-gap</code></td>
-<td>The per-coordinate shortfall (serialised as <code>CausalDependencies</code>; empty for header violations)</td>
-</tr>
-</tbody>
-</table>
-<p>The reason and gap headers allow an operator to distinguish eviction from header violations and
-reconstruct exactly which offsets were missing at eviction time.</p>
-<h3 id="per-violation-type-policy">Per-violation-type policy</h3>
-<p>The convenience factories above apply the same action to every violation reason. The builder lets
-each reason carry its own <code>CausalViolationAction</code>:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a><span class="n">CausalBufferPolicy</span><span class="w"> </span><span class="n">policy</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">CausalBufferPolicy</span><span class="p">.</span><span class="na">builder</span><span class="p">()</span>
-<a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a><span class="w">        </span><span class="p">.</span><span class="na">onMissing</span><span class="p">(</span><span class="n">CausalViolationAction</span><span class="p">.</span><span class="na">FORWARD_UNSAFE</span><span class="p">)</span><span class="w">      </span><span class="c1">// tolerate legacy (non-Parsley) producers</span>
-<a id="__codelineno-6-3" name="__codelineno-6-3" href="#__codelineno-6-3"></a><span class="w">        </span><span class="p">.</span><span class="na">onUnresolvable</span><span class="p">(</span><span class="n">CausalViolationAction</span><span class="p">.</span><span class="na">DROP</span><span class="p">)</span><span class="w">            </span><span class="c1">// corrupt header → discard</span>
-<a id="__codelineno-6-4" name="__codelineno-6-4" href="#__codelineno-6-4"></a><span class="w">        </span><span class="p">.</span><span class="na">onLimit</span><span class="p">(</span><span class="n">CausalViolationAction</span><span class="p">.</span><span class="na">DEAD_LETTER</span><span class="p">)</span><span class="w">            </span><span class="c1">// buffer overflow → DLQ</span>
-<a id="__codelineno-6-5" name="__codelineno-6-5" href="#__codelineno-6-5"></a><span class="w">        </span><span class="p">.</span><span class="na">setLimit</span><span class="p">(</span><span class="n">CausalBufferLimit</span><span class="p">.</span><span class="na">ofSize</span><span class="p">(</span><span class="mi">1000</span><span class="p">))</span>
-<a id="__codelineno-6-6" name="__codelineno-6-6" href="#__codelineno-6-6"></a><span class="w">        </span><span class="p">.</span><span class="na">build</span><span class="p">();</span>
-</code></pre></div>
-<p>All four settings (<code>onMissing</code>, <code>onUnresolvable</code>, <code>onLimit</code>, <code>setLimit</code>) are required; <code>build()</code>
-throws <code>IllegalStateException</code> if any are omitted. A dead-letter sink is required if any action
-is <code>DEAD_LETTER</code>, and forbidden otherwise.</p>
-<p>See <a href="../migration/">Migration</a> for the typical use of this builder when integrating Parsley with
-an existing cluster.</p>
-<hr />
-<h2 id="violation-handler">Violation handler</h2>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a><span class="n">CausalProcessors</span><span class="p">.</span><span class="na">builder</span><span class="p">(</span><span class="n">user</span><span class="p">,</span><span class="w"> </span><span class="n">policy</span><span class="p">)</span>
-<a id="__codelineno-7-2" name="__codelineno-7-2" href="#__codelineno-7-2"></a><span class="w">        </span><span class="p">.</span><span class="na">onViolation</span><span class="p">(</span><span class="n">violation</span><span class="w"> </span><span class="o">-&gt;</span><span class="w"> </span><span class="n">myMetrics</span><span class="p">.</span><span class="na">increment</span><span class="p">(</span><span class="s">&quot;causal.violations&quot;</span><span class="p">,</span>
-<a id="__codelineno-7-3" name="__codelineno-7-3" href="#__codelineno-7-3"></a><span class="w">                </span><span class="s">&quot;reason&quot;</span><span class="p">,</span><span class="w"> </span><span class="n">violation</span><span class="p">.</span><span class="na">reason</span><span class="p">().</span><span class="na">name</span><span class="p">()))</span>
-<a id="__codelineno-7-4" name="__codelineno-7-4" href="#__codelineno-7-4"></a><span class="w">        </span><span class="p">...</span>
-</code></pre></div>
-<p><code>CausalViolationHandler</code> receives a <code>CausalViolation</code> for every record that cannot be delivered
-in causal order. The violation includes:</p>
-<ul>
-<li><code>reason()</code> — <code>MISSING_HEADER</code>, <code>UNRESOLVABLE_DEPENDENCIES</code>, or <code>LIMIT_REACHED</code></li>
-<li><code>frontier()</code> — the consumer's frontier at the time of the violation</li>
-<li><code>required()</code> — the dependencies the record carried (empty for <code>MISSING_HEADER</code>/<code>UNRESOLVABLE_DEPENDENCIES</code>)</li>
-<li><code>gap()</code> — per-coordinate shortfall list (empty if already above the frontier)</li>
-<li><code>record()</code> — the underlying <code>ConsumerRecord</code></li>
-</ul>
-<p>The default handler logs at <code>WARN</code> level. Override it to integrate with your own metrics or
-alerting system. Violations are expected under sustained lag or misconfiguration — their presence
-is not an error in isolation, but their <em>frequency</em> and <em>gap size</em> are the key signals to watch.</p>
+<h2 id="always-forward-delivery">Always-forward delivery</h2>
+<p>Parsley never drops or diverts a record — there is no policy to configure for what happens on
+eviction. Every record reaches the user's <code>process()</code>/<code>poll()</code> exactly once. In the common case it
+is delivered in causal order; the exception is <strong>eviction</strong>, when the configured <code>CausalBufferLimit</code>
+fires before a held record's dependencies are satisfied and the record is delivered anyway, out of
+order. The frontier always advances on delivery, so buffered records waiting on that coordinate are
+not permanently stalled.</p>
+<p>Eviction is surfaced operationally, not as a per-record signal: Parsley logs every eviction at
+<code>WARN</code> with the causal gap (the per-coordinate shortfall between what was required and what the
+frontier had observed) and counts it via its eviction metric.</p>
 <hr />
 <h2 id="header-size">Header size</h2>
 <p>The serialised <code>parsley-causal-dependencies</code> header is <code>5 + 28 × entries</code> bytes. It counts against
@@ -1172,13 +1028,44 @@ separate header budget).</p>
 <li><strong>Automatic Streams stamping</strong> stamps the per-task frontier, bounded by the number of source
   topics in the subtopology (one partition per topic per task). This stays small under normal
   topologies.</li>
-<li><strong><code>consumer.frontier()</code></strong> and <strong><code>CausalFrontier.toDependencies()</code></strong> carry every partition ever
-  seen by the consumer. Watch this path on wide-fan-in consumers or broad regex subscriptions.</li>
 <li><strong><code>CausalDependencies.fromRecord(trigger)</code></strong> carries only the partitions the upstream producer
-  depended on. Prefer it over <code>frontier()</code> when the causal context is a single upstream record.</li>
+  depended on — the recommended way to propagate causal context.</li>
+<li><strong>A manually built <code>CausalDependencies</code></strong> is as wide as the coordinates you <code>require(...)</code>. Watch
+  this on records that legitimately depend on many topic-partitions.</li>
 </ul>
 <p>Parsley never truncates the dependencies header — truncation would silently break the guarantee. Keep the
 relevant-partition count within your record-size budget.</p>
+<hr />
+<h2 id="parsleyproperties"><code>parsley.properties</code></h2>
+<p>Parsley reads its own behaviour from a <code>parsley.properties</code> resource on the classpath — kept separate
+from Kafka Streams configuration because these behaviours have no Streams equivalent. An absent file
+(or absent keys) falls back to the defaults below.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="c1"># How a held record that can no longer be deserialised on the forward path is handled</span>
+<a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a><span class="c1"># (e.g. an incompatible Schema Registry change while the record was buffered).</span>
+<a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a><span class="c1">#   fail     (default) — fail fast; the record stays in the buffer changelog for recovery</span>
+<a id="__codelineno-3-4" name="__codelineno-3-4" href="#__codelineno-3-4"></a><span class="c1">#   continue           — drop the record (logged + violation metric) and keep processing</span>
+<a id="__codelineno-3-5" name="__codelineno-3-5" href="#__codelineno-3-5"></a><span class="na">parsley.buffer.deserialization.failure.policy</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s">fail</span>
+</code></pre></div>
+<table>
+<thead>
+<tr>
+<th>Key</th>
+<th>Default</th>
+<th>Values</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>parsley.buffer.deserialization.failure.policy</code></td>
+<td><code>fail</code></td>
+<td><code>fail</code>, <code>continue</code></td>
+</tr>
+</tbody>
+</table>
+<p><code>continue</code> is <strong>best-effort and lossy</strong> — see
+<a href="../troubleshooting/">Troubleshooting → poison records</a> for the full semantics (and why this is <em>not</em>
+mapped from Streams' <code>deserialization.exception.handler</code>). A durable quarantine + operator-triggered
+redelivery is planned to supersede it.</p>
 
 
 

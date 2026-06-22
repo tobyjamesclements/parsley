@@ -424,6 +424,33 @@
   
   
     <li class="md-nav__item">
+      <a href="../../troubleshooting/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Troubleshooting
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
       <a href="../../migration/" class="md-nav__link">
         
   
@@ -488,10 +515,10 @@
       
         
         
-        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_9" checked>
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_10" checked>
         
           
-          <label class="md-nav__link" for="__nav_9" id="__nav_9_label" tabindex="0">
+          <label class="md-nav__link" for="__nav_10" id="__nav_10_label" tabindex="0">
             
   
   
@@ -509,8 +536,8 @@
             <span class="md-nav__icon md-icon"></span>
           </label>
         
-        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_9_label" aria-expanded="true">
-          <label class="md-nav__title" for="__nav_9">
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_10_label" aria-expanded="true">
+          <label class="md-nav__title" for="__nav_10">
             <span class="md-nav__icon md-icon"></span>
             
   
@@ -947,27 +974,19 @@
 <tbody>
 <tr>
 <td><code>CausalDependencies</code></td>
-<td>Immutable set of causal requirements stamped by the producer onto each record</td>
+<td>Public facade over a <code>ParsleyClock</code>: the causal requirements stamped by the producer onto each record</td>
 </tr>
 <tr>
-<td><code>CausalFrontier</code></td>
-<td>Immutable per-consumer horizon: highest observed offset per (topicId, partition)</td>
+<td><code>CausalBuffer</code></td>
+<td>Registers one causal source on a builder: topic name + the serdes the buffer round-trips held records with (the topic's UUID is resolved from the broker)</td>
 </tr>
 <tr>
-<td><code>CausalPosition</code></td>
-<td>A single coordinate: <code>(topicId, partition, offset)</code></td>
+<td><code>CausalTopic</code></td>
+<td>A topic's stable causal identity: name + Kafka UUID (used to build <code>CausalDependencies.require</code>)</td>
 </tr>
 <tr>
-<td><code>CausalViolation</code></td>
-<td>Snapshot of a violation: reason, frontier, required dependencies, gap</td>
-</tr>
-<tr>
-<td><code>CausalViolationReason</code></td>
-<td>Enum: <code>MISSING_HEADER</code>, <code>UNRESOLVABLE_DEPENDENCIES</code>, <code>LIMIT_REACHED</code></td>
-</tr>
-<tr>
-<td><code>CausalViolationAction</code></td>
-<td>Enum: <code>FORWARD_UNSAFE</code>, <code>DROP</code>, <code>DEAD_LETTER</code> — the per-reason action a policy applies</td>
+<td><code>CausalBufferLimit</code></td>
+<td>When to evict held records: <code>ofDuration</code>, <code>ofSize</code>, <code>first</code></td>
 </tr>
 </tbody>
 </table>
@@ -985,12 +1004,16 @@
 <td>Causal buffer engine: classify, buffer, cascade, evict</td>
 </tr>
 <tr>
-<td><code>ParsleyRecord</code></td>
-<td>Internal record envelope carrying source coordinate and dependency headers</td>
+<td><code>ParsleyClock</code></td>
+<td>The one vector clock: node frontier <em>and</em> dependency representation, keyed on <code>(Uuid, int)</code> primitives</td>
 </tr>
 <tr>
-<td><code>ParsleyAttributes</code></td>
-<td>String constants for all header keys and state-store keys</td>
+<td><code>ParsleyMessage</code></td>
+<td>Typed engine envelope: source coordinate + dependency clock as fields, user headers separate</td>
+</tr>
+<tr>
+<td><code>ParsleyHeader</code></td>
+<td>A <code>(key, value)</code> header plus the header-key vocabulary (<code>_parsley_*</code>, reserved keys, factories)</td>
 </tr>
 <tr>
 <td><code>ParsleyProcessor</code></td>
@@ -1017,12 +1040,12 @@
 <td>Durable buffer of held records</td>
 </tr>
 <tr>
-<td><code>ParsleyWaitIndex</code> / <code>RocksWaitIndex</code></td>
+<td><code>ParsleyPositionIndex</code> / <code>RocksPositionIndex</code></td>
 <td>Secondary index: coordinate -&gt; candidate record IDs</td>
 </tr>
 <tr>
 <td><code>ParsleySerializer</code></td>
-<td>Binary serde for <code>ParsleyRecord</code> (buffer store wire format)</td>
+<td>Binary serde for <code>ParsleyMessage</code> (buffer store wire format)</td>
 </tr>
 </tbody>
 </table>
@@ -1035,11 +1058,11 @@
 <a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a>Consumer (CausalConsumer path)
 <a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a>  Kafka Streams topology
 <a id="__codelineno-0-8" name="__codelineno-0-8" href="#__codelineno-0-8"></a>    ParsleyProcessor.process(record)
-<a id="__codelineno-0-9" name="__codelineno-0-9" href="#__codelineno-0-9"></a>      -&gt; ingest: wrap in ParsleyRecord, embed source coordinates
+<a id="__codelineno-0-9" name="__codelineno-0-9" href="#__codelineno-0-9"></a>      -&gt; ingest: wrap in ParsleyMessage, embed source coordinates
 <a id="__codelineno-0-10" name="__codelineno-0-10" href="#__codelineno-0-10"></a>      -&gt; gate:   ParsleyEngine.onRecord()
 <a id="__codelineno-0-11" name="__codelineno-0-11" href="#__codelineno-0-11"></a>                   satisfied   -&gt; advance frontier, drain cascade
-<a id="__codelineno-0-12" name="__codelineno-0-12" href="#__codelineno-0-12"></a>                   unsatisfied -&gt; buffer (RocksBufferStore) + index (RocksWaitIndex)
-<a id="__codelineno-0-13" name="__codelineno-0-13" href="#__codelineno-0-13"></a>                   no header   -&gt; MISSING_HEADER violation, apply policy
+<a id="__codelineno-0-12" name="__codelineno-0-12" href="#__codelineno-0-12"></a>                   unsatisfied -&gt; buffer (RocksBufferStore) + index (RocksPositionIndex)
+<a id="__codelineno-0-13" name="__codelineno-0-13" href="#__codelineno-0-13"></a>                   no header   -&gt; trivially satisfied (empty dependencies)
 <a id="__codelineno-0-14" name="__codelineno-0-14" href="#__codelineno-0-14"></a>      -&gt; deliver: for each admitted record
 <a id="__codelineno-0-15" name="__codelineno-0-15" href="#__codelineno-0-15"></a>                   stamp frontier onto parsley-causal-dependencies
 <a id="__codelineno-0-16" name="__codelineno-0-16" href="#__codelineno-0-16"></a>                   save ORIGINAL_DEPENDENCIES, forward to outbox topic
@@ -1061,7 +1084,7 @@
 <h2 id="further-reading">Further reading</h2>
 <ul>
 <li><a href="../wire-format/">Wire format</a> — binary layouts for all headers and state stores</li>
-<li><a href="../engine/">The engine</a> — buffer, wait index, drain cascade, eviction</li>
+<li><a href="../engine/">The engine</a> — buffer, position index, drain cascade, eviction</li>
 <li><a href="../streams/">Streams integration</a> — processor init, state store wiring, stamping proxy</li>
 <li><a href="../consumer/">Consumer</a> — outbox pattern, poll() path, frontier merging</li>
 </ul>

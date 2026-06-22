@@ -424,6 +424,33 @@
   
   
     <li class="md-nav__item">
+      <a href="../../troubleshooting/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Troubleshooting
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
       <a href="../../migration/" class="md-nav__link">
         
   
@@ -488,10 +515,10 @@
       
         
         
-        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_9" checked>
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_10" checked>
         
           
-          <label class="md-nav__link" for="__nav_9" id="__nav_9_label" tabindex="0">
+          <label class="md-nav__link" for="__nav_10" id="__nav_10_label" tabindex="0">
             
   
   
@@ -509,8 +536,8 @@
             <span class="md-nav__icon md-icon"></span>
           </label>
         
-        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_9_label" aria-expanded="true">
-          <label class="md-nav__title" for="__nav_9">
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_10_label" aria-expanded="true">
+          <label class="md-nav__title" for="__nav_10">
             <span class="md-nav__icon md-icon"></span>
             
   
@@ -626,10 +653,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#buffer-record-parsleyserializer-v2" class="md-nav__link">
+  <a href="#buffer-record-parsleyserializer-v3" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Buffer record (ParsleySerializer v2)
+        Buffer record (ParsleySerializer v3)
       
     </span>
   </a>
@@ -637,10 +664,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#wait-index-key" class="md-nav__link">
+  <a href="#position-index-key" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Wait-index key
+        Position-index key
       
     </span>
   </a>
@@ -846,10 +873,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#buffer-record-parsleyserializer-v2" class="md-nav__link">
+  <a href="#buffer-record-parsleyserializer-v3" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Buffer record (ParsleySerializer v2)
+        Buffer record (ParsleySerializer v3)
       
     </span>
   </a>
@@ -857,10 +884,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#wait-index-key" class="md-nav__link">
+  <a href="#position-index-key" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Wait-index key
+        Position-index key
       
     </span>
   </a>
@@ -923,7 +950,8 @@
 <h1 id="wire-format">Wire format</h1>
 <p>All binary encodings are big-endian. All lengths are in bytes.</p>
 <h2 id="parsley-causal-dependencies-header"><code>parsley-causal-dependencies</code> header</h2>
-<p>Same encoding used for both <code>CausalDependencies</code> and <code>CausalFrontier</code>.</p>
+<p>The public <code>CausalDependencies</code> facade and the internal <code>ParsleyClock</code> (node frontier) share this
+encoding.</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>[version    :1]   0x01
 <a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>[count      :4]   number of entries
 <a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a>per entry:
@@ -934,24 +962,32 @@
 </code></pre></div>
 <p>Size: <code>5 + 28 × n</code> bytes. Wire version <code>0x01</code>; deserialization throws <code>IllegalStateException</code> on mismatch.</p>
 <p>Topic IDs are Kafka <code>Uuid</code> values stored as two <code>long</code> fields (most-significant bits, then least-significant bits).</p>
-<h2 id="buffer-record-parsleyserializer-v2">Buffer record (<code>ParsleySerializer</code> v2)</h2>
-<p>Records held in the <code>{ns}-buffer</code> state store are serialised with <code>ParsleySerializer</code>. The key/value bytes are produced by the Serde resolved from the record's <code>_parsley_src_topic</code> header.</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>[version       :1]   0x02
+<h2 id="buffer-record-parsleyserializer-v3">Buffer record (<code>ParsleySerializer</code> v3)</h2>
+<p>Records held in the <code>{ns}-buffer</code> state store are serialised with <code>ParsleySerializer</code>. The source
+coordinate and dependency clock are written as typed fields (not headers); only the user's headers
+are carried. The key/value bytes are produced by the Serde resolved from the typed source topic.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>[version       :1]   0x03
 <a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a>[timestamp     :8]
-<a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a>[header-count  :4]
-<a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a>per header:
-<a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a>  [key-len     :2]
-<a id="__codelineno-1-6" name="__codelineno-1-6" href="#__codelineno-1-6"></a>  [key         :key-len]
-<a id="__codelineno-1-7" name="__codelineno-1-7" href="#__codelineno-1-7"></a>  [value-len   :4]   -1 if value is null
-<a id="__codelineno-1-8" name="__codelineno-1-8" href="#__codelineno-1-8"></a>  [value       :value-len]
-<a id="__codelineno-1-9" name="__codelineno-1-9" href="#__codelineno-1-9"></a>[key-len       :4]   -1 if key is null
-<a id="__codelineno-1-10" name="__codelineno-1-10" href="#__codelineno-1-10"></a>[key           :key-len]
-<a id="__codelineno-1-11" name="__codelineno-1-11" href="#__codelineno-1-11"></a>[value-len     :4]   -1 if value is null
-<a id="__codelineno-1-12" name="__codelineno-1-12" href="#__codelineno-1-12"></a>[value         :value-len]
+<a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a>[topic-len     :2]
+<a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a>[topic         :topic-len]   UTF-8 source topic
+<a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a>[topicId       :16]          topicId.MSB then topicId.LSB
+<a id="__codelineno-1-6" name="__codelineno-1-6" href="#__codelineno-1-6"></a>[partition     :4]
+<a id="__codelineno-1-7" name="__codelineno-1-7" href="#__codelineno-1-7"></a>[offset        :8]
+<a id="__codelineno-1-8" name="__codelineno-1-8" href="#__codelineno-1-8"></a>[deps-len      :4]   -1 if absent (the empty clock still encodes as 5 bytes)
+<a id="__codelineno-1-9" name="__codelineno-1-9" href="#__codelineno-1-9"></a>[deps          :deps-len]    parsley-causal-dependencies encoding
+<a id="__codelineno-1-10" name="__codelineno-1-10" href="#__codelineno-1-10"></a>[header-count  :4]
+<a id="__codelineno-1-11" name="__codelineno-1-11" href="#__codelineno-1-11"></a>per user header:
+<a id="__codelineno-1-12" name="__codelineno-1-12" href="#__codelineno-1-12"></a>  [key-len     :2]
+<a id="__codelineno-1-13" name="__codelineno-1-13" href="#__codelineno-1-13"></a>  [key         :key-len]
+<a id="__codelineno-1-14" name="__codelineno-1-14" href="#__codelineno-1-14"></a>  [value-len   :4]   -1 if value is null
+<a id="__codelineno-1-15" name="__codelineno-1-15" href="#__codelineno-1-15"></a>  [value       :value-len]
+<a id="__codelineno-1-16" name="__codelineno-1-16" href="#__codelineno-1-16"></a>[key-len       :4]   -1 if key is null
+<a id="__codelineno-1-17" name="__codelineno-1-17" href="#__codelineno-1-17"></a>[key           :key-len]
+<a id="__codelineno-1-18" name="__codelineno-1-18" href="#__codelineno-1-18"></a>[value-len     :4]   -1 if value is null
+<a id="__codelineno-1-19" name="__codelineno-1-19" href="#__codelineno-1-19"></a>[value         :value-len]
 </code></pre></div>
-<p>All headers on the record (user headers plus <code>_parsley_*</code> internal headers) are serialised in order.</p>
-<h2 id="wait-index-key">Wait-index key</h2>
-<p>The <code>{ns}-wait-index</code> store maps coordinate+offset+recordId to an empty presence marker. The 36-byte key uses big-endian encoding throughout so that RocksDB lexicographic ordering produces a range scan for all records waiting on a given coordinate up to a given offset.</p>
+<h2 id="position-index-key">Position-index key</h2>
+<p>The <code>{ns}-position-index</code> store maps coordinate+offset+recordId to an empty presence marker. The 36-byte key uses big-endian encoding throughout so that RocksDB lexicographic ordering produces a range scan for all records waiting on a given coordinate up to a given offset.</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>[topicId MSB    :8]
 <a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a>[topicId LSB    :8]
 <a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a>[partition      :4]
@@ -959,7 +995,11 @@
 <a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a>[recordId       :8]   buffer insertion sequence
 </code></pre></div>
 <h2 id="internal-record-headers">Internal record headers</h2>
-<p>These headers are added by <code>ParsleyProcessor</code> at ingest time and stripped before the record is returned to the application.</p>
+<p>These headers carry the source coordinate through the consumer's outbox topic. They are written by
+<code>ParsleyMessage.toForwardHeaders()</code> (only on the <code>ParsleyConsumer</code> outbox path, where the Kafka
+record's own topic/partition/offset are the outbox's, not the source's) and stripped by
+<code>ParsleyConsumer.poll()</code> before the record is returned to the application. The processor path never
+emits them.</p>
 <table>
 <thead>
 <tr>
@@ -984,13 +1024,8 @@
 <td><code>_parsley_src_offset</code></td>
 <td>8-byte big-endian long</td>
 </tr>
-<tr>
-<td><code>_parsley_original_dependencies</code></td>
-<td>Same encoding as <code>parsley-causal-dependencies</code></td>
-</tr>
 </tbody>
 </table>
-<p><code>_parsley_original_dependencies</code> holds a copy of the producer's original dependencies saved before <code>ParsleyProcessorContext</code> overwrites <code>parsley-causal-dependencies</code> with the delivery-time frontier. <code>ParsleyConsumer.poll()</code> uses it to restore the producer's intent before returning records to the application.</p>
 <h2 id="state-store-names-and-serdes">State store names and serdes</h2>
 <p>The default namespace is <code>parsley</code>. It is configurable via <code>CausalProcessors.builder(...).storeName(ns)</code>.</p>
 <table>
@@ -1007,16 +1042,16 @@
 <td><code>{ns}-frontier</code></td>
 <td><code>String</code></td>
 <td><code>byte[]</code></td>
-<td>Single entry at key <code>"f"</code>: serialised <code>CausalFrontier</code></td>
+<td>Single entry at key <code>"f"</code>: serialised <code>ParsleyClock</code></td>
 </tr>
 <tr>
 <td><code>{ns}-buffer</code></td>
 <td><code>Long</code></td>
 <td><code>byte[]</code></td>
-<td>Insertion sequence -&gt; serialised <code>ParsleyRecord</code></td>
+<td>Insertion sequence -&gt; serialised <code>ParsleyMessage</code></td>
 </tr>
 <tr>
-<td><code>{ns}-wait-index</code></td>
+<td><code>{ns}-position-index</code></td>
 <td><code>byte[]</code></td>
 <td><code>byte[]</code> (empty)</td>
 <td>36-byte composite key -&gt; presence marker</td>
@@ -1025,8 +1060,20 @@
 </table>
 <p>All three stores are persistent and changelog-backed. Changelog topic names follow the Kafka Streams pattern: <code>{applicationId}-{storeName}-changelog</code>.</p>
 <h2 id="topic-uuids">Topic UUIDs</h2>
-<p>In a live topology, topic UUIDs are fetched from the Kafka broker via <code>AdminClient</code> at startup and passed to the processor via <code>CausalProcessors.builder(...).topicUuids(map)</code>.</p>
-<p><code>CausalPosition.deriveUuid(topicName)</code> is a fallback used in tests and <code>TopologyTestDriver</code>. It computes a deterministic UUID using <code>UUID.nameUUIDFromBytes(topicName.getBytes(UTF_8))</code> (UUID version 3). This is not the UUID Kafka assigns to the topic. A topic deleted and recreated with the same name produces the same derived UUID, which would cause records stamped against the old topic to appear satisfied by the new one.</p>
+<p>Topic UUIDs are not derived or guessed — they are resolved from the broker via <code>AdminClient</code> at
+startup, for every topic registered as a <code>CausalBuffer</code> on <code>CausalProcessors.builder(...)</code> /
+<code>CausalConsumers.builder(...)</code> (the processor resolves them at <code>init()</code> from the task's
+<code>appConfigs()</code>; the consumer resolves them when it starts). If a registered topic does not exist on
+the broker, resolution fails fast with <code>IllegalStateException</code> rather than falling back to a guess.</p>
+<p>The real UUID Kafka assigned to the topic is what's used. A topic deleted and recreated with the
+same name gets a new UUID, so records stamped against the old incarnation correctly fail to satisfy
+dependencies on the new one.</p>
+<p>When building <code>CausalDependencies</code> explicitly (the producer side), the topic identity is still
+supplied as a <code>CausalTopic(topic, uuid)</code> — there the UUID names a coordinate in the dependency
+clock and is not resolved from a broker.</p>
+<p>Tests without a live broker (<code>TopologyTestDriver</code>, unit tests) may use any stable <code>Uuid</code>, e.g.
+<code>Uuid.randomUuid()</code>, as long as the same value is used consistently wherever that topic's identity
+is referenced.</p>
 
 
 

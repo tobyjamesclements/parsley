@@ -513,6 +513,33 @@
   
   
     <li class="md-nav__item">
+      <a href="troubleshooting/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Troubleshooting
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
       <a href="migration/" class="md-nav__link">
         
   
@@ -575,10 +602,10 @@
       
         
         
-        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_9" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_10" >
         
           
-          <label class="md-nav__link" for="__nav_9" id="__nav_9_label" tabindex="0">
+          <label class="md-nav__link" for="__nav_10" id="__nav_10_label" tabindex="0">
             
   
   
@@ -596,8 +623,8 @@
             <span class="md-nav__icon md-icon"></span>
           </label>
         
-        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_9_label" aria-expanded="false">
-          <label class="md-nav__title" for="__nav_9">
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_10_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_10">
             <span class="md-nav__icon md-icon"></span>
             
   
@@ -893,8 +920,8 @@ load-dependent latency cost.</p>
 <p>Every message carries the producer's <strong>causal dependencies</strong> as a header. When a message arrives, the
 consumer checks whether its <strong>frontier</strong> already satisfies those dependencies; if so it forwards
 immediately, otherwise it holds the message in a <strong>causal buffer</strong> until the frontier catches up.</p>
-<p>If the frontier never catches up, a configurable <strong>buffering policy</strong> forwards out-of-order, drops,
-or dead-letters the record — reporting a <code>CausalViolation</code> in each case.</p>
+<p>If the frontier never catches up, the configured <code>CausalBufferLimit</code> fires and the record is
+forwarded anyway, stamped <code>EVICTED</code> instead of <code>SATISFIED</code>.</p>
 <p>The library is a single jar with three entry points, sharing a common vocabulary of value types:</p>
 <table>
 <thead>
@@ -920,10 +947,10 @@ or dead-letters the record — reporting a <code>CausalViolation</code> in each 
 </table>
 <h2 id="where-to-go-next">Where to go next</h2>
 <ul>
-<li><a href="concepts/"><strong>Concepts</strong></a> — causal dependencies, frontiers, the buffer, violation policies</li>
+<li><a href="concepts/"><strong>Concepts</strong></a> — causal dependencies, frontiers, the buffer, always-forward delivery</li>
 <li><a href="getting-started/"><strong>Getting started</strong></a> — dependency setup, producer, and consumer examples</li>
 <li><a href="streams/"><strong>Streams integration</strong></a> — wrapping a <code>Processor</code>, preconditions, recovery</li>
-<li><a href="configuration/"><strong>Configuration</strong></a> — limits, policies, violation handler, DLQ headers</li>
+<li><a href="configuration/"><strong>Configuration</strong></a> — buffer limits, eviction, header size</li>
 <li><a href="api/"><strong>API reference</strong></a> — full Javadoc</li>
 </ul>
 

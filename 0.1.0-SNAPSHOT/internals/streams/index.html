@@ -424,6 +424,33 @@
   
   
     <li class="md-nav__item">
+      <a href="../../troubleshooting/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Troubleshooting
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
       <a href="../../migration/" class="md-nav__link">
         
   
@@ -488,10 +515,10 @@
       
         
         
-        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_9" checked>
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_10" checked>
         
           
-          <label class="md-nav__link" for="__nav_9" id="__nav_9_label" tabindex="0">
+          <label class="md-nav__link" for="__nav_10" id="__nav_10_label" tabindex="0">
             
   
   
@@ -509,8 +536,8 @@
             <span class="md-nav__icon md-icon"></span>
           </label>
         
-        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_9_label" aria-expanded="true">
-          <label class="md-nav__title" for="__nav_9">
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_10_label" aria-expanded="true">
+          <label class="md-nav__title" for="__nav_10">
             <span class="md-nav__icon md-icon"></span>
             
   
@@ -924,7 +951,7 @@
 <td><code>byte[]</code></td>
 </tr>
 <tr>
-<td><code>{ns}-wait-index</code></td>
+<td><code>{ns}-position-index</code></td>
 <td><code>byte[]</code></td>
 <td><code>byte[]</code></td>
 </tr>
@@ -933,13 +960,13 @@
 <p>All three are created with <code>Stores.persistentKeyValueStore(...)</code>, so they are changelog-backed and durable across restarts.</p>
 <h2 id="parsleyprocessor-init-sequence"><code>ParsleyProcessor</code> init sequence</h2>
 <ol>
+<li>Resolve each registered <code>CausalBuffer</code> topic's stable UUID from the broker via a <code>ParsleyTopicAdmin</code> built from <code>context.appConfigs()</code> (the topology decorator has no broker config until init), populating the <code>topicUuids</code> map. Closed immediately after.</li>
 <li>Retrieve the three stores from the processor context by name.</li>
-<li>Read frontier from <code>{ns}-frontier</code> at key <code>"f"</code>. Start from <code>CausalFrontier.empty()</code> if absent.</li>
-<li>Publish the restored frontier to the <code>CausalFrontierListener</code>.</li>
+<li>Read frontier from <code>{ns}-frontier</code> at key <code>"f"</code>. Start from <code>ParsleyClock.empty()</code> if absent.</li>
 <li>Construct <code>ParsleyEngine</code> with:<ul>
-<li>A <code>FrontierCallback</code> that writes the new frontier to the frontier store, appends a snapshot to a local list, and fires the <code>CausalFrontierListener</code>.</li>
+<li>A <code>FrontierCallback</code> (internal) that writes the new frontier to the frontier store and appends a snapshot to a local list used for per-record delivery-time stamping.</li>
 <li>A <code>RocksBufferStore</code> wrapping the buffer store and a <code>ParsleySerializer</code>.</li>
-<li>A <code>RocksWaitIndex</code> wrapping the wait-index store.</li>
+<li>A <code>RocksPositionIndex</code> wrapping the position-index store.</li>
 </ul>
 </li>
 <li>Wrap the real context in a <code>ParsleyProcessorContext</code> (stamping proxy).</li>
@@ -950,8 +977,8 @@
 <div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>process(Record&lt;KIn,VIn&gt;)
 <a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>  ingest(record)
 <a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a>    reads source metadata from context.recordMetadata()
-<a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a>    resolves topicId from topicUuids map or CausalPosition.deriveUuid()
-<a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a>    returns ParsleyRecord.of(record, source, offset, topicId)
+<a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a>    resolves topicId from topicUuids map (broker-resolved at init for each registered CausalBuffer; throws IllegalStateException if absent)
+<a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a>    returns ParsleyMessage.from(record, source, offset, topicId)
 <a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a>
 <a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a>  gate(parsleyRecord)
 <a id="__codelineno-0-8" name="__codelineno-0-8" href="#__codelineno-0-8"></a>    clears snapshot list
@@ -972,7 +999,7 @@
 <p><strong><code>forward(Record&lt;K,V&gt;)</code>:</strong></p>
 <ol>
 <li>Build a new <code>RecordHeaders</code> from the record's existing headers, excluding any <code>parsley-causal-dependencies</code> header.</li>
-<li>Add <code>parsley-causal-dependencies</code> from <code>frontier.get().toBytes()</code> (the <code>Supplier&lt;CausalFrontier&gt;</code> is read at call time).</li>
+<li>Add <code>parsley-causal-dependencies</code> from <code>frontier.get().toBytes()</code> (the <code>Supplier&lt;ParsleyClock&gt;</code> is read at call time).</li>
 <li>Call <code>delegate.forward(record.withHeaders(stamped))</code>.</li>
 </ol>
 <p>The original record object is never mutated. The frontier is read live: a <code>forward()</code> during admit sees the post-admit frontier; a <code>forward()</code> from a punctuator sees the frontier at punctuator fire time.</p>

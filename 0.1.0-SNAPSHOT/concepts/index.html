@@ -393,10 +393,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#buffer-policies" class="md-nav__link">
+  <a href="#always-forward-delivery" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Buffer policies
+        Always-forward delivery
       
     </span>
   </a>
@@ -548,6 +548,33 @@
   
   
     <li class="md-nav__item">
+      <a href="../troubleshooting/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Troubleshooting
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
       <a href="../migration/" class="md-nav__link">
         
   
@@ -610,10 +637,10 @@
       
         
         
-        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_9" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_10" >
         
           
-          <label class="md-nav__link" for="__nav_9" id="__nav_9_label" tabindex="0">
+          <label class="md-nav__link" for="__nav_10" id="__nav_10_label" tabindex="0">
             
   
   
@@ -631,8 +658,8 @@
             <span class="md-nav__icon md-icon"></span>
           </label>
         
-        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_9_label" aria-expanded="false">
-          <label class="md-nav__title" for="__nav_9">
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_10_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_10">
             <span class="md-nav__icon md-icon"></span>
             
   
@@ -888,10 +915,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#buffer-policies" class="md-nav__link">
+  <a href="#always-forward-delivery" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Buffer policies
+        Always-forward delivery
       
     </span>
   </a>
@@ -947,15 +974,17 @@ from <code>(topicId, partition)</code> to the highest offset seen on that coordi
 as a compact binary header (<code>parsley-causal-dependencies</code>) attached to every outgoing record.</p>
 <p>On the consumer side, it is decoded into a <code>CausalDependencies</code> value: the minimum frontier
 a downstream consumer must have reached before the record may be delivered. A record is <strong>causally
-ready</strong> when <code>CausalDependencies.isSatisfiedBy(frontier)</code> returns <code>true</code>.</p>
+ready</strong> once the consumer's frontier has observed at least the offset its dependencies require on
+every coordinate.</p>
 <p>Keys are Kafka <strong>topic UUIDs</strong>, not topic names. UUID-keyed dependencies survive topic deletion and
 recreation: a new incarnation of <code>prices</code> gets a new UUID and is treated as a distinct dependency,
 so records stamped against the old <code>prices</code> are never accidentally satisfied by the new one.</p>
 <h2 id="the-frontier">The frontier</h2>
-<p>The <strong>causal frontier</strong> (<code>CausalFrontier</code>) tracks the highest offset
-it has successfully delivered on each <code>(topicId, partition)</code> coordinate. Every time a record is
-forwarded, the frontier advances. Frontiers from multiple sources can be merged with
-<code>CausalFrontier.merge</code>, taking the per-coordinate maximum.</p>
+<p>The <strong>causal frontier</strong> is the node's internal clock: the highest offset it has successfully
+delivered on each <code>(topicId, partition)</code> coordinate. Every time a record is forwarded, the frontier
+advances (taking the per-coordinate maximum). It is an implementation detail — there is no public
+frontier type; to propagate causal context downstream, read a consumed record's dependencies with
+<code>CausalDependencies.fromRecord(record)</code> and stamp them on what you produce.</p>
 <p>The frontier is <strong>persisted</strong> before each record is forwarded, so it survives restarts and rebalances.</p>
 <h2 id="the-causal-buffer">The causal buffer</h2>
 <p>Records whose dependencies are not yet satisfied are held in a <strong>causal buffer</strong>. Held records
@@ -965,7 +994,7 @@ Parsley checks the buffer for records that were waiting on that coordinate. If a
 satisfied, they are released and their source coordinates advance the frontier in turn — cascading
 until no further releases occur.</p>
 <h2 id="buffer-limits">Buffer limits</h2>
-<p>A <code>CausalBufferLimit</code> bounds how long or how large the buffer may grow before a <strong>policy</strong> fires:</p>
+<p>A <code>CausalBufferLimit</code> bounds how long or how large the buffer may grow before eviction fires:</p>
 <table>
 <thead>
 <tr>
@@ -992,68 +1021,19 @@ until no further releases occur.</p>
 </tr>
 </tbody>
 </table>
-<h2 id="buffer-policies">Buffer policies</h2>
-<p>A <code>CausalBufferPolicy</code> determines what happens when the limit fires. <strong>All policies</strong> report a
-<code>CausalViolation</code> for every evicted record.</p>
-<table>
-<thead>
-<tr>
-<th>Policy</th>
-<th>Factory</th>
-<th>On eviction</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td>Forward unsafe</td>
-<td><code>CausalBufferPolicy.forwardUnsafe(limit)</code></td>
-<td>Forwards the record out-of-order (lenient — delivery is preserved, ordering is not)</td>
-</tr>
-<tr>
-<td>Drop</td>
-<td><code>CausalBufferPolicy.drop(limit)</code></td>
-<td>Discards the record (strict — no out-of-order delivery)</td>
-</tr>
-<tr>
-<td>Dead letter</td>
-<td><code>CausalBufferPolicy.deadLetter(limit)</code></td>
-<td>Routes the record to a dead-letter sink with additional headers describing the gap (strict)</td>
-</tr>
-</tbody>
-</table>
+<h2 id="always-forward-delivery">Always-forward delivery</h2>
+<p>Parsley never drops or diverts a record. Every record reaches the user's <code>process()</code>/<code>poll()</code>
+exactly once. In the common case it is delivered <strong>in causal order</strong> — the frontier had observed its
+dependencies by delivery time (immediately, after a wait, or trivially: no dependencies claimed, or
+an undecodable header, both treated as vacuously satisfied). The exception is <strong>eviction</strong>: when the
+configured <code>CausalBufferLimit</code> fires before a held record's dependencies are satisfied, the record is
+delivered anyway, out of causal order. The frontier always advances on delivery, so records buffered
+downstream are not permanently stalled by an eviction.</p>
 <h2 id="causal-violations">Causal violations</h2>
-<p>A <code>CausalViolation</code> is reported via <code>CausalViolationHandler</code> whenever the causal guarantee cannot
-be upheld for a specific record. Three reasons exist:</p>
-<table>
-<thead>
-<tr>
-<th>Reason</th>
-<th>Meaning</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td><code>MISSING_HEADER</code></td>
-<td>The record carries no <code>parsley-causal-dependencies</code> header (not stamped by Parsley)</td>
-</tr>
-<tr>
-<td><code>UNRESOLVABLE_DEPENDENCIES</code></td>
-<td>The header is present but cannot be deserialised (corrupt or unsupported wire version)</td>
-</tr>
-<tr>
-<td><code>LIMIT_REACHED</code></td>
-<td>The record was evicted from the buffer because a limit fired</td>
-</tr>
-</tbody>
-</table>
-<p>The action taken for each violation reason is configured by the policy. The convenience factories
-(<code>forwardUnsafe</code>, <code>drop</code>, <code>deadLetter</code>) apply the same action to all three reasons. The
-<code>CausalBufferPolicy.builder()</code> lets each reason carry a distinct <code>CausalViolationAction</code> — for example,
-forwarding records with no Parsley header while dropping or dead-lettering records evicted from the
-buffer. The frontier always advances regardless of action, so records buffered downstream are not
-permanently stalled by the violation.</p>
-<p>Each violation includes the current frontier, the required dependencies, and the <strong>causal gap</strong>:
-a per-coordinate shortfall showing exactly how far the frontier was behind at the time of eviction.</p>
+<p>Every eviction is logged with the current frontier, the required dependencies, and the <strong>causal
+gap</strong> — a per-coordinate shortfall showing exactly how far the frontier was behind at the time of
+eviction — and counted via Parsley's eviction metric. Eviction is surfaced operationally (logs +
+metric), not as a per-record signal on the delivered record.</p>
 <h2 id="co-partitioning">Co-partitioning</h2>
 <p>Parsley evaluates dependencies against the partitions assigned to a single consumer instance. For
 the guarantee to hold, an instance must be assigned <strong>all</strong> partitions in a causally related set.
