@@ -52,9 +52,9 @@ import org.apache.kafka.streams.processor.api.ProcessorSupplier;
  * </ol>
  *
  * <p>Outgoing messages are stamped with the current frontier transparently as they are forwarded —
- * no {@code CausalProducer} is needed on egress, because Streams sinks propagate record headers to
- * the produced messages. Held records are persisted to a changelog-backed buffer store (serialised
- * with the serdes you supply, resolved per source topic) so they survive a restart.
+ * nothing extra is needed on egress, because Streams sinks propagate record headers to the produced
+ * messages. Held records are persisted to a changelog-backed buffer store (serialised with the serdes
+ * you supply, resolved per source topic) so they survive a restart.
  */
 public interface CausalProcessorSupplier<KIn, VIn, KOut, VOut> extends ProcessorSupplier<KIn, VIn, KOut, VOut> {
 }

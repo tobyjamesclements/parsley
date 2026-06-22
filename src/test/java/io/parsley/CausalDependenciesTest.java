@@ -5,6 +5,7 @@ import org.apache.kafka.common.Uuid;
 import org.apache.kafka.common.header.Headers;
 import org.junit.jupiter.api.Test;
 
+import java.util.Map;
 import java.util.Optional;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -18,8 +19,8 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  */
 class CausalDependenciesTest {
 
-    private static final CausalTopic T1 = new CausalTopic("t1", Uuid.randomUuid());
-    private static final CausalTopic T2 = new CausalTopic("t2", Uuid.randomUuid());
+    private static final CausalTopics TOPICS =
+            CausalTopics.of(Map.of("t1", Uuid.randomUuid(), "t2", Uuid.randomUuid()));
 
     /**
      * When two entries for the same (topic, partition) are added via the builder, the builder
@@ -30,11 +31,11 @@ class CausalDependenciesTest {
      */
     @Test
     void requireTakesTheMaximum() {
-        CausalDependencies deps = CausalDependencies.builder()
-                .require(T1, 0, 5)
-                .require(T1, 0, 2)
+        CausalDependencies deps = CausalDependencies.builder(TOPICS)
+                .require("t1", 0, 5)
+                .require("t1", 0, 2)
                 .build();
-        assertEquals(CausalDependencies.builder().require(T1, 0, 5).build(), deps,
+        assertEquals(CausalDependencies.builder(TOPICS).require("t1", 0, 5).build(), deps,
                 "builder must retain only the maximum required offset per (topic, partition)");
     }
 
@@ -45,9 +46,9 @@ class CausalDependenciesTest {
      */
     @Test
     void serialisationRoundTrips() {
-        CausalDependencies deps = CausalDependencies.builder()
-                .require(T1, 0, 42)
-                .require(T2, 0, 7)
+        CausalDependencies deps = CausalDependencies.builder(TOPICS)
+                .require("t1", 0, 42)
+                .require("t2", 0, 7)
                 .build();
         assertEquals(deps, CausalDependencies.fromBytes(deps.toBytes()),
                 "dependencies must round-trip through binary serialisation");
@@ -100,9 +101,9 @@ class CausalDependenciesTest {
      */
     @Test
     void fromHeadersReadsTheStampedClock() {
-        CausalDependencies deps = CausalDependencies.builder()
-                .require(T1, 0, 12)
-                .require(T2, 0, 4)
+        CausalDependencies deps = CausalDependencies.builder(TOPICS)
+                .require("t1", 0, 12)
+                .require("t2", 0, 4)
                 .build();
         Headers headers = ParsleyHeader.mutableHeaders();
         headers.add(ParsleyHeader.CAUSAL_DEPENDENCIES, deps.toBytes());
@@ -135,7 +136,7 @@ class CausalDependenciesTest {
      */
     @Test
     void fromRecordReadsTheStampedClock() {
-        CausalDependencies deps = CausalDependencies.builder().require(T1, 0, 27).build();
+        CausalDependencies deps = CausalDependencies.builder(TOPICS).require("t1", 0, 27).build();
         ConsumerRecord<String, String> record = new ConsumerRecord<>("t2", 0, 5L, "k", "v");
         record.headers().add(ParsleyHeader.CAUSAL_DEPENDENCIES, deps.toBytes());
 

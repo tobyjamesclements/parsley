@@ -8,11 +8,9 @@ import java.util.Objects;
  * Registers one causal source: a topic name paired with the serdes Parsley's buffer uses to
  * (de)serialise records held from that topic.
  *
- * <p>Supply one per input topic to {@link CausalProcessors.Builder#addBuffer} or
- * {@link CausalConsumers.Builder#addBuffer}. This replaces the old separate {@code serdes(...)} +
- * {@code addCausalTopic(...)} registration: the topic's stable UUID is now resolved from the broker
- * automatically (no {@link CausalTopic} needed here), so a buffer only carries what the DSL cannot —
- * the per-topic serdes the buffer store round-trips held records with.
+ * <p>Supply one per input topic to {@link CausalProcessors.Builder#addBuffer}. The topic's stable
+ * UUID is resolved from the broker automatically, so a buffer only carries what the DSL cannot — the
+ * per-topic serdes the buffer store round-trips held records with.
  *
  * <p>For Schema Registry serdes (e.g. Avro), pass the <strong>same configured instance</strong> you
  * pass to {@code Consumed.with(...)}: Parsley uses the serde as-is and resolves the registry subject

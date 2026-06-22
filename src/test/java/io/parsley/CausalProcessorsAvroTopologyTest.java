@@ -55,6 +55,7 @@ class CausalProcessorsAvroTopologyTest {
     private static final String ORDERS = "orders";
     private static final Uuid PRICES_ID = Uuid.randomUuid();
     private static final Uuid ORDERS_ID = Uuid.randomUuid();
+    private static final CausalTopics TOPICS = CausalTopics.of(Map.of(PRICES, PRICES_ID, ORDERS, ORDERS_ID));
 
     private final List<SpecificRecord> processed = new ArrayList<>();
 
@@ -107,7 +108,7 @@ class CausalProcessorsAvroTopologyTest {
 
             // The order depends on prices-0@0, which has not arrived: it is held (Avro-serialised
             // into the buffer store), not delivered.
-            orders.pipeInput(new TestRecord<>("k", order, depsHeader(CausalDependencies.builder().require(new CausalTopic(PRICES, PRICES_ID), 0, 0).build())));
+            orders.pipeInput(new TestRecord<>("k", order, depsHeader(CausalDependencies.builder(TOPICS).require(PRICES, 0, 0).build())));
             assertTrue(processed.isEmpty(), "held record must not reach the delegate");
             assertEquals(1, storeSize(bufferStore), "held record must be persisted (Avro bytes) to the buffer store");
 
@@ -232,7 +233,7 @@ class CausalProcessorsAvroTopologyTest {
         TestInputTopic<String, SpecificRecord> orders =
                 driver.createInputTopic(ORDERS, new StringSerializer(), avro.serializer());
         orders.pipeInput(new TestRecord<>("k", new Order("o-1", "ACME", 5),
-                depsHeader(CausalDependencies.builder().require(new CausalTopic(PRICES, PRICES_ID), 0, 0).build())));
+                depsHeader(CausalDependencies.builder(TOPICS).require(PRICES, 0, 0).build())));
     }
 
     /** The price (empty deps) advances the frontier and triggers the drain of the held order. */

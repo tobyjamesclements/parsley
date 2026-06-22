@@ -1,6 +1,7 @@
 package io.parsley;
 
 import org.apache.kafka.clients.consumer.ConsumerRecord;
+import org.apache.kafka.clients.producer.ProducerRecord;
 import org.apache.kafka.common.header.Header;
 import org.apache.kafka.common.header.Headers;
 
@@ -11,11 +12,12 @@ import java.util.Optional;
  * A producer-stamped set of causal requirements: the positions a consumer must have observed before
  * a record stamped with these dependencies may be delivered.
  *
- * <p>Build one with {@link #builder()} from the {@link CausalTopic} identities you already register,
- * or read the dependencies a consumed record carries with {@link #fromRecord(ConsumerRecord)} — the
- * latter is usually the right choice when propagating causal context across services, since it
- * carries exactly the positions the upstream producer depended on. Serialise with {@link #toBytes()}
- * / {@link #fromBytes(byte[])}.
+ * <p>The usual flow at a topology edge is to derive the dependencies of the record you are about to
+ * produce from the record(s) you consumed with {@link #from(CausalTopics, ConsumerRecord)} — which
+ * carries the upstream's dependencies <em>and</em> the consumed record's own position — combine
+ * several with {@link #merge(CausalDependencies)} for a fan-in, then attach them to the outbound
+ * record with {@link #stamp(ProducerRecord)}. To assert a dependency you did not consume, build one
+ * with {@link #builder(CausalTopics)}. Serialise with {@link #toBytes()} / {@link #fromBytes(byte[])}.
  *
  * <p>This is the public face of an internal {@link ParsleyClock}; the two share a wire format.
  *
@@ -42,33 +44,40 @@ public final class CausalDependencies {
     }
 
     /**
-     * Returns a new builder for constructing a {@code CausalDependencies} instance.
+     * Returns a new builder that resolves topic names to their stable UUIDs through {@code topics}.
      *
+     * @param topics the resolver mapping topic names to their Kafka UUIDs; must not be {@code null}
      * @return a new {@code Builder}
      */
-    public static Builder builder() {
-        return new Builder();
+    public static Builder builder(CausalTopics topics) {
+        return new Builder(topics);
     }
 
     /**
      * Builder for {@link CausalDependencies}.
      */
     public static final class Builder {
+        private final CausalTopics topics;
         private ParsleyClock clock = ParsleyClock.empty();
 
-        private Builder() {}
+        private Builder(CausalTopics topics) {
+            this.topics = Objects.requireNonNull(topics, "topics must not be null");
+        }
 
         /**
          * Requires that {@code (topic, partition)} has been observed at offset {@code offset} or
-         * later. If a requirement already exists for that coordinate, the higher offset wins.
+         * later. The topic name is resolved to its stable UUID through the builder's
+         * {@link CausalTopics}. If a requirement already exists for that coordinate, the higher offset
+         * wins.
          *
-         * @param topic     the topic whose stable causal identity to require; must not be {@code null}
+         * @param topic     the topic name to require; must not be {@code null}
          * @param partition the partition index
          * @param offset    the offset (inclusive) the consumer must have observed
          * @return this builder
+         * @throws IllegalArgumentException if {@code topic} cannot be resolved to a UUID
          */
-        public Builder require(CausalTopic topic, int partition, long offset) {
-            clock = clock.observe(topic.topicId(), partition, offset);
+        public Builder require(String topic, int partition, long offset) {
+            clock = clock.observe(topics.topicId(topic), partition, offset);
             return this;
         }
 
@@ -80,6 +89,65 @@ public final class CausalDependencies {
         public CausalDependencies build() {
             return new CausalDependencies(clock);
         }
+    }
+
+    /**
+     * Returns the causal union of these dependencies and {@code other} — the per-coordinate maximum
+     * offset. Use this to combine the dependencies of several consumed records before stamping a
+     * fan-in record.
+     *
+     * @param other the dependencies to merge in; must not be {@code null}
+     * @return a new {@code CausalDependencies} dominating both inputs
+     */
+    public CausalDependencies merge(CausalDependencies other) {
+        Objects.requireNonNull(other, "other must not be null");
+        return new CausalDependencies(clock.merge(other.clock));
+    }
+
+    /**
+     * Returns the dependencies a record produced after consuming {@code record} should carry: the
+     * dependencies {@code record} itself carried, unioned with {@code record}'s own position
+     * {@code (topic, partition, offset)} so that downstream consumers wait until they have observed
+     * {@code record} before delivering anything stamped with the result.
+     *
+     * @param topics the resolver mapping {@code record}'s topic name to its Kafka UUID; must not be
+     *               {@code null}
+     * @param record the consumed record; must not be {@code null}
+     * @return the consumed record's transitive dependencies plus its own position
+     * @throws IllegalArgumentException if {@code record}'s topic cannot be resolved to a UUID
+     * @throws IllegalStateException    if {@code record} carries a malformed dependencies header
+     */
+    public static CausalDependencies from(CausalTopics topics, ConsumerRecord<?, ?> record) {
+        Objects.requireNonNull(topics, "topics must not be null");
+        Objects.requireNonNull(record, "record must not be null");
+        ParsleyClock carried = fromHeaders(record.headers()).map(deps -> deps.clock).orElse(ParsleyClock.empty());
+        ParsleyClock withOwnPosition =
+                carried.observe(topics.topicId(record.topic()), record.partition(), record.offset());
+        return new CausalDependencies(withOwnPosition);
+    }
+
+    /**
+     * Returns a copy of {@code record} carrying these dependencies in its
+     * {@code parsley-causal-dependencies} header, ready to send through a plain Kafka producer. The
+     * input record is never mutated: a fresh header set is built (preserving every other header), and
+     * stamping is idempotent — any existing dependencies header is replaced, not duplicated.
+     *
+     * @param record the record to stamp; must not be {@code null}
+     * @param <K>    the record key type
+     * @param <V>    the record value type
+     * @return a new {@code ProducerRecord} with the dependencies header attached
+     */
+    public <K, V> ProducerRecord<K, V> stamp(ProducerRecord<K, V> record) {
+        Objects.requireNonNull(record, "record must not be null");
+        Headers stamped = ParsleyHeader.mutableHeaders();
+        for (Header header : record.headers()) {
+            if (!header.key().equals(ParsleyHeader.CAUSAL_DEPENDENCIES)) {
+                stamped.add(header.key(), header.value());
+            }
+        }
+        stamped.add(ParsleyHeader.CAUSAL_DEPENDENCIES, clock.toBytes());
+        return new ProducerRecord<>(record.topic(), record.partition(), record.timestamp(),
+                record.key(), record.value(), stamped);
     }
 
     /**

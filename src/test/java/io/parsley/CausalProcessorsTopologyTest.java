@@ -55,14 +55,16 @@ class CausalProcessorsTopologyTest {
     private static final Uuid T3_ID = Uuid.randomUuid();
     private static final Uuid T4_ID = Uuid.randomUuid();
     private static final Uuid T5_ID = Uuid.randomUuid();
-    private static final CausalTopic T1_TOPIC = new CausalTopic("t1", T1_ID);
-    private static final CausalTopic T2_TOPIC = new CausalTopic("t2", T2_ID);
-    private static final CausalTopic T4_TOPIC = new CausalTopic("t4", T4_ID);
+    private static final Uuid GHOST_ID = Uuid.randomUuid();
 
     // Fake admin resolving the test topics' UUIDs (no broker under TopologyTestDriver); injected into
     // every builder via the package-private topicAdmin(...) seam.
     private static final ParsleyTopicAdmin ADMIN = TestTopicAdmin.of(Map.of(
             "t1", T1_ID, "t2", T2_ID, "t3", T3_ID, "t4", T4_ID, "t5", T5_ID));
+
+    // Resolver mapping the same test topic names to their UUIDs, for building CausalDependencies.
+    private static final CausalTopics TOPICS = CausalTopics.of(Map.of(
+            "t1", T1_ID, "t2", T2_ID, "t3", T3_ID, "t4", T4_ID, "t5", T5_ID, "ghost", GHOST_ID));
 
     private final List<String> processed = new ArrayList<>();
 
@@ -144,8 +146,50 @@ class CausalProcessorsTopologyTest {
             assertEquals(List.of("hello"), processed, "delegate.process must run for an admitted record");
             TestRecord<String, String> emitted = out.readRecord();
             assertEquals("HELLO", emitted.value(), "delegate's transform must be applied");
-            assertEquals(CausalDependencies.builder().require(T1_TOPIC, 0, 0).build(), outDeps(emitted),
+            assertEquals(CausalDependencies.builder(TOPICS).require("t1", 0, 0).build(), outDeps(emitted),
                     "forward must be stamped with the frontier as of admission");
+        }
+    }
+
+    /**
+     * A record whose dependencies were derived at the edge with
+     * {@link CausalDependencies#from(CausalTopics, org.apache.kafka.clients.consumer.ConsumerRecord)}
+     * is gated on the triggering record's own position: it is held until the processor observes that
+     * position, then delivered. This proves the edge API's own-coordinate semantic against the real
+     * gate — a record produced after consuming {@code t2@0} must not be delivered before {@code t2@0}.
+     *
+     * Asserts the t1 record stamped via {@code from(t2@0)} is buffered until a t2 record at offset 0
+     * arrives, then drains.
+     */
+    @Test
+    void recordStampedViaFromIsHeldUntilItsTriggerCoordinateIsObserved() {
+        // The dependencies a downstream producer would attach after consuming t2@0 (no carried deps).
+        org.apache.kafka.clients.consumer.ConsumerRecord<String, String> trigger =
+                new org.apache.kafka.clients.consumer.ConsumerRecord<>("t2", 0, 0L, "tk", "tv");
+        CausalDependencies stampedFromTrigger = CausalDependencies.from(TOPICS, trigger);
+
+        Topology topology = topology(
+                CausalProcessors.builder(upperCaser()).addBufferStore("parsley", CausalBufferLimit.ofSize(100))
+                        .addBuffer(CausalBuffer.of("t1", Serdes.String(), Serdes.String()))
+                        .addBuffer(CausalBuffer.of("t2", Serdes.String(), Serdes.String()))
+                        .topicAdmin(ADMIN).build(),
+                List.of("t1", "t2"));
+
+        try (TopologyTestDriver driver = new TopologyTestDriver(topology, config(null))) {
+            TestInputTopic<String, String> t1 =
+                    driver.createInputTopic("t1", new StringSerializer(), new StringSerializer());
+            TestInputTopic<String, String> t2 =
+                    driver.createInputTopic("t2", new StringSerializer(), new StringSerializer());
+
+            // The t1 record depends on t2@0, which has not arrived: it must be held.
+            t1.pipeInput(new TestRecord<>("k", "held", depsHeader(stampedFromTrigger)));
+            assertEquals(List.of(), processed,
+                    "a record stamped via from(t2@0) must be held until t2@0 is observed");
+
+            // The triggering coordinate arrives (lands at t2 offset 0), draining the held record.
+            t2.pipeInput(new TestRecord<>("tk", "trigger", depsHeader(CausalDependencies.empty())));
+            assertEquals(List.of("trigger", "held"), processed,
+                    "once t2@0 is observed, the record stamped via from(t2@0) must drain in causal order");
         }
     }
 
@@ -176,7 +220,7 @@ class CausalProcessorsTopologyTest {
 
             // t3-record depends on t2-0 offset 0, which hasn't arrived: held, not delivered.
             t3.pipeInput(new TestRecord<>("k", "t3-val",
-                    depsHeader(CausalDependencies.builder().require(T2_TOPIC, 0, 0).build())));
+                    depsHeader(CausalDependencies.builder(TOPICS).require("t2", 0, 0).build())));
             assertTrue(processed.isEmpty(), "held record must not reach the delegate");
             assertTrue(out.isEmpty(), "held record must not appear in the output topic");
             assertEquals(1, storeSize(bufferStore), "held record must be persisted to the buffer store");
@@ -214,7 +258,7 @@ class CausalProcessorsTopologyTest {
 
             // Depends on a t2 record that never arrives; size limit 1 evicts immediately.
             t3.pipeInput(new TestRecord<>("k", "t3-val",
-                    depsHeader(CausalDependencies.builder().require(T2_TOPIC, 0, 99).build())));
+                    depsHeader(CausalDependencies.builder(TOPICS).require("t2", 0, 99).build())));
 
             assertEquals(List.of("t3-val"), processed,
                     "eviction still runs the delegate — Parsley never drops a record");
@@ -249,7 +293,7 @@ class CausalProcessorsTopologyTest {
 
             // Record A is buffered first; it will be 2s old (the full duration) once we advance below.
             t3.pipeInput(new TestRecord<>("k", "t3-val-A",
-                    depsHeader(CausalDependencies.builder().require(T2_TOPIC, 0, 99).build())));
+                    depsHeader(CausalDependencies.builder(TOPICS).require("t2", 0, 99).build())));
 
             driver.advanceWallClockTime(Duration.ofSeconds(1));
             assertEquals(1, storeSize(bufferStore), "advancing by less than the duration must not fire eviction yet");
@@ -257,7 +301,7 @@ class CausalProcessorsTopologyTest {
 
             // Record B is buffered one second after A — only one second old at the next punctuation.
             t3.pipeInput(new TestRecord<>("k", "t3-val-B",
-                    depsHeader(CausalDependencies.builder().require(T2_TOPIC, 0, 99).build())));
+                    depsHeader(CausalDependencies.builder(TOPICS).require("t2", 0, 99).build())));
 
             // Total elapsed since A was buffered is now 2s: the punctuator fires and A has aged out,
             // but B (buffered 1s ago) has not.
@@ -293,12 +337,12 @@ class CausalProcessorsTopologyTest {
             KeyValueStore<String, byte[]> bufferStore = driver.getKeyValueStore("parsley-buffer");
 
             t3.pipeInput(new TestRecord<>("k", "t3-val-A",
-                    depsHeader(CausalDependencies.builder().require(T2_TOPIC, 0, 99).build())));
+                    depsHeader(CausalDependencies.builder(TOPICS).require("t2", 0, 99).build())));
             assertEquals(1, storeSize(bufferStore), "buffering the first record must not fire eviction yet");
             assertTrue(out.isEmpty(), "no record must be evicted before the limit is reached");
 
             t3.pipeInput(new TestRecord<>("k", "t3-val-B",
-                    depsHeader(CausalDependencies.builder().require(T2_TOPIC, 0, 99).build())));
+                    depsHeader(CausalDependencies.builder(TOPICS).require("t2", 0, 99).build())));
 
             assertEquals(List.of("T3-VAL-A"), out.readValuesToList(),
                     "only the oldest record must be evicted and forwarded once the size limit is reached");
@@ -330,7 +374,7 @@ class CausalProcessorsTopologyTest {
                 headers.add("user-h", "keep".getBytes());
                 // A stale dependencies header the user happens to carry — stamping must replace, not duplicate it.
                 headers.add("parsley-causal-dependencies",
-                        CausalDependencies.builder().require(T2_TOPIC, 0, 5).build().toBytes());
+                        CausalDependencies.builder(TOPICS).require("t2", 0, 5).build().toBytes());
                 ctx.forward(record.withHeaders(headers));
             }
         };
@@ -350,7 +394,7 @@ class CausalProcessorsTopologyTest {
             TestRecord<String, String> emitted = out.readRecord();
             assertEquals(1, count(emitted.headers(), "parsley-causal-dependencies"),
                     "exactly one dependencies header — stamping must replace, not duplicate");
-            assertEquals(CausalDependencies.builder().require(T1_TOPIC, 0, 0).build(), outDeps(emitted),
+            assertEquals(CausalDependencies.builder(TOPICS).require("t1", 0, 0).build(), outDeps(emitted),
                     "the stamped dependencies must be the frontier, not the user's stale value");
             assertEquals("keep", new String(emitted.headers().lastHeader("user-h").value()),
                     "user headers must be preserved");
@@ -398,7 +442,7 @@ class CausalProcessorsTopologyTest {
 
             TestRecord<String, String> punctuated = out.readRecord();
             assertEquals("punct", punctuated.value(), "punctuator output must reach the topic");
-            assertEquals(CausalDependencies.builder().require(T1_TOPIC, 0, 0).build(), outDeps(punctuated),
+            assertEquals(CausalDependencies.builder(TOPICS).require("t1", 0, 0).build(), outDeps(punctuated),
                     "punctuator forwards must be stamped with the live frontier");
         }
     }
@@ -486,7 +530,7 @@ class CausalProcessorsTopologyTest {
 
             // An unmet dependency forces the t3-record to be buffered, which serialises it.
             t3.pipeInput(new TestRecord<>("k", "t3-val",
-                    depsHeader(CausalDependencies.builder().require(T2_TOPIC, 0, 5).build())));
+                    depsHeader(CausalDependencies.builder(TOPICS).require("t2", 0, 5).build())));
 
             assertTrue(valueSpy.serializeTopics.contains("t3"),
                     "the buffer value serde must be invoked with the record's source topic, not the changelog name");
@@ -598,10 +642,9 @@ class CausalProcessorsTopologyTest {
      */
     @Test
     void aLargeInboundDependencySetIsNeverFoldedIntoTheStampedOutput() {
-        CausalDependencies.Builder bigBuilder = CausalDependencies.builder();
-        CausalTopic ghost = new CausalTopic("ghost", Uuid.randomUuid());
+        CausalDependencies.Builder bigBuilder = CausalDependencies.builder(TOPICS);
         for (int p = 0; p < 500; p++) {
-            bigBuilder.require(ghost, p, 1_000 + p);
+            bigBuilder.require("ghost", p, 1_000 + p);
         }
         CausalDependencies big = bigBuilder.build();
 
@@ -619,7 +662,7 @@ class CausalProcessorsTopologyTest {
             t1.pipeInput(new TestRecord<>("k", "v", depsHeader(big)));
 
             CausalDependencies stamped = outDeps(out.readRecord());
-            assertEquals(CausalDependencies.builder().require(T1_TOPIC, 0, 0).build(), stamped,
+            assertEquals(CausalDependencies.builder(TOPICS).require("t1", 0, 0).build(), stamped,
                     "a 500-partition inbound dependency set must not enlarge the stamped output");
             assertEquals(1, stamped.clock().size(),
                     "the stamped output must carry only the source coordinate");
@@ -648,7 +691,7 @@ class CausalProcessorsTopologyTest {
 
             // Buffer one t3-record (depends on t2-0 offset 0, not yet arrived).
             t3.pipeInput(new TestRecord<>("k", "t3-val",
-                    depsHeader(CausalDependencies.builder().require(T2_TOPIC, 0, 0).build())));
+                    depsHeader(CausalDependencies.builder(TOPICS).require("t2", 0, 0).build())));
             // Release it (the t2-record arrives and advances the frontier).
             t2.pipeInput(new TestRecord<>("k", "t2-val", depsHeader(CausalDependencies.empty())));
 
@@ -686,7 +729,7 @@ class CausalProcessorsTopologyTest {
 
             // Dependencies require T1_ID/0@0 — exactly the record's own source coordinate.
             t1.pipeInput(new TestRecord<>("k", "hello",
-                    depsHeader(CausalDependencies.builder().require(T1_TOPIC, 0, 0).build())));
+                    depsHeader(CausalDependencies.builder(TOPICS).require("t1", 0, 0).build())));
 
             assertEquals(List.of("HELLO"), out.readValuesToList(),
                     "self-dep stripped → effective dependencies empty → forwarded immediately");
@@ -802,7 +845,7 @@ class CausalProcessorsTopologyTest {
 
             // Phase 1: t3-records arrive before t2; held at proc1 AND at proc2 (direct subscription).
             t3.pipeInput(new TestRecord<>("k", "t3-val",
-                    depsHeader(CausalDependencies.builder().require(T2_TOPIC, 0, 0).build())));
+                    depsHeader(CausalDependencies.builder(TOPICS).require("t2", 0, 0).build())));
             assertTrue(out.isEmpty(), "t3-records must be held before t2 arrives");
             assertEquals(1, storeSize(driver.getKeyValueStore("node1-buffer")),
                     "proc1 must buffer the t3-record");
@@ -893,7 +936,7 @@ class CausalProcessorsTopologyTest {
 
             // t5-record (sidecar) arrives before t4@0 has been produced — must be buffered.
             t5.pipeInput(new TestRecord<>("k", "t5-val",
-                    depsHeader(CausalDependencies.builder().require(T4_TOPIC, 0, 0).build())));
+                    depsHeader(CausalDependencies.builder(TOPICS).require("t4", 0, 0).build())));
             assertTrue(out.isEmpty(), "sidecar must be held: t4@0 not yet in proc2's frontier");
             assertEquals(1, storeSize(driver.getKeyValueStore("node2-buffer")),
                     "sidecar must be in proc2's buffer");
@@ -959,7 +1002,7 @@ class CausalProcessorsTopologyTest {
 
             // t5-record depends on t1@0 which hasn't been processed yet — must be buffered.
             t5.pipeInput(new TestRecord<>("k", "t5-val",
-                    depsHeader(CausalDependencies.builder().require(T1_TOPIC, 0, 0).build())));
+                    depsHeader(CausalDependencies.builder(TOPICS).require("t1", 0, 0).build())));
             assertTrue(out.isEmpty(), "sidecar must be held: T1_ID@0 not yet in proc2's frontier");
             assertEquals(1, storeSize(driver.getKeyValueStore("node2-buffer")),
                     "sidecar must be in proc2's buffer");

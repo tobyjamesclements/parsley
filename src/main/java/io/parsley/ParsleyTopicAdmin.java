@@ -71,6 +71,40 @@ interface ParsleyTopicAdmin extends AutoCloseable {
      */
     static ParsleyTopicAdmin ofConfigs(Map<String, Object> configs) {
         Admin admin = Admin.create(new HashMap<>(configs));
+        ParsleyTopicAdmin delegate = ofAdmin(admin);
+        return new ParsleyTopicAdmin() {
+            @Override
+            public Map<String, Uuid> topicIds(List<String> topics) throws Exception {
+                return delegate.topicIds(topics);
+            }
+
+            @Override
+            public Map<String, Integer> partitionCounts(List<String> topics) throws Exception {
+                return delegate.partitionCounts(topics);
+            }
+
+            @Override
+            public void createTopic(String name, int partitions) throws Exception {
+                delegate.createTopic(name, partitions);
+            }
+
+            @Override
+            public void close() {
+                admin.close();
+            }
+        };
+    }
+
+    /**
+     * Returns a {@link ParsleyTopicAdmin} backed by a caller-owned {@link Admin}. Unlike
+     * {@link #ofConfigs}, the returned instance does <strong>not</strong> close {@code admin} on
+     * {@link #close()} — the caller keeps ownership of its lifecycle. Used by {@link CausalTopics} to
+     * resolve UUIDs through an {@code Admin} the application already manages.
+     *
+     * @param admin the Kafka admin client to resolve through; must not be {@code null}
+     * @return a {@code ParsleyTopicAdmin} over {@code admin} whose {@link #close()} is a no-op
+     */
+    static ParsleyTopicAdmin ofAdmin(Admin admin) {
         return new ParsleyTopicAdmin() {
             @Override
             public Map<String, Uuid> topicIds(List<String> topics) throws Exception {
@@ -95,7 +129,7 @@ interface ParsleyTopicAdmin extends AutoCloseable {
 
             @Override
             public void close() {
-                admin.close();
+                // caller owns the Admin's lifecycle
             }
         };
     }

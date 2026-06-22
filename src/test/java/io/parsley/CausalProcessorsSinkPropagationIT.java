@@ -44,9 +44,8 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 
 /**
  * End-to-end proof that dependencies stamped by the decorator at {@code forward} ride the record
- * headers through a Streams sink ({@code .to(topic)}) out to the output topic — so no
- * {@code CausalProducer} is needed on egress. A raw {@link KafkaConsumer} reads the output topic
- * and checks the header.
+ * headers through a Streams sink ({@code .to(topic)}) out to the output topic — so nothing extra is
+ * needed on egress. A raw {@link KafkaConsumer} reads the output topic and checks the header.
  */
 @Testcontainers(disabledWithoutDocker = true)
 class CausalProcessorsSinkPropagationIT {
@@ -63,9 +62,9 @@ class CausalProcessorsSinkPropagationIT {
      * through a Kafka Streams sink ({@code .to(topic)}) onto the output topic, so a downstream raw
      * consumer can read the header without a {@code CausalProducer} on the egress path.
      *
-     * <p>The decorator is wired with a drop policy; the input record carries empty dependencies so it
-     * is admitted immediately and the frontier advances. The output is read by a raw {@link
-     * org.apache.kafka.clients.consumer.KafkaConsumer} that only understands byte headers.
+     * <p>The input record carries empty dependencies so it is admitted immediately and the frontier
+     * advances. The output is read by a raw {@link org.apache.kafka.clients.consumer.KafkaConsumer}
+     * that only understands byte headers.
      *
      * Asserts that the value is the delegate's transform, and that the causal-dependencies header
      * on the output record decodes to a position on {@code decorator-in} at offset 0.
@@ -74,7 +73,7 @@ class CausalProcessorsSinkPropagationIT {
     void stampedClockSurvivesTheSinkToTheOutputTopic() throws Exception {
         String bootstrap = kafka.getBootstrapServers();
         Map<String, Uuid> topicIds = createTopics(bootstrap, IN, OUT);
-        Uuid inId = topicIds.get(IN);
+        CausalTopics topics = CausalTopics.of(topicIds);
 
         ProcessorSupplier<String, String, String, String> user = () -> new Processor<>() {
             private ProcessorContext<String, String> ctx;
@@ -122,7 +121,7 @@ class CausalProcessorsSinkPropagationIT {
                 assertEquals("HELLO", new String(out.value()), "the delegate's transform reached the sink");
 
                 Optional<CausalDependencies> stamped = CausalDependencies.fromHeaders(out.headers());
-                assertEquals(Optional.of(CausalDependencies.builder().require(new CausalTopic(IN, inId), 0, 0).build()), stamped,
+                assertEquals(Optional.of(CausalDependencies.builder(topics).require(IN, 0, 0).build()), stamped,
                         "the dependencies stamped at forward must survive the sink to the output topic");
             }
         }

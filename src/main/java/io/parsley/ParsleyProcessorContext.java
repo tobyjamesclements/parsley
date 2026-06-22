@@ -25,10 +25,10 @@ import java.util.function.Supplier;
  * delegate, stamping the current causal frontier onto every forwarded record's headers and
  * delegating everything else verbatim.
  *
- * <p>This is what makes outgoing messages causally stamped without the user touching a
- * {@code CausalProducer}: within a topology {@code forward} is internal routing, and Kafka Streams
- * sinks propagate a {@link Record}'s headers onto the produced {@code ProducerRecord}, so
- * dependencies stamped here ride the headers all the way to the output topic.
+ * <p>This is what makes outgoing messages causally stamped without the user stamping anything by
+ * hand: within a topology {@code forward} is internal routing, and Kafka Streams sinks propagate a
+ * {@link Record}'s headers onto the produced {@code ProducerRecord}, so dependencies stamped here
+ * ride the headers all the way to the output topic.
  *
  * <p>The frontier is read <strong>live</strong> through a {@link Supplier} at stamp time, so a
  * forward during record admission sees the post-admit frontier and a forward from a punctuator sees
