@@ -23,13 +23,23 @@ Topic IDs are Kafka `Uuid` values stored as two `long` fields (most-significant 
 
 ## Buffer record (`ParsleySerializer` v3)
 
-Records held in the `{ns}-buffer` state store are serialised with `ParsleySerializer`. The source
-coordinate and dependency clock are written as typed fields (not headers); only the user's headers
-are carried. The key/value bytes are produced by the Serde resolved from the typed source topic.
+The `{ns}-buffer` state store value has two layers: `RocksBufferStore` prepends the buffer-admission
+time to the `ParsleySerializer`-encoded record.
+
+```
+[bufferedAt    :8]   wall-clock time (epoch millis) the record was admitted to the buffer
+[ParsleySerializer v3 payload, below]
+```
+
+The `ParsleySerializer` payload is what's passed to and decoded from `serialize`/`deserialize`. The
+source coordinate and dependency clock are written as typed fields (not headers); only the user's
+headers are carried. The key/value bytes are produced by the Serde resolved from the typed source
+topic. Its own `[timestamp:8]` field is the record's original Kafka timestamp — distinct from, and
+written independently of, the outer `bufferedAt`.
 
 ```
 [version       :1]   0x03
-[timestamp     :8]
+[timestamp     :8]   the record's original Kafka timestamp (not bufferedAt above)
 [topic-len     :2]
 [topic         :topic-len]   UTF-8 source topic
 [topicId       :16]          topicId.MSB then topicId.LSB
@@ -48,6 +58,10 @@ per user header:
 [value-len     :4]   -1 if value is null
 [value         :value-len]
 ```
+
+`ParsleyEngine`'s startup index rebuild and the duration-based eviction scan decode only the outer
+`bufferedAt` and the `deps` field — via `ParsleySerializer.deserializeDependencies` — never the
+key/value bytes, so a record whose user serde can no longer decode it doesn't block either path.
 
 ## Candidate-index key
 
@@ -68,7 +82,7 @@ The namespace is the `name` passed to `CausalProcessors.builder(...).addBufferSt
 | Store | Key serde | Value serde | Purpose |
 |---|---|---|---|
 | `{ns}-frontier` | `String` | `byte[]` | Single entry at key `"f"`: serialised `ParsleyClock` |
-| `{ns}-buffer` | `Long` | `byte[]` | Insertion sequence -> serialised `ParsleyMessage` |
+| `{ns}-buffer` | `Long` | `byte[]` | Insertion sequence -> `bufferedAt` + serialised `ParsleyMessage` |
 | `{ns}-candidate-index` | `byte[]` | `byte[]` (empty) | 36-byte composite key -> presence marker |
 
 All three stores are persistent and changelog-backed. Changelog topic names follow the Kafka Streams pattern: `{applicationId}-{storeName}-changelog`.

@@ -27,8 +27,12 @@ All three are created with `Stores.persistentKeyValueStore(...)`, so they are ch
     - A `FrontierCallback` (internal) that writes the new frontier to the frontier store and appends a snapshot to a local list used for per-record delivery-time stamping.
     - A `RocksBufferStore` wrapping the buffer store and a `ParsleySerializer`.
     - A `RocksCandidateIndex` wrapping the candidate-index store.
-5. Wrap the real context in a `ParsleyProcessorContext` (stamping proxy).
-6. Call `delegate.init(wrappedContext)`.
+4. Wrap the real context in a `ParsleyProcessorContext` (stamping proxy).
+5. Call `delegate.init(wrappedContext)`.
+6. Schedule a self-cancelling, one-shot `WALL_CLOCK_TIME` punctuation that calls `engine.evictOverflow()` on its
+   first firing and cancels itself immediately after — enforces the size limit once against a buffer restored
+   from a changelog (see [The engine: `evictOverflow()`](engine.md#evictoverflow-size-limit) for why this can't
+   run synchronously inside `init()`).
 7. If `engine.evictionInterval()` is present, schedule a punctuator to call `evict()` on that interval.
 
 ## `process()` path

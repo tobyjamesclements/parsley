@@ -60,8 +60,9 @@ final class ParsleyEngine<K, V> {
     private final FrontierCallback frontierListener;
     private final ParsleyMetrics metrics;
     private final LongSupplier clock;
-    // When true (deserialization handler = LogAndContinue), an undecodable held record is dropped on
-    // the forward path and processing continues; when false (default LogAndFail), it is rethrown.
+    // When true (parsley.buffer.deserialization.failure.policy = continue), an undecodable held
+    // record is dropped on the forward path and processing continues; when false (default = fail),
+    // it is rethrown.
     private final boolean skipOnDecodeFailure;
 
     private ParsleyClock frontier;
