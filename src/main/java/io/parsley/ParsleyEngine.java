@@ -119,7 +119,7 @@ final class ParsleyEngine<K, V> {
     /**
      * Processes one incoming record.
      *
-     * @param record the record to process
+     * @param message the record to process
      * @return the records to forward downstream, in order; possibly empty
      */
     List<ParsleyMessage<K, V>> onRecord(ParsleyMessage<K, V> message) {

@@ -49,8 +49,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * Proves that a record held by the causal buffer <strong>survives a processor restart</strong>: the
  * buffer is changelog-backed, so a held record persists across a {@link KafkaStreams} stop/start (with
  * a fresh local state directory, forcing a changelog restore) and still drains in causal order once
- * its dependency finally arrives. This restores the recovery coverage the deleted standalone-consumer
- * resilience IT used to provide.
+ * its dependency finally arrives.
  */
 @Testcontainers(disabledWithoutDocker = true)
 class CausalProcessorRestartIT {

@@ -29,7 +29,8 @@ interface ParsleyCandidateIndex {
      *
      * @param recordId the buffer sequence number of the buffered record
      * @param required the record's causal dependency clock
-     * @param frontier the frontier at the time of buffering; unsatisfied = required offset &gt; offsetFor
+     * @param frontier the frontier at the time of buffering; unsatisfied means the required offset
+     *                 exceeds {@code frontier}'s offset for that coordinate
      */
     void index(long recordId, ParsleyClock required, ParsleyClock frontier);
 
@@ -40,7 +41,7 @@ interface ParsleyCandidateIndex {
      *
      * @param topicId   the topic UUID whose frontier just advanced
      * @param partition the partition whose frontier just advanced
-     * @param newOffset the new offsetFor offset on this coordinate
+     * @param newOffset the coordinate's newly advanced frontier offset
      * @return candidates; empty if none are indexed on this coordinate within the offset range
      */
     List<Candidate> findCandidates(Uuid topicId, int partition, long newOffset);

@@ -18,8 +18,8 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 /**
  * Tests the topology-edge operations on {@link CausalDependencies}: stamping a {@link ProducerRecord},
  * merging dependency sets for a fan-in, and deriving a record's outbound dependencies from a consumed
- * {@link ConsumerRecord} via a {@link CausalTopics} resolver. These replace the old
- * {@code CausalProducer}/{@code CausalConsumer} wrappers.
+ * {@link ConsumerRecord} via a {@link CausalTopics} resolver — the edge-of-topology operations for
+ * talking to a Parsley topology from plain Kafka clients.
  */
 class CausalDependenciesEdgeOpsTest {
 

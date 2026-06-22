@@ -60,7 +60,7 @@ class CausalProcessorsSinkPropagationIT {
     /**
      * A record forwarded by the causal decorator carries Parsley's stamped causal-dependencies header
      * through a Kafka Streams sink ({@code .to(topic)}) onto the output topic, so a downstream raw
-     * consumer can read the header without a {@code CausalProducer} on the egress path.
+     * consumer can read the header without anything extra on the egress path.
      *
      * <p>The input record carries empty dependencies so it is admitted immediately and the frontier
      * advances. The output is read by a raw {@link org.apache.kafka.clients.consumer.KafkaConsumer}
