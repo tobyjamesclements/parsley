@@ -24,6 +24,15 @@ interface ParsleyBufferStore<K, V> {
     record Entry<K, V>(long sequence, long bufferedAt, ParsleyMessage<K, V> record, ParsleyClock dependencies) {}
 
     /**
+     * The metadata decodable <em>without</em> the user serde: an entry's insertion sequence, its
+     * buffer-admission time, and decoded dependencies — but not the deserialised record. Used both to
+     * rebuild the position index on restart and to drive eviction without all-or-nothing decoding, so
+     * a record whose key/value can no longer be decoded (e.g. an incompatible Schema Registry change)
+     * neither blocks startup nor wedges eviction of the other held records.
+     */
+    record IndexEntry(long sequence, long bufferedAt, ParsleyClock dependencies) {}
+
+    /**
      * Buffers a record under the next insertion sequence and returns that sequence. The sequence
      * is the opaque handle used by {@link #get} and {@link #remove}.
      *
@@ -52,6 +61,15 @@ interface ParsleyBufferStore<K, V> {
      * @return the buffered entries; empty if the buffer is empty
      */
     List<Entry<K, V>> entries();
+
+    /**
+     * Returns the {@link IndexEntry index metadata} for every buffered entry — decoding only the
+     * dependency clock, not the record's key/value. Used once at construction to rebuild the position
+     * index after a restart, immune to user-serde decode failures.
+     *
+     * @return the index metadata for every buffered entry
+     */
+    List<IndexEntry> indexEntries();
 
     /**
      * Removes the entry with the given insertion sequence.

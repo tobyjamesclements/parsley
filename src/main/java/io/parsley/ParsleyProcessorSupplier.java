@@ -1,6 +1,5 @@
 package io.parsley;
 
-import org.apache.kafka.common.Uuid;
 import org.apache.kafka.common.serialization.Serde;
 import org.apache.kafka.streams.processor.api.Processor;
 import org.apache.kafka.streams.processor.api.ProcessorSupplier;
@@ -27,7 +26,9 @@ final class ParsleyProcessorSupplier<KIn, VIn, KOut, VOut>
     private final String frontierStoreName;
     private final String bufferStoreName;
     private final String positionIndexStoreName;
-    private final Map<String, Uuid> topicUuids;
+    private final Set<String> topics;
+    private final Function<Map<String, Object>, ParsleyTopicAdmin> adminFactory;
+    private final ParsleyConfig config;
 
     ParsleyProcessorSupplier(ProcessorSupplier<KIn, VIn, KOut, VOut> userSupplier,
                                       CausalBufferLimit limit,
@@ -36,7 +37,9 @@ final class ParsleyProcessorSupplier<KIn, VIn, KOut, VOut>
                                       String frontierStoreName,
                                       String bufferStoreName,
                                       String positionIndexStoreName,
-                                      Map<String, Uuid> topicUuids) {
+                                      Set<String> topics,
+                                      Function<Map<String, Object>, ParsleyTopicAdmin> adminFactory,
+                                      ParsleyConfig config) {
         this.userSupplier = userSupplier;
         this.limit = limit;
         this.keySerdeByTopic = keySerdeByTopic;
@@ -44,7 +47,9 @@ final class ParsleyProcessorSupplier<KIn, VIn, KOut, VOut>
         this.frontierStoreName = frontierStoreName;
         this.bufferStoreName = bufferStoreName;
         this.positionIndexStoreName = positionIndexStoreName;
-        this.topicUuids = topicUuids;
+        this.topics = topics;
+        this.adminFactory = adminFactory;
+        this.config = config;
     }
 
     @Override
@@ -52,7 +57,7 @@ final class ParsleyProcessorSupplier<KIn, VIn, KOut, VOut>
         return new ParsleyProcessor<>(
                 userSupplier.get(), limit,
                 new ParsleySerializer<>(new ParsleyResolver<>(keySerdeByTopic, valueSerdeByTopic)),
-                frontierStoreName, bufferStoreName, positionIndexStoreName, topicUuids);
+                frontierStoreName, bufferStoreName, positionIndexStoreName, topics, adminFactory, config);
     }
 
     @Override

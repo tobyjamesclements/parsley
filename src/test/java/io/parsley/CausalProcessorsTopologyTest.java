@@ -59,6 +59,11 @@ class CausalProcessorsTopologyTest {
     private static final CausalTopic T2_TOPIC = new CausalTopic("t2", T2_ID);
     private static final CausalTopic T4_TOPIC = new CausalTopic("t4", T4_ID);
 
+    // Fake admin resolving the test topics' UUIDs (no broker under TopologyTestDriver); injected into
+    // every builder via the package-private topicAdmin(...) seam.
+    private static final ParsleyTopicAdmin ADMIN = TestTopicAdmin.of(Map.of(
+            "t1", T1_ID, "t2", T2_ID, "t3", T3_ID, "t4", T4_ID, "t5", T5_ID));
+
     private final List<String> processed = new ArrayList<>();
 
     // --- helpers -------------------------------------------------------------------------------
@@ -125,8 +130,7 @@ class CausalProcessorsTopologyTest {
     void admittedRecordRunsDelegateAndStampsTheMergedClock() {
         Topology topology = topology(
                 CausalProcessors.builder(upperCaser(), CausalBufferLimit.ofSize(100))
-                        .serdes(Serdes.String(), Serdes.String())
-                        .addCausalTopic(new CausalTopic("t1", T1_ID)).build(),
+                        .addBuffer(CausalBuffer.of("t1", Serdes.String(), Serdes.String())).topicAdmin(ADMIN).build(),
                 List.of("t1"));
 
         try (TopologyTestDriver driver = new TopologyTestDriver(topology, config(null))) {
@@ -158,8 +162,7 @@ class CausalProcessorsTopologyTest {
     void heldRecordIsBufferedThenDrainedThroughDelegate() {
         Topology topology = topology(
                 CausalProcessors.builder(upperCaser(), CausalBufferLimit.ofSize(100))
-                        .serdes(Serdes.String(), Serdes.String())
-                        .addCausalTopics(List.of(new CausalTopic("t2", T2_ID), new CausalTopic("t3", T3_ID))).build(),
+                        .addBuffers(List.of("t2", "t3"), Serdes.String(), Serdes.String()).topicAdmin(ADMIN).build(),
                 List.of("t2", "t3"));
 
         try (TopologyTestDriver driver = new TopologyTestDriver(topology, config(null))) {
@@ -200,8 +203,7 @@ class CausalProcessorsTopologyTest {
     void evictedRecordIsForwardedToDelegate() {
         Topology topology = topology(
                 CausalProcessors.builder(upperCaser(), CausalBufferLimit.ofSize(1))
-                        .serdes(Serdes.String(), Serdes.String())
-                        .addCausalTopic(new CausalTopic("t3", T3_ID)).build(),
+                        .addBuffer(CausalBuffer.of("t3", Serdes.String(), Serdes.String())).topicAdmin(ADMIN).build(),
                 List.of("t3"));
 
         try (TopologyTestDriver driver = new TopologyTestDriver(topology, config(null))) {
@@ -235,8 +237,7 @@ class CausalProcessorsTopologyTest {
     void durationEvictionOnlyEvictsRecordsThatHaveIndividuallyAgedOut() {
         Topology topology = topology(
                 CausalProcessors.builder(upperCaser(), CausalBufferLimit.ofDuration(Duration.ofSeconds(2)))
-                        .serdes(Serdes.String(), Serdes.String())
-                        .addCausalTopic(new CausalTopic("t3", T3_ID)).build(),
+                        .addBuffer(CausalBuffer.of("t3", Serdes.String(), Serdes.String())).topicAdmin(ADMIN).build(),
                 List.of("t3"));
 
         try (TopologyTestDriver driver = new TopologyTestDriver(topology, config(null))) {
@@ -281,8 +282,7 @@ class CausalProcessorsTopologyTest {
     void sizeLimitEvictionOnlyEvictsTheOldestOverflowingRecord() {
         Topology topology = topology(
                 CausalProcessors.builder(upperCaser(), CausalBufferLimit.ofSize(2))
-                        .serdes(Serdes.String(), Serdes.String())
-                        .addCausalTopic(new CausalTopic("t3", T3_ID)).build(),
+                        .addBuffer(CausalBuffer.of("t3", Serdes.String(), Serdes.String())).topicAdmin(ADMIN).build(),
                 List.of("t3"));
 
         try (TopologyTestDriver driver = new TopologyTestDriver(topology, config(null))) {
@@ -336,8 +336,7 @@ class CausalProcessorsTopologyTest {
         };
         Topology topology = topology(
                 CausalProcessors.builder(user, CausalBufferLimit.ofSize(100))
-                        .serdes(Serdes.String(), Serdes.String())
-                        .addCausalTopic(new CausalTopic("t1", T1_ID)).build(),
+                        .addBuffer(CausalBuffer.of("t1", Serdes.String(), Serdes.String())).topicAdmin(ADMIN).build(),
                 List.of("t1"));
 
         try (TopologyTestDriver driver = new TopologyTestDriver(topology, config(null))) {
@@ -384,8 +383,7 @@ class CausalProcessorsTopologyTest {
         };
         Topology topology = topology(
                 CausalProcessors.builder(user, CausalBufferLimit.ofSize(100))
-                        .serdes(Serdes.String(), Serdes.String())
-                        .addCausalTopic(new CausalTopic("t1", T1_ID)).build(),
+                        .addBuffer(CausalBuffer.of("t1", Serdes.String(), Serdes.String())).topicAdmin(ADMIN).build(),
                 List.of("t1"));
 
         try (TopologyTestDriver driver = new TopologyTestDriver(topology, config(null))) {
@@ -445,8 +443,7 @@ class CausalProcessorsTopologyTest {
         };
         Topology topology = topology(
                 CausalProcessors.builder(user, CausalBufferLimit.ofSize(100))
-                        .serdes(Serdes.String(), Serdes.String())
-                        .addCausalTopic(new CausalTopic("t1", T1_ID)).build(),
+                        .addBuffer(CausalBuffer.of("t1", Serdes.String(), Serdes.String())).topicAdmin(ADMIN).build(),
                 List.of("t1"));
 
         try (TopologyTestDriver driver = new TopologyTestDriver(topology, config(null))) {
@@ -478,8 +475,9 @@ class CausalProcessorsTopologyTest {
         SpyStringSerde valueSpy = new SpyStringSerde();
         Topology topology = topology(
                 CausalProcessors.builder(upperCaser(), CausalBufferLimit.ofSize(100))
-                        .serdesByTopic(t -> Serdes.String(), t -> valueSpy)
-                        .addCausalTopics(List.of(new CausalTopic("t2", T2_ID), new CausalTopic("t3", T3_ID))).build(),
+                        .addBuffer(CausalBuffer.of("t2", Serdes.String(), valueSpy))
+                        .addBuffer(CausalBuffer.of("t3", Serdes.String(), valueSpy))
+                        .topicAdmin(ADMIN).build(),
                 List.of("t2", "t3"));
 
         try (TopologyTestDriver driver = new TopologyTestDriver(topology, config(null))) {
@@ -513,13 +511,13 @@ class CausalProcessorsTopologyTest {
         StreamsBuilder builder = new StreamsBuilder();
         builder.stream("t3", Consumed.with(Serdes.String(), Serdes.String()))
                 .process(CausalProcessors.builder(upperCaser(), CausalBufferLimit.ofSize(100))
-                        .serdesByTopic(t -> Serdes.String(), t -> Serdes.String()).storeName("t3")
-                        .addCausalTopic(new CausalTopic("t3", T3_ID)).build())
+                        .storeName("t3")
+                        .addBuffer(CausalBuffer.of("t3", Serdes.String(), Serdes.String())).topicAdmin(ADMIN).build())
                 .to("t3-out", Produced.with(Serdes.String(), Serdes.String()));
         builder.stream("t2", Consumed.with(Serdes.String(), Serdes.String()))
                 .process(CausalProcessors.builder(upperCaser(), CausalBufferLimit.ofSize(100))
-                        .serdesByTopic(t -> Serdes.String(), t -> Serdes.String()).storeName("t2")
-                        .addCausalTopic(new CausalTopic("t2", T2_ID)).build())
+                        .storeName("t2")
+                        .addBuffer(CausalBuffer.of("t2", Serdes.String(), Serdes.String())).topicAdmin(ADMIN).build())
                 .to("t2-out", Produced.with(Serdes.String(), Serdes.String()));
 
         try (TopologyTestDriver driver = new TopologyTestDriver(builder.build(), config(null))) {
@@ -564,9 +562,7 @@ class CausalProcessorsTopologyTest {
     void automaticStampFrontierIsBoundedByInputTopicCountNotRecordCount() {
         Topology topology = topology(
                 CausalProcessors.builder(upperCaser(), CausalBufferLimit.ofSize(1000))
-                        .serdes(Serdes.String(), Serdes.String())
-                        .addCausalTopics(List.of(
-                                new CausalTopic("t1", T1_ID), new CausalTopic("t2", T2_ID), new CausalTopic("t3", T3_ID)))
+                        .addBuffers(List.of("t1", "t2", "t3"), Serdes.String(), Serdes.String()).topicAdmin(ADMIN)
                         .build(),
                 List.of("t1", "t2", "t3"));
 
@@ -613,8 +609,7 @@ class CausalProcessorsTopologyTest {
 
         Topology topology = topology(
                 CausalProcessors.builder(upperCaser(), CausalBufferLimit.ofSize(1))
-                        .serdes(Serdes.String(), Serdes.String())
-                        .addCausalTopic(new CausalTopic("t1", T1_ID)).build(),
+                        .addBuffer(CausalBuffer.of("t1", Serdes.String(), Serdes.String())).topicAdmin(ADMIN).build(),
                 List.of("t1"));
 
         try (TopologyTestDriver driver = new TopologyTestDriver(topology, config(null))) {
@@ -644,8 +639,7 @@ class CausalProcessorsTopologyTest {
     void streamsMetricsSensorsArePopulatedAfterBufferingAndRelease() {
         Topology topology = topology(
                 CausalProcessors.builder(upperCaser(), CausalBufferLimit.ofSize(100))
-                        .serdes(Serdes.String(), Serdes.String())
-                        .addCausalTopics(List.of(new CausalTopic("t2", T2_ID), new CausalTopic("t3", T3_ID))).build(),
+                        .addBuffers(List.of("t2", "t3"), Serdes.String(), Serdes.String()).topicAdmin(ADMIN).build(),
                 List.of("t2", "t3"));
 
         try (TopologyTestDriver driver = new TopologyTestDriver(topology, config(null))) {
@@ -682,8 +676,7 @@ class CausalProcessorsTopologyTest {
     void stripSelfReferentialDependencyAndForwardImmediately() {
         Topology topology = topology(
                 CausalProcessors.builder(upperCaser(), CausalBufferLimit.ofSize(1))
-                        .serdes(Serdes.String(), Serdes.String())
-                        .addCausalTopic(new CausalTopic("t1", T1_ID)).build(),
+                        .addBuffer(CausalBuffer.of("t1", Serdes.String(), Serdes.String())).topicAdmin(ADMIN).build(),
                 List.of("t1"));
 
         try (TopologyTestDriver driver = new TopologyTestDriver(topology, config(null))) {
@@ -731,13 +724,11 @@ class CausalProcessorsTopologyTest {
         // context.recordMetadata() still returns the original "t1" metadata → self-reference dep.
         builder.stream("t1", consumed)
                 .process(CausalProcessors.builder(upperCaser(), CausalBufferLimit.ofSize(100))
-                        .serdes(Serdes.String(), Serdes.String())
                         .storeName("node1")
-                        .addCausalTopic(new CausalTopic("t1", T1_ID)).build())
+                        .addBuffer(CausalBuffer.of("t1", Serdes.String(), Serdes.String())).topicAdmin(ADMIN).build())
                 .process(CausalProcessors.builder(upperCaser(), CausalBufferLimit.ofSize(100))
-                        .serdes(Serdes.String(), Serdes.String())
                         .storeName("node2")
-                        .addCausalTopic(new CausalTopic("t1", T1_ID)).build())
+                        .addBuffer(CausalBuffer.of("t1", Serdes.String(), Serdes.String())).topicAdmin(ADMIN).build())
                 .to("out", produced);
 
         try (TopologyTestDriver driver = new TopologyTestDriver(builder.build(), config(null))) {
@@ -795,18 +786,15 @@ class CausalProcessorsTopologyTest {
         // proc1: holds t3-records (dep on t2) until t2 arrives. Output materializes to "t4".
         t2Src.merge(t3Src)
                 .process(CausalProcessors.builder(upperCaser(), CausalBufferLimit.ofSize(100))
-                        .serdesByTopic(t -> Serdes.String(), t -> Serdes.String())
                         .storeName("node1")
-                        .addCausalTopics(List.of(new CausalTopic("t2", T2_ID), new CausalTopic("t3", T3_ID))).build())
+                        .addBuffers(List.of("t2", "t3"), Serdes.String(), Serdes.String()).topicAdmin(ADMIN).build())
                 .to("t4", produced);
 
         // proc2: receives "t4" (proc1's derived output) AND direct t2/t3 feeds to bootstrap its frontier.
         t4Src.merge(t2Src).merge(t3Src)
                 .process(CausalProcessors.builder(upperCaser(), CausalBufferLimit.ofSize(100))
-                        .serdesByTopic(t -> Serdes.String(), t -> Serdes.String())
                         .storeName("node2")
-                        .addCausalTopics(List.of(
-                                new CausalTopic("t4", T4_ID), new CausalTopic("t2", T2_ID), new CausalTopic("t3", T3_ID)))
+                        .addBuffers(List.of("t4", "t2", "t3"), Serdes.String(), Serdes.String()).topicAdmin(ADMIN)
                         .build())
                 .to("out", produced);
 
@@ -890,19 +878,16 @@ class CausalProcessorsTopologyTest {
 
         t2Src
                 .process(CausalProcessors.builder(upperCaser(), CausalBufferLimit.ofSize(100))
-                        .serdes(Serdes.String(), Serdes.String())
                         .storeName("node1")
-                        .addCausalTopic(new CausalTopic("t2", T2_ID)).build())
+                        .addBuffer(CausalBuffer.of("t2", Serdes.String(), Serdes.String())).topicAdmin(ADMIN).build())
                 .to("t4", produced);
 
         // proc2 takes proc1's materialised output, the original t2 (to bootstrap T2 frontier),
         // and the independent "t5" stream.
         t4Src.merge(t2Src).merge(t5Src)
                 .process(CausalProcessors.builder(upperCaser(), CausalBufferLimit.ofSize(100))
-                        .serdes(Serdes.String(), Serdes.String())
                         .storeName("node2")
-                        .addCausalTopics(List.of(
-                                new CausalTopic("t4", T4_ID), new CausalTopic("t2", T2_ID), new CausalTopic("t5", T5_ID)))
+                        .addBuffers(List.of("t4", "t2", "t5"), Serdes.String(), Serdes.String()).topicAdmin(ADMIN)
                         .build())
                 .to("out", produced);
 
@@ -966,14 +951,12 @@ class CausalProcessorsTopologyTest {
         // proc1 fused directly into proc2 (no .to("intermediate")); t5 also merges into proc2.
         builder.stream("t1", consumed)
                 .process(CausalProcessors.builder(upperCaser(), CausalBufferLimit.ofSize(100))
-                        .serdes(Serdes.String(), Serdes.String())
                         .storeName("node1")
-                        .addCausalTopic(new CausalTopic("t1", T1_ID)).build())
+                        .addBuffer(CausalBuffer.of("t1", Serdes.String(), Serdes.String())).topicAdmin(ADMIN).build())
                 .merge(t5Src)
                 .process(CausalProcessors.builder(upperCaser(), CausalBufferLimit.ofSize(100))
-                        .serdes(Serdes.String(), Serdes.String())
                         .storeName("node2")
-                        .addCausalTopics(List.of(new CausalTopic("t1", T1_ID), new CausalTopic("t5", T5_ID))).build())
+                        .addBuffers(List.of("t1", "t5"), Serdes.String(), Serdes.String()).topicAdmin(ADMIN).build())
                 .to("out", produced);
 
         try (TopologyTestDriver driver = new TopologyTestDriver(builder.build(), config(null))) {
@@ -1022,17 +1005,14 @@ class CausalProcessorsTopologyTest {
 
         t2Src
                 .process(CausalProcessors.builder(upperCaser(), CausalBufferLimit.ofSize(100))
-                        .serdes(Serdes.String(), Serdes.String())
                         .storeName("node1")
-                        .addCausalTopic(new CausalTopic("t2", T2_ID)).build())
+                        .addBuffer(CausalBuffer.of("t2", Serdes.String(), Serdes.String())).topicAdmin(ADMIN).build())
                 .to("t4", produced);
 
         t4Src.merge(t2Src).merge(t5Src)
                 .process(CausalProcessors.builder(upperCaser(), CausalBufferLimit.ofSize(100))
-                        .serdes(Serdes.String(), Serdes.String())
                         .storeName("node2")
-                        .addCausalTopics(List.of(
-                                new CausalTopic("t4", T4_ID), new CausalTopic("t2", T2_ID), new CausalTopic("t5", T5_ID)))
+                        .addBuffers(List.of("t4", "t2", "t5"), Serdes.String(), Serdes.String()).topicAdmin(ADMIN)
                         .build())
                 .to("out", produced);
 
@@ -1078,14 +1058,12 @@ class CausalProcessorsTopologyTest {
 
         builder.stream("t1", consumed)
                 .process(CausalProcessors.builder(upperCaser(), CausalBufferLimit.ofSize(100))
-                        .serdes(Serdes.String(), Serdes.String())
                         .storeName("node1")
-                        .addCausalTopic(new CausalTopic("t1", T1_ID)).build())
+                        .addBuffer(CausalBuffer.of("t1", Serdes.String(), Serdes.String())).topicAdmin(ADMIN).build())
                 .merge(t5Src)
                 .process(CausalProcessors.builder(upperCaser(), CausalBufferLimit.ofSize(100))
-                        .serdes(Serdes.String(), Serdes.String())
                         .storeName("node2")
-                        .addCausalTopics(List.of(new CausalTopic("t1", T1_ID), new CausalTopic("t5", T5_ID))).build())
+                        .addBuffers(List.of("t1", "t5"), Serdes.String(), Serdes.String()).topicAdmin(ADMIN).build())
                 .to("out", produced);
 
         try (TopologyTestDriver driver = new TopologyTestDriver(builder.build(), config(null))) {

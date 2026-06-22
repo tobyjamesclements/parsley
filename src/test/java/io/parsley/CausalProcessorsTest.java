@@ -1,6 +1,5 @@
 package io.parsley;
 
-import org.apache.kafka.common.Uuid;
 import org.apache.kafka.common.serialization.Serdes;
 import org.apache.kafka.streams.processor.api.Processor;
 import org.apache.kafka.streams.processor.api.ProcessorSupplier;
@@ -19,22 +18,21 @@ class CausalProcessorsTest {
             };
 
     /**
-     * {@code CausalProcessors.Builder.build()} requires key and value serdes to be set
-     * before the processor supplier can be constructed.
+     * {@code CausalProcessors.Builder.build()} requires at least one {@link CausalBuffer} to be
+     * registered before the processor supplier can be constructed.
      *
-     * Asserts that {@code IllegalStateException} is thrown when {@code serdes()} has not
-     * been called.
+     * Asserts that {@code IllegalStateException} is thrown when no buffer has been added.
      */
     @Test
-    void buildRequiresSerdes() {
+    void buildRequiresABuffer() {
         CausalProcessors.Builder<String, String, String, String> b =
                 builderWith(CausalBufferLimit.ofSize(1));
         assertThrows(IllegalStateException.class, b::build,
-                "build() must throw when serdes have not been configured");
+                "build() must throw when no CausalBuffer has been registered");
     }
 
     /**
-     * A fully configured builder with a buffer limit and serdes produces a non-null
+     * A fully configured builder with a buffer limit and a registered buffer produces a non-null
      * {@code CausalProcessorSupplier} whose {@code get()} method returns a non-null
      * processor instance.
      *
@@ -44,8 +42,7 @@ class CausalProcessorsTest {
     void buildsAValidSupplier() {
         CausalProcessorSupplier<String, String, String, String> supplier =
                 builderWith(CausalBufferLimit.ofSize(1))
-                        .serdes(Serdes.String(), Serdes.String())
-                        .addCausalTopic(new CausalTopic("t1", Uuid.randomUuid()))
+                        .addBuffer(CausalBuffer.of("t1", Serdes.String(), Serdes.String()))
                         .build();
         assertNotNull(supplier, "build() must return a non-null supplier");
         assertNotNull(supplier.get(), "supplier.get() must return a non-null processor");

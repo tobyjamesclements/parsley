@@ -41,11 +41,19 @@ interface ParsleyMetrics {
     /** A record was evicted from the causal buffer before its dependencies were satisfied. */
     void recordViolation();
 
+    /**
+     * A held record could not be deserialised from the buffer store on the forward path (e.g. an
+     * incompatible Schema Registry change after buffering). The record stays buffered; this counts
+     * the failed attempt.
+     */
+    void recordDeserializationError();
+
     ParsleyMetrics NOOP = new ParsleyMetrics() {
         @Override public void recordBuffered(int d) {}
         @Override public void recordReleased(int c, int d) {}
         @Override public void recordEvicted(int c) {}
         @Override public void recordViolation() {}
+        @Override public void recordDeserializationError() {}
     };
 
     /**
@@ -72,6 +80,7 @@ interface ParsleyMetrics {
         Sensor released  = sm.addRateTotalSensor("parsley", taskId, "records-released",  Sensor.RecordingLevel.INFO);
         Sensor evicted   = sm.addRateTotalSensor("parsley", taskId, "records-evicted",   Sensor.RecordingLevel.INFO);
         Sensor violation = sm.addRateTotalSensor("parsley", taskId, "violations",         Sensor.RecordingLevel.INFO);
+        Sensor deserErr  = sm.addRateTotalSensor("parsley", taskId, "deserialization-errors", Sensor.RecordingLevel.INFO);
 
         Sensor depth = sm.addSensor("parsley-buffer-depth-" + taskId, Sensor.RecordingLevel.INFO);
         depth.add(new MetricName("buffer-depth", "stream-parsley-metrics",
@@ -83,8 +92,9 @@ interface ParsleyMetrics {
             @Override public void recordReleased(int c, int d){ released.record(c);  depth.record(d); }
             @Override public void recordEvicted(int c)        { evicted.record(c);   depth.record(0); }
             @Override public void recordViolation()           { violation.record(); }
+            @Override public void recordDeserializationError(){ deserErr.record(); }
         };
 
-        return new Wired(metrics, List.of(buffered, released, evicted, violation, depth));
+        return new Wired(metrics, List.of(buffered, released, evicted, violation, deserErr, depth));
     }
 }

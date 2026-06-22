@@ -90,16 +90,19 @@ All three stores are persistent and changelog-backed. Changelog topic names foll
 
 ## Topic UUIDs
 
-Topic UUIDs are not derived or guessed — each one must be registered explicitly via
-`CausalTopic(topic, uuid)`, passed to `CausalProcessors.builder(...)` /
-`CausalConsumers.builder(...)` / `CausalProducers.builder(...)` via `.addCausalTopic(s)(...)`. If a
-topic's UUID is not registered, resolution fails fast with `IllegalStateException` rather than
-falling back to a guess.
+Topic UUIDs are not derived or guessed — they are resolved from the broker via `AdminClient` at
+startup, for every topic registered as a `CausalBuffer` on `CausalProcessors.builder(...)` /
+`CausalConsumers.builder(...)` (the processor resolves them at `init()` from the task's
+`appConfigs()`; the consumer resolves them when it starts). If a registered topic does not exist on
+the broker, resolution fails fast with `IllegalStateException` rather than falling back to a guess.
 
-In a live topology, the UUID is typically resolved from the broker via `AdminClient` at startup
-(e.g. `CreateTopicsResult.topicId(topic)` or `DescribeTopicsResult`) — the real UUID Kafka assigned
-to the topic. A topic deleted and recreated with the same name gets a new UUID, so records stamped
-against the old incarnation correctly fail to satisfy dependencies on the new one.
+The real UUID Kafka assigned to the topic is what's used. A topic deleted and recreated with the
+same name gets a new UUID, so records stamped against the old incarnation correctly fail to satisfy
+dependencies on the new one.
+
+When building `CausalDependencies` explicitly (the producer side), the topic identity is still
+supplied as a `CausalTopic(topic, uuid)` — there the UUID names a coordinate in the dependency
+clock and is not resolved from a broker.
 
 Tests without a live broker (`TopologyTestDriver`, unit tests) may use any stable `Uuid`, e.g.
 `Uuid.randomUuid()`, as long as the same value is used consistently wherever that topic's identity

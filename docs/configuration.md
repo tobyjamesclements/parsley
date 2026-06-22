@@ -76,3 +76,28 @@ separate header budget).
 
 Parsley never truncates the dependencies header — truncation would silently break the guarantee. Keep the
 relevant-partition count within your record-size budget.
+
+---
+
+## `parsley.properties`
+
+Parsley reads its own behaviour from a `parsley.properties` resource on the classpath — kept separate
+from Kafka Streams configuration because these behaviours have no Streams equivalent. An absent file
+(or absent keys) falls back to the defaults below.
+
+```properties
+# How a held record that can no longer be deserialised on the forward path is handled
+# (e.g. an incompatible Schema Registry change while the record was buffered).
+#   fail     (default) — fail fast; the record stays in the buffer changelog for recovery
+#   continue           — drop the record (logged + violation metric) and keep processing
+parsley.buffer.deserialization.failure.policy = fail
+```
+
+| Key | Default | Values |
+|---|---|---|
+| `parsley.buffer.deserialization.failure.policy` | `fail` | `fail`, `continue` |
+
+`continue` is **best-effort and lossy** — see
+[Troubleshooting → poison records](troubleshooting.md) for the full semantics (and why this is *not*
+mapped from Streams' `deserialization.exception.handler`). A durable quarantine + operator-triggered
+redelivery is planned to supersede it.

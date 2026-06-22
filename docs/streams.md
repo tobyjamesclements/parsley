@@ -16,13 +16,18 @@ ProcessorSupplier<String, Order, String, Enriched> user = new ProcessorSupplier<
 
 CausalProcessorSupplier<String, Order, String, Enriched> causal =
         CausalProcessors.builder(user, CausalBufferLimit.ofDuration(limit))
-                .serdes(Serdes.String(), orderSerde)
+                .addBuffers(List.of("prices", "orders"), Serdes.String(), orderSerde)
                 .build();
 
 builder.stream(List.of("prices", "orders"), Consumed.with(Serdes.String(), orderSerde))
        .process(causal)
        .to("output-topic");
 ```
+
+Each input topic is registered as a `CausalBuffer` carrying the serdes the buffer round-trips held
+records with; the topic's stable UUID is resolved from the broker automatically at startup. For
+per-topic serdes (e.g. mixed Avro types), use `.addBuffer(CausalBuffer.of(topic, keySerde, valueSerde))`
+once per topic instead of the shared `addBuffers(topics, key, value)` convenience.
 
 Parsley registers its own internal state stores (causal buffer, frontier store) alongside any
 stores declared by your `ProcessorSupplier.stores()`. You never interact with these stores

@@ -46,6 +46,7 @@ nav:
   - Streams integration: streams.md
   - Configuration: configuration.md
   - Performance: performance.md
+  - Troubleshooting: troubleshooting.md
   - Migration: migration.md
   - API reference: api/index.html
   - Internals:

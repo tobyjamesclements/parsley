@@ -60,17 +60,16 @@ final class ParsleyConsumer<K, V> implements CausalConsumer<K, V> {
 
     private final KafkaStreams streams;
     private final KafkaConsumer<byte[], byte[]> outboxConsumer;
-    private final Serde<K> keySerde;
-    private final Serde<V> valueSerde;
+    private final Map<String, Serde<K>> keySerdes;
+    private final Map<String, Serde<V>> valueSerdes;
 
     ParsleyConsumer(
-            Collection<String> topics,
+            Map<String, CausalBuffer<K, V>> buffers,
             CausalBufferLimit limit,
             Map<String, Object> consumerConfig,
             Map<String, Object> streamsConfig,
             String storeName,
-            ParsleyTopicAdmin topicAdmin,
-            Map<String, Uuid> topicUuids) {
+            ParsleyTopicAdmin topicAdmin) {
 
         Map<String, Object> merged = new HashMap<>();
         merged.put("processing.exception.handler.global.enabled", "true");
@@ -82,16 +81,27 @@ final class ParsleyConsumer<K, V> implements CausalConsumer<K, V> {
         String bootstrap     = (String) merged.get(StreamsConfig.BOOTSTRAP_SERVERS_CONFIG);
         String outboxTopic   = applicationId + "-" + storeName + "-outbox";
 
-        @SuppressWarnings("unchecked")
-        Serde<K> keySerde = (Serde<K>) config.defaultKeySerde();
-        @SuppressWarnings("unchecked")
-        Serde<V> valueSerde = (Serde<V>) config.defaultValueSerde();
-        this.keySerde = keySerde;
-        this.valueSerde = valueSerde;
+        List<String> topics = new ArrayList<>(buffers.keySet());
+        // Per-topic serdes: each held record is deserialised on poll() under its own source topic,
+        // so distinct schemas (e.g. multiple Avro types) resolve their correct registry subject.
+        Map<String, Serde<K>> keySerdes = new HashMap<>();
+        Map<String, Serde<V>> valueSerdes = new HashMap<>();
+        buffers.forEach((topic, buffer) -> {
+            keySerdes.put(topic, buffer.keySerde());
+            valueSerdes.put(topic, buffer.valueSerde());
+        });
+        this.keySerdes = keySerdes;
+        this.valueSerdes = valueSerdes;
 
         ParsleyTopicAdmin admin = (topicAdmin != null) ? topicAdmin : ParsleyTopicAdmin.ofBootstrap(bootstrap);
+        Map<String, Uuid> topicUuids;
         try {
+            topicUuids = admin.topicIds(topics);
             setupOutbox(admin, topics, outboxTopic);
+        } catch (RuntimeException e) {
+            throw e;
+        } catch (Exception e) {
+            throw new RuntimeException("Failed to resolve topic UUIDs for causal buffers " + topics, e);
         } finally {
             try { admin.close(); } catch (Exception ignored) {}
         }
@@ -130,8 +140,8 @@ final class ParsleyConsumer<K, V> implements CausalConsumer<K, V> {
             // Decode the outbox record back to its original source coordinate and user headers; the
             // internal _parsley_src_* routing headers are dropped, the causal-dependencies clock kept.
             ParsleyMessage<byte[], byte[]> message = ParsleyMessage.fromOutboxRecord(r);
-            K key   = keySerde.deserializer().deserialize(message.topic(), message.key());
-            V value = valueSerde.deserializer().deserialize(message.topic(), message.value());
+            K key   = keySerdes.get(message.topic()).deserializer().deserialize(message.topic(), message.key());
+            V value = valueSerdes.get(message.topic()).deserializer().deserialize(message.topic(), message.value());
             ConsumerRecord<K, V> cr = new ConsumerRecord<>(
                     message.topic(), message.partition(), message.offset(), message.timestamp(),
                     TimestampType.CREATE_TIME, -1, -1, key, value,
@@ -147,8 +157,8 @@ final class ParsleyConsumer<K, V> implements CausalConsumer<K, V> {
     public void close() {
         outboxConsumer.close();
         streams.close();
-        keySerde.close();
-        valueSerde.close();
+        keySerdes.values().forEach(Serde::close);
+        valueSerdes.values().forEach(Serde::close);
     }
 
     /**

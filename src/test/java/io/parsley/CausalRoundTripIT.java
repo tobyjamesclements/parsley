@@ -11,6 +11,7 @@ import org.apache.kafka.clients.producer.ProducerConfig;
 import org.apache.kafka.clients.producer.ProducerRecord;
 import org.apache.kafka.common.Uuid;
 import org.apache.kafka.common.serialization.StringDeserializer;
+import org.apache.kafka.common.serialization.Serdes;
 import org.apache.kafka.common.serialization.StringSerializer;
 import org.apache.kafka.streams.StreamsConfig;
 import org.junit.jupiter.api.Test;
@@ -66,11 +67,10 @@ class CausalRoundTripIT {
                 ProducerConfig.KEY_SERIALIZER_CLASS_CONFIG, StringSerializer.class.getName(),
                 ProducerConfig.VALUE_SERIALIZER_CLASS_CONFIG, StringSerializer.class.getName())).build();
              CausalConsumer<String, String> consumer = CausalConsumers.<String, String>builder(
-                     List.of(TOPIC),
                      CausalBufferLimit.ofDuration(Duration.ofSeconds(5)),
                      Map.of(ConsumerConfig.GROUP_ID_CONFIG, "rt-" + UUID.randomUUID()),
                      streamsConfig(bootstrap))
-                     .addCausalTopic(new CausalTopic(TOPIC, topicId))
+                     .addBuffer(CausalBuffer.of(TOPIC, Serdes.String(), Serdes.String()))
                      .build()) {
 
             // Each record depends on the previous one, forming a causal chain.
@@ -120,11 +120,10 @@ class CausalRoundTripIT {
         Uuid topicId = createTopic(bootstrap, topic);
 
         try (CausalConsumer<String, String> consumer = CausalConsumers.<String, String>builder(
-                List.of(topic),
                 CausalBufferLimit.ofDuration(Duration.ofSeconds(5)),
                 Map.of(ConsumerConfig.GROUP_ID_CONFIG, "rt-" + UUID.randomUUID()),
                 streamsConfig(bootstrap))
-                .addCausalTopic(new CausalTopic(topic, topicId))
+                .addBuffer(CausalBuffer.of(topic, Serdes.String(), Serdes.String()))
                 .build()) {
 
             try (KafkaProducer<String, String> raw = new KafkaProducer<>(Map.of(
@@ -170,11 +169,10 @@ class CausalRoundTripIT {
                 ProducerConfig.KEY_SERIALIZER_CLASS_CONFIG, StringSerializer.class.getName(),
                 ProducerConfig.VALUE_SERIALIZER_CLASS_CONFIG, StringSerializer.class.getName())).build();
              CausalConsumer<String, String> consumer = CausalConsumers.<String, String>builder(
-                     List.of(topic),
                      CausalBufferLimit.ofDuration(Duration.ofSeconds(2)),
                      Map.of(ConsumerConfig.GROUP_ID_CONFIG, "rt-" + UUID.randomUUID()),
                      streamsConfig(bootstrap))
-                     .addCausalTopic(new CausalTopic(topic, topicId))
+                     .addBuffer(CausalBuffer.of(topic, Serdes.String(), Serdes.String()))
                      .storeName("custom-store")
                      .build()) {
 

@@ -19,7 +19,7 @@ import org.apache.kafka.streams.processor.api.ProcessorSupplier;
  *
  * builder.stream(List.of("prices", "orders"), Consumed.with(Serdes.String(), orderSerde))
  *        .process(CausalProcessors.builder(user, CausalBufferLimit.ofDuration(limit))
- *                                .serdes(Serdes.String(), orderSerde)
+ *                                .addBuffers(List.of("prices", "orders"), Serdes.String(), orderSerde)
  *                                .build())
  *        .to("output-topic");
  * }</pre>

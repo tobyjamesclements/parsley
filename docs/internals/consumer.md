@@ -58,4 +58,4 @@ metric.
 
 ## Multiple input topics
 
-If the input topic set contains multiple topics with different key or value types, the Serde resolver must be configured via `CausalConsumers.builder(...).serdesByTopic(keyFn, valueFn)`. All types co-exist in the single outbox topic as `byte[]`, so there is no schema registry conflict. Deserialisation is deferred to `poll()` where the source topic is known.
+Each subscribed topic is registered as a `CausalBuffer` carrying its own serdes (`CausalConsumers.builder(...).addBuffer(CausalBuffer.of(topic, keySerde, valueSerde))`), so topics with different key or value types each resolve their own. All types co-exist in the single outbox topic as `byte[]`, so there is no schema registry conflict. Deserialisation is deferred to `poll()`, where each record is decoded with its source topic's registered serde.

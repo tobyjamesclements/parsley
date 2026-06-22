@@ -1,11 +1,10 @@
 package io.parsley;
 
-import org.apache.kafka.common.Uuid;
 import org.apache.kafka.common.serialization.Serde;
 import org.apache.kafka.streams.processor.api.ProcessorSupplier;
 
 import java.util.Collection;
-import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.function.Function;
 
@@ -19,12 +18,14 @@ import java.util.function.Function;
  * <pre>{@code
  * builder.stream(List.of("prices", "orders"), Consumed.with(Serdes.String(), orderSerde))
  *        .process(CausalProcessors.builder(userSupplier, CausalBufferLimit.ofDuration(limit))
- *                .serdes(Serdes.String(), orderSerde)
- *                .addCausalTopic(new CausalTopic("prices", pricesTopicId))
- *                .addCausalTopic(new CausalTopic("orders", ordersTopicId))
+ *                .addBuffer(CausalBuffer.of("prices", Serdes.String(), orderSerde))
+ *                .addBuffer(CausalBuffer.of("orders", Serdes.String(), orderSerde))
  *                .build())
  *        .to("output-topic");
  * }</pre>
+ *
+ * <p>Each input topic's stable UUID is resolved from the broker automatically at startup, so a
+ * {@link CausalBuffer} only carries the per-topic serdes the buffer round-trips held records with.
  *
  * <p>See {@link CausalProcessorSupplier} for the causal guarantee and its preconditions.
  */
@@ -54,9 +55,8 @@ public final class CausalProcessors {
     }
 
     /**
-     * Builder for a {@link CausalProcessorSupplier}. A serde pair is required (via {@link #serdes} or
-     * {@link #serdesByTopic}); the violation handler, store namespace, and frontier listener are
-     * optional.
+     * Builder for a {@link CausalProcessorSupplier}. At least one {@link CausalBuffer} is required
+     * (via {@link #addBuffer}/{@link #addBuffers}); the store namespace is optional.
      *
      * @param <KIn>  the input key type
      * @param <VIn>  the input value type
@@ -67,10 +67,10 @@ public final class CausalProcessors {
 
         private final ProcessorSupplier<KIn, VIn, KOut, VOut> userSupplier;
         private final CausalBufferLimit limit;
-        private Function<String, Serde<KIn>> keySerdeByTopic;
-        private Function<String, Serde<VIn>> valueSerdeByTopic;
         private String storeName = "parsley";
-        private final Map<String, Uuid> topicUuids = new HashMap<>();
+        private final Map<String, CausalBuffer<KIn, VIn>> buffers = new LinkedHashMap<>();
+        private Function<Map<String, Object>, ParsleyTopicAdmin> adminFactory = ParsleyTopicAdmin::ofConfigs;
+        private ParsleyConfig config = null;
 
         private Builder(ProcessorSupplier<KIn, VIn, KOut, VOut> userSupplier, CausalBufferLimit limit) {
             this.userSupplier = userSupplier;
@@ -78,32 +78,45 @@ public final class CausalProcessors {
         }
 
         /**
-         * Sets one serde pair for all input topics (the serdes the buffer (de)serialises held records
-         * with).
+         * Registers a causal source: its topic name and the serdes the buffer (de)serialises held
+         * records from that topic with. Required for every input topic this processor will see; the
+         * topic's stable UUID is resolved from the broker automatically at startup.
          *
-         * @param keySerde   the key serde
-         * @param valueSerde the value serde
+         * @param buffer the source topic and its serdes; must not be {@code null}
          * @return this builder
          */
-        public Builder<KIn, VIn, KOut, VOut> serdes(Serde<KIn> keySerde, Serde<VIn> valueSerde) {
-            this.keySerdeByTopic = topic -> keySerde;
-            this.valueSerdeByTopic = topic -> valueSerde;
+        public Builder<KIn, VIn, KOut, VOut> addBuffer(CausalBuffer<KIn, VIn> buffer) {
+            buffers.put(buffer.topic(), buffer);
             return this;
         }
 
         /**
-         * Sets the buffer serdes resolved by source topic, so input topics with distinct serdes (e.g.
-         * Avro {@code SpecificRecord} / Schema Registry) round-trip correctly.
+         * Registers several causal sources at once. Equivalent to calling {@link #addBuffer} for each.
          *
-         * @param keySerdeByTopic   resolves the key serde for a given source topic
-         * @param valueSerdeByTopic resolves the value serde for a given source topic
+         * @param buffers the source buffers; must not be {@code null}
          * @return this builder
          */
-        public Builder<KIn, VIn, KOut, VOut> serdesByTopic(
-                Function<String, Serde<KIn>> keySerdeByTopic,
-                Function<String, Serde<VIn>> valueSerdeByTopic) {
-            this.keySerdeByTopic = keySerdeByTopic;
-            this.valueSerdeByTopic = valueSerdeByTopic;
+        public Builder<KIn, VIn, KOut, VOut> addBuffers(Collection<CausalBuffer<KIn, VIn>> buffers) {
+            for (CausalBuffer<KIn, VIn> buffer : buffers) {
+                addBuffer(buffer);
+            }
+            return this;
+        }
+
+        /**
+         * Registers several topics that share one serde pair — the convenience for the homogeneous
+         * case, mirroring a single {@code stream(topics, Consumed.with(key, value))}.
+         *
+         * @param topics the source topic names
+         * @param key    the key serde shared by all {@code topics}
+         * @param value  the value serde shared by all {@code topics}
+         * @return this builder
+         */
+        public Builder<KIn, VIn, KOut, VOut> addBuffers(
+                Collection<String> topics, Serde<KIn> key, Serde<VIn> value) {
+            for (String topic : topics) {
+                addBuffer(CausalBuffer.of(topic, key, value));
+            }
             return this;
         }
 
@@ -122,31 +135,24 @@ public final class CausalProcessors {
         }
 
         /**
-         * Registers the stable causal identity for one input topic. Used as the stable partition
-         * identity so that topic deletion and recreation produce different identities. Required for
-         * every topic this processor will see; {@link #build()} requires at least one registration,
-         * and an unrecognised topic at runtime fails fast rather than silently degrading identity.
+         * Overrides the {@link ParsleyTopicAdmin} used to resolve topic UUIDs at startup (default: a
+         * live {@link org.apache.kafka.clients.admin.Admin} built from the task's {@code appConfigs()}).
+         * For tests running under {@code TopologyTestDriver} with no broker.
          *
-         * @param stream the topic name and its Kafka UUID; typically sourced from
-         *               {@code AdminClient.describeTopics(topics)}; must not be {@code null}
+         * @param topicAdmin the admin to resolve UUIDs with
          * @return this builder
          */
-        public Builder<KIn, VIn, KOut, VOut> addCausalTopic(CausalTopic stream) {
-            topicUuids.put(stream.topic(), stream.topicId());
+        Builder<KIn, VIn, KOut, VOut> topicAdmin(ParsleyTopicAdmin topicAdmin) {
+            this.adminFactory = configs -> topicAdmin;
             return this;
         }
 
         /**
-         * Registers the stable causal identity for several input topics at once. Equivalent to
-         * calling {@link #addCausalTopic} for each element.
-         *
-         * @param streams the topic names and their Kafka UUIDs; must not be {@code null}
-         * @return this builder
+         * Overrides the {@link ParsleyConfig} (default: loaded from the {@code parsley.properties}
+         * classpath resource). For tests / embedding.
          */
-        public Builder<KIn, VIn, KOut, VOut> addCausalTopics(Collection<CausalTopic> streams) {
-            for (CausalTopic stream : streams) {
-                addCausalTopic(stream);
-            }
+        Builder<KIn, VIn, KOut, VOut> config(ParsleyConfig config) {
+            this.config = config;
             return this;
         }
 
@@ -154,21 +160,30 @@ public final class CausalProcessors {
          * Builds the {@link CausalProcessorSupplier}.
          *
          * @return a decorated supplier ready for {@code stream(...).process(...)}
-         * @throws IllegalStateException if no serde pair was set, or no {@link CausalTopic} was
-         *                                registered via {@link #addCausalTopic}/{@link #addCausalTopics}
+         * @throws IllegalStateException if no {@link CausalBuffer} was registered
          */
         public CausalProcessorSupplier<KIn, VIn, KOut, VOut> build() {
-            if (keySerdeByTopic == null || valueSerdeByTopic == null) {
-                throw new IllegalStateException("serdes are required; call serdes(...) or serdesByTopic(...)");
-            }
-            if (topicUuids.isEmpty()) {
+            if (buffers.isEmpty()) {
                 throw new IllegalStateException(
-                        "at least one CausalTopic is required; call addCausalTopic(...) for every input topic");
+                        "at least one CausalBuffer is required; call addBuffer(...) for every input topic");
             }
+            Map<String, CausalBuffer<KIn, VIn>> resolved = Map.copyOf(buffers);
+            Function<String, Serde<KIn>> keySerdeByTopic = topic -> serdeFor(resolved, topic).keySerde();
+            Function<String, Serde<VIn>> valueSerdeByTopic = topic -> serdeFor(resolved, topic).valueSerde();
+            ParsleyConfig effectiveConfig = config != null ? config : ParsleyConfig.load();
             return new ParsleyProcessorSupplier<>(
                     userSupplier, limit, keySerdeByTopic, valueSerdeByTopic,
                     storeName + "-frontier", storeName + "-buffer", storeName + "-position-index",
-                    Map.copyOf(topicUuids));
+                    resolved.keySet(), adminFactory, effectiveConfig);
+        }
+
+        private static <KIn, VIn> CausalBuffer<KIn, VIn> serdeFor(
+                Map<String, CausalBuffer<KIn, VIn>> buffers, String topic) {
+            CausalBuffer<KIn, VIn> buffer = buffers.get(topic);
+            if (buffer == null) {
+                throw new IllegalStateException("no CausalBuffer registered for topic '" + topic + "'");
+            }
+            return buffer;
         }
     }
 }

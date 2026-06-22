@@ -17,7 +17,8 @@ All three share a common set of value types and a single causal engine.
 | Class | Role |
 |---|---|
 | `CausalDependencies` | Public facade over a `ParsleyClock`: the causal requirements stamped by the producer onto each record |
-| `CausalTopic` | A topic's stable causal identity: name + Kafka UUID (used for registration and `require`) |
+| `CausalBuffer` | Registers one causal source on a builder: topic name + the serdes the buffer round-trips held records with (the topic's UUID is resolved from the broker) |
+| `CausalTopic` | A topic's stable causal identity: name + Kafka UUID (used to build `CausalDependencies.require`) |
 | `CausalBufferLimit` | When to evict held records: `ofDuration`, `ofSize`, `first` |
 
 ### Package-private implementation

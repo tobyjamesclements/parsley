@@ -17,6 +17,8 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
+import java.util.function.Function;
 
 /**
  * Wraps a user {@link Processor} and gates delegation on the causal frontier: an incoming record is
@@ -47,9 +49,15 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
     private final String frontierStoreName;
     private final String bufferStoreName;
     private final String positionIndexStoreName;
-    private final Map<String, Uuid> topicUuids;
+    private final Set<String> topics;
+    private final Function<Map<String, Object>, ParsleyTopicAdmin> adminFactory;
+    private final ParsleyConfig config;
 
     // All mutable state below is confined to the single Kafka Streams thread that owns this task.
+
+    // Source topic name -> stable UUID, resolved from the broker at init() (the topology decorator
+    // has no broker config until then). Used by ingest() to stamp each record's causal identity.
+    private Map<String, Uuid> topicUuids = Map.of();
 
     // Frontier snapshots captured per-record-admission; zips 1:1 with engine.onRecord() returns.
     private final List<ParsleyClock> snapshots = new ArrayList<>();
@@ -71,19 +79,24 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
                      String frontierStoreName,
                      String bufferStoreName,
                      String positionIndexStoreName,
-                     Map<String, Uuid> topicUuids) {
+                     Set<String> topics,
+                     Function<Map<String, Object>, ParsleyTopicAdmin> adminFactory,
+                     ParsleyConfig config) {
         this.delegate = delegate;
         this.limit = limit;
         this.serializer = serializer;
         this.frontierStoreName = frontierStoreName;
         this.bufferStoreName = bufferStoreName;
         this.positionIndexStoreName = positionIndexStoreName;
-        this.topicUuids = topicUuids;
+        this.topics = topics;
+        this.adminFactory = adminFactory;
+        this.config = config;
     }
 
     @Override
     public void init(ProcessorContext<KOut, VOut> context) {
         this.context = context;
+        this.topicUuids = resolveTopicUuids(context);
         this.frontierStore = context.getStateStore(frontierStoreName);
         this.bufferStore = context.getStateStore(bufferStoreName);
         this.positionIndexStore = context.getStateStore(positionIndexStoreName);
@@ -111,7 +124,8 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
         this.wiredMetrics = ParsleyMetrics.wire(context);
 
         this.engine = new ParsleyEngine<>(limit, initialFrontier,
-                listener, buffer, positionIndex, wiredMetrics.metrics(), context::currentSystemTimeMs);
+                listener, buffer, positionIndex, wiredMetrics.metrics(), context::currentSystemTimeMs,
+                config.skipOnDecodeFailure());
 
         ProcessorContext<KOut, VOut> stamping = new ParsleyProcessorContext<>(
                 context, () -> stampFrontier, () -> Optional.ofNullable(deliveryMetadata));
@@ -180,9 +194,30 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
         Uuid topicId = topicUuids.get(topic);
         if (topicId == null) {
             throw new IllegalStateException(
-                    "no CausalTopic registered for topic '" + topic
-                            + "'; call addCausalTopic(...) on the CausalProcessors builder for every input topic");
+                    "no CausalBuffer registered for topic '" + topic
+                            + "'; call addBuffer(...) on the CausalProcessors builder for every input topic");
         }
         return ParsleyMessage.from(record, source, meta.map(RecordMetadata::offset).orElse(0L), topicId);
+    }
+
+    /**
+     * Resolves each registered source topic's stable UUID from the broker. The topology decorator has
+     * no broker configuration until init, so this runs here (once per task), using the task's
+     * {@code appConfigs()} so it inherits broker security settings.
+     */
+    private Map<String, Uuid> resolveTopicUuids(ProcessorContext<KOut, VOut> context) {
+        try (ParsleyTopicAdmin admin = adminFactory.apply(context.appConfigs())) {
+            Map<String, Uuid> resolved = admin.topicIds(new ArrayList<>(topics));
+            for (String topic : topics) {
+                if (resolved.get(topic) == null) {
+                    throw new IllegalStateException("broker did not return a UUID for topic '" + topic + "'");
+                }
+            }
+            return resolved;
+        } catch (Exception e) {
+            throw new IllegalStateException(
+                    "failed to resolve topic UUIDs for causal buffers " + topics
+                            + "; ensure the topics exist and the broker is reachable", e);
+        }
     }
 }

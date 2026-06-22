@@ -8,6 +8,7 @@ import org.apache.kafka.clients.producer.KafkaProducer;
 import org.apache.kafka.clients.producer.ProducerConfig;
 import org.apache.kafka.clients.producer.ProducerRecord;
 import org.apache.kafka.common.Uuid;
+import org.apache.kafka.common.serialization.Serdes;
 import org.apache.kafka.common.serialization.StringSerializer;
 import org.apache.kafka.streams.StreamsConfig;
 import org.junit.jupiter.api.Test;
@@ -107,14 +108,10 @@ class CausalConcurrentProducersIT {
         List<ConsumerRecord<String, String>> received = new ArrayList<>();
 
         try (CausalConsumer<String, String> consumer = CausalConsumers.<String, String>builder(
-                     List.of(SOURCE_A, SOURCE_B, OUTPUT),
                      CausalBufferLimit.ofDuration(Duration.ofMinutes(5)),
                      Map.of(),
                      streamsConfig(bootstrap))
-                     .addCausalTopics(List.of(
-                             new CausalTopic(SOURCE_A, topicAId),
-                             new CausalTopic(SOURCE_B, topicBId),
-                             new CausalTopic(OUTPUT, outputId)))
+                     .addBuffers(List.of(SOURCE_A, SOURCE_B, OUTPUT), Serdes.String(), Serdes.String())
                      .build();
              CausalProducer<String, String> producerA = causalProducer(bootstrap);
              CausalProducer<String, String> producerB = causalProducer(bootstrap)) {

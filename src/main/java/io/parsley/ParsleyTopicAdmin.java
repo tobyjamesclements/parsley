@@ -3,6 +3,7 @@ package io.parsley;
 import org.apache.kafka.clients.admin.Admin;
 import org.apache.kafka.clients.admin.NewTopic;
 import org.apache.kafka.clients.admin.TopicDescription;
+import org.apache.kafka.common.Uuid;
 
 import java.util.HashMap;
 import java.util.List;
@@ -10,13 +11,22 @@ import java.util.Map;
 import java.util.Set;
 
 /**
- * Narrow abstraction over the two Kafka Admin operations that {@link ParsleyConsumer} uses at
- * startup: reading input topics' partition counts (to size the outbox topic) and creating the
- * outbox topic. Topic identity (UUID) is not this interface's concern — callers supply that
- * directly via {@link CausalConsumers.Builder#addCausalTopic}. Keeping the interface narrow lets
- * tests implement it without the full ~40-method {@link Admin} surface.
+ * Narrow abstraction over the Kafka Admin operations Parsley performs at startup: resolving input
+ * topics' stable UUIDs (the causal identity), reading their partition counts (to size the consumer
+ * outbox topic), and creating the outbox topic. Keeping the interface narrow lets tests implement it
+ * without the full ~40-method {@link Admin} surface, and lets the processor path resolve UUIDs at
+ * {@code init()} from {@link #ofConfigs}.
  */
 interface ParsleyTopicAdmin extends AutoCloseable {
+
+    /**
+     * Returns the stable Kafka UUID for each name in {@code topics} — the identity Parsley keys
+     * frontiers and dependencies by (stable across topic deletion/recreation; the name is not).
+     *
+     * @param topics the topic names to look up
+     * @return topic UUIDs; must include every requested topic
+     */
+    Map<String, Uuid> topicIds(List<String> topics) throws Exception;
 
     /**
      * Returns the partition count for each name in {@code topics}.
@@ -45,8 +55,31 @@ interface ParsleyTopicAdmin extends AutoCloseable {
      * @return a live, closeable {@code ParsleyTopicAdmin}
      */
     static ParsleyTopicAdmin ofBootstrap(String bootstrap) {
-        Admin admin = Admin.create(Map.of("bootstrap.servers", bootstrap));
+        return ofConfigs(Map.of("bootstrap.servers", bootstrap));
+    }
+
+    /**
+     * Returns a {@link ParsleyTopicAdmin} backed by a real Kafka {@link Admin} created from
+     * {@code configs} — used by the processor path, which resolves UUIDs at {@code init()} from the
+     * task's {@code appConfigs()} (so it inherits broker security settings, not just bootstrap). The
+     * returned instance closes the underlying {@code Admin} on {@link #close()}. Admin tolerates the
+     * extra Streams config keys (it logs them as unknown).
+     *
+     * @param configs the configuration to build the {@link Admin} from; must include
+     *                {@code bootstrap.servers}
+     * @return a live, closeable {@code ParsleyTopicAdmin}
+     */
+    static ParsleyTopicAdmin ofConfigs(Map<String, Object> configs) {
+        Admin admin = Admin.create(new HashMap<>(configs));
         return new ParsleyTopicAdmin() {
+            @Override
+            public Map<String, Uuid> topicIds(List<String> topics) throws Exception {
+                Map<String, TopicDescription> descriptions = admin.describeTopics(topics).allTopicNames().get();
+                Map<String, Uuid> ids = new HashMap<>();
+                descriptions.forEach((topic, desc) -> ids.put(topic, desc.topicId()));
+                return ids;
+            }
+
             @Override
             public Map<String, Integer> partitionCounts(List<String> topics) throws Exception {
                 Map<String, TopicDescription> descriptions = admin.describeTopics(topics).allTopicNames().get();

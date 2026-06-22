@@ -96,16 +96,93 @@ final class ParsleySerializer<K, V> {
             byte[] keyBytes = readNullable(in);
             byte[] valueBytes = readNullable(in);
 
-            K key = keyBytes == null ? null
-                    : resolver.keySerde(topic).deserializer().deserialize(topic, keyBytes);
-            V value = valueBytes == null ? null
-                    : resolver.valueSerde(topic).deserializer().deserialize(topic, valueBytes);
+            K key;
+            V value;
+            try {
+                key = keyBytes == null ? null
+                        : resolver.keySerde(topic).deserializer().deserialize(topic, keyBytes);
+                value = valueBytes == null ? null
+                        : resolver.valueSerde(topic).deserializer().deserialize(topic, valueBytes);
+            } catch (RuntimeException e) {
+                // The user serde (e.g. Avro + Schema Registry) could not decode the held bytes —
+                // typically a registry state change after buffering. Surface a typed error carrying
+                // everything decodable without the serde; how it's handled (fail vs skip) is the
+                // caller's decision.
+                int schemaId = schemaId(valueBytes, keyBytes);
+                String details = details(topic, topicId, partition, offset, timestamp,
+                        dependencies, headers, keyBytes, valueBytes, schemaId);
+                throw new ParsleyBufferDeserializationException(topic, partition, offset, schemaId, details, e);
+            }
 
             return new ParsleyMessage<>(topic, topicId, partition, offset, timestamp,
                     key, value, headers, dependencies);
         } catch (IOException e) {
             throw new IllegalStateException("Buffered record deserialisation failed", e);
         }
+    }
+
+    /**
+     * Reconstructs only the metadata a restored buffer needs to rebuild its position index — the
+     * insertion-time dependency clock — <strong>without invoking the user serde</strong>. The
+     * dependency clock is part of Parsley's own framing (written before the key/value bytes), so a
+     * value Parsley cannot decode (e.g. an incompatible Schema Registry change) never blocks startup;
+     * the failure surfaces only when the record is actually forwarded via {@link #deserialize}.
+     *
+     * @param bytes the buffered-record bytes
+     * @return the record's decoded dependency clock
+     */
+    ParsleyClock deserializeDependencies(byte[] bytes) {
+        try (DataInputStream in = new DataInputStream(new ByteArrayInputStream(bytes))) {
+            byte version = in.readByte();
+            if (version != FORMAT_VERSION) {
+                throw new IllegalStateException(
+                        "unsupported buffered-record format version: " + version + " (expected " + FORMAT_VERSION + ")");
+            }
+            in.readLong();              // timestamp
+            readString(in);             // topic
+            in.readFully(new byte[16]); // topicId
+            in.readInt();               // partition
+            in.readLong();              // offset
+            return ParsleyClock.fromBytes(readNullable(in));
+        } catch (IOException e) {
+            throw new IllegalStateException("Buffered record metadata deserialisation failed", e);
+        }
+    }
+
+    /**
+     * Renders an operator diagnostic for a held record that could not be deserialised — everything
+     * decodable <strong>without</strong> the user serde, and <strong>never the payload bytes</strong>
+     * (those stay in the buffer changelog topic). Lengths and the schema id are enough to identify the
+     * record and its subject.
+     */
+    private static String details(String topic, Uuid topicId, int partition, long offset, long timestamp,
+                                  ParsleyClock dependencies, List<ParsleyHeader> headers,
+                                  byte[] keyBytes, byte[] valueBytes, int schemaId) {
+        List<String> headerKeys = new ArrayList<>(headers.size());
+        for (ParsleyHeader header : headers) {
+            headerKeys.add(header.key());
+        }
+        return "held record " + topic + "-" + partition + "@" + offset
+                + " (topicId " + topicId + ", ts " + timestamp + ")"
+                + "; schema id: " + (schemaId >= 0 ? schemaId : "n/a")
+                + "; dependencies: " + dependencies
+                + "; header keys: " + headerKeys
+                + "; key bytes: " + (keyBytes == null ? "null" : keyBytes.length)
+                + "; value bytes: " + (valueBytes == null ? "null" : valueBytes.length);
+    }
+
+    /**
+     * Best-effort extraction of the Confluent wire-format writer schema id ({@code [0x00][id:4]}) for
+     * diagnostics, from the first candidate that carries the magic byte; {@code -1} if none does.
+     */
+    private static int schemaId(byte[]... candidates) {
+        for (byte[] bytes : candidates) {
+            if (bytes != null && bytes.length >= 5 && bytes[0] == 0x0) {
+                return ((bytes[1] & 0xFF) << 24) | ((bytes[2] & 0xFF) << 16)
+                        | ((bytes[3] & 0xFF) << 8) | (bytes[4] & 0xFF);
+            }
+        }
+        return -1;
     }
 
     private static void writeString(DataOutputStream out, String value) throws IOException {

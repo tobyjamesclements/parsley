@@ -104,13 +104,10 @@ class CausalAvroSchemaRegistryIT {
                 ProducerConfig.VALUE_SERIALIZER_CLASS_CONFIG, KafkaAvroSerializer.class.getName(),
                 "schema.registry.url", registryUrl)).build();
              CausalConsumer<String, SpecificRecord> consumer = CausalConsumers.<String, SpecificRecord>builder(
-                     List.of(ORDERS, PRICES),
                      CausalBufferLimit.ofDuration(Duration.ofSeconds(10)),
                      Map.of(ConsumerConfig.GROUP_ID_CONFIG, "avro-rt-" + UUID.randomUUID()),
                      streamsConfig(bootstrap, registryUrl))
-                     .addCausalTopics(List.of(
-                             new CausalTopic(ORDERS, topicIds.get(ORDERS)),
-                             new CausalTopic(PRICES, topicIds.get(PRICES))))
+                     .addBuffers(List.of(ORDERS, PRICES), Serdes.String(), avroValueSerde(registryUrl))
                      .build()) {
 
             // Neither record has a causal dependency — both are admitted immediately.
@@ -161,15 +158,12 @@ class CausalAvroSchemaRegistryIT {
                 ProducerConfig.VALUE_SERIALIZER_CLASS_CONFIG, KafkaAvroSerializer.class.getName(),
                 "schema.registry.url", registryUrl)).build();
              CausalConsumer<String, SpecificRecord> consumer = CausalConsumers.<String, SpecificRecord>builder(
-                     List.of(ORDERS, PRICES),
                      // Short eviction window: if causal drain is broken the Order is evicted
                      // instead of drained and delivered out of order (caught by the order assertion).
                      CausalBufferLimit.ofDuration(Duration.ofSeconds(5)),
                      Map.of(ConsumerConfig.GROUP_ID_CONFIG, "avro-buf-" + UUID.randomUUID()),
                      streamsConfig(bootstrap, registryUrl))
-                     .addCausalTopics(List.of(
-                             new CausalTopic(ORDERS, ordersId),
-                             new CausalTopic(PRICES, pricesId)))
+                     .addBuffers(List.of(ORDERS, PRICES), Serdes.String(), avroValueSerde(registryUrl))
                      .build()) {
 
             // Order declares it has seen prices-0@0 — it will be buffered until Price arrives.
@@ -219,6 +213,15 @@ class CausalAvroSchemaRegistryIT {
                 .filter(type::isInstance)
                 .findFirst()
                 .orElseThrow(() -> new AssertionError("no delivered record of type " + type.getSimpleName()));
+    }
+
+    /** A configured Avro value serde for the consumer's per-topic buffers, pointed at the registry. */
+    private static org.apache.kafka.common.serialization.Serde<SpecificRecord> avroValueSerde(String registryUrl) {
+        SpecificAvroSerde<SpecificRecord> serde = new SpecificAvroSerde<>();
+        serde.configure(Map.of(
+                "schema.registry.url", registryUrl,
+                "specific.avro.reader", true), false);
+        return serde;
     }
 
     private static Map<String, Object> streamsConfig(String bootstrap, String registryUrl) {

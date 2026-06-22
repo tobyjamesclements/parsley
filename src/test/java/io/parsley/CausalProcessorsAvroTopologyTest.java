@@ -92,8 +92,8 @@ class CausalProcessorsAvroTopologyTest {
                 .process(CausalProcessors.builder(
                         user,
                         CausalBufferLimit.ofSize(100))
-                        .serdesByTopic(topic -> Serdes.String(), topic -> avro)
-                        .addCausalTopics(List.of(new CausalTopic(PRICES, PRICES_ID), new CausalTopic(ORDERS, ORDERS_ID)))
+                        .addBuffers(List.of(PRICES, ORDERS), Serdes.String(), avro)
+                        .topicAdmin(TestTopicAdmin.of(Map.of(PRICES, PRICES_ID, ORDERS, ORDERS_ID)))
                         .build());
         Topology topology = builder.build();
 
@@ -132,7 +132,123 @@ class CausalProcessorsAvroTopologyTest {
                 "no subject may be derived from the buffer/changelog name; got " + subjects);
     }
 
+    /**
+     * When a held Avro record can no longer be deserialised on drain — modelling the registry's schema
+     * for its subject changing incompatibly while the record was buffered — Parsley fails fast with a
+     * typed {@link ParsleyBufferDeserializationException} (a {@link RuntimeException}, so the JVM is
+     * never crashed) and leaves the record in the buffer for recovery rather than dropping it.
+     *
+     * <p>The buffer serialises the held {@link Order} with the real {@link SpecificAvroSerde} (genuine
+     * Confluent wire bytes, schema registered under {@code orders-value}), so the failure path also
+     * exercises the writer-schema-id extraction in the exception. Only the drain-time decode is forced
+     * to fail, via a serde whose deserializer throws.
+     *
+     * Asserts that the drain raises {@code ParsleyBufferDeserializationException}, naming the source
+     * topic {@code orders}, and that the undecodable record remains in the buffer store.
+     */
+    @Test
+    void heldAvroRecordThatCanNoLongerBeDecodedFailsFastAndStaysBuffered() {
+        SpecificAvroSerde<SpecificRecord> avro = specificAvroSerde();
+
+        try (TopologyTestDriver driver = new TopologyTestDriver(poisonTopology(avro, failPolicy()), config())) {
+            KeyValueStore<String, byte[]> bufferStore = driver.getKeyValueStore("parsley-buffer");
+            bufferAnUndecodableOrder(driver, avro);
+            assertEquals(1, storeSize(bufferStore), "the order must be buffered before the price arrives");
+
+            // The price advances the frontier and triggers the drain — which fails to decode the order.
+            Exception thrown = org.junit.jupiter.api.Assertions.assertThrows(Exception.class,
+                    () -> arrivePrice(driver, avro),
+                    "an undecodable held record must surface an exception on drain");
+
+            ParsleyBufferDeserializationException cause = causeOfType(thrown, ParsleyBufferDeserializationException.class);
+            assertTrue(cause != null, "the failure must be a typed ParsleyBufferDeserializationException; got " + thrown);
+            assertEquals(ORDERS, cause.topic(), "the exception must name the held record's source topic");
+            assertEquals(1, storeSize(bufferStore), "the undecodable record must remain buffered for recovery");
+        }
+    }
+
+    /**
+     * The same scenario, but with {@code parsley.buffer.deserialization.failure.policy = continue}:
+     * Parsley <strong>skips</strong> the undecodable held record on drain instead of failing — the
+     * price is still delivered, the order is dropped from the buffer, and no exception propagates.
+     * Proves the processor reads the policy from {@link ParsleyConfig} and threads it into the engine.
+     */
+    @Test
+    void heldAvroRecordIsSkippedWhenPolicyIsContinue() {
+        SpecificAvroSerde<SpecificRecord> avro = specificAvroSerde();
+
+        try (TopologyTestDriver driver = new TopologyTestDriver(poisonTopology(avro, continuePolicy()), config())) {
+            KeyValueStore<String, byte[]> bufferStore = driver.getKeyValueStore("parsley-buffer");
+            bufferAnUndecodableOrder(driver, avro);
+            assertEquals(1, storeSize(bufferStore), "the order must be buffered before the price arrives");
+
+            // In continue-mode the drain skips the undecodable order rather than throwing.
+            org.junit.jupiter.api.Assertions.assertDoesNotThrow(() -> arrivePrice(driver, avro),
+                    "continue-mode must skip the undecodable record, not propagate the failure");
+
+            assertEquals(List.of(new Price("ACME", 42.5)), processed,
+                    "the price is delivered; the undecodable order is dropped, never delivered");
+            assertEquals(0, storeSize(bufferStore), "the skipped order must be removed from the buffer");
+        }
+    }
+
     // --- helpers -----------------------------------------------------------------------------
+
+    /** Topology whose ORDERS buffer serde writes real Avro but throws on read (registry change). */
+    private Topology poisonTopology(SpecificAvroSerde<SpecificRecord> avro, ParsleyConfig config) {
+        Serde<SpecificRecord> undecodableOnRead = new Serde<>() {
+            @Override public org.apache.kafka.common.serialization.Serializer<SpecificRecord> serializer() {
+                return avro.serializer();
+            }
+            @Override public org.apache.kafka.common.serialization.Deserializer<SpecificRecord> deserializer() {
+                return (topic, data) -> {
+                    throw new org.apache.kafka.common.errors.SerializationException(
+                            "incompatible schema for subject " + topic + "-value");
+                };
+            }
+        };
+        StreamsBuilder builder = new StreamsBuilder();
+        builder.stream(List.of(PRICES, ORDERS), Consumed.with(Serdes.String(), avro))
+                .process(CausalProcessors.builder(capturing(), CausalBufferLimit.ofSize(100))
+                        .addBuffer(CausalBuffer.of(PRICES, Serdes.String(), avro))
+                        .addBuffer(CausalBuffer.of(ORDERS, Serdes.String(), undecodableOnRead))
+                        .topicAdmin(TestTopicAdmin.of(Map.of(PRICES, PRICES_ID, ORDERS, ORDERS_ID)))
+                        .config(config)
+                        .build());
+        return builder.build();
+    }
+
+    private static ParsleyConfig failPolicy() {
+        return ParsleyConfig.from(new Properties());  // default policy = fail
+    }
+
+    private static ParsleyConfig continuePolicy() {
+        Properties props = new Properties();
+        props.put(ParsleyConfig.DESERIALIZATION_FAILURE_POLICY, "continue");
+        return ParsleyConfig.from(props);
+    }
+
+    /** Feeds an Order depending on prices-0@0 (not yet arrived) → held, serialised with real Avro. */
+    private static void bufferAnUndecodableOrder(TopologyTestDriver driver, SpecificAvroSerde<SpecificRecord> avro) {
+        TestInputTopic<String, SpecificRecord> orders =
+                driver.createInputTopic(ORDERS, new StringSerializer(), avro.serializer());
+        orders.pipeInput(new TestRecord<>("k", new Order("o-1", "ACME", 5),
+                depsHeader(CausalDependencies.builder().require(new CausalTopic(PRICES, PRICES_ID), 0, 0).build())));
+    }
+
+    /** The price (empty deps) advances the frontier and triggers the drain of the held order. */
+    private static void arrivePrice(TopologyTestDriver driver, SpecificAvroSerde<SpecificRecord> avro) {
+        TestInputTopic<String, SpecificRecord> prices =
+                driver.createInputTopic(PRICES, new StringSerializer(), avro.serializer());
+        prices.pipeInput(new TestRecord<>("k", new Price("ACME", 42.5), depsHeader(CausalDependencies.empty())));
+    }
+
+    private static <T extends Throwable> T causeOfType(Throwable thrown, Class<T> type) {
+        for (Throwable t = thrown; t != null; t = t.getCause()) {
+            if (type.isInstance(t)) return type.cast(t);
+        }
+        return null;
+    }
 
     /** A user processor that records every (Avro) value it sees and forwards it unchanged. */
     private ProcessorSupplier<String, SpecificRecord, String, SpecificRecord> capturing() {

@@ -59,6 +59,9 @@ final class ParsleyEngine<K, V> {
     private final FrontierCallback frontierListener;
     private final ParsleyMetrics metrics;
     private final LongSupplier clock;
+    // When true (deserialization handler = LogAndContinue), an undecodable held record is dropped on
+    // the forward path and processing continues; when false (default LogAndFail), it is rethrown.
+    private final boolean skipOnDecodeFailure;
 
     private ParsleyClock frontier;
     private int sizeLimit = Integer.MAX_VALUE;
@@ -71,7 +74,7 @@ final class ParsleyEngine<K, V> {
                  ParsleyPositionIndex positionIndex,
                  ParsleyMetrics metrics) {
         this(limit, initialFrontier, frontierListener, buffer, positionIndex,
-                metrics, System::currentTimeMillis);
+                metrics, System::currentTimeMillis, false);
     }
 
     ParsleyEngine(CausalBufferLimit limit,
@@ -81,6 +84,17 @@ final class ParsleyEngine<K, V> {
                  ParsleyPositionIndex positionIndex,
                  ParsleyMetrics metrics,
                  LongSupplier clock) {
+        this(limit, initialFrontier, frontierListener, buffer, positionIndex, metrics, clock, false);
+    }
+
+    ParsleyEngine(CausalBufferLimit limit,
+                 ParsleyClock initialFrontier,
+                 FrontierCallback frontierListener,
+                 ParsleyBufferStore<K, V> buffer,
+                 ParsleyPositionIndex positionIndex,
+                 ParsleyMetrics metrics,
+                 LongSupplier clock,
+                 boolean skipOnDecodeFailure) {
         this.limit = limit;
         this.frontier = initialFrontier;
         this.frontierListener = frontierListener;
@@ -88,10 +102,14 @@ final class ParsleyEngine<K, V> {
         this.positionIndex = positionIndex;
         this.metrics = metrics;
         this.clock = clock;
+        this.skipOnDecodeFailure = skipOnDecodeFailure;
         configureLimits(limit);
         // Populate the position index for any records already in the buffer (e.g., restored from
-        // a state store after a restart). This is a one-time O(n) pass at construction.
-        for (ParsleyBufferStore.Entry<K, V> entry : buffer.entries()) {
+        // a state store after a restart). This is a one-time O(n) pass at construction. It decodes
+        // only the dependency clock (never the user-serde key/value), so a record whose value can no
+        // longer be deserialised — e.g. an incompatible Schema Registry change while buffered — does
+        // not block startup; that failure surfaces later, on the forward path.
+        for (ParsleyBufferStore.IndexEntry entry : buffer.indexEntries()) {
             positionIndex.index(entry.sequence(), entry.dependencies(), frontier);
         }
     }
@@ -149,8 +167,12 @@ final class ParsleyEngine<K, V> {
         if (overflow <= 0) {
             return List.of();
         }
-        List<ParsleyBufferStore.Entry<K, V>> all = buffer.entries();
-        return evictEntries(new ArrayList<>(all.subList(0, Math.min(overflow, all.size()))));
+        List<ParsleyBufferStore.IndexEntry> all = orderedIndex();
+        List<Long> oldest = new ArrayList<>();
+        for (int i = 0; i < Math.min(overflow, all.size()); i++) {
+            oldest.add(all.get(i).sequence());
+        }
+        return evictSequences(oldest);
     }
 
     /**
@@ -158,9 +180,8 @@ final class ParsleyEngine<K, V> {
      * {@link ParsleyDurationLimit}, leaving younger records held. Called by the duration
      * punctuator; a no-op when no duration limit is configured.
      *
-     * <p>Relies on {@link ParsleyBufferStore#entries()} being sorted oldest-first (true for both
-     * implementations, since insertion sequence tracks buffer-admission time on the single owning
-     * thread), so the scan can stop at the first record that hasn't aged out yet.
+     * <p>Iterates the oldest-first metadata index, so the scan can stop at the first record that
+     * hasn't aged out yet — and never decodes a value to decide what to evict.
      *
      * @return the evicted records, to forward downstream out-of-order
      */
@@ -169,27 +190,52 @@ final class ParsleyEngine<K, V> {
             return List.of();
         }
         long cutoff = clock.getAsLong() - evictionInterval.toMillis();
-        List<ParsleyBufferStore.Entry<K, V>> expired = new ArrayList<>();
-        for (ParsleyBufferStore.Entry<K, V> entry : buffer.entries()) {
+        List<Long> expired = new ArrayList<>();
+        for (ParsleyBufferStore.IndexEntry entry : orderedIndex()) {
             if (entry.bufferedAt() > cutoff) break;
-            expired.add(entry);
+            expired.add(entry.sequence());
         }
-        return evictEntries(expired);
+        return evictSequences(expired);
     }
 
-    private List<ParsleyMessage<K, V>> evictEntries(List<ParsleyBufferStore.Entry<K, V>> evicted) {
-        if (evicted.isEmpty()) {
+    /** The buffer's metadata index, oldest-first (by insertion sequence); never decodes a value. */
+    private List<ParsleyBufferStore.IndexEntry> orderedIndex() {
+        List<ParsleyBufferStore.IndexEntry> all = new ArrayList<>(buffer.indexEntries());
+        all.sort(java.util.Comparator.comparingLong(ParsleyBufferStore.IndexEntry::sequence));
+        return all;
+    }
+
+    /**
+     * Force-forwards the given buffered records (by sequence) out of causal order, logging the gap
+     * and counting a violation for each. A record that cannot be deserialised is — in continue-mode —
+     * dropped (logged, counted) instead of forwarded; in fail-fast mode the decode failure propagates
+     * with the entry left in the buffer.
+     */
+    private List<ParsleyMessage<K, V>> evictSequences(List<Long> sequences) {
+        if (sequences.isEmpty()) {
             return List.of();
         }
-        log.warn("Evicting {} held record(s) (limit: {})", evicted.size(), limit);
+        log.warn("Evicting {} held record(s) (limit: {})", sequences.size(), limit);
         List<ParsleyMessage<K, V>> toForward = new ArrayList<>();
-        for (ParsleyBufferStore.Entry<K, V> entry : evicted) {
+        int evicted = 0;
+        for (long sequence : sequences) {
+            ParsleyBufferStore.Entry<K, V> entry;
+            try {
+                entry = buffer.get(sequence);
+            } catch (ParsleyBufferDeserializationException e) {
+                if (tryDropPoison(e, sequence)) continue;  // skipped (logged + counted)
+                throw e;                                   // fail fast
+            }
+            if (entry == null) continue;
             reportEviction(entry.record(), entry.dependencies());
-            buffer.remove(entry.sequence());
+            buffer.remove(sequence);
             advanceFrontier(entry.record());
             toForward.add(entry.record());
+            evicted++;
         }
-        metrics.recordEvicted(evicted.size());
+        if (evicted > 0) {
+            metrics.recordEvicted(evicted);
+        }
         return toForward;
     }
 
@@ -233,7 +279,13 @@ final class ParsleyEngine<K, V> {
                     long coordOffset = frontier.offsetFor(coordTopicId, coordPartition);
                     for (ParsleyPositionIndex.Candidate candidate : positionIndex.findCandidates(coordTopicId, coordPartition, coordOffset)) {
                         if (!seen.add(candidate.recordId())) continue;
-                        ParsleyBufferStore.Entry<K, V> entry = buffer.get(candidate.recordId());
+                        ParsleyBufferStore.Entry<K, V> entry;
+                        try {
+                            entry = buffer.get(candidate.recordId());
+                        } catch (ParsleyBufferDeserializationException e) {
+                            if (tryDropPoison(e, candidate.recordId())) continue;  // skipped
+                            throw e;                                               // fail fast
+                        }
                         if (entry == null) {
                             stale.add(candidate);
                         } else {
@@ -285,6 +337,28 @@ final class ParsleyEngine<K, V> {
     private void advanceFrontier(ParsleyMessage<K, V> record) {
         frontier = frontier.observe(record.topicId(), record.partition(), record.offset());
         frontierListener.frontierAdvanced(frontier);
+    }
+
+    /**
+     * Handles a held record that could not be deserialised on the forward path: always logs the
+     * (payload-free) diagnostic and counts the error. In continue-mode (deserialization handler =
+     * {@code LogAndContinue}) it drops the record — removes it, counts a violation — and returns
+     * {@code true} so the caller skips it; in fail-fast mode it returns {@code false} so the caller
+     * rethrows, leaving the entry in the buffer changelog for recovery.
+     */
+    private boolean tryDropPoison(ParsleyBufferDeserializationException e, long sequence) {
+        metrics.recordDeserializationError();
+        if (skipOnDecodeFailure) {
+            log.error("Dropping an undecodable buffered record "
+                    + "(parsley.buffer.deserialization.failure.policy = continue). {}", e.details(), e);
+            buffer.remove(sequence);
+            metrics.recordViolation();
+            return true;
+        }
+        log.error("Buffered record could not be deserialised "
+                + "(parsley.buffer.deserialization.failure.policy = fail); failing fast. "
+                + "It remains in the buffer changelog for recovery. {}", e.details(), e);
+        return false;
     }
 
     private void reportEviction(ParsleyMessage<K, V> record, ParsleyClock required) {

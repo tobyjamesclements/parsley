@@ -1,36 +1,38 @@
 package io.parsley;
 
-import org.apache.kafka.common.Uuid;
+import org.apache.kafka.common.serialization.Serde;
 
 import java.util.Collection;
-import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.Map;
 
 /**
  * Factory for {@link CausalConsumer}. Obtain a {@link Builder} with
- * {@link #builder(Collection, CausalBufferLimit, Map, Map)}, register a {@link CausalTopic} for
- * every subscribed topic, and call {@link Builder#build()}:
+ * {@link #builder(CausalBufferLimit, Map, Map)}, register a {@link CausalBuffer} for every
+ * subscribed topic, and call {@link Builder#build()}:
  *
  * <pre>{@code
  * CausalConsumer<String, Order> consumer = CausalConsumers.<String, Order>builder(
- *         List.of("prices", "orders"),
  *         CausalBufferLimit.ofDuration(Duration.ofSeconds(30)),
  *         Map.of(), streamsConfig)
- *         .addCausalTopic(new CausalTopic("prices", pricesTopicId))
- *         .addCausalTopic(new CausalTopic("orders", ordersTopicId))
+ *         .addBuffer(CausalBuffer.of("prices", Serdes.String(), orderSerde))
+ *         .addBuffer(CausalBuffer.of("orders", Serdes.String(), orderSerde))
  *         .build();
  * }</pre>
+ *
+ * <p>The subscribed topics are the registered buffers' topics; each topic's stable UUID is resolved
+ * from the broker automatically at startup.
  */
 public final class CausalConsumers {
 
     private CausalConsumers() {}
 
     /**
-     * Starts building a running {@link CausalConsumer} subscribed to {@code topics}.
+     * Starts building a running {@link CausalConsumer}. Subscribe to topics by registering a
+     * {@link CausalBuffer} for each.
      *
      * @param <K>            the record key type
      * @param <V>            the record value type
-     * @param topics         the Kafka topics to subscribe to; must not be empty
      * @param limit          the buffer eviction trigger — how long to wait for a record's
      *                       dependencies before delivering it anyway (out of causal order, logged
      *                       and counted by the violation metric)
@@ -41,11 +43,10 @@ public final class CausalConsumers {
      * @return a {@link Builder} for a {@code CausalConsumer}
      */
     public static <K, V> Builder<K, V> builder(
-            Collection<String> topics,
             CausalBufferLimit limit,
             Map<String, Object> consumerConfig,
             Map<String, Object> streamsConfig) {
-        return new Builder<>(topics, limit, consumerConfig, streamsConfig);
+        return new Builder<>(limit, consumerConfig, streamsConfig);
     }
 
     /**
@@ -56,44 +57,58 @@ public final class CausalConsumers {
      */
     public static final class Builder<K, V> {
 
-        private final Collection<String> topics;
         private final CausalBufferLimit limit;
         private final Map<String, Object> consumerConfig;
         private final Map<String, Object> streamsConfig;
-        private final Map<String, Uuid> topicUuids = new HashMap<>();
+        private final Map<String, CausalBuffer<K, V>> buffers = new LinkedHashMap<>();
         private String storeName = "parsley";
         private ParsleyTopicAdmin topicAdmin = null;
 
-        private Builder(Collection<String> topics, CausalBufferLimit limit,
+        private Builder(CausalBufferLimit limit,
                         Map<String, Object> consumerConfig, Map<String, Object> streamsConfig) {
-            this.topics = topics;
             this.limit = limit;
             this.consumerConfig = consumerConfig;
             this.streamsConfig = streamsConfig;
         }
 
         /**
-         * Registers the stable causal identity for one subscribed topic. Required for every topic
-         * passed to {@link CausalConsumers#builder}; {@link #build()} throws if any is missing.
+         * Subscribes to one topic and registers the serdes its records are deserialised with on
+         * {@code poll()}. Required for every topic the consumer should read; the topic's stable UUID
+         * is resolved from the broker automatically at startup.
          *
-         * @param stream the topic name and its Kafka UUID; must not be {@code null}
+         * @param buffer the source topic and its serdes; must not be {@code null}
          * @return this builder
          */
-        public Builder<K, V> addCausalTopic(CausalTopic stream) {
-            topicUuids.put(stream.topic(), stream.topicId());
+        public Builder<K, V> addBuffer(CausalBuffer<K, V> buffer) {
+            buffers.put(buffer.topic(), buffer);
             return this;
         }
 
         /**
-         * Registers the stable causal identity for several subscribed topics at once. Equivalent to
-         * calling {@link #addCausalTopic} for each element.
+         * Subscribes to several topics at once. Equivalent to calling {@link #addBuffer} for each.
          *
-         * @param streams the topic names and their Kafka UUIDs; must not be {@code null}
+         * @param buffers the source buffers; must not be {@code null}
          * @return this builder
          */
-        public Builder<K, V> addCausalTopics(Collection<CausalTopic> streams) {
-            for (CausalTopic stream : streams) {
-                addCausalTopic(stream);
+        public Builder<K, V> addBuffers(Collection<CausalBuffer<K, V>> buffers) {
+            for (CausalBuffer<K, V> buffer : buffers) {
+                addBuffer(buffer);
+            }
+            return this;
+        }
+
+        /**
+         * Subscribes to several topics that share one serde pair — the convenience for the
+         * homogeneous case.
+         *
+         * @param topics the source topic names
+         * @param key    the key serde shared by all {@code topics}
+         * @param value  the value serde shared by all {@code topics}
+         * @return this builder
+         */
+        public Builder<K, V> addBuffers(Collection<String> topics, Serde<K> key, Serde<V> value) {
+            for (String topic : topics) {
+                addBuffer(CausalBuffer.of(topic, key, value));
             }
             return this;
         }
@@ -129,19 +144,15 @@ public final class CausalConsumers {
          * Builds and starts the {@link CausalConsumer}.
          *
          * @return a new, running {@code CausalConsumer}
-         * @throws IllegalStateException if any topic passed to {@link CausalConsumers#builder} has
-         *                               no corresponding {@link #addCausalTopic} call
+         * @throws IllegalStateException if no {@link CausalBuffer} was registered
          */
         public CausalConsumer<K, V> build() {
-            for (String topic : topics) {
-                if (!topicUuids.containsKey(topic)) {
-                    throw new IllegalStateException(
-                            "no CausalTopic registered for subscribed topic '" + topic
-                                    + "'; call addCausalTopic(...) for every topic passed to builder(...)");
-                }
+            if (buffers.isEmpty()) {
+                throw new IllegalStateException(
+                        "at least one CausalBuffer is required; call addBuffer(...) for every subscribed topic");
             }
             return new ParsleyConsumer<>(
-                    topics, limit, consumerConfig, streamsConfig, storeName, topicAdmin, Map.copyOf(topicUuids));
+                    Map.copyOf(buffers), limit, consumerConfig, streamsConfig, storeName, topicAdmin);
         }
     }
 }

@@ -7,6 +7,7 @@ import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.apache.kafka.clients.producer.ProducerConfig;
 import org.apache.kafka.clients.producer.ProducerRecord;
 import org.apache.kafka.common.Uuid;
+import org.apache.kafka.common.serialization.Serdes;
 import org.apache.kafka.common.serialization.StringSerializer;
 import org.apache.kafka.streams.StreamsConfig;
 import org.junit.jupiter.api.Test;
@@ -72,13 +73,10 @@ class CausalResilienceIT {
         List<ConsumerRecord<String, String>> phase1 = new ArrayList<>();
         try (CausalConsumer<String, String> consumer1 =
                      CausalConsumers.<String, String>builder(
-                             List.of(PRICES, ORDERS),
                              CausalBufferLimit.ofDuration(Duration.ofMinutes(5)),
                              Map.of(),
                              streamsConfig(bootstrap, appId))
-                             .addCausalTopics(List.of(
-                                     new CausalTopic(PRICES, pricesId),
-                                     new CausalTopic(ORDERS, ordersId)))
+                             .addBuffers(List.of(PRICES, ORDERS), Serdes.String(), Serdes.String())
                              .build();
              CausalProducer<String, String> producer = causalProducer(bootstrap)) {
 
@@ -102,13 +100,10 @@ class CausalResilienceIT {
         List<ConsumerRecord<String, String>> phase2 = new ArrayList<>();
         try (CausalConsumer<String, String> consumer2 =
                      CausalConsumers.<String, String>builder(
-                             List.of(PRICES, ORDERS),
                              CausalBufferLimit.ofDuration(Duration.ofMinutes(5)),
                              Map.of(),
                              streamsConfig(bootstrap, appId))
-                             .addCausalTopics(List.of(
-                                     new CausalTopic(PRICES, pricesId),
-                                     new CausalTopic(ORDERS, ordersId)))
+                             .addBuffers(List.of(PRICES, ORDERS), Serdes.String(), Serdes.String())
                              .build();
              CausalProducer<String, String> producer = causalProducer(bootstrap)) {
 
@@ -156,13 +151,10 @@ class CausalResilienceIT {
         // arrive, under a generous size limit — none are evicted.
         try (CausalConsumer<String, String> consumer1 =
                      CausalConsumers.<String, String>builder(
-                             List.of(PRICES, ORDERS),
                              CausalBufferLimit.ofSize(10),
                              Map.of(),
                              streamsConfig(bootstrap, appId))
-                             .addCausalTopics(List.of(
-                                     new CausalTopic(PRICES, pricesId),
-                                     new CausalTopic(ORDERS, ordersId)))
+                             .addBuffers(List.of(PRICES, ORDERS), Serdes.String(), Serdes.String())
                              .build();
              CausalProducer<String, String> producer = causalProducer(bootstrap)) {
 
@@ -190,13 +182,10 @@ class CausalResilienceIT {
         List<ConsumerRecord<String, String>> phase2 = new ArrayList<>();
         try (CausalConsumer<String, String> consumer2 =
                      CausalConsumers.<String, String>builder(
-                             List.of(PRICES, ORDERS),
                              CausalBufferLimit.ofSize(2),
                              Map.of(),
                              streamsConfig(bootstrap, appId))
-                             .addCausalTopics(List.of(
-                                     new CausalTopic(PRICES, pricesId),
-                                     new CausalTopic(ORDERS, ordersId)))
+                             .addBuffers(List.of(PRICES, ORDERS), Serdes.String(), Serdes.String())
                              .build()) {
 
             await().atMost(Duration.ofSeconds(60)).until(() -> {
@@ -233,11 +222,10 @@ class CausalResilienceIT {
         List<ConsumerRecord<String, String>> received = new ArrayList<>();
         try (CausalConsumer<String, String> consumer =
                      CausalConsumers.<String, String>builder(
-                             List.of(EVENTS),
                              CausalBufferLimit.ofSize(100),
                              Map.of(),
                              streamsConfigWithThreads(bootstrap, 2))
-                             .addCausalTopic(new CausalTopic(EVENTS, eventsId))
+                             .addBuffer(CausalBuffer.of(EVENTS, Serdes.String(), Serdes.String()))
                              .build();
              CausalProducer<String, String> producer = causalProducer(bootstrap)) {
 

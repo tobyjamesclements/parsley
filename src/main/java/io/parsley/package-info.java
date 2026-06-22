@@ -15,6 +15,9 @@
  *
  * <h2>Key value types</h2>
  * <ul>
+ *   <li>{@link io.parsley.CausalBuffer} &mdash; registers one causal source on a builder: a topic
+ *       name paired with the serdes the buffer round-trips held records with (the topic's stable UUID
+ *       is resolved from the broker automatically)</li>
  *   <li>{@link io.parsley.CausalDependencies} &mdash; the causal requirements stamped on a record
  *       (what the consumer must have observed before the record may be delivered); build one from the
  *       {@link io.parsley.CausalTopic} identities you register, or read a consumed record's
@@ -22,7 +25,7 @@
  *       propagating across services. Its serialised size grows with the number of relevant
  *       topic-partitions and counts against Kafka's {@code message.max.bytes}</li>
  *   <li>{@link io.parsley.CausalTopic} &mdash; a topic's stable causal identity (name + Kafka UUID),
- *       supplied to the builders and used when declaring dependencies</li>
+ *       used when declaring {@link io.parsley.CausalDependencies}</li>
  *   <li>{@link io.parsley.CausalBufferLimit} &mdash; how long to wait for a record's dependencies
  *       before forwarding it anyway: {@code ofDuration}, {@code ofSize}, or {@code first}</li>
  * </ul>

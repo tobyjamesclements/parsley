@@ -126,8 +126,8 @@ final class ParsleyOutboxProcessor implements Processor<byte[], byte[], byte[], 
         Uuid topicId = topicUuids.get(topic);
         if (topicId == null) {
             throw new IllegalStateException(
-                    "no CausalTopic registered for topic '" + topic
-                            + "'; call addCausalTopic(...) on the CausalConsumers builder for every subscribed topic");
+                    "no CausalBuffer registered for topic '" + topic
+                            + "'; call addBuffer(...) on the CausalConsumers builder for every subscribed topic");
         }
         return ParsleyMessage.from(record, source, meta.map(RecordMetadata::offset).orElse(0L), topicId);
     }

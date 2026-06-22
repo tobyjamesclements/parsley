@@ -132,8 +132,8 @@ public class BufferReleaseBenchmark {
         StreamsBuilder builder = new StreamsBuilder();
         builder.stream("bench-in", Consumed.with(Serdes.String(), Serdes.String()))
                .process(CausalProcessors.builder(noOp, BENCH_LIMIT)
-                       .serdes(Serdes.String(), Serdes.String())
-                       .addCausalTopic(new CausalTopic("bench-in", topicId("bench-in")))
+                       .addBuffer(CausalBuffer.of("bench-in", Serdes.String(), Serdes.String()))
+                       .topicAdmin(TestTopicAdmin.of(java.util.Map.of("bench-in", topicId("bench-in"))))
                        .build())
                .to("bench-out", Produced.with(Serdes.String(), Serdes.String()));
         // Unique state dir per trial so each trial starts with an empty RocksDB

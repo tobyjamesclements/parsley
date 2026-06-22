@@ -50,11 +50,12 @@ subscribed topics in causal order, holding any record whose dependencies have no
 
 ```java
 try (CausalConsumer<String, Order> consumer = CausalConsumers.<String, Order>builder(
-        List.of("prices", "orders"),
         CausalBufferLimit.ofDuration(Duration.ofSeconds(30)),
         Map.of(ConsumerConfig.GROUP_ID_CONFIG, "my-group"),
         Map.of(StreamsConfig.APPLICATION_ID_CONFIG,    "my-app",
-               StreamsConfig.BOOTSTRAP_SERVERS_CONFIG, "localhost:9092")).build()) {
+               StreamsConfig.BOOTSTRAP_SERVERS_CONFIG, "localhost:9092"))
+        .addBuffers(List.of("prices", "orders"), Serdes.String(), orderSerde)
+        .build()) {
 
     while (running) {
         ConsumerRecords<String, Order> records = consumer.poll(Duration.ofMillis(100));

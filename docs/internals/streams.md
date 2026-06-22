@@ -20,6 +20,7 @@ All three are created with `Stores.persistentKeyValueStore(...)`, so they are ch
 
 ## `ParsleyProcessor` init sequence
 
+0. Resolve each registered `CausalBuffer` topic's stable UUID from the broker via a `ParsleyTopicAdmin` built from `context.appConfigs()` (the topology decorator has no broker config until init), populating the `topicUuids` map. Closed immediately after.
 1. Retrieve the three stores from the processor context by name.
 2. Read frontier from `{ns}-frontier` at key `"f"`. Start from `ParsleyClock.empty()` if absent.
 3. Construct `ParsleyEngine` with:
@@ -36,7 +37,7 @@ All three are created with `Stores.persistentKeyValueStore(...)`, so they are ch
 process(Record<KIn,VIn>)
   ingest(record)
     reads source metadata from context.recordMetadata()
-    resolves topicId from topicUuids map (registered via CausalTopic; throws IllegalStateException if absent)
+    resolves topicId from topicUuids map (broker-resolved at init for each registered CausalBuffer; throws IllegalStateException if absent)
     returns ParsleyMessage.from(record, source, offset, topicId)
 
   gate(parsleyRecord)

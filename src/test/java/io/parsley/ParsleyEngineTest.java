@@ -396,6 +396,7 @@ class ParsleyEngineTest {
             @Override public void recordReleased(int c, int depth) { releasedCounts.add(c); releasedDepths.add(depth); }
             @Override public void recordEvicted(int c)             {}
             @Override public void recordViolation()                {}
+            @Override public void recordDeserializationError()     {}
         };
         ParsleyEngine<String, String> engine = new ParsleyEngine<>(
                 CausalBufferLimit.ofSize(100),
@@ -425,6 +426,7 @@ class ParsleyEngineTest {
             @Override public void recordReleased(int c, int d) {}
             @Override public void recordEvicted(int c)         { evictedCounts.add(c); }
             @Override public void recordViolation()            {}
+            @Override public void recordDeserializationError() {}
         };
         ParsleyEngine<String, String> engine = new ParsleyEngine<>(
                 CausalBufferLimit.ofSize(1),
