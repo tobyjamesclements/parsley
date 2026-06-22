@@ -1,6 +1,7 @@
 package io.parsley;
 
 import org.apache.kafka.common.Uuid;
+import org.jspecify.annotations.Nullable;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -32,7 +33,7 @@ import java.util.function.LongSupplier;
  * forwarding, so persisting the frontier in the listener is guaranteed to happen before the
  * record leaves the engine.
  *
- * <p><strong>Drain algorithm:</strong> the engine uses a {@link ParsleyPositionIndex} to avoid a full
+ * <p><strong>Drain algorithm:</strong> the engine uses a {@link ParsleyCandidateIndex} to avoid a full
  * buffer scan on every frontier advance. When a coordinate advances, only records indexed on
  * that coordinate are checked for causal satisfaction. The cascade repeats for each newly
  * released record's source coordinate.
@@ -55,7 +56,7 @@ final class ParsleyEngine<K, V> {
 
     private final CausalBufferLimit limit;
     private final ParsleyBufferStore<K, V> buffer;
-    private final ParsleyPositionIndex positionIndex;
+    private final ParsleyCandidateIndex candidateIndex;
     private final FrontierCallback frontierListener;
     private final ParsleyMetrics metrics;
     private final LongSupplier clock;
@@ -65,15 +66,16 @@ final class ParsleyEngine<K, V> {
 
     private ParsleyClock frontier;
     private int sizeLimit = Integer.MAX_VALUE;
-    private Duration evictionInterval;
+    // Set only for a duration-based limit; null for size/first limits (guarded at every read).
+    private @Nullable Duration evictionInterval;
 
     ParsleyEngine(CausalBufferLimit limit,
                  ParsleyClock initialFrontier,
                  FrontierCallback frontierListener,
                  ParsleyBufferStore<K, V> buffer,
-                 ParsleyPositionIndex positionIndex,
+                 ParsleyCandidateIndex candidateIndex,
                  ParsleyMetrics metrics) {
-        this(limit, initialFrontier, frontierListener, buffer, positionIndex,
+        this(limit, initialFrontier, frontierListener, buffer, candidateIndex,
                 metrics, System::currentTimeMillis, false);
     }
 
@@ -81,17 +83,17 @@ final class ParsleyEngine<K, V> {
                  ParsleyClock initialFrontier,
                  FrontierCallback frontierListener,
                  ParsleyBufferStore<K, V> buffer,
-                 ParsleyPositionIndex positionIndex,
+                 ParsleyCandidateIndex candidateIndex,
                  ParsleyMetrics metrics,
                  LongSupplier clock) {
-        this(limit, initialFrontier, frontierListener, buffer, positionIndex, metrics, clock, false);
+        this(limit, initialFrontier, frontierListener, buffer, candidateIndex, metrics, clock, false);
     }
 
     ParsleyEngine(CausalBufferLimit limit,
                  ParsleyClock initialFrontier,
                  FrontierCallback frontierListener,
                  ParsleyBufferStore<K, V> buffer,
-                 ParsleyPositionIndex positionIndex,
+                 ParsleyCandidateIndex candidateIndex,
                  ParsleyMetrics metrics,
                  LongSupplier clock,
                  boolean skipOnDecodeFailure) {
@@ -99,18 +101,18 @@ final class ParsleyEngine<K, V> {
         this.frontier = initialFrontier;
         this.frontierListener = frontierListener;
         this.buffer = buffer;
-        this.positionIndex = positionIndex;
+        this.candidateIndex = candidateIndex;
         this.metrics = metrics;
         this.clock = clock;
         this.skipOnDecodeFailure = skipOnDecodeFailure;
         configureLimits(limit);
-        // Populate the position index for any records already in the buffer (e.g., restored from
+        // Populate the candidate index for any records already in the buffer (e.g., restored from
         // a state store after a restart). This is a one-time O(n) pass at construction. It decodes
         // only the dependency clock (never the user-serde key/value), so a record whose value can no
         // longer be deserialised — e.g. an incompatible Schema Registry change while buffered — does
         // not block startup; that failure surfaces later, on the forward path.
         for (ParsleyBufferStore.IndexEntry entry : buffer.indexEntries()) {
-            positionIndex.index(entry.sequence(), entry.dependencies(), frontier);
+            candidateIndex.index(entry.sequence(), entry.dependencies(), frontier);
         }
     }
 
@@ -133,7 +135,7 @@ final class ParsleyEngine<K, V> {
             drainInto(out, message.topicId(), message.partition());
         } else {
             long seq = buffer.add(message, clock.getAsLong());
-            positionIndex.index(seq, dependencies, frontier);
+            candidateIndex.index(seq, dependencies, frontier);
             int depth = buffer.size();
             if (log.isDebugEnabled()) {
                 log.debug("Holding {}-{} @{} (buffer depth: {}, gap: {})",
@@ -271,13 +273,13 @@ final class ParsleyEngine<K, V> {
         while (!toScan.isEmpty()) {
             Set<Long> seen = new HashSet<>();
             List<ParsleyBufferStore.Entry<K, V>> releasable = new ArrayList<>();
-            List<ParsleyPositionIndex.Candidate> stale = new ArrayList<>();
+            List<ParsleyCandidateIndex.Candidate> stale = new ArrayList<>();
 
             for (Map.Entry<Uuid, Set<Integer>> coord : toScan.entrySet()) {
                 Uuid coordTopicId = coord.getKey();
                 for (int coordPartition : coord.getValue()) {
                     long coordOffset = frontier.offsetFor(coordTopicId, coordPartition);
-                    for (ParsleyPositionIndex.Candidate candidate : positionIndex.findCandidates(coordTopicId, coordPartition, coordOffset)) {
+                    for (ParsleyCandidateIndex.Candidate candidate : candidateIndex.findCandidates(coordTopicId, coordPartition, coordOffset)) {
                         if (!seen.add(candidate.recordId())) continue;
                         ParsleyBufferStore.Entry<K, V> entry;
                         try {
@@ -298,7 +300,7 @@ final class ParsleyEngine<K, V> {
                 }
             }
 
-            stale.forEach(positionIndex::prune);
+            stale.forEach(candidateIndex::prune);
             toScan = new HashMap<>();
 
             if (releasable.isEmpty()) break;

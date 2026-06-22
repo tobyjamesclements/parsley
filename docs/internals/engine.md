@@ -8,7 +8,7 @@
 |---|---|---|
 | `frontier` | `ParsleyClock` | Highest admitted offset per `(topicId, partition)` |
 | `buffer` | `ParsleyBufferStore<K,V>` | Durable set of held records |
-| `positionIndex` | `ParsleyPositionIndex` | Secondary index: coordinate -> candidate record IDs |
+| `candidateIndex` | `ParsleyCandidateIndex` | Secondary index: coordinate -> candidate record IDs |
 | `sizeLimit` | `int` | Buffer depth at which eviction triggers |
 | `evictionInterval` | `Duration` | Optional interval for time-based eviction |
 
@@ -21,7 +21,7 @@
    required offset equals the record's own source offset on that coordinate is removed
    (`ParsleyClock.without`). This prevents a record from blocking on its own position in the log.
 3. If `frontier.dominates(deps)`: advance frontier, add the record to output, call `drainInto()`.
-4. Otherwise: add record to buffer (assigned an insertion sequence and a `bufferedAt` timestamp), index unsatisfied coordinates in the position index. If buffer depth >= `sizeLimit`, call `evictOverflow()`.
+4. Otherwise: add record to buffer (assigned an insertion sequence and a `bufferedAt` timestamp), index unsatisfied coordinates in the candidate index. If buffer depth >= `sizeLimit`, call `evictOverflow()`.
 
 A missing or undecodable dependency header always falls into the satisfied branch (step 3) — it
 never reaches the buffer. The frontier still advances on these records, so buffered records
@@ -35,7 +35,7 @@ When the frontier advances on coordinate `C`, `drainInto` uses a worklist algori
 toScan = {C}
 while toScan not empty:
   for each coordinate in toScan:
-    candidates = positionIndex.findCandidates(topicId, partition, newOffset)
+    candidates = candidateIndex.findCandidates(topicId, partition, newOffset)
     for each candidate:
       entry = buffer.get(candidate.recordId)
       if entry == null: prune stale index entry, skip
@@ -60,7 +60,7 @@ equivalently by `bufferedAt`) and hand it to a shared `evictEntries()` helper. F
 
 1. Log the eviction at `WARN` with the causal gap (`required.missing(frontier)`) and call
    `metrics.recordViolation()`.
-2. Remove from buffer and position index.
+2. Remove from buffer and candidate index.
 3. Advance the frontier at the entry's source coordinate and add the record to the forward list —
    eviction never drops or diverts a record, it just delivers it out of causal order.
 
@@ -106,10 +106,10 @@ at eviction time.
 - **`RocksBufferStore`** (production): wraps a `KeyValueStore<Long, byte[]>` backed by RocksDB and changelog-replicated. On construction, it makes a single pass over all existing keys to seed the monotonic `nextSequence` counter and the `size` field. No separate rehydration step is needed: the store is the buffer.
 - **`MockBufferStore`** (tests): wraps a `TreeMap<Long, ParsleyMessage<K,V>>` with equivalent semantics.
 
-## Position index
+## Candidate index
 
-`ParsleyPositionIndex` is backed by `RocksPositionIndex`, which wraps a `KeyValueStore<byte[], byte[]>`. The 36-byte composite key (topicId + partition + requiredOffset + recordId) sorts lexicographically in RocksDB, enabling a bounded range scan to find all records waiting on a given coordinate up to the new frontier offset.
+`ParsleyCandidateIndex` is backed by `RocksCandidateIndex`, which wraps a `KeyValueStore<byte[], byte[]>`. The 36-byte composite key (topicId + partition + requiredOffset + recordId) sorts lexicographically in RocksDB, enabling a bounded range scan to find all records waiting on a given coordinate up to the new frontier offset.
 
 The store value is always an empty byte array (`PRESENT` marker). The key encodes everything needed to find and validate a candidate.
 
-On engine construction, if the buffer is non-empty (restart recovery), the engine makes a single pass over all buffer entries to populate the position index. This rebuilds the secondary index from the authoritative buffer state.
+On engine construction, if the buffer is non-empty (restart recovery), the engine makes a single pass over all buffer entries to populate the candidate index. This rebuilds the secondary index from the authoritative buffer state.

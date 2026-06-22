@@ -9,6 +9,7 @@ import org.apache.kafka.streams.processor.api.ProcessorContext;
 import org.apache.kafka.streams.processor.api.Record;
 import org.apache.kafka.streams.processor.api.RecordMetadata;
 import org.apache.kafka.streams.state.KeyValueStore;
+import org.jspecify.annotations.Nullable;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -48,7 +49,7 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
     private final ParsleySerializer<KIn, VIn> serializer;
     private final String frontierStoreName;
     private final String bufferStoreName;
-    private final String positionIndexStoreName;
+    private final String candidateIndexStoreName;
     private final Set<String> topics;
     private final Function<Map<String, Object>, ParsleyTopicAdmin> adminFactory;
     private final ParsleyConfig config;
@@ -65,12 +66,12 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
     private ProcessorContext<KOut, VOut> context;
     private KeyValueStore<String, byte[]> frontierStore;
     private KeyValueStore<Long, byte[]> bufferStore;
-    private KeyValueStore<byte[], byte[]> positionIndexStore;
+    private KeyValueStore<byte[], byte[]> candidateIndexStore;
     private ParsleyEngine<KIn, VIn> engine;
     private ParsleyMetrics.Wired wiredMetrics;
     // Read live by the stamping proxy; volatile as belt-and-suspenders (single task thread owns this).
     private volatile ParsleyClock stampFrontier = ParsleyClock.empty();
-    private volatile RecordMetadata deliveryMetadata;
+    private volatile @Nullable RecordMetadata deliveryMetadata;
     private Cancellable restoredOverflowSchedule;
 
     ParsleyProcessor(Processor<KIn, VIn, KOut, VOut> delegate,
@@ -78,7 +79,7 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
                      ParsleySerializer<KIn, VIn> serializer,
                      String frontierStoreName,
                      String bufferStoreName,
-                     String positionIndexStoreName,
+                     String candidateIndexStoreName,
                      Set<String> topics,
                      Function<Map<String, Object>, ParsleyTopicAdmin> adminFactory,
                      ParsleyConfig config) {
@@ -87,7 +88,7 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
         this.serializer = serializer;
         this.frontierStoreName = frontierStoreName;
         this.bufferStoreName = bufferStoreName;
-        this.positionIndexStoreName = positionIndexStoreName;
+        this.candidateIndexStoreName = candidateIndexStoreName;
         this.topics = topics;
         this.adminFactory = adminFactory;
         this.config = config;
@@ -99,7 +100,7 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
         this.topicUuids = resolveTopicUuids(context);
         this.frontierStore = context.getStateStore(frontierStoreName);
         this.bufferStore = context.getStateStore(bufferStoreName);
-        this.positionIndexStore = context.getStateStore(positionIndexStoreName);
+        this.candidateIndexStore = context.getStateStore(candidateIndexStoreName);
 
         ParsleyClock initialFrontier = ParsleyClock.empty();
         byte[] stored = frontierStore.get(ParsleyStores.FRONTIER_KEY);
@@ -119,12 +120,12 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
         };
 
         ParsleyBufferStore<KIn, VIn> buffer = new RocksBufferStore<>(bufferStore, serializer);
-        ParsleyPositionIndex positionIndex = new RocksPositionIndex(positionIndexStore);
+        ParsleyCandidateIndex candidateIndex = new RocksCandidateIndex(candidateIndexStore);
 
         this.wiredMetrics = ParsleyMetrics.wire(context);
 
         this.engine = new ParsleyEngine<>(limit, initialFrontier,
-                listener, buffer, positionIndex, wiredMetrics.metrics(), context::currentSystemTimeMs,
+                listener, buffer, candidateIndex, wiredMetrics.metrics(), context::currentSystemTimeMs,
                 config.skipOnDecodeFailure());
 
         ProcessorContext<KOut, VOut> stamping = new ParsleyProcessorContext<>(

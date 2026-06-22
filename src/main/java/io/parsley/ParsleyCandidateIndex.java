@@ -16,7 +16,7 @@ import java.util.List;
  * authoritative. The index only reduces the search space. Stale entries (pointing to
  * already-released or evicted records) are tolerated and cleaned up lazily via {@link #prune}.
  */
-interface ParsleyPositionIndex {
+interface ParsleyCandidateIndex {
 
     /**
      * An index hit: the record waiting on a coordinate, plus the key information needed to

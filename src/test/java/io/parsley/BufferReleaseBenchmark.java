@@ -42,10 +42,10 @@ import static java.nio.charset.StandardCharsets.UTF_8;
  * Measures the cost of scanning and releasing buffered records when the causal frontier advances.
  *
  * <p>Three operations are benchmarked independently, each with its own @Param dimension and its
- * own pre-populated {@link RocksBufferStore} / {@link RocksPositionIndex} backed by a
+ * own pre-populated {@link RocksBufferStore} / {@link RocksCandidateIndex} backed by a
  * {@link TopologyTestDriver}-managed RocksDB instance:
  * <ul>
- *   <li>{@link #bufferSize} — O(log n) position-index lookup; varies buffer size {@code n}, fixes k=1, r=1
+ *   <li>{@link #bufferSize} — O(log n) candidate-index lookup; varies buffer size {@code n}, fixes k=1, r=1
  *   <li>{@link #positionalOccupancy} — O(k) positional scan; varies occupancy {@code k}, fixes n=128, r=1
  *   <li>{@link #cascadeDepth} — O(r) cascade propagation; varies depth {@code r}, fixes n=128, k=1
  * </ul>
@@ -64,7 +64,7 @@ import static java.nio.charset.StandardCharsets.UTF_8;
 @State(Scope.Benchmark)
 public class BufferReleaseBenchmark {
 
-    /** Buffer size (n); isolates O(log n) position-index lookup when k=1 and r=1. */
+    /** Buffer size (n); isolates O(log n) candidate-index lookup when k=1 and r=1. */
     @Param({"1", "8", "32", "128", "512", "1024"})
     public int n;
 
@@ -104,7 +104,7 @@ public class BufferReleaseBenchmark {
                 ParsleyClock.empty(),
                 f -> {},
                 new RocksBufferStore<>(bufferKV, serializer),
-                new RocksPositionIndex(waitKV),
+                new RocksCandidateIndex(waitKV),
                 ParsleyMetrics.NOOP);
     }
 
@@ -166,7 +166,7 @@ public class BufferReleaseBenchmark {
         public void setUpTrial(BenchmarkInfra infra) throws IOException {
             driver     = buildDriver(infra, "bench-size");
             bufferKV   = driver.getKeyValueStore("parsley-buffer");
-            waitKV     = driver.getKeyValueStore("parsley-position-index");
+            waitKV     = driver.getKeyValueStore("parsley-candidate-index");
             serializer = buildSerializer();
         }
 
@@ -213,7 +213,7 @@ public class BufferReleaseBenchmark {
         public void setUpTrial(BenchmarkInfra infra) throws IOException {
             driver     = buildDriver(infra, "bench-occupancy");
             bufferKV   = driver.getKeyValueStore("parsley-buffer");
-            waitKV     = driver.getKeyValueStore("parsley-position-index");
+            waitKV     = driver.getKeyValueStore("parsley-candidate-index");
             serializer = buildSerializer();
         }
 
@@ -261,7 +261,7 @@ public class BufferReleaseBenchmark {
         public void setUpTrial(BenchmarkInfra infra) throws IOException {
             driver     = buildDriver(infra, "bench-cascade");
             bufferKV   = driver.getKeyValueStore("parsley-buffer");
-            waitKV     = driver.getKeyValueStore("parsley-position-index");
+            waitKV     = driver.getKeyValueStore("parsley-candidate-index");
             serializer = buildSerializer();
         }
 
@@ -300,7 +300,7 @@ public class BufferReleaseBenchmark {
     // -------------------------------------------------------------------------
 
     /**
-     * Isolates the O(log n) position-index lookup cost as buffer size n grows.
+     * Isolates the O(log n) candidate-index lookup cost as buffer size n grows.
      * One record is released per invocation; records 1..n-1 remain buffered.
      */
     @Benchmark

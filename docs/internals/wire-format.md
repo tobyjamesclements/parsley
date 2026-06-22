@@ -49,9 +49,9 @@ per user header:
 [value         :value-len]
 ```
 
-## Position-index key
+## Candidate-index key
 
-The `{ns}-position-index` store maps coordinate+offset+recordId to an empty presence marker. The 36-byte key uses big-endian encoding throughout so that RocksDB lexicographic ordering produces a range scan for all records waiting on a given coordinate up to a given offset.
+The `{ns}-candidate-index` store maps coordinate+offset+recordId to an empty presence marker. The 36-byte key uses big-endian encoding throughout so that RocksDB lexicographic ordering produces a range scan for all records waiting on a given coordinate up to a given offset.
 
 ```
 [topicId MSB    :8]
@@ -69,7 +69,7 @@ The namespace is the `name` passed to `CausalProcessors.builder(...).addBufferSt
 |---|---|---|---|
 | `{ns}-frontier` | `String` | `byte[]` | Single entry at key `"f"`: serialised `ParsleyClock` |
 | `{ns}-buffer` | `Long` | `byte[]` | Insertion sequence -> serialised `ParsleyMessage` |
-| `{ns}-position-index` | `byte[]` | `byte[]` (empty) | 36-byte composite key -> presence marker |
+| `{ns}-candidate-index` | `byte[]` | `byte[]` (empty) | 36-byte composite key -> presence marker |
 
 All three stores are persistent and changelog-backed. Changelog topic names follow the Kafka Streams pattern: `{applicationId}-{storeName}-changelog`.
 

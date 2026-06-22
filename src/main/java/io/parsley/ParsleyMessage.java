@@ -5,6 +5,7 @@ import org.apache.kafka.common.Uuid;
 import org.apache.kafka.common.header.Header;
 import org.apache.kafka.common.header.Headers;
 import org.apache.kafka.streams.processor.api.Record;
+import org.jspecify.annotations.Nullable;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -23,7 +24,8 @@ import java.util.List;
  * @param <V> the record value type
  */
 record ParsleyMessage<K, V>(String topic, Uuid topicId, int partition, long offset, long timestamp,
-                            K key, V value, List<ParsleyHeader> headers, ParsleyClock dependencies) {
+                            @Nullable K key, @Nullable V value, List<ParsleyHeader> headers,
+                            ParsleyClock dependencies) {
 
     private static final Logger log = LoggerFactory.getLogger(ParsleyMessage.class);
 
@@ -72,7 +74,7 @@ record ParsleyMessage<K, V>(String topic, Uuid topicId, int partition, long offs
         return out;
     }
 
-    private static ParsleyClock decodeDependencies(byte[] encoded, TopicPartition source, long offset) {
+    private static ParsleyClock decodeDependencies(byte @Nullable [] encoded, TopicPartition source, long offset) {
         if (encoded == null) {
             return ParsleyClock.empty();
         }

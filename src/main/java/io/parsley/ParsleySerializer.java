@@ -1,6 +1,7 @@
 package io.parsley;
 
 import org.apache.kafka.common.Uuid;
+import org.jspecify.annotations.Nullable;
 
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
@@ -10,6 +11,7 @@ import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Objects;
 
 /**
  * Serialises a held {@link ParsleyMessage} to and from the byte value stored in the durable buffer
@@ -85,7 +87,8 @@ final class ParsleySerializer<K, V> {
             Uuid topicId = ParsleyHeader.uuidFromBytes(topicIdBytes);
             int partition = in.readInt();
             long offset = in.readLong();
-            ParsleyClock dependencies = ParsleyClock.fromBytes(readNullable(in));
+            // Dependencies are always framed non-null (serialize() writes dependencies().toBytes()).
+            ParsleyClock dependencies = ParsleyClock.fromBytes(Objects.requireNonNull(readNullable(in)));
             int headerCount = in.readInt();
             List<ParsleyHeader> headers = new ArrayList<>(headerCount);
             for (int i = 0; i < headerCount; i++) {
@@ -109,6 +112,7 @@ final class ParsleySerializer<K, V> {
                 // everything decodable without the serde; how it's handled (fail vs skip) is the
                 // caller's decision.
                 int schemaId = schemaId(valueBytes, keyBytes);
+                // (schemaId reads either array's Confluent magic byte; both may be null tombstones)
                 String details = details(topic, topicId, partition, offset, timestamp,
                         dependencies, headers, keyBytes, valueBytes, schemaId);
                 throw new ParsleyBufferDeserializationException(topic, partition, offset, schemaId, details, e);
@@ -122,7 +126,7 @@ final class ParsleySerializer<K, V> {
     }
 
     /**
-     * Reconstructs only the metadata a restored buffer needs to rebuild its position index — the
+     * Reconstructs only the metadata a restored buffer needs to rebuild its candidate index — the
      * insertion-time dependency clock — <strong>without invoking the user serde</strong>. The
      * dependency clock is part of Parsley's own framing (written before the key/value bytes), so a
      * value Parsley cannot decode (e.g. an incompatible Schema Registry change) never blocks startup;
@@ -143,7 +147,8 @@ final class ParsleySerializer<K, V> {
             in.readFully(new byte[16]); // topicId
             in.readInt();               // partition
             in.readLong();              // offset
-            return ParsleyClock.fromBytes(readNullable(in));
+            // Dependencies are always framed non-null (serialize() writes dependencies().toBytes()).
+            return ParsleyClock.fromBytes(Objects.requireNonNull(readNullable(in)));
         } catch (IOException e) {
             throw new IllegalStateException("Buffered record metadata deserialisation failed", e);
         }
@@ -157,7 +162,7 @@ final class ParsleySerializer<K, V> {
      */
     private static String details(String topic, Uuid topicId, int partition, long offset, long timestamp,
                                   ParsleyClock dependencies, List<ParsleyHeader> headers,
-                                  byte[] keyBytes, byte[] valueBytes, int schemaId) {
+                                  byte @Nullable [] keyBytes, byte @Nullable [] valueBytes, int schemaId) {
         List<String> headerKeys = new ArrayList<>(headers.size());
         for (ParsleyHeader header : headers) {
             headerKeys.add(header.key());
@@ -175,8 +180,8 @@ final class ParsleySerializer<K, V> {
      * Best-effort extraction of the Confluent wire-format writer schema id ({@code [0x00][id:4]}) for
      * diagnostics, from the first candidate that carries the magic byte; {@code -1} if none does.
      */
-    private static int schemaId(byte[]... candidates) {
-        for (byte[] bytes : candidates) {
+    private static int schemaId(byte @Nullable [] first, byte @Nullable [] second) {
+        for (byte[] bytes : new byte[][] {first, second}) {
             if (bytes != null && bytes.length >= 5 && bytes[0] == 0x0) {
                 return ((bytes[1] & 0xFF) << 24) | ((bytes[2] & 0xFF) << 16)
                         | ((bytes[3] & 0xFF) << 8) | (bytes[4] & 0xFF);
@@ -198,7 +203,7 @@ final class ParsleySerializer<K, V> {
         return new String(bytes, StandardCharsets.UTF_8);
     }
 
-    private static void writeNullable(DataOutputStream out, byte[] bytes) throws IOException {
+    private static void writeNullable(DataOutputStream out, byte @Nullable [] bytes) throws IOException {
         if (bytes == null) {
             out.writeInt(-1);
             return;
@@ -207,7 +212,7 @@ final class ParsleySerializer<K, V> {
         out.write(bytes);
     }
 
-    private static byte[] readNullable(DataInputStream in) throws IOException {
+    private static byte @Nullable [] readNullable(DataInputStream in) throws IOException {
         int len = in.readInt();
         if (len < 0) {
             return null;

@@ -401,7 +401,7 @@ class ParsleyEngineTest {
         ParsleyEngine<String, String> engine = new ParsleyEngine<>(
                 CausalBufferLimit.ofSize(100),
                 ParsleyClock.empty(), frontiers::add, buffer,
-                new MockPositionIndex(), capturing);
+                new MockCandidateIndex(), capturing);
 
         engine.onRecord(incomingRecord(T2, 0, ParsleyClock.empty().observe(T1_ID, 0, 3)));
         assertEquals(List.of(1), bufferedDepths, "recordBuffered must fire with the new buffer depth");
@@ -431,7 +431,7 @@ class ParsleyEngineTest {
         ParsleyEngine<String, String> engine = new ParsleyEngine<>(
                 CausalBufferLimit.ofSize(1),
                 ParsleyClock.empty(), frontiers::add, buffer,
-                new MockPositionIndex(), capturing);
+                new MockCandidateIndex(), capturing);
 
         engine.onRecord(incomingRecord(T2, 0, ParsleyClock.empty().observe(T1_ID, 0, 99)));
 
@@ -572,13 +572,13 @@ class ParsleyEngineTest {
 
     private ParsleyEngine<String, String> engineWith(CausalBufferLimit limit) {
         return new ParsleyEngine<>(limit, ParsleyClock.empty(), frontiers::add,
-                buffer, new MockPositionIndex(), ParsleyMetrics.NOOP);
+                buffer, new MockCandidateIndex(), ParsleyMetrics.NOOP);
     }
 
     private ParsleyEngine<String, String> engineWithClock(CausalBufferLimit limit,
                                                            java.util.function.LongSupplier clock) {
         return new ParsleyEngine<>(limit, ParsleyClock.empty(), frontiers::add,
-                buffer, new MockPositionIndex(), ParsleyMetrics.NOOP, clock);
+                buffer, new MockCandidateIndex(), ParsleyMetrics.NOOP, clock);
     }
 
     private void processRecord(ParsleyEngine<String, String> engine, ParsleyMessage<String, String> message) {

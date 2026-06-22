@@ -75,7 +75,7 @@ class CausalProcessorsTest {
 
     /**
      * {@code addBufferStore(name, limit)} sets the state-store namespace — the frontier, buffer, and
-     * position-index store names are all derived from {@code name} — and carries the eviction limit
+     * candidate-index store names are all derived from {@code name} — and carries the eviction limit
      * through to the built supplier.
      *
      * Asserts the three derived store names appear in {@code stores()} and the supplier reports the
@@ -95,8 +95,8 @@ class CausalProcessorsTest {
                 .collect(Collectors.toSet());
         assertTrue(storeNames.contains("t1-frontier"), "frontier store must be named from the namespace");
         assertTrue(storeNames.contains("t1-buffer"), "buffer store must be named from the namespace");
-        assertTrue(storeNames.contains("t1-position-index"),
-                "position-index store must be named from the namespace");
+        assertTrue(storeNames.contains("t1-candidate-index"),
+                "candidate-index store must be named from the namespace");
         assertEquals(limit, supplier.limit(), "the supplier must carry the eviction limit it was given");
     }
 

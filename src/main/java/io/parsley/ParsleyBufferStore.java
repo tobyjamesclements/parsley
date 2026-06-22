@@ -1,5 +1,7 @@
 package io.parsley;
 
+import org.jspecify.annotations.Nullable;
+
 import java.util.List;
 
 /**
@@ -26,7 +28,7 @@ interface ParsleyBufferStore<K, V> {
     /**
      * The metadata decodable <em>without</em> the user serde: an entry's insertion sequence, its
      * buffer-admission time, and decoded dependencies — but not the deserialised record. Used both to
-     * rebuild the position index on restart and to drive eviction without all-or-nothing decoding, so
+     * rebuild the candidate index on restart and to drive eviction without all-or-nothing decoding, so
      * a record whose key/value can no longer be decoded (e.g. an incompatible Schema Registry change)
      * neither blocks startup nor wedges eviction of the other held records.
      */
@@ -44,13 +46,13 @@ interface ParsleyBufferStore<K, V> {
 
     /**
      * Returns the buffered entry for the given insertion sequence, or {@code null} if no such
-     * entry exists. Used by the drain path to verify that a position-index candidate is still in the
+     * entry exists. Used by the drain path to verify that a candidate-index candidate is still in the
      * buffer before attempting release.
      *
      * @param sequence the sequence of an entry previously returned by {@link #add}
      * @return the entry, or {@code null} if already removed
      */
-    Entry<K, V> get(long sequence);
+    @Nullable Entry<K, V> get(long sequence);
 
     /**
      * Returns every buffered entry, in ascending insertion-sequence (causal arrival) order. Since
@@ -64,7 +66,7 @@ interface ParsleyBufferStore<K, V> {
 
     /**
      * Returns the {@link IndexEntry index metadata} for every buffered entry — decoding only the
-     * dependency clock, not the record's key/value. Used once at construction to rebuild the position
+     * dependency clock, not the record's key/value. Used once at construction to rebuild the candidate
      * index after a restart, immune to user-serde decode failures.
      *
      * @return the index metadata for every buffered entry

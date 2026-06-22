@@ -3,6 +3,7 @@ package io.parsley;
 import org.apache.kafka.common.Uuid;
 import org.apache.kafka.common.header.Headers;
 import org.apache.kafka.clients.producer.ProducerRecord;
+import org.jspecify.annotations.Nullable;
 
 import java.nio.ByteBuffer;
 import java.util.Objects;
@@ -17,7 +18,7 @@ import java.util.Objects;
  * @param key   the header name; must not be {@code null} or empty
  * @param value the raw header bytes; may be {@code null}
  */
-record ParsleyHeader(String key, byte[] value) {
+record ParsleyHeader(String key, byte @Nullable [] value) {
 
     /** Prefix marking a header as Parsley-internal routing metadata, stripped before user delivery. */
     static final String INTERNAL_PREFIX = "_parsley_";
@@ -25,11 +26,15 @@ record ParsleyHeader(String key, byte[] value) {
     /** Header carrying a record's serialised causal dependency clock. */
     static final String CAUSAL_DEPENDENCIES = "parsley-causal-dependencies";
 
-    ParsleyHeader {
+    // Explicit canonical constructor: NullAway does not propagate the type-use @Nullable from an
+    // array record component to the implicit constructor parameter, so annotate it here directly.
+    ParsleyHeader(String key, byte @Nullable [] value) {
         Objects.requireNonNull(key, "header key must not be null");
         if (key.isEmpty()) {
             throw new IllegalArgumentException("header key must not be empty");
         }
+        this.key = key;
+        this.value = value;
     }
 
     /** Returns {@code true} if this is a Parsley-internal routing header (the {@code _parsley_} prefix). */

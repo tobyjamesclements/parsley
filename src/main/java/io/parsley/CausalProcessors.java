@@ -2,6 +2,7 @@ package io.parsley;
 
 import org.apache.kafka.common.serialization.Serde;
 import org.apache.kafka.streams.processor.api.ProcessorSupplier;
+import org.jspecify.annotations.Nullable;
 
 import java.util.Collection;
 import java.util.LinkedHashMap;
@@ -69,12 +70,12 @@ public final class CausalProcessors {
     public static final class Builder<KIn, VIn, KOut, VOut> {
 
         private final ProcessorSupplier<KIn, VIn, KOut, VOut> userSupplier;
-        private String storeName = null;
-        private CausalBufferLimit limit = null;
+        private @Nullable String storeName = null;
+        private @Nullable CausalBufferLimit limit = null;
         private final Map<String, CausalBuffer<KIn, VIn>> buffers = new LinkedHashMap<>();
         private final Properties config = new Properties();
         private Function<Map<String, Object>, ParsleyTopicAdmin> adminFactory = ParsleyTopicAdmin::ofConfigs;
-        private ParsleyConfig configOverride = null;
+        private @Nullable ParsleyConfig configOverride = null;
 
         private Builder(ProcessorSupplier<KIn, VIn, KOut, VOut> userSupplier) {
             this.userSupplier = userSupplier;
@@ -86,8 +87,8 @@ public final class CausalProcessors {
          * {@link org.apache.kafka.streams.state.Stores}.
          *
          * <p>{@code name} is the state-store namespace: the frontier store is {@code name + "-frontier"},
-         * the held-record buffer store {@code name + "-buffer"}, and the position index
-         * {@code name + "-position-index"}. These name the backing changelog topics, so keep
+         * the held-record buffer store {@code name + "-buffer"}, and the candidate index
+         * {@code name + "-candidate-index"}. These name the backing changelog topics, so keep
          * {@code name} stable across restarts, and unique per causal processor sharing a topology.
          *
          * @param name  the state-store namespace
@@ -221,13 +222,15 @@ public final class CausalProcessors {
                 throw new IllegalStateException(
                         "at least one CausalBuffer is required; call addBuffer(...) for every input topic");
             }
+            String store = storeName;
+            CausalBufferLimit bufferLimit = limit;
             Map<String, CausalBuffer<KIn, VIn>> resolved = Map.copyOf(buffers);
             Function<String, Serde<KIn>> keySerdeByTopic = topic -> serdeFor(resolved, topic).keySerde();
             Function<String, Serde<VIn>> valueSerdeByTopic = topic -> serdeFor(resolved, topic).valueSerde();
             ParsleyConfig effectiveConfig = configOverride != null ? configOverride : effectiveConfig();
             return new ParsleyProcessorSupplier<>(
-                    userSupplier, limit, keySerdeByTopic, valueSerdeByTopic,
-                    storeName + "-frontier", storeName + "-buffer", storeName + "-position-index",
+                    userSupplier, bufferLimit, keySerdeByTopic, valueSerdeByTopic,
+                    store + "-frontier", store + "-buffer", store + "-candidate-index",
                     resolved.keySet(), adminFactory, effectiveConfig);
         }
 

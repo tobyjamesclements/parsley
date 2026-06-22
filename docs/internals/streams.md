@@ -14,7 +14,7 @@ Implements `CausalProcessorSupplier<KIn,VIn,KOut,VOut>`.
 |---|---|---|
 | `{ns}-frontier` | `String` | `byte[]` |
 | `{ns}-buffer` | `Long` | `byte[]` |
-| `{ns}-position-index` | `byte[]` | `byte[]` |
+| `{ns}-candidate-index` | `byte[]` | `byte[]` |
 
 All three are created with `Stores.persistentKeyValueStore(...)`, so they are changelog-backed and durable across restarts.
 
@@ -26,7 +26,7 @@ All three are created with `Stores.persistentKeyValueStore(...)`, so they are ch
 3. Construct `ParsleyEngine` with:
     - A `FrontierCallback` (internal) that writes the new frontier to the frontier store and appends a snapshot to a local list used for per-record delivery-time stamping.
     - A `RocksBufferStore` wrapping the buffer store and a `ParsleySerializer`.
-    - A `RocksPositionIndex` wrapping the position-index store.
+    - A `RocksCandidateIndex` wrapping the candidate-index store.
 5. Wrap the real context in a `ParsleyProcessorContext` (stamping proxy).
 6. Call `delegate.init(wrappedContext)`.
 7. If `engine.evictionInterval()` is present, schedule a punctuator to call `evict()` on that interval.

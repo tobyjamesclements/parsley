@@ -35,7 +35,7 @@ All share a common set of value types and a single causal engine.
 | `ParsleyProcessorSupplier` | Processor factory; registers the three Parsley state stores |
 | `ParsleyProcessorContext` | Stamping proxy: replaces the context given to the user processor |
 | `ParsleyBufferStore` / `RocksBufferStore` | Durable buffer of held records |
-| `ParsleyPositionIndex` / `RocksPositionIndex` | Secondary index: coordinate -> candidate record IDs |
+| `ParsleyCandidateIndex` / `RocksCandidateIndex` | Secondary index: coordinate -> candidate record IDs |
 | `ParsleySerializer` | Binary serde for `ParsleyMessage` (buffer store wire format) |
 
 ## End-to-end flow
@@ -52,7 +52,7 @@ Causal processor (Streams)
     -> ingest: wrap in ParsleyMessage, embed source coordinates
     -> gate:   ParsleyEngine.onRecord()
                  satisfied   -> advance frontier, drain cascade
-                 unsatisfied -> buffer (RocksBufferStore) + index (RocksPositionIndex)
+                 unsatisfied -> buffer (RocksBufferStore) + index (RocksCandidateIndex)
                  no header   -> trivially satisfied (empty dependencies)
     -> deliver: user processor receives records via ParsleyProcessorContext
                 forwarded records carry the stamped frontier dependencies
@@ -62,5 +62,5 @@ Causal processor (Streams)
 ## Further reading
 
 - [Wire format](wire-format.md) — binary layouts for all headers and state stores
-- [The engine](engine.md) — buffer, position index, drain cascade, eviction
+- [The engine](engine.md) — buffer, candidate index, drain cascade, eviction
 - [Streams integration](streams.md) — processor init, state store wiring, stamping proxy

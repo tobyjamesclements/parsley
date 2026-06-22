@@ -91,7 +91,8 @@ final class ParsleyClock {
             return this;
         }
         Map<Uuid, Map<Integer, Long>> next = mutableCopy();
-        Map<Integer, Long> byPartition = next.get(topicId);
+        // Present by the offsetFor guard above: a non-negative offset means this coordinate exists.
+        Map<Integer, Long> byPartition = Objects.requireNonNull(next.get(topicId));
         byPartition.remove(partition);
         if (byPartition.isEmpty()) {
             next.remove(topicId);

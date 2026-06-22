@@ -47,7 +47,7 @@ class CausalBufferDeserializationFailureTest {
         CountingMetrics metrics = new CountingMetrics();
         ParsleyEngine<String, String> engine = new ParsleyEngine<>(
                 CausalBufferLimit.ofSize(100), ParsleyClock.empty(), c -> {},
-                buffer, new MockPositionIndex(), metrics);
+                buffer, new MockCandidateIndex(), metrics);
 
         // Buffer a T2 record that depends on T1@3 — held, not yet decoded.
         engine.onRecord(message(T2, 0, T2_ID, ParsleyClock.empty().observe(T1_ID, 0, 3)));
@@ -80,7 +80,7 @@ class CausalBufferDeserializationFailureTest {
                 "entries() decodes the value and would fail on a poison record");
 
         // ...but constructing the engine (which rebuilds the index from indexEntries()) must not.
-        MockPositionIndex index = new MockPositionIndex();
+        MockCandidateIndex index = new MockCandidateIndex();
         assertDoesNotThrow(
                 () -> new ParsleyEngine<>(CausalBufferLimit.ofSize(100), ParsleyClock.empty(), c -> {},
                         buffer, index, ParsleyMetrics.NOOP),
@@ -153,7 +153,7 @@ class CausalBufferDeserializationFailureTest {
         CountingMetrics metrics = new CountingMetrics();
         ParsleyEngine<String, String> engine = new ParsleyEngine<>(
                 CausalBufferLimit.ofSize(100), ParsleyClock.empty(), c -> {},
-                buffer, new MockPositionIndex(), metrics, System::currentTimeMillis, /* skip */ true);
+                buffer, new MockCandidateIndex(), metrics, System::currentTimeMillis, /* skip */ true);
 
         engine.onRecord(message(T2, 0, T2_ID, ParsleyClock.empty().observe(T1_ID, 0, 3)));  // held (poison)
         assertEquals(1, buffer.size(), "the poison record is buffered while its dependency is unmet");
@@ -179,7 +179,7 @@ class CausalBufferDeserializationFailureTest {
         CountingMetrics metrics = new CountingMetrics();
         ParsleyEngine<String, String> engine = new ParsleyEngine<>(
                 CausalBufferLimit.ofSize(1), ParsleyClock.empty(), c -> {},
-                buffer, new MockPositionIndex(), metrics, System::currentTimeMillis, /* skip */ true);
+                buffer, new MockCandidateIndex(), metrics, System::currentTimeMillis, /* skip */ true);
 
         // Both depend on an unmet T1@3, so both are held; the second overflows the size-1 limit.
         ParsleyClock unmet = ParsleyClock.empty().observe(T1_ID, 0, 3);

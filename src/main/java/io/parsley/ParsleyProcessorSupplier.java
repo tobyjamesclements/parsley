@@ -25,7 +25,7 @@ final class ParsleyProcessorSupplier<KIn, VIn, KOut, VOut>
     private final Function<String, Serde<VIn>> valueSerdeByTopic;
     private final String frontierStoreName;
     private final String bufferStoreName;
-    private final String positionIndexStoreName;
+    private final String candidateIndexStoreName;
     private final Set<String> topics;
     private final Function<Map<String, Object>, ParsleyTopicAdmin> adminFactory;
     private final ParsleyConfig config;
@@ -36,7 +36,7 @@ final class ParsleyProcessorSupplier<KIn, VIn, KOut, VOut>
                                       Function<String, Serde<VIn>> valueSerdeByTopic,
                                       String frontierStoreName,
                                       String bufferStoreName,
-                                      String positionIndexStoreName,
+                                      String candidateIndexStoreName,
                                       Set<String> topics,
                                       Function<Map<String, Object>, ParsleyTopicAdmin> adminFactory,
                                       ParsleyConfig config) {
@@ -46,7 +46,7 @@ final class ParsleyProcessorSupplier<KIn, VIn, KOut, VOut>
         this.valueSerdeByTopic = valueSerdeByTopic;
         this.frontierStoreName = frontierStoreName;
         this.bufferStoreName = bufferStoreName;
-        this.positionIndexStoreName = positionIndexStoreName;
+        this.candidateIndexStoreName = candidateIndexStoreName;
         this.topics = topics;
         this.adminFactory = adminFactory;
         this.config = config;
@@ -57,7 +57,7 @@ final class ParsleyProcessorSupplier<KIn, VIn, KOut, VOut>
         return new ParsleyProcessor<>(
                 userSupplier.get(), limit,
                 new ParsleySerializer<>(new ParsleyResolver<>(keySerdeByTopic, valueSerdeByTopic)),
-                frontierStoreName, bufferStoreName, positionIndexStoreName, topics, adminFactory, config);
+                frontierStoreName, bufferStoreName, candidateIndexStoreName, topics, adminFactory, config);
     }
 
     /** The buffer eviction limit this supplier was built with. Package-private for tests. */
@@ -79,7 +79,7 @@ final class ParsleyProcessorSupplier<KIn, VIn, KOut, VOut>
         }
         stores.add(ParsleyStores.frontierStore(frontierStoreName));
         stores.add(ParsleyStores.bufferStore(bufferStoreName));
-        stores.add(ParsleyStores.positionIndexStore(positionIndexStoreName));
+        stores.add(ParsleyStores.candidateIndexStore(candidateIndexStoreName));
         return stores;
     }
 }

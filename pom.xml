@@ -34,6 +34,10 @@
         <confluent.version>8.0.0</confluent.version>
         <avro.version>1.11.4</avro.version>
         <maven.compiler.release>25</maven.compiler.release>
+        <jspecify.version>1.0.0</jspecify.version>
+        <!-- NullAway 0.13.7 requires Error Prone >= 2.50.0; both run on JDK 25. -->
+        <errorprone.version>2.50.0</errorprone.version>
+        <nullaway.version>0.13.7</nullaway.version>
         <pitest.version>1.25.4</pitest.version>
         <pitest.junit5.version>1.2.3</pitest.junit5.version>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
@@ -55,6 +59,13 @@
     </dependencyManagement>
 
     <dependencies>
+        <!-- JSpecify nullness annotations (@NullMarked/@Nullable). Runtime-retained and tiny with no
+             transitive deps; shipped so downstream callers (incl. Kotlin) see the null contracts. -->
+        <dependency>
+            <groupId>org.jspecify</groupId>
+            <artifactId>jspecify</artifactId>
+            <version>${jspecify.version}</version>
+        </dependency>
         <dependency>
             <groupId>org.apache.kafka</groupId>
             <artifactId>kafka-clients</artifactId>
@@ -227,16 +238,74 @@
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-compiler-plugin</artifactId>
                 <version>3.13.0</version>
+                <!-- Error Prone reaches into javac internals, so it must run in a forked compiler JVM
+                     with the compiler module's packages exported/opened (required on JDK 16+). Only
+                     NullAway is enabled (-XepDisableAllChecks); io.parsley is the @NullMarked surface.
+                     Main sources fail on a nullness violation (ERROR); tests warn only (WARN) since the
+                     test suite shares the io.parsley package but is not yet null-clean. -->
                 <configuration>
                     <proc>full</proc>
+                    <fork>true</fork>
                     <annotationProcessorPaths>
                         <path>
                             <groupId>org.openjdk.jmh</groupId>
                             <artifactId>jmh-generator-annprocess</artifactId>
                             <version>1.37</version>
                         </path>
+                        <path>
+                            <groupId>com.google.errorprone</groupId>
+                            <artifactId>error_prone_core</artifactId>
+                            <version>${errorprone.version}</version>
+                        </path>
+                        <path>
+                            <groupId>com.uber.nullaway</groupId>
+                            <artifactId>nullaway</artifactId>
+                            <version>${nullaway.version}</version>
+                        </path>
                     </annotationProcessorPaths>
                 </configuration>
+                <executions>
+                    <execution>
+                        <id>default-compile</id>
+                        <configuration>
+                            <compilerArgs>
+                                <arg>-XDcompilePolicy=simple</arg>
+                                <arg>--should-stop=ifError=FLOW</arg>
+                                <arg>-Xplugin:ErrorProne -XepDisableAllChecks -Xep:NullAway:ERROR -XepOpt:NullAway:AnnotatedPackages=io.parsley -XepOpt:NullAway:KnownInitializers=org.apache.kafka.streams.processor.api.Processor.init</arg>
+                                <arg>-J--add-exports=jdk.compiler/com.sun.tools.javac.api=ALL-UNNAMED</arg>
+                                <arg>-J--add-exports=jdk.compiler/com.sun.tools.javac.file=ALL-UNNAMED</arg>
+                                <arg>-J--add-exports=jdk.compiler/com.sun.tools.javac.main=ALL-UNNAMED</arg>
+                                <arg>-J--add-exports=jdk.compiler/com.sun.tools.javac.model=ALL-UNNAMED</arg>
+                                <arg>-J--add-exports=jdk.compiler/com.sun.tools.javac.parser=ALL-UNNAMED</arg>
+                                <arg>-J--add-exports=jdk.compiler/com.sun.tools.javac.processing=ALL-UNNAMED</arg>
+                                <arg>-J--add-exports=jdk.compiler/com.sun.tools.javac.tree=ALL-UNNAMED</arg>
+                                <arg>-J--add-exports=jdk.compiler/com.sun.tools.javac.util=ALL-UNNAMED</arg>
+                                <arg>-J--add-opens=jdk.compiler/com.sun.tools.javac.code=ALL-UNNAMED</arg>
+                                <arg>-J--add-opens=jdk.compiler/com.sun.tools.javac.comp=ALL-UNNAMED</arg>
+                            </compilerArgs>
+                        </configuration>
+                    </execution>
+                    <execution>
+                        <id>default-testCompile</id>
+                        <configuration>
+                            <compilerArgs>
+                                <arg>-XDcompilePolicy=simple</arg>
+                                <arg>--should-stop=ifError=FLOW</arg>
+                                <arg>-Xplugin:ErrorProne -XepDisableAllChecks -Xep:NullAway:WARN -XepOpt:NullAway:AnnotatedPackages=io.parsley -XepOpt:NullAway:KnownInitializers=org.apache.kafka.streams.processor.api.Processor.init</arg>
+                                <arg>-J--add-exports=jdk.compiler/com.sun.tools.javac.api=ALL-UNNAMED</arg>
+                                <arg>-J--add-exports=jdk.compiler/com.sun.tools.javac.file=ALL-UNNAMED</arg>
+                                <arg>-J--add-exports=jdk.compiler/com.sun.tools.javac.main=ALL-UNNAMED</arg>
+                                <arg>-J--add-exports=jdk.compiler/com.sun.tools.javac.model=ALL-UNNAMED</arg>
+                                <arg>-J--add-exports=jdk.compiler/com.sun.tools.javac.parser=ALL-UNNAMED</arg>
+                                <arg>-J--add-exports=jdk.compiler/com.sun.tools.javac.processing=ALL-UNNAMED</arg>
+                                <arg>-J--add-exports=jdk.compiler/com.sun.tools.javac.tree=ALL-UNNAMED</arg>
+                                <arg>-J--add-exports=jdk.compiler/com.sun.tools.javac.util=ALL-UNNAMED</arg>
+                                <arg>-J--add-opens=jdk.compiler/com.sun.tools.javac.code=ALL-UNNAMED</arg>
+                                <arg>-J--add-opens=jdk.compiler/com.sun.tools.javac.comp=ALL-UNNAMED</arg>
+                            </compilerArgs>
+                        </configuration>
+                    </execution>
+                </executions>
             </plugin>
             <!-- Generates test-only SpecificRecord classes from src/test/avro/*.avsc. -->
             <plugin>

@@ -44,7 +44,7 @@ import static java.nio.charset.StandardCharsets.UTF_8;
  *       dimension (expected to be effectively constant); run with all {@code bufferSize} values but
  *       only one curve will appear.
  *   <li>{@link #bufferRestore} — O(n) scans to rebuild {@link RocksBufferStore}'s sequence counter
- *       and {@link ParsleyEngine}'s position-index from existing RocksDB data; varies buffer size n.
+ *       and {@link ParsleyEngine}'s candidate-index from existing RocksDB data; varies buffer size n.
  * </ul>
  *
  * <p>State is pre-populated once at {@code Level.Trial} and held read-only by the benchmark
@@ -96,7 +96,7 @@ public class StateRestorationBenchmark {
 
         frontierKV = driver.getKeyValueStore("parsley-frontier");
         bufferKV   = driver.getKeyValueStore("parsley-buffer");
-        waitKV     = driver.getKeyValueStore("parsley-position-index");
+        waitKV     = driver.getKeyValueStore("parsley-candidate-index");
         serializer = new ParsleySerializer<>(
                 new ParsleyResolver<>(t -> Serdes.String(), t -> Serdes.String()));
 
@@ -111,7 +111,7 @@ public class StateRestorationBenchmark {
         // dependency, as if a crash occurred with that many held records.
         ParsleyEngine<String, String> engine = new ParsleyEngine<>(
                 limit, ParsleyClock.empty(), f -> {},
-                new RocksBufferStore<>(bufferKV, serializer), new RocksPositionIndex(waitKV),
+                new RocksBufferStore<>(bufferKV, serializer), new RocksCandidateIndex(waitKV),
                 ParsleyMetrics.NOOP);
         for (int i = 0; i < bufferSize; i++) {
             ParsleyClock deps = ParsleyClock.empty().observe(Uuid.randomUuid(), 0, 0L);
@@ -137,15 +137,15 @@ public class StateRestorationBenchmark {
 
     /**
      * Simulates buffer restoration on startup: the O(n) scan in {@link RocksBufferStore}'s
-     * constructor (to seed nextSequence and size) plus the O(n) position-index rebuild in
-     * {@link ParsleyEngine}'s constructor (one {@link RocksPositionIndex#index} write per buffered
+     * constructor (to seed nextSequence and size) plus the O(n) candidate-index rebuild in
+     * {@link ParsleyEngine}'s constructor (one {@link RocksCandidateIndex#index} write per buffered
      * record). Together these reproduce the full cost of {@link ParsleyProcessor#init} when
      * non-empty state is found in RocksDB.
      */
     @Benchmark
     public ParsleyEngine<String, String> bufferRestore() {
         RocksBufferStore<String, String> buf = new RocksBufferStore<>(bufferKV, serializer);
-        RocksPositionIndex idx = new RocksPositionIndex(waitKV);
+        RocksCandidateIndex idx = new RocksCandidateIndex(waitKV);
         return new ParsleyEngine<>(limit, ParsleyClock.empty(), f -> {},
                 buf, idx, ParsleyMetrics.NOOP);
     }

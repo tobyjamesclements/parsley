@@ -2,6 +2,7 @@ package io.parsley;
 
 import org.apache.kafka.streams.state.KeyValueIterator;
 import org.apache.kafka.streams.state.KeyValueStore;
+import org.jspecify.annotations.Nullable;
 
 import java.nio.ByteBuffer;
 import java.util.ArrayList;
@@ -55,7 +56,7 @@ final class RocksBufferStore<K, V> implements ParsleyBufferStore<K, V> {
     }
 
     @Override
-    public Entry<K, V> get(long sequence) {
+    public @Nullable Entry<K, V> get(long sequence) {
         byte[] value = store.get(sequence);
         if (value == null) return null;
         return toEntry(sequence, value);

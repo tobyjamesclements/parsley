@@ -38,4 +38,7 @@
  *       before forwarding it anyway: {@code ofDuration}, {@code ofSize}, or {@code first}</li>
  * </ul>
  */
+@NullMarked
 package io.parsley;
+
+import org.jspecify.annotations.NullMarked;
