@@ -154,9 +154,8 @@
 
     <profiles>
         <!-- Benchmarks: mvn -Pbenchmarks test
-             Runs the JMH suite against TestContainers by default.
-             Override infrastructure via:
-               -Dparsley.bench.bootstrap.servers=my-broker:9092
+             Runs the JMH suite in-process on TopologyTestDriver + local RocksDB (no broker, no Docker).
+             Point RocksDB at the target machine's real storage for representative figures via:
                -Dparsley.bench.state.store.dir=/mnt/nvme/parsley-bench
              Pass JMH flags via:
                -Dbenchmark.args="-wi 1 -i 1 -f 1 -p n=8 -p k=1 -p r=1" -->
@@ -165,7 +164,6 @@
             <properties>
                 <!-- Defaults; override on the command line with -Dproperty=value -->
                 <benchmark.args></benchmark.args>
-                <parsley.bench.bootstrap.servers>dummy:1234</parsley.bench.bootstrap.servers>
                 <parsley.bench.state.store.dir></parsley.bench.state.store.dir>
             </properties>
             <build>
@@ -187,7 +185,6 @@
                                     <classpathScope>test</classpathScope>
                                     <arguments>
                                         <argument>--enable-native-access=ALL-UNNAMED</argument>
-                                        <argument>-Dparsley.bench.bootstrap.servers=${parsley.bench.bootstrap.servers}</argument>
                                         <argument>-Dparsley.bench.state.store.dir=${parsley.bench.state.store.dir}</argument>
                                         <argument>-Dbenchmark.args=${benchmark.args}</argument>
                                         <argument>-classpath</argument>

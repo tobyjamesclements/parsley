@@ -58,28 +58,29 @@ reassignment:
 
 | Property | Default | Description |
 |---|---|---|
-| `parsley.bench.bootstrap.servers` | TestContainers-managed broker | Kafka bootstrap address |
 | `parsley.bench.state.store.dir` | System temp dir | Root for RocksDB state directories |
-| `parsley.bench.replication.factor` | `1` | Topic replication factor (future use) |
-| `parsley.bench.partition.count` | `1` | Topic partition count (future use) |
 
 ---
 
 ## Running the benchmarks
 
-### Default (TestContainers, no configuration needed)
+### Default (no configuration needed)
 
 ```
 mvn -Pbenchmarks test
 ```
 
-TestContainers starts a Kafka broker automatically. Docker must be available.
+The suite runs entirely in-process on `TopologyTestDriver` and local RocksDB. There is no Kafka
+broker in the measurement path, so **no Docker and no broker are required**.
 
-### Against your own cluster
+### Representative absolute figures
+
+The only infrastructure-sensitive numbers are the RocksDB scan and restore costs
+(`BufferReleaseBenchmark`, `StateRestorationBenchmark`). To make them representative of a target
+machine, point the state-store directory at that machine's real storage class (e.g. NVMe):
 
 ```
 mvn -Pbenchmarks test \
-  -Dparsley.bench.bootstrap.servers=my-broker:9092 \
   -Dparsley.bench.state.store.dir=/mnt/nvme/parsley-bench
 ```
 
@@ -134,5 +135,5 @@ parameter confirms (or refutes) the theoretical complexity claim.
 **Absolute latency figures are infrastructure-specific.** The numbers produced by this suite
 reflect your hardware, storage class, and JVM GC configuration; they are not directly comparable
 to numbers generated on different infrastructure. To produce figures meaningful for a
-capacity-planning decision, run this suite in your own environment against your own Kafka cluster
-and storage.
+capacity-planning decision, run this suite on your target hardware with
+`parsley.bench.state.store.dir` pointed at its real storage class.

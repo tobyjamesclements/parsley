@@ -179,8 +179,8 @@ long to restore.
 
 ## Running the benchmarks
 
-The benchmark suite lives in `src/test/java/io/parsley/` and can be run with Maven. It uses
-`TopologyTestDriver` and does not require a running Kafka cluster by default.
+The benchmark suite lives in `src/test/java/io/parsley/` and can be run with Maven. It runs
+in-process on `TopologyTestDriver` and local RocksDB — no Kafka broker or Docker is required.
 
 ```
 mvn -Pbenchmarks test
@@ -201,4 +201,5 @@ mvn -Pbenchmarks test \
 ```
 
 See [Internals: Benchmark suite](internals/benchmarks.md) for the full parameter reference,
-system property overrides, and instructions for running against your own Kafka cluster and storage.
+system property overrides, and how to point RocksDB at your target hardware's storage for
+representative absolute figures.

@@ -35,14 +35,11 @@ public class BenchmarkRunner {
 
         ChainedOptionsBuilder builder = new OptionsBuilder()
                 .parent(cmdOpts)
-                // Propagate infra properties so each JMH-forked JVM has them too.
-                // benchmark.args is NOT propagated — it is already applied in the driver JVM above.
-                // bootstrap.servers defaults to "dummy:1234" so forked JVMs don't start TestContainers;
-                // the benchmarks use TopologyTestDriver and do not need a real broker.
+                // Propagate the state-store dir so each JMH-forked JVM uses it too. benchmark.args is
+                // NOT propagated — it is already applied in the driver JVM above. The benchmarks run
+                // entirely on TopologyTestDriver + local RocksDB; there is no broker in the path.
                 .jvmArgsAppend(
                         "--enable-native-access=ALL-UNNAMED",
-                        "-Dparsley.bench.bootstrap.servers="
-                                + System.getProperty("parsley.bench.bootstrap.servers", "dummy:1234"),
                         "-Dparsley.bench.state.store.dir="
                                 + System.getProperty("parsley.bench.state.store.dir", ""));
 
