@@ -16,10 +16,12 @@ import java.time.Duration;
  * <h2>Usage</h2>
  * <pre>{@code
  * try (CausalConsumer<String, Order> consumer = CausalConsumers.<String, Order>builder(
- *         List.of("prices", "orders"),
  *         CausalBufferLimit.ofDuration(Duration.ofSeconds(30)),
  *         Map.of(),
- *         streamsConfig).build()) {
+ *         streamsConfig)
+ *         .addBuffer(CausalBuffer.of("prices", Serdes.String(), orderSerde))
+ *         .addBuffer(CausalBuffer.of("orders", Serdes.String(), orderSerde))
+ *         .build()) {
  *
  *     ConsumerRecords<String, Order> records = consumer.poll(Duration.ofMillis(200));
  * }

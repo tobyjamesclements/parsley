@@ -127,12 +127,12 @@ public final class CausalConsumers {
         }
 
         /**
-         * Overrides the {@link ParsleyTopicAdmin} used to size and create the outbox topic (default:
-         * a live Kafka {@link org.apache.kafka.clients.admin.Admin} created from
-         * {@code bootstrap.servers}). This governs outbox topic creation only — topic identity comes
-         * from {@link #addCausalTopic}, not from this admin client.
+         * Overrides the {@link ParsleyTopicAdmin} used at startup to resolve the subscribed topics'
+         * stable UUIDs and to size and create the outbox topic (default: a live Kafka
+         * {@link org.apache.kafka.clients.admin.Admin} created from {@code bootstrap.servers}). For
+         * tests without a broker.
          *
-         * @param topicAdmin the {@link ParsleyTopicAdmin} to use; closed automatically after outbox setup
+         * @param topicAdmin the {@link ParsleyTopicAdmin} to use; closed automatically after startup
          * @return this builder
          */
         public Builder<K, V> topicAdmin(ParsleyTopicAdmin topicAdmin) {
