@@ -109,9 +109,9 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
         }
         this.stampFrontier = initialFrontier;
         if (stored != null) {
-            log.debug("Processor initialized [task: {}] — frontier restored: {}", context.taskId(), initialFrontier);
+            log.info("Processor initialized [task: {}] — frontier restored: {}", context.taskId(), initialFrontier);
         } else {
-            log.debug("Processor initialized [task: {}] — frontier empty (fresh start)", context.taskId());
+            log.info("Processor initialized [task: {}] — frontier empty (fresh start)", context.taskId());
         }
 
         ParsleyEngine.FrontierCallback listener = frontier -> {
@@ -154,7 +154,7 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
 
     @Override
     public void close() {
-        log.debug("Processor closing [task: {}]", context.taskId());
+        log.info("Processor closing [task: {}]", context.taskId());
         delegate.close();
         wiredMetrics.close(context.metrics());
     }
