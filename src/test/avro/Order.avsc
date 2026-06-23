@@ -1,5 +1,5 @@
 {
-  "namespace": "io.parsley.avro",
+  "namespace": "io.github.tobyjamesclements.parsley.avro",
   "type": "record",
   "name": "Order",
   "fields": [

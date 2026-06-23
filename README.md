@@ -19,7 +19,7 @@ as a server with id `github-parsley`.
 </repository>
 
 <dependency>
-  <groupId>io.parsley</groupId>
+  <groupId>io.github.tobyjamesclements</groupId>
   <artifactId>parsley</artifactId>
   <version>0.1.0-SNAPSHOT</version>
 </dependency>

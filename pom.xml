@@ -4,7 +4,7 @@
          xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
     <modelVersion>4.0.0</modelVersion>
 
-    <groupId>io.parsley</groupId>
+    <groupId>io.github.tobyjamesclements</groupId>
     <artifactId>parsley</artifactId>
     <version>0.1.0-SNAPSHOT</version>
     <packaging>jar</packaging>
@@ -190,7 +190,7 @@
                                         <argument>-Dbenchmark.args=${benchmark.args}</argument>
                                         <argument>-classpath</argument>
                                         <classpath/>
-                                        <argument>io.parsley.BenchmarkRunner</argument>
+                                        <argument>io.github.tobyjamesclements.parsley.BenchmarkRunner</argument>
                                     </arguments>
                                 </configuration>
                             </execution>
@@ -212,7 +212,7 @@
                         <artifactId>pitest-maven</artifactId>
                         <configuration>
                             <excludedTestClasses>
-                                <param>io.parsley.*IT</param>
+                                <param>io.github.tobyjamesclements.parsley.*IT</param>
                             </excludedTestClasses>
                         </configuration>
                         <executions>
@@ -238,9 +238,9 @@
                 <version>3.13.0</version>
                 <!-- Error Prone reaches into javac internals, so it must run in a forked compiler JVM
                      with the compiler module's packages exported/opened (required on JDK 16+). Only
-                     NullAway is enabled (-XepDisableAllChecks); io.parsley is the @NullMarked surface.
+                     NullAway is enabled (-XepDisableAllChecks); io.github.tobyjamesclements.parsley is the @NullMarked surface.
                      Main sources fail on a nullness violation (ERROR); tests warn only (WARN) since the
-                     test suite shares the io.parsley package but is not yet null-clean. -->
+                     test suite shares the io.github.tobyjamesclements.parsley package but is not yet null-clean. -->
                 <configuration>
                     <proc>full</proc>
                     <fork>true</fork>
@@ -269,7 +269,7 @@
                             <compilerArgs>
                                 <arg>-XDcompilePolicy=simple</arg>
                                 <arg>--should-stop=ifError=FLOW</arg>
-                                <arg>-Xplugin:ErrorProne -XepDisableAllChecks -Xep:NullAway:ERROR -XepOpt:NullAway:AnnotatedPackages=io.parsley -XepOpt:NullAway:KnownInitializers=org.apache.kafka.streams.processor.api.Processor.init</arg>
+                                <arg>-Xplugin:ErrorProne -XepDisableAllChecks -Xep:NullAway:ERROR -XepOpt:NullAway:AnnotatedPackages=io.github.tobyjamesclements.parsley -XepOpt:NullAway:KnownInitializers=org.apache.kafka.streams.processor.api.Processor.init</arg>
                                 <arg>-J--add-exports=jdk.compiler/com.sun.tools.javac.api=ALL-UNNAMED</arg>
                                 <arg>-J--add-exports=jdk.compiler/com.sun.tools.javac.file=ALL-UNNAMED</arg>
                                 <arg>-J--add-exports=jdk.compiler/com.sun.tools.javac.main=ALL-UNNAMED</arg>
@@ -289,7 +289,7 @@
                             <compilerArgs>
                                 <arg>-XDcompilePolicy=simple</arg>
                                 <arg>--should-stop=ifError=FLOW</arg>
-                                <arg>-Xplugin:ErrorProne -XepDisableAllChecks -Xep:NullAway:WARN -XepOpt:NullAway:AnnotatedPackages=io.parsley -XepOpt:NullAway:KnownInitializers=org.apache.kafka.streams.processor.api.Processor.init</arg>
+                                <arg>-Xplugin:ErrorProne -XepDisableAllChecks -Xep:NullAway:WARN -XepOpt:NullAway:AnnotatedPackages=io.github.tobyjamesclements.parsley -XepOpt:NullAway:KnownInitializers=org.apache.kafka.streams.processor.api.Processor.init</arg>
                                 <arg>-J--add-exports=jdk.compiler/com.sun.tools.javac.api=ALL-UNNAMED</arg>
                                 <arg>-J--add-exports=jdk.compiler/com.sun.tools.javac.file=ALL-UNNAMED</arg>
                                 <arg>-J--add-exports=jdk.compiler/com.sun.tools.javac.main=ALL-UNNAMED</arg>
@@ -361,7 +361,7 @@
                 </configuration>
             </plugin>
             <!-- Unit test coverage. Scoped to surefire's *Test classes (not the Testcontainers ITs),
-                 matching the existing mutation-testing exclusion of io.parsley.*IT below. Report lands
+                 matching the existing mutation-testing exclusion of io.github.tobyjamesclements.parsley.*IT below. Report lands
                  at target/site/jacoco/ as part of plain 'mvn test'. -->
             <plugin>
                 <groupId>org.jacoco</groupId>
@@ -415,7 +415,7 @@
                 <configuration>
                     <archive>
                         <manifestEntries>
-                            <Automatic-Module-Name>io.parsley</Automatic-Module-Name>
+                            <Automatic-Module-Name>io.github.tobyjamesclements.parsley</Automatic-Module-Name>
                         </manifestEntries>
                     </archive>
                 </configuration>

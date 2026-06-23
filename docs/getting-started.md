@@ -35,7 +35,7 @@ Then declare the repository and dependency in your `pom.xml`:
 </repositories>
 
 <dependency>
-  <groupId>io.parsley</groupId>
+  <groupId>io.github.tobyjamesclements</groupId>
   <artifactId>parsley</artifactId>
   <version>0.1.0-SNAPSHOT</version>
 </dependency>

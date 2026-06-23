@@ -1,0 +1,65 @@
+package io.github.tobyjamesclements.parsley;
+
+import org.apache.kafka.common.Uuid;
+import org.apache.kafka.common.header.Headers;
+import org.apache.kafka.clients.producer.ProducerRecord;
+import org.jspecify.annotations.Nullable;
+
+import java.nio.ByteBuffer;
+import java.util.Objects;
+
+/**
+ * A single record header — a {@code (key, value)} pair — plus Parsley's header-key vocabulary.
+ *
+ * <p>This type owns the names of every header Parsley reads or writes and the rule that distinguishes
+ * Parsley's internal routing headers (the {@code _parsley_*} prefix) from user headers, so that
+ * knowledge lives with the header type rather than scattered as loose constants.
+ *
+ * @param key   the header name; must not be {@code null} or empty
+ * @param value the raw header bytes; may be {@code null}
+ */
+record ParsleyHeader(String key, byte @Nullable [] value) {
+
+    /** Prefix marking a header as Parsley-internal routing metadata, stripped before user delivery. */
+    static final String INTERNAL_PREFIX = "_parsley_";
+
+    /** Header carrying a record's serialised causal dependency clock. */
+    static final String CAUSAL_DEPENDENCIES = "parsley-causal-dependencies";
+
+    // Explicit canonical constructor: NullAway does not propagate the type-use @Nullable from an
+    // array record component to the implicit constructor parameter, so annotate it here directly.
+    ParsleyHeader(String key, byte @Nullable [] value) {
+        Objects.requireNonNull(key, "header key must not be null");
+        if (key.isEmpty()) {
+            throw new IllegalArgumentException("header key must not be empty");
+        }
+        this.key = key;
+        this.value = value;
+    }
+
+    /** Returns {@code true} if this is a Parsley-internal routing header (the {@code _parsley_} prefix). */
+    boolean isInternal() {
+        return key.startsWith(INTERNAL_PREFIX);
+    }
+
+    /**
+     * Returns a fresh, empty, mutable {@link Headers} to populate via {@code add(String, byte[])}.
+     * Kafka exposes no public {@code Headers} factory and its only implementation lives in an
+     * {@code internals} package; a throwaway {@link ProducerRecord} hands back an empty mutable
+     * instance through the public API, which is what we want without depending on that internals type.
+     */
+    static Headers mutableHeaders() {
+        return new ProducerRecord<byte[], byte[]>("", null, null).headers();
+    }
+
+    static byte[] uuidToBytes(Uuid id) {
+        return ByteBuffer.allocate(16)
+                .putLong(id.getMostSignificantBits())
+                .putLong(id.getLeastSignificantBits())
+                .array();
+    }
+
+    static Uuid uuidFromBytes(byte[] b) {
+        return new Uuid(ByteBuffer.wrap(b, 0, 8).getLong(), ByteBuffer.wrap(b, 8, 8).getLong());
+    }
+}

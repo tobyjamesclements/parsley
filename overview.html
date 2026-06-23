@@ -6,30 +6,30 @@ every consumer processes messages in the correct causal order, even when records
 multiple topics and partitions, by encoding each message's causal dependencies onto it and buffering
 records until those dependencies have been observed.</p>
 
-<p>The entire public surface lives in a single package, {@link io.parsley}, and consists of
+<p>The entire public surface lives in a single package, {@link io.github.tobyjamesclements.parsley}, and consists of
 interfaces and value types; every implementation is package-private and obtained through a static
-factory ({@link io.parsley.CausalProcessors}, {@link io.parsley.CausalDependencies},
-{@link io.parsley.CausalTopics}).</p>
+factory ({@link io.github.tobyjamesclements.parsley.CausalProcessors}, {@link io.github.tobyjamesclements.parsley.CausalDependencies},
+{@link io.github.tobyjamesclements.parsley.CausalTopics}).</p>
 
 <h2>Core concepts</h2>
 <dl>
   <dt><strong>Causal dependencies</strong></dt>
   <dd>The positions a consumer must have observed before a record stamped with them may be
   delivered &mdash; a producer's snapshot of what it had seen when it sent the record. Carried as
-  {@link io.parsley.CausalDependencies} in a {@code parsley-causal-dependencies} header. Build one
-  from a consumed record with {@link io.parsley.CausalDependencies#from from}, combine several for a
-  fan-in with {@link io.parsley.CausalDependencies#merge merge}, and attach it to an outbound record
-  with {@link io.parsley.CausalDependencies#stamp stamp}.</dd>
+  {@link io.github.tobyjamesclements.parsley.CausalDependencies} in a {@code parsley-causal-dependencies} header. Build one
+  from a consumed record with {@link io.github.tobyjamesclements.parsley.CausalDependencies#from from}, combine several for a
+  fan-in with {@link io.github.tobyjamesclements.parsley.CausalDependencies#merge merge}, and attach it to an outbound record
+  with {@link io.github.tobyjamesclements.parsley.CausalDependencies#stamp stamp}.</dd>
 
   <dt><strong>Causal frontier</strong></dt>
   <dd>The highest offset a causal processor has admitted on each topic-partition, keyed by topic
   UUID so that topic deletion and recreation produce a distinct identity even when the name is
   reused. A record is delivered once the frontier dominates its dependencies. The frontier is
-  internal to {@link io.parsley.CausalProcessors}; it is not a separate public type.</dd>
+  internal to {@link io.github.tobyjamesclements.parsley.CausalProcessors}; it is not a separate public type.</dd>
 
   <dt><strong>Causal buffer</strong></dt>
   <dd>Records whose dependencies are not yet satisfied are held in a changelog-backed buffer and
-  released as soon as the frontier catches up. A {@link io.parsley.CausalBufferLimit} bounds how long
+  released as soon as the frontier catches up. A {@link io.github.tobyjamesclements.parsley.CausalBufferLimit} bounds how long
   or how large the buffer may grow; Parsley never drops or diverts a record &mdash; when the limit
   fires, the held record is forwarded anyway, out of causal order, logged and counted as a
   violation.</dd>
@@ -39,8 +39,8 @@ factory ({@link io.parsley.CausalProcessors}, {@link io.parsley.CausalDependenci
 <table>
   <thead><tr><th>Type</th><th>Purpose</th></tr></thead>
   <tbody>
-    <tr><td>{@link io.parsley.CausalProcessorSupplier}</td><td>Wraps a user Kafka Streams {@code Processor} so its state access and {@code forward}s run behind the causal guarantee; built via {@link io.parsley.CausalProcessors}.</td></tr>
-    <tr><td>{@link io.parsley.CausalDependencies}</td><td>Stamps and reads causal dependencies directly on plain {@code ProducerRecord}/{@code ConsumerRecord} objects, for talking to a Parsley topology from outside Kafka Streams.</td></tr>
+    <tr><td>{@link io.github.tobyjamesclements.parsley.CausalProcessorSupplier}</td><td>Wraps a user Kafka Streams {@code Processor} so its state access and {@code forward}s run behind the causal guarantee; built via {@link io.github.tobyjamesclements.parsley.CausalProcessors}.</td></tr>
+    <tr><td>{@link io.github.tobyjamesclements.parsley.CausalDependencies}</td><td>Stamps and reads causal dependencies directly on plain {@code ProducerRecord}/{@code ConsumerRecord} objects, for talking to a Parsley topology from outside Kafka Streams.</td></tr>
   </tbody>
 </table>
 
