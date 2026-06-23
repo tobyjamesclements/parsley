@@ -11,10 +11,10 @@
       
       
       
-        <link rel="prev" href="../concepts/">
+        <link rel="prev" href="../configuration/">
       
       
-        <link rel="next" href="../streams/">
+        <link rel="next" href="../performance/">
       
       
         
@@ -25,7 +25,7 @@
     
     
       
-        <title>Getting started - Parsley</title>
+        <title>Audit logging - Parsley</title>
       
     
     
@@ -76,7 +76,7 @@
     <div data-md-component="skip">
       
         
-        <a href="#getting-started" class="md-skip">
+        <a href="#audit-logging" class="md-skip">
           Skip to content
         </a>
       
@@ -116,7 +116,7 @@
         <div class="md-header__topic" data-md-component="header-topic">
           <span class="md-ellipsis">
             
-              Getting started
+              Audit logging
             
           </span>
         </div>
@@ -313,37 +313,10 @@
       
   
   
-    
   
   
-  
-    <li class="md-nav__item md-nav__item--active">
-      
-      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
-      
-      
-        
-      
-      
-        <label class="md-nav__link md-nav__link--active" for="__toc">
-          
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    Getting started
-  
-
-    
-  </span>
-  
-  
-
-          <span class="md-nav__icon md-icon"></span>
-        </label>
-      
-      <a href="./" class="md-nav__link md-nav__link--active">
+    <li class="md-nav__item">
+      <a href="../getting-started/" class="md-nav__link">
         
   
   
@@ -359,81 +332,6 @@
   
 
       </a>
-      
-        
-
-<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
-  
-  
-  
-    
-  
-  
-    <label class="md-nav__title" for="__toc">
-      <span class="md-nav__icon md-icon"></span>
-      Table of contents
-    </label>
-    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
-      
-        <li class="md-nav__item">
-  <a href="#prerequisites" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Prerequisites
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#installation" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Installation
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#ordering-records-causally" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Ordering records causally
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#stamping-causal-context-onto-produced-records" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Stamping causal context onto produced records
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#propagating-causal-context-across-services" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Propagating causal context across services
-      
-    </span>
-  </a>
-  
-</li>
-      
-    </ul>
-  
-</nav>
-      
     </li>
   
 
@@ -496,10 +394,37 @@
       
   
   
+    
   
   
-    <li class="md-nav__item">
-      <a href="../audit-logging/" class="md-nav__link">
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Audit logging
+  
+
+    
+  </span>
+  
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
         
   
   
@@ -515,6 +440,81 @@
   
 
       </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#registering-an-audit" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Registering an audit
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#events" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Events
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#relationship-to-parsleys-metrics" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Relationship to Parsley's metrics
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#failure-handling" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Failure handling
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#thread-safety" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Thread-safety
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
     </li>
   
 
@@ -848,10 +848,10 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
-  <a href="#prerequisites" class="md-nav__link">
+  <a href="#registering-an-audit" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Prerequisites
+        Registering an audit
       
     </span>
   </a>
@@ -859,10 +859,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#installation" class="md-nav__link">
+  <a href="#events" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Installation
+        Events
       
     </span>
   </a>
@@ -870,10 +870,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#ordering-records-causally" class="md-nav__link">
+  <a href="#relationship-to-parsleys-metrics" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Ordering records causally
+        Relationship to Parsley's metrics
       
     </span>
   </a>
@@ -881,10 +881,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#stamping-causal-context-onto-produced-records" class="md-nav__link">
+  <a href="#failure-handling" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Stamping causal context onto produced records
+        Failure handling
       
     </span>
   </a>
@@ -892,10 +892,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#propagating-causal-context-across-services" class="md-nav__link">
+  <a href="#thread-safety" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Propagating causal context across services
+        Thread-safety
       
     </span>
   </a>
@@ -922,84 +922,86 @@
   
 
 
-<h1 id="getting-started">Getting started</h1>
-<h2 id="prerequisites">Prerequisites</h2>
-<ul>
-<li>Java 25 (<code>--release 25</code>)</li>
-<li>Maven 3.9+ (or use the included <code>./mvnw</code> wrapper)</li>
-<li>A GitHub account with a <a href="https://github.com/settings/tokens">personal access token</a> that has the
-  <code>read:packages</code> scope (required for GitHub Packages, even for public repositories)</li>
-</ul>
-<h2 id="installation">Installation</h2>
-<p>Parsley is published to <a href="https://github.com/tobyjamesclements/parsley/packages">GitHub Packages</a>.
-Add your credentials to <code>~/.m2/settings.xml</code>:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="nt">&lt;settings&gt;</span>
-<a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="w">  </span><span class="nt">&lt;servers&gt;</span>
-<a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a><span class="w">    </span><span class="nt">&lt;server&gt;</span>
-<a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a><span class="w">      </span><span class="nt">&lt;id&gt;</span>github-parsley<span class="nt">&lt;/id&gt;</span>
-<a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a><span class="w">      </span><span class="nt">&lt;username&gt;</span>YOUR_GITHUB_USERNAME<span class="nt">&lt;/username&gt;</span>
-<a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a><span class="w">      </span><span class="nt">&lt;password&gt;</span>YOUR_PAT<span class="nt">&lt;/password&gt;</span>
-<a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a><span class="w">    </span><span class="nt">&lt;/server&gt;</span>
-<a id="__codelineno-0-8" name="__codelineno-0-8" href="#__codelineno-0-8"></a><span class="w">  </span><span class="nt">&lt;/servers&gt;</span>
-<a id="__codelineno-0-9" name="__codelineno-0-9" href="#__codelineno-0-9"></a><span class="nt">&lt;/settings&gt;</span>
+<h1 id="audit-logging">Audit logging</h1>
+<p><code>CausalAudit</code> is an optional, client-supplied seam that receives every per-record event in the
+causal-buffering lifecycle — forwarded, held, released, evicted (causal violation), and
+undecodable — plus processor startup/shutdown. Register one to route these events wherever your
+audit or compliance trail needs them: a SIEM, a durable audit store, structured logs. Parsley never
+decides where they go; without one registered, events are simply discarded.</p>
+<h2 id="registering-an-audit">Registering an audit</h2>
+<p>Implement <code>CausalAudit</code> and pass it to the builder:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="n">CausalProcessorSupplier</span><span class="o">&lt;</span><span class="n">String</span><span class="p">,</span><span class="w"> </span><span class="n">Order</span><span class="p">,</span><span class="w"> </span><span class="n">String</span><span class="p">,</span><span class="w"> </span><span class="n">Enriched</span><span class="o">&gt;</span><span class="w"> </span><span class="n">causal</span><span class="w"> </span><span class="o">=</span>
+<a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="w">        </span><span class="n">CausalProcessors</span><span class="p">.</span><span class="na">builder</span><span class="p">(</span><span class="n">user</span><span class="p">)</span>
+<a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a><span class="w">                </span><span class="p">.</span><span class="na">addBufferStore</span><span class="p">(</span><span class="s">&quot;parsley&quot;</span><span class="p">,</span><span class="w"> </span><span class="n">CausalBufferLimit</span><span class="p">.</span><span class="na">ofDuration</span><span class="p">(</span><span class="n">limit</span><span class="p">))</span>
+<a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a><span class="w">                </span><span class="p">.</span><span class="na">addBuffers</span><span class="p">(</span><span class="n">List</span><span class="p">.</span><span class="na">of</span><span class="p">(</span><span class="s">&quot;prices&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;orders&quot;</span><span class="p">),</span><span class="w"> </span><span class="n">Serdes</span><span class="p">.</span><span class="na">String</span><span class="p">(),</span><span class="w"> </span><span class="n">orderSerde</span><span class="p">)</span>
+<a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a><span class="w">                </span><span class="p">.</span><span class="na">withAudit</span><span class="p">(</span><span class="n">mySiemAudit</span><span class="p">)</span>
+<a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a><span class="w">                </span><span class="p">.</span><span class="na">build</span><span class="p">();</span>
 </code></pre></div>
-<p>Then declare the repository and dependency in your <code>pom.xml</code>:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="nt">&lt;repositories&gt;</span>
-<a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a><span class="w">  </span><span class="nt">&lt;repository&gt;</span>
-<a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a><span class="w">    </span><span class="nt">&lt;id&gt;</span>github-parsley<span class="nt">&lt;/id&gt;</span>
-<a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a><span class="w">    </span><span class="nt">&lt;url&gt;</span>https://maven.pkg.github.com/tobyjamesclements/parsley<span class="nt">&lt;/url&gt;</span>
-<a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a><span class="w">  </span><span class="nt">&lt;/repository&gt;</span>
-<a id="__codelineno-1-6" name="__codelineno-1-6" href="#__codelineno-1-6"></a><span class="nt">&lt;/repositories&gt;</span>
-<a id="__codelineno-1-7" name="__codelineno-1-7" href="#__codelineno-1-7"></a>
-<a id="__codelineno-1-8" name="__codelineno-1-8" href="#__codelineno-1-8"></a><span class="nt">&lt;dependency&gt;</span>
-<a id="__codelineno-1-9" name="__codelineno-1-9" href="#__codelineno-1-9"></a><span class="w">  </span><span class="nt">&lt;groupId&gt;</span>io.github.tobyjamesclements<span class="nt">&lt;/groupId&gt;</span>
-<a id="__codelineno-1-10" name="__codelineno-1-10" href="#__codelineno-1-10"></a><span class="w">  </span><span class="nt">&lt;artifactId&gt;</span>parsley<span class="nt">&lt;/artifactId&gt;</span>
-<a id="__codelineno-1-11" name="__codelineno-1-11" href="#__codelineno-1-11"></a><span class="w">  </span><span class="nt">&lt;version&gt;</span>0.1.0-SNAPSHOT<span class="nt">&lt;/version&gt;</span>
-<a id="__codelineno-1-12" name="__codelineno-1-12" href="#__codelineno-1-12"></a><span class="nt">&lt;/dependency&gt;</span>
-</code></pre></div>
-<p><code>parsley</code> pulls in <code>kafka-streams</code> and <code>kafka-clients</code> transitively.</p>
-<h2 id="ordering-records-causally">Ordering records causally</h2>
-<p>Parsley delivers records in causal order <strong>inside a Kafka Streams topology</strong>. Wrap your own processor
-with <code>CausalProcessors</code> and it holds any record whose dependencies have not yet been observed,
-releasing it once the frontier catches up. See <a href="../streams/">Streams integration</a> for the full setup.</p>
-<h2 id="stamping-causal-context-onto-produced-records">Stamping causal context onto produced records</h2>
-<p>At the edges of a topology — where plain Kafka producers feed records in — attach the causal
-dependencies as a header with <code>CausalDependencies.stamp</code>. Resolve topic UUIDs once through a
-<code>CausalTopics</code> backed by an <code>Admin</code> you own (Parsley never closes it):</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="n">CausalTopics</span><span class="w"> </span><span class="n">topics</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">CausalTopics</span><span class="p">.</span><span class="na">of</span><span class="p">(</span><span class="n">admin</span><span class="p">);</span>
-<a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a>
-<a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a><span class="c1">// trigger&#39;s own dependencies plus its own position</span>
-<a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a><span class="n">CausalDependencies</span><span class="w"> </span><span class="n">deps</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">CausalDependencies</span><span class="p">.</span><span class="na">from</span><span class="p">(</span><span class="n">topics</span><span class="p">,</span><span class="w"> </span><span class="n">trigger</span><span class="p">);</span>
-<a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a><span class="n">producer</span><span class="p">.</span><span class="na">send</span><span class="p">(</span><span class="n">deps</span><span class="p">.</span><span class="na">stamp</span><span class="p">(</span><span class="k">new</span><span class="w"> </span><span class="n">ProducerRecord</span><span class="o">&lt;&gt;</span><span class="p">(</span><span class="s">&quot;orders&quot;</span><span class="p">,</span><span class="w"> </span><span class="n">key</span><span class="p">,</span><span class="w"> </span><span class="n">value</span><span class="p">)));</span>
-</code></pre></div>
-<p><code>from</code> carries the dependencies the triggering record arrived with <strong>and</strong> its own position, so a
-downstream causal processor waits until it has observed <code>trigger</code> before delivering anything stamped
-here. Combine several with <code>merge</code> for a fan-in:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="n">CausalDependencies</span><span class="w"> </span><span class="n">deps</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">CausalDependencies</span><span class="p">.</span><span class="na">from</span><span class="p">(</span><span class="n">topics</span><span class="p">,</span><span class="w"> </span><span class="n">priceUpdate</span><span class="p">)</span>
-<a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a><span class="w">        </span><span class="p">.</span><span class="na">merge</span><span class="p">(</span><span class="n">CausalDependencies</span><span class="p">.</span><span class="na">from</span><span class="p">(</span><span class="n">topics</span><span class="p">,</span><span class="w"> </span><span class="n">inventoryChange</span><span class="p">));</span>
-<a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a><span class="n">producer</span><span class="p">.</span><span class="na">send</span><span class="p">(</span><span class="n">deps</span><span class="p">.</span><span class="na">stamp</span><span class="p">(</span><span class="n">record</span><span class="p">));</span>
-</code></pre></div>
-<p>To declare a dependency on a specific upstream position you did not consume, build one explicitly:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a><span class="n">CausalDependencies</span><span class="w"> </span><span class="n">deps</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">CausalDependencies</span><span class="p">.</span><span class="na">builder</span><span class="p">(</span><span class="n">topics</span><span class="p">)</span>
-<a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a><span class="w">        </span><span class="p">.</span><span class="na">require</span><span class="p">(</span><span class="s">&quot;prices&quot;</span><span class="p">,</span><span class="w"> </span><span class="cm">/* partition */</span><span class="w"> </span><span class="mi">0</span><span class="p">,</span><span class="w"> </span><span class="cm">/* offset */</span><span class="w"> </span><span class="mi">42</span><span class="p">)</span>
-<a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a><span class="w">        </span><span class="p">.</span><span class="na">build</span><span class="p">();</span>
-</code></pre></div>
-<p>The serialised dependencies header grows with the number of topic-partitions it names — see the
-<a href="../configuration/#header-size">header size note</a> in Configuration.</p>
-<h2 id="propagating-causal-context-across-services">Propagating causal context across services</h2>
-<p>A <code>CausalDependencies</code> value is a portable causal token. To gate a read in a downstream service on
-what an upstream record depended on, serialise the dependencies and send them over your transport:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a><span class="c1">// Sender — extract the relevant dependencies and serialise them</span>
-<a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a><span class="n">CausalDependencies</span><span class="w"> </span><span class="n">context</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">CausalDependencies</span><span class="p">.</span><span class="na">fromRecord</span><span class="p">(</span><span class="n">consumedRecord</span><span class="p">)</span>
-<a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a><span class="w">        </span><span class="p">.</span><span class="na">orElse</span><span class="p">(</span><span class="n">CausalDependencies</span><span class="p">.</span><span class="na">empty</span><span class="p">());</span>
-<a id="__codelineno-5-4" name="__codelineno-5-4" href="#__codelineno-5-4"></a><span class="kt">byte</span><span class="o">[]</span><span class="w"> </span><span class="n">token</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">context</span><span class="p">.</span><span class="na">toBytes</span><span class="p">();</span>
-<a id="__codelineno-5-5" name="__codelineno-5-5" href="#__codelineno-5-5"></a><span class="c1">// ... send token over HTTP, gRPC, etc. (apply your own encryption/transport)</span>
-<a id="__codelineno-5-6" name="__codelineno-5-6" href="#__codelineno-5-6"></a>
-<a id="__codelineno-5-7" name="__codelineno-5-7" href="#__codelineno-5-7"></a><span class="c1">// Receiver — rebuild the dependencies</span>
-<a id="__codelineno-5-8" name="__codelineno-5-8" href="#__codelineno-5-8"></a><span class="n">CausalDependencies</span><span class="w"> </span><span class="n">required</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">CausalDependencies</span><span class="p">.</span><span class="na">fromBytes</span><span class="p">(</span><span class="n">receivedToken</span><span class="p">);</span>
-</code></pre></div>
-<p>Parsley ships no encryption or transport layer; securing and routing the token is the
-application's responsibility.</p>
+<p>Without <code>.withAudit(...)</code>, Parsley uses <code>CausalAudit.NOOP</code> — no events are emitted, with no overhead.</p>
+<h2 id="events">Events</h2>
+<table>
+<thead>
+<tr>
+<th>Method</th>
+<th>Fires when</th>
+<th>Carries</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>recordForwarded</code></td>
+<td>a record's dependencies were already satisfied; delivered without buffering</td>
+<td>topic, partition, offset</td>
+</tr>
+<tr>
+<td><code>recordHeld</code></td>
+<td>a record's dependencies were unsatisfied; admitted to the buffer to wait</td>
+<td>topic, partition, offset, buffer depth after admission, the unmet gap</td>
+</tr>
+<tr>
+<td><code>recordReleased</code></td>
+<td>a previously held record became satisfiable and drained, in causal order</td>
+<td>topic, partition, offset, buffer depth after release</td>
+</tr>
+<tr>
+<td><code>recordViolation</code></td>
+<td>a held record was evicted and forwarded out of order because a <code>CausalBufferLimit</code> fired first — a causal violation</td>
+<td>topic, partition, offset, the gap still unmet at eviction</td>
+</tr>
+<tr>
+<td><code>recordDeserializationFailure</code></td>
+<td>a held record could no longer be deserialised on the forward path (e.g. an incompatible Schema Registry change while buffered)</td>
+<td>topic, partition, offset, an operator-facing reason string, whether the record was dropped or left buffered for recovery</td>
+</tr>
+<tr>
+<td><code>processorInitialized</code></td>
+<td>a task's processor started up</td>
+<td>task id, whether a persisted frontier was restored</td>
+</tr>
+<tr>
+<td><code>processorClosing</code></td>
+<td>a task's processor is shutting down</td>
+<td>task id</td>
+</tr>
+</tbody>
+</table>
+<p>Every method carries only topic/partition/offset/causal-metadata — never the record's key or
+value, matching Parsley's own logs.</p>
+<h2 id="relationship-to-parsleys-metrics">Relationship to Parsley's metrics</h2>
+<p><code>CausalAudit</code> is independent of, and parallel to, the aggregate counters Parsley always wires into
+the Kafka Streams metrics registry (<code>records-buffered-total</code>, <code>records-released-total</code>,
+<code>buffer-depth</code>, the violation and deserialization-error counters). Both are notified from the same
+internal trigger points, but serve different purposes: the metrics are always-on, aggregate-only,
+and feed JMX/Streams' own metrics reporters; <code>CausalAudit</code> is optional, per-record, and routed
+wherever you supply it. Registering an audit has no effect on the metrics, and vice versa.</p>
+<h2 id="failure-handling">Failure handling</h2>
+<p>An exception thrown from any <code>CausalAudit</code> method is caught and logged by Parsley — it never fails
+the record or the Streams task (fail-open). A slow implementation will, however, add latency to the
+calling thread, since these methods are called synchronously from the processing path: keep
+implementations fast and non-blocking, and hand off to a queue if the real destination is slow.</p>
+<h2 id="thread-safety">Thread-safety</h2>
+<p>One <code>CausalAudit</code> instance is shared across every task and partition the processor runs on, each
+owned by its own Kafka Streams thread. Implementations must be thread-safe.</p>
 
 
 
@@ -1035,7 +1037,7 @@ application's responsibility.</p>
       <nav class="md-footer__inner md-grid" aria-label="Footer" >
         
           
-          <a href="../concepts/" class="md-footer__link md-footer__link--prev" aria-label="Previous: Concepts">
+          <a href="../configuration/" class="md-footer__link md-footer__link--prev" aria-label="Previous: Configuration">
             <div class="md-footer__button md-icon">
               
               <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
@@ -1045,20 +1047,20 @@ application's responsibility.</p>
                 Previous
               </span>
               <div class="md-ellipsis">
-                Concepts
+                Configuration
               </div>
             </div>
           </a>
         
         
           
-          <a href="../streams/" class="md-footer__link md-footer__link--next" aria-label="Next: Streams integration">
+          <a href="../performance/" class="md-footer__link md-footer__link--next" aria-label="Next: Performance">
             <div class="md-footer__title">
               <span class="md-footer__direction">
                 Next
               </span>
               <div class="md-ellipsis">
-                Streams integration
+                Performance
               </div>
             </div>
             <div class="md-footer__button md-icon">

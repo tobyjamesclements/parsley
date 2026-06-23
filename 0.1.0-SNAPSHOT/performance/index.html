@@ -11,7 +11,7 @@
       
       
       
-        <link rel="prev" href="../configuration/">
+        <link rel="prev" href="../audit-logging/">
       
       
         <link rel="next" href="../troubleshooting/">
@@ -394,6 +394,33 @@
       
   
   
+  
+  
+    <li class="md-nav__item">
+      <a href="../audit-logging/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Audit logging
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
     
   
   
@@ -682,10 +709,10 @@
       
         
         
-        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_10" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_11" >
         
           
-          <label class="md-nav__link" for="__nav_10" id="__nav_10_label" tabindex="0">
+          <label class="md-nav__link" for="__nav_11" id="__nav_11_label" tabindex="0">
             
   
   
@@ -703,8 +730,8 @@
             <span class="md-nav__icon md-icon"></span>
           </label>
         
-        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_10_label" aria-expanded="false">
-          <label class="md-nav__title" for="__nav_10">
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_11_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_11">
             <span class="md-nav__icon md-icon"></span>
             
   
@@ -1359,8 +1386,8 @@ possible.</p>
 </table>
 <hr />
 <h2 id="running-the-benchmarks">Running the benchmarks</h2>
-<p>The benchmark suite lives in <code>src/test/java/io/parsley/</code> and can be run with Maven. It uses
-<code>TopologyTestDriver</code> and does not require a running Kafka cluster by default.</p>
+<p>The benchmark suite lives in <code>src/test/java/io/parsley/</code> and can be run with Maven. It runs
+in-process on <code>TopologyTestDriver</code> and local RocksDB — no Kafka broker or Docker is required.</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>mvn -Pbenchmarks test
 </code></pre></div>
 <p>To run a single curve with reduced iterations (smoke test):</p>
@@ -1372,7 +1399,8 @@ possible.</p>
 <a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a>  &quot;-Dbenchmark.args=-rf json -rff results.json&quot;
 </code></pre></div>
 <p>See <a href="../internals/benchmarks/">Internals: Benchmark suite</a> for the full parameter reference,
-system property overrides, and instructions for running against your own Kafka cluster and storage.</p>
+system property overrides, and how to point RocksDB at your target hardware's storage for
+representative absolute figures.</p>
 
 
 
@@ -1408,7 +1436,7 @@ system property overrides, and instructions for running against your own Kafka c
       <nav class="md-footer__inner md-grid" aria-label="Footer" >
         
           
-          <a href="../configuration/" class="md-footer__link md-footer__link--prev" aria-label="Previous: Configuration">
+          <a href="../audit-logging/" class="md-footer__link md-footer__link--prev" aria-label="Previous: Audit logging">
             <div class="md-footer__button md-icon">
               
               <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
@@ -1418,7 +1446,7 @@ system property overrides, and instructions for running against your own Kafka c
                 Previous
               </span>
               <div class="md-ellipsis">
-                Configuration
+                Audit logging
               </div>
             </div>
           </a>

@@ -397,6 +397,33 @@
   
   
     <li class="md-nav__item">
+      <a href="../../audit-logging/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Audit logging
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
       <a href="../../performance/" class="md-nav__link">
         
   
@@ -515,10 +542,10 @@
       
         
         
-        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_10" checked>
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_11" checked>
         
           
-          <label class="md-nav__link" for="__nav_10" id="__nav_10_label" tabindex="0">
+          <label class="md-nav__link" for="__nav_11" id="__nav_11_label" tabindex="0">
             
   
   
@@ -536,8 +563,8 @@
             <span class="md-nav__icon md-icon"></span>
           </label>
         
-        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_10_label" aria-expanded="true">
-          <label class="md-nav__title" for="__nav_10">
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_11_label" aria-expanded="true">
+          <label class="md-nav__title" for="__nav_11">
             <span class="md-nav__icon md-icon"></span>
             
   
@@ -913,36 +940,46 @@ encoding.</p>
 <p>Size: <code>5 + 28 × n</code> bytes. Wire version <code>0x01</code>; deserialization throws <code>IllegalStateException</code> on mismatch.</p>
 <p>Topic IDs are Kafka <code>Uuid</code> values stored as two <code>long</code> fields (most-significant bits, then least-significant bits).</p>
 <h2 id="buffer-record-parsleyserializer-v3">Buffer record (<code>ParsleySerializer</code> v3)</h2>
-<p>Records held in the <code>{ns}-buffer</code> state store are serialised with <code>ParsleySerializer</code>. The source
-coordinate and dependency clock are written as typed fields (not headers); only the user's headers
-are carried. The key/value bytes are produced by the Serde resolved from the typed source topic.</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>[version       :1]   0x03
-<a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a>[timestamp     :8]
-<a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a>[topic-len     :2]
-<a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a>[topic         :topic-len]   UTF-8 source topic
-<a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a>[topicId       :16]          topicId.MSB then topicId.LSB
-<a id="__codelineno-1-6" name="__codelineno-1-6" href="#__codelineno-1-6"></a>[partition     :4]
-<a id="__codelineno-1-7" name="__codelineno-1-7" href="#__codelineno-1-7"></a>[offset        :8]
-<a id="__codelineno-1-8" name="__codelineno-1-8" href="#__codelineno-1-8"></a>[deps-len      :4]   -1 if absent (the empty clock still encodes as 5 bytes)
-<a id="__codelineno-1-9" name="__codelineno-1-9" href="#__codelineno-1-9"></a>[deps          :deps-len]    parsley-causal-dependencies encoding
-<a id="__codelineno-1-10" name="__codelineno-1-10" href="#__codelineno-1-10"></a>[header-count  :4]
-<a id="__codelineno-1-11" name="__codelineno-1-11" href="#__codelineno-1-11"></a>per user header:
-<a id="__codelineno-1-12" name="__codelineno-1-12" href="#__codelineno-1-12"></a>  [key-len     :2]
-<a id="__codelineno-1-13" name="__codelineno-1-13" href="#__codelineno-1-13"></a>  [key         :key-len]
-<a id="__codelineno-1-14" name="__codelineno-1-14" href="#__codelineno-1-14"></a>  [value-len   :4]   -1 if value is null
-<a id="__codelineno-1-15" name="__codelineno-1-15" href="#__codelineno-1-15"></a>  [value       :value-len]
-<a id="__codelineno-1-16" name="__codelineno-1-16" href="#__codelineno-1-16"></a>[key-len       :4]   -1 if key is null
-<a id="__codelineno-1-17" name="__codelineno-1-17" href="#__codelineno-1-17"></a>[key           :key-len]
-<a id="__codelineno-1-18" name="__codelineno-1-18" href="#__codelineno-1-18"></a>[value-len     :4]   -1 if value is null
-<a id="__codelineno-1-19" name="__codelineno-1-19" href="#__codelineno-1-19"></a>[value         :value-len]
+<p>The <code>{ns}-buffer</code> state store value has two layers: <code>RocksBufferStore</code> prepends the buffer-admission
+time to the <code>ParsleySerializer</code>-encoded record.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>[bufferedAt    :8]   wall-clock time (epoch millis) the record was admitted to the buffer
+<a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a>[ParsleySerializer v3 payload, below]
 </code></pre></div>
+<p>The <code>ParsleySerializer</code> payload is what's passed to and decoded from <code>serialize</code>/<code>deserialize</code>. The
+source coordinate and dependency clock are written as typed fields (not headers); only the user's
+headers are carried. The key/value bytes are produced by the Serde resolved from the typed source
+topic. Its own <code>[timestamp:8]</code> field is the record's original Kafka timestamp — distinct from, and
+written independently of, the outer <code>bufferedAt</code>.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>[version       :1]   0x03
+<a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a>[timestamp     :8]   the record&#39;s original Kafka timestamp (not bufferedAt above)
+<a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a>[topic-len     :2]
+<a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a>[topic         :topic-len]   UTF-8 source topic
+<a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a>[topicId       :16]          topicId.MSB then topicId.LSB
+<a id="__codelineno-2-6" name="__codelineno-2-6" href="#__codelineno-2-6"></a>[partition     :4]
+<a id="__codelineno-2-7" name="__codelineno-2-7" href="#__codelineno-2-7"></a>[offset        :8]
+<a id="__codelineno-2-8" name="__codelineno-2-8" href="#__codelineno-2-8"></a>[deps-len      :4]   -1 if absent (the empty clock still encodes as 5 bytes)
+<a id="__codelineno-2-9" name="__codelineno-2-9" href="#__codelineno-2-9"></a>[deps          :deps-len]    parsley-causal-dependencies encoding
+<a id="__codelineno-2-10" name="__codelineno-2-10" href="#__codelineno-2-10"></a>[header-count  :4]
+<a id="__codelineno-2-11" name="__codelineno-2-11" href="#__codelineno-2-11"></a>per user header:
+<a id="__codelineno-2-12" name="__codelineno-2-12" href="#__codelineno-2-12"></a>  [key-len     :2]
+<a id="__codelineno-2-13" name="__codelineno-2-13" href="#__codelineno-2-13"></a>  [key         :key-len]
+<a id="__codelineno-2-14" name="__codelineno-2-14" href="#__codelineno-2-14"></a>  [value-len   :4]   -1 if value is null
+<a id="__codelineno-2-15" name="__codelineno-2-15" href="#__codelineno-2-15"></a>  [value       :value-len]
+<a id="__codelineno-2-16" name="__codelineno-2-16" href="#__codelineno-2-16"></a>[key-len       :4]   -1 if key is null
+<a id="__codelineno-2-17" name="__codelineno-2-17" href="#__codelineno-2-17"></a>[key           :key-len]
+<a id="__codelineno-2-18" name="__codelineno-2-18" href="#__codelineno-2-18"></a>[value-len     :4]   -1 if value is null
+<a id="__codelineno-2-19" name="__codelineno-2-19" href="#__codelineno-2-19"></a>[value         :value-len]
+</code></pre></div>
+<p><code>ParsleyEngine</code>'s startup index rebuild and the duration-based eviction scan decode only the outer
+<code>bufferedAt</code> and the <code>deps</code> field — via <code>ParsleySerializer.deserializeDependencies</code> — never the
+key/value bytes, so a record whose user serde can no longer decode it doesn't block either path.</p>
 <h2 id="candidate-index-key">Candidate-index key</h2>
 <p>The <code>{ns}-candidate-index</code> store maps coordinate+offset+recordId to an empty presence marker. The 36-byte key uses big-endian encoding throughout so that RocksDB lexicographic ordering produces a range scan for all records waiting on a given coordinate up to a given offset.</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>[topicId MSB    :8]
-<a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a>[topicId LSB    :8]
-<a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a>[partition      :4]
-<a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a>[requiredOffset :8]
-<a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a>[recordId       :8]   buffer insertion sequence
+<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>[topicId MSB    :8]
+<a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a>[topicId LSB    :8]
+<a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a>[partition      :4]
+<a id="__codelineno-3-4" name="__codelineno-3-4" href="#__codelineno-3-4"></a>[requiredOffset :8]
+<a id="__codelineno-3-5" name="__codelineno-3-5" href="#__codelineno-3-5"></a>[recordId       :8]   buffer insertion sequence
 </code></pre></div>
 <h2 id="state-store-names-and-serdes">State store names and serdes</h2>
 <p>The namespace is the <code>name</code> passed to <code>CausalProcessors.builder(...).addBufferStore(name, limit)</code>.</p>
@@ -966,7 +1003,7 @@ are carried. The key/value bytes are produced by the Serde resolved from the typ
 <td><code>{ns}-buffer</code></td>
 <td><code>Long</code></td>
 <td><code>byte[]</code></td>
-<td>Insertion sequence -&gt; serialised <code>ParsleyMessage</code></td>
+<td>Insertion sequence -&gt; <code>bufferedAt</code> + serialised <code>ParsleyMessage</code></td>
 </tr>
 <tr>
 <td><code>{ns}-candidate-index</code></td>
