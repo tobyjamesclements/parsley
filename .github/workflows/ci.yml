@@ -16,6 +16,34 @@ jobs:
           cache: 'maven'
       - name: Run unit tests
         run: ./mvnw test --no-transfer-progress
+      - name: Coverage summary
+        if: always()
+        run: |
+          csv=target/site/jacoco/jacoco.csv
+          if [ -f "$csv" ]; then
+            awk -F',' '
+              NR > 1 {
+                im += $4; ic += $5; bm += $6; bc += $7
+              }
+              END {
+                printf "## Coverage\n\n"
+                printf "| Metric | Covered | Missed | %% |\n"
+                printf "|---|---|---|---|\n"
+                printf "| Instructions | %d | %d | %.1f%% |\n", ic, im, 100*ic/(ic+im)
+                printf "| Branches | %d | %d | %.1f%% |\n", bc, bm, 100*bc/(bc+bm)
+              }
+            ' "$csv" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "## Coverage" >> "$GITHUB_STEP_SUMMARY"
+            echo "no jacoco.csv produced" >> "$GITHUB_STEP_SUMMARY"
+          fi
+      - name: Upload coverage report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: jacoco-report
+          path: target/site/jacoco/
+          if-no-files-found: ignore
 
   integration-tests:
     runs-on: ubuntu-latest

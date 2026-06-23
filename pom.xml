@@ -40,6 +40,7 @@
         <nullaway.version>0.13.7</nullaway.version>
         <pitest.version>1.25.4</pitest.version>
         <pitest.junit5.version>1.2.3</pitest.junit5.version>
+        <jacoco.version>0.8.13</jacoco.version>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
     </properties>
 
@@ -351,11 +352,39 @@
                 <artifactId>maven-surefire-plugin</artifactId>
                 <version>3.5.2</version>
                 <configuration>
-                    <argLine>--enable-native-access=ALL-UNNAMED</argLine>
+                    <!-- @{argLine} (not ${argLine}) picks up the javaagent flag that jacoco:prepare-agent
+                         sets on the "argLine" property at execution time, after the static pom is parsed. -->
+                    <argLine>@{argLine} --enable-native-access=ALL-UNNAMED</argLine>
                     <includes>
                         <include>**/*Test.java</include>
                     </includes>
                 </configuration>
+            </plugin>
+            <!-- Unit test coverage. Scoped to surefire's *Test classes (not the Testcontainers ITs),
+                 matching the existing mutation-testing exclusion of io.parsley.*IT below. Report lands
+                 at target/site/jacoco/ as part of plain 'mvn test'. -->
+            <plugin>
+                <groupId>org.jacoco</groupId>
+                <artifactId>jacoco-maven-plugin</artifactId>
+                <version>${jacoco.version}</version>
+                <executions>
+                    <execution>
+                        <id>prepare-agent</id>
+                        <goals>
+                            <goal>prepare-agent</goal>
+                        </goals>
+                        <configuration>
+                            <propertyName>argLine</propertyName>
+                        </configuration>
+                    </execution>
+                    <execution>
+                        <id>report</id>
+                        <phase>test</phase>
+                        <goals>
+                            <goal>report</goal>
+                        </goals>
+                    </execution>
+                </executions>
             </plugin>
             <!-- IT tests (Testcontainers/broker-dependent) run in the integration-test phase.
                  Use 'mvn test' for fast tests only; 'mvn verify' for the full suite. -->
