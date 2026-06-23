@@ -76,6 +76,7 @@ public final class CausalProcessors {
         private final Properties config = new Properties();
         private Function<Map<String, Object>, ParsleyTopicAdmin> adminFactory = ParsleyTopicAdmin::ofConfigs;
         private @Nullable ParsleyConfig configOverride = null;
+        private CausalAudit audit = CausalAudit.NOOP;
 
         private Builder(ProcessorSupplier<KIn, VIn, KOut, VOut> userSupplier) {
             this.userSupplier = userSupplier;
@@ -186,6 +187,23 @@ public final class CausalProcessors {
         }
 
         /**
+         * Registers a {@link CausalAudit} to receive this processor's per-record causal events
+         * (forwarded, held, released, evicted, undecodable), for routing to your own audit/compliance
+         * trail. Optional — without one, these events are observable only through Parsley's logs and
+         * metrics.
+         *
+         * <p>An exception thrown from the audit is caught and logged; it never fails a record or the
+         * Streams task. See {@link CausalAudit} for the full contract.
+         *
+         * @param audit the audit to notify; must not be {@code null}
+         * @return this builder
+         */
+        public Builder<KIn, VIn, KOut, VOut> withAudit(CausalAudit audit) {
+            this.audit = audit;
+            return this;
+        }
+
+        /**
          * Overrides the {@link ParsleyTopicAdmin} used to resolve topic UUIDs at startup (default: a
          * live {@link org.apache.kafka.clients.admin.Admin} built from the task's {@code appConfigs()}).
          * For tests running under {@code TopologyTestDriver} with no broker.
@@ -231,7 +249,7 @@ public final class CausalProcessors {
             return new ParsleyProcessorSupplier<>(
                     userSupplier, bufferLimit, keySerdeByTopic, valueSerdeByTopic,
                     store + "-frontier", store + "-buffer", store + "-candidate-index",
-                    resolved.keySet(), adminFactory, effectiveConfig);
+                    resolved.keySet(), adminFactory, effectiveConfig, ParsleyAudit.wrap(audit));
         }
 
         /** Classpath {@code parsley.properties} as a base layer, overlaid with builder-supplied keys. */

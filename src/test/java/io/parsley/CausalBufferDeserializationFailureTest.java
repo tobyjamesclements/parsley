@@ -152,9 +152,10 @@ class CausalBufferDeserializationFailureTest {
     void continueModeSkipsThePoisonRecordOnDrainInsteadOfFailing() {
         PoisonBufferStore<String, String> buffer = new PoisonBufferStore<>();
         CountingMetrics metrics = new CountingMetrics();
+        RecordingCausalAudit audit = new RecordingCausalAudit();
         ParsleyEngine<String, String> engine = new ParsleyEngine<>(
                 CausalBufferLimit.ofSize(100), ParsleyClock.empty(), c -> {},
-                buffer, new MockCandidateIndex(), metrics, System::currentTimeMillis, /* skip */ true);
+                buffer, new MockCandidateIndex(), metrics, audit, System::currentTimeMillis, /* skip */ true);
 
         engine.onRecord(message(T2, 0, T2_ID, ParsleyClock.empty().observe(T1_ID, 0, 3)));  // held (poison)
         assertEquals(1, buffer.size(), "the poison record is buffered while its dependency is unmet");
@@ -168,6 +169,12 @@ class CausalBufferDeserializationFailureTest {
         assertEquals(0, buffer.size(), "the dropped poison record must be removed from the buffer");
         assertEquals(1, metrics.deserializationErrors.get(), "the decode error is counted");
         assertEquals(1, metrics.violations.get(), "dropping the record counts a causal violation");
+
+        assertEquals(1, audit.deserializationFailures.size(), "the dropped poison record must be audited");
+        RecordingCausalAudit.DeserializationFailure failure = audit.deserializationFailures.get(0);
+        assertEquals("t2", failure.topic(), "audit must name the poison record's own topic");
+        assertEquals(0L, failure.offset(), "audit must name the poison record's own offset");
+        assertTrue(failure.dropped(), "continue-mode drops the record, which the audit must reflect");
     }
 
     /**
@@ -178,9 +185,10 @@ class CausalBufferDeserializationFailureTest {
     void continueModeSkipsThePoisonRecordOnEvictionInsteadOfFailing() {
         PoisonBufferStore<String, String> buffer = new PoisonBufferStore<>();
         CountingMetrics metrics = new CountingMetrics();
+        RecordingCausalAudit audit = new RecordingCausalAudit();
         ParsleyEngine<String, String> engine = new ParsleyEngine<>(
                 CausalBufferLimit.ofSize(1), ParsleyClock.empty(), c -> {},
-                buffer, new MockCandidateIndex(), metrics, System::currentTimeMillis, /* skip */ true);
+                buffer, new MockCandidateIndex(), metrics, audit, System::currentTimeMillis, /* skip */ true);
 
         // Both depend on an unmet T1@3, so both are held; the second overflows the size-1 limit.
         ParsleyClock unmet = ParsleyClock.empty().observe(T1_ID, 0, 3);
@@ -192,6 +200,10 @@ class CausalBufferDeserializationFailureTest {
         assertTrue(out.isEmpty(), "skip-dropped records are not forwarded");
         assertEquals(0, buffer.size(), "overflow poison records are dropped from the buffer");
         assertTrue(metrics.deserializationErrors.get() >= 1, "the decode error(s) are counted");
+
+        assertTrue(audit.deserializationFailures.size() >= 1, "the overflow-dropped poison record(s) must be audited");
+        assertTrue(audit.deserializationFailures.stream().allMatch(RecordingCausalAudit.DeserializationFailure::dropped),
+                "continue-mode drops every overflow poison record, which the audit must reflect");
     }
 
     // --- helpers --------------------------------------------------------------------------------

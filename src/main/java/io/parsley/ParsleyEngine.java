@@ -59,6 +59,7 @@ final class ParsleyEngine<K, V> {
     private final ParsleyCandidateIndex candidateIndex;
     private final FrontierCallback frontierListener;
     private final ParsleyMetrics metrics;
+    private final CausalAudit audit;
     private final LongSupplier clock;
     // When true (parsley.buffer.deserialization.failure.policy = continue), an undecodable held
     // record is dropped on the forward path and processing continues; when false (default = fail),
@@ -77,7 +78,7 @@ final class ParsleyEngine<K, V> {
                  ParsleyCandidateIndex candidateIndex,
                  ParsleyMetrics metrics) {
         this(limit, initialFrontier, frontierListener, buffer, candidateIndex,
-                metrics, System::currentTimeMillis, false);
+                metrics, CausalAudit.NOOP, System::currentTimeMillis, false);
     }
 
     ParsleyEngine(CausalBufferLimit limit,
@@ -87,7 +88,8 @@ final class ParsleyEngine<K, V> {
                  ParsleyCandidateIndex candidateIndex,
                  ParsleyMetrics metrics,
                  LongSupplier clock) {
-        this(limit, initialFrontier, frontierListener, buffer, candidateIndex, metrics, clock, false);
+        this(limit, initialFrontier, frontierListener, buffer, candidateIndex,
+                metrics, CausalAudit.NOOP, clock, false);
     }
 
     ParsleyEngine(CausalBufferLimit limit,
@@ -96,6 +98,7 @@ final class ParsleyEngine<K, V> {
                  ParsleyBufferStore<K, V> buffer,
                  ParsleyCandidateIndex candidateIndex,
                  ParsleyMetrics metrics,
+                 CausalAudit audit,
                  LongSupplier clock,
                  boolean skipOnDecodeFailure) {
         this.limit = limit;
@@ -104,6 +107,7 @@ final class ParsleyEngine<K, V> {
         this.buffer = buffer;
         this.candidateIndex = candidateIndex;
         this.metrics = metrics;
+        this.audit = audit;
         this.clock = clock;
         this.skipOnDecodeFailure = skipOnDecodeFailure;
         this.sizeLimit = sizeLimitOf(limit).orElse(Integer.MAX_VALUE);
@@ -132,6 +136,7 @@ final class ParsleyEngine<K, V> {
         if (frontier.dominates(dependencies)) {
             log.debug("Forwarding {}-{} @{} (satisfied immediately)",
                     message.topic(), message.partition(), message.offset());
+            audit.recordForwarded(message.topic(), message.partition(), message.offset());
             advanceFrontier(message);
             out.add(message);
             drainInto(out, message.topicId(), message.partition());
@@ -139,11 +144,10 @@ final class ParsleyEngine<K, V> {
             long seq = buffer.add(message, clock.getAsLong());
             candidateIndex.index(seq, dependencies, frontier);
             int depth = buffer.size();
-            if (log.isDebugEnabled()) {
-                log.debug("Holding {}-{} @{} (buffer depth: {}, gap: {})",
-                        message.topic(), message.partition(), message.offset(), depth,
-                        dependencies.missing(frontier));
-            }
+            ParsleyClock gap = dependencies.missing(frontier);
+            log.debug("Holding {}-{} @{} (buffer depth: {}, gap: {})",
+                    message.topic(), message.partition(), message.offset(), depth, gap);
+            audit.recordHeld(message.topic(), message.partition(), message.offset(), depth, CausalDependencies.of(gap));
             metrics.recordBuffered();
             reportBufferState();
             if (depth >= sizeLimit) {
@@ -311,6 +315,8 @@ final class ParsleyEngine<K, V> {
 
             for (ParsleyBufferStore.Entry<K, V> entry : releasable) {
                 buffer.remove(entry.sequence());
+                audit.recordReleased(entry.record().topic(), entry.record().partition(),
+                        entry.record().offset(), buffer.size());
                 advanceFrontier(entry.record());
                 toScan.computeIfAbsent(entry.record().topicId(), k -> new HashSet<>())
                         .add(entry.record().partition());
@@ -365,6 +371,7 @@ final class ParsleyEngine<K, V> {
      */
     private boolean tryDropPoison(ParsleyBufferDeserializationException e, long sequence) {
         metrics.recordDeserializationError();
+        audit.recordDeserializationFailure(e.topic(), e.partition(), e.offset(), e.details(), skipOnDecodeFailure);
         if (skipOnDecodeFailure) {
             log.error("Dropping an undecodable buffered record "
                     + "(parsley.buffer.deserialization.failure.policy = continue). {}", e.details(), e);
@@ -379,9 +386,10 @@ final class ParsleyEngine<K, V> {
     }
 
     private void reportEviction(ParsleyMessage<K, V> record, ParsleyClock required) {
+        ParsleyClock gap = required.missing(frontier);
         log.warn("Causal violation [EVICTED on {}-{} @{}] gap: {}",
-                record.topic(), record.partition(),
-                record.offset(), required.missing(frontier));
+                record.topic(), record.partition(), record.offset(), gap);
+        audit.recordViolation(record.topic(), record.partition(), record.offset(), CausalDependencies.of(gap));
         metrics.recordViolation();
     }
 

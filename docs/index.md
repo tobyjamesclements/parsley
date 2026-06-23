@@ -48,4 +48,5 @@ common vocabulary of value types:
 - [**Getting started**](getting-started.md) — installation and stamping causal context at the edge
 - [**Streams integration**](streams.md) — wrapping a `Processor`, preconditions, recovery
 - [**Configuration**](configuration.md) — buffer limits, eviction, header size
+- [**Audit logging**](audit-logging.md) — routing per-record causal events to your own audit trail
 - [**API reference**](api/index.html) — full Javadoc

@@ -29,6 +29,7 @@ final class ParsleyProcessorSupplier<KIn, VIn, KOut, VOut>
     private final Set<String> topics;
     private final Function<Map<String, Object>, ParsleyTopicAdmin> adminFactory;
     private final ParsleyConfig config;
+    private final CausalAudit audit;
 
     ParsleyProcessorSupplier(ProcessorSupplier<KIn, VIn, KOut, VOut> userSupplier,
                                       CausalBufferLimit limit,
@@ -39,7 +40,8 @@ final class ParsleyProcessorSupplier<KIn, VIn, KOut, VOut>
                                       String candidateIndexStoreName,
                                       Set<String> topics,
                                       Function<Map<String, Object>, ParsleyTopicAdmin> adminFactory,
-                                      ParsleyConfig config) {
+                                      ParsleyConfig config,
+                                      CausalAudit audit) {
         this.userSupplier = userSupplier;
         this.limit = limit;
         this.keySerdeByTopic = keySerdeByTopic;
@@ -50,6 +52,7 @@ final class ParsleyProcessorSupplier<KIn, VIn, KOut, VOut>
         this.topics = topics;
         this.adminFactory = adminFactory;
         this.config = config;
+        this.audit = audit;
     }
 
     @Override
@@ -57,7 +60,7 @@ final class ParsleyProcessorSupplier<KIn, VIn, KOut, VOut>
         return new ParsleyProcessor<>(
                 userSupplier.get(), limit,
                 new ParsleySerializer<>(new ParsleyResolver<>(keySerdeByTopic, valueSerdeByTopic)),
-                frontierStoreName, bufferStoreName, candidateIndexStoreName, topics, adminFactory, config);
+                frontierStoreName, bufferStoreName, candidateIndexStoreName, topics, adminFactory, config, audit);
     }
 
     /** The buffer eviction limit this supplier was built with. Package-private for tests. */

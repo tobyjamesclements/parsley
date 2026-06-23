@@ -55,6 +55,7 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
     private final Set<String> topics;
     private final Function<Map<String, Object>, ParsleyTopicAdmin> adminFactory;
     private final ParsleyConfig config;
+    private final CausalAudit audit;
 
     // All mutable state below is confined to the single Kafka Streams thread that owns this task.
 
@@ -84,7 +85,8 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
                      String candidateIndexStoreName,
                      Set<String> topics,
                      Function<Map<String, Object>, ParsleyTopicAdmin> adminFactory,
-                     ParsleyConfig config) {
+                     ParsleyConfig config,
+                     CausalAudit audit) {
         this.delegate = delegate;
         this.limit = limit;
         this.serializer = serializer;
@@ -94,6 +96,7 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
         this.topics = topics;
         this.adminFactory = adminFactory;
         this.config = config;
+        this.audit = audit;
     }
 
     @Override
@@ -115,6 +118,7 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
         } else {
             log.info("Processor initialized [task: {}] — frontier empty (fresh start)", context.taskId());
         }
+        audit.processorInitialized(context.taskId().toString(), stored != null);
 
         ParsleyEngine.FrontierCallback listener = frontier -> {
             frontierStore.put(ParsleyStores.FRONTIER_KEY, frontier.toBytes());
@@ -128,7 +132,7 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
                 ParsleyEngine.sizeLimitOf(limit), ParsleyEngine.durationLimitOf(limit));
 
         this.engine = new ParsleyEngine<>(limit, initialFrontier,
-                listener, buffer, candidateIndex, wiredMetrics.metrics(), context::currentSystemTimeMs,
+                listener, buffer, candidateIndex, wiredMetrics.metrics(), audit, context::currentSystemTimeMs,
                 config.skipOnDecodeFailure());
 
         ProcessorContext<KOut, VOut> stamping = new ParsleyProcessorContext<>(
@@ -164,6 +168,7 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
     @Override
     public void close() {
         log.info("Processor closing [task: {}]", context.taskId());
+        audit.processorClosing(context.taskId().toString());
         delegate.close();
         wiredMetrics.close(context.metrics());
     }

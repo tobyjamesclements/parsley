@@ -62,7 +62,9 @@ instance owns the complete partition set for a related group. See
 The guarantee holds for every record delivered in causal order. When the configured
 `CausalBufferLimit` fires before a held record's dependencies are satisfied, the record is forwarded
 anyway (out of order); this eviction is logged with the causal gap and counted by the violation
-metric rather than signalled on the record.
+metric rather than signalled on the record. Register a `CausalAudit` (see
+[Audit logging](audit-logging.md)) to receive this — and every other causal-buffering event — as a
+per-record callback instead of a log line.
 
 ## Restart and recovery
 

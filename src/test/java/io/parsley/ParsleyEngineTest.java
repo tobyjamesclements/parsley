@@ -445,6 +445,71 @@ class ParsleyEngineTest {
     }
 
     /**
+     * The {@code CausalAudit} callback fires alongside the existing forward/hold behaviour:
+     * {@code recordForwarded} for a record whose dependencies are already satisfied, and
+     * {@code recordHeld} (with the buffer depth and the unmet gap) for a record that is buffered.
+     *
+     * Asserts that the satisfied record is reported forwarded and the unsatisfied record is
+     * reported held with depth 1 and a gap naming the unmet dependency.
+     */
+    @Test
+    void auditReceivesForwardedAndHeldEvents() {
+        RecordingCausalAudit audit = new RecordingCausalAudit();
+        ParsleyEngine<String, String> engine = engineWithAudit(CausalBufferLimit.ofSize(100), audit);
+
+        processRecord(engine, incomingRecord(T1, 0, ParsleyClock.empty()));
+        assertEquals(List.of(new RecordingCausalAudit.Forwarded("t1", 0, 0L)), audit.forwarded,
+                "a trivially-satisfied record must be reported forwarded");
+
+        processRecord(engine, incomingRecord(T2, 0, ParsleyClock.empty().observe(T1_ID, 0, 99)));
+        assertEquals(1, audit.held.size(), "an unsatisfied record must be reported held");
+        RecordingCausalAudit.Held held = audit.held.get(0);
+        assertEquals("t2", held.topic(), "held event must carry the record's source topic");
+        assertEquals(1, held.bufferDepth(), "held event must carry the buffer depth after admission");
+        assertEquals(CausalDependencies.of(ParsleyClock.empty().observe(T1_ID, 0, 99)), held.gap(),
+                "held event must carry the unmet dependency as the gap");
+    }
+
+    /**
+     * The {@code recordReleased} audit callback fires once per record drained from the buffer,
+     * carrying the buffer depth immediately after that record's removal.
+     *
+     * Asserts that releasing the one buffered record reports it with depth 0 after removal.
+     */
+    @Test
+    void auditReceivesReleasedEventOnDrain() {
+        RecordingCausalAudit audit = new RecordingCausalAudit();
+        ParsleyEngine<String, String> engine = engineWithAudit(CausalBufferLimit.ofSize(100), audit);
+
+        processRecord(engine, incomingRecord(T2, 0, ParsleyClock.empty().observe(T1_ID, 0, 3)));
+        assertTrue(audit.released.isEmpty(), "recordReleased must not fire while the record is held");
+
+        processRecord(engine, incomingRecord(T1, 3, ParsleyClock.empty()));
+        assertEquals(List.of(new RecordingCausalAudit.Released("t2", 0, 0L, 0)), audit.released,
+                "the released record must be reported with the post-removal buffer depth");
+    }
+
+    /**
+     * The {@code recordViolation} audit callback fires once per record evicted by a
+     * {@link CausalBufferLimit}, carrying the dependencies still unmet at the time of eviction.
+     *
+     * Asserts that the evicted record is reported with a gap naming its unmet dependency.
+     */
+    @Test
+    void auditReceivesViolationEventOnEviction() {
+        RecordingCausalAudit audit = new RecordingCausalAudit();
+        ParsleyEngine<String, String> engine = engineWithAudit(CausalBufferLimit.ofSize(1), audit);
+
+        ParsleyClock unmet = ParsleyClock.empty().observe(T1_ID, 0, 99);
+        processRecord(engine, incomingRecord(T2, 0, unmet));
+
+        assertEquals(
+                List.of(new RecordingCausalAudit.Violation(
+                        "t2", 0, 0L, CausalDependencies.of(unmet.missing(ParsleyClock.empty())))),
+                audit.violations, "the evicted record must be reported with its unmet dependency as the gap");
+    }
+
+    /**
      * A record whose only dependency is on itself (same topic, partition, and offset) has
      * its self-reference stripped before the admissibility check. After stripping, its
      * effective dependencies are empty, so it is forwarded immediately.
@@ -585,6 +650,11 @@ class ParsleyEngineTest {
                                                            java.util.function.LongSupplier clock) {
         return new ParsleyEngine<>(limit, ParsleyClock.empty(), frontiers::add,
                 buffer, new MockCandidateIndex(), ParsleyMetrics.NOOP, clock);
+    }
+
+    private ParsleyEngine<String, String> engineWithAudit(CausalBufferLimit limit, CausalAudit audit) {
+        return new ParsleyEngine<>(limit, ParsleyClock.empty(), frontiers::add, buffer,
+                new MockCandidateIndex(), ParsleyMetrics.NOOP, audit, System::currentTimeMillis, false);
     }
 
     private void processRecord(ParsleyEngine<String, String> engine, ParsleyMessage<String, String> message) {
