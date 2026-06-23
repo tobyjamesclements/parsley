@@ -87,6 +87,28 @@ class CausalDependenciesEdgeOpsTest {
     }
 
     /**
+     * {@code stamp} preserves a pre-existing header unrelated to the dependencies header — only the
+     * dependencies header itself is replaced; every other header on the input record is carried
+     * through untouched.
+     *
+     * Asserts that the stamped record carries both the original unrelated header and the new
+     * dependencies header.
+     */
+    @Test
+    void stampPreservesUnrelatedExistingHeaders() {
+        ProducerRecord<String, String> input = new ProducerRecord<>("orders", "k", "v");
+        input.headers().add("trace-id", "abc".getBytes());
+        CausalDependencies deps = CausalDependencies.builder(TOPICS).require("prices", 0, 3).build();
+
+        ProducerRecord<String, String> stamped = deps.stamp(input);
+
+        assertEquals("abc", new String(stamped.headers().lastHeader("trace-id").value()),
+                "an unrelated header on the input record must be preserved by stamp");
+        assertEquals(Optional.of(deps), CausalDependencies.fromRecord(asConsumerRecord(stamped)),
+                "the dependencies header must still be set alongside the preserved unrelated header");
+    }
+
+    /**
      * {@code merge} unions two dependency sets, keeping the higher offset where they overlap.
      *
      * Asserts that merging two single-coordinate dependencies yields both coordinates, and that an

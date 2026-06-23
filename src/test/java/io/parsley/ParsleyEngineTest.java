@@ -7,6 +7,7 @@ import org.junit.jupiter.api.Test;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Optional;
 import java.util.OptionalLong;
 import java.util.concurrent.atomic.AtomicLong;
 
@@ -637,6 +638,33 @@ class ParsleyEngineTest {
         processRecord(engine, incomingRecordWithId(T1, 5, oldT1, ParsleyClock.empty()));
         assertEquals(3, forwarded.size(), "old-t1 record forwarded, then buffered T2 released");
         assertEquals(T2, tp(forwarded.get(2)), "T2 must be released after old-t1 arrives");
+    }
+
+    /**
+     * {@code ParsleyEngine.sizeLimitOf} and {@code durationLimitOf} resolve through a composite
+     * {@code ParsleyFirstLimit}, finding the first limit of the requested kind regardless of its
+     * position, and returning empty when no limit of that kind is present in the composite.
+     *
+     * Asserts that the size limit and duration limit are each found within a composite of both
+     * kinds, and that a composite missing a kind resolves to {@code Optional.empty()} for it.
+     */
+    @Test
+    void sizeAndDurationLimitOfResolveThroughAFirstLimitComposite() {
+        CausalBufferLimit composite = CausalBufferLimit.first(
+                CausalBufferLimit.ofSize(5), CausalBufferLimit.ofDuration(Duration.ofSeconds(1)));
+
+        assertEquals(Optional.of(5), ParsleyEngine.sizeLimitOf(composite),
+                "sizeLimitOf must find the size limit within the composite");
+        assertEquals(Optional.of(Duration.ofSeconds(1)), ParsleyEngine.durationLimitOf(composite),
+                "durationLimitOf must find the duration limit within the composite");
+
+        CausalBufferLimit sizeOnly = CausalBufferLimit.first(CausalBufferLimit.ofSize(5));
+        assertEquals(Optional.empty(), ParsleyEngine.durationLimitOf(sizeOnly),
+                "durationLimitOf must resolve to empty when the composite carries no duration limit");
+
+        CausalBufferLimit durationOnly = CausalBufferLimit.first(CausalBufferLimit.ofDuration(Duration.ofSeconds(1)));
+        assertEquals(Optional.empty(), ParsleyEngine.sizeLimitOf(durationOnly),
+                "sizeLimitOf must resolve to empty when the composite carries no size limit");
     }
 
     // --- helpers --------------------------------------------------------------------------------

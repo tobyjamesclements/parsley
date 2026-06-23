@@ -3,6 +3,7 @@ package io.parsley;
 import org.junit.jupiter.api.Test;
 
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
@@ -44,5 +45,16 @@ class ParsleyHeaderTest {
     void theCausalDependenciesHeaderIsNotInternal() {
         assertFalse(new ParsleyHeader(ParsleyHeader.CAUSAL_DEPENDENCIES, new byte[0]).isInternal(),
                 "the causal-dependencies header must not be treated as internal");
+    }
+
+    /**
+     * A header key must not be empty — there is no meaningful internal/user classification for it.
+     *
+     * Asserts that constructing a header with an empty key throws {@code IllegalArgumentException}.
+     */
+    @Test
+    void anEmptyKeyIsRejected() {
+        assertThrows(IllegalArgumentException.class, () -> new ParsleyHeader("", new byte[0]),
+                "an empty header key must be rejected");
     }
 }

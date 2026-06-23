@@ -16,6 +16,7 @@ import org.apache.kafka.streams.TestInputTopic;
 import org.apache.kafka.streams.TestOutputTopic;
 import org.apache.kafka.streams.Topology;
 import org.apache.kafka.streams.TopologyTestDriver;
+import org.apache.kafka.streams.errors.StreamsException;
 import org.apache.kafka.streams.kstream.Consumed;
 import org.apache.kafka.streams.kstream.Produced;
 import org.apache.kafka.streams.processor.PunctuationType;
@@ -30,6 +31,8 @@ import org.apache.kafka.streams.test.TestRecord;
 import org.junit.jupiter.api.Test;
 
 import java.io.File;
+import java.io.IOException;
+import java.nio.file.Files;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
@@ -37,8 +40,10 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Properties;
 import java.util.Set;
+import java.util.concurrent.TimeoutException;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
@@ -233,6 +238,40 @@ class CausalProcessorsTopologyTest {
             assertEquals(List.of("T2-VAL", "T3-VAL"), out.readValuesToList(),
                     "both transformed values must appear in the output in order");
             assertEquals(0, storeSize(bufferStore), "drained record must be removed from the buffer store");
+        }
+    }
+
+    /**
+     * {@code addBuffers(Collection<CausalBuffer>)} registers every buffer in the collection, exactly
+     * like calling {@code addBuffer} once per element — the convenience overload for buffers with
+     * distinct (non-shared) serdes.
+     *
+     * Asserts that records on every topic registered via the collection overload are admitted and
+     * forwarded through the delegate.
+     */
+    @Test
+    void addBuffersCollectionOverloadRegistersEveryBuffer() {
+        Topology topology = topology(
+                CausalProcessors.builder(upperCaser()).addBufferStore("parsley", CausalBufferLimit.ofSize(100))
+                        .addBuffers(List.of(
+                                CausalBuffer.of("t2", Serdes.String(), Serdes.String()),
+                                CausalBuffer.of("t3", Serdes.String(), Serdes.String())))
+                        .topicAdmin(ADMIN).build(),
+                List.of("t2", "t3"));
+
+        try (TopologyTestDriver driver = new TopologyTestDriver(topology, config(null))) {
+            TestInputTopic<String, String> t2 =
+                    driver.createInputTopic("t2", new StringSerializer(), new StringSerializer());
+            TestInputTopic<String, String> t3 =
+                    driver.createInputTopic("t3", new StringSerializer(), new StringSerializer());
+            TestOutputTopic<String, String> out =
+                    driver.createOutputTopic("out", new StringDeserializer(), new StringDeserializer());
+
+            t2.pipeInput(new TestRecord<>("k", "t2-val", depsHeader(CausalDependencies.empty())));
+            t3.pipeInput(new TestRecord<>("k", "t3-val", depsHeader(CausalDependencies.empty())));
+
+            assertEquals(List.of("T2-VAL", "T3-VAL"), out.readValuesToList(),
+                    "both buffers registered via the collection overload must admit and forward their records");
         }
     }
 
@@ -1147,6 +1186,113 @@ class CausalProcessorsTopologyTest {
         }
 
         assertEquals(1, audit.closings.size(), "processorClosing must fire once when the driver closes");
+    }
+
+    /**
+     * A record arrives on a topic for which no {@link CausalBuffer} was registered (e.g. an input
+     * topic added to the stream but never wired up via {@code addBuffer}). The processor's intake
+     * guard rejects it rather than silently treating it as dependency-free.
+     *
+     * Asserts that processing the record throws (wrapped by Kafka Streams in a
+     * {@code StreamsException}) with a cause naming the unregistered topic.
+     */
+    @Test
+    void ingestThrowsForATopicWithNoRegisteredBuffer() throws IOException {
+        Topology topology = topology(
+                CausalProcessors.builder(upperCaser()).addBufferStore("parsley", CausalBufferLimit.ofSize(100))
+                        .addBuffer(CausalBuffer.of("t1", Serdes.String(), Serdes.String()))
+                        .topicAdmin(ADMIN).build(),
+                List.of("t1", "ghost"));
+
+        try (TopologyTestDriver driver = new TopologyTestDriver(topology, config(tempStateDir()))) {
+            TestInputTopic<String, String> ghost =
+                    driver.createInputTopic("ghost", new StringSerializer(), new StringSerializer());
+
+            StreamsException thrown = assertThrows(StreamsException.class,
+                    () -> ghost.pipeInput(new TestRecord<>("k", "v", depsHeader(CausalDependencies.empty()))),
+                    "a record on an unregistered topic must not be silently admitted");
+            assertEquals(IllegalStateException.class, thrown.getCause().getClass(),
+                    "the wrapped cause must be the intake guard's exception");
+            assertTrue(thrown.getCause().getMessage().contains("no CausalBuffer registered for topic 'ghost'"),
+                    "the cause must name the unregistered topic: " + thrown.getCause().getMessage());
+        }
+    }
+
+    /**
+     * The broker (via {@link ParsleyTopicAdmin}) fails to return a UUID for one of the registered
+     * causal-buffer topics at startup — a defensive guard against an admin implementation that
+     * returns successfully but with an incomplete result.
+     *
+     * Asserts that constructing the driver throws (wrapped in a {@code StreamsException}) with a
+     * cause naming the topic the broker did not resolve.
+     */
+    @Test
+    void resolveTopicUuidsThrowsWhenTheAdminOmitsARegisteredTopic() throws IOException {
+        ParsleyTopicAdmin incomplete = new ParsleyTopicAdmin() {
+            @Override public Map<String, Uuid> topicIds(List<String> topics) { return Map.of(); }
+            @Override public Map<String, Integer> partitionCounts(List<String> topics) { return Map.of(); }
+            @Override public void createTopic(String name, int partitions) {}
+            @Override public void close() {}
+        };
+        Topology topology = topology(
+                CausalProcessors.builder(upperCaser()).addBufferStore("parsley", CausalBufferLimit.ofSize(100))
+                        .addBuffer(CausalBuffer.of("t1", Serdes.String(), Serdes.String()))
+                        .topicAdmin(incomplete).build(),
+                List.of("t1"));
+
+        StreamsException thrown = assertThrows(StreamsException.class,
+                () -> new TopologyTestDriver(topology, config(tempStateDir())),
+                "startup must fail when the admin does not resolve every registered topic");
+        // The per-topic guard's IllegalStateException is itself caught by resolveTopicUuids' own
+        // catch-all and re-wrapped, so the missing-topic message is one level further down.
+        assertEquals(IllegalStateException.class, thrown.getCause().getClass(),
+                "the wrapped cause must be the resolveTopicUuids catch-and-rethrow");
+        Throwable guardFailure = thrown.getCause().getCause();
+        assertEquals(IllegalStateException.class, guardFailure.getClass(),
+                "the innermost cause must be the UUID-resolution guard's exception");
+        assertTrue(guardFailure.getMessage().contains("broker did not return a UUID for topic 't1'"),
+                "the cause must name the unresolved topic: " + guardFailure.getMessage());
+    }
+
+    /**
+     * The {@link ParsleyTopicAdmin} itself fails (e.g. the broker is unreachable) while resolving
+     * causal-buffer topic UUIDs at startup. The failure is wrapped with the topics that were being
+     * resolved, rather than the raw admin exception escaping.
+     *
+     * Asserts that constructing the driver throws (wrapped in a {@code StreamsException}) with a
+     * cause chain of: the wrapping {@code IllegalStateException}, then the original admin failure.
+     */
+    @Test
+    void resolveTopicUuidsWrapsAnAdminFailure() throws IOException {
+        ParsleyTopicAdmin throwing = new ParsleyTopicAdmin() {
+            @Override public Map<String, Uuid> topicIds(List<String> topics) throws Exception {
+                throw new TimeoutException("no broker reachable");
+            }
+            @Override public Map<String, Integer> partitionCounts(List<String> topics) { return Map.of(); }
+            @Override public void createTopic(String name, int partitions) {}
+            @Override public void close() {}
+        };
+        Topology topology = topology(
+                CausalProcessors.builder(upperCaser()).addBufferStore("parsley", CausalBufferLimit.ofSize(100))
+                        .addBuffer(CausalBuffer.of("t1", Serdes.String(), Serdes.String()))
+                        .topicAdmin(throwing).build(),
+                List.of("t1"));
+
+        StreamsException thrown = assertThrows(StreamsException.class,
+                () -> new TopologyTestDriver(topology, config(tempStateDir())),
+                "startup must fail when the admin itself throws");
+        assertEquals(IllegalStateException.class, thrown.getCause().getClass(),
+                "the wrapped cause must be the resolveTopicUuids catch-and-rethrow");
+        assertTrue(thrown.getCause().getMessage().contains("failed to resolve topic UUIDs for causal buffers"),
+                "the wrapping message must name the failed resolution: " + thrown.getCause().getMessage());
+        assertEquals(TimeoutException.class, thrown.getCause().getCause().getClass(),
+                "the original admin failure must be preserved as the innermost cause");
+    }
+
+    /** A fresh, unique state directory — required when a test expects driver construction itself to
+     * fail, since a failed construction cannot be closed to release its RocksDB locks. */
+    private static File tempStateDir() throws IOException {
+        return Files.createTempDirectory("parsley-topology-test-").toFile();
     }
 
     // --- small utilities -----------------------------------------------------------------------
