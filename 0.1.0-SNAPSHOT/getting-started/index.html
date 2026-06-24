@@ -927,36 +927,29 @@
 <ul>
 <li>Java 25 (<code>--release 25</code>)</li>
 <li>Maven 3.9+ (or use the included <code>./mvnw</code> wrapper)</li>
-<li>A GitHub account with a <a href="https://github.com/settings/tokens">personal access token</a> that has the
-  <code>read:packages</code> scope (required for GitHub Packages, even for public repositories)</li>
 </ul>
 <h2 id="installation">Installation</h2>
-<p>Parsley is published to <a href="https://github.com/tobyjamesclements/parsley/packages">GitHub Packages</a>.
-Add your credentials to <code>~/.m2/settings.xml</code>:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="nt">&lt;settings&gt;</span>
-<a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="w">  </span><span class="nt">&lt;servers&gt;</span>
-<a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a><span class="w">    </span><span class="nt">&lt;server&gt;</span>
-<a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a><span class="w">      </span><span class="nt">&lt;id&gt;</span>github-parsley<span class="nt">&lt;/id&gt;</span>
-<a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a><span class="w">      </span><span class="nt">&lt;username&gt;</span>YOUR_GITHUB_USERNAME<span class="nt">&lt;/username&gt;</span>
-<a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a><span class="w">      </span><span class="nt">&lt;password&gt;</span>YOUR_PAT<span class="nt">&lt;/password&gt;</span>
-<a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a><span class="w">    </span><span class="nt">&lt;/server&gt;</span>
-<a id="__codelineno-0-8" name="__codelineno-0-8" href="#__codelineno-0-8"></a><span class="w">  </span><span class="nt">&lt;/servers&gt;</span>
-<a id="__codelineno-0-9" name="__codelineno-0-9" href="#__codelineno-0-9"></a><span class="nt">&lt;/settings&gt;</span>
+<p>Parsley is published to <a href="https://central.sonatype.com/artifact/io.github.tobyjamesclements/parsley">Maven Central</a>.
+The current version is a snapshot, so it lives in Central's snapshot repository rather than the main
+one — no credentials needed, snapshots are publicly readable. Declare the repository and dependency in
+your <code>pom.xml</code>:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="nt">&lt;repositories&gt;</span>
+<a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="w">  </span><span class="nt">&lt;repository&gt;</span>
+<a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a><span class="w">    </span><span class="nt">&lt;id&gt;</span>central-snapshots<span class="nt">&lt;/id&gt;</span>
+<a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a><span class="w">    </span><span class="nt">&lt;url&gt;</span>https://central.sonatype.com/repository/maven-snapshots/<span class="nt">&lt;/url&gt;</span>
+<a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a><span class="w">    </span><span class="nt">&lt;releases&gt;&lt;enabled&gt;</span>false<span class="nt">&lt;/enabled&gt;&lt;/releases&gt;</span>
+<a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a><span class="w">    </span><span class="nt">&lt;snapshots&gt;&lt;enabled&gt;</span>true<span class="nt">&lt;/enabled&gt;&lt;/snapshots&gt;</span>
+<a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a><span class="w">  </span><span class="nt">&lt;/repository&gt;</span>
+<a id="__codelineno-0-8" name="__codelineno-0-8" href="#__codelineno-0-8"></a><span class="nt">&lt;/repositories&gt;</span>
+<a id="__codelineno-0-9" name="__codelineno-0-9" href="#__codelineno-0-9"></a>
+<a id="__codelineno-0-10" name="__codelineno-0-10" href="#__codelineno-0-10"></a><span class="nt">&lt;dependency&gt;</span>
+<a id="__codelineno-0-11" name="__codelineno-0-11" href="#__codelineno-0-11"></a><span class="w">  </span><span class="nt">&lt;groupId&gt;</span>io.github.tobyjamesclements<span class="nt">&lt;/groupId&gt;</span>
+<a id="__codelineno-0-12" name="__codelineno-0-12" href="#__codelineno-0-12"></a><span class="w">  </span><span class="nt">&lt;artifactId&gt;</span>parsley<span class="nt">&lt;/artifactId&gt;</span>
+<a id="__codelineno-0-13" name="__codelineno-0-13" href="#__codelineno-0-13"></a><span class="w">  </span><span class="nt">&lt;version&gt;</span>0.1.0-SNAPSHOT<span class="nt">&lt;/version&gt;</span>
+<a id="__codelineno-0-14" name="__codelineno-0-14" href="#__codelineno-0-14"></a><span class="nt">&lt;/dependency&gt;</span>
 </code></pre></div>
-<p>Then declare the repository and dependency in your <code>pom.xml</code>:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="nt">&lt;repositories&gt;</span>
-<a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a><span class="w">  </span><span class="nt">&lt;repository&gt;</span>
-<a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a><span class="w">    </span><span class="nt">&lt;id&gt;</span>github-parsley<span class="nt">&lt;/id&gt;</span>
-<a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a><span class="w">    </span><span class="nt">&lt;url&gt;</span>https://maven.pkg.github.com/tobyjamesclements/parsley<span class="nt">&lt;/url&gt;</span>
-<a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a><span class="w">  </span><span class="nt">&lt;/repository&gt;</span>
-<a id="__codelineno-1-6" name="__codelineno-1-6" href="#__codelineno-1-6"></a><span class="nt">&lt;/repositories&gt;</span>
-<a id="__codelineno-1-7" name="__codelineno-1-7" href="#__codelineno-1-7"></a>
-<a id="__codelineno-1-8" name="__codelineno-1-8" href="#__codelineno-1-8"></a><span class="nt">&lt;dependency&gt;</span>
-<a id="__codelineno-1-9" name="__codelineno-1-9" href="#__codelineno-1-9"></a><span class="w">  </span><span class="nt">&lt;groupId&gt;</span>io.github.tobyjamesclements<span class="nt">&lt;/groupId&gt;</span>
-<a id="__codelineno-1-10" name="__codelineno-1-10" href="#__codelineno-1-10"></a><span class="w">  </span><span class="nt">&lt;artifactId&gt;</span>parsley<span class="nt">&lt;/artifactId&gt;</span>
-<a id="__codelineno-1-11" name="__codelineno-1-11" href="#__codelineno-1-11"></a><span class="w">  </span><span class="nt">&lt;version&gt;</span>0.1.0-SNAPSHOT<span class="nt">&lt;/version&gt;</span>
-<a id="__codelineno-1-12" name="__codelineno-1-12" href="#__codelineno-1-12"></a><span class="nt">&lt;/dependency&gt;</span>
-</code></pre></div>
+<p>Once a tagged <code>0.1.0</code> release ships, this repository block won't be needed — Central's default repo
+(already in every Maven setup) covers real releases.</p>
 <p><code>parsley</code> pulls in <code>kafka-streams</code> and <code>kafka-clients</code> transitively.</p>
 <h2 id="ordering-records-causally">Ordering records causally</h2>
 <p>Parsley delivers records in causal order <strong>inside a Kafka Streams topology</strong>. Wrap your own processor
@@ -966,37 +959,37 @@ releasing it once the frontier catches up. See <a href="../streams/">Streams int
 <p>At the edges of a topology — where plain Kafka producers feed records in — attach the causal
 dependencies as a header with <code>CausalDependencies.stamp</code>. Resolve topic UUIDs once through a
 <code>CausalTopics</code> backed by an <code>Admin</code> you own (Parsley never closes it):</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="n">CausalTopics</span><span class="w"> </span><span class="n">topics</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">CausalTopics</span><span class="p">.</span><span class="na">of</span><span class="p">(</span><span class="n">admin</span><span class="p">);</span>
-<a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a>
-<a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a><span class="c1">// trigger&#39;s own dependencies plus its own position</span>
-<a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a><span class="n">CausalDependencies</span><span class="w"> </span><span class="n">deps</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">CausalDependencies</span><span class="p">.</span><span class="na">from</span><span class="p">(</span><span class="n">topics</span><span class="p">,</span><span class="w"> </span><span class="n">trigger</span><span class="p">);</span>
-<a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a><span class="n">producer</span><span class="p">.</span><span class="na">send</span><span class="p">(</span><span class="n">deps</span><span class="p">.</span><span class="na">stamp</span><span class="p">(</span><span class="k">new</span><span class="w"> </span><span class="n">ProducerRecord</span><span class="o">&lt;&gt;</span><span class="p">(</span><span class="s">&quot;orders&quot;</span><span class="p">,</span><span class="w"> </span><span class="n">key</span><span class="p">,</span><span class="w"> </span><span class="n">value</span><span class="p">)));</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="n">CausalTopics</span><span class="w"> </span><span class="n">topics</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">CausalTopics</span><span class="p">.</span><span class="na">of</span><span class="p">(</span><span class="n">admin</span><span class="p">);</span>
+<a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a>
+<a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a><span class="c1">// trigger&#39;s own dependencies plus its own position</span>
+<a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a><span class="n">CausalDependencies</span><span class="w"> </span><span class="n">deps</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">CausalDependencies</span><span class="p">.</span><span class="na">from</span><span class="p">(</span><span class="n">topics</span><span class="p">,</span><span class="w"> </span><span class="n">trigger</span><span class="p">);</span>
+<a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a><span class="n">producer</span><span class="p">.</span><span class="na">send</span><span class="p">(</span><span class="n">deps</span><span class="p">.</span><span class="na">stamp</span><span class="p">(</span><span class="k">new</span><span class="w"> </span><span class="n">ProducerRecord</span><span class="o">&lt;&gt;</span><span class="p">(</span><span class="s">&quot;orders&quot;</span><span class="p">,</span><span class="w"> </span><span class="n">key</span><span class="p">,</span><span class="w"> </span><span class="n">value</span><span class="p">)));</span>
 </code></pre></div>
 <p><code>from</code> carries the dependencies the triggering record arrived with <strong>and</strong> its own position, so a
 downstream causal processor waits until it has observed <code>trigger</code> before delivering anything stamped
 here. Combine several with <code>merge</code> for a fan-in:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="n">CausalDependencies</span><span class="w"> </span><span class="n">deps</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">CausalDependencies</span><span class="p">.</span><span class="na">from</span><span class="p">(</span><span class="n">topics</span><span class="p">,</span><span class="w"> </span><span class="n">priceUpdate</span><span class="p">)</span>
-<a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a><span class="w">        </span><span class="p">.</span><span class="na">merge</span><span class="p">(</span><span class="n">CausalDependencies</span><span class="p">.</span><span class="na">from</span><span class="p">(</span><span class="n">topics</span><span class="p">,</span><span class="w"> </span><span class="n">inventoryChange</span><span class="p">));</span>
-<a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a><span class="n">producer</span><span class="p">.</span><span class="na">send</span><span class="p">(</span><span class="n">deps</span><span class="p">.</span><span class="na">stamp</span><span class="p">(</span><span class="n">record</span><span class="p">));</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="n">CausalDependencies</span><span class="w"> </span><span class="n">deps</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">CausalDependencies</span><span class="p">.</span><span class="na">from</span><span class="p">(</span><span class="n">topics</span><span class="p">,</span><span class="w"> </span><span class="n">priceUpdate</span><span class="p">)</span>
+<a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="w">        </span><span class="p">.</span><span class="na">merge</span><span class="p">(</span><span class="n">CausalDependencies</span><span class="p">.</span><span class="na">from</span><span class="p">(</span><span class="n">topics</span><span class="p">,</span><span class="w"> </span><span class="n">inventoryChange</span><span class="p">));</span>
+<a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a><span class="n">producer</span><span class="p">.</span><span class="na">send</span><span class="p">(</span><span class="n">deps</span><span class="p">.</span><span class="na">stamp</span><span class="p">(</span><span class="n">record</span><span class="p">));</span>
 </code></pre></div>
 <p>To declare a dependency on a specific upstream position you did not consume, build one explicitly:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a><span class="n">CausalDependencies</span><span class="w"> </span><span class="n">deps</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">CausalDependencies</span><span class="p">.</span><span class="na">builder</span><span class="p">(</span><span class="n">topics</span><span class="p">)</span>
-<a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a><span class="w">        </span><span class="p">.</span><span class="na">require</span><span class="p">(</span><span class="s">&quot;prices&quot;</span><span class="p">,</span><span class="w"> </span><span class="cm">/* partition */</span><span class="w"> </span><span class="mi">0</span><span class="p">,</span><span class="w"> </span><span class="cm">/* offset */</span><span class="w"> </span><span class="mi">42</span><span class="p">)</span>
-<a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a><span class="w">        </span><span class="p">.</span><span class="na">build</span><span class="p">();</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="n">CausalDependencies</span><span class="w"> </span><span class="n">deps</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">CausalDependencies</span><span class="p">.</span><span class="na">builder</span><span class="p">(</span><span class="n">topics</span><span class="p">)</span>
+<a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a><span class="w">        </span><span class="p">.</span><span class="na">require</span><span class="p">(</span><span class="s">&quot;prices&quot;</span><span class="p">,</span><span class="w"> </span><span class="cm">/* partition */</span><span class="w"> </span><span class="mi">0</span><span class="p">,</span><span class="w"> </span><span class="cm">/* offset */</span><span class="w"> </span><span class="mi">42</span><span class="p">)</span>
+<a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a><span class="w">        </span><span class="p">.</span><span class="na">build</span><span class="p">();</span>
 </code></pre></div>
 <p>The serialised dependencies header grows with the number of topic-partitions it names — see the
 <a href="../configuration/#header-size">header size note</a> in Configuration.</p>
 <h2 id="propagating-causal-context-across-services">Propagating causal context across services</h2>
 <p>A <code>CausalDependencies</code> value is a portable causal token. To gate a read in a downstream service on
 what an upstream record depended on, serialise the dependencies and send them over your transport:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a><span class="c1">// Sender — extract the relevant dependencies and serialise them</span>
-<a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a><span class="n">CausalDependencies</span><span class="w"> </span><span class="n">context</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">CausalDependencies</span><span class="p">.</span><span class="na">fromRecord</span><span class="p">(</span><span class="n">consumedRecord</span><span class="p">)</span>
-<a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a><span class="w">        </span><span class="p">.</span><span class="na">orElse</span><span class="p">(</span><span class="n">CausalDependencies</span><span class="p">.</span><span class="na">empty</span><span class="p">());</span>
-<a id="__codelineno-5-4" name="__codelineno-5-4" href="#__codelineno-5-4"></a><span class="kt">byte</span><span class="o">[]</span><span class="w"> </span><span class="n">token</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">context</span><span class="p">.</span><span class="na">toBytes</span><span class="p">();</span>
-<a id="__codelineno-5-5" name="__codelineno-5-5" href="#__codelineno-5-5"></a><span class="c1">// ... send token over HTTP, gRPC, etc. (apply your own encryption/transport)</span>
-<a id="__codelineno-5-6" name="__codelineno-5-6" href="#__codelineno-5-6"></a>
-<a id="__codelineno-5-7" name="__codelineno-5-7" href="#__codelineno-5-7"></a><span class="c1">// Receiver — rebuild the dependencies</span>
-<a id="__codelineno-5-8" name="__codelineno-5-8" href="#__codelineno-5-8"></a><span class="n">CausalDependencies</span><span class="w"> </span><span class="n">required</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">CausalDependencies</span><span class="p">.</span><span class="na">fromBytes</span><span class="p">(</span><span class="n">receivedToken</span><span class="p">);</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a><span class="c1">// Sender — extract the relevant dependencies and serialise them</span>
+<a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a><span class="n">CausalDependencies</span><span class="w"> </span><span class="n">context</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">CausalDependencies</span><span class="p">.</span><span class="na">fromRecord</span><span class="p">(</span><span class="n">consumedRecord</span><span class="p">)</span>
+<a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a><span class="w">        </span><span class="p">.</span><span class="na">orElse</span><span class="p">(</span><span class="n">CausalDependencies</span><span class="p">.</span><span class="na">empty</span><span class="p">());</span>
+<a id="__codelineno-4-4" name="__codelineno-4-4" href="#__codelineno-4-4"></a><span class="kt">byte</span><span class="o">[]</span><span class="w"> </span><span class="n">token</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">context</span><span class="p">.</span><span class="na">toBytes</span><span class="p">();</span>
+<a id="__codelineno-4-5" name="__codelineno-4-5" href="#__codelineno-4-5"></a><span class="c1">// ... send token over HTTP, gRPC, etc. (apply your own encryption/transport)</span>
+<a id="__codelineno-4-6" name="__codelineno-4-6" href="#__codelineno-4-6"></a>
+<a id="__codelineno-4-7" name="__codelineno-4-7" href="#__codelineno-4-7"></a><span class="c1">// Receiver — rebuild the dependencies</span>
+<a id="__codelineno-4-8" name="__codelineno-4-8" href="#__codelineno-4-8"></a><span class="n">CausalDependencies</span><span class="w"> </span><span class="n">required</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">CausalDependencies</span><span class="p">.</span><span class="na">fromBytes</span><span class="p">(</span><span class="n">receivedToken</span><span class="p">);</span>
 </code></pre></div>
 <p>Parsley ships no encryption or transport layer; securing and routing the token is the
 application's responsibility.</p>
