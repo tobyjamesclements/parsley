@@ -227,18 +227,19 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
      * {@code appConfigs()} so it inherits broker security settings.
      */
     private Map<String, Uuid> resolveTopicUuids(ProcessorContext<KOut, VOut> context) {
+        Map<String, Uuid> resolved;
         try (ParsleyTopicAdmin admin = adminFactory.apply(context.appConfigs())) {
-            Map<String, Uuid> resolved = admin.topicIds(new ArrayList<>(topics));
-            for (String topic : topics) {
-                if (resolved.get(topic) == null) {
-                    throw new IllegalStateException("broker did not return a UUID for topic '" + topic + "'");
-                }
-            }
-            return resolved;
+            resolved = admin.topicIds(new ArrayList<>(topics));
         } catch (Exception e) {
             throw new IllegalStateException(
                     "failed to resolve topic UUIDs for causal buffers " + topics
                             + "; ensure the topics exist and the broker is reachable", e);
         }
+        for (String topic : topics) {
+            if (resolved.get(topic) == null) {
+                throw new IllegalStateException("broker did not return a UUID for topic '" + topic + "'");
+            }
+        }
+        return resolved;
     }
 }

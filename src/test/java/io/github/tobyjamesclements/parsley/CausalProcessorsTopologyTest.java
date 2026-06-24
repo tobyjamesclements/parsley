@@ -1345,13 +1345,9 @@ class CausalProcessorsTopologyTest {
         StreamsException thrown = assertThrows(StreamsException.class,
                 () -> new TopologyTestDriver(topology, config(tempStateDir())),
                 "startup must fail when the admin does not resolve every registered topic");
-        // The per-topic guard's IllegalStateException is itself caught by resolveTopicUuids' own
-        // catch-all and re-wrapped, so the missing-topic message is one level further down.
-        assertEquals(IllegalStateException.class, thrown.getCause().getClass(),
-                "the wrapped cause must be the resolveTopicUuids catch-and-rethrow");
-        Throwable guardFailure = thrown.getCause().getCause();
+        Throwable guardFailure = thrown.getCause();
         assertEquals(IllegalStateException.class, guardFailure.getClass(),
-                "the innermost cause must be the UUID-resolution guard's exception");
+                "the cause must be the UUID-resolution guard's exception directly, not re-wrapped");
         assertTrue(guardFailure.getMessage().contains("broker did not return a UUID for topic 't1'"),
                 "the cause must name the unresolved topic: " + guardFailure.getMessage());
     }
