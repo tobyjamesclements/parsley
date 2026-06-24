@@ -936,6 +936,100 @@ class CausalProcessorsTopologyTest {
     }
 
     /**
+     * Backlog #15 ("fused processor chain footgun") regression: the same multi-topic fan-in shape
+     * as {@link #materializedChainEnablesFullDrainAtBothProcessorLayers()}, but WITHOUT the
+     * {@code .to("t4")} materialization step — proc1's output feeds proc2 directly (fused), in
+     * addition to proc2's direct t2/t3 subscriptions.
+     *
+     * <h2>Why this could deadlock</h2>
+     * In a fused chain, {@code context.recordMetadata()} in proc2 reports the ORIGINAL source
+     * topic/offset (not a synthetic intermediate one), so a record relayed from proc1 can carry a
+     * dependency that is NOT its own coordinate (e.g. a t2-sourced record carrying a t3 dependency
+     * proc1 had already observed). #15 claimed this circularly blocks proc2 forever. This test
+     * proves that claim false today: {@link ParsleyEngine#effectiveDependencies} strips only the
+     * exact self-coordinate match, and proc1 always relays records in its own admission order, so
+     * any "other dimension" a relayed record still depends on was already established at proc2 by
+     * an earlier relayed (or directly-subscribed) record.
+     *
+     * <h2>Topology</h2>
+     * <pre>
+     *   [t2, t3] ──→ proc1("node1") ──┐ (fused, no .to())
+     *                                  ↓
+     *   [t2, t3] ─────────────────→ proc2("node2") ──→ "out"
+     * </pre>
+     */
+    @Test
+    void fusedChainWithoutMaterializationStillFullyDrainsBothLayers() {
+        StreamsBuilder builder = new StreamsBuilder();
+        Consumed<String, String> consumed = Consumed.with(Serdes.String(), Serdes.String());
+        Produced<String, String> produced = Produced.with(Serdes.String(), Serdes.String());
+
+        var t2Src = builder.stream("t2", consumed);
+        var t3Src = builder.stream("t3", consumed);
+
+        // proc1: holds t3-records (dep on t2) until t2 arrives. No .to() — output stays in-process.
+        var viaProc1 = t2Src.merge(t3Src)
+                .process(CausalProcessors.builder(upperCaser()).addBufferStore("node1", CausalBufferLimit.ofSize(100))
+                        .addBuffers(List.of("t2", "t3"), Serdes.String(), Serdes.String()).topicAdmin(ADMIN).build());
+
+        // proc2: receives proc1's output directly (FUSED) AND direct t2/t3 feeds to bootstrap its frontier.
+        viaProc1.merge(t2Src).merge(t3Src)
+                .process(CausalProcessors.builder(upperCaser()).addBufferStore("node2", CausalBufferLimit.ofSize(100))
+                        .addBuffers(List.of("t2", "t3"), Serdes.String(), Serdes.String()).topicAdmin(ADMIN)
+                        .build())
+                .to("out", produced);
+
+        try (TopologyTestDriver driver = new TopologyTestDriver(builder.build(), config(null))) {
+            TestInputTopic<String, String> t2 =
+                    driver.createInputTopic("t2", new StringSerializer(), new StringSerializer());
+            TestInputTopic<String, String> t3 =
+                    driver.createInputTopic("t3", new StringSerializer(), new StringSerializer());
+            TestOutputTopic<String, String> out =
+                    driver.createOutputTopic("out", new StringDeserializer(), new StringDeserializer());
+
+            // Phase 1: t3-records arrive before t2; held at proc1 AND at proc2 (direct subscription).
+            t3.pipeInput(new TestRecord<>("k", "t3-val",
+                    depsHeader(CausalDependencies.builder(TOPICS).require("t2", 0, 0).build())));
+            assertTrue(out.isEmpty(), "t3-records must be held before t2 arrives");
+            assertEquals(1, storeSize(driver.getKeyValueStore("node1-buffer")),
+                    "proc1 must buffer the t3-record");
+            assertEquals(1, storeSize(driver.getKeyValueStore("node2-buffer")),
+                    "proc2 must buffer the direct t3-record");
+
+            // Phase 2: t2-record arrives — proc1 drains and relays both records straight into
+            // proc2 (no intermediate topic); proc2 also bootstraps directly from t2/t3 and must
+            // NOT get stuck on the relayed records' non-self-coordinate dependencies.
+            t2.pipeInput(new TestRecord<>("k", "t2-val", depsHeader(CausalDependencies.empty())));
+
+            // Both layers drained completely; no records stuck in either buffer (the deadlock #15
+            // describes would manifest as a non-zero node2-buffer size here).
+            assertEquals(0, storeSize(driver.getKeyValueStore("node1-buffer")),
+                    "node1 buffer must be empty after drain");
+            assertEquals(0, storeSize(driver.getKeyValueStore("node2-buffer")),
+                    "node2 buffer must be empty after drain — no fused-chain deadlock");
+
+            // "out" has 4 records: direct t2-val, direct t3-val (proc2's own admissions) plus the
+            // proc1-relayed t2-val and t3-val (arriving via the fused edge, not a topic).
+            List<String> outValues = out.readValuesToList();
+            assertEquals(4, outValues.size(), "four records must reach the output");
+            assertEquals(2, outValues.stream().filter("T2-VAL"::equals).count(),
+                    "two T2-VAL records: direct and via the fused proc1 edge");
+            assertEquals(2, outValues.stream().filter("T3-VAL"::equals).count(),
+                    "two T3-VAL records: direct and via the fused proc1 edge");
+
+            // Both processors' frontiers span both source topics after draining.
+            assertEquals(
+                    ParsleyClock.empty().observe(T2_ID, 0, 0).observe(T3_ID, 0, 0),
+                    frontierIn(driver, "node1-frontier"),
+                    "proc1 frontier must span both t2 and t3 after drain");
+            assertEquals(
+                    ParsleyClock.empty().observe(T2_ID, 0, 0).observe(T3_ID, 0, 0),
+                    frontierIn(driver, "node2-frontier"),
+                    "proc2 frontier must span both t2 and t3 after drain");
+        }
+    }
+
+    /**
      * Materialized chain: a clocked sidecar record ("t5") whose dependency points to the
      * derived topic ("t4") is buffered in proc2 until proc1 materializes that record.
      *
