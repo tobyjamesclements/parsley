@@ -115,7 +115,7 @@ final class ParsleySerializer<K, V> {
                 // (schemaId reads either array's Confluent magic byte; both may be null tombstones)
                 String details = details(topic, topicId, partition, offset, timestamp,
                         dependencies, headers, keyBytes, valueBytes, schemaId);
-                throw new ParsleyBufferDeserializationException(topic, partition, offset, schemaId, details, e);
+                throw new ParsleyBufferDeserializationException(topic, topicId, partition, offset, schemaId, details, e);
             }
 
             return new ParsleyMessage<>(topic, topicId, partition, offset, timestamp,

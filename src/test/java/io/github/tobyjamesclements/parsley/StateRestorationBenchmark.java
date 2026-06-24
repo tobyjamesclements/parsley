@@ -69,6 +69,7 @@ public class StateRestorationBenchmark {
     private KeyValueStore<String, byte[]> frontierKV;
     private KeyValueStore<Long, byte[]> bufferKV;
     private KeyValueStore<byte[], byte[]> waitKV;
+    private KeyValueStore<byte[], byte[]> forwardedKV;
     private ParsleySerializer<String, String> serializer;
     private CausalBufferLimit limit;
 
@@ -94,9 +95,10 @@ public class StateRestorationBenchmark {
                    trialDir.toAbsolutePath().toString());
         driver = new TopologyTestDriver(builder.build(), config);
 
-        frontierKV = driver.getKeyValueStore("parsley-frontier");
-        bufferKV   = driver.getKeyValueStore("parsley-buffer");
-        waitKV     = driver.getKeyValueStore("parsley-candidate-index");
+        frontierKV  = driver.getKeyValueStore("parsley-frontier");
+        bufferKV    = driver.getKeyValueStore("parsley-buffer");
+        waitKV      = driver.getKeyValueStore("parsley-candidate-index");
+        forwardedKV = driver.getKeyValueStore("parsley-forwarded-index");
         serializer = new ParsleySerializer<>(
                 new ParsleyResolver<>(t -> Serdes.String(), t -> Serdes.String()));
 
@@ -112,7 +114,7 @@ public class StateRestorationBenchmark {
         ParsleyEngine<String, String> engine = new ParsleyEngine<>(
                 limit, ParsleyClock.empty(), f -> {},
                 new RocksBufferStore<>(bufferKV, serializer), new RocksCandidateIndex(waitKV),
-                ParsleyMetrics.NOOP);
+                new RocksForwardedIndex(forwardedKV), ParsleyMetrics.NOOP);
         for (int i = 0; i < bufferSize; i++) {
             ParsleyClock deps = ParsleyClock.empty().observe(Uuid.randomUuid(), 0, 0L);
             engine.onRecord(record("bench-" + i, 0, (long) i, deps));
@@ -146,8 +148,9 @@ public class StateRestorationBenchmark {
     public ParsleyEngine<String, String> bufferRestore() {
         RocksBufferStore<String, String> buf = new RocksBufferStore<>(bufferKV, serializer);
         RocksCandidateIndex idx = new RocksCandidateIndex(waitKV);
+        RocksForwardedIndex fwd = new RocksForwardedIndex(forwardedKV);
         return new ParsleyEngine<>(limit, ParsleyClock.empty(), f -> {},
-                buf, idx, ParsleyMetrics.NOOP);
+                buf, idx, fwd, ParsleyMetrics.NOOP);
     }
 
     private static ParsleyMessage<String, String> record(String srcTopic, int partition, long offset,

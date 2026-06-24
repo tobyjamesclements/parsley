@@ -17,11 +17,15 @@ so records stamped against the old `prices` are never accidentally satisfied by 
 
 ## The frontier
 
-The **causal frontier** is the node's internal clock: the highest offset it has successfully
-delivered on each `(topicId, partition)` coordinate. Every time a record is forwarded, the frontier
-advances (taking the per-coordinate maximum). It is an implementation detail — there is no public
-frontier type; to propagate causal context downstream, read a consumed record's dependencies with
-`CausalDependencies.fromRecord(record)` and stamp them on what you produce.
+The **causal frontier** is the node's internal clock: the highest offset it has *contiguously*
+delivered on each `(topicId, partition)` coordinate — never a coordinate it merely happens to have
+seen something later on. Parsley does not head-of-line block: a later-offset record on a partition
+may forward before an earlier one still held on the same partition. So forwarding that later record
+advances the frontier only as far as the contiguous run actually reaches; the held record's gap is
+never skipped over. Once the held record is itself delivered (released or evicted), the frontier
+catches up in a single step through everything already forwarded above it. It is an implementation
+detail — there is no public frontier type; to propagate causal context downstream, read a consumed
+record's dependencies with `CausalDependencies.fromRecord(record)` and stamp them on what you produce.
 
 The frontier is **persisted** before each record is forwarded, so it survives restarts and rebalances.
 
@@ -52,8 +56,10 @@ exactly once. In the common case it is delivered **in causal order** — the fro
 dependencies by delivery time (immediately, after a wait, or trivially: no dependencies claimed, or
 an undecodable header, both treated as vacuously satisfied). The exception is **eviction**: when the
 configured `CausalBufferLimit` fires before a held record's dependencies are satisfied, the record is
-delivered anyway, out of causal order. The frontier always advances on delivery, so records buffered
-downstream are not permanently stalled by an eviction.
+delivered anyway, out of causal order. Eviction still feeds the frontier exactly like a normal
+delivery, so once an evicted record's coordinate closes its gap, every record already forwarded
+above it (and any record buffered downstream waiting on them) catches up in the same step — an
+eviction never permanently stalls anything behind it.
 
 ## Causal violations
 

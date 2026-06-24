@@ -98,6 +98,7 @@ public class BufferReleaseBenchmark {
 
     static ParsleyEngine<String, String> freshEngine(KeyValueStore<Long, byte[]> bufferKV,
                                                        KeyValueStore<byte[], byte[]> waitKV,
+                                                       KeyValueStore<byte[], byte[]> forwardedKV,
                                                        ParsleySerializer<String, String> serializer) {
         return new ParsleyEngine<>(
                 BENCH_LIMIT,
@@ -105,6 +106,7 @@ public class BufferReleaseBenchmark {
                 f -> {},
                 new RocksBufferStore<>(bufferKV, serializer),
                 new RocksCandidateIndex(waitKV),
+                new RocksForwardedIndex(forwardedKV),
                 ParsleyMetrics.NOOP);
     }
 
@@ -158,16 +160,18 @@ public class BufferReleaseBenchmark {
         TopologyTestDriver driver;
         KeyValueStore<Long, byte[]> bufferKV;
         KeyValueStore<byte[], byte[]> waitKV;
+        KeyValueStore<byte[], byte[]> forwardedKV;
         ParsleySerializer<String, String> serializer;
         ParsleyEngine<String, String> engine;
         ParsleyMessage<String, String> trigger;
 
         @Setup(Level.Trial)
         public void setUpTrial(BenchmarkInfra infra) throws IOException {
-            driver     = buildDriver(infra, "bench-size");
-            bufferKV   = driver.getKeyValueStore("parsley-buffer");
-            waitKV     = driver.getKeyValueStore("parsley-candidate-index");
-            serializer = buildSerializer();
+            driver      = buildDriver(infra, "bench-size");
+            bufferKV    = driver.getKeyValueStore("parsley-buffer");
+            waitKV      = driver.getKeyValueStore("parsley-candidate-index");
+            forwardedKV = driver.getKeyValueStore("parsley-forwarded-index");
+            serializer  = buildSerializer();
         }
 
         @TearDown(Level.Trial)
@@ -177,7 +181,8 @@ public class BufferReleaseBenchmark {
         public void setUpInvocation(BufferReleaseBenchmark bench) {
             clearBufferStore(bufferKV);
             clearWaitStore(waitKV);
-            engine = freshEngine(bufferKV, waitKV, serializer);
+            clearWaitStore(forwardedKV);
+            engine = freshEngine(bufferKV, waitKV, forwardedKV, serializer);
 
             // Record 0 waits on the trigger coordinate; only it is released when the trigger fires.
             ParsleyClock triggerDeps = ParsleyClock.empty().observe(topicId("trigger"), 0, 0L);
@@ -205,16 +210,18 @@ public class BufferReleaseBenchmark {
         TopologyTestDriver driver;
         KeyValueStore<Long, byte[]> bufferKV;
         KeyValueStore<byte[], byte[]> waitKV;
+        KeyValueStore<byte[], byte[]> forwardedKV;
         ParsleySerializer<String, String> serializer;
         ParsleyEngine<String, String> engine;
         ParsleyMessage<String, String> trigger;
 
         @Setup(Level.Trial)
         public void setUpTrial(BenchmarkInfra infra) throws IOException {
-            driver     = buildDriver(infra, "bench-occupancy");
-            bufferKV   = driver.getKeyValueStore("parsley-buffer");
-            waitKV     = driver.getKeyValueStore("parsley-candidate-index");
-            serializer = buildSerializer();
+            driver      = buildDriver(infra, "bench-occupancy");
+            bufferKV    = driver.getKeyValueStore("parsley-buffer");
+            waitKV      = driver.getKeyValueStore("parsley-candidate-index");
+            forwardedKV = driver.getKeyValueStore("parsley-forwarded-index");
+            serializer  = buildSerializer();
         }
 
         @TearDown(Level.Trial)
@@ -224,7 +231,8 @@ public class BufferReleaseBenchmark {
         public void setUpInvocation(BufferReleaseBenchmark bench) {
             clearBufferStore(bufferKV);
             clearWaitStore(waitKV);
-            engine = freshEngine(bufferKV, waitKV, serializer);
+            clearWaitStore(forwardedKV);
+            engine = freshEngine(bufferKV, waitKV, forwardedKV, serializer);
 
             ParsleyClock triggerDeps = ParsleyClock.empty().observe(topicId("trigger"), 0, 0L);
 
@@ -253,16 +261,18 @@ public class BufferReleaseBenchmark {
         TopologyTestDriver driver;
         KeyValueStore<Long, byte[]> bufferKV;
         KeyValueStore<byte[], byte[]> waitKV;
+        KeyValueStore<byte[], byte[]> forwardedKV;
         ParsleySerializer<String, String> serializer;
         ParsleyEngine<String, String> engine;
         ParsleyMessage<String, String> trigger;
 
         @Setup(Level.Trial)
         public void setUpTrial(BenchmarkInfra infra) throws IOException {
-            driver     = buildDriver(infra, "bench-cascade");
-            bufferKV   = driver.getKeyValueStore("parsley-buffer");
-            waitKV     = driver.getKeyValueStore("parsley-candidate-index");
-            serializer = buildSerializer();
+            driver      = buildDriver(infra, "bench-cascade");
+            bufferKV    = driver.getKeyValueStore("parsley-buffer");
+            waitKV      = driver.getKeyValueStore("parsley-candidate-index");
+            forwardedKV = driver.getKeyValueStore("parsley-forwarded-index");
+            serializer  = buildSerializer();
         }
 
         @TearDown(Level.Trial)
@@ -272,7 +282,8 @@ public class BufferReleaseBenchmark {
         public void setUpInvocation(BufferReleaseBenchmark bench) {
             clearBufferStore(bufferKV);
             clearWaitStore(waitKV);
-            engine = freshEngine(bufferKV, waitKV, serializer);
+            clearWaitStore(forwardedKV);
+            engine = freshEngine(bufferKV, waitKV, forwardedKV, serializer);
 
             // Record 0 depends on the trigger; record i depends on record (i-1)'s source coordinate.
             // This forms an r-hop chain: advancing the trigger releases record 0, which in turn

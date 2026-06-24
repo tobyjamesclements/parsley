@@ -22,10 +22,13 @@ factory ({@link io.github.tobyjamesclements.parsley.CausalProcessors}, {@link io
   with {@link io.github.tobyjamesclements.parsley.CausalDependencies#stamp stamp}.</dd>
 
   <dt><strong>Causal frontier</strong></dt>
-  <dd>The highest offset a causal processor has admitted on each topic-partition, keyed by topic
-  UUID so that topic deletion and recreation produce a distinct identity even when the name is
-  reused. A record is delivered once the frontier dominates its dependencies. The frontier is
-  internal to {@link io.github.tobyjamesclements.parsley.CausalProcessors}; it is not a separate public type.</dd>
+  <dd>The highest offset a causal processor has <em>contiguously</em> admitted on each
+  topic-partition &mdash; never a coordinate it merely happens to have seen something later on,
+  since a later-offset record may forward before an earlier one still held on the same partition.
+  Keyed by topic UUID so that topic deletion and recreation produce a distinct identity even when
+  the name is reused. A record is delivered once the frontier dominates its dependencies. The
+  frontier is internal to {@link io.github.tobyjamesclements.parsley.CausalProcessors}; it is not a
+  separate public type.</dd>
 
   <dt><strong>Causal buffer</strong></dt>
   <dd>Records whose dependencies are not yet satisfied are held in a changelog-backed buffer and

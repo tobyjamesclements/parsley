@@ -48,7 +48,7 @@ class CausalBufferDeserializationFailureTest {
         CountingMetrics metrics = new CountingMetrics();
         ParsleyEngine<String, String> engine = new ParsleyEngine<>(
                 CausalBufferLimit.ofSize(100), ParsleyClock.empty(), c -> {},
-                buffer, new MockCandidateIndex(), metrics);
+                buffer, new MockCandidateIndex(), new MockForwardedIndex(), metrics);
 
         // Buffer a T2 record that depends on T1@3 — held, not yet decoded.
         engine.onRecord(message(T2, 0, T2_ID, ParsleyClock.empty().observe(T1_ID, 0, 3)));
@@ -84,7 +84,7 @@ class CausalBufferDeserializationFailureTest {
         MockCandidateIndex index = new MockCandidateIndex();
         assertDoesNotThrow(
                 () -> new ParsleyEngine<>(CausalBufferLimit.ofSize(100), ParsleyClock.empty(), c -> {},
-                        buffer, index, ParsleyMetrics.NOOP),
+                        buffer, index, new MockForwardedIndex(), ParsleyMetrics.NOOP),
                 "index restore must not deserialise the value, so a poison record cannot block startup");
     }
 
@@ -155,7 +155,8 @@ class CausalBufferDeserializationFailureTest {
         RecordingCausalAudit audit = new RecordingCausalAudit();
         ParsleyEngine<String, String> engine = new ParsleyEngine<>(
                 CausalBufferLimit.ofSize(100), ParsleyClock.empty(), c -> {},
-                buffer, new MockCandidateIndex(), metrics, audit, System::currentTimeMillis, /* skip */ true);
+                buffer, new MockCandidateIndex(), new MockForwardedIndex(), metrics, audit,
+                System::currentTimeMillis, /* skip */ true);
 
         engine.onRecord(message(T2, 0, T2_ID, ParsleyClock.empty().observe(T1_ID, 0, 3)));  // held (poison)
         assertEquals(1, buffer.size(), "the poison record is buffered while its dependency is unmet");
@@ -188,7 +189,8 @@ class CausalBufferDeserializationFailureTest {
         RecordingCausalAudit audit = new RecordingCausalAudit();
         ParsleyEngine<String, String> engine = new ParsleyEngine<>(
                 CausalBufferLimit.ofSize(1), ParsleyClock.empty(), c -> {},
-                buffer, new MockCandidateIndex(), metrics, audit, System::currentTimeMillis, /* skip */ true);
+                buffer, new MockCandidateIndex(), new MockForwardedIndex(), metrics, audit,
+                System::currentTimeMillis, /* skip */ true);
 
         // Both depend on an unmet T1@3, so both are held; the second overflows the size-1 limit.
         ParsleyClock unmet = ParsleyClock.empty().observe(T1_ID, 0, 3);
@@ -204,6 +206,81 @@ class CausalBufferDeserializationFailureTest {
         assertTrue(audit.deserializationFailures.size() >= 1, "the overflow-dropped poison record(s) must be audited");
         assertTrue(audit.deserializationFailures.stream().allMatch(RecordingCausalAudit.DeserializationFailure::dropped),
                 "continue-mode drops every overflow poison record, which the audit must reflect");
+    }
+
+    /**
+     * Dropping a poison record produces the same contiguous-frontier catch-up jump as a natural
+     * release or an eviction: the dropped record's own coordinate still gets marked forwarded and
+     * walked, absorbing every already-forwarded record above it in one step. Release, eviction, and
+     * poison-drop all feed the exact same bookkeeping — none are special-cased.
+     */
+    @Test
+    void continueModePoisonDropCatchesUpThroughEverythingAlreadyForwardedAboveIt() {
+        PoisonBufferStore<String, String> buffer = new PoisonBufferStore<>();
+        ParsleyEngine<String, String> engine = new ParsleyEngine<>(
+                CausalBufferLimit.ofSize(100), ParsleyClock.empty(), c -> {},
+                buffer, new MockCandidateIndex(), new MockForwardedIndex(), ParsleyMetrics.NOOP,
+                CausalAudit.NOOP, System::currentTimeMillis, /* skip */ true);
+
+        // T1@5 is held (poison: its value can never be decoded) on a dependency T2@0 will satisfy.
+        engine.onRecord(message(T1, 5, T1_ID, ParsleyClock.empty().observe(T2_ID, 0, 0)));
+
+        // T1@6, T1@7, T1@8 each forward immediately, piling up above the gap.
+        engine.onRecord(message(T1, 6, T1_ID, ParsleyClock.empty()));
+        engine.onRecord(message(T1, 7, T1_ID, ParsleyClock.empty()));
+        engine.onRecord(message(T1, 8, T1_ID, ParsleyClock.empty()));
+        assertEquals(4L, engine.frontier().offsetFor(T1_ID, 0), "frontier stalls below the held poison record");
+
+        // T2@0 satisfies T1@5's own dependency, triggering a drain attempt on T1@5 — which fails to
+        // decode and is dropped (continue-mode) rather than released, but its coordinate is still
+        // accounted for: the frontier catches up through 6, 7, and 8 in the same step.
+        List<ParsleyMessage<String, String>> forwarded = assertDoesNotThrow(
+                () -> engine.onRecord(message(T2, 0, T2_ID, ParsleyClock.empty())),
+                "the poison drop on drain must not propagate the decode failure");
+
+        assertEquals(List.of("t2"), forwarded.stream().map(ParsleyMessage::topic).toList(),
+                "only T2@0 is forwarded; the poison record is dropped, not delivered");
+        assertEquals(8L, engine.frontier().offsetFor(T1_ID, 0),
+                "dropping the poison record must catch the frontier up through everything forwarded above it");
+    }
+
+    /**
+     * The same catch-up jump and drain cascade happen when the poison record is reached through
+     * {@code evictSequences} (a size limit firing) rather than {@code drainInto}'s own scan —
+     * eviction-driven and drain-driven poison-drops feed the exact same contiguous-clock
+     * bookkeeping, with no special-casing between them.
+     */
+    @Test
+    void continueModePoisonDropViaEvictionCascadesThroughEverythingAlreadyForwardedAboveIt() {
+        PoisonBufferStore<String, String> buffer = new PoisonBufferStore<>();
+        ParsleyEngine<String, String> engine = new ParsleyEngine<>(
+                CausalBufferLimit.ofSize(3), ParsleyClock.empty(), c -> {},
+                buffer, new MockCandidateIndex(), new MockForwardedIndex(), ParsleyMetrics.NOOP,
+                CausalAudit.NOOP, System::currentTimeMillis, /* skip */ true);
+
+        // T1@5 is held (poison) on a dependency that will never be satisfied in this test.
+        engine.onRecord(message(T1, 5, T1_ID, ParsleyClock.empty().observe(T2_ID, 0, 99)));
+
+        // T1@6, T1@7, T1@8 each forward immediately, piling up above the gap.
+        engine.onRecord(message(T1, 6, T1_ID, ParsleyClock.empty()));
+        engine.onRecord(message(T1, 7, T1_ID, ParsleyClock.empty()));
+        engine.onRecord(message(T1, 8, T1_ID, ParsleyClock.empty()));
+        assertEquals(4L, engine.frontier().offsetFor(T1_ID, 0), "frontier stalls below the held poison record");
+
+        // T1@9 depends on exactly T1@8 (also poison, held) — indexed under (T1_ID, 0, 8). When the
+        // eviction below closes the gap at 5, the cascade must reach all the way to T1@9.
+        engine.onRecord(message(T1, 9, T1_ID, ParsleyClock.empty().observe(T1_ID, 0, 8)));
+
+        // T2@0 (unrelated, never-satisfied) overflows the size-3 buffer (T1@5, T1@9, T2@0),
+        // force-evicting T1@5 — the oldest — through evictSequences, not drainInto.
+        List<ParsleyMessage<String, String>> forwarded = assertDoesNotThrow(
+                () -> engine.onRecord(message(T2, 0, T2_ID, ParsleyClock.empty().observe(T2_ID, 0, 99))),
+                "eviction of the poison record must not propagate the decode failure");
+
+        assertTrue(forwarded.isEmpty(), "both poison records (T1@5, T1@9) are dropped, not delivered");
+        assertEquals(1, buffer.size(), "only T2@0 remains held");
+        assertEquals(9L, engine.frontier().offsetFor(T1_ID, 0),
+                "evicting T1@5 must cascade all the way through T1@9 via drainInto, not just close its own gap");
     }
 
     // --- helpers --------------------------------------------------------------------------------
@@ -256,7 +333,9 @@ class CausalBufferDeserializationFailureTest {
         }
 
         @Override public Entry<K, V> get(long sequence) {
-            throw poison(held.get((int) sequence));
+            ParsleyMessage<K, V> m = held.get((int) sequence);
+            if (m == null) return null; // already removed — matches the real @Nullable contract
+            throw poison(m);
         }
 
         @Override public List<Entry<K, V>> entries() {
@@ -289,7 +368,7 @@ class CausalBufferDeserializationFailureTest {
 
         private static ParsleyBufferDeserializationException poison(ParsleyMessage<?, ?> m) {
             return new ParsleyBufferDeserializationException(
-                    m.topic(), m.partition(), m.offset(), -1, "test poison " + m.topic(),
+                    m.topic(), m.topicId(), m.partition(), m.offset(), -1, "test poison " + m.topic(),
                     new SerializationException("poison"));
         }
     }

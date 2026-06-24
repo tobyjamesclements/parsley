@@ -28,15 +28,40 @@ import java.util.function.LongSupplier;
  * surrenders the oldest buffered records needed to satisfy the limit and forwards them anyway (out
  * of causal order), logging the causal gap and counting a violation metric for each.
  *
+ * <p><strong>The frontier is a contiguous watermark, not a running max.</strong> The engine does
+ * not head-of-line block: a later-offset record on a partition may forward before an earlier one
+ * still held on the same partition. So a coordinate's frontier offset must only ever advance once
+ * every offset up to it has actually been forwarded — never past a gap, or a record elsewhere
+ * depending on exactly the gapped offset would be released on bookkeeping alone, never having
+ * actually observed it. {@link #extendContiguous} marks every forward in a {@link
+ * ParsleyForwardedIndex} and walks forward from the current frontier to find the longest run of
+ * consecutive forwarded offsets now achievable, advancing the frontier by that run and pruning the
+ * absorbed entries. Release, eviction, and poison-drop all call it the same way — none are
+ * special-cased.
+ *
+ * <p><strong>A coordinate's first offset need not be 0.</strong> Kafka delivers a partition's
+ * records strictly in increasing offset order, but retention, compaction, or a fresh consumer group
+ * can all mean the first offset this engine ever observes for a coordinate is well past 0. {@link
+ * #establishBaselineIfFirstSeen} folds everything below the first-ever-observed offset into the
+ * frontier the moment it's seen, so it is treated as outside the engine's purview rather than an
+ * unfillable hole — without that, the contiguous walk above could never advance past {@code -1} for
+ * such a coordinate.
+ *
  * <p><strong>Frontier persistence ordering:</strong> the {@link FrontierCallback} fires for
  * every frontier advancement <em>before</em> the corresponding record is returned for
  * forwarding, so persisting the frontier in the listener is guaranteed to happen before the
- * record leaves the engine.
+ * record leaves the engine. It fires exactly once per record in the list {@link #onRecord} (or an
+ * eviction method) returns, in the same order — {@code ParsleyProcessor} zips frontier snapshots to
+ * returned records by position — so an advance with no corresponding out-bound record (a
+ * poison-drop, or the baseline seed above) must go through the silent variants instead and never
+ * notify the listener directly.
  *
  * <p><strong>Drain algorithm:</strong> the engine uses a {@link ParsleyCandidateIndex} to avoid a full
  * buffer scan on every frontier advance. When a coordinate advances, only records indexed on
  * that coordinate are checked for causal satisfaction. The cascade repeats for each newly
- * released record's source coordinate.
+ * released record's source coordinate. A record is only ever released once this check — against
+ * the real, contiguous frontier — passes; extending the frontier and checking for release are
+ * always two separate steps, never one.
  *
  * @param <K> the record key type
  * @param <V> the record value type
@@ -57,6 +82,7 @@ final class ParsleyEngine<K, V> {
     private final CausalBufferLimit limit;
     private final ParsleyBufferStore<K, V> buffer;
     private final ParsleyCandidateIndex candidateIndex;
+    private final ParsleyForwardedIndex forwardedIndex;
     private final FrontierCallback frontierListener;
     private final ParsleyMetrics metrics;
     private final CausalAudit audit;
@@ -67,6 +93,10 @@ final class ParsleyEngine<K, V> {
     private final boolean skipOnDecodeFailure;
 
     private ParsleyClock frontier;
+    // Coordinates seen at least once by onRecord this process; guards the one-time baseline seed in
+    // establishBaselineIfFirstSeen (restart-safe: re-derived identically if lost, since it only ever
+    // re-fires when the persisted frontier doesn't already cover the coordinate).
+    private final Set<CoordKey> seenCoordinates = new HashSet<>();
     private int sizeLimit;
     // Set only for a duration-based limit; null for size/first limits (guarded at every read).
     private @Nullable Duration evictionInterval;
@@ -76,8 +106,9 @@ final class ParsleyEngine<K, V> {
                  FrontierCallback frontierListener,
                  ParsleyBufferStore<K, V> buffer,
                  ParsleyCandidateIndex candidateIndex,
+                 ParsleyForwardedIndex forwardedIndex,
                  ParsleyMetrics metrics) {
-        this(limit, initialFrontier, frontierListener, buffer, candidateIndex,
+        this(limit, initialFrontier, frontierListener, buffer, candidateIndex, forwardedIndex,
                 metrics, CausalAudit.NOOP, System::currentTimeMillis, false);
     }
 
@@ -86,9 +117,10 @@ final class ParsleyEngine<K, V> {
                  FrontierCallback frontierListener,
                  ParsleyBufferStore<K, V> buffer,
                  ParsleyCandidateIndex candidateIndex,
+                 ParsleyForwardedIndex forwardedIndex,
                  ParsleyMetrics metrics,
                  LongSupplier clock) {
-        this(limit, initialFrontier, frontierListener, buffer, candidateIndex,
+        this(limit, initialFrontier, frontierListener, buffer, candidateIndex, forwardedIndex,
                 metrics, CausalAudit.NOOP, clock, false);
     }
 
@@ -97,6 +129,7 @@ final class ParsleyEngine<K, V> {
                  FrontierCallback frontierListener,
                  ParsleyBufferStore<K, V> buffer,
                  ParsleyCandidateIndex candidateIndex,
+                 ParsleyForwardedIndex forwardedIndex,
                  ParsleyMetrics metrics,
                  CausalAudit audit,
                  LongSupplier clock,
@@ -106,6 +139,7 @@ final class ParsleyEngine<K, V> {
         this.frontierListener = frontierListener;
         this.buffer = buffer;
         this.candidateIndex = candidateIndex;
+        this.forwardedIndex = forwardedIndex;
         this.metrics = metrics;
         this.audit = audit;
         this.clock = clock;
@@ -130,6 +164,7 @@ final class ParsleyEngine<K, V> {
      */
     List<ParsleyMessage<K, V>> onRecord(ParsleyMessage<K, V> message) {
         List<ParsleyMessage<K, V>> out = new ArrayList<>();
+        establishBaselineIfFirstSeen(out, message.topicId(), message.partition(), message.offset());
 
         ParsleyClock dependencies = effectiveDependencies(message.dependencies(), message);
 
@@ -137,7 +172,7 @@ final class ParsleyEngine<K, V> {
             log.debug("Forwarding {}-{} @{} (satisfied immediately)",
                     message.topic(), message.partition(), message.offset());
             audit.recordForwarded(message.topic(), message.partition(), message.offset());
-            advanceFrontier(message);
+            extendContiguous(message.topicId(), message.partition(), message.offset());
             out.add(message);
             drainInto(out, message.topicId(), message.partition());
         } else {
@@ -232,14 +267,22 @@ final class ParsleyEngine<K, V> {
             try {
                 entry = buffer.get(sequence);
             } catch (ParsleyBufferDeserializationException e) {
-                if (tryDropPoison(e, sequence)) continue;  // skipped (logged + counted)
+                if (tryDropPoison(e, sequence)) {
+                    // The dropped record's own coordinate may unblock something else waiting on it —
+                    // a poison-drop is an accounted-for loss, same as an eviction. Silent: the dropped
+                    // record itself is never added to toForward.
+                    extendContiguousSilently(e.topicId(), e.partition(), e.offset());
+                    drainInto(toForward, e.topicId(), e.partition());
+                    continue;
+                }
                 throw e;                                   // fail fast
             }
             if (entry == null) continue;
             reportEviction(entry.record(), entry.dependencies());
             buffer.remove(sequence);
-            advanceFrontier(entry.record());
+            extendContiguous(entry.record().topicId(), entry.record().partition(), entry.record().offset());
             toForward.add(entry.record());
+            drainInto(toForward, entry.record().topicId(), entry.record().partition());
             evicted++;
         }
         if (evicted > 0) {
@@ -282,6 +325,10 @@ final class ParsleyEngine<K, V> {
             Set<Long> seen = new HashSet<>();
             List<ParsleyBufferStore.Entry<K, V>> releasable = new ArrayList<>();
             List<ParsleyCandidateIndex.Candidate> stale = new ArrayList<>();
+            // Coordinates to rescan on the next pass: fed both by records released below and by
+            // poison-drops discovered during this pass (a drop's own coordinate may also unblock
+            // something else, same as a release).
+            Map<Uuid, Set<Integer>> nextScan = new HashMap<>();
 
             for (Map.Entry<Uuid, Set<Integer>> coord : toScan.entrySet()) {
                 Uuid coordTopicId = coord.getKey();
@@ -293,7 +340,12 @@ final class ParsleyEngine<K, V> {
                         try {
                             entry = buffer.get(candidate.recordId());
                         } catch (ParsleyBufferDeserializationException e) {
-                            if (tryDropPoison(e, candidate.recordId())) continue;  // skipped
+                            if (tryDropPoison(e, candidate.recordId())) {
+                                // Silent: the dropped record itself is never released into `out`.
+                                extendContiguousSilently(e.topicId(), e.partition(), e.offset());
+                                nextScan.computeIfAbsent(e.topicId(), k -> new HashSet<>()).add(e.partition());
+                                continue;
+                            }
                             throw e;                                               // fail fast
                         }
                         if (entry == null) {
@@ -309,15 +361,13 @@ final class ParsleyEngine<K, V> {
             }
 
             stale.forEach(candidateIndex::prune);
-            toScan = new HashMap<>();
-
-            if (releasable.isEmpty()) break;
+            toScan = nextScan;
 
             for (ParsleyBufferStore.Entry<K, V> entry : releasable) {
                 buffer.remove(entry.sequence());
                 audit.recordReleased(entry.record().topic(), entry.record().partition(),
                         entry.record().offset(), buffer.size());
-                advanceFrontier(entry.record());
+                extendContiguous(entry.record().topicId(), entry.record().partition(), entry.record().offset());
                 toScan.computeIfAbsent(entry.record().topicId(), k -> new HashSet<>())
                         .add(entry.record().partition());
                 out.add(entry.record());
@@ -346,9 +396,19 @@ final class ParsleyEngine<K, V> {
      * Returns {@code deps} with the record's <em>exact</em> source coordinate removed if present — a
      * record depending on its own {@code (topicId, partition, offset)} has, by being delivered, met
      * that dependency, so it must not wait on itself (this is what keeps the self-referential stamp on
-     * a fused chain from deadlocking). Any other same-partition entry is retained: a backward dep
-     * ({@code req < offset}) and a forward dep ({@code req > offset}, a later record on the partition)
-     * are both satisfiable by waiting, so they flow through the normal frontier check unchanged.
+     * a fused chain from deadlocking). A backward same-partition dependency ({@code req < offset}) is
+     * retained and flows through the normal frontier check unchanged — satisfiable by waiting, since
+     * the frontier reaches {@code req} strictly before it reaches the record's own offset.
+     *
+     * <p>A <em>forward</em> same-partition dependency ({@code req > offset}, naming a later offset on
+     * the record's own partition) is retained too, but is never satisfiable by waiting: a dependency
+     * clock is always a snapshot of some producer's frontier at write time, so a producer can never
+     * have legitimately observed an offset on its own output partition that doesn't exist yet — this
+     * shape can only arise from a hand-constructed, causally impossible {@code CausalDependencies}.
+     * Since the contiguous frontier cannot pass coordinate {@code (topicId, partition)} past {@code
+     * req} without first passing through {@code offset} itself (the very record waiting on {@code
+     * req}), it can only ever be resolved by eviction (forced, out of causal order, counted as a
+     * violation) — never by a natural release.
      */
     private ParsleyClock effectiveDependencies(ParsleyClock deps, ParsleyMessage<K, V> record) {
         if (deps.offsetFor(record.topicId(), record.partition()) == record.offset()) {
@@ -357,10 +417,80 @@ final class ParsleyEngine<K, V> {
         return deps;
     }
 
-    private void advanceFrontier(ParsleyMessage<K, V> record) {
-        frontier = frontier.observe(record.topicId(), record.partition(), record.offset());
+    /**
+     * Marks {@code offset} as forwarded in the {@link ParsleyForwardedIndex} and, if this closes a
+     * gap (or extends an already-closed one), advances the frontier by the longest contiguous run
+     * now achievable on {@code (topicId, partition)} — never past a gap. Pure clock update: never
+     * touches the buffer or candidate index. Callers remain responsible for driving {@link
+     * #drainInto} for the coordinate afterward, so a record is only ever released once its
+     * dependencies are checked against the resulting frontier — never on this update alone.
+     *
+     * <p>Unconditionally notifies the {@link FrontierCallback} — used only where {@code offset}
+     * corresponds 1:1 to a record the caller is about to add to its own out-bound list, matching
+     * {@code ParsleyProcessor}'s per-record frontier-stamping snapshot, which zips against the
+     * returned record list by position. For an offset with no corresponding out-bound record (a
+     * poison-drop, or the one-time baseline seed below) use {@link #extendContiguousSilently}
+     * instead — any record it cascades into releasing via the caller's own {@code drainInto} still
+     * goes through this method, and so still fires normally.
+     */
+    private void extendContiguous(Uuid topicId, int partition, long offset) {
+        frontier = frontier.observe(topicId, partition, mergeForward(topicId, partition, offset));
         frontierListener.frontierAdvanced(frontier);
     }
+
+    /** As {@link #extendContiguous}, but never notifies the listener. See its Javadoc for when. */
+    private void extendContiguousSilently(Uuid topicId, int partition, long offset) {
+        frontier = frontier.observe(topicId, partition, mergeForward(topicId, partition, offset));
+    }
+
+    /**
+     * Marks {@code offset} forwarded and returns the longest contiguous run now achievable on {@code
+     * (topicId, partition)} — {@code offset} itself if nothing else is pending, further if earlier
+     * forwards were waiting on a gap this one just closed, or the unchanged current frontier offset
+     * if a gap remains immediately above it.
+     */
+    private long mergeForward(Uuid topicId, int partition, long offset) {
+        forwardedIndex.mark(topicId, partition, offset);
+        long watermark = frontier.offsetFor(topicId, partition);
+        long extended = watermark;
+        for (long candidate : forwardedIndex.forwardedAfter(topicId, partition, watermark)) {
+            if (candidate != extended + 1) break;        // gap — stop extending here
+            forwardedIndex.unmark(topicId, partition, candidate);
+            extended = candidate;
+        }
+        return extended;
+    }
+
+    /**
+     * Establishes the contiguous frontier's starting point for {@code (topicId, partition)} the very
+     * first time this engine observes it. Kafka delivers a partition's records strictly in
+     * increasing offset order, so the first offset this engine ever sees for a coordinate is, by
+     * construction, wherever consumption actually began — which need not be 0 (finite retention, a
+     * fresh consumer group, etc.). Anything below it is outside this engine's purview, not a real
+     * gap: folding it into the frontier (rather than treating it as an unfillable hole) may
+     * immediately satisfy other records depending on it, so this drives {@link #drainInto} too.
+     *
+     * <p>A no-op on every subsequent record for the same coordinate ({@code seenCoordinates} guards
+     * it), and a no-op after a restart if the persisted frontier already reflects the coordinate —
+     * in which case the engine's own prior progress is authoritative, not a fresh first-offset guess.
+     * Sets the frontier directly rather than through {@link #mergeForward} — {@code offset - 1}
+     * names no real marked record, just a floor — and never notifies the listener directly for the
+     * same reason {@link #extendContiguousSilently} doesn't: this is not itself an out-bound record,
+     * but anything it cascades into releasing via {@code drainInto} still fires the listener normally.
+     */
+    private void establishBaselineIfFirstSeen(List<ParsleyMessage<K, V>> out, Uuid topicId, int partition, long offset) {
+        // Mark the coordinate seen unconditionally, on the very first record regardless of its
+        // offset — otherwise a held (not yet forwarded) first record at offset 0 would leave the
+        // coordinate looking unseen, and a later record on the same partition could wrongly trigger
+        // the seed below, treating the still-held offset 0 as outside the engine's purview.
+        if (!seenCoordinates.add(new CoordKey(topicId, partition))) return;
+        if (offset <= 0) return; // nothing below 0 to fold in
+        if (frontier.offsetFor(topicId, partition) >= 0) return;
+        frontier = frontier.observe(topicId, partition, offset - 1);
+        drainInto(out, topicId, partition);
+    }
+
+    private record CoordKey(Uuid topicId, int partition) {}
 
     /**
      * Handles a held record that could not be deserialised on the forward path: always logs the

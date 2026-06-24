@@ -30,11 +30,12 @@ parsley.buffer.deserialization.failure.policy = fail   # or: continue
 | `fail` (**default**) | **Fail fast.** The Streams client shuts down; the record stays in the buffer changelog for recovery. |
 | `continue` | **Skip.** The record is dropped, logged, and counted as a violation; processing continues. |
 
-> **`continue` is best-effort and lossy (v1).** The dropped record is gone, and because the frontier
-> is a high-water mark, a *dependent* of the dropped record may later be delivered as if satisfied
-> (the next offset on the partition dominates the dropped one) — i.e. on a premise that was never
-> delivered. Prefer `fail` unless you specifically need liveness over correctness. A durable
-> quarantine store plus operator-triggered redelivery is planned to supersede `continue`.
+> **`continue` is best-effort and lossy (v1).** The dropped record's contents are gone for good — but
+> its coordinate is still accounted for, exactly like an eviction: dropping it closes the gap it sat
+> in, so a *dependent* of the dropped record (one that named its exact coordinate) is later
+> delivered as satisfied, on a premise whose actual contents were never delivered to anyone. Prefer
+> `fail` unless you specifically need liveness over correctness. A durable quarantine store plus
+> operator-triggered redelivery is planned to supersede `continue`.
 
 Either way:
 

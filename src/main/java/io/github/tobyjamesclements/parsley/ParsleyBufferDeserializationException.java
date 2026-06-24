@@ -1,5 +1,7 @@
 package io.github.tobyjamesclements.parsley;
 
+import org.apache.kafka.common.Uuid;
+
 /**
  * Thrown when a held record's key or value cannot be deserialised from the buffer store on the
  * forward path (drain or eviction) — typically because the registry state for its subject changed
@@ -21,16 +23,18 @@ package io.github.tobyjamesclements.parsley;
 final class ParsleyBufferDeserializationException extends RuntimeException {
 
     private final String topic;
+    private final Uuid topicId;
     private final int partition;
     private final long offset;
     private final String details;
 
-    ParsleyBufferDeserializationException(String topic, int partition, long offset, int schemaId,
-                                          String details, Throwable cause) {
+    ParsleyBufferDeserializationException(String topic, Uuid topicId, int partition, long offset,
+                                          int schemaId, String details, Throwable cause) {
         super("failed to deserialise buffered record from " + topic + "-" + partition + "@" + offset
                 + (schemaId >= 0 ? " (writer schema id " + schemaId + ")" : "")
                 + "; the record remains in the buffer changelog for recovery", cause);
         this.topic = topic;
+        this.topicId = topicId;
         this.partition = partition;
         this.offset = offset;
         this.details = details;
@@ -38,6 +42,11 @@ final class ParsleyBufferDeserializationException extends RuntimeException {
 
     String topic() {
         return topic;
+    }
+
+    /** The source topic's stable UUID — used to drive the forwarded-index coordinate on poison-drop. */
+    Uuid topicId() {
+        return topicId;
     }
 
     int partition() {

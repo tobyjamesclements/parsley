@@ -26,6 +26,7 @@ final class ParsleyProcessorSupplier<KIn, VIn, KOut, VOut>
     private final String frontierStoreName;
     private final String bufferStoreName;
     private final String candidateIndexStoreName;
+    private final String forwardedIndexStoreName;
     private final Set<String> topics;
     private final Function<Map<String, Object>, ParsleyTopicAdmin> adminFactory;
     private final ParsleyConfig config;
@@ -38,6 +39,7 @@ final class ParsleyProcessorSupplier<KIn, VIn, KOut, VOut>
                                       String frontierStoreName,
                                       String bufferStoreName,
                                       String candidateIndexStoreName,
+                                      String forwardedIndexStoreName,
                                       Set<String> topics,
                                       Function<Map<String, Object>, ParsleyTopicAdmin> adminFactory,
                                       ParsleyConfig config,
@@ -49,6 +51,7 @@ final class ParsleyProcessorSupplier<KIn, VIn, KOut, VOut>
         this.frontierStoreName = frontierStoreName;
         this.bufferStoreName = bufferStoreName;
         this.candidateIndexStoreName = candidateIndexStoreName;
+        this.forwardedIndexStoreName = forwardedIndexStoreName;
         this.topics = topics;
         this.adminFactory = adminFactory;
         this.config = config;
@@ -60,7 +63,8 @@ final class ParsleyProcessorSupplier<KIn, VIn, KOut, VOut>
         return new ParsleyProcessor<>(
                 userSupplier.get(), limit,
                 new ParsleySerializer<>(new ParsleyResolver<>(keySerdeByTopic, valueSerdeByTopic)),
-                frontierStoreName, bufferStoreName, candidateIndexStoreName, topics, adminFactory, config, audit);
+                frontierStoreName, bufferStoreName, candidateIndexStoreName, forwardedIndexStoreName,
+                topics, adminFactory, config, audit);
     }
 
     /** The buffer eviction limit this supplier was built with. Package-private for tests. */
@@ -83,6 +87,7 @@ final class ParsleyProcessorSupplier<KIn, VIn, KOut, VOut>
         stores.add(ParsleyStores.frontierStore(frontierStoreName));
         stores.add(ParsleyStores.bufferStore(bufferStoreName));
         stores.add(ParsleyStores.candidateIndexStore(candidateIndexStoreName));
+        stores.add(ParsleyStores.forwardedIndexStore(forwardedIndexStoreName));
         return stores;
     }
 }

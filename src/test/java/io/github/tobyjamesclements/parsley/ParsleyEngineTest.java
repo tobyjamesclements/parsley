@@ -24,6 +24,7 @@ class ParsleyEngineTest {
     private final List<ParsleyMessage<String, String>> forwarded = new ArrayList<>();
     private final List<ParsleyClock> frontiers = new ArrayList<>();
     private final MockBufferStore<String, String> buffer = new MockBufferStore<>();
+    private final MockForwardedIndex forwardedIndex = new MockForwardedIndex();
 
     // --- test methods ---------------------------------------------------------------------------
 
@@ -406,7 +407,7 @@ class ParsleyEngineTest {
         ParsleyEngine<String, String> engine = new ParsleyEngine<>(
                 CausalBufferLimit.ofSize(100),
                 ParsleyClock.empty(), frontiers::add, buffer,
-                new MockCandidateIndex(), capturing);
+                new MockCandidateIndex(), forwardedIndex, capturing);
 
         engine.onRecord(incomingRecord(T2, 0, ParsleyClock.empty().observe(T1_ID, 0, 3)));
         assertEquals(List.of(1), bufferedCounts, "recordBuffered must fire when a record enters the buffer");
@@ -438,7 +439,7 @@ class ParsleyEngineTest {
         ParsleyEngine<String, String> engine = new ParsleyEngine<>(
                 CausalBufferLimit.ofSize(1),
                 ParsleyClock.empty(), frontiers::add, buffer,
-                new MockCandidateIndex(), capturing);
+                new MockCandidateIndex(), forwardedIndex, capturing);
 
         engine.onRecord(incomingRecord(T2, 0, ParsleyClock.empty().observe(T1_ID, 0, 99)));
 
@@ -561,15 +562,19 @@ class ParsleyEngineTest {
 
     /**
      * A dependency on a <em>higher</em> offset of the record's own partition is not a
-     * self-reference — it names a later record on that partition — so it is honoured, not stripped:
-     * the record waits until that later offset arrives and the frontier reaches it.
+     * self-reference — it names a later record on that partition — so it is honoured, not stripped.
+     * But it can never be satisfied by waiting: the contiguous frontier cannot pass this coordinate
+     * past the required offset without first passing through the held record's own offset, which is
+     * exactly the thing waiting on it. A later record on the same partition can still forward on its
+     * own, but does not release the held one. The only way out is eventual eviction.
      *
-     * Asserts the record is held while the forward dependency is unmet, then released after the
-     * later same-partition record advances the frontier.
+     * Asserts the record is held while the forward dependency is unmet, that a later same-partition
+     * record forwards independently without releasing it, and that it is eventually force-evicted —
+     * never naturally released — once the buffer limit requires it.
      */
     @Test
-    void holdRecordUntilForwardSamePartitionDependencyArrives() {
-        ParsleyEngine<String, String> engine = engineWith(CausalBufferLimit.ofSize(100));
+    void forwardSamePartitionDependencyCanOnlyResolveByEviction() {
+        ParsleyEngine<String, String> engine = engineWith(CausalBufferLimit.ofSize(2));
 
         // T1@3 depends on T1@5 — a later record on its own partition (forward dep, not a self-reference).
         processRecord(engine, incomingRecord(T1, 3,
@@ -577,36 +582,56 @@ class ParsleyEngineTest {
         assertTrue(forwarded.isEmpty(), "forward same-partition dep must hold the record, not be stripped");
         assertEquals(1, buffer.size(), "record must be buffered while the forward dependency is unmet");
 
-        // T1@5 arrives, advancing the frontier to 5 and satisfying the forward dependency.
+        // T1@5 itself arrives — it forwards on its own, but cannot release T1@3: the contiguous
+        // frontier cannot reach offset 5 without first passing through offset 3, the very record
+        // waiting on it.
         processRecord(engine, incomingRecord(T1, 5, ParsleyClock.empty()));
+        assertEquals(List.of(5L), forwarded.stream().map(ParsleyMessage::offset).toList(),
+                "T1@5 forwards on its own, but does not release T1@3");
+        assertEquals(1, buffer.size(),
+                "T1@3 remains held — a forward same-partition dependency can never be satisfied by waiting");
 
-        assertEquals(2, forwarded.size(), "both records must be forwarded once the forward dependency arrives");
-        assertEquals(5L, forwarded.get(0).offset(), "the satisfying later record (offset 5) is forwarded first");
-        assertEquals(3L, forwarded.get(1).offset(), "the held record (offset 3) is released after its dependency");
+        // A second held record overflows the size limit, forcing T1@3 out by eviction instead.
+        forwarded.clear();
+        processRecord(engine, incomingRecord(T2, 0, ParsleyClock.empty().observe(T1_ID, 0, 99)));
+
+        assertEquals(List.of(3L), forwarded.stream().map(ParsleyMessage::offset).toList(),
+                "the held record must be force-evicted, never naturally released");
+        assertEquals(1, buffer.size(), "buffer holds exactly the size limit after eviction (T2@0 now held)");
     }
 
     /**
      * A dependency on a <em>lower</em> offset of the record's own partition is satisfiable and
-     * honoured: the record waits until that earlier offset has been delivered.
+     * honoured. Realistically, by the time a record arrives, an earlier offset on its own partition
+     * has already been delivered to {@link ParsleyEngine#onRecord} (Kafka guarantees strictly
+     * increasing per-partition delivery) — so the interesting case isn't "waiting for it to arrive",
+     * it's "waiting for it to actually be forwarded", when that earlier record is itself held on an
+     * unrelated dependency.
      *
-     * Asserts the record is held while the backward dependency is unmet, then released once the
-     * earlier same-partition record advances the frontier.
+     * Asserts the dependent record is held until the earlier record's own (unrelated) dependency is
+     * satisfied, releasing the earlier record first and the dependent one second.
      */
     @Test
     void holdRecordUntilBackwardSamePartitionDependencyArrives() {
         ParsleyEngine<String, String> engine = engineWith(CausalBufferLimit.ofSize(100));
 
-        // T1@5 depends on T1@3 — an earlier record on its own partition (backward dep, honoured).
-        processRecord(engine, incomingRecord(T1, 5,
-                ParsleyClock.empty().observe(T1_ID, 0, 3)));
-        assertTrue(forwarded.isEmpty(), "backward same-partition dep must hold the record until it is satisfied");
-        assertEquals(1, buffer.size(), "record must be buffered while the backward dependency is unmet");
+        // T1@3 arrives first (natural Kafka order) but is itself held on an unrelated dependency.
+        processRecord(engine, incomingRecord(T1, 3, ParsleyClock.empty().observe(T2_ID, 0, 0)));
+        assertTrue(forwarded.isEmpty(), "T1@3 is held on its own, unrelated, unmet dependency");
 
-        processRecord(engine, incomingRecord(T1, 3, ParsleyClock.empty()));
+        // T1@5 depends on T1@3 — an earlier record on its own partition (backward dep, honoured) —
+        // but T1@3 hasn't actually been forwarded yet, only buffered, so T1@5 must wait too.
+        processRecord(engine, incomingRecord(T1, 5, ParsleyClock.empty().observe(T1_ID, 0, 3)));
+        assertTrue(forwarded.isEmpty(), "backward same-partition dep must hold T1@5 until T1@3 is actually forwarded");
+        assertEquals(2, buffer.size(), "both T1@3 and T1@5 remain held");
 
-        assertEquals(2, forwarded.size(), "both records must be forwarded once the backward dependency arrives");
-        assertEquals(3L, forwarded.get(0).offset(), "the satisfying earlier record (offset 3) is forwarded first");
-        assertEquals(5L, forwarded.get(1).offset(), "the held record (offset 5) is released after its dependency");
+        // T2@0 arrives, satisfying T1@3's own dependency — T1@3 releases, which in turn satisfies T1@5.
+        processRecord(engine, incomingRecord(T2, 0, ParsleyClock.empty()));
+
+        assertEquals(3, forwarded.size(), "T2@0, then T1@3, then T1@5 must all be forwarded");
+        assertEquals(0L, forwarded.get(0).offset(), "the satisfying record (T2@0) is forwarded first");
+        assertEquals(3L, forwarded.get(1).offset(), "T1@3 releases once its own dependency is met");
+        assertEquals(5L, forwarded.get(2).offset(), "T1@5 releases once T1@3 (its backward dependency) is forwarded");
     }
 
     /**
@@ -667,22 +692,258 @@ class ParsleyEngineTest {
                 "sizeLimitOf must resolve to empty when the composite carries no size limit");
     }
 
+    /**
+     * The frontier is a contiguous watermark, not a running max: a later-offset record on a
+     * partition may forward immediately even while an earlier-offset record on the same partition
+     * remains held, but doing so must never advance the frontier past the held record's offset —
+     * otherwise a third record depending on exactly the held offset would be released on
+     * bookkeeping alone, without that record's effects ever having gone out.
+     *
+     * Asserts that forwarding the later offset leaves the frontier exactly one below the held
+     * record, and that neither the held record nor a record depending on it is released.
+     */
+    @Test
+    void laterSamePartitionRecordForwardsWithoutLeapfroggingAnEarlierHeldOne() {
+        ParsleyEngine<String, String> engine = engineWith(CausalBufferLimit.ofSize(100));
+
+        // T1@5 is held on an unrelated dependency requiring real progress on T2 (not just T2's
+        // baseline — a dependency on T2's very first observed offset would be trivially satisfied
+        // the moment any record on T2 is seen at all, which isn't the scenario under test here).
+        processRecord(engine, incomingRecord(T1, 5, ParsleyClock.empty().observe(T2_ID, 0, 10)));
+        assertTrue(forwarded.isEmpty(), "T1@5 must be held while its dependency is unmet");
+
+        // A third record depends on exactly T1@5 having been forwarded.
+        processRecord(engine, incomingRecord(T2, 1, ParsleyClock.empty().observe(T1_ID, 0, 5)));
+        assertTrue(forwarded.isEmpty(), "T2@1 must be held: T1@5 has not actually been forwarded yet");
+
+        // T1@6 has independently-satisfied (empty) deps and forwards immediately.
+        processRecord(engine, incomingRecord(T1, 6, ParsleyClock.empty()));
+
+        assertEquals(List.of(6L), forwarded.stream().map(ParsleyMessage::offset).toList(),
+                "T1@6 forwards on its own");
+        assertEquals(4L, engine.frontier().offsetFor(T1_ID, 0),
+                "the frontier must stall one below T1@5, never leapfrogging past the still-held record");
+        assertEquals(2, buffer.size(),
+                "T1@5 and T2@1 (depending on it) must both remain held — T1@6 forwarding must not release either");
+    }
+
+    /**
+     * Once the held record at the bottom of a gap is released, the frontier jumps forward in a
+     * single step to absorb every already-forwarded record above it — it does not need those later
+     * records to arrive again, since they are already sitting in the forwarded index.
+     *
+     * Asserts that releasing T1@5 advances the frontier all the way to T1@8 (which already
+     * forwarded while T1@5 was held) in one step, and that a record depending on T1@8 releases too.
+     */
+    @Test
+    void releasingTheHeldRecordCatchesUpThroughEverythingAlreadyForwardedAboveIt() {
+        ParsleyEngine<String, String> engine = engineWith(CausalBufferLimit.ofSize(100));
+
+        // T1@5 is held on an unrelated dependency.
+        processRecord(engine, incomingRecord(T1, 5, ParsleyClock.empty().observe(T2_ID, 0, 0)));
+
+        // T1@6, T1@7, T1@8 each forward immediately (independently-satisfied), piling up above the gap.
+        processRecord(engine, incomingRecord(T1, 6, ParsleyClock.empty()));
+        processRecord(engine, incomingRecord(T1, 7, ParsleyClock.empty()));
+        processRecord(engine, incomingRecord(T1, 8, ParsleyClock.empty()));
+        assertEquals(4L, engine.frontier().offsetFor(T1_ID, 0), "frontier stalls below T1@5 the whole time");
+        forwarded.clear();
+
+        // T1@9 depends on T1@8 (its own immediate predecessor) — held, since the frontier hasn't
+        // actually reached 8 yet (it is stuck behind the still-held T1@5).
+        processRecord(engine, incomingRecord(T1, 9, ParsleyClock.empty().observe(T1_ID, 0, 8)));
+        assertTrue(forwarded.isEmpty(), "T1@9 must be held: the frontier hasn't reached 8 yet");
+        assertEquals(2, buffer.size(), "T1@5 and T1@9 both remain held");
+        forwarded.clear();
+
+        // T2@0 satisfies T1@5's own dependency — releasing it closes the gap, and the frontier
+        // should catch up through 6, 7, and 8 in one step, releasing T1@9 too.
+        processRecord(engine, incomingRecord(T2, 0, ParsleyClock.empty()));
+
+        assertEquals(9L, engine.frontier().offsetFor(T1_ID, 0),
+                "the frontier must jump straight to 9, absorbing every already-forwarded record above the gap");
+        assertEquals(List.of(0L, 5L, 9L), forwarded.stream().map(ParsleyMessage::offset).toList(),
+                "T2@0 forwards, releasing T1@5, which in turn releases T1@9");
+        assertTrue(forwardedIndex.forwardedAfter(T1_ID, 0, 4).isEmpty(),
+                "every absorbed offset (5-9) must be pruned from the forwarded index, not left to "
+                        + "accumulate — it is no longer needed once folded into the frontier");
+    }
+
+    /**
+     * The same catch-up jump happens when the gap-closing record resolves by eviction rather than a
+     * natural release — eviction and release feed the exact same contiguous-clock bookkeeping, with
+     * no special-casing between them.
+     *
+     * Asserts that evicting T1@5 (forced, out of causal order) advances the frontier through the
+     * already-forwarded T1@6/7/8 in one step, exactly as a natural release would.
+     */
+    @Test
+    void evictingTheHeldRecordCatchesUpThroughEverythingAlreadyForwardedAboveIt() {
+        ParsleyEngine<String, String> engine = engineWith(CausalBufferLimit.ofSize(2));
+
+        // T1@5 is held on a dependency that will never be satisfied in this test.
+        processRecord(engine, incomingRecord(T1, 5, ParsleyClock.empty().observe(T2_ID, 0, 99)));
+
+        // T1@6, T1@7, T1@8 each forward immediately, piling up above the gap.
+        processRecord(engine, incomingRecord(T1, 6, ParsleyClock.empty()));
+        processRecord(engine, incomingRecord(T1, 7, ParsleyClock.empty()));
+        processRecord(engine, incomingRecord(T1, 8, ParsleyClock.empty()));
+        assertEquals(4L, engine.frontier().offsetFor(T1_ID, 0), "frontier stalls below T1@5 the whole time");
+        forwarded.clear();
+
+        // A second held record overflows the size-2 buffer, force-evicting T1@5 (the oldest).
+        processRecord(engine, incomingRecord(T2, 0, ParsleyClock.empty().observe(T2_ID, 0, 99)));
+
+        assertEquals(List.of(5L), forwarded.stream().map(ParsleyMessage::offset).toList(),
+                "T1@5 must be force-evicted");
+        assertEquals(8L, engine.frontier().offsetFor(T1_ID, 0),
+                "evicting T1@5 must catch the frontier up through everything already forwarded above it");
+    }
+
+    /**
+     * Evicting a held record must trigger the same drain cascade a natural release does: another
+     * record depending on exactly the evicted record's coordinate is released as a direct result of
+     * the eviction itself, not only on some later, unrelated admission.
+     *
+     * Asserts that evicting T2@0 immediately releases T1@1, which depends on exactly T2@0's
+     * coordinate — in the same call that performed the eviction.
+     */
+    @Test
+    void evictionTriggersTheSameDrainCascadeAsANaturalRelease() {
+        ParsleyEngine<String, String> engine = engineWith(CausalBufferLimit.ofSize(2));
+
+        // T2@0 is held (its dependency on T1@99 will never arrive in this test).
+        processRecord(engine, incomingRecord(T2, 0, ParsleyClock.empty().observe(T1_ID, 0, 99)));
+        assertTrue(forwarded.isEmpty(), "T2@0 must be held while its dependency is unmet");
+
+        // T1@1 depends on exactly T2@0's own coordinate, and its own admission overflows the
+        // size-2 buffer, force-evicting T2@0. T1@1 must be released as a direct result of that very
+        // eviction — proving evictSequences now drives the same drain cascade a natural release does.
+        processRecord(engine, incomingRecord(T1, 1, ParsleyClock.empty().observe(T2_ID, 0, 0)));
+
+        assertEquals(List.of(0L, 1L), forwarded.stream().map(ParsleyMessage::offset).toList(),
+                "evicting T2@0 must immediately release T1@1, which depended on exactly its coordinate");
+        assertEquals(0, buffer.size(), "both records must have left the buffer");
+    }
+
+    /**
+     * The forwarded index is itself durable (restored from its own changelog, like the buffer and
+     * candidate index already are), so a restart never loses track of offsets forwarded ahead of a
+     * still-open gap — simulated here by handing a fresh engine instance the same forwarded-index
+     * and buffer-store contents an earlier instance left behind, without persisting any separate
+     * "ceiling" value.
+     *
+     * Asserts that resolving the gap on the new instance reaches the same final frontier as
+     * resolving it without a restart in between.
+     */
+    @Test
+    void forwardedIndexSurvivesARestartSoTheCatchUpJumpStillWorks() {
+        MockForwardedIndex sharedForwardedIndex = new MockForwardedIndex();
+        MockBufferStore<String, String> sharedBuffer = new MockBufferStore<>();
+
+        ParsleyEngine<String, String> first = new ParsleyEngine<>(CausalBufferLimit.ofSize(100),
+                ParsleyClock.empty(), f -> {}, sharedBuffer, new MockCandidateIndex(),
+                sharedForwardedIndex, ParsleyMetrics.NOOP);
+
+        // T1@5 is held; T1@6, T1@7, T1@8 each forward immediately, piling up above the gap.
+        first.onRecord(incomingRecord(T1, 5, ParsleyClock.empty().observe(T2_ID, 0, 0)));
+        first.onRecord(incomingRecord(T1, 6, ParsleyClock.empty()));
+        first.onRecord(incomingRecord(T1, 7, ParsleyClock.empty()));
+        first.onRecord(incomingRecord(T1, 8, ParsleyClock.empty()));
+        ParsleyClock persistedFrontier = first.frontier();
+        assertEquals(4L, persistedFrontier.offsetFor(T1_ID, 0),
+                "frontier persisted at the gap, as it would be before a crash");
+
+        // Simulate a restart: a brand-new engine instance, seeded with the persisted frontier and a
+        // buffer restored from the changelog (still holding T1@5), and the SAME forwarded-index
+        // contents (standing in for "restored from its own changelog") — no separate "ceiling"
+        // value is needed; the forwarded index alone remembers that 6, 7, and 8 already went out.
+        ParsleyEngine<String, String> restarted = new ParsleyEngine<>(CausalBufferLimit.ofSize(100),
+                persistedFrontier, f -> {}, sharedBuffer, new MockCandidateIndex(),
+                sharedForwardedIndex, ParsleyMetrics.NOOP);
+
+        List<ParsleyMessage<String, String>> released =
+                restarted.onRecord(incomingRecord(T2, 0, ParsleyClock.empty()));
+
+        assertEquals(8L, restarted.frontier().offsetFor(T1_ID, 0),
+                "the restarted instance must still catch up through 6, 7, and 8 via the surviving forwarded index");
+        assertEquals(List.of(0L, 5L), released.stream().map(ParsleyMessage::offset).toList(),
+                "T2@0 forwards and releases T1@5 on the restarted instance");
+    }
+
+    /**
+     * Establishing the baseline for a coordinate this engine has never observed before can itself
+     * release an already-buffered record — before the very record that triggered the baseline seed
+     * is even dispositioned by its own dominates check.
+     *
+     * Asserts that T2@0, depending on a coordinate the engine has never seen, is released as a
+     * direct effect of T1@5 establishing that coordinate's baseline — and is forwarded ahead of
+     * T1@5 itself in the returned order.
+     */
+    @Test
+    void establishingTheBaselineForAFirstSeenCoordinateCanItselfReleaseAWaitingRecord() {
+        ParsleyEngine<String, String> engine = engineWith(CausalBufferLimit.ofSize(100));
+
+        // T2@0 depends on T1_ID/0@4 — a coordinate this engine has never observed at all yet.
+        processRecord(engine, incomingRecord(T2, 0, ParsleyClock.empty().observe(T1_ID, 0, 4)));
+        assertTrue(forwarded.isEmpty(), "T2@0 must be held: T1/0 has never been observed");
+
+        // T1@5 is the very first record this engine ever sees on T1/0. Establishing its baseline
+        // (frontier = 4) is itself enough to satisfy T2@0's dependency — before T1@5 is even
+        // dispositioned by its own dominates check.
+        processRecord(engine, incomingRecord(T1, 5, ParsleyClock.empty()));
+
+        assertEquals(List.of(0L, 5L), forwarded.stream().map(ParsleyMessage::offset).toList(),
+                "establishing T1's baseline must release T2@0 before T1@5 itself forwards");
+        assertEquals(0, buffer.size(), "both records must have left the buffer");
+    }
+
+    /**
+     * The baseline seed must never re-fire once the persisted frontier already reflects real
+     * progress on a coordinate — even progress as low as offset 0 exactly. A restarted engine
+     * instance, with a fresh {@code seenCoordinates} set, sees every coordinate "for the first
+     * time" in this process, but must defer entirely to a restored frontier value rather than guess
+     * a new baseline from whatever offset it happens to see next.
+     *
+     * Asserts that with a restored frontier already at exactly 0 for a coordinate, the first record
+     * this instance sees on it at a much later offset does not corrupt the frontier: it correctly
+     * stalls at 0 (a real, unaccounted-for gap exists from 1 through 9), rather than treating that
+     * gap as moot just because {@code seenCoordinates} happened to be fresh.
+     */
+    @Test
+    void baselineSeedNeverRefiresWhenTheRestoredFrontierAlreadyHasRealProgress() {
+        ParsleyClock restoredFrontier = ParsleyClock.empty().observe(T1_ID, 0, 0);
+        ParsleyEngine<String, String> engine = new ParsleyEngine<>(CausalBufferLimit.ofSize(100),
+                restoredFrontier, frontiers::add, buffer, new MockCandidateIndex(),
+                forwardedIndex, ParsleyMetrics.NOOP);
+
+        // The first record this (restarted) instance ever sees on T1/0 is offset 10 — far above
+        // the restored frontier of 0. There is a real, unaccounted-for gap from 1 through 9.
+        processRecord(engine, incomingRecord(T1, 10, ParsleyClock.empty()));
+
+        assertEquals(0L, engine.frontier().offsetFor(T1_ID, 0),
+                "the frontier must stay at the restored value (0); it must not be corrupted into "
+                        + "treating the unaccounted-for gap from 1-9 as moot just because "
+                        + "seenCoordinates was fresh");
+    }
+
     // --- helpers --------------------------------------------------------------------------------
 
     private ParsleyEngine<String, String> engineWith(CausalBufferLimit limit) {
         return new ParsleyEngine<>(limit, ParsleyClock.empty(), frontiers::add,
-                buffer, new MockCandidateIndex(), ParsleyMetrics.NOOP);
+                buffer, new MockCandidateIndex(), forwardedIndex, ParsleyMetrics.NOOP);
     }
 
     private ParsleyEngine<String, String> engineWithClock(CausalBufferLimit limit,
                                                            java.util.function.LongSupplier clock) {
         return new ParsleyEngine<>(limit, ParsleyClock.empty(), frontiers::add,
-                buffer, new MockCandidateIndex(), ParsleyMetrics.NOOP, clock);
+                buffer, new MockCandidateIndex(), forwardedIndex, ParsleyMetrics.NOOP, clock);
     }
 
     private ParsleyEngine<String, String> engineWithAudit(CausalBufferLimit limit, CausalAudit audit) {
         return new ParsleyEngine<>(limit, ParsleyClock.empty(), frontiers::add, buffer,
-                new MockCandidateIndex(), ParsleyMetrics.NOOP, audit, System::currentTimeMillis, false);
+                new MockCandidateIndex(), forwardedIndex, ParsleyMetrics.NOOP, audit,
+                System::currentTimeMillis, false);
     }
 
     private void processRecord(ParsleyEngine<String, String> engine, ParsleyMessage<String, String> message) {

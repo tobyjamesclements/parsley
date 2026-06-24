@@ -51,8 +51,9 @@ Parsley never drops or diverts a record — there is no policy to configure for 
 eviction. Every record reaches the user's `process()`/`poll()` exactly once. In the common case it
 is delivered in causal order; the exception is **eviction**, when the configured `CausalBufferLimit`
 fires before a held record's dependencies are satisfied and the record is delivered anyway, out of
-order. The frontier always advances on delivery, so buffered records waiting on that coordinate are
-not permanently stalled.
+order. Eviction still feeds the frontier exactly like a normal delivery: once the evicted record's
+coordinate closes its gap, buffered records waiting on it catch up in the same step, so they are not
+permanently stalled.
 
 Eviction is surfaced operationally, not as a per-record signal: Parsley logs every eviction at
 `WARN` with the causal gap (the per-coordinate shortfall between what was required and what the
