@@ -256,6 +256,73 @@
                 </plugins>
             </build>
         </profile>
+
+        <!-- Real Central release: mvn -Prelease deploy (only the tag-triggered release.yml workflow
+             uses this; the snapshot path on every CI run stays on plain maven-deploy-plugin and never
+             activates this profile). Signs artifacts, attaches sources/javadoc jars, and bundles+
+             uploads the release to Central via the Publisher API instead of a plain repository PUT. -->
+        <profile>
+            <id>release</id>
+            <build>
+                <plugins>
+                    <plugin>
+                        <groupId>org.apache.maven.plugins</groupId>
+                        <artifactId>maven-gpg-plugin</artifactId>
+                        <version>3.2.7</version>
+                        <configuration>
+                            <passphraseEnvName>MAVEN_GPG_PASSPHRASE</passphraseEnvName>
+                        </configuration>
+                        <executions>
+                            <execution>
+                                <id>sign-artifacts</id>
+                                <phase>verify</phase>
+                                <goals>
+                                    <goal>sign</goal>
+                                </goals>
+                            </execution>
+                        </executions>
+                    </plugin>
+                    <plugin>
+                        <groupId>org.apache.maven.plugins</groupId>
+                        <artifactId>maven-source-plugin</artifactId>
+                        <version>3.3.1</version>
+                        <executions>
+                            <execution>
+                                <id>attach-sources</id>
+                                <goals>
+                                    <goal>jar-no-fork</goal>
+                                </goals>
+                            </execution>
+                        </executions>
+                    </plugin>
+                    <!-- Adds a jar-producing execution to the unconditional maven-javadoc-plugin
+                         declaration above (Maven merges profile and main-build plugin entries sharing
+                         the same key), so -javadoc.jar is only built for a real release. -->
+                    <plugin>
+                        <groupId>org.apache.maven.plugins</groupId>
+                        <artifactId>maven-javadoc-plugin</artifactId>
+                        <executions>
+                            <execution>
+                                <id>attach-javadoc</id>
+                                <goals>
+                                    <goal>jar</goal>
+                                </goals>
+                            </execution>
+                        </executions>
+                    </plugin>
+                    <plugin>
+                        <groupId>org.sonatype.central</groupId>
+                        <artifactId>central-publishing-maven-plugin</artifactId>
+                        <version>0.10.0</version>
+                        <extensions>true</extensions>
+                        <configuration>
+                            <publishingServerId>central</publishingServerId>
+                            <autoPublish>false</autoPublish>
+                        </configuration>
+                    </plugin>
+                </plugins>
+            </build>
+        </profile>
     </profiles>
 
     <build>
@@ -456,6 +523,11 @@
                     <encoding>UTF-8</encoding>
                     <doclint>none</doclint>
                     <overview>${project.basedir}/overview.html</overview>
+                    <!-- avro-maven-plugin registers its test-avro output dir as a main compile source
+                         root too (see comment above build-helper-maven-plugin); those test-only
+                         generated classes never actually land in the main jar, so excluded here to
+                         avoid javadoc failing on a package with no real main-module source. -->
+                    <excludePackageNames>io.github.tobyjamesclements.parsley.avro</excludePackageNames>
                 </configuration>
             </plugin>
         </plugins>
