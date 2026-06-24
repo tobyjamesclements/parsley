@@ -4,33 +4,21 @@
 
 - Java 25 (`--release 25`)
 - Maven 3.9+ (or use the included `./mvnw` wrapper)
-- A GitHub account with a [personal access token](https://github.com/settings/tokens) that has the
-  `read:packages` scope (required for GitHub Packages, even for public repositories)
 
 ## Installation
 
-Parsley is published to [GitHub Packages](https://github.com/tobyjamesclements/parsley/packages).
-Add your credentials to `~/.m2/settings.xml`:
-
-```xml
-<settings>
-  <servers>
-    <server>
-      <id>github-parsley</id>
-      <username>YOUR_GITHUB_USERNAME</username>
-      <password>YOUR_PAT</password>
-    </server>
-  </servers>
-</settings>
-```
-
-Then declare the repository and dependency in your `pom.xml`:
+Parsley is published to [Maven Central](https://central.sonatype.com/artifact/io.github.tobyjamesclements/parsley).
+The current version is a snapshot, so it lives in Central's snapshot repository rather than the main
+one — no credentials needed, snapshots are publicly readable. Declare the repository and dependency in
+your `pom.xml`:
 
 ```xml
 <repositories>
   <repository>
-    <id>github-parsley</id>
-    <url>https://maven.pkg.github.com/tobyjamesclements/parsley</url>
+    <id>central-snapshots</id>
+    <url>https://central.sonatype.com/repository/maven-snapshots/</url>
+    <releases><enabled>false</enabled></releases>
+    <snapshots><enabled>true</enabled></snapshots>
   </repository>
 </repositories>
 
@@ -40,6 +28,9 @@ Then declare the repository and dependency in your `pom.xml`:
   <version>0.1.0-SNAPSHOT</version>
 </dependency>
 ```
+
+Once a tagged `0.1.0` release ships, this repository block won't be needed — Central's default repo
+(already in every Maven setup) covers real releases.
 
 `parsley` pulls in `kafka-streams` and `kafka-clients` transitively.
 

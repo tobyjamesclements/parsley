@@ -8,14 +8,16 @@ The guarantee: if A causally precedes B, every consumer observes A before B.
 
 ## Install
 
-Parsley is published to [GitHub Packages](https://github.com/tobyjamesclements/parsley/packages).
-GitHub requires a PAT with `read:packages` even for public packages — add it to `~/.m2/settings.xml`
-as a server with id `github-parsley`.
+Parsley is published to [Maven Central](https://central.sonatype.com/artifact/io.github.tobyjamesclements/parsley).
+The current version is a snapshot, so it lives in Central's snapshot repository rather than the main
+one — no credentials needed, snapshots are publicly readable:
 
 ```xml
 <repository>
-  <id>github-parsley</id>
-  <url>https://maven.pkg.github.com/tobyjamesclements/parsley</url>
+  <id>central-snapshots</id>
+  <url>https://central.sonatype.com/repository/maven-snapshots/</url>
+  <releases><enabled>false</enabled></releases>
+  <snapshots><enabled>true</enabled></snapshots>
 </repository>
 
 <dependency>
@@ -24,6 +26,9 @@ as a server with id `github-parsley`.
   <version>0.1.0-SNAPSHOT</version>
 </dependency>
 ```
+
+Once a tagged `0.1.0` release ships, this repository block won't be needed — Central's default repo
+(already in every Maven setup) covers real releases.
 
 Requires Java 25. Build from source: `./mvnw install`.
 

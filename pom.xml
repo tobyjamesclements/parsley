@@ -43,19 +43,13 @@
         </repository>
     </repositories>
 
-    <!-- Snapshots also publish to Sonatype Central, in addition to GitHub Packages below. That target
-         isn't declared here because <distributionManagement> only supports one deploy destination per
-         version type; Central is instead pushed to via a second, separate deploy invocation (CI:
-         .github/workflows/publish.yml; locally:
+    <!-- Snapshots publish to Sonatype Central via a separate deploy invocation rather than this
+         element (CI: .github/workflows/publish.yml; locally:
          mvn deploy -DskipTests -DaltSnapshotDeploymentRepository=central::https://central.sonatype.com/repository/maven-snapshots/
-         which requires a matching <server id="central"> entry in your own ~/.m2/settings.xml). -->
-    <distributionManagement>
-        <repository>
-            <id>github</id>
-            <name>GitHub Packages</name>
-            <url>https://maven.pkg.github.com/tobyjamesclements/parsley</url>
-        </repository>
-    </distributionManagement>
+         which requires a matching <server id="central"> entry in your own ~/.m2/settings.xml). Real
+         releases go through the release profile's central-publishing-maven-plugin, which uploads via
+         Central's bundle API rather than a repository URL. Neither path needs
+         <distributionManagement>, so there is none here. -->
 
     <properties>
         <kafka.version>4.3.0</kafka.version>
