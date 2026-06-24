@@ -950,11 +950,12 @@ consequences a source-record skip does not):</p>
 </tbody>
 </table>
 <blockquote>
-<p><strong><code>continue</code> is best-effort and lossy (v1).</strong> The dropped record is gone, and because the frontier
-is a high-water mark, a <em>dependent</em> of the dropped record may later be delivered as if satisfied
-(the next offset on the partition dominates the dropped one) — i.e. on a premise that was never
-delivered. Prefer <code>fail</code> unless you specifically need liveness over correctness. A durable
-quarantine store plus operator-triggered redelivery is planned to supersede <code>continue</code>.</p>
+<p><strong><code>continue</code> is best-effort and lossy (v1).</strong> The dropped record's contents are gone for good — but
+its coordinate is still accounted for, exactly like an eviction: dropping it closes the gap it sat
+in, so a <em>dependent</em> of the dropped record (one that named its exact coordinate) is later
+delivered as satisfied, on a premise whose actual contents were never delivered to anyone. Prefer
+<code>fail</code> unless you specifically need liveness over correctness. A durable quarantine store plus
+operator-triggered redelivery is planned to supersede <code>continue</code>.</p>
 </blockquote>
 <p>Either way:</p>
 <ul>

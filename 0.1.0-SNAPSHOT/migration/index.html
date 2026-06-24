@@ -960,8 +960,9 @@ stamping it has fully adopted the guarantee.</p>
 there's no follow-up configuration step, since there was never a policy gating it.</p>
 <h2 id="notes">Notes</h2>
 <ul>
-<li>The frontier always advances on delivery regardless of whether a record carried a header, so
-  records buffered downstream of a still-unmigrated producer are not permanently stalled.</li>
+<li>A record with no header (or an absent-but-vacuously-satisfied dependency set) still feeds the
+  frontier exactly like any other delivery, so records buffered downstream of a still-unmigrated
+  producer catch up once that coordinate's gap closes — they are not permanently stalled.</li>
 <li>A present-but-undecodable header (a genuine bug, not a migration artefact) is logged at <code>WARN</code>
   and also treated as an empty, vacuously satisfied dependency set — it does not block delivery,
   but is worth alerting on separately from missing-header records, since it indicates corruption

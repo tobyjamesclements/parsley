@@ -1013,8 +1013,9 @@ backstop.</p>
 eviction. Every record reaches the user's <code>process()</code>/<code>poll()</code> exactly once. In the common case it
 is delivered in causal order; the exception is <strong>eviction</strong>, when the configured <code>CausalBufferLimit</code>
 fires before a held record's dependencies are satisfied and the record is delivered anyway, out of
-order. The frontier always advances on delivery, so buffered records waiting on that coordinate are
-not permanently stalled.</p>
+order. Eviction still feeds the frontier exactly like a normal delivery: once the evicted record's
+coordinate closes its gap, buffered records waiting on it catch up in the same step, so they are not
+permanently stalled.</p>
 <p>Eviction is surfaced operationally, not as a per-record signal: Parsley logs every eviction at
 <code>WARN</code> with the causal gap (the per-coordinate shortfall between what was required and what the
 frontier had observed) and counts it via its eviction metric.</p>
