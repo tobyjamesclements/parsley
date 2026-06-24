@@ -2,6 +2,40 @@
 
 `ParsleyEngine<K,V>` is the core of the causal guarantee. It classifies incoming records, manages the causal frontier and the held-record buffer, cascades releases as the frontier advances, and enforces buffer limits.
 
+## Engine algorithm, at a glance
+
+```
+onRecord(record):
+    establishBaselineIfFirstSeen(record.coordinate)   # one-time per coordinate, folds in
+                                                        # everything below the first-seen offset
+    deps = effectiveDependencies(record.dependencies)  # strip a self-referential entry
+
+    if frontier.dominates(deps):
+        extendContiguous(record.coordinate)            # advance frontier, fire FrontierCallback
+        out.add(record)
+        drainInto(record.coordinate)                    # cascade releases (see below)
+    else:
+        buffer.add(record)                              # hold until satisfied
+        candidateIndex.index(record, deps)
+        if buffer.size() >= sizeLimit:
+            out.addAll(evictOverflow())                 # bring buffer back under the limit
+
+    return out
+
+evictOverflow() / evictExpired():
+    candidates = oldest/expired buffered entries
+    evictOrFail(candidates):
+        if failOnEvictionLimit:
+            throw ParsleyBufferEvictionLimitException   # candidates remain buffered
+        else:
+            evictSequences(candidates)                  # force-forward out of causal order,
+                                                          # cascading via drainInto per release
+```
+
+Each piece is covered in its own section below: [`onRecord()` algorithm](#onrecord-algorithm)
+for admission, [Drain cascade](#drain-cascade-draininto) for the cascade, and
+[Eviction](#eviction) for the fail/continue policy split.
+
 ## Key state
 
 | Field | Type | Purpose |
