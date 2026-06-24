@@ -114,17 +114,17 @@ class ParsleySerializerTest {
     }
 
     /**
-     * {@code ParsleySerializer.deserializeDependencies()} rejects a byte array whose leading
+     * {@code ParsleySerializer.deserializeIndexMetadata()} rejects a byte array whose leading
      * version byte is not a recognised format version, the same as {@link #deserializeRejectsAnUnknownFormatVersion}
      * asserts for the full {@code deserialize()} path.
      *
      * Asserts that {@code IllegalStateException} is thrown for an unknown version byte.
      */
     @Test
-    void deserializeDependenciesRejectsAnUnknownFormatVersion() {
+    void deserializeIndexMetadataRejectsAnUnknownFormatVersion() {
         // Leading version byte 99 (not 2) — rejected before any field is read.
-        assertThrows(IllegalStateException.class, () -> serializer.deserializeDependencies(new byte[]{99}),
-                "deserializeDependencies must throw for an unrecognised format version");
+        assertThrows(IllegalStateException.class, () -> serializer.deserializeIndexMetadata(new byte[]{99}),
+                "deserializeIndexMetadata must throw for an unrecognised format version");
     }
 
     // --- helpers --------------------------------------------------------------------------------

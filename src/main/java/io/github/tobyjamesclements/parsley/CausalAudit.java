@@ -2,7 +2,8 @@ package io.github.tobyjamesclements.parsley;
 
 /**
  * Receives Parsley's per-record causal-buffering events: forwarded, held, released, evicted
- * (causal violation), and undecodable. Register one with
+ * (causal violation), eviction-limit-exceeded (fail-fast instead of a violation), and undecodable.
+ * Register one with
  * {@link CausalProcessors.Builder#withAudit} to route these events wherever your audit/compliance
  * trail needs them (a SIEM, a durable audit store, structured logs) — Parsley itself never decides
  * where they go.
@@ -89,6 +90,19 @@ public interface CausalAudit {
     void recordDeserializationFailure(String topic, int partition, long offset, String reason, boolean dropped);
 
     /**
+     * A {@link CausalBufferLimit} fired on a held record whose dependencies were not yet satisfied,
+     * and {@code parsley.buffer.eviction.failure.policy = fail} (the default) is configured: the
+     * record was <strong>not</strong> evicted — it remains buffered — and the owning Streams task is
+     * about to fail fast rather than deliver it out of causal order.
+     *
+     * @param topic     the record's source topic
+     * @param partition the record's source partition
+     * @param offset    the record's source offset
+     * @param gap       the dependencies that remain unsatisfied
+     */
+    void recordEvictionLimitExceeded(String topic, int partition, long offset, CausalDependencies gap);
+
+    /**
      * The processor for {@code taskId} initialized.
      *
      * @param taskId           the Kafka Streams task id
@@ -111,6 +125,7 @@ public interface CausalAudit {
         @Override public void recordReleased(String topic, int partition, long offset, int bufferDepthAfter) {}
         @Override public void recordViolation(String topic, int partition, long offset, CausalDependencies gap) {}
         @Override public void recordDeserializationFailure(String topic, int partition, long offset, String reason, boolean dropped) {}
+        @Override public void recordEvictionLimitExceeded(String topic, int partition, long offset, CausalDependencies gap) {}
         @Override public void processorInitialized(String taskId, boolean frontierRestored) {}
         @Override public void processorClosing(String taskId) {}
     };

@@ -41,17 +41,36 @@ final class ParsleyConfig {
      */
     static final String DESERIALIZATION_FAILURE_POLICY = "parsley.buffer.deserialization.failure.policy";
 
+    /**
+     * {@code parsley.buffer.eviction.failure.policy} — how a {@link CausalBufferLimit} firing
+     * (the buffer would otherwise force a held record's delivery out of causal order) is handled:
+     * <ul>
+     *   <li>{@code fail} (default): fail fast, leaving the record buffered rather than violate
+     *       causal order — trades availability for consistency.</li>
+     *   <li>{@code continue}: evict and forward the record anyway, out of causal order (logged,
+     *       counted as a violation) — Parsley's original always-forward behaviour.</li>
+     * </ul>
+     */
+    static final String EVICTION_FAILURE_POLICY = "parsley.buffer.eviction.failure.policy";
+
     enum FailurePolicy { FAIL, CONTINUE }
 
     private final FailurePolicy deserializationFailurePolicy;
+    private final FailurePolicy evictionFailurePolicy;
 
-    private ParsleyConfig(FailurePolicy deserializationFailurePolicy) {
+    private ParsleyConfig(FailurePolicy deserializationFailurePolicy, FailurePolicy evictionFailurePolicy) {
         this.deserializationFailurePolicy = deserializationFailurePolicy;
+        this.evictionFailurePolicy = evictionFailurePolicy;
     }
 
     /** Whether a buffer-decode failure should be skipped ({@code continue}) rather than fail fast. */
     boolean skipOnDecodeFailure() {
         return deserializationFailurePolicy == FailurePolicy.CONTINUE;
+    }
+
+    /** Whether a buffer-limit eviction should fail the task fast rather than evict and forward. */
+    boolean failOnEvictionLimit() {
+        return evictionFailurePolicy == FailurePolicy.FAIL;
     }
 
     /** Loads from the {@code parsley.properties} classpath resource, or defaults if it is absent. */
@@ -79,16 +98,17 @@ final class ParsleyConfig {
 
     /** Builds from explicit properties (programmatic override / tests). */
     static ParsleyConfig from(Properties props) {
-        return new ParsleyConfig(failurePolicy(props));
+        return new ParsleyConfig(
+                failurePolicy(props, DESERIALIZATION_FAILURE_POLICY),
+                failurePolicy(props, EVICTION_FAILURE_POLICY));
     }
 
-    private static FailurePolicy failurePolicy(Properties props) {
-        String value = props.getProperty(DESERIALIZATION_FAILURE_POLICY, "fail").trim();
+    private static FailurePolicy failurePolicy(Properties props, String key) {
+        String value = props.getProperty(key, "fail").trim();
         try {
             return FailurePolicy.valueOf(value.toUpperCase(Locale.ROOT));
         } catch (IllegalArgumentException e) {
-            throw new IllegalStateException(
-                    DESERIALIZATION_FAILURE_POLICY + " must be 'fail' or 'continue', got '" + value + "'");
+            throw new IllegalStateException(key + " must be 'fail' or 'continue', got '" + value + "'");
         }
     }
 }

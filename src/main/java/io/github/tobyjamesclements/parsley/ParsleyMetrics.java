@@ -48,6 +48,13 @@ interface ParsleyMetrics {
     void recordDeserializationError();
 
     /**
+     * A {@link CausalBufferLimit} fired on a held record and {@code parsley.buffer.eviction.failure.policy
+     * = fail} (the default) failed the task fast instead of evicting it. The record stays buffered;
+     * this counts the failed attempt.
+     */
+    void recordEvictionLimitExceeded();
+
+    /**
      * Reports the buffer's current observable state. Called after every depth-changing event and,
      * independently, on a periodic refresh tick — so the oldest-record gauge stays current even on a
      * buffer that is idle (no admits, releases, or evictions) between ticks.
@@ -64,6 +71,7 @@ interface ParsleyMetrics {
         @Override public void recordEvicted(int c) {}
         @Override public void recordViolation() {}
         @Override public void recordDeserializationError() {}
+        @Override public void recordEvictionLimitExceeded() {}
         @Override public void reportState(int depth, OptionalLong oldestBufferedAtMs) {}
     };
 
@@ -99,6 +107,7 @@ interface ParsleyMetrics {
         Sensor evicted   = sm.addRateTotalSensor("parsley", taskId, "records-evicted",   Sensor.RecordingLevel.INFO);
         Sensor violation = sm.addRateTotalSensor("parsley", taskId, "violations",         Sensor.RecordingLevel.INFO);
         Sensor deserErr  = sm.addRateTotalSensor("parsley", taskId, "deserialization-errors", Sensor.RecordingLevel.INFO);
+        Sensor evictionLimitExceeded = sm.addRateTotalSensor("parsley", taskId, "eviction-limit-exceeded", Sensor.RecordingLevel.INFO);
 
         Sensor depth = gauge(sm, taskId, "buffer-depth",
                 "Current number of records held in the causal buffer");
@@ -106,7 +115,7 @@ interface ParsleyMetrics {
                 "Buffer-admission time (epoch millis) of the oldest held record, or 0 if the buffer is empty");
 
         List<Sensor> sensors = new ArrayList<>(List.of(buffered, released, evicted, violation, deserErr,
-                depth, oldestBufferedAt));
+                evictionLimitExceeded, depth, oldestBufferedAt));
 
         sizeLimit.ifPresent(limit -> {
             Sensor sizeLimitGauge = gauge(sm, taskId, "buffer-size-limit",
@@ -127,6 +136,7 @@ interface ParsleyMetrics {
             @Override public void recordEvicted(int c)         { evicted.record(c); }
             @Override public void recordViolation()            { violation.record(); }
             @Override public void recordDeserializationError() { deserErr.record(); }
+            @Override public void recordEvictionLimitExceeded() { evictionLimitExceeded.record(); }
             @Override public void reportState(int d, OptionalLong oldest) {
                 depth.record(d);
                 oldestBufferedAt.record(oldest.isPresent() ? oldest.getAsLong() : 0L);

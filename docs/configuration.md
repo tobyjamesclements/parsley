@@ -2,21 +2,23 @@
 
 ## Buffer limits
 
-A `CausalBufferLimit` bounds how large or how long-lived the causal buffer may grow before
-eviction fires.
+A `CausalBufferLimit` bounds how large or how long-lived the causal buffer may grow before it
+fires — what firing actually does (evict, or fail fast) is governed by
+[`parsley.buffer.eviction.failure.policy`](#eviction-fail-fast-or-forward-anyway) below; this
+section describes when each limit kind fires.
 
 ### Size limit
 
 ```java
-CausalBufferLimit.ofSize(500)  // evict the oldest record(s) once the buffer holds ≥ 500 records
+CausalBufferLimit.ofSize(500)  // fires once the buffer holds ≥ 500 records
 ```
 
-Fires synchronously during `process()` — eviction happens in the same call that pushes the buffer
-over the limit, and evicts only the oldest records needed to bring the buffer back under the
-limit (typically one per call). Younger buffered records are left alone.
+Fires synchronously during `process()` — in the same call that pushes the buffer over the limit,
+on only the oldest records needed to bring the buffer back under the limit (typically one per
+call). Younger buffered records are left alone.
 
 The limit is also enforced once at startup, against whatever buffer was restored from the
-changelog — so lowering the limit and restarting evicts the oldest excess records immediately,
+changelog — so lowering the limit and restarting acts on the oldest excess records immediately,
 rather than waiting for new traffic to retrigger the inline check above. This enforcement happens
 shortly after startup, not necessarily before the very first record — but the buffer can't stay
 over the limit either way: a record admitted in that window trips the inline check above instead.
@@ -28,8 +30,8 @@ CausalBufferLimit.ofDuration(Duration.ofSeconds(30))
 ```
 
 Fires on a scheduled basis. The processor calls `evictExpired()` at the configured interval, which
-evicts only the records that have individually aged past `duration`, leaving younger records held;
-Parsley wires this schedule automatically when using `CausalProcessors`.
+acts only on the records that have individually aged past `duration`, leaving younger records
+held; Parsley wires this schedule automatically when using `CausalProcessors`.
 
 ### First-of (composite)
 
@@ -45,19 +47,24 @@ backstop.
 
 ---
 
-## Always-forward delivery
+## Eviction: fail fast, or forward anyway
 
-Parsley never drops or diverts a record — there is no policy to configure for what happens on
-eviction. Every record reaches the user's `process()`/`poll()` exactly once. In the common case it
-is delivered in causal order; the exception is **eviction**, when the configured `CausalBufferLimit`
-fires before a held record's dependencies are satisfied and the record is delivered anyway, out of
-order. Eviction still feeds the frontier exactly like a normal delivery: once the evicted record's
-coordinate closes its gap, buffered records waiting on it catch up in the same step, so they are not
-permanently stalled.
+When the configured `CausalBufferLimit` fires before a held record's dependencies are satisfied,
+`parsley.buffer.eviction.failure.policy` decides what happens:
 
-Eviction is surfaced operationally, not as a per-record signal: Parsley logs every eviction at
-`WARN` with the causal gap (the per-coordinate shortfall between what was required and what the
-frontier had observed) and counts it via its eviction metric.
+- **`fail`** (default): fail the task fast, leaving the candidate record(s) buffered rather than
+  deliver them out of causal order — trades availability for consistency. The record(s) are
+  retried on the next attempt (after a restart, or once the limit/backlog eases).
+- **`continue`**: Parsley's original always-forward behaviour — never drops or diverts a record.
+  The configured limit evicts the oldest qualifying record(s) and delivers them anyway, out of
+  causal order. Eviction still feeds the frontier exactly like a normal delivery: once the evicted
+  record's coordinate closes its gap, buffered records waiting on it catch up in the same step, so
+  they are not permanently stalled.
+
+Either way, eviction is surfaced operationally, not as a per-record signal: Parsley logs every
+eviction (or fail-fast) at `WARN`/`ERROR` with the causal gap (the per-coordinate shortfall between
+what was required and what the frontier had observed) and counts it via its eviction (or
+eviction-limit-exceeded) metric.
 
 ---
 
@@ -92,13 +99,26 @@ from Kafka Streams configuration because these behaviours have no Streams equiva
 #   fail     (default) — fail fast; the record stays in the buffer changelog for recovery
 #   continue           — drop the record (logged + violation metric) and keep processing
 parsley.buffer.deserialization.failure.policy = fail
+
+# How a CausalBufferLimit firing (eviction) is handled.
+#   fail     (default) — fail fast; the candidate record(s) stay buffered rather than be
+#                         delivered out of causal order — trades availability for consistency
+#   continue           — evict and forward the record(s) anyway, out of causal order
+#                         (logged + violation metric) — Parsley's original always-forward behaviour
+parsley.buffer.eviction.failure.policy = fail
 ```
 
 | Key | Default | Values |
 |---|---|---|
 | `parsley.buffer.deserialization.failure.policy` | `fail` | `fail`, `continue` |
+| `parsley.buffer.eviction.failure.policy` | `fail` | `fail`, `continue` |
 
-`continue` is **best-effort and lossy** — see
+`parsley.buffer.deserialization.failure.policy = continue` is **best-effort and lossy** — see
 [Troubleshooting → poison records](troubleshooting.md) for the full semantics (and why this is *not*
 mapped from Streams' `deserialization.exception.handler`). A durable quarantine + operator-triggered
 redelivery is planned to supersede it.
+
+`parsley.buffer.eviction.failure.policy = fail` means a sustained causal gap (a dependency that
+never arrives) will repeatedly fail the task once the buffer limit is reached, rather than ever
+deliver out of order — set `continue` if availability matters more than strict causal order for
+your use case.

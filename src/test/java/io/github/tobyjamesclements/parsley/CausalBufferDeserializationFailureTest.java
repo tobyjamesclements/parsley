@@ -106,19 +106,20 @@ class CausalBufferDeserializationFailureTest {
     }
 
     /**
-     * {@link ParsleySerializer#deserializeDependencies} reads the dependency clock without invoking the
-     * value serde, so it succeeds even when the value can no longer be decoded — the property that
-     * makes index restore immune to a Schema Registry change.
+     * {@link ParsleySerializer#deserializeIndexMetadata} reads the source coordinate and dependency
+     * clock without invoking the value serde, so it succeeds even when the value can no longer be
+     * decoded — the property that makes index restore immune to a Schema Registry change.
      */
     @Test
-    void deserializeDependenciesSurvivesAnUndecodableValue() {
+    void deserializeIndexMetadataSurvivesAnUndecodableValue() {
         ParsleySerializer<String, String> serializer = serializerWith(new ThrowingDeserializerSerde());
         ParsleyClock deps = ParsleyClock.empty().observe(T1_ID, 0, 3);
         byte[] bytes = serializer.serialize(message(T2, 0, T2_ID, deps));
 
-        ParsleyClock restored = assertDoesNotThrow(() -> serializer.deserializeDependencies(bytes),
-                "metadata decode must not touch the value serde");
-        assertEquals(deps, restored, "the dependency clock must round-trip without the value serde");
+        ParsleySerializer.IndexMetadata restored = assertDoesNotThrow(
+                () -> serializer.deserializeIndexMetadata(bytes), "metadata decode must not touch the value serde");
+        assertEquals(deps, restored.dependencies(), "the dependency clock must round-trip without the value serde");
+        assertEquals("t2", restored.topic(), "the source topic must round-trip without the value serde");
     }
 
     /**
@@ -156,7 +157,7 @@ class CausalBufferDeserializationFailureTest {
         ParsleyEngine<String, String> engine = new ParsleyEngine<>(
                 CausalBufferLimit.ofSize(100), ParsleyClock.empty(), c -> {},
                 buffer, new MockCandidateIndex(), new MockForwardedIndex(), metrics, audit,
-                System::currentTimeMillis, /* skip */ true);
+                System::currentTimeMillis, /* skip */ true, /* failOnEvictionLimit */ false);
 
         engine.onRecord(message(T2, 0, T2_ID, ParsleyClock.empty().observe(T1_ID, 0, 3)));  // held (poison)
         assertEquals(1, buffer.size(), "the poison record is buffered while its dependency is unmet");
@@ -190,7 +191,7 @@ class CausalBufferDeserializationFailureTest {
         ParsleyEngine<String, String> engine = new ParsleyEngine<>(
                 CausalBufferLimit.ofSize(1), ParsleyClock.empty(), c -> {},
                 buffer, new MockCandidateIndex(), new MockForwardedIndex(), metrics, audit,
-                System::currentTimeMillis, /* skip */ true);
+                System::currentTimeMillis, /* skip */ true, /* failOnEvictionLimit */ false);
 
         // Both depend on an unmet T1@3, so both are held; the second overflows the size-1 limit.
         ParsleyClock unmet = ParsleyClock.empty().observe(T1_ID, 0, 3);
@@ -220,7 +221,7 @@ class CausalBufferDeserializationFailureTest {
         ParsleyEngine<String, String> engine = new ParsleyEngine<>(
                 CausalBufferLimit.ofSize(100), ParsleyClock.empty(), c -> {},
                 buffer, new MockCandidateIndex(), new MockForwardedIndex(), ParsleyMetrics.NOOP,
-                CausalAudit.NOOP, System::currentTimeMillis, /* skip */ true);
+                CausalAudit.NOOP, System::currentTimeMillis, /* skip */ true, /* failOnEvictionLimit */ false);
 
         // T1@5 is held (poison: its value can never be decoded) on a dependency T2@0 will satisfy.
         engine.onRecord(message(T1, 5, T1_ID, ParsleyClock.empty().observe(T2_ID, 0, 0)));
@@ -256,7 +257,7 @@ class CausalBufferDeserializationFailureTest {
         ParsleyEngine<String, String> engine = new ParsleyEngine<>(
                 CausalBufferLimit.ofSize(3), ParsleyClock.empty(), c -> {},
                 buffer, new MockCandidateIndex(), new MockForwardedIndex(), ParsleyMetrics.NOOP,
-                CausalAudit.NOOP, System::currentTimeMillis, /* skip */ true);
+                CausalAudit.NOOP, System::currentTimeMillis, /* skip */ true, /* failOnEvictionLimit */ false);
 
         // T1@5 is held (poison) on a dependency that will never be satisfied in this test.
         engine.onRecord(message(T1, 5, T1_ID, ParsleyClock.empty().observe(T2_ID, 0, 99)));
@@ -304,6 +305,7 @@ class CausalBufferDeserializationFailureTest {
         @Override public void recordEvicted(int c) {}
         @Override public void recordViolation() { violations.incrementAndGet(); }
         @Override public void recordDeserializationError() { deserializationErrors.incrementAndGet(); }
+        @Override public void recordEvictionLimitExceeded() {}
         @Override public void reportState(int depth, OptionalLong oldest) {}
     }
 
@@ -346,7 +348,9 @@ class CausalBufferDeserializationFailureTest {
         @Override public List<IndexEntry> indexEntries() {
             List<IndexEntry> out = new ArrayList<>(held.size());
             for (int i = 0; i < held.size(); i++) {
-                if (held.get(i) != null) out.add(new IndexEntry(i, 0L, held.get(i).dependencies()));
+                ParsleyMessage<K, V> m = held.get(i);
+                if (m != null) out.add(new IndexEntry(i, 0L, m.topic(), m.topicId(), m.partition(), m.offset(),
+                        m.dependencies()));
             }
             return out;
         }

@@ -402,6 +402,7 @@ class ParsleyEngineTest {
             @Override public void recordEvicted(int c)         {}
             @Override public void recordViolation()             {}
             @Override public void recordDeserializationError()  {}
+            @Override public void recordEvictionLimitExceeded() {}
             @Override public void reportState(int depth, OptionalLong oldest) { reportedDepths.add(depth); }
         };
         ParsleyEngine<String, String> engine = new ParsleyEngine<>(
@@ -434,12 +435,14 @@ class ParsleyEngineTest {
             @Override public void recordEvicted(int c)         { evictedCounts.add(c); }
             @Override public void recordViolation()            {}
             @Override public void recordDeserializationError() {}
+            @Override public void recordEvictionLimitExceeded() {}
             @Override public void reportState(int depth, OptionalLong oldest) {}
         };
         ParsleyEngine<String, String> engine = new ParsleyEngine<>(
                 CausalBufferLimit.ofSize(1),
                 ParsleyClock.empty(), frontiers::add, buffer,
-                new MockCandidateIndex(), forwardedIndex, capturing);
+                new MockCandidateIndex(), forwardedIndex, capturing, CausalAudit.NOOP,
+                System::currentTimeMillis, false, false);
 
         engine.onRecord(incomingRecord(T2, 0, ParsleyClock.empty().observe(T1_ID, 0, 99)));
 
@@ -929,21 +932,27 @@ class ParsleyEngineTest {
 
     // --- helpers --------------------------------------------------------------------------------
 
+    // failOnEvictionLimit=false (continue) below: these helpers back tests that assert the
+    // evict-and-forward-out-of-order outcome, so they opt out of the new fail-fast default
+    // explicitly rather than via the convenience constructors (which now default to fail-fast,
+    // matching ParsleyConfig's production default).
+
     private ParsleyEngine<String, String> engineWith(CausalBufferLimit limit) {
-        return new ParsleyEngine<>(limit, ParsleyClock.empty(), frontiers::add,
-                buffer, new MockCandidateIndex(), forwardedIndex, ParsleyMetrics.NOOP);
+        return new ParsleyEngine<>(limit, ParsleyClock.empty(), frontiers::add, buffer,
+                new MockCandidateIndex(), forwardedIndex, ParsleyMetrics.NOOP, CausalAudit.NOOP,
+                System::currentTimeMillis, false, false);
     }
 
     private ParsleyEngine<String, String> engineWithClock(CausalBufferLimit limit,
                                                            java.util.function.LongSupplier clock) {
-        return new ParsleyEngine<>(limit, ParsleyClock.empty(), frontiers::add,
-                buffer, new MockCandidateIndex(), forwardedIndex, ParsleyMetrics.NOOP, clock);
+        return new ParsleyEngine<>(limit, ParsleyClock.empty(), frontiers::add, buffer,
+                new MockCandidateIndex(), forwardedIndex, ParsleyMetrics.NOOP, CausalAudit.NOOP, clock, false, false);
     }
 
     private ParsleyEngine<String, String> engineWithAudit(CausalBufferLimit limit, CausalAudit audit) {
         return new ParsleyEngine<>(limit, ParsleyClock.empty(), frontiers::add, buffer,
                 new MockCandidateIndex(), forwardedIndex, ParsleyMetrics.NOOP, audit,
-                System::currentTimeMillis, false);
+                System::currentTimeMillis, false, false);
     }
 
     private void processRecord(ParsleyEngine<String, String> engine, ParsleyMessage<String, String> message) {

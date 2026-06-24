@@ -46,7 +46,9 @@ final class MockBufferStore<K, V> implements ParsleyBufferStore<K, V> {
     @Override
     public List<IndexEntry> indexEntries() {
         List<IndexEntry> entries = new ArrayList<>(buffer.size());
-        buffer.forEach((seq, held) -> entries.add(new IndexEntry(seq, held.bufferedAt(), held.record().dependencies())));
+        buffer.forEach((seq, held) -> entries.add(new IndexEntry(seq, held.bufferedAt(),
+                held.record().topic(), held.record().topicId(), held.record().partition(),
+                held.record().offset(), held.record().dependencies())));
         return entries;
     }
 

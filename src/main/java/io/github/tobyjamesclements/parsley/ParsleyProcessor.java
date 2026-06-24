@@ -139,7 +139,7 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
 
         this.engine = new ParsleyEngine<>(limit, initialFrontier,
                 listener, buffer, candidateIndex, forwardedIndex, wiredMetrics.metrics(), audit,
-                context::currentSystemTimeMs, config.skipOnDecodeFailure());
+                context::currentSystemTimeMs, config.skipOnDecodeFailure(), config.failOnEvictionLimit());
 
         ProcessorContext<KOut, VOut> stamping = new ParsleyProcessorContext<>(
                 context, () -> stampFrontier, () -> Optional.ofNullable(deliveryMetadata));

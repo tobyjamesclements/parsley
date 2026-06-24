@@ -84,13 +84,14 @@ final class RocksBufferStore<K, V> implements ParsleyBufferStore<K, V> {
         try (KeyValueIterator<Long, byte[]> all = store.all()) {
             while (all.hasNext()) {
                 var kv = all.next();
-                // Decode only the buffered-at time and dependency clock (Parsley framing), never the
-                // user-serde key/value, so a record whose value can no longer be decoded does not
-                // block restore or eviction.
+                // Decode only the buffered-at time, source coordinate, and dependency clock (Parsley
+                // framing), never the user-serde key/value, so a record whose value can no longer be
+                // decoded does not block restore or eviction.
                 long bufferedAt = ByteBuffer.wrap(kv.value, 0, 8).getLong();
-                ParsleyClock dependencies =
-                        serializer.deserializeDependencies(Arrays.copyOfRange(kv.value, 8, kv.value.length));
-                entries.add(new IndexEntry(kv.key, bufferedAt, dependencies));
+                ParsleySerializer.IndexMetadata meta =
+                        serializer.deserializeIndexMetadata(Arrays.copyOfRange(kv.value, 8, kv.value.length));
+                entries.add(new IndexEntry(kv.key, bufferedAt, meta.topic(), meta.topicId(), meta.partition(),
+                        meta.offset(), meta.dependencies()));
             }
         }
         return entries;

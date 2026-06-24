@@ -24,9 +24,12 @@ import java.util.function.LongSupplier;
  * immediately, after a wait, or trivially — no dependencies claimed, or an undecodable header, both
  * treated as an empty, vacuously satisfied set).
  *
- * <p>The engine also owns limit-driven eviction: when a {@link CausalBufferLimit} fires it
- * surrenders the oldest buffered records needed to satisfy the limit and forwards them anyway (out
- * of causal order), logging the causal gap and counting a violation metric for each.
+ * <p>The engine also owns limit-driven eviction: when a {@link CausalBufferLimit} fires, the default
+ * ({@code parsley.buffer.eviction.failure.policy = fail}) is to fail the task fast instead, leaving
+ * the oldest qualifying record(s) buffered rather than forward them out of causal order — trading
+ * availability for consistency. {@code continue} restores the original behaviour: it surrenders the
+ * oldest buffered records needed to satisfy the limit and forwards them anyway (out of causal
+ * order), logging the causal gap and counting a violation metric for each.
  *
  * <p><strong>The frontier is a contiguous watermark, not a running max.</strong> The engine does
  * not head-of-line block: a later-offset record on a partition may forward before an earlier one
@@ -91,6 +94,10 @@ final class ParsleyEngine<K, V> {
     // record is dropped on the forward path and processing continues; when false (default = fail),
     // it is rethrown.
     private final boolean skipOnDecodeFailure;
+    // When true (parsley.buffer.eviction.failure.policy = fail, the default), a buffer-limit
+    // eviction fails the task fast instead, leaving the record buffered; when false (continue),
+    // it is evicted and forwarded out of causal order as before.
+    private final boolean failOnEvictionLimit;
 
     private ParsleyClock frontier;
     // Coordinates seen at least once by onRecord this process; guards the one-time baseline seed in
@@ -108,8 +115,11 @@ final class ParsleyEngine<K, V> {
                  ParsleyCandidateIndex candidateIndex,
                  ParsleyForwardedIndex forwardedIndex,
                  ParsleyMetrics metrics) {
+        // Convenience constructor: mirrors ParsleyConfig's own production defaults — fail fast on
+        // both an undecodable held record and a buffer-limit eviction — rather than silently
+        // diverging from what a caller gets with no configuration at all.
         this(limit, initialFrontier, frontierListener, buffer, candidateIndex, forwardedIndex,
-                metrics, CausalAudit.NOOP, System::currentTimeMillis, false);
+                metrics, CausalAudit.NOOP, System::currentTimeMillis, false, true);
     }
 
     ParsleyEngine(CausalBufferLimit limit,
@@ -121,7 +131,7 @@ final class ParsleyEngine<K, V> {
                  ParsleyMetrics metrics,
                  LongSupplier clock) {
         this(limit, initialFrontier, frontierListener, buffer, candidateIndex, forwardedIndex,
-                metrics, CausalAudit.NOOP, clock, false);
+                metrics, CausalAudit.NOOP, clock, false, true);
     }
 
     ParsleyEngine(CausalBufferLimit limit,
@@ -133,7 +143,8 @@ final class ParsleyEngine<K, V> {
                  ParsleyMetrics metrics,
                  CausalAudit audit,
                  LongSupplier clock,
-                 boolean skipOnDecodeFailure) {
+                 boolean skipOnDecodeFailure,
+                 boolean failOnEvictionLimit) {
         this.limit = limit;
         this.frontier = initialFrontier;
         this.frontierListener = frontierListener;
@@ -144,6 +155,7 @@ final class ParsleyEngine<K, V> {
         this.audit = audit;
         this.clock = clock;
         this.skipOnDecodeFailure = skipOnDecodeFailure;
+        this.failOnEvictionLimit = failOnEvictionLimit;
         this.sizeLimit = sizeLimitOf(limit).orElse(Integer.MAX_VALUE);
         this.evictionInterval = durationLimitOf(limit).orElse(null);
         // Populate the candidate index for any records already in the buffer (e.g., restored from
@@ -204,7 +216,9 @@ final class ParsleyEngine<K, V> {
      * {@link #evictExpired()}), so only the leading {@code buffer.size() - sizeLimit + 1}
      * entries need to be evicted to fit the record just admitted.
      *
-     * @return the evicted records, to forward downstream out-of-order
+     * @return the evicted records, to forward downstream out-of-order; empty under
+     *         {@code parsley.buffer.eviction.failure.policy = fail} (the candidates are left
+     *         buffered and a {@link ParsleyBufferEvictionLimitException} is thrown instead)
      */
     List<ParsleyMessage<K, V>> evictOverflow() {
         int overflow = buffer.size() - sizeLimit + 1;
@@ -212,11 +226,8 @@ final class ParsleyEngine<K, V> {
             return List.of();
         }
         List<ParsleyBufferStore.IndexEntry> all = orderedIndex();
-        List<Long> oldest = new ArrayList<>();
-        for (int i = 0; i < Math.min(overflow, all.size()); i++) {
-            oldest.add(all.get(i).sequence());
-        }
-        return evictSequences(oldest);
+        List<ParsleyBufferStore.IndexEntry> oldest = all.subList(0, Math.min(overflow, all.size()));
+        return evictOrFail(oldest);
     }
 
     /**
@@ -227,19 +238,21 @@ final class ParsleyEngine<K, V> {
      * <p>Iterates the oldest-first metadata index, so the scan can stop at the first record that
      * hasn't aged out yet — and never decodes a value to decide what to evict.
      *
-     * @return the evicted records, to forward downstream out-of-order
+     * @return the evicted records, to forward downstream out-of-order; empty under
+     *         {@code parsley.buffer.eviction.failure.policy = fail} (the candidates are left
+     *         buffered and a {@link ParsleyBufferEvictionLimitException} is thrown instead)
      */
     List<ParsleyMessage<K, V>> evictExpired() {
         if (evictionInterval == null) {
             return List.of();
         }
         long cutoff = clock.getAsLong() - evictionInterval.toMillis();
-        List<Long> expired = new ArrayList<>();
+        List<ParsleyBufferStore.IndexEntry> expired = new ArrayList<>();
         for (ParsleyBufferStore.IndexEntry entry : orderedIndex()) {
             if (entry.bufferedAt() > cutoff) break;
-            expired.add(entry.sequence());
+            expired.add(entry);
         }
-        return evictSequences(expired);
+        return evictOrFail(expired);
     }
 
     /** The buffer's metadata index, oldest-first (by insertion sequence); never decodes a value. */
@@ -247,6 +260,33 @@ final class ParsleyEngine<K, V> {
         List<ParsleyBufferStore.IndexEntry> all = new ArrayList<>(buffer.indexEntries());
         all.sort(java.util.Comparator.comparingLong(ParsleyBufferStore.IndexEntry::sequence));
         return all;
+    }
+
+    /**
+     * The shared branch point for both eviction triggers: under
+     * {@code parsley.buffer.eviction.failure.policy = fail} (the default), fails the task fast on
+     * the oldest candidate instead of evicting any of them — none are touched, so all remain
+     * buffered for a future attempt. Under {@code continue}, delegates to {@link #evictSequences}
+     * to evict and forward every candidate as before. Identifying the oldest candidate for the
+     * exception never decodes the user-serde key/value — {@code toEvict} is index metadata only.
+     */
+    private List<ParsleyMessage<K, V>> evictOrFail(List<ParsleyBufferStore.IndexEntry> toEvict) {
+        if (toEvict.isEmpty()) {
+            return List.of();
+        }
+        if (failOnEvictionLimit) {
+            ParsleyBufferStore.IndexEntry oldest = toEvict.get(0);
+            ParsleyClock gap = oldest.dependencies().missing(frontier);
+            CausalDependencies missing = CausalDependencies.of(gap);
+            log.error("Buffer limit reached (limit: {}); failing fast on the oldest held record "
+                    + "{}-{}@{} (parsley.buffer.eviction.failure.policy = fail). It remains buffered.",
+                    limit, oldest.topic(), oldest.partition(), oldest.offset());
+            audit.recordEvictionLimitExceeded(oldest.topic(), oldest.partition(), oldest.offset(), missing);
+            metrics.recordEvictionLimitExceeded();
+            throw new ParsleyBufferEvictionLimitException(oldest.topic(), oldest.topicId(),
+                    oldest.partition(), oldest.offset(), limit, missing);
+        }
+        return evictSequences(toEvict.stream().map(ParsleyBufferStore.IndexEntry::sequence).toList());
     }
 
     /**

@@ -126,29 +126,39 @@ final class ParsleySerializer<K, V> {
     }
 
     /**
-     * Reconstructs only the metadata a restored buffer needs to rebuild its candidate index — the
-     * insertion-time dependency clock — <strong>without invoking the user serde</strong>. The
-     * dependency clock is part of Parsley's own framing (written before the key/value bytes), so a
-     * value Parsley cannot decode (e.g. an incompatible Schema Registry change) never blocks startup;
-     * the failure surfaces only when the record is actually forwarded via {@link #deserialize}.
+     * The source coordinate and dependency clock decodable for an {@link ParsleyBufferStore.IndexEntry
+     * IndexEntry} — see {@link #deserializeIndexMetadata}.
+     */
+    record IndexMetadata(String topic, Uuid topicId, int partition, long offset, ParsleyClock dependencies) {}
+
+    /**
+     * Reconstructs only the metadata a restored buffer needs to rebuild its candidate index, and to
+     * identify a record for eviction reporting — the source coordinate and the insertion-time
+     * dependency clock — <strong>without invoking the user serde</strong>. Both are part of Parsley's
+     * own framing (written before the key/value bytes), so a value Parsley cannot decode (e.g. an
+     * incompatible Schema Registry change) never blocks startup or eviction; that failure surfaces
+     * only when the record is actually forwarded via {@link #deserialize}.
      *
      * @param bytes the buffered-record bytes
-     * @return the record's decoded dependency clock
+     * @return the record's source coordinate and decoded dependency clock
      */
-    ParsleyClock deserializeDependencies(byte[] bytes) {
+    IndexMetadata deserializeIndexMetadata(byte[] bytes) {
         try (DataInputStream in = new DataInputStream(new ByteArrayInputStream(bytes))) {
             byte version = in.readByte();
             if (version != FORMAT_VERSION) {
                 throw new IllegalStateException(
                         "unsupported buffered-record format version: " + version + " (expected " + FORMAT_VERSION + ")");
             }
-            in.readLong();              // timestamp
-            readString(in);             // topic
-            in.readFully(new byte[16]); // topicId
-            in.readInt();               // partition
-            in.readLong();              // offset
+            in.readLong();               // timestamp
+            String topic = readString(in);
+            byte[] topicIdBytes = new byte[16];
+            in.readFully(topicIdBytes);
+            Uuid topicId = ParsleyHeader.uuidFromBytes(topicIdBytes);
+            int partition = in.readInt();
+            long offset = in.readLong();
             // Dependencies are always framed non-null (serialize() writes dependencies().toBytes()).
-            return ParsleyClock.fromBytes(Objects.requireNonNull(readNullable(in)));
+            ParsleyClock dependencies = ParsleyClock.fromBytes(Objects.requireNonNull(readNullable(in)));
+            return new IndexMetadata(topic, topicId, partition, offset, dependencies);
         } catch (IOException e) {
             throw new IllegalStateException("Buffered record metadata deserialisation failed", e);
         }

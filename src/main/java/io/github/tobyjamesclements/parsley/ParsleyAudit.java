@@ -52,6 +52,12 @@ final class ParsleyAudit implements CausalAudit {
     }
 
     @Override
+    public void recordEvictionLimitExceeded(String topic, int partition, long offset, CausalDependencies gap) {
+        safely("recordEvictionLimitExceeded",
+                () -> delegate.recordEvictionLimitExceeded(topic, partition, offset, gap));
+    }
+
+    @Override
     public void processorInitialized(String taskId, boolean frontierRestored) {
         safely("processorInitialized", () -> delegate.processorInitialized(taskId, frontierRestored));
     }

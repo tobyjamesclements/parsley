@@ -286,7 +286,9 @@ class CausalProcessorsTopologyTest {
     void evictedRecordIsForwardedToDelegate() {
         Topology topology = topology(
                 CausalProcessors.builder(upperCaser()).addBufferStore("parsley", CausalBufferLimit.ofSize(1))
-                        .addBuffer(CausalBuffer.of("t3", Serdes.String(), Serdes.String())).topicAdmin(ADMIN).build(),
+                        .addBuffer(CausalBuffer.of("t3", Serdes.String(), Serdes.String()))
+                        .withConfig("parsley.buffer.eviction.failure.policy", "continue")
+                        .topicAdmin(ADMIN).build(),
                 List.of("t3"));
 
         try (TopologyTestDriver driver = new TopologyTestDriver(topology, config(null))) {
@@ -320,7 +322,9 @@ class CausalProcessorsTopologyTest {
     void durationEvictionOnlyEvictsRecordsThatHaveIndividuallyAgedOut() {
         Topology topology = topology(
                 CausalProcessors.builder(upperCaser()).addBufferStore("parsley", CausalBufferLimit.ofDuration(Duration.ofSeconds(2)))
-                        .addBuffer(CausalBuffer.of("t3", Serdes.String(), Serdes.String())).topicAdmin(ADMIN).build(),
+                        .addBuffer(CausalBuffer.of("t3", Serdes.String(), Serdes.String()))
+                        .withConfig("parsley.buffer.eviction.failure.policy", "continue")
+                        .topicAdmin(ADMIN).build(),
                 List.of("t3"));
 
         try (TopologyTestDriver driver = new TopologyTestDriver(topology, config(null))) {
@@ -365,7 +369,9 @@ class CausalProcessorsTopologyTest {
     void sizeLimitEvictionOnlyEvictsTheOldestOverflowingRecord() {
         Topology topology = topology(
                 CausalProcessors.builder(upperCaser()).addBufferStore("parsley", CausalBufferLimit.ofSize(2))
-                        .addBuffer(CausalBuffer.of("t3", Serdes.String(), Serdes.String())).topicAdmin(ADMIN).build(),
+                        .addBuffer(CausalBuffer.of("t3", Serdes.String(), Serdes.String()))
+                        .withConfig("parsley.buffer.eviction.failure.policy", "continue")
+                        .topicAdmin(ADMIN).build(),
                 List.of("t3"));
 
         try (TopologyTestDriver driver = new TopologyTestDriver(topology, config(null))) {
@@ -689,7 +695,9 @@ class CausalProcessorsTopologyTest {
 
         Topology topology = topology(
                 CausalProcessors.builder(upperCaser()).addBufferStore("parsley", CausalBufferLimit.ofSize(1))
-                        .addBuffer(CausalBuffer.of("t1", Serdes.String(), Serdes.String())).topicAdmin(ADMIN).build(),
+                        .addBuffer(CausalBuffer.of("t1", Serdes.String(), Serdes.String()))
+                        .withConfig("parsley.buffer.eviction.failure.policy", "continue")
+                        .topicAdmin(ADMIN).build(),
                 List.of("t1"));
 
         try (TopologyTestDriver driver = new TopologyTestDriver(topology, config(null))) {
