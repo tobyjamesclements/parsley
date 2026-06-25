@@ -1127,7 +1127,7 @@ internal implementation.</p>
 <td><code>ParsleyProcessorSupplier</code> + <code>ParsleyProcessor</code></td>
 </tr>
 <tr>
-<td><code>CausalDependencies</code> edge ops (<code>stamp</code> / <code>from</code> / <code>merge</code>)</td>
+<td><code>CausalDependencies</code> edge ops (<code>using</code> / <code>observe</code> / <code>stamp</code> / <code>merge</code>)</td>
 <td><code>ParsleyClock</code> (no wrapper objects)</td>
 </tr>
 <tr>
@@ -1149,7 +1149,7 @@ internal implementation.</p>
 <tbody>
 <tr>
 <td><code>CausalDependencies</code></td>
-<td>Public facade over a <code>ParsleyClock</code>: the causal requirements stamped onto each record, plus the <code>stamp</code>/<code>from</code>/<code>merge</code> edge operations</td>
+<td>Public facade over a <code>ParsleyClock</code>: the causal requirements stamped onto each record, plus the <code>using</code>/<code>observe</code>/<code>stamp</code>/<code>merge</code> edge operations</td>
 </tr>
 <tr>
 <td><code>CausalTopics</code></td>
@@ -1218,7 +1218,7 @@ internal implementation.</p>
 </table>
 <h2 id="end-to-end-flow">End-to-end flow</h2>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>Edge (plain Kafka producer)
-<a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>  CausalDependencies.from(topics, trigger) / .merge(...) / .builder(topics).require(...)
+<a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>  CausalDependencies.using(topics).observe(trigger) / .observe(...) / .builder(topics).require(...)
 <a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a>    -&gt; CausalDependencies.stamp(record)
 <a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a>         -&gt; stamps parsley-causal-dependencies header
 <a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a>    -&gt; producer.send(record)

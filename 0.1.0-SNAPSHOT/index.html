@@ -1118,8 +1118,8 @@ common vocabulary of value types.</p>
 <td>Wraps a Kafka Streams <code>Processor</code> behind the causal guarantee. This is the core of the library.</td>
 </tr>
 <tr>
-<td><code>CausalDependencies.stamp</code> / <code>from</code> / <code>merge</code></td>
-<td>Stamp and propagate causal context to and from plain Kafka clients at the topology edge.</td>
+<td><code>CausalDependencies.using</code> / <code>observe</code> / <code>stamp</code> / <code>merge</code></td>
+<td>Maintain a consumer-side frontier and stamp causal context onto records produced to plain Kafka clients at the topology edge.</td>
 </tr>
 <tr>
 <td><code>CausalTopics</code></td>
