@@ -24,6 +24,7 @@ import org.apache.kafka.streams.processor.api.Processor;
 import org.apache.kafka.streams.processor.api.ProcessorContext;
 import org.apache.kafka.streams.processor.api.ProcessorSupplier;
 import org.apache.kafka.streams.processor.api.Record;
+import org.apache.kafka.streams.processor.api.RecordMetadata;
 import org.apache.kafka.streams.state.KeyValueStore;
 import org.apache.kafka.streams.state.StoreBuilder;
 import org.apache.kafka.streams.state.Stores;
@@ -420,6 +421,48 @@ class CausalProcessorsTopologyTest {
                     "T3@0's own delivery must be stamped with a frontier that includes T3@0 itself — "
                             + "only possible using its own call's snapshot, not a leftover entry from "
                             + "call A's cascade (before t3 existed in the frontier at all): " + stampedOnT3);
+        }
+    }
+
+    /**
+     * While delivering a buffered-then-released record, {@code context.recordMetadata()} reports
+     * that record's own true source coordinate — not the real Streams record that triggered its
+     * release. This is what lets a delegate correctly attribute state to the record it is actually
+     * handling, even when delivery was deferred by causal buffering.
+     */
+    @Test
+    void recordMetadataDuringDeliveryReportsTheHeldRecordsOwnSourceNotTheTriggeringRecord() {
+        List<String> reportedSources = new ArrayList<>();
+        ProcessorSupplier<String, String, String, String> recordingDelegate = () -> new Processor<>() {
+            private ProcessorContext<String, String> ctx;
+            @Override public void init(ProcessorContext<String, String> context) { this.ctx = context; }
+            @Override public void process(Record<String, String> record) {
+                RecordMetadata meta = ctx.recordMetadata().orElseThrow();
+                reportedSources.add(meta.topic() + "-" + meta.partition() + "@" + meta.offset());
+            }
+        };
+        Topology topology = topology(
+                CausalProcessors.builder(recordingDelegate).addBufferStore("parsley", CausalBufferLimit.ofSize(100))
+                        .addBuffer(CausalBuffer.of("t1", Serdes.String(), Serdes.String()))
+                        .addBuffer(CausalBuffer.of("t2", Serdes.String(), Serdes.String()))
+                        .topicAdmin(ADMIN).build(),
+                List.of("t1", "t2"));
+
+        try (TopologyTestDriver driver = new TopologyTestDriver(topology, config(null))) {
+            TestInputTopic<String, String> t1 =
+                    driver.createInputTopic("t1", new StringSerializer(), new StringSerializer());
+            TestInputTopic<String, String> t2 =
+                    driver.createInputTopic("t2", new StringSerializer(), new StringSerializer());
+
+            // T2@0 depends on T1@0 — held until T1@0 arrives.
+            t2.pipeInput(new TestRecord<>("k", "t2-val",
+                    depsHeader(CausalDependencies.builder(TOPICS).require("t1", 0, 0).build())));
+            // T1@0 arrives, releasing T2@0 in the same call as T1@0's own delivery.
+            t1.pipeInput(new TestRecord<>("k", "t1-val", depsHeader(CausalDependencies.empty())));
+
+            assertEquals(List.of("t1-0@0", "t2-0@0"), reportedSources,
+                    "the held T2@0 record's delivery must report its own source, not T1's, even "
+                            + "though T1's arrival is what triggered its release");
         }
     }
 
