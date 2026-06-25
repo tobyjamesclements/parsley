@@ -9,26 +9,17 @@ The guarantee is that if A causally precedes B, every consumer observes A before
 ## Install
 
 Parsley is published to [Maven Central](https://central.sonatype.com/artifact/io.github.tobyjamesclements/parsley).
-The current version is a snapshot, so it lives in Central's snapshot repository rather than the main
-one. No credentials are needed, because snapshots are publicly readable.
 
 ```xml
-<repository>
-  <id>central-snapshots</id>
-  <url>https://central.sonatype.com/repository/maven-snapshots/</url>
-  <releases><enabled>false</enabled></releases>
-  <snapshots><enabled>true</enabled></snapshots>
-</repository>
-
 <dependency>
   <groupId>io.github.tobyjamesclements</groupId>
   <artifactId>parsley</artifactId>
-  <version>0.1.0-SNAPSHOT</version>
+  <version>0.1.0</version>
 </dependency>
 ```
 
-Once a tagged `0.1.0` release ships, this repository block is no longer needed, because Central's
-default repository, which is already in every Maven setup, covers real releases.
+0.1.0 is an early release. The causal guarantee is implemented and tested, but the fault-injection
+suite that exercises it under crashes, rebalances, and partitions lands in 1.0.
 
 Requires Java 25. Build from source with `./mvnw install`.
 
