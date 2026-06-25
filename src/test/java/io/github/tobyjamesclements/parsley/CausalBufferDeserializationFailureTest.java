@@ -383,6 +383,7 @@ class CausalBufferDeserializationFailureTest {
         @Override public void recordEvicted(int c) {}
         @Override public void recordViolation() { violations.incrementAndGet(); }
         @Override public void recordDeserializationError() { deserializationErrors.incrementAndGet(); }
+        @Override public void recordClockResolutionError() {}
         @Override public void recordEvictionLimitExceeded() {}
         @Override public void reportState(int depth, OptionalLong oldest) {}
     }

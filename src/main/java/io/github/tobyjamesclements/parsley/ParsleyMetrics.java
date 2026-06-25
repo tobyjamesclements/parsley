@@ -48,6 +48,13 @@ interface ParsleyMetrics {
     void recordDeserializationError();
 
     /**
+     * An inbound record's {@code parsley-causal-dependencies} header could not be decoded into a clock
+     * at ingest (a corrupt or truncated header). This counts the occurrence regardless of whether
+     * {@code parsley.clock.resolution.failure.policy} then failed the task or forwarded empty.
+     */
+    void recordClockResolutionError();
+
+    /**
      * A {@link CausalBufferLimit} fired on a held record and {@code parsley.buffer.eviction.failure.policy
      * = fail} (the default) failed the task fast instead of evicting it. The record stays buffered;
      * this counts the failed attempt.
@@ -71,6 +78,7 @@ interface ParsleyMetrics {
         @Override public void recordEvicted(int c) {}
         @Override public void recordViolation() {}
         @Override public void recordDeserializationError() {}
+        @Override public void recordClockResolutionError() {}
         @Override public void recordEvictionLimitExceeded() {}
         @Override public void reportState(int depth, OptionalLong oldestBufferedAtMs) {}
     };
@@ -107,6 +115,7 @@ interface ParsleyMetrics {
         Sensor evicted   = sm.addRateTotalSensor("parsley", taskId, "records-evicted",   Sensor.RecordingLevel.INFO);
         Sensor violation = sm.addRateTotalSensor("parsley", taskId, "violations",         Sensor.RecordingLevel.INFO);
         Sensor deserErr  = sm.addRateTotalSensor("parsley", taskId, "deserialization-errors", Sensor.RecordingLevel.INFO);
+        Sensor clockResErr = sm.addRateTotalSensor("parsley", taskId, "clock-resolution-errors", Sensor.RecordingLevel.INFO);
         Sensor evictionLimitExceeded = sm.addRateTotalSensor("parsley", taskId, "eviction-limit-exceeded", Sensor.RecordingLevel.INFO);
 
         Sensor depth = gauge(sm, taskId, "buffer-depth",
@@ -115,7 +124,7 @@ interface ParsleyMetrics {
                 "Buffer-admission time (epoch millis) of the oldest held record, or 0 if the buffer is empty");
 
         List<Sensor> sensors = new ArrayList<>(List.of(buffered, released, evicted, violation, deserErr,
-                evictionLimitExceeded, depth, oldestBufferedAt));
+                clockResErr, evictionLimitExceeded, depth, oldestBufferedAt));
 
         sizeLimit.ifPresent(limit -> {
             Sensor sizeLimitGauge = gauge(sm, taskId, "buffer-size-limit",
@@ -136,6 +145,7 @@ interface ParsleyMetrics {
             @Override public void recordEvicted(int c)         { evicted.record(c); }
             @Override public void recordViolation()            { violation.record(); }
             @Override public void recordDeserializationError() { deserErr.record(); }
+            @Override public void recordClockResolutionError() { clockResErr.record(); }
             @Override public void recordEvictionLimitExceeded() { evictionLimitExceeded.record(); }
             @Override public void reportState(int d, OptionalLong oldest) {
                 depth.record(d);

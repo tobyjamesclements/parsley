@@ -218,7 +218,38 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
                     "no CausalBuffer registered for topic '" + topic
                             + "'; call addBuffer(...) on the CausalProcessors builder for every input topic");
         }
-        return ParsleyMessage.from(record, source, meta.map(RecordMetadata::offset).orElse(0L), topicId);
+        long offset = meta.map(RecordMetadata::offset).orElse(0L);
+        try {
+            return ParsleyMessage.from(record, source, offset, topicId);
+        } catch (ParsleyClockResolutionException e) {
+            return onUnresolvableClock(e, record, source, offset, topicId);
+        }
+    }
+
+    /**
+     * Applies {@code parsley.clock.resolution.failure.policy} when an inbound record's causal
+     * dependencies header could not be decoded: {@code fail} (default) fails the task fast, leaving
+     * the record to be reprocessed on restart; {@code continue} forwards it with empty (vacuously
+     * satisfied) dependencies, counted as a violation. The occurrence is metered and audited either
+     * way.
+     */
+    private ParsleyMessage<KIn, VIn> onUnresolvableClock(ParsleyClockResolutionException e,
+            Record<KIn, VIn> record, TopicPartition source, long offset, Uuid topicId) {
+        boolean fail = config.failOnUnresolvableClock();
+        wiredMetrics.metrics().recordClockResolutionError();
+        audit.recordClockResolutionFailure(e.topic(), e.partition(), e.offset(), e.details(), fail);
+        if (fail) {
+            log.error("Unresolvable causal-dependencies header on {}-{} @{} "
+                    + "(parsley.clock.resolution.failure.policy = fail); failing fast. The record was "
+                    + "not forwarded and is reprocessed on restart. {}",
+                    e.topic(), e.partition(), e.offset(), e.details(), e);
+            throw e;
+        }
+        log.warn("Unresolvable causal-dependencies header on {}-{} @{} "
+                + "(parsley.clock.resolution.failure.policy = continue); forwarding with empty "
+                + "dependencies. {}", e.topic(), e.partition(), e.offset(), e.details(), e);
+        wiredMetrics.metrics().recordViolation();
+        return ParsleyMessage.from(record, source, offset, topicId, ParsleyClock.empty());
     }
 
     /**
