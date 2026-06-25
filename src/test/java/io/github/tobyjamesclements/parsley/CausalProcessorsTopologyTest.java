@@ -309,6 +309,121 @@ class CausalProcessorsTopologyTest {
     }
 
     /**
+     * An evicted record updates both the {@code records-evicted-total} and {@code violations-total}
+     * sensors — not just the forwarding behaviour {@link #evictedRecordIsForwardedToDelegate} above
+     * already covers.
+     */
+    @Test
+    void evictionUpdatesTheRecordsEvictedAndViolationsSensors() {
+        Topology topology = topology(
+                CausalProcessors.builder(upperCaser()).addBufferStore("parsley", CausalBufferLimit.ofSize(1))
+                        .addBuffer(CausalBuffer.of("t3", Serdes.String(), Serdes.String()))
+                        .withConfig("parsley.buffer.eviction.failure.policy", "continue")
+                        .topicAdmin(ADMIN).build(),
+                List.of("t3"));
+
+        try (TopologyTestDriver driver = new TopologyTestDriver(topology, config(null))) {
+            TestInputTopic<String, String> t3 =
+                    driver.createInputTopic("t3", new StringSerializer(), new StringSerializer());
+
+            // Depends on a t2 record that never arrives; size limit 1 evicts immediately.
+            t3.pipeInput(new TestRecord<>("k", "t3-val",
+                    depsHeader(CausalDependencies.builder(TOPICS).require("t2", 0, 99).build())));
+
+            assertEquals(1.0, parsleyMetric(driver, "records-evicted-total"), 0.001,
+                    "the evicted record must update the records-evicted sensor");
+            assertEquals(1.0, parsleyMetric(driver, "violations-total"), 0.001,
+                    "the evicted record must update the violations sensor");
+        }
+    }
+
+    /**
+     * Closing the driver (which closes every processor node) invokes the delegate processor's own
+     * {@code close()} and removes Parsley's registered Streams metrics sensors — not just that the
+     * topology runs without throwing while open.
+     */
+    @Test
+    void closeInvokesTheDelegateAndRemovesTheRegisteredSensors() {
+        List<String> delegateCloseCalls = new ArrayList<>();
+        ProcessorSupplier<String, String, String, String> recordingDelegate = () -> new Processor<>() {
+            @Override public void init(ProcessorContext<String, String> context) {}
+            @Override public void process(Record<String, String> record) {}
+            @Override public void close() { delegateCloseCalls.add("closed"); }
+        };
+        Topology topology = topology(
+                CausalProcessors.builder(recordingDelegate).addBufferStore("parsley", CausalBufferLimit.ofSize(100))
+                        .addBuffer(CausalBuffer.of("t1", Serdes.String(), Serdes.String())).topicAdmin(ADMIN).build(),
+                List.of("t1"));
+
+        TopologyTestDriver driver = new TopologyTestDriver(topology, config(null));
+        // Sanity: a Parsley sensor is registered while the driver is open.
+        assertEquals(0.0, parsleyMetric(driver, "buffer-depth"), 0.001,
+                "a parsley sensor must be registered while the driver is open");
+
+        driver.close();
+
+        assertEquals(List.of("closed"), delegateCloseCalls,
+                "closing the driver must invoke the delegate's own close()");
+        assertThrows(AssertionError.class, () -> parsleyMetric(driver, "buffer-depth"),
+                "closing the driver must remove Parsley's registered sensors");
+    }
+
+    /**
+     * {@code deliver()} stamps each delivered record with the exact frontier snapshot captured at the
+     * moment <em>that specific record</em> was admitted ({@code snapshots.get(i)}), not a snapshot
+     * left over from an earlier, unrelated {@code process()} call — the per-call
+     * {@code snapshots.clear()} in {@code gate()} is what prevents that.
+     *
+     * <p>Call A buffers T2@0 (depending on T1@0) then sends T1@0 itself, which both releases T2@0
+     * <em>and</em> forwards on its own: two deliveries from one {@code process()} call, populating
+     * two snapshot entries, neither of which yet includes the t3 dimension at all. Call B then sends
+     * a lone, unrelated T3@0 on a third topic — its own delivery must be stamped with a frontier that
+     * includes T3@0, which is only possible if it used the snapshot taken during <em>its own</em>
+     * call rather than a leftover entry from call A (where t3 didn't exist yet).
+     */
+    @Test
+    void deliverStampsEachRecordWithItsOwnSnapshotNotALeftoverFromAnEarlierCall() {
+        Topology topology = topology(
+                CausalProcessors.builder(upperCaser()).addBufferStore("parsley", CausalBufferLimit.ofSize(100))
+                        .addBuffer(CausalBuffer.of("t1", Serdes.String(), Serdes.String()))
+                        .addBuffer(CausalBuffer.of("t2", Serdes.String(), Serdes.String()))
+                        .addBuffer(CausalBuffer.of("t3", Serdes.String(), Serdes.String()))
+                        .topicAdmin(ADMIN).build(),
+                List.of("t1", "t2", "t3"));
+
+        try (TopologyTestDriver driver = new TopologyTestDriver(topology, config(null))) {
+            TestInputTopic<String, String> t1 =
+                    driver.createInputTopic("t1", new StringSerializer(), new StringSerializer());
+            TestInputTopic<String, String> t2 =
+                    driver.createInputTopic("t2", new StringSerializer(), new StringSerializer());
+            TestInputTopic<String, String> t3 =
+                    driver.createInputTopic("t3", new StringSerializer(), new StringSerializer());
+            TestOutputTopic<String, String> out =
+                    driver.createOutputTopic("out", new StringDeserializer(), new StringDeserializer());
+
+            // T2@0 depends on T1@0 — held, nothing delivered yet.
+            t2.pipeInput(new TestRecord<>("k", "t2-val",
+                    depsHeader(CausalDependencies.builder(TOPICS).require("t1", 0, 0).build())));
+
+            // Call A: T1@0 has no dependencies of its own, so it forwards immediately — and its
+            // arrival also satisfies T2@0's requirement, releasing it too. Two deliveries, one call.
+            t1.pipeInput(new TestRecord<>("k", "t1-val", depsHeader(CausalDependencies.empty())));
+
+            // Call B: a lone, unrelated T3@0 on a topic that didn't exist during call A at all.
+            t3.pipeInput(new TestRecord<>("k", "t3-val", depsHeader(CausalDependencies.empty())));
+
+            List<TestRecord<String, String>> outputs = out.readRecordsToList();
+            assertEquals(3, outputs.size(), "T2@0, T1@0, and T3@0 must all be delivered");
+
+            CausalDependencies stampedOnT3 = outDeps(outputs.get(2));
+            assertEquals(0L, stampedOnT3.clock().offsetFor(T3_ID, 0),
+                    "T3@0's own delivery must be stamped with a frontier that includes T3@0 itself — "
+                            + "only possible using its own call's snapshot, not a leftover entry from "
+                            + "call A's cascade (before t3 existed in the frontier at all): " + stampedOnT3);
+        }
+    }
+
+    /**
      * Under a duration-based buffer limit, the eviction punctuator must only evict records that
      * have individually aged past the configured duration — not the entire buffer, which was the
      * bug being fixed here. Two records are buffered one duration-interval apart; when the
@@ -748,6 +863,47 @@ class CausalProcessorsTopologyTest {
                     "one record was released from the buffer");
             assertEquals(0.0, parsleyMetric(driver, "buffer-depth"), 0.001,
                     "buffer is empty after the drain");
+        }
+    }
+
+    /**
+     * The {@code buffer-size-limit} gauge is recorded only when a size limit is configured, and the
+     * {@code buffer-duration-limit-ms} gauge is registered only when a duration limit is configured —
+     * each {@code Optional.ifPresent} branch in {@code ParsleyMetrics.wire} is independently
+     * load-bearing, not redundant with the other.
+     */
+    @Test
+    void sizeLimitGaugeIsRecordedButDurationLimitGaugeIsAbsentForASizeOnlyLimit() {
+        Topology topology = topology(
+                CausalProcessors.builder(upperCaser()).addBufferStore("parsley", CausalBufferLimit.ofSize(7))
+                        .addBuffer(CausalBuffer.of("t1", Serdes.String(), Serdes.String())).topicAdmin(ADMIN).build(),
+                List.of("t1"));
+
+        try (TopologyTestDriver driver = new TopologyTestDriver(topology, config(null))) {
+            assertEquals(7.0, parsleyMetric(driver, "buffer-size-limit"), 0.001,
+                    "the configured size limit must be recorded as a gauge");
+            assertThrows(AssertionError.class, () -> parsleyMetric(driver, "buffer-duration-limit-ms"),
+                    "no duration-limit gauge must be registered when only a size limit is configured");
+        }
+    }
+
+    /**
+     * The inverse of {@link #sizeLimitGaugeIsRecordedButDurationLimitGaugeIsAbsentForASizeOnlyLimit}:
+     * a duration-only limit registers the duration gauge but not the size gauge.
+     */
+    @Test
+    void durationLimitGaugeIsRecordedButSizeLimitGaugeIsAbsentForADurationOnlyLimit() {
+        Topology topology = topology(
+                CausalProcessors.builder(upperCaser())
+                        .addBufferStore("parsley", CausalBufferLimit.ofDuration(Duration.ofSeconds(5)))
+                        .addBuffer(CausalBuffer.of("t1", Serdes.String(), Serdes.String())).topicAdmin(ADMIN).build(),
+                List.of("t1"));
+
+        try (TopologyTestDriver driver = new TopologyTestDriver(topology, config(null))) {
+            assertEquals(5000.0, parsleyMetric(driver, "buffer-duration-limit-ms"), 0.001,
+                    "the configured duration limit must be recorded as a gauge, in milliseconds");
+            assertThrows(AssertionError.class, () -> parsleyMetric(driver, "buffer-size-limit"),
+                    "no size-limit gauge must be registered when only a duration limit is configured");
         }
     }
 
