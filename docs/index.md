@@ -1,52 +1,63 @@
 # Parsley
 
-Causal consistency for Kafka — a stream-processing library that builds Kafka Streams topologies from
-causally consistent processors, with edge operations to stamp and propagate causal dependencies
-to and from plain Kafka clients.
-
-## Motivation
-
-As event streaming systems increasingly derive decisions from events across multiple topics, Kafka's per-partition ordering guarantees may not be enough.
-
-Consider a stream processor processing order and discount events from different topics. The processor may process an order event before processing the discount event that was the premise upon which the order was placed. The discount event is said to have happened before the order event. A causally consistent order of events would respect this relationship and delay the processing of the order event until the discount event had been processed.
-
-Parsley provides causally consistent Kafka Streams processors that automatically track the happens-before relationship between events and deliver them in a causally consistent order, regardless of how many topics are involved.
+Parsley is a stream-processing library that adds causal consistency to Kafka. It builds Kafka
+Streams topologies from causally consistent processors, and it provides edge operations that stamp
+and propagate causal dependencies to and from plain Kafka clients.
 
 ## The problem
 
-A consumer reads a price from `prices-0` at offset 27 and, on that basis, produces an order to
-`orders`. A downstream consumer of `orders` processes that order while its own `prices` consumer is
-only at offset 24 — acting on an order whose causal premise it has not yet seen. This is a
-**causal violation**, and it happens under normal Kafka operation: consumer lag on one topic races
-ahead of a write to another. Kafka's per-partition ordering does not prevent it; Parsley does.
+Kafka guarantees ordering only within a single partition. When a system derives decisions from
+events across several topics, that guarantee is not enough.
 
-The guarantee is **causal consistency**: if A causally precedes B, every consumer observes A before
-B — stronger than eventual consistency, weaker than linearisability, with a predictable rather than
-load-dependent latency cost.
+Consider two topics, `prices` and `orders`. A consumer reads a price from `prices-0` at offset 27
+and, on the basis of that price, produces a record to `orders`. A downstream consumer of `orders`
+processes that order while its own `prices` consumer has only reached offset 24. It is acting on an
+order whose causal premise, the price at offset 27, it has not yet seen.
+
+This is a causal violation, and it happens under normal Kafka operation whenever consumer lag on one
+topic races ahead of a write to another. The price update at offset 27 happened before the order, so
+a causally consistent system would process the price before the order regardless of which topic each
+arrived on. Kafka's per-partition ordering does not prevent the violation. Parsley does.
+
+The guarantee Parsley provides is causal consistency: if event A causally precedes event B, every
+consumer observes A before B. This is stronger than eventual consistency and weaker than
+linearisability.
 
 ## How it works
 
-Every message carries the producer's **causal dependencies** as a header. When a message arrives, the
-consumer checks whether its **frontier** already satisfies those dependencies; if so it forwards
-immediately, otherwise it holds the message in a **causal buffer** until the frontier catches up.
+Every record carries the producer's causal dependencies in a header. The dependencies are a snapshot
+of the offsets the producer had observed when it sent the record. When a record arrives, the
+consumer compares those dependencies against its own frontier, which is the set of offsets it has
+already delivered on each partition. If the frontier already satisfies the dependencies, the record
+is forwarded immediately. If it does not, the record is held in a causal buffer until the frontier
+catches up.
 
-If the frontier never catches up, the configured `CausalBufferLimit` fires and the record is
-forwarded anyway, stamped `EVICTED` instead of `SATISFIED`.
+If the frontier never catches up and the configured `CausalBufferLimit` fires, the outcome is
+governed by `parsley.buffer.eviction.failure.policy`. By default this policy is `fail`: Parsley fails
+the task and leaves the record in the buffer for retry, which preserves causal order at the cost of
+availability. Setting the policy to `continue` instead forwards the held record out of causal order
+once the limit fires. In neither case does Parsley add a per-record status to the delivered record.
+Eviction is reported through logs and a metric. The [Configuration](configuration.md) page describes
+the policy in full.
 
-The library is a single jar built around one entry point and a set of edge operations, sharing a
-common vocabulary of value types:
+## Public API
+
+The library is a single jar built around one entry point and a set of edge operations. They share a
+common vocabulary of value types.
 
 | API | Purpose |
 |---|---|
-| `CausalProcessorSupplier` | Wraps a Kafka Streams `Processor` behind the causal guarantee — the core |
-| `CausalDependencies.stamp` / `from` / `merge` | Stamp and propagate causal context to and from plain Kafka clients at the topology edge |
-| `CausalTopics` | Resolves topic names to their stable Kafka UUIDs for building dependencies |
+| `CausalProcessorSupplier` | Wraps a Kafka Streams `Processor` behind the causal guarantee. This is the core of the library. |
+| `CausalDependencies.stamp` / `from` / `merge` | Stamp and propagate causal context to and from plain Kafka clients at the topology edge. |
+| `CausalTopics` | Resolves topic names to their stable Kafka UUIDs for building dependencies. |
 
 ## Where to go next
 
-- [**Concepts**](concepts.md) — causal dependencies, frontiers, the buffer, always-forward delivery
-- [**Getting started**](getting-started.md) — installation and stamping causal context at the edge
-- [**Streams integration**](streams.md) — wrapping a `Processor`, preconditions, recovery
-- [**Configuration**](configuration.md) — buffer limits, eviction, header size
-- [**Audit logging**](audit-logging.md) — routing per-record causal events to your own audit trail
-- [**API reference**](api/index.html) — full Javadoc
+- [Concepts](concepts.md) covers causal dependencies, the frontier, the buffer, and how eviction is
+  handled.
+- [Getting started](getting-started.md) covers installation and stamping causal context at the edge.
+- [Streams integration](streams.md) covers wrapping a `Processor`, the preconditions, and recovery.
+- [Configuration](configuration.md) covers buffer limits, the eviction and deserialization policies,
+  and header size.
+- [Audit logging](audit-logging.md) covers routing per-record causal events to your own audit trail.
+- [API reference](api/index.html) is the full Javadoc.

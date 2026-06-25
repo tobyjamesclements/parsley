@@ -57,9 +57,9 @@ for admission, [Drain cascade](#drain-cascade-draininto) for the cascade, and
 3. If `frontier.dominates(deps)`: advance frontier, add the record to output, call `drainInto()`.
 4. Otherwise: add record to buffer (assigned an insertion sequence and a `bufferedAt` timestamp), index unsatisfied coordinates in the candidate index. If buffer depth >= `sizeLimit`, call `evictOverflow()`.
 
-A missing or undecodable dependency header always falls into the satisfied branch (step 3) — it
-never reaches the buffer. The frontier still advances on these records, so buffered records
-waiting on that coordinate are not permanently stalled.
+A missing or undecodable dependency header always falls into the satisfied branch (step 3). It never
+reaches the buffer. The frontier still advances on these records, so buffered records waiting on that
+coordinate are not permanently stalled.
 
 ## Drain cascade (`drainInto`)
 
@@ -95,28 +95,28 @@ equivalently by `bufferedAt`) and hand it to a shared `evictEntries()` helper. F
 1. Log the eviction at `WARN` with the causal gap (`required.missing(frontier)`) and call
    `metrics.recordViolation()`.
 2. Remove from buffer and candidate index.
-3. Advance the frontier at the entry's source coordinate and add the record to the forward list —
-   eviction never drops or diverts a record, it just delivers it out of causal order.
+3. Advance the frontier at the entry's source coordinate and add the record to the forward list.
+   Eviction never drops or diverts a record. It delivers the record out of causal order instead.
 
 ### `evictOverflow()` — size limit
 
-Called inline from `onRecord()` once buffer depth reaches `sizeLimit`. Evicts only the oldest
-`buffer.size() - sizeLimit + 1` entries — just enough to bring the buffer back under the limit —
-leaving younger records held. In the common case (depth checked after every single admission)
-this evicts exactly one record per overflow, sliding the window forward.
+Called inline from `onRecord()` once buffer depth reaches `sizeLimit`. It evicts only the oldest
+`buffer.size() - sizeLimit + 1` entries, which is just enough to bring the buffer back under the
+limit, and leaves younger records held. In the common case, where depth is checked after every single
+admission, this evicts exactly one record per overflow and slides the window forward.
 
-A second call site exists in `ParsleyProcessor.init()`, to enforce the limit once against a
-buffer restored from a changelog after a restart (relevant after a reconfiguration that lowers
-`ofSize(...)` before restarting — the restored buffer can legitimately hold more entries than the
-new limit allows, and the inline check above only runs on the next admission, which may never
-come). This can't happen synchronously inside `init()`: Kafka Streams hasn't finished wiring the
-task's `RecordCollector` until every processor in the topology returns from `init()`, so
-forwarding a `FORWARD_UNSAFE` eviction at that point throws an NPE. Instead, `init()` schedules a
-self-cancelling, one-shot `WALL_CLOCK_TIME` punctuation that calls `evictOverflow()` on its first
-firing and cancels itself immediately after. The formula is unconditional on *when* it's called,
-so the same method serves both call sites without change; if a new record is admitted via the
-inline path before the punctuation fires, that path's own overflow check already restores the
-invariant, and the punctuation's subsequent call is a no-op.
+A second call site exists in `ParsleyProcessor.init()`, to enforce the limit once against a buffer
+restored from a changelog after a restart. This matters after a reconfiguration that lowers
+`ofSize(...)` before restarting, because the restored buffer can legitimately hold more entries than
+the new limit allows, and the inline check above only runs on the next admission, which may never
+come. This cannot happen synchronously inside `init()`. Kafka Streams does not finish wiring the
+task's `RecordCollector` until every processor in the topology returns from `init()`, so forwarding a
+`FORWARD_UNSAFE` eviction at that point throws an NPE. Instead, `init()` schedules a self-cancelling,
+one-shot `WALL_CLOCK_TIME` punctuation that calls `evictOverflow()` on its first firing and cancels
+itself immediately after. The formula does not depend on *when* it is called, so the same method
+serves both call sites without change. If a new record is admitted via the inline path before the
+punctuation fires, that path's own overflow check already restores the invariant, and the
+punctuation's subsequent call is a no-op.
 
 ### `evictExpired()` — duration limit
 

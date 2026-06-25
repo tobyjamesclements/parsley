@@ -1,16 +1,16 @@
 # Parsley
 
-Causal consistency for Kafka. Producers stamp each record with its causal dependencies;
-consumers and Kafka Streams processors hold back any record whose dependencies have not yet
-been observed, releasing it once the frontier catches up.
+Causal consistency for Kafka. Producers stamp each record with its causal dependencies. Consumers and
+Kafka Streams processors hold back any record whose dependencies have not yet been observed, and
+release the record once the frontier catches up.
 
-The guarantee: if A causally precedes B, every consumer observes A before B.
+The guarantee is that if A causally precedes B, every consumer observes A before B.
 
 ## Install
 
 Parsley is published to [Maven Central](https://central.sonatype.com/artifact/io.github.tobyjamesclements/parsley).
 The current version is a snapshot, so it lives in Central's snapshot repository rather than the main
-one — no credentials needed, snapshots are publicly readable:
+one. No credentials are needed, because snapshots are publicly readable.
 
 ```xml
 <repository>
@@ -27,10 +27,10 @@ one — no credentials needed, snapshots are publicly readable:
 </dependency>
 ```
 
-Once a tagged `0.1.0` release ships, this repository block won't be needed — Central's default repo
-(already in every Maven setup) covers real releases.
+Once a tagged `0.1.0` release ships, this repository block is no longer needed, because Central's
+default repository, which is already in every Maven setup, covers real releases.
 
-Requires Java 25. Build from source: `./mvnw install`.
+Requires Java 25. Build from source with `./mvnw install`.
 
 ## Docs
 

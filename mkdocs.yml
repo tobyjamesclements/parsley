@@ -41,18 +41,21 @@ extra:
 
 nav:
   - Home: index.md
-  - Concepts: concepts.md
-  - Getting started: getting-started.md
-  - Streams integration: streams.md
-  - Configuration: configuration.md
-  - Audit logging: audit-logging.md
-  - Performance: performance.md
-  - Troubleshooting: troubleshooting.md
-  - Migration: migration.md
-  - API reference: api/index.html
-  - Internals:
-    - Overview: internals/overview.md
-    - Wire format: internals/wire-format.md
-    - The engine: internals/engine.md
-    - Streams integration: internals/streams.md
-    - Benchmarks: internals/benchmarks.md
+  - Guide:
+    - Concepts: concepts.md
+    - Getting started: getting-started.md
+    - Streams integration: streams.md
+    - Configuration: configuration.md
+    - Audit logging: audit-logging.md
+    - Migration: migration.md
+  - Operations:
+    - Performance: performance.md
+    - Troubleshooting: troubleshooting.md
+  - Reference:
+    - API reference: api/index.html
+    - Internals:
+      - Overview: internals/overview.md
+      - Wire format: internals/wire-format.md
+      - The engine: internals/engine.md
+      - The processor: internals/streams.md
+      - Benchmarks: internals/benchmarks.md
