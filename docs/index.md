@@ -48,7 +48,7 @@ common vocabulary of value types.
 | API | Purpose |
 |---|---|
 | `CausalProcessorSupplier` | Wraps a Kafka Streams `Processor` behind the causal guarantee. This is the core of the library. |
-| `CausalDependencies.stamp` / `from` / `merge` | Stamp and propagate causal context to and from plain Kafka clients at the topology edge. |
+| `CausalDependencies.using` / `observe` / `stamp` / `merge` | Maintain a consumer-side frontier and stamp causal context onto records produced to plain Kafka clients at the topology edge. |
 | `CausalTopics` | Resolves topic names to their stable Kafka UUIDs for building dependencies. |
 
 ## Where to go next

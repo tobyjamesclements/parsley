@@ -168,11 +168,11 @@ class CausalProcessorsTopologyTest {
      * arrives, then drains.
      */
     @Test
-    void recordStampedViaFromIsHeldUntilItsTriggerCoordinateIsObserved() {
+    void recordStampedViaObserveIsHeldUntilItsTriggerCoordinateIsObserved() {
         // The dependencies a downstream producer would attach after consuming t2@0 (no carried deps).
         org.apache.kafka.clients.consumer.ConsumerRecord<String, String> trigger =
                 new org.apache.kafka.clients.consumer.ConsumerRecord<>("t2", 0, 0L, "tk", "tv");
-        CausalDependencies stampedFromTrigger = CausalDependencies.from(TOPICS, trigger);
+        CausalDependencies stampedFromTrigger = CausalDependencies.using(TOPICS).observe(trigger);
 
         Topology topology = topology(
                 CausalProcessors.builder(upperCaser()).addBufferStore("parsley", CausalBufferLimit.ofSize(100))

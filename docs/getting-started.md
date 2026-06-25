@@ -43,27 +43,34 @@ setup.
 
 ## Stamping causal context onto produced records
 
-At the edges of a topology, where plain Kafka producers feed records in, attach the causal
-dependencies as a header with `CausalDependencies.stamp`. Resolve topic UUIDs once through a
-`CausalTopics` backed by an `Admin` you own. Parsley never closes that `Admin`.
+At the edges of a topology, where plain Kafka producers feed records in, a node has no Parsley engine
+maintaining a frontier for it, so it maintains one itself. A `CausalDependencies` value is that
+frontier: the running set of positions the node has observed. Bind a `CausalTopics` resolver once with
+`using`, fold in each record you consume with `observe`, and attach the result to each record you
+produce with `stamp`. The `CausalTopics` is backed by an `Admin` you own; Parsley never closes it.
 
 ```java
 CausalTopics topics = CausalTopics.of(admin);
 
 // the trigger's own dependencies plus its own position
-CausalDependencies deps = CausalDependencies.from(topics, trigger);
+CausalDependencies deps = CausalDependencies.using(topics).observe(trigger);
 producer.send(deps.stamp(new ProducerRecord<>("orders", key, value)));
 ```
 
-`from` carries the dependencies that the triggering record arrived with, together with the triggering
+`observe` folds in the dependencies the consumed record arrived with, together with the consumed
 record's own position. A downstream causal processor therefore waits until it has observed `trigger`
-before it delivers anything stamped here. Combine several dependency sets with `merge` for a fan-in.
+before it delivers anything stamped here. The resolver bound by `using` carries through each
+`observe`, so a fan-in — where an output is caused by several inputs — chains an `observe` per input.
 
 ```java
-CausalDependencies deps = CausalDependencies.from(topics, priceUpdate)
-        .merge(CausalDependencies.from(topics, inventoryChange));
+CausalDependencies deps = CausalDependencies.using(topics)
+        .observe(priceUpdate)
+        .observe(inventoryChange);
 producer.send(deps.stamp(record));
 ```
+
+A stateful node whose output reflects everything it has consumed keeps a single instance and
+`observe`s into it across records, so each record it produces carries the node's full frontier.
 
 To declare a dependency on a specific upstream position that you did not consume, build one
 explicitly.

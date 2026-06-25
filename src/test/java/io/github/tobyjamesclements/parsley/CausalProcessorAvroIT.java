@@ -114,7 +114,7 @@ class CausalProcessorAvroIT {
                 // The Order's dependencies, as derived after consuming prices@0.
                 ConsumerRecord<String, SpecificRecord> priceConsumed =
                         new ConsumerRecord<>(PRICES, 0, 0L, "ACME", price);
-                CausalDependencies orderDeps = CausalDependencies.from(topics, priceConsumed);
+                CausalDependencies orderDeps = CausalDependencies.using(topics).observe(priceConsumed);
 
                 try (KafkaProducer<String, SpecificRecord> producer =
                              new KafkaProducer<>(producerConfig(bootstrap, registryUrl))) {

@@ -83,7 +83,7 @@ class CausalProcessorRestartIT {
             CausalTopics topics = CausalTopics.of(admin);
             // Dependencies a producer would attach after consuming PREREQ@0.
             ConsumerRecord<String, String> prereqConsumed = new ConsumerRecord<>(PREREQ, 0, 0L, "pk", "prereq");
-            orderDeps = CausalDependencies.from(topics, prereqConsumed);
+            orderDeps = CausalDependencies.using(topics).observe(prereqConsumed);
         }
 
         // Phase 1: buffer the dependent record, confirm it is held, then shut the instance down cleanly.

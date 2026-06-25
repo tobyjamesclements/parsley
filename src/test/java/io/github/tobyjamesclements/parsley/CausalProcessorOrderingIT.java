@@ -94,7 +94,7 @@ class CausalProcessorOrderingIT {
                 // Dependencies a producer would attach after consuming PREREQ@0 (carries its position).
                 ConsumerRecord<String, String> prereqConsumed =
                         new ConsumerRecord<>(PREREQ, 0, 0L, "pk", "prereq");
-                CausalDependencies orderDeps = CausalDependencies.from(topics, prereqConsumed);
+                CausalDependencies orderDeps = CausalDependencies.using(topics).observe(prereqConsumed);
 
                 try (KafkaProducer<String, String> producer = new KafkaProducer<>(producerConfig(bootstrap))) {
                     // Produce the dependent record FIRST — it must be buffered, not delivered early.

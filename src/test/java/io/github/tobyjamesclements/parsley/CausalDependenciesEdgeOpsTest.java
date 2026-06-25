@@ -128,37 +128,77 @@ class CausalDependenciesEdgeOpsTest {
     }
 
     /**
-     * {@code from} derives a record's outbound dependencies as the dependencies the consumed record
-     * carried, unioned with the consumed record's own position.
+     * {@code observe} folds a consumed record into an empty accumulator as the dependencies the
+     * consumed record carried, unioned with the consumed record's own position.
      *
      * Asserts that the result equals the carried dependencies plus the {@code (topic, partition,
      * offset)} of the consumed record.
      */
     @Test
-    void fromUnionsCarriedDependenciesWithTheConsumedRecordsOwnPosition() {
+    void observeUnionsCarriedDependenciesWithTheConsumedRecordsOwnPosition() {
         CausalDependencies carried = CausalDependencies.builder(TOPICS).require("prices", 0, 4).build();
         ConsumerRecord<String, String> consumed = new ConsumerRecord<>("orders", 0, 11L, "k", "v");
         consumed.headers().add(ParsleyHeader.CAUSAL_DEPENDENCIES, carried.toBytes());
 
         CausalDependencies expected = CausalDependencies.builder(TOPICS)
                 .require("prices", 0, 4).require("orders", 0, 11).build();
-        assertEquals(expected, CausalDependencies.from(TOPICS, consumed),
-                "from must union the carried dependencies with the consumed record's own position");
+        assertEquals(expected, CausalDependencies.using(TOPICS).observe(consumed),
+                "observe must union the carried dependencies with the consumed record's own position");
     }
 
     /**
-     * {@code from} includes the consumed record's own position even when the record carries no
+     * {@code observe} includes the consumed record's own position even when the record carries no
      * dependencies header of its own.
      *
      * Asserts that the result is the single own-position coordinate.
      */
     @Test
-    void fromIncludesOwnPositionForARecordWithNoCarriedDependencies() {
+    void observeIncludesOwnPositionForARecordWithNoCarriedDependencies() {
         ConsumerRecord<String, String> consumed = new ConsumerRecord<>("orders", 0, 6L, "k", "v");
 
         CausalDependencies expected = CausalDependencies.builder(TOPICS).require("orders", 0, 6).build();
-        assertEquals(expected, CausalDependencies.from(TOPICS, consumed),
-                "from must record the consumed record's own position even with no carried dependencies");
+        assertEquals(expected, CausalDependencies.using(TOPICS).observe(consumed),
+                "observe must record the consumed record's own position even with no carried dependencies");
+    }
+
+    /**
+     * {@code observe} accumulates across successive records, so a running instance acts as the
+     * consumer's own causal frontier: folding in several consumed records yields the union of every
+     * carried dependency and every record's own position, keeping the maximum offset per coordinate.
+     *
+     * Asserts that observing three records — two on one coordinate, one (carrying its own past) on
+     * another — yields the per-coordinate maximum across all of them plus the carried past.
+     */
+    @Test
+    void observeAccumulatesAcrossRecordsAsARunningFrontier() {
+        ConsumerRecord<String, String> priceLow = new ConsumerRecord<>("prices", 0, 3L, "k", "v");
+        ConsumerRecord<String, String> priceHigh = new ConsumerRecord<>("prices", 0, 7L, "k", "v");
+        CausalDependencies orderCarried = CausalDependencies.builder(TOPICS).require("prices", 0, 2).build();
+        ConsumerRecord<String, String> order = new ConsumerRecord<>("orders", 0, 5L, "k", "v");
+        order.headers().add(ParsleyHeader.CAUSAL_DEPENDENCIES, orderCarried.toBytes());
+
+        CausalDependencies frontier = CausalDependencies.using(TOPICS)
+                .observe(priceLow)
+                .observe(priceHigh)
+                .observe(order);
+
+        CausalDependencies expected = CausalDependencies.builder(TOPICS)
+                .require("prices", 0, 7).require("orders", 0, 5).build();
+        assertEquals(expected, frontier,
+                "a running observe(...) accumulator must keep the per-coordinate maximum across all observed records");
+    }
+
+    /**
+     * {@code observe} requires a bound resolver, so an instance created without one (here via
+     * {@code empty()}) fails fast rather than silently dropping the consumed record's position.
+     *
+     * Asserts that calling {@code observe} on an unbound instance throws {@code IllegalStateException}.
+     */
+    @Test
+    void observeOnAnUnboundInstanceThrows() {
+        ConsumerRecord<String, String> consumed = new ConsumerRecord<>("orders", 0, 0L, "k", "v");
+        assertThrows(IllegalStateException.class, () -> CausalDependencies.empty().observe(consumed),
+                "observe must throw when no CausalTopics resolver is bound");
     }
 
     /**
@@ -169,8 +209,8 @@ class CausalDependenciesEdgeOpsTest {
     @Test
     void resolverRejectsAnUnknownTopic() {
         ConsumerRecord<String, String> consumed = new ConsumerRecord<>("unknown", 0, 0L, "k", "v");
-        assertThrows(IllegalArgumentException.class, () -> CausalDependencies.from(TOPICS, consumed),
-                "from must throw when the consumed record's topic cannot be resolved to a UUID");
+        assertThrows(IllegalArgumentException.class, () -> CausalDependencies.using(TOPICS).observe(consumed),
+                "observe must throw when the consumed record's topic cannot be resolved to a UUID");
     }
 
     private static ConsumerRecord<String, String> asConsumerRecord(ProducerRecord<String, String> record) {

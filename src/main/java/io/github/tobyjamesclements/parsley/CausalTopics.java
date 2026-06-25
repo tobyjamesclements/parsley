@@ -19,7 +19,7 @@ import java.util.Objects;
  * <pre>{@code
  * try (Admin admin = Admin.create(adminConfig)) {
  *     CausalTopics topics = CausalTopics.of(admin);
- *     CausalDependencies deps = CausalDependencies.from(topics, consumedRecord);
+ *     CausalDependencies deps = CausalDependencies.using(topics).observe(consumedRecord);
  *     producer.send(deps.stamp(new ProducerRecord<>("orders", key, value)));
  * }
  * }</pre>

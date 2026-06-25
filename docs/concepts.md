@@ -27,9 +27,15 @@ run actually reaches, so the held record's gap is never skipped over. Once the h
 delivered, whether it is released or evicted, the frontier catches up in a single step through
 everything already forwarded above it.
 
-The frontier is an implementation detail. There is no public frontier type. To propagate causal
-context downstream, read a consumed record's dependencies with `CausalDependencies.fromRecord(record)`
-and stamp them onto what you produce.
+The node's internal frontier is an implementation detail, and there is no public type for it: it is
+contiguous (the highest offset delivered without a gap), which is specific to how the engine releases
+held records. A node consuming with a plain Kafka client maintains its own frontier instead, as an
+accumulating `CausalDependencies` value. Bind a resolver once with `CausalDependencies.using(topics)`,
+fold in each record you consume with `observe(record)`, and stamp the result onto each record you
+produce. A one-to-one relay is `using(topics).observe(record)`; a fan-in chains an `observe` per
+input; a stateful node keeps one instance and observes into it across records. To read back the
+dependencies a record already carries, without folding in a new position, use
+`CausalDependencies.fromRecord(record)`.
 
 The frontier is persisted before each record is forwarded, so it survives restarts and rebalances.
 

@@ -7,7 +7,7 @@ internal implementation.
 | API | Backed by |
 |---|---|
 | `CausalProcessorSupplier` | `ParsleyProcessorSupplier` + `ParsleyProcessor` |
-| `CausalDependencies` edge ops (`stamp` / `from` / `merge`) | `ParsleyClock` (no wrapper objects) |
+| `CausalDependencies` edge ops (`using` / `observe` / `stamp` / `merge`) | `ParsleyClock` (no wrapper objects) |
 | `CausalTopics` | A caller-owned Kafka `Admin` (name → UUID, cached) |
 
 All share a common set of value types and a single causal engine.
@@ -18,7 +18,7 @@ All share a common set of value types and a single causal engine.
 
 | Class | Role |
 |---|---|
-| `CausalDependencies` | Public facade over a `ParsleyClock`: the causal requirements stamped onto each record, plus the `stamp`/`from`/`merge` edge operations |
+| `CausalDependencies` | Public facade over a `ParsleyClock`: the causal requirements stamped onto each record, plus the `using`/`observe`/`stamp`/`merge` edge operations |
 | `CausalTopics` | Resolves topic names to their stable Kafka UUIDs through a caller-owned `Admin` (used to build `CausalDependencies`) |
 | `CausalBuffer` | Registers one causal source on the processor builder: topic name + the serdes the buffer round-trips held records with (the topic's UUID is resolved from the broker) |
 | `CausalBufferLimit` | When to evict held records: `ofDuration`, `ofSize`, `first` |
@@ -42,7 +42,7 @@ All share a common set of value types and a single causal engine.
 
 ```
 Edge (plain Kafka producer)
-  CausalDependencies.from(topics, trigger) / .merge(...) / .builder(topics).require(...)
+  CausalDependencies.using(topics).observe(trigger) / .observe(...) / .builder(topics).require(...)
     -> CausalDependencies.stamp(record)
          -> stamps parsley-causal-dependencies header
     -> producer.send(record)
