@@ -66,7 +66,7 @@ fires, what happens next is governed by `parsley.buffer.eviction.failure.policy`
 record stays in the buffer and is retried after a restart or once the backlog eases. A record whose
 dependency never arrives is therefore never force-delivered under the default policy.
 
-Setting the policy to `continue` restores Parsley's original forward-anyway behaviour. Under
+Setting the policy to `continue` makes Parsley forward records rather than fail. Under
 `continue`, the limit evicts the oldest qualifying record and delivers it out of causal order.
 Eviction still feeds the frontier exactly like a normal delivery, so once the evicted record's
 coordinate closes its gap, every record already forwarded above it, and any record buffered

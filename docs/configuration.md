@@ -55,8 +55,7 @@ When the configured `CausalBufferLimit` fires before a held record's dependencie
 - **`fail`** (the default) fails the task fast and leaves the candidate records buffered, rather than
   deliver them out of causal order. This trades availability for consistency. The records are retried
   on the next attempt, which is after a restart or once the limit or backlog eases.
-- **`continue`** is Parsley's original always-forward behaviour, under which Parsley never drops or
-  diverts a record. The configured limit evicts the oldest qualifying records and delivers them
+- **`continue`** never drops or diverts a record. The configured limit evicts the oldest qualifying records and delivers them
   anyway, out of causal order. Eviction still feeds the frontier exactly like a normal delivery, so
   once the evicted record's coordinate closes its gap, buffered records waiting on it catch up in the
   same step and are not permanently stalled.
@@ -78,7 +77,7 @@ unsupported wire version, `parsley.clock.resolution.failure.policy` decides what
   The record was never buffered and its source offset is not committed past it, so it is reprocessed
   on the next attempt, which is after a restart or once the upstream is fixed.
 - **`continue`** treats the unresolvable header as empty (vacuously satisfied) and forwards the record
-  immediately. This is Parsley's original best-effort behaviour. It is lossy of causal premises:
+  immediately. This is best-effort. It is lossy of causal premises:
   because the frontier is a high-water mark, forwarding on empty dependencies can let the record, and
   its dependents, be delivered ahead of a premise the corrupt header actually carried.
 
@@ -124,7 +123,7 @@ parsley.buffer.deserialization.failure.policy = fail
 #   fail     (default) fails fast; the candidate records stay buffered rather than be
 #                      delivered out of causal order, which trades availability for consistency
 #   continue           evicts and forwards the records anyway, out of causal order
-#                      (logged and counted); this is Parsley's original always-forward behaviour
+#                      (logged and counted)
 parsley.buffer.eviction.failure.policy = fail
 
 # How an inbound record whose causal-dependencies header cannot be decoded is handled at ingest
@@ -154,5 +153,5 @@ case.
 
 `parsley.clock.resolution.failure.policy = fail` means that a record carrying a corrupt
 causal-dependencies header fails the task rather than be forwarded on unknown premises. Set it to
-`continue` to keep Parsley's original best-effort behaviour, which forwards such a record with empty
-dependencies, accepting that this is lossy of causal order.
+`continue` to forward such a record with empty dependencies, best-effort, accepting that this is
+lossy of causal order.
