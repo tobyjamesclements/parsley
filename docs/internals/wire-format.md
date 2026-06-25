@@ -17,7 +17,7 @@ per entry:
   [offset     :8]
 ```
 
-Size: `5 + 28 × n` bytes. Wire version `0x01`; deserialization throws `IllegalStateException` on mismatch.
+Size: `5 + 28 × n` bytes. The wire version is `0x01`, and deserialization throws `IllegalStateException` on a mismatch.
 
 Topic IDs are Kafka `Uuid` values stored as two `long` fields (most-significant bits, then least-significant bits).
 
@@ -31,11 +31,11 @@ time to the `ParsleySerializer`-encoded record.
 [ParsleySerializer v3 payload, below]
 ```
 
-The `ParsleySerializer` payload is what's passed to and decoded from `serialize`/`deserialize`. The
-source coordinate and dependency clock are written as typed fields (not headers); only the user's
-headers are carried. The key/value bytes are produced by the Serde resolved from the typed source
-topic. Its own `[timestamp:8]` field is the record's original Kafka timestamp — distinct from, and
-written independently of, the outer `bufferedAt`.
+The `ParsleySerializer` payload is what is passed to and decoded from `serialize` and `deserialize`.
+The source coordinate and dependency clock are written as typed fields rather than headers, and only
+the user's headers are carried. The key and value bytes are produced by the Serde resolved from the
+typed source topic. The payload's own `[timestamp:8]` field is the record's original Kafka timestamp,
+which is distinct from the outer `bufferedAt` and written independently of it.
 
 ```
 [version       :1]   0x03
@@ -60,8 +60,9 @@ per user header:
 ```
 
 `ParsleyEngine`'s startup index rebuild and the duration-based eviction scan decode only the outer
-`bufferedAt` and the `deps` field — via `ParsleySerializer.deserializeDependencies` — never the
-key/value bytes, so a record whose user serde can no longer decode it doesn't block either path.
+`bufferedAt` and the `deps` field, through `ParsleySerializer.deserializeDependencies`, and never the
+key or value bytes. A record whose user serde can no longer decode it therefore does not block either
+path.
 
 ## Candidate-index key
 
@@ -89,7 +90,7 @@ All three stores are persistent and changelog-backed. Changelog topic names foll
 
 ## Topic UUIDs
 
-Topic UUIDs are not derived or guessed — they are resolved from the broker via `AdminClient`. The
+Topic UUIDs are not derived or guessed. They are resolved from the broker through `AdminClient`. The
 processor resolves them at `init()` from the task's `appConfigs()` for every topic registered as a
 `CausalBuffer` on `CausalProcessors.builder(...)`. If a registered topic does not exist on the
 broker, resolution fails fast with `IllegalStateException` rather than falling back to a guess.

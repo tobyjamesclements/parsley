@@ -70,7 +70,7 @@ Wraps `ProcessorContext<KOut,VOut>`. Intercepts `forward()` to stamp the causal 
 2. Add `parsley-causal-dependencies` from `frontier.get().toBytes()` (the `Supplier<ParsleyClock>` is read at call time).
 3. Call `delegate.forward(record.withHeaders(stamped))`.
 
-The original record object is never mutated. The frontier is read live: a `forward()` during admit sees the post-admit frontier; a `forward()` from a punctuator sees the frontier at punctuator fire time.
+The original record object is never mutated. The frontier is read live. A `forward()` during admit sees the post-admit frontier, and a `forward()` from a punctuator sees the frontier at punctuator fire time.
 
 **`recordMetadata()`:** Returns the source coordinate metadata of the record currently being delivered (set by `deliver()` above) when inside a delivery call. Returns the delegate's `recordMetadata()` otherwise. This gives the user processor access to the causal position of the triggering record.
 

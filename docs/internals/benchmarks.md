@@ -2,8 +2,8 @@
 
 A JMH performance-characterisation suite covering the three areas of Parsley's algorithmic
 complexity. The goal is to produce **complexity curves**, not absolute latency figures. Complexity
-curves are reproducible across environments; absolute numbers are infrastructure-specific and must
-be generated in the target environment to be meaningful.
+curves are reproducible across environments. Absolute numbers are infrastructure-specific and must be
+generated in the target environment to be meaningful.
 
 See [Performance](../performance.md) for an explanation of what each curve measures and what the
 results imply for capacity planning.
@@ -133,7 +133,7 @@ dimension while holding others constant. The slope of the resulting curve agains
 parameter confirms (or refutes) the theoretical complexity claim.
 
 **Absolute latency figures are infrastructure-specific.** The numbers produced by this suite
-reflect your hardware, storage class, and JVM GC configuration; they are not directly comparable
+reflect your hardware, storage class, and JVM GC configuration, and they are not directly comparable
 to numbers generated on different infrastructure. To produce figures meaningful for a
 capacity-planning decision, run this suite on your target hardware with
 `parsley.bench.state.store.dir` pointed at its real storage class.
