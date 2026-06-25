@@ -145,6 +145,84 @@ class CausalBufferDeserializationFailureTest {
     }
 
     /**
+     * When the held value's bytes carry the Confluent wire-format magic byte ({@code 0x00}) followed
+     * by a 4-byte writer schema id, {@link ParsleyBufferDeserializationException#details() details}
+     * decodes and reports that exact id — pinning the bit-shift/mask arithmetic in
+     * {@code ParsleySerializer.schemaId()}, which only the excluded Avro integration test otherwise
+     * exercises (PIT's mutation profile excludes {@code *IT} classes).
+     */
+    @Test
+    void detailsDecodeTheConfluentSchemaIdFromTheMagicByteValueBytes() {
+        ParsleySerializer<String, String> serializer =
+                serializerWith(new FixedBytesThrowingSerde(new byte[] {0x00, 0, 0, 0, 42}));
+        byte[] bytes = serializer.serialize(message(T2, 0, T2_ID, ParsleyClock.empty().observe(T1_ID, 0, 3)));
+
+        ParsleyBufferDeserializationException thrown = assertThrows(
+                ParsleyBufferDeserializationException.class, () -> serializer.deserialize(bytes));
+
+        assertTrue(thrown.details().contains("schema id: 42"),
+                "details must report the decoded schema id: " + thrown.details());
+    }
+
+    /**
+     * The decoded schema id is correct when every byte of the 4-byte big-endian id is non-zero —
+     * unlike a small id (e.g. {@code 42}), where the high three bytes are zero and a shift-direction
+     * or OR/AND mutation on them is unobservable (0 shifted either way, or ORed/ANDed with 0, is
+     * still 0). Pins the actual shift-and-mask arithmetic across all four bytes.
+     */
+    @Test
+    void detailsDecodeAMultiByteSchemaIdAcrossAllFourBytes() {
+        // 0x12345678 = 305419896; every byte is non-zero and distinct, so a shift-direction or
+        // OR/AND mutation on any one of them changes the decoded result.
+        ParsleySerializer<String, String> serializer =
+                serializerWith(new FixedBytesThrowingSerde(new byte[] {0x00, 0x12, 0x34, 0x56, 0x78}));
+        byte[] bytes = serializer.serialize(message(T2, 0, T2_ID, ParsleyClock.empty().observe(T1_ID, 0, 3)));
+
+        ParsleyBufferDeserializationException thrown = assertThrows(
+                ParsleyBufferDeserializationException.class, () -> serializer.deserialize(bytes));
+
+        assertTrue(thrown.details().contains("schema id: 305419896"),
+                "details must report the correctly-decoded multi-byte schema id: " + thrown.details());
+    }
+
+    /**
+     * A decoded schema id of exactly {@code 0} is reported as {@code "0"}, not {@code "n/a"} — the
+     * precise boundary between "no magic byte found" ({@code -1}) and "magic byte found, id is 0".
+     */
+    @Test
+    void detailsReportSchemaIdZeroRatherThanNotApplicable() {
+        ParsleySerializer<String, String> serializer =
+                serializerWith(new FixedBytesThrowingSerde(new byte[] {0x00, 0, 0, 0, 0}));
+        byte[] bytes = serializer.serialize(message(T2, 0, T2_ID, ParsleyClock.empty().observe(T1_ID, 0, 3)));
+
+        ParsleyBufferDeserializationException thrown = assertThrows(
+                ParsleyBufferDeserializationException.class, () -> serializer.deserialize(bytes));
+
+        assertTrue(thrown.details().contains("schema id: 0"),
+                "a schema id of exactly 0 must be reported as \"0\", not \"n/a\": " + thrown.details());
+    }
+
+    /**
+     * When the held record's key is null, {@link ParsleyBufferDeserializationException#details() details}
+     * reports {@code "key bytes: null"} rather than a length — the existing coverage above only
+     * exercises a non-null key.
+     */
+    @Test
+    void detailsReportNullKeyBytesWhenTheKeyIsNull() {
+        ParsleySerializer<String, String> serializer = serializerWith(new ThrowingDeserializerSerde());
+        ParsleyMessage<String, String> record = new ParsleyMessage<>(
+                T2.topic(), T2_ID, T2.partition(), 7L, 0L, null, "v", List.of(),
+                ParsleyClock.empty().observe(T1_ID, 0, 3));
+        byte[] bytes = serializer.serialize(record);
+
+        ParsleyBufferDeserializationException thrown = assertThrows(
+                ParsleyBufferDeserializationException.class, () -> serializer.deserialize(bytes));
+
+        assertTrue(thrown.details().contains("key bytes: null"),
+                "details must report \"key bytes: null\" for a null key: " + thrown.details());
+    }
+
+    /**
      * In continue-mode (deserialization handler = {@code LogAndContinue}) an undecodable held record is
      * dropped on the drain path and processing continues: the satisfying record is still forwarded, the
      * poison record is removed, a violation is counted, and no exception propagates.
@@ -316,6 +394,21 @@ class CausalBufferDeserializationFailureTest {
     private static final class ThrowingDeserializerSerde implements Serde<String> {
         private final Serde<String> delegate = Serdes.String();
         @Override public Serializer<String> serializer() { return delegate.serializer(); }
+        @Override public Deserializer<String> deserializer() {
+            return (topic, data) -> { throw new SerializationException("registry can no longer decode " + topic); };
+        }
+    }
+
+    /**
+     * A {@link Serde} whose serializer always returns a fixed byte array (ignoring the value passed
+     * in) and whose deserializer always throws — lets a test control the exact bytes
+     * {@code ParsleySerializer.schemaId()} decodes from, including the Confluent magic byte
+     * ({@code 0x00}) followed by a 4-byte writer schema id.
+     */
+    private static final class FixedBytesThrowingSerde implements Serde<String> {
+        private final byte[] bytes;
+        FixedBytesThrowingSerde(byte[] bytes) { this.bytes = bytes; }
+        @Override public Serializer<String> serializer() { return (topic, data) -> bytes; }
         @Override public Deserializer<String> deserializer() {
             return (topic, data) -> { throw new SerializationException("registry can no longer decode " + topic); };
         }

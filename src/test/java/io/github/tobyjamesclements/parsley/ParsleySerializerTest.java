@@ -74,6 +74,24 @@ class ParsleySerializerTest {
     }
 
     /**
+     * A record with an empty (zero-length, but non-null) key and value round-trips as empty
+     * strings, not as null. This distinguishes the wire format's null-sentinel length ({@code -1})
+     * from a genuinely empty byte array (length {@code 0}) — a key/value with no content is not
+     * the same as an absent one.
+     *
+     * Asserts that key and value round-trip as {@code ""}, not {@code null}.
+     */
+    @Test
+    void roundTripsEmptyButNonNullKeyAndValue() {
+        ParsleyMessage<String, String> record = buildRecord("", "", 0L, T1, 0L, null, List.of());
+
+        ParsleyMessage<String, String> out = serializer.deserialize(serializer.serialize(record));
+
+        assertEquals("", out.key(), "an empty (zero-length) key must round-trip as \"\", not null");
+        assertEquals("", out.value(), "an empty (zero-length) value must round-trip as \"\", not null");
+    }
+
+    /**
      * The serializer passes the record's source topic — not the buffer store's changelog
      * topic name — to the key and value serdes on both serialise and deserialise.
      *

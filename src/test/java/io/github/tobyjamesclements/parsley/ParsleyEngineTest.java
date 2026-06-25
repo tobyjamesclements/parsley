@@ -6,6 +6,7 @@ import org.junit.jupiter.api.Test;
 
 import java.time.Duration;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 import java.util.Optional;
 import java.util.OptionalLong;
@@ -276,6 +277,115 @@ class ParsleyEngineTest {
 
         assertTrue(result.isEmpty(), "no eviction must occur while the buffer is within the limit");
         assertEquals(1, buffer.size(), "the buffer must be left untouched");
+    }
+
+    /**
+     * {@code evictOverflow()} must not consult the buffer's index at all when the buffer is exactly
+     * at the configured limit (no overflow) — its early-return guard, not a downstream empty-sublist
+     * computation that happens to produce the same result, is what makes this a no-op. Pins the
+     * boundary at {@code overflow == 0} precisely: a buffer with one fewer record than the size limit
+     * still computes {@code overflow == 0} via the no-op path above, but only adding a second record
+     * (bringing it to exactly the limit) drives {@code overflow} to exactly {@code 0} through the
+     * "would otherwise need to scan" branch.
+     */
+    @Test
+    void evictOverflowSkipsTheIndexEntirelyWhenExactlyAtTheLimit() {
+        CountingIndexEntriesBufferStore<String, String> countingBuffer = new CountingIndexEntriesBufferStore<>();
+        countingBuffer.add(incomingRecord(T2, 0, ParsleyClock.empty().observe(T1_ID, 0, 99)), 0L);
+
+        ParsleyEngine<String, String> engine = new ParsleyEngine<>(CausalBufferLimit.ofSize(2),
+                ParsleyClock.empty(), frontiers::add, countingBuffer, new MockCandidateIndex(),
+                forwardedIndex, ParsleyMetrics.NOOP, CausalAudit.NOOP, System::currentTimeMillis, false, false);
+        int callsAfterConstruction = countingBuffer.indexEntriesCalls;
+
+        List<ParsleyMessage<String, String>> result = engine.evictOverflow();
+
+        assertTrue(result.isEmpty(), "no eviction must occur when the buffer is exactly at the limit");
+        assertEquals(callsAfterConstruction, countingBuffer.indexEntriesCalls,
+                "evictOverflow() must not consult the buffer's index again when overflow is exactly 0");
+    }
+
+    /**
+     * {@code evictOverflow()} evicts the genuinely oldest (lowest-sequence) buffered record even when
+     * the backing store's {@code indexEntries()} happens to return them out of insertion order —
+     * proving {@code orderedIndex()}'s own sort is load-bearing, not merely redundant with
+     * {@link MockBufferStore}'s {@code TreeMap}-backed iteration, which is already sorted and would
+     * mask a regression that removes the sort.
+     */
+    @Test
+    void evictOverflowEvictsTheOldestRecordEvenWhenTheBufferReturnsEntriesNewestFirst() {
+        ReverseOrderBufferStore<String, String> reversedBuffer = new ReverseOrderBufferStore<>();
+        ParsleyClock unmet = ParsleyClock.empty().observe(T1_ID, 0, 99);
+        reversedBuffer.add(incomingRecord(T2, 0, unmet), 0L); // oldest: sequence 0
+        reversedBuffer.add(incomingRecord(T2, 1, unmet), 1L); // newest: sequence 1
+
+        ParsleyEngine<String, String> engine = new ParsleyEngine<>(CausalBufferLimit.ofSize(2),
+                ParsleyClock.empty(), frontiers::add, reversedBuffer, new MockCandidateIndex(),
+                forwardedIndex, ParsleyMetrics.NOOP, CausalAudit.NOOP, System::currentTimeMillis, false, false);
+
+        List<ParsleyMessage<String, String>> result = engine.evictOverflow();
+
+        assertEquals(List.of(0L), result.stream().map(ParsleyMessage::offset).toList(),
+                "the oldest record (sequence 0) must be evicted even though the buffer returned "
+                        + "its index entries newest-first");
+    }
+
+    /**
+     * {@code evictOverflow()} reports the buffer's post-eviction depth, the same as every other
+     * depth-changing event — not just on the {@code onRecord()}-triggered eviction path that
+     * {@link #metricsCallbacksFireOnBufferAndRelease} already covers.
+     */
+    @Test
+    void evictOverflowReportsTheBufferStateAfterEviction() {
+        List<Integer> reportedDepths = new ArrayList<>();
+        ParsleyMetrics capturing = new ParsleyMetrics() {
+            @Override public void recordBuffered()             {}
+            @Override public void recordReleased(int c)        {}
+            @Override public void recordEvicted(int c)         {}
+            @Override public void recordViolation()             {}
+            @Override public void recordDeserializationError()  {}
+            @Override public void recordEvictionLimitExceeded() {}
+            @Override public void reportState(int depth, OptionalLong oldest) { reportedDepths.add(depth); }
+        };
+        ParsleyClock unmet = ParsleyClock.empty().observe(T1_ID, 0, 99);
+        buffer.add(incomingRecord(T2, 0, unmet), 0L);
+        buffer.add(incomingRecord(T2, 1, unmet), 1L);
+        buffer.add(incomingRecord(T2, 2, unmet), 2L);
+
+        ParsleyEngine<String, String> engine = new ParsleyEngine<>(CausalBufferLimit.ofSize(2),
+                ParsleyClock.empty(), frontiers::add, buffer, new MockCandidateIndex(),
+                forwardedIndex, capturing, CausalAudit.NOOP, System::currentTimeMillis, false, false);
+
+        engine.evictOverflow();
+
+        assertEquals(List.of(1), reportedDepths,
+                "reportState must fire with the post-eviction buffer depth (3 - 2 evicted = 1)");
+    }
+
+    /**
+     * An evicted record (the {@code parsley.buffer.eviction.failure.policy = continue} path) counts a
+     * causal violation in the metrics — not just in the audit callback, which
+     * {@link #auditReceivesViolationEventOnEviction} already covers.
+     */
+    @Test
+    void evictionCountsAViolationInMetricsNotJustAudit() {
+        List<Integer> violationCounts = new ArrayList<>();
+        ParsleyMetrics capturing = new ParsleyMetrics() {
+            @Override public void recordBuffered()             {}
+            @Override public void recordReleased(int c)        {}
+            @Override public void recordEvicted(int c)         {}
+            @Override public void recordViolation()             { violationCounts.add(1); }
+            @Override public void recordDeserializationError()  {}
+            @Override public void recordEvictionLimitExceeded() {}
+            @Override public void reportState(int depth, OptionalLong oldest) {}
+        };
+        ParsleyEngine<String, String> engine = new ParsleyEngine<>(CausalBufferLimit.ofSize(1),
+                ParsleyClock.empty(), frontiers::add, buffer, new MockCandidateIndex(),
+                forwardedIndex, capturing, CausalAudit.NOOP, System::currentTimeMillis, false, false);
+
+        engine.onRecord(incomingRecord(T2, 0, ParsleyClock.empty().observe(T1_ID, 0, 99)));
+
+        assertEquals(List.of(1), violationCounts, "the evicted record must count exactly one violation");
     }
 
     /**
@@ -979,5 +1089,44 @@ class ParsleyEngineTest {
                                                                         ParsleyClock deps) {
         return new ParsleyMessage<>(tp.topic(), topicId, tp.partition(), offset, 0L,
                 "k", "v", List.of(), deps == null ? ParsleyClock.empty() : deps);
+    }
+
+    /**
+     * Wraps a {@link MockBufferStore}, counting {@code indexEntries()} calls — used to prove an
+     * eviction guard short-circuits before consulting the buffer's index at all (beyond the engine
+     * constructor's own one-time wait-index rebuild scan), rather than relying on a downstream
+     * computation that happens to converge on the same (empty) result.
+     */
+    private static final class CountingIndexEntriesBufferStore<K, V> implements ParsleyBufferStore<K, V> {
+        private final MockBufferStore<K, V> delegate = new MockBufferStore<>();
+        int indexEntriesCalls = 0;
+        @Override public long add(ParsleyMessage<K, V> record, long bufferedAt) { return delegate.add(record, bufferedAt); }
+        @Override public Entry<K, V> get(long sequence) { return delegate.get(sequence); }
+        @Override public List<Entry<K, V>> entries() { return delegate.entries(); }
+        @Override public List<IndexEntry> indexEntries() { indexEntriesCalls++; return delegate.indexEntries(); }
+        @Override public void remove(long sequence) { delegate.remove(sequence); }
+        @Override public int size() { return delegate.size(); }
+        @Override public OptionalLong oldestBufferedAt() { return delegate.oldestBufferedAt(); }
+    }
+
+    /**
+     * Wraps a {@link MockBufferStore} but returns {@code indexEntries()} in reverse-insertion order —
+     * proving a caller's own sort over those entries is load-bearing, not merely redundant with
+     * {@link MockBufferStore}'s {@code TreeMap}-backed iteration, which is already sorted and would
+     * otherwise mask a regression that removes the sort.
+     */
+    private static final class ReverseOrderBufferStore<K, V> implements ParsleyBufferStore<K, V> {
+        private final MockBufferStore<K, V> delegate = new MockBufferStore<>();
+        @Override public long add(ParsleyMessage<K, V> record, long bufferedAt) { return delegate.add(record, bufferedAt); }
+        @Override public Entry<K, V> get(long sequence) { return delegate.get(sequence); }
+        @Override public List<Entry<K, V>> entries() { return delegate.entries(); }
+        @Override public List<IndexEntry> indexEntries() {
+            List<IndexEntry> reversed = new ArrayList<>(delegate.indexEntries());
+            Collections.reverse(reversed);
+            return reversed;
+        }
+        @Override public void remove(long sequence) { delegate.remove(sequence); }
+        @Override public int size() { return delegate.size(); }
+        @Override public OptionalLong oldestBufferedAt() { return delegate.oldestBufferedAt(); }
     }
 }
