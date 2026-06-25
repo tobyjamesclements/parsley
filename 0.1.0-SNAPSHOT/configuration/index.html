@@ -543,6 +543,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#unresolvable-clock-fail-fast-or-forward-empty" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Unresolvable clock: fail fast, or forward empty
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#header-size" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1111,6 +1122,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#unresolvable-clock-fail-fast-or-forward-empty" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Unresolvable clock: fail fast, or forward empty
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#header-size" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1202,6 +1224,23 @@ eviction or fail-fast at <code>WARN</code> or <code>ERROR</code> with the causal
 between what was required and what the frontier had observed. It also counts the event through its
 eviction metric, or its eviction-limit-exceeded metric under the <code>fail</code> policy.</p>
 <hr />
+<h2 id="unresolvable-clock-fail-fast-or-forward-empty">Unresolvable clock: fail fast, or forward empty</h2>
+<p>A record's causal dependencies travel in its <code>parsley-causal-dependencies</code> header. When that header is
+present but cannot be decoded into a clock, a corrupt or truncated header, or one written in an
+unsupported wire version, <code>parsley.clock.resolution.failure.policy</code> decides what happens at ingest.</p>
+<ul>
+<li><strong><code>fail</code></strong> (the default) fails the task fast rather than forward the record on an unknown premise.
+  The record was never buffered and its source offset is not committed past it, so it is reprocessed
+  on the next attempt, which is after a restart or once the upstream is fixed.</li>
+<li><strong><code>continue</code></strong> treats the unresolvable header as empty (vacuously satisfied) and forwards the record
+  immediately. This is Parsley's original best-effort behaviour. It is lossy of causal premises:
+  because the frontier is a high-water mark, forwarding on empty dependencies can let the record, and
+  its dependents, be delivered ahead of a premise the corrupt header actually carried.</li>
+</ul>
+<p>Either way the occurrence is surfaced operationally. Parsley logs it at <code>ERROR</code> (<code>fail</code>) or <code>WARN</code>
+(<code>continue</code>) with the source coordinate, counts it through its clock-resolution-error metric, and
+under <code>continue</code> also counts a violation.</p>
+<hr />
 <h2 id="header-size">Header size</h2>
 <p>The serialised <code>parsley-causal-dependencies</code> header is <code>5 + 28 × entries</code> bytes. It counts against
 Kafka's record-size limit (<code>message.max.bytes</code> and <code>max.request.size</code>, around 1 MB by default), and
@@ -1234,6 +1273,14 @@ absent file, or an absent key, falls back to the defaults below.</p>
 <a id="__codelineno-3-10" name="__codelineno-3-10" href="#__codelineno-3-10"></a><span class="c1">#   continue           evicts and forwards the records anyway, out of causal order</span>
 <a id="__codelineno-3-11" name="__codelineno-3-11" href="#__codelineno-3-11"></a><span class="c1">#                      (logged and counted); this is Parsley&#39;s original always-forward behaviour</span>
 <a id="__codelineno-3-12" name="__codelineno-3-12" href="#__codelineno-3-12"></a><span class="na">parsley.buffer.eviction.failure.policy</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s">fail</span>
+<a id="__codelineno-3-13" name="__codelineno-3-13" href="#__codelineno-3-13"></a>
+<a id="__codelineno-3-14" name="__codelineno-3-14" href="#__codelineno-3-14"></a><span class="c1"># How an inbound record whose causal-dependencies header cannot be decoded is handled at ingest</span>
+<a id="__codelineno-3-15" name="__codelineno-3-15" href="#__codelineno-3-15"></a><span class="c1"># (for example, a corrupt or truncated header, or one in an unsupported wire version).</span>
+<a id="__codelineno-3-16" name="__codelineno-3-16" href="#__codelineno-3-16"></a><span class="c1">#   fail     (default) fails fast; the record is reprocessed on restart rather than forwarded</span>
+<a id="__codelineno-3-17" name="__codelineno-3-17" href="#__codelineno-3-17"></a><span class="c1">#                      on an unknown premise</span>
+<a id="__codelineno-3-18" name="__codelineno-3-18" href="#__codelineno-3-18"></a><span class="c1">#   continue           forwards the record with empty (vacuously satisfied) dependencies,</span>
+<a id="__codelineno-3-19" name="__codelineno-3-19" href="#__codelineno-3-19"></a><span class="c1">#                      out of causal order (logged and counted as a violation)</span>
+<a id="__codelineno-3-20" name="__codelineno-3-20" href="#__codelineno-3-20"></a><span class="na">parsley.clock.resolution.failure.policy</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s">fail</span>
 </code></pre></div>
 <table>
 <thead>
@@ -1254,6 +1301,11 @@ absent file, or an absent key, falls back to the defaults below.</p>
 <td><code>fail</code></td>
 <td><code>fail</code>, <code>continue</code></td>
 </tr>
+<tr>
+<td><code>parsley.clock.resolution.failure.policy</code></td>
+<td><code>fail</code></td>
+<td><code>fail</code>, <code>continue</code></td>
+</tr>
 </tbody>
 </table>
 <p><code>parsley.buffer.deserialization.failure.policy = continue</code> is best-effort and lossy. See
@@ -1264,6 +1316,10 @@ is planned to supersede it.</p>
 never arrives, repeatedly fails the task once the buffer limit is reached, rather than ever deliver
 out of order. Set it to <code>continue</code> if availability matters more than strict causal order for your use
 case.</p>
+<p><code>parsley.clock.resolution.failure.policy = fail</code> means that a record carrying a corrupt
+causal-dependencies header fails the task rather than be forwarded on unknown premises. Set it to
+<code>continue</code> to keep Parsley's original best-effort behaviour, which forwards such a record with empty
+dependencies, accepting that this is lossy of causal order.</p>
 
 
 
