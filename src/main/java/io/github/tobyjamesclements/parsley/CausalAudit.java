@@ -2,7 +2,8 @@ package io.github.tobyjamesclements.parsley;
 
 /**
  * Receives Parsley's per-record causal-buffering events: forwarded, held, released, evicted
- * (causal violation), eviction-limit-exceeded (fail-fast instead of a violation), and undecodable.
+ * (causal violation), eviction-limit-exceeded (fail-fast instead of a violation), undecodable, and
+ * unresolvable-clock (an undecodable dependencies header at ingest).
  * Register one with
  * {@link CausalProcessors.Builder#withAudit} to route these events wherever your audit/compliance
  * trail needs them (a SIEM, a durable audit store, structured logs) — Parsley itself never decides
@@ -90,6 +91,21 @@ public interface CausalAudit {
     void recordDeserializationFailure(String topic, int partition, long offset, String reason, boolean dropped);
 
     /**
+     * An inbound record's {@code parsley-causal-dependencies} header could not be decoded into a clock
+     * (a corrupt or truncated header, or one in an unsupported wire version).
+     *
+     * @param topic     the record's source topic
+     * @param partition the record's source partition
+     * @param offset    the record's source offset
+     * @param reason    an operator-facing diagnostic (coordinate, encoded header length — never the
+     *                  payload bytes)
+     * @param failed    {@code true} if the task is being failed fast (the {@code fail} default of
+     *                  {@code parsley.clock.resolution.failure.policy}); {@code false} if the record
+     *                  was forwarded with empty dependencies ({@code continue})
+     */
+    void recordClockResolutionFailure(String topic, int partition, long offset, String reason, boolean failed);
+
+    /**
      * A {@link CausalBufferLimit} fired on a held record whose dependencies were not yet satisfied,
      * and {@code parsley.buffer.eviction.failure.policy = fail} (the default) is configured: the
      * record was <strong>not</strong> evicted — it remains buffered — and the owning Streams task is
@@ -125,6 +141,7 @@ public interface CausalAudit {
         @Override public void recordReleased(String topic, int partition, long offset, int bufferDepthAfter) {}
         @Override public void recordViolation(String topic, int partition, long offset, CausalDependencies gap) {}
         @Override public void recordDeserializationFailure(String topic, int partition, long offset, String reason, boolean dropped) {}
+        @Override public void recordClockResolutionFailure(String topic, int partition, long offset, String reason, boolean failed) {}
         @Override public void recordEvictionLimitExceeded(String topic, int partition, long offset, CausalDependencies gap) {}
         @Override public void processorInitialized(String taskId, boolean frontierRestored) {}
         @Override public void processorClosing(String taskId) {}

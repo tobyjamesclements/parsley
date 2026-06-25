@@ -53,14 +53,36 @@ final class ParsleyConfig {
      */
     static final String EVICTION_FAILURE_POLICY = "parsley.buffer.eviction.failure.policy";
 
+    /**
+     * {@code parsley.clock.resolution.failure.policy} — how an inbound record whose
+     * {@code parsley-causal-dependencies} header cannot be decoded into a clock (a corrupt or
+     * truncated header, or one written in an unsupported wire version) is handled at ingest:
+     * <ul>
+     *   <li>{@code fail} (default): fail fast, rather than forward the record on an unknown premise.
+     *       The record was never buffered and its source offset is not committed past it, so it is
+     *       reprocessed on restart.</li>
+     *   <li>{@code continue}: treat the unresolvable header as empty (vacuously satisfied) and forward
+     *       the record immediately (logged, counted as a violation) — Parsley's original best-effort
+     *       behaviour.</li>
+     * </ul>
+     *
+     * <p><strong>v1 caveat:</strong> {@code continue} is lossy of causal premises — because the
+     * frontier is a high-water mark, forwarding on empty dependencies can let the record, and its
+     * dependents, be delivered ahead of a premise the corrupt header actually carried.
+     */
+    static final String CLOCK_RESOLUTION_FAILURE_POLICY = "parsley.clock.resolution.failure.policy";
+
     enum FailurePolicy { FAIL, CONTINUE }
 
     private final FailurePolicy deserializationFailurePolicy;
     private final FailurePolicy evictionFailurePolicy;
+    private final FailurePolicy clockResolutionFailurePolicy;
 
-    private ParsleyConfig(FailurePolicy deserializationFailurePolicy, FailurePolicy evictionFailurePolicy) {
+    private ParsleyConfig(FailurePolicy deserializationFailurePolicy, FailurePolicy evictionFailurePolicy,
+                          FailurePolicy clockResolutionFailurePolicy) {
         this.deserializationFailurePolicy = deserializationFailurePolicy;
         this.evictionFailurePolicy = evictionFailurePolicy;
+        this.clockResolutionFailurePolicy = clockResolutionFailurePolicy;
     }
 
     /** Whether a buffer-decode failure should be skipped ({@code continue}) rather than fail fast. */
@@ -71,6 +93,11 @@ final class ParsleyConfig {
     /** Whether a buffer-limit eviction should fail the task fast rather than evict and forward. */
     boolean failOnEvictionLimit() {
         return evictionFailurePolicy == FailurePolicy.FAIL;
+    }
+
+    /** Whether an undecodable causal-dependencies header should fail the task fast rather than forward empty. */
+    boolean failOnUnresolvableClock() {
+        return clockResolutionFailurePolicy == FailurePolicy.FAIL;
     }
 
     /** Loads from the {@code parsley.properties} classpath resource, or defaults if it is absent. */
@@ -100,7 +127,8 @@ final class ParsleyConfig {
     static ParsleyConfig from(Properties props) {
         return new ParsleyConfig(
                 failurePolicy(props, DESERIALIZATION_FAILURE_POLICY),
-                failurePolicy(props, EVICTION_FAILURE_POLICY));
+                failurePolicy(props, EVICTION_FAILURE_POLICY),
+                failurePolicy(props, CLOCK_RESOLUTION_FAILURE_POLICY));
     }
 
     private static FailurePolicy failurePolicy(Properties props, String key) {

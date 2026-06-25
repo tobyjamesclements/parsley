@@ -186,6 +186,7 @@ class CausalBufferEvictionLimitFailureTest {
         @Override public void recordEvicted(int c) {}
         @Override public void recordViolation() {}
         @Override public void recordDeserializationError() {}
+        @Override public void recordClockResolutionError() {}
         @Override public void recordEvictionLimitExceeded() { evictionLimitExceeded.incrementAndGet(); }
         @Override public void reportState(int depth, OptionalLong oldest) {}
     }

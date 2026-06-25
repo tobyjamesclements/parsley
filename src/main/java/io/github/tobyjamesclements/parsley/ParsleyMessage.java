@@ -6,8 +6,6 @@ import org.apache.kafka.common.header.Header;
 import org.apache.kafka.common.header.Headers;
 import org.apache.kafka.streams.processor.api.Record;
 import org.jspecify.annotations.Nullable;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -27,8 +25,6 @@ record ParsleyMessage<K, V>(String topic, Uuid topicId, int partition, long offs
                             @Nullable K key, @Nullable V value, List<ParsleyHeader> headers,
                             ParsleyClock dependencies) {
 
-    private static final Logger log = LoggerFactory.getLogger(ParsleyMessage.class);
-
     ParsleyMessage {
         headers = List.copyOf(headers);
     }
@@ -36,23 +32,49 @@ record ParsleyMessage<K, V>(String topic, Uuid topicId, int partition, long offs
     /**
      * Builds a message from an inbound Kafka Streams {@link Record} at its source coordinate. The
      * record's {@code parsley-causal-dependencies} header is decoded into {@link #dependencies}
-     * (absent or undecodable → empty, vacuously satisfied), and all other non-internal headers are
-     * carried as user headers.
+     * (absent → empty, vacuously satisfied), and all other non-internal headers are carried as user
+     * headers.
+     *
+     * @throws ParsleyClockResolutionException if the dependencies header is present but cannot be
+     *     decoded; the caller applies {@code parsley.clock.resolution.failure.policy} to decide
+     *     whether to fail or to rebuild with empty dependencies via
+     *     {@link #from(Record, TopicPartition, long, Uuid, ParsleyClock)}
      */
     static <K, V> ParsleyMessage<K, V> from(Record<K, V> record, TopicPartition source,
                                             long offset, Uuid topicId) {
+        ParsleyClock dependencies = decodeDependencies(encodedDependencies(record), source, topicId, offset);
+        return from(record, source, offset, topicId, dependencies);
+    }
+
+    /**
+     * Builds a message with caller-supplied {@code dependencies}, skipping header decoding. Used by
+     * the {@code parsley.clock.resolution.failure.policy = continue} path to forward a record whose
+     * dependencies header was unresolvable with empty (vacuously satisfied) dependencies.
+     */
+    static <K, V> ParsleyMessage<K, V> from(Record<K, V> record, TopicPartition source,
+                                            long offset, Uuid topicId, ParsleyClock dependencies) {
+        return new ParsleyMessage<>(source.topic(), topicId, source.partition(), offset,
+                record.timestamp(), record.key(), record.value(), userHeaders(record), dependencies);
+    }
+
+    private static List<ParsleyHeader> userHeaders(Record<?, ?> record) {
         List<ParsleyHeader> userHeaders = new ArrayList<>();
-        byte[] encodedDependencies = null;
         for (Header header : record.headers()) {
-            if (ParsleyHeader.CAUSAL_DEPENDENCIES.equals(header.key())) {
-                encodedDependencies = header.value();
-            } else if (!header.key().startsWith(ParsleyHeader.INTERNAL_PREFIX)) {
+            if (!ParsleyHeader.CAUSAL_DEPENDENCIES.equals(header.key())
+                    && !header.key().startsWith(ParsleyHeader.INTERNAL_PREFIX)) {
                 userHeaders.add(new ParsleyHeader(header.key(), header.value()));
             }
         }
-        ParsleyClock dependencies = decodeDependencies(encodedDependencies, source, offset);
-        return new ParsleyMessage<>(source.topic(), topicId, source.partition(), offset,
-                record.timestamp(), record.key(), record.value(), userHeaders, dependencies);
+        return userHeaders;
+    }
+
+    private static byte @Nullable [] encodedDependencies(Record<?, ?> record) {
+        for (Header header : record.headers()) {
+            if (ParsleyHeader.CAUSAL_DEPENDENCIES.equals(header.key())) {
+                return header.value();
+            }
+        }
+        return null;
     }
 
     /**
@@ -74,16 +96,16 @@ record ParsleyMessage<K, V>(String topic, Uuid topicId, int partition, long offs
         return out;
     }
 
-    private static ParsleyClock decodeDependencies(byte @Nullable [] encoded, TopicPartition source, long offset) {
+    private static ParsleyClock decodeDependencies(byte @Nullable [] encoded, TopicPartition source,
+                                                   Uuid topicId, long offset) {
         if (encoded == null) {
             return ParsleyClock.empty();
         }
         try {
             return ParsleyClock.fromBytes(encoded);
         } catch (Exception e) {
-            log.warn("Unresolvable causal-dependencies header on {}-{} @{} — treating as trivially satisfied",
-                    source.topic(), source.partition(), offset);
-            return ParsleyClock.empty();
+            throw new ParsleyClockResolutionException(source.topic(), topicId, source.partition(), offset,
+                    "encoded causal-dependencies header length " + encoded.length, e);
         }
     }
 }

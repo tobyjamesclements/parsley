@@ -344,6 +344,7 @@ class ParsleyEngineTest {
             @Override public void recordEvicted(int c)         {}
             @Override public void recordViolation()             {}
             @Override public void recordDeserializationError()  {}
+            @Override public void recordClockResolutionError()  {}
             @Override public void recordEvictionLimitExceeded() {}
             @Override public void reportState(int depth, OptionalLong oldest) { reportedDepths.add(depth); }
         };
@@ -376,6 +377,7 @@ class ParsleyEngineTest {
             @Override public void recordEvicted(int c)         {}
             @Override public void recordViolation()             { violationCounts.add(1); }
             @Override public void recordDeserializationError()  {}
+            @Override public void recordClockResolutionError()  {}
             @Override public void recordEvictionLimitExceeded() {}
             @Override public void reportState(int depth, OptionalLong oldest) {}
         };
@@ -512,6 +514,7 @@ class ParsleyEngineTest {
             @Override public void recordEvicted(int c)         {}
             @Override public void recordViolation()             {}
             @Override public void recordDeserializationError()  {}
+            @Override public void recordClockResolutionError()  {}
             @Override public void recordEvictionLimitExceeded() {}
             @Override public void reportState(int depth, OptionalLong oldest) { reportedDepths.add(depth); }
         };
@@ -545,6 +548,7 @@ class ParsleyEngineTest {
             @Override public void recordEvicted(int c)         { evictedCounts.add(c); }
             @Override public void recordViolation()            {}
             @Override public void recordDeserializationError() {}
+            @Override public void recordClockResolutionError() {}
             @Override public void recordEvictionLimitExceeded() {}
             @Override public void reportState(int depth, OptionalLong oldest) {}
         };

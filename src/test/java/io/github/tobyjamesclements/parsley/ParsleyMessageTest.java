@@ -9,6 +9,7 @@ import org.junit.jupiter.api.Test;
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
@@ -60,18 +61,44 @@ class ParsleyMessageTest {
     }
 
     /**
-     * {@code from} treats an undecodable dependency header as empty rather than failing — a
-     * corrupt header must not deadlock or crash the gate.
+     * {@code from} throws {@link ParsleyClockResolutionException} when the dependency header is
+     * present but cannot be decoded — the caller applies
+     * {@code parsley.clock.resolution.failure.policy} rather than {@code from} silently degrading.
      *
-     * Asserts the decoded dependencies are empty.
+     * Asserts the exception is thrown and carries the source coordinate.
      */
     @Test
-    void fromTreatsGarbledDependenciesAsEmpty() {
+    void fromThrowsOnUndecodableDependencies() {
         Headers headers = ParsleyHeader.mutableHeaders();
         headers.add(ParsleyHeader.CAUSAL_DEPENDENCIES, new byte[]{9, 9, 9});
 
-        ParsleyMessage<String, String> message =
-                ParsleyMessage.from(new Record<>("k", "v", 0L, headers), T1, 0L, T1_ID);
-        assertTrue(message.dependencies().isEmpty(), "garbled dependencies must decode as empty");
+        ParsleyClockResolutionException thrown = assertThrows(ParsleyClockResolutionException.class,
+                () -> ParsleyMessage.from(new Record<>("k", "v", 0L, headers), T1, 0L, T1_ID),
+                "an undecodable dependencies header must throw rather than decode as empty");
+        assertEquals("t1", thrown.topic(), "the exception must carry the source topic");
+        assertEquals(3, thrown.partition(), "the exception must carry the source partition");
+        assertEquals(0L, thrown.offset(), "the exception must carry the source offset");
+    }
+
+    /**
+     * The explicit-dependencies {@code from} overload builds with the caller-supplied clock and
+     * skips header decoding, while still carrying the user headers and dropping the dependency
+     * header — the path the {@code continue} policy uses to forward an unresolvable record with
+     * empty dependencies.
+     *
+     * Asserts the supplied dependencies are used and the user header is kept.
+     */
+    @Test
+    void fromWithExplicitDependenciesSkipsDecoding() {
+        Headers headers = ParsleyHeader.mutableHeaders();
+        headers.add("user", "u".getBytes());
+        headers.add(ParsleyHeader.CAUSAL_DEPENDENCIES, new byte[]{9, 9, 9});
+
+        ParsleyMessage<String, String> message = ParsleyMessage.from(
+                new Record<>("k", "v", 0L, headers), T1, 0L, T1_ID, ParsleyClock.empty());
+
+        assertTrue(message.dependencies().isEmpty(), "the supplied empty dependencies must be used");
+        assertEquals(1, message.headers().size(), "only the user header is carried");
+        assertEquals("user", message.headers().get(0).key(), "the user header is preserved");
     }
 }
