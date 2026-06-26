@@ -68,4 +68,12 @@ jobs:
           else
             # Set dev as default only when no stable release exists yet
             mike list | grep -q "latest" || mike set-default --push dev
+            # Garbage-collect superseded snapshot doc versions: keep only this build's snapshot
+            # (which now holds the `dev` alias) plus real releases. Dev docs are deployed under the
+            # literal X.Y.Z-SNAPSHOT version, so without this every version bump leaves a stale
+            # entry behind in the selector. Runs after the deploy above, so the current snapshot is
+            # never the one removed.
+            keep="${{ steps.ver.outputs.version }}"
+            mike list | awk '{print $1}' | grep -- '-SNAPSHOT$' | grep -vx "$keep" \
+                | xargs -r mike delete --push || true
           fi
