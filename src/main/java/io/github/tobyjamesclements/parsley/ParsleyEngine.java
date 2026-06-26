@@ -476,13 +476,17 @@ final class ParsleyEngine<K, V> {
      * violation) — never by a natural release.
      */
     private ParsleyClock effectiveDependencies(ParsleyClock deps, ParsleyMessage<K, V> record) {
+        return effectiveDependencies(deps, record.topicId(), record.partition(), record.offset());
+    }
+
+    private ParsleyClock effectiveDependencies(ParsleyClock deps, Uuid topicId, int partition, long offset) {
         // Drop coordinates this engine does not consume first: a dependency on a partition this task
         // does not own, or a topic outside its registered buffers, is vacuously satisfied — there is
         // nothing here to wait on. The record's own source coordinate is always in scope, so the
         // self-reference strip below still applies.
         ParsleyClock scoped = deps.retaining(inScope);
-        if (scoped.offsetFor(record.topicId(), record.partition()) == record.offset()) {
-            return scoped.without(record.topicId(), record.partition());
+        if (scoped.offsetFor(topicId, partition) == offset) {
+            return scoped.without(topicId, partition);
         }
         return scoped;
     }
