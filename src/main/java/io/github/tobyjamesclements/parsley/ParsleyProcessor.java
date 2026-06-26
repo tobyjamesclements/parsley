@@ -117,7 +117,6 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
         if (stored != null) {
             initialFrontier = ParsleyClock.fromBytes(stored);
         }
-        this.stampFrontier = initialFrontier;
         if (stored != null) {
             log.info("Processor initialized [task: {}] — frontier restored: {}", context.taskId(), initialFrontier);
         } else {
@@ -147,6 +146,13 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
         int taskPartition = context.taskId().partition();
         ParsleyClock.CoordinatePredicate inScope = (topicId, partition) ->
                 partition == taskPartition && consumedTopicIds.contains(topicId);
+
+        // Prune coordinates that no longer belong to this processor's scope — topic UUIDs change
+        // when a topic is dropped and recreated, leaving stale entries in the persisted clock.
+        // Pruning here keeps the stored frontier compact and ensures the initial stampFrontier
+        // does not carry coordinates that drainRestoredSatisfied would otherwise need to ignore.
+        initialFrontier = initialFrontier.retaining(inScope);
+        this.stampFrontier = initialFrontier;
 
         this.engine = new ParsleyEngine<>(limit, initialFrontier, inScope,
                 listener, buffer, candidateIndex, forwardedIndex, wiredMetrics.metrics(), audit,

@@ -299,11 +299,12 @@ final class ParsleyEngine<K, V> {
             if (buffer.get(entry.sequence()) == null) continue;
             ParsleyMessage<K, V> record = entry.record();
             ParsleyClock effective = effectiveDependencies(record.dependencies(), record);
-            // A record with no in-scope deps would have been forwarded immediately by onRecord and
-            // never buffered. If one appears in the restored buffer (e.g., after a scope change or
-            // direct test seeding), leave it for the normal overflow eviction path.
-            if (effective.isEmpty()) continue;
-            if (frontier.dominates(effective)) {
+            // Empty effective deps means all raw dependencies were filtered as out-of-scope —
+            // vacuously satisfied. This arises when a topic UUID changes across a restart (the
+            // old UUID leaves consumedTopicIds, so its coords are dropped from effectiveDeps).
+            // Such a record must be released here; no future onRecord will trigger drainInto for
+            // the dropped coordinate, so it would otherwise be stuck in the buffer indefinitely.
+            if (effective.isEmpty() || frontier.dominates(effective)) {
                 buffer.remove(entry.sequence());
                 audit.recordForwarded(record.topic(), record.partition(), record.offset());
                 extendContiguous(record.topicId(), record.partition(), record.offset());

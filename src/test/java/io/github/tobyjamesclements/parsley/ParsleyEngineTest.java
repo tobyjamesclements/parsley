@@ -1228,6 +1228,54 @@ class ParsleyEngineTest {
         assertEquals(0, sharedBuffer.size(), "buffer must be empty after T2@4 satisfies T1@5's dep");
     }
 
+    /**
+     * When a topic is dropped and recreated across a restart, its UUID changes and the old UUID
+     * leaves {@code consumedTopicIds}. A record buffered with a dependency on the old UUID now has
+     * empty effective dependencies — all coords were filtered as out-of-scope. Such a record is
+     * vacuously satisfied and must be released by {@link ParsleyEngine#drainRestoredSatisfied()}.
+     *
+     * <p>Before the fix, the guard {@code if (effective.isEmpty()) continue} skipped these records.
+     * Since no records ever arrive on the dropped topic, {@code drainInto} was never triggered for
+     * the stale coordinate and the record remained buffered indefinitely.
+     */
+    @Test
+    void drainRestoredSatisfiedReleasesRecordWhoseDepsAreNowOutOfScope() {
+        MockBufferStore<String, String> sharedBuffer = new MockBufferStore<>();
+
+        // Engine A: scope includes T1 and T2.
+        // T1@5 has a dep on T2@4. T2 has not yet been observed, so T1@5 is buffered.
+        ParsleyClock.CoordinatePredicate scopeA =
+                (id, p) -> p == 0 && (id.equals(T1_ID) || id.equals(T2_ID));
+        ParsleyEngine<String, String> engineA = new ParsleyEngine<>(CausalBufferLimit.ofSize(100),
+                ParsleyClock.empty(), scopeA, f -> {}, sharedBuffer,
+                new MockCandidateIndex(), new MockForwardedIndex(),
+                ParsleyMetrics.NOOP, CausalAudit.NOOP, System::currentTimeMillis, false, false);
+        List<ParsleyMessage<String, String>> out1 = engineA.onRecord(
+                incomingRecordWithId(T1, 5, T1_ID,
+                        ParsleyClock.empty().observe(T2_ID, 0, 4)));
+        assertTrue(out1.isEmpty(), "T1@5 must be buffered: T2@4 not yet satisfied");
+        assertEquals(1, sharedBuffer.size(), "buffer must hold T1@5");
+
+        // Simulate restart: T2 was dropped and recreated with a new UUID — it is no longer in
+        // scope. New scope = T1 only. Restored frontier carries T1's baseline from engine A.
+        ParsleyClock.CoordinatePredicate scopeB = (id, p) -> p == 0 && id.equals(T1_ID);
+        ParsleyClock restoredFrontier = ParsleyClock.empty().observe(T1_ID, 0, 4);
+
+        List<ParsleyClock> caps = new ArrayList<>();
+        ParsleyEngine<String, String> engineB = new ParsleyEngine<>(CausalBufferLimit.ofSize(100),
+                restoredFrontier, scopeB, caps::add, sharedBuffer,
+                new MockCandidateIndex(), new MockForwardedIndex(),
+                ParsleyMetrics.NOOP, CausalAudit.NOOP, System::currentTimeMillis, false, false);
+
+        // T1@5's only dep (T2@4) is now out-of-scope — vacuously satisfied. Must be released.
+        List<ParsleyMessage<String, String>> released = engineB.drainRestoredSatisfied();
+        assertEquals(List.of(5L), released.stream().map(ParsleyMessage::offset).toList(),
+                "drainRestoredSatisfied must release T1@5 whose dep (T2@4) is now out-of-scope");
+        assertEquals(0, sharedBuffer.size(), "T1@5 must have been removed from the buffer");
+        assertEquals(5L, engineB.frontier().offsetFor(T1_ID, 0),
+                "frontier must advance to T1@5 after release");
+    }
+
     // --- helpers --------------------------------------------------------------------------------
 
     // failOnEvictionLimit=false (continue) below: these helpers back tests that assert the

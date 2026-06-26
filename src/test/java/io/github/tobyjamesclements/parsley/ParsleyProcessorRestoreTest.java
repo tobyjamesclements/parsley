@@ -48,7 +48,9 @@ class ParsleyProcessorRestoreTest {
      */
     @Test
     void initRestoresAPersistedFrontierAndItGatesAdmissionImmediately() {
-        ParsleyClock restoredFrontier = ParsleyClock.empty().observe(OTHER_ID, 0, 5);
+        // Use an in-scope coordinate (T1_ID) so the restored frontier is not pruned away and
+        // genuinely gates admission — the dep is satisfied by the frontier, not vacuously.
+        ParsleyClock restoredFrontier = ParsleyClock.empty().observe(T1_ID, 0, 5);
         TestKeyValueStore<String, byte[]> frontierStore =
                 new TestKeyValueStore<String, byte[]>(Comparator.naturalOrder(), "frontier");
         frontierStore.put(ParsleyStores.FRONTIER_KEY, restoredFrontier.toBytes());
@@ -84,10 +86,10 @@ class ParsleyProcessorRestoreTest {
         assertTrue(audit.initializations.get(0).frontierRestored(),
                 "a non-empty frontier store must be reported as restored, not a fresh start");
 
-        // A record whose only dependency (OTHER_ID/0@5) is exactly satisfied by the restored
-        // frontier — it must be forwarded immediately rather than buffered, which would not be
-        // possible if init() had started the engine from an empty frontier.
-        context.setRecordMetadata("t1", 0, 0);
+        // A record whose only dependency (T1_ID/0@5) is exactly satisfied by the restored frontier
+        // — it must be forwarded immediately rather than buffered, which would not be possible if
+        // init() had started the engine from an empty frontier. Offset 10 avoids the self-ref strip.
+        context.setRecordMetadata("t1", 0, 10);
         Headers headers = ParsleyHeader.mutableHeaders();
         headers.add(ParsleyHeader.CAUSAL_DEPENDENCIES, restoredFrontier.toBytes());
         processor.process(new Record<>("k", "v", 0L, headers));
@@ -127,8 +129,10 @@ class ParsleyProcessorRestoreTest {
                 new ParsleySerializer<>(new ParsleyResolver<>(t -> Serdes.String(), t -> Serdes.String()));
         // Seed two held records directly — as if the buffer survived a restart after a
         // reconfiguration lowered the size limit to 2, leaving it exactly one record over.
+        // Use an in-scope but unmet dep (T1_ID@99) so drainRestoredSatisfied does not release
+        // them; overflow eviction is what these records are testing.
         RocksBufferStore<String, String> seedBuffer = new RocksBufferStore<>(bufferStore, serializer);
-        ParsleyClock unmet = ParsleyClock.empty().observe(OTHER_ID, 0, 99);
+        ParsleyClock unmet = ParsleyClock.empty().observe(T1_ID, 0, 99);
         seedBuffer.add(new ParsleyMessage<>("t1", T1_ID, 0, 0, 0L, "k", "oldest", List.of(), unmet), 0L);
         seedBuffer.add(new ParsleyMessage<>("t1", T1_ID, 0, 1, 0L, "k", "newest", List.of(), unmet), 1L);
 
