@@ -5,6 +5,7 @@ import org.junit.jupiter.api.Test;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
@@ -134,6 +135,46 @@ class ParsleyClockTest {
         ParsleyClock clock = ParsleyClock.empty().observe(T1_ID, 0, 5).observe(T2_ID, 0, 2);
         assertEquals(clock, ParsleyClock.fromBytes(clock.toBytes()),
                 "clock must round-trip through binary serialisation");
+    }
+
+    /**
+     * {@code retaining} drops every coordinate the predicate rejects — both a whole topic outside
+     * scope and an out-of-scope partition of an in-scope topic — and keeps the rest. The dropped
+     * coordinates then no longer count against {@code dominates}, so they are vacuously satisfied.
+     *
+     * Asserts the filtered clock holds only the in-scope coordinate, and that an empty frontier
+     * dominates the filtered dependencies even though it did not dominate the originals.
+     */
+    @Test
+    void retainingDropsOutOfScopeCoordinates() {
+        // In scope: topic T1 on partition 0 only. T1-1 (wrong partition) and T2-0 (wrong topic) are out.
+        ParsleyClock.CoordinatePredicate inScope = (topicId, partition) -> topicId.equals(T1_ID) && partition == 0;
+        ParsleyClock deps = ParsleyClock.empty()
+                .observe(T1_ID, 0, 3).observe(T1_ID, 1, 8).observe(T2_ID, 0, 5);
+
+        ParsleyClock scoped = deps.retaining(inScope);
+
+        assertEquals(ParsleyClock.empty().observe(T1_ID, 0, 3), scoped,
+                "retaining must keep only the in-scope coordinate and drop the others");
+        assertFalse(ParsleyClock.empty().dominates(deps),
+                "the unfiltered dependencies are not satisfied by an empty frontier");
+        assertFalse(ParsleyClock.empty().dominates(scoped),
+                "the in-scope coordinate still requires offset 3 from the frontier");
+        assertTrue(ParsleyClock.empty().observe(T1_ID, 0, 3).dominates(scoped),
+                "once out-of-scope coordinates are dropped, only the in-scope requirement gates");
+    }
+
+    /**
+     * {@code retaining} returns the same instance — not a copy — when every coordinate is in scope,
+     * so the common all-in-scope case allocates nothing on the gating path.
+     *
+     * Asserts the returned clock is reference-identical to the original.
+     */
+    @Test
+    void retainingReturnsSameInstanceWhenNothingDropped() {
+        ParsleyClock deps = ParsleyClock.empty().observe(T1_ID, 0, 3).observe(T2_ID, 0, 5);
+        assertSame(deps, deps.retaining((topicId, partition) -> true),
+                "retaining must not allocate when every coordinate is kept");
     }
 
     /**

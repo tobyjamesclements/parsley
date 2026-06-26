@@ -83,6 +83,10 @@ final class ParsleyEngine<K, V> {
     }
 
     private final CausalBufferLimit limit;
+    // Which dependency coordinates this engine actually consumes and must wait on; a dependency on
+    // any other coordinate — a partition this task does not own, or a topic outside its registered
+    // buffers — is dropped before the satisfaction check and treated as vacuously satisfied.
+    private final ParsleyClock.CoordinatePredicate inScope;
     private final ParsleyBufferStore<K, V> buffer;
     private final ParsleyCandidateIndex candidateIndex;
     private final ParsleyForwardedIndex forwardedIndex;
@@ -145,7 +149,28 @@ final class ParsleyEngine<K, V> {
                  LongSupplier clock,
                  boolean skipOnDecodeFailure,
                  boolean failOnEvictionLimit) {
+        // Default scope: treat every coordinate as consumed (no vacuous-satisfaction filtering).
+        // Production wiring always supplies a real scope via the constructor below; this overload
+        // preserves the historical behaviour for the convenience constructors and direct test use.
+        this(limit, initialFrontier, (topicId, partition) -> true, frontierListener, buffer,
+                candidateIndex, forwardedIndex, metrics, audit, clock, skipOnDecodeFailure,
+                failOnEvictionLimit);
+    }
+
+    ParsleyEngine(CausalBufferLimit limit,
+                 ParsleyClock initialFrontier,
+                 ParsleyClock.CoordinatePredicate inScope,
+                 FrontierCallback frontierListener,
+                 ParsleyBufferStore<K, V> buffer,
+                 ParsleyCandidateIndex candidateIndex,
+                 ParsleyForwardedIndex forwardedIndex,
+                 ParsleyMetrics metrics,
+                 CausalAudit audit,
+                 LongSupplier clock,
+                 boolean skipOnDecodeFailure,
+                 boolean failOnEvictionLimit) {
         this.limit = limit;
+        this.inScope = inScope;
         this.frontier = initialFrontier;
         this.frontierListener = frontierListener;
         this.buffer = buffer;
@@ -276,7 +301,7 @@ final class ParsleyEngine<K, V> {
         }
         if (failOnEvictionLimit) {
             ParsleyBufferStore.IndexEntry oldest = toEvict.get(0);
-            ParsleyClock gap = oldest.dependencies().missing(frontier);
+            ParsleyClock gap = oldest.dependencies().retaining(inScope).missing(frontier);
             CausalDependencies missing = CausalDependencies.of(gap);
             log.error("Buffer limit reached (limit: {}); failing fast on the oldest held record "
                     + "{}-{}@{} (parsley.buffer.eviction.failure.policy = fail). It remains buffered.",
@@ -451,10 +476,15 @@ final class ParsleyEngine<K, V> {
      * violation) — never by a natural release.
      */
     private ParsleyClock effectiveDependencies(ParsleyClock deps, ParsleyMessage<K, V> record) {
-        if (deps.offsetFor(record.topicId(), record.partition()) == record.offset()) {
-            return deps.without(record.topicId(), record.partition());
+        // Drop coordinates this engine does not consume first: a dependency on a partition this task
+        // does not own, or a topic outside its registered buffers, is vacuously satisfied — there is
+        // nothing here to wait on. The record's own source coordinate is always in scope, so the
+        // self-reference strip below still applies.
+        ParsleyClock scoped = deps.retaining(inScope);
+        if (scoped.offsetFor(record.topicId(), record.partition()) == record.offset()) {
+            return scoped.without(record.topicId(), record.partition());
         }
-        return deps;
+        return scoped;
     }
 
     /**
@@ -556,7 +586,7 @@ final class ParsleyEngine<K, V> {
     }
 
     private void reportEviction(ParsleyMessage<K, V> record, ParsleyClock required) {
-        ParsleyClock gap = required.missing(frontier);
+        ParsleyClock gap = required.retaining(inScope).missing(frontier);
         log.warn("Causal violation [EVICTED on {}-{} @{}] gap: {}",
                 record.topic(), record.partition(), record.offset(), gap);
         audit.recordViolation(record.topic(), record.partition(), record.offset(), CausalDependencies.of(gap));
