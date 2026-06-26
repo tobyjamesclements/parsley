@@ -189,7 +189,9 @@ final class ParsleyEngine<K, V> {
         // longer be deserialised — e.g. an incompatible Schema Registry change while buffered — does
         // not block startup; that failure surfaces later, on the forward path.
         for (ParsleyBufferStore.IndexEntry entry : buffer.indexEntries()) {
-            candidateIndex.index(entry.sequence(), entry.dependencies(), frontier);
+            candidateIndex.index(entry.sequence(),
+                    effectiveDependencies(entry.dependencies(), entry.topicId(), entry.partition(), entry.offset()),
+                    frontier);
         }
     }
 
