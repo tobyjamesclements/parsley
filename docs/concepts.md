@@ -66,6 +66,13 @@ the common case, and it covers a record delivered immediately, a record delivere
 record that claims no dependencies or carries an undecodable header, both of which are treated as
 vacuously satisfied.
 
+Dependencies on coordinates this processor does not consume are also treated as vacuously satisfied.
+A producer stamps its full causal frontier, which can span topics and partitions a given processor
+never reads. The processor waits only on the coordinates it actually consumes, meaning the topics
+registered as causal buffers on the partitions its task owns, and treats every other coordinate as
+already met. Without this, a dependency the processor could never observe would hold a record until
+eviction.
+
 When a held record's dependencies are still not satisfied and the configured `CausalBufferLimit`
 fires, what happens next is governed by `parsley.buffer.eviction.failure.policy`. The default is
 `fail`. Under `fail`, Parsley fails the task rather than deliver the record out of causal order. The

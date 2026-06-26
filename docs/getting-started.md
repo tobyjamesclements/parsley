@@ -25,7 +25,7 @@ the dependency in your `pom.xml`.
 <dependency>
   <groupId>io.github.tobyjamesclements</groupId>
   <artifactId>parsley</artifactId>
-  <version>0.1.0-SNAPSHOT</version>
+  <version>0.1.1-SNAPSHOT</version>
 </dependency>
 ```
 

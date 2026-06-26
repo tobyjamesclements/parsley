@@ -287,10 +287,11 @@ class CausalProcessorsTopologyTest {
     void evictedRecordIsForwardedToDelegate() {
         Topology topology = topology(
                 CausalProcessors.builder(upperCaser()).addBufferStore("parsley", CausalBufferLimit.ofSize(1))
+                        .addBuffer(CausalBuffer.of("t2", Serdes.String(), Serdes.String()))
                         .addBuffer(CausalBuffer.of("t3", Serdes.String(), Serdes.String()))
                         .withConfig("parsley.buffer.eviction.failure.policy", "continue")
                         .topicAdmin(ADMIN).build(),
-                List.of("t3"));
+                List.of("t2", "t3"));
 
         try (TopologyTestDriver driver = new TopologyTestDriver(topology, config(null))) {
             TestInputTopic<String, String> t3 =
@@ -318,10 +319,11 @@ class CausalProcessorsTopologyTest {
     void evictionUpdatesTheRecordsEvictedAndViolationsSensors() {
         Topology topology = topology(
                 CausalProcessors.builder(upperCaser()).addBufferStore("parsley", CausalBufferLimit.ofSize(1))
+                        .addBuffer(CausalBuffer.of("t2", Serdes.String(), Serdes.String()))
                         .addBuffer(CausalBuffer.of("t3", Serdes.String(), Serdes.String()))
                         .withConfig("parsley.buffer.eviction.failure.policy", "continue")
                         .topicAdmin(ADMIN).build(),
-                List.of("t3"));
+                List.of("t2", "t3"));
 
         try (TopologyTestDriver driver = new TopologyTestDriver(topology, config(null))) {
             TestInputTopic<String, String> t3 =
@@ -480,10 +482,11 @@ class CausalProcessorsTopologyTest {
     void durationEvictionOnlyEvictsRecordsThatHaveIndividuallyAgedOut() {
         Topology topology = topology(
                 CausalProcessors.builder(upperCaser()).addBufferStore("parsley", CausalBufferLimit.ofDuration(Duration.ofSeconds(2)))
+                        .addBuffer(CausalBuffer.of("t2", Serdes.String(), Serdes.String()))
                         .addBuffer(CausalBuffer.of("t3", Serdes.String(), Serdes.String()))
                         .withConfig("parsley.buffer.eviction.failure.policy", "continue")
                         .topicAdmin(ADMIN).build(),
-                List.of("t3"));
+                List.of("t2", "t3"));
 
         try (TopologyTestDriver driver = new TopologyTestDriver(topology, config(null))) {
             TestInputTopic<String, String> t3 =
@@ -527,10 +530,11 @@ class CausalProcessorsTopologyTest {
     void sizeLimitEvictionOnlyEvictsTheOldestOverflowingRecord() {
         Topology topology = topology(
                 CausalProcessors.builder(upperCaser()).addBufferStore("parsley", CausalBufferLimit.ofSize(2))
+                        .addBuffer(CausalBuffer.of("t2", Serdes.String(), Serdes.String()))
                         .addBuffer(CausalBuffer.of("t3", Serdes.String(), Serdes.String()))
                         .withConfig("parsley.buffer.eviction.failure.policy", "continue")
                         .topicAdmin(ADMIN).build(),
-                List.of("t3"));
+                List.of("t2", "t3"));
 
         try (TopologyTestDriver driver = new TopologyTestDriver(topology, config(null))) {
             TestInputTopic<String, String> t3 =
@@ -836,9 +840,10 @@ class CausalProcessorsTopologyTest {
      * into the frontier or re-stamped onto the output record.
      *
      * <p>This is the most important regression guard: a record carrying dependencies over
-     * hundreds of unrelated partitions, force-forwarded after an eviction, must still carry
-     * only its own source coordinate on the output. The inbound deps must not amplify the output
-     * header size.
+     * hundreds of partitions of an un-consumed topic ({@code ghost}) must still carry only its own
+     * source coordinate on the output. Those entries are out of this processor's scope, so the
+     * record is admitted immediately rather than held; either way the inbound deps must not amplify
+     * the output header size.
      *
      * Asserts that a record with 500 inbound dependency entries produces an output stamped
      * with exactly one dependency (the record's own source coordinate).
@@ -871,6 +876,53 @@ class CausalProcessorsTopologyTest {
                     "a 500-partition inbound dependency set must not enlarge the stamped output");
             assertEquals(1, stamped.clock().size(),
                     "the stamped output must carry only the source coordinate");
+        }
+    }
+
+    /**
+     * A dependency on a coordinate this processor does not consume — a topic outside its registered
+     * buffers, or a partition this task does not own — is vacuously satisfied: the record is admitted
+     * immediately, even under the default fail-fast eviction policy with a one-record buffer that
+     * would otherwise fail the task the moment the record is held.
+     *
+     * <p>This is the end-to-end guard for the fix. Producers stamp a clock spanning every topic and
+     * partition they consume, so a downstream processor routinely sees dependencies it can never
+     * observe; those must not block, evict, or fail the task. Before the fix, the {@code ghost}
+     * dependency (and the unowned {@code t1} partition) would hold the record, and with a size-1
+     * buffer under {@code fail} the overflow check would throw on the first record.
+     *
+     * Asserts the record is emitted (no exception), transformed by the delegate, and stamped with
+     * only its own source coordinate.
+     */
+    @Test
+    void dependenciesOnUnconsumedCoordinatesAreAdmittedUnderFailFast() {
+        CausalDependencies deps = CausalDependencies.builder(TOPICS)
+                .require("ghost", 0, 5)     // un-consumed topic
+                .require("t1", 7, 9)        // consumed topic, but a partition this task does not own
+                .build();
+
+        // Default eviction policy is fail; a one-record buffer would fail the task on the first held
+        // record. Only "t1" is a registered buffer.
+        Topology topology = topology(
+                CausalProcessors.builder(upperCaser()).addBufferStore("parsley", CausalBufferLimit.ofSize(1))
+                        .addBuffer(CausalBuffer.of("t1", Serdes.String(), Serdes.String()))
+                        .topicAdmin(ADMIN).build(),
+                List.of("t1"));
+
+        try (TopologyTestDriver driver = new TopologyTestDriver(topology, config(null))) {
+            TestInputTopic<String, String> t1 =
+                    driver.createInputTopic("t1", new StringSerializer(), new StringSerializer());
+            TestOutputTopic<String, String> out =
+                    driver.createOutputTopic("out", new StringDeserializer(), new StringDeserializer());
+
+            t1.pipeInput(new TestRecord<>("k", "hello", depsHeader(deps)));
+
+            assertEquals(List.of("hello"), processed,
+                    "the record must be admitted, not held or evicted, despite out-of-scope dependencies");
+            TestRecord<String, String> emitted = out.readRecord();
+            assertEquals("HELLO", emitted.value(), "the delegate must run on the admitted record");
+            assertEquals(CausalDependencies.builder(TOPICS).require("t1", 0, 0).build(), outDeps(emitted),
+                    "the output must be stamped with only the record's own source coordinate");
         }
     }
 

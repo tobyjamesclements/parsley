@@ -41,6 +41,12 @@ final class ParsleyClock {
         void accept(Uuid topicId, int partition, long offset);
     }
 
+    /** A predicate over a {@code (topicId, partition)} coordinate; see {@link #retaining}. */
+    @FunctionalInterface
+    interface CoordinatePredicate {
+        boolean test(Uuid topicId, int partition);
+    }
+
     private final Map<Uuid, Map<Integer, Long>> offsets; // always deeply immutable
 
     private ParsleyClock(Map<Uuid, Map<Integer, Long>> offsets) {
@@ -98,6 +104,36 @@ final class ParsleyClock {
             next.remove(topicId);
         }
         return new ParsleyClock(freeze(next));
+    }
+
+    /**
+     * Returns a copy of this clock keeping only the coordinates for which {@code inScope} holds, or
+     * {@code this} unchanged when every coordinate is kept (so the common all-in-scope case allocates
+     * nothing). Used to drop dependency coordinates a processor does not consume — a different
+     * partition, or a topic outside its registered buffers — so they are treated as vacuously
+     * satisfied rather than waited on.
+     */
+    ParsleyClock retaining(CoordinatePredicate inScope) {
+        boolean anyDropped = false;
+        outer:
+        for (Map.Entry<Uuid, Map<Integer, Long>> byTopic : offsets.entrySet()) {
+            for (int partition : byTopic.getValue().keySet()) {
+                if (!inScope.test(byTopic.getKey(), partition)) {
+                    anyDropped = true;
+                    break outer;
+                }
+            }
+        }
+        if (!anyDropped) {
+            return this;
+        }
+        Map<Uuid, Map<Integer, Long>> kept = new HashMap<>();
+        offsets.forEach((topicId, byPartition) -> byPartition.forEach((partition, offset) -> {
+            if (inScope.test(topicId, partition)) {
+                kept.computeIfAbsent(topicId, k -> new HashMap<>()).put(partition, offset);
+            }
+        }));
+        return new ParsleyClock(freeze(kept));
     }
 
     /**

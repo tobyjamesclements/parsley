@@ -22,6 +22,10 @@ class ParsleyEngineTest {
     private static final Uuid T1_ID = Uuid.randomUuid();
     private static final Uuid T2_ID = Uuid.randomUuid();
 
+    // A consumed scope owning partition 0 of t1 and t2 — what a Streams task sees for these sources.
+    private static final ParsleyClock.CoordinatePredicate SCOPE = (topicId, partition) ->
+            partition == 0 && (topicId.equals(T1_ID) || topicId.equals(T2_ID));
+
     private final List<ParsleyMessage<String, String>> forwarded = new ArrayList<>();
     private final List<ParsleyClock> frontiers = new ArrayList<>();
     private final MockBufferStore<String, String> buffer = new MockBufferStore<>();
@@ -98,6 +102,91 @@ class ParsleyEngineTest {
 
         engine.onRecord(incomingRecord(T1, 3, ParsleyClock.empty()));
         assertEquals(0, buffer.size(), "drained record must be removed from the buffer");
+    }
+
+    /**
+     * A dependency on a topic this engine does not consume carries no obligation here: it is dropped
+     * before the satisfaction check, so a record whose only dependencies name un-consumed topics is
+     * forwarded immediately rather than held until eviction. This is the core of the fix — producers
+     * stamp a clock spanning every topic they consume, so inbound records routinely depend on topics
+     * a downstream processor never sees.
+     *
+     * Asserts the record is forwarded immediately and the frontier advances through its own source.
+     */
+    @Test
+    void dependencyOnUnconsumedTopicIsVacuouslySatisfied() {
+        Uuid unconsumedId = Uuid.randomUuid();
+        ParsleyEngine<String, String> engine = engineConsuming(CausalBufferLimit.ofSize(100), SCOPE);
+
+        processRecord(engine, incomingRecord(T1, 3, ParsleyClock.empty().observe(unconsumedId, 0, 5)));
+
+        assertEquals(1, forwarded.size(), "a dependency on an un-consumed topic must not hold the record");
+        assertEquals(ParsleyClock.empty().observe(T1_ID, 0, 3), engine.frontier(),
+                "frontier must advance through the immediately-forwarded record");
+    }
+
+    /**
+     * Scope is at topic-partition granularity, not topic: a dependency on a partition this task does
+     * not own — even of a topic it otherwise consumes — is vacuously satisfied. A Kafka consumer may
+     * read many partitions of a topic and stamp a clock spanning all of them, while a Streams task
+     * owns only its own partition.
+     *
+     * Asserts a record depending only on an unowned partition of a consumed topic is forwarded
+     * immediately.
+     */
+    @Test
+    void dependencyOnUnownedPartitionOfConsumedTopicIsVacuouslySatisfied() {
+        // SCOPE owns partition 0 only; a dependency on T2 partition 1 is out of scope.
+        ParsleyEngine<String, String> engine = engineConsuming(CausalBufferLimit.ofSize(100), SCOPE);
+
+        processRecord(engine, incomingRecord(T1, 3, ParsleyClock.empty().observe(T2_ID, 1, 5)));
+
+        assertEquals(1, forwarded.size(), "a dependency on an unowned partition must not hold the record");
+        assertEquals(ParsleyClock.empty().observe(T1_ID, 0, 3), engine.frontier(),
+                "frontier must advance through the immediately-forwarded record");
+    }
+
+    /**
+     * A record whose dependencies mix an in-scope coordinate with out-of-scope ones blocks only on
+     * the in-scope coordinate: the out-of-scope entries are dropped, so the record releases as soon
+     * as the in-scope dependency is met, without ever observing the out-of-scope coordinate.
+     *
+     * Asserts the record is held until the in-scope dependency arrives, then released — proving the
+     * out-of-scope entry (which is never observed) did not gate it.
+     */
+    @Test
+    void mixedDependenciesBlockOnlyOnTheInScopeCoordinate() {
+        Uuid unconsumedId = Uuid.randomUuid();
+        ParsleyEngine<String, String> engine = engineConsuming(CausalBufferLimit.ofSize(100), SCOPE);
+        ParsleyClock deps = ParsleyClock.empty()
+                .observe(T2_ID, 0, 0)            // in scope, not yet observed
+                .observe(unconsumedId, 0, 9);    // out of scope, never observed
+
+        processRecord(engine, incomingRecord(T1, 5, deps));
+        assertTrue(forwarded.isEmpty(), "the in-scope dependency is unmet, so the record must be held");
+
+        processRecord(engine, incomingRecord(T2, 0, ParsleyClock.empty()));
+
+        assertEquals(2, forwarded.size(), "the record must release once only the in-scope dependency is met");
+        assertEquals(T2, tp(forwarded.get(0)), "the satisfying record forwards first");
+        assertEquals(T1, tp(forwarded.get(1)), "the held record releases after its in-scope dependency");
+    }
+
+    /**
+     * Regression guard for the opposite case the fix must preserve: a dependency on a coordinate this
+     * engine <em>does</em> consume but has not yet observed still blocks. Scoping must not collapse
+     * "behind on a coordinate I own" into "vacuously satisfied".
+     *
+     * Asserts the record is held while the in-scope coordinate is unobserved.
+     */
+    @Test
+    void dependencyOnConsumedButUnobservedCoordinateStillBlocks() {
+        ParsleyEngine<String, String> engine = engineConsuming(CausalBufferLimit.ofSize(100), SCOPE);
+
+        processRecord(engine, incomingRecord(T1, 0, ParsleyClock.empty().observe(T2_ID, 0, 3)));
+
+        assertTrue(forwarded.isEmpty(), "an unobserved in-scope dependency must still hold the record");
+        assertEquals(1, buffer.size(), "the record must be buffered, not forwarded");
     }
 
     /**
@@ -1053,6 +1142,15 @@ class ParsleyEngineTest {
 
     private ParsleyEngine<String, String> engineWith(CausalBufferLimit limit) {
         return new ParsleyEngine<>(limit, ParsleyClock.empty(), frontiers::add, buffer,
+                new MockCandidateIndex(), forwardedIndex, ParsleyMetrics.NOOP, CausalAudit.NOOP,
+                System::currentTimeMillis, false, false);
+    }
+
+    // As engineWith, but gates only the given in-scope coordinates — dependencies on any other
+    // coordinate are vacuously satisfied, mirroring what ParsleyProcessor supplies in production.
+    private ParsleyEngine<String, String> engineConsuming(CausalBufferLimit limit,
+                                                          ParsleyClock.CoordinatePredicate inScope) {
+        return new ParsleyEngine<>(limit, ParsleyClock.empty(), inScope, frontiers::add, buffer,
                 new MockCandidateIndex(), forwardedIndex, ParsleyMetrics.NOOP, CausalAudit.NOOP,
                 System::currentTimeMillis, false, false);
     }

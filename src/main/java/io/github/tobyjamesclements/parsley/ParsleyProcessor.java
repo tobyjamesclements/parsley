@@ -137,7 +137,18 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
         this.wiredMetrics = ParsleyMetrics.wire(context,
                 ParsleyEngine.sizeLimitOf(limit), ParsleyEngine.durationLimitOf(limit));
 
-        this.engine = new ParsleyEngine<>(limit, initialFrontier,
+        // A dependency is gated only if this task actually consumes its coordinate: a registered
+        // input topic, on the partition this task owns. Streams co-partitions a sub-topology's
+        // sources, so the task owns partition taskId().partition() of every input topic — which is
+        // the partition of every record it consumes. Any other coordinate (a different partition, or
+        // a topic outside the registered buffers) carries no obligation here and is vacuously
+        // satisfied. Derived here, never persisted, so it is recomputed identically after a rebalance.
+        Set<Uuid> consumedTopicIds = Set.copyOf(topicUuids.values());
+        int taskPartition = context.taskId().partition();
+        ParsleyClock.CoordinatePredicate inScope = (topicId, partition) ->
+                partition == taskPartition && consumedTopicIds.contains(topicId);
+
+        this.engine = new ParsleyEngine<>(limit, initialFrontier, inScope,
                 listener, buffer, candidateIndex, forwardedIndex, wiredMetrics.metrics(), audit,
                 context::currentSystemTimeMs, config.skipOnDecodeFailure(), config.failOnEvictionLimit());
 
