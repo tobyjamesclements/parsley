@@ -189,7 +189,9 @@ final class ParsleyEngine<K, V> {
         // longer be deserialised — e.g. an incompatible Schema Registry change while buffered — does
         // not block startup; that failure surfaces later, on the forward path.
         for (ParsleyBufferStore.IndexEntry entry : buffer.indexEntries()) {
-            candidateIndex.index(entry.sequence(), entry.dependencies(), frontier);
+            candidateIndex.index(entry.sequence(),
+                    effectiveDependencies(entry.dependencies(), entry.topicId(), entry.partition(), entry.offset()),
+                    frontier);
         }
     }
 
@@ -278,6 +280,38 @@ final class ParsleyEngine<K, V> {
             expired.add(entry);
         }
         return evictOrFail(expired);
+    }
+
+    /**
+     * Releases every buffered record whose effective dependencies (in-scope coordinates, self-ref
+     * stripped) are already dominated by the current frontier. Called once, via the 1ms post-init
+     * punctuator in {@link ParsleyProcessor}, to drain records that were satisfied between the last
+     * committed frontier and the last committed buffer-removal — a window that exists under
+     * {@code at_least_once} processing. On fresh starts (empty buffer) this returns empty.
+     *
+     * <p>Iterates {@link ParsleyBufferStore#entries()} (a snapshot in causal arrival order). The
+     * {@link ParsleyBufferStore#get(long)} guard skips entries already removed by a {@link
+     * #drainInto} cascade from an earlier step in this same pass.
+     */
+    List<ParsleyMessage<K, V>> drainRestoredSatisfied() {
+        List<ParsleyMessage<K, V>> out = new ArrayList<>();
+        for (ParsleyBufferStore.Entry<K, V> entry : buffer.entries()) {
+            if (buffer.get(entry.sequence()) == null) continue;
+            ParsleyMessage<K, V> record = entry.record();
+            ParsleyClock effective = effectiveDependencies(record.dependencies(), record);
+            // A record with no in-scope deps would have been forwarded immediately by onRecord and
+            // never buffered. If one appears in the restored buffer (e.g., after a scope change or
+            // direct test seeding), leave it for the normal overflow eviction path.
+            if (effective.isEmpty()) continue;
+            if (frontier.dominates(effective)) {
+                buffer.remove(entry.sequence());
+                audit.recordForwarded(record.topic(), record.partition(), record.offset());
+                extendContiguous(record.topicId(), record.partition(), record.offset());
+                out.add(record);
+                drainInto(out, record.topicId(), record.partition());
+            }
+        }
+        return out;
     }
 
     /** The buffer's metadata index, oldest-first (by insertion sequence); never decodes a value. */
@@ -476,13 +510,17 @@ final class ParsleyEngine<K, V> {
      * violation) — never by a natural release.
      */
     private ParsleyClock effectiveDependencies(ParsleyClock deps, ParsleyMessage<K, V> record) {
+        return effectiveDependencies(deps, record.topicId(), record.partition(), record.offset());
+    }
+
+    private ParsleyClock effectiveDependencies(ParsleyClock deps, Uuid topicId, int partition, long offset) {
         // Drop coordinates this engine does not consume first: a dependency on a partition this task
         // does not own, or a topic outside its registered buffers, is vacuously satisfied — there is
         // nothing here to wait on. The record's own source coordinate is always in scope, so the
         // self-reference strip below still applies.
         ParsleyClock scoped = deps.retaining(inScope);
-        if (scoped.offsetFor(record.topicId(), record.partition()) == record.offset()) {
-            return scoped.without(record.topicId(), record.partition());
+        if (scoped.offsetFor(topicId, partition) == offset) {
+            return scoped.without(topicId, partition);
         }
         return scoped;
     }

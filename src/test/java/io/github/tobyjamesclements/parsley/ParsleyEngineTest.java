@@ -1133,6 +1133,101 @@ class ParsleyEngineTest {
                         + "seenCoordinates was fresh");
     }
 
+    /**
+     * After a restart under at_least_once processing, the frontier changelog can commit ahead of
+     * buffer-removal. A buffered record whose raw dependencies include both an in-scope coordinate
+     * (already satisfied by the restored frontier) and an out-of-scope coordinate must be released
+     * by {@link ParsleyEngine#drainRestoredSatisfied()} without waiting for any further record.
+     *
+     * <p>Before the fix, the constructor indexed the record only under the out-of-scope dead-end
+     * coordinate (the in-scope dep was already satisfied, so not indexed), leaving it permanently
+     * invisible to {@code drainInto} and eventually evicted with {@code gap: ParsleyClock{}}.
+     */
+    @Test
+    void drainRestoredSatisfiedReleasesBufferedRecordWhoseInScopeDepsAreAlreadySatisfied() {
+        Uuid T_OTHER_ID = Uuid.randomUuid(); // intentionally NOT in SCOPE
+        ParsleyClock.CoordinatePredicate scope =
+                (id, p) -> p == 0 && (id.equals(T1_ID) || id.equals(T2_ID));
+        MockBufferStore<String, String> sharedBuffer = new MockBufferStore<>();
+
+        // Engine A: T1@5 with raw deps {T2@4 (in-scope), T_OTHER@9999 (out-of-scope)}.
+        // T2 has not been seen, so T1@5 is held.
+        ParsleyEngine<String, String> engineA = new ParsleyEngine<>(CausalBufferLimit.ofSize(100),
+                ParsleyClock.empty(), scope, f -> {}, sharedBuffer,
+                new MockCandidateIndex(), new MockForwardedIndex(),
+                ParsleyMetrics.NOOP, CausalAudit.NOOP, System::currentTimeMillis, false, false);
+        List<ParsleyMessage<String, String>> out1 = engineA.onRecord(
+                incomingRecordWithId(T1, 5, T1_ID,
+                        ParsleyClock.empty().observe(T2_ID, 0, 4).observe(T_OTHER_ID, 0, 9999)));
+        assertTrue(out1.isEmpty(), "T1@5 must be buffered: T2@4 not yet satisfied");
+        assertEquals(1, sharedBuffer.size(), "buffer must hold T1@5");
+
+        // Simulate a restart: the frontier changelog committed T2@4 ahead of buffer removal.
+        // T1's baseline (offset - 1 = 4) was also persisted when T1@5 was first seen by engine A.
+        ParsleyClock restoredFrontier = ParsleyClock.empty()
+                .observe(T1_ID, 0, 4)
+                .observe(T2_ID, 0, 4);
+
+        // Engine B: same buffer, restored frontier already dominates T1@5's effective deps {T2@4}.
+        List<ParsleyClock> caps = new ArrayList<>();
+        ParsleyEngine<String, String> engineB = new ParsleyEngine<>(CausalBufferLimit.ofSize(100),
+                restoredFrontier, scope, caps::add, sharedBuffer,
+                new MockCandidateIndex(), new MockForwardedIndex(),
+                ParsleyMetrics.NOOP, CausalAudit.NOOP, System::currentTimeMillis, false, false);
+
+        List<ParsleyMessage<String, String>> released = engineB.drainRestoredSatisfied();
+        assertEquals(List.of(5L), released.stream().map(ParsleyMessage::offset).toList(),
+                "drainRestoredSatisfied must release T1@5 whose in-scope deps are already satisfied");
+        assertEquals(0, sharedBuffer.size(), "T1@5 must have been removed from the buffer");
+        assertEquals(5L, engineB.frontier().offsetFor(T1_ID, 0),
+                "frontier must advance to T1@5 after release");
+    }
+
+    /**
+     * {@link ParsleyEngine#drainRestoredSatisfied()} must leave records with still-unsatisfied
+     * in-scope dependencies untouched. They must then be released normally by the first
+     * {@link ParsleyEngine#onRecord} call that satisfies those dependencies.
+     *
+     * <p>Complements the previous test: here the restored frontier does NOT include the in-scope
+     * dependency, so {@code drainRestoredSatisfied} returns empty and the record waits in the
+     * buffer until the missing dep arrives via {@code onRecord}.
+     */
+    @Test
+    void stillUnsatisfiedDepsAreNotReleasedByDrainRestoredSatisfiedAndForwardNormallyWhenDepArrives() {
+        Uuid T_OTHER_ID = Uuid.randomUuid(); // intentionally NOT in SCOPE
+        ParsleyClock.CoordinatePredicate scope =
+                (id, p) -> p == 0 && (id.equals(T1_ID) || id.equals(T2_ID));
+        MockBufferStore<String, String> sharedBuffer = new MockBufferStore<>();
+
+        // Engine A: T1@5 buffered with deps {T2@4 (in-scope), T_OTHER@9999 (out-of-scope)}.
+        ParsleyEngine<String, String> engineA = new ParsleyEngine<>(CausalBufferLimit.ofSize(100),
+                ParsleyClock.empty(), scope, f -> {}, sharedBuffer,
+                new MockCandidateIndex(), new MockForwardedIndex(),
+                ParsleyMetrics.NOOP, CausalAudit.NOOP, System::currentTimeMillis, false, false);
+        engineA.onRecord(incomingRecordWithId(T1, 5, T1_ID,
+                ParsleyClock.empty().observe(T2_ID, 0, 4).observe(T_OTHER_ID, 0, 9999)));
+
+        // Restored frontier has T1's baseline but NOT T2 — in-scope dep still unsatisfied.
+        ParsleyClock restoredFrontier = ParsleyClock.empty().observe(T1_ID, 0, 4);
+
+        List<ParsleyClock> caps = new ArrayList<>();
+        ParsleyEngine<String, String> engineB = new ParsleyEngine<>(CausalBufferLimit.ofSize(100),
+                restoredFrontier, scope, caps::add, sharedBuffer,
+                new MockCandidateIndex(), new MockForwardedIndex(),
+                ParsleyMetrics.NOOP, CausalAudit.NOOP, System::currentTimeMillis, false, false);
+
+        assertTrue(engineB.drainRestoredSatisfied().isEmpty(),
+                "T1@5 must not be released: T2@4 is still unsatisfied");
+        assertEquals(1, sharedBuffer.size(), "T1@5 must remain in the buffer");
+
+        // T2@4 arrives — satisfies the in-scope dep and releases T1@5 via the normal drain path.
+        List<ParsleyMessage<String, String>> released = engineB.onRecord(
+                incomingRecord(T2, 4, ParsleyClock.empty()));
+        assertEquals(List.of(4L, 5L), released.stream().map(ParsleyMessage::offset).toList(),
+                "T2@4 must forward and release T1@5 via onRecord once the dep is satisfied");
+        assertEquals(0, sharedBuffer.size(), "buffer must be empty after T2@4 satisfies T1@5's dep");
+    }
+
     // --- helpers --------------------------------------------------------------------------------
 
     // failOnEvictionLimit=false (continue) below: these helpers back tests that assert the
