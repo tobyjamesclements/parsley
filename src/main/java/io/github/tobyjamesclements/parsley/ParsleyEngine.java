@@ -299,6 +299,10 @@ final class ParsleyEngine<K, V> {
             if (buffer.get(entry.sequence()) == null) continue;
             ParsleyMessage<K, V> record = entry.record();
             ParsleyClock effective = effectiveDependencies(record.dependencies(), record);
+            // A record with no in-scope deps would have been forwarded immediately by onRecord and
+            // never buffered. If one appears in the restored buffer (e.g., after a scope change or
+            // direct test seeding), leave it for the normal overflow eviction path.
+            if (effective.isEmpty()) continue;
             if (frontier.dominates(effective)) {
                 buffer.remove(entry.sequence());
                 audit.recordForwarded(record.topic(), record.partition(), record.offset());
