@@ -202,7 +202,9 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
 
     private List<ParsleyMessage<KIn, VIn>> evictRestoredOverflow() {
         snapshots.clear();
-        return engine.evictOverflow();
+        List<ParsleyMessage<KIn, VIn>> out = new ArrayList<>(engine.drainRestoredSatisfied());
+        out.addAll(engine.evictOverflow());
+        return out;
     }
 
     private void deliver(List<ParsleyMessage<KIn, VIn>> admitted) {
