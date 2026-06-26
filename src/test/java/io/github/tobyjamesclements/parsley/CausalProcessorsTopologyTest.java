@@ -158,6 +158,42 @@ class CausalProcessorsTopologyTest {
     }
 
     /**
+     * A record carrying no Parsley dependency header at all — a raw, never-stamped record from an
+     * unaware producer — is treated as having empty (vacuously satisfied) dependencies: the delegate
+     * runs immediately on the first poll, the record is forwarded, and the frontier is bumped through
+     * its source coordinate so the emitted record is stamped with it. This exercises the absent-header
+     * path end-to-end through the real decorator, where {@code ParsleyMessage.from} normalises the
+     * missing header to empty.
+     *
+     * Asserts the header-less record runs the delegate at once and is forwarded stamped with the
+     * advanced frontier.
+     */
+    @Test
+    void recordWithNoDependencyHeaderIsForwardedImmediatelyAndBumpsTheFrontier() {
+        Topology topology = topology(
+                CausalProcessors.builder(upperCaser()).addBufferStore("parsley", CausalBufferLimit.ofSize(100))
+                        .addBuffer(CausalBuffer.of("t1", Serdes.String(), Serdes.String())).topicAdmin(ADMIN).build(),
+                List.of("t1"));
+
+        try (TopologyTestDriver driver = new TopologyTestDriver(topology, config(null))) {
+            TestInputTopic<String, String> t1 =
+                    driver.createInputTopic("t1", new StringSerializer(), new StringSerializer());
+            TestOutputTopic<String, String> out =
+                    driver.createOutputTopic("out", new StringDeserializer(), new StringDeserializer());
+
+            // No headers at all — not even an empty-dependencies header.
+            t1.pipeInput(new TestRecord<>("k", "raw"));
+
+            assertEquals(List.of("raw"), processed,
+                    "a record with no dependency header must be admitted immediately, not held");
+            TestRecord<String, String> emitted = out.readRecord();
+            assertEquals("RAW", emitted.value(), "the admitted record must flow through the delegate");
+            assertEquals(CausalDependencies.builder(TOPICS).require("t1", 0, 0).build(), outDeps(emitted),
+                    "the absent header is treated as empty and the frontier is bumped through the source coordinate");
+        }
+    }
+
+    /**
      * A record whose dependencies were derived at the edge with
      * {@link CausalDependencies#from(CausalTopics, org.apache.kafka.clients.consumer.ConsumerRecord)}
      * is gated on the triggering record's own position: it is held until the processor observes that
