@@ -282,6 +282,34 @@ final class ParsleyEngine<K, V> {
         return evictOrFail(expired);
     }
 
+    /**
+     * Releases every buffered record whose effective dependencies (in-scope coordinates, self-ref
+     * stripped) are already dominated by the current frontier. Called once, via the 1ms post-init
+     * punctuator in {@link ParsleyProcessor}, to drain records that were satisfied between the last
+     * committed frontier and the last committed buffer-removal — a window that exists under
+     * {@code at_least_once} processing. On fresh starts (empty buffer) this returns empty.
+     *
+     * <p>Iterates {@link ParsleyBufferStore#entries()} (a snapshot in causal arrival order). The
+     * {@link ParsleyBufferStore#get(long)} guard skips entries already removed by a {@link
+     * #drainInto} cascade from an earlier step in this same pass.
+     */
+    List<ParsleyMessage<K, V>> drainRestoredSatisfied() {
+        List<ParsleyMessage<K, V>> out = new ArrayList<>();
+        for (ParsleyBufferStore.Entry<K, V> entry : buffer.entries()) {
+            if (buffer.get(entry.sequence()) == null) continue;
+            ParsleyMessage<K, V> record = entry.record();
+            ParsleyClock effective = effectiveDependencies(record.dependencies(), record);
+            if (frontier.dominates(effective)) {
+                buffer.remove(entry.sequence());
+                audit.recordForwarded(record.topic(), record.partition(), record.offset());
+                extendContiguous(record.topicId(), record.partition(), record.offset());
+                out.add(record);
+                drainInto(out, record.topicId(), record.partition());
+            }
+        }
+        return out;
+    }
+
     /** The buffer's metadata index, oldest-first (by insertion sequence); never decodes a value. */
     private List<ParsleyBufferStore.IndexEntry> orderedIndex() {
         List<ParsleyBufferStore.IndexEntry> all = new ArrayList<>(buffer.indexEntries());
