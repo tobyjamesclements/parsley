@@ -10,14 +10,15 @@ import java.util.List;
  * <ul>
  *   <li>{@link #ofDuration(Duration)} — evict after waiting this long with no frontier advancement
  *   <li>{@link #ofSize(int)} — evict when the buffer holds this many messages
- *   <li>{@link #first(CausalBufferLimit...)} — evict when the first of several limits fires
+ *   <li>{@link #first(CausalBoundedBufferLimit...)} — evict when the first of several limits fires
+ *   <li>{@link #unbounded()} — never evict; hold records until their dependencies are satisfied
  * </ul>
  *
- * <p>When a limit fires, the evicted record is always forwarded to the user's processor — Parsley
- * never drops a record — delivered out of causal order, logged with the causal gap, and counted by
- * the buffer's violation metric.
+ * <p>When a bounded limit fires, the evicted record is always forwarded to the user's processor —
+ * Parsley never drops a record — delivered out of causal order, logged with the causal gap, and
+ * counted by the buffer's violation metric.
  */
-public sealed interface CausalBufferLimit permits ParsleyDurationLimit, ParsleySizeLimit, ParsleyFirstLimit {
+public sealed interface CausalBufferLimit permits CausalBoundedBufferLimit, ParsleyUnboundedLimit {
 
     /**
      * Creates a limit that evicts records buffered longer than {@code duration} without their causal
@@ -27,7 +28,7 @@ public sealed interface CausalBufferLimit permits ParsleyDurationLimit, ParsleyS
      * @return a new duration limit
      * @throws IllegalArgumentException if {@code duration} is {@code null}, zero, or negative
      */
-    static CausalBufferLimit ofDuration(Duration duration) {
+    static CausalBoundedBufferLimit ofDuration(Duration duration) {
         return new ParsleyDurationLimit(duration);
     }
 
@@ -40,7 +41,7 @@ public sealed interface CausalBufferLimit permits ParsleyDurationLimit, ParsleyS
      * @return a new size limit
      * @throws IllegalArgumentException if {@code messages} is not positive
      */
-    static CausalBufferLimit ofSize(int messages) {
+    static CausalBoundedBufferLimit ofSize(int messages) {
         return new ParsleySizeLimit(messages);
     }
 
@@ -51,7 +52,22 @@ public sealed interface CausalBufferLimit permits ParsleyDurationLimit, ParsleyS
      * @return a new composite limit
      * @throws IllegalArgumentException if {@code limits} is empty
      */
-    static CausalBufferLimit first(CausalBufferLimit... limits) {
+    static CausalBoundedBufferLimit first(CausalBoundedBufferLimit... limits) {
         return new ParsleyFirstLimit(List.of(limits));
+    }
+
+    /**
+     * Creates a limit that never evicts. Records are held until their causal dependencies are
+     * satisfied, regardless of how long they wait or how many accumulate.
+     *
+     * <p><strong>Warning:</strong> if a dependency can never be satisfied — for example because the
+     * producing topic was deleted or its producer has stopped permanently — records will accumulate
+     * without bound and will eventually exhaust disk on the RocksDB state store and the Kafka
+     * changelog. Monitor buffer depth when using this option.
+     *
+     * @return an unbounded limit
+     */
+    static CausalBufferLimit unbounded() {
+        return new ParsleyUnboundedLimit();
     }
 }

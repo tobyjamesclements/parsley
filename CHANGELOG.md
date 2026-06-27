@@ -6,6 +6,32 @@ All notable changes to this project are documented in this file. The format is b
 
 ## [Unreleased]
 
+### Added
+- `CausalBufferLimit.unbounded()` — a new limit that never evicts. Records are held until their
+  causal dependencies are satisfied regardless of depth or wait time. Intended for deployments
+  where uncoordinated producers make bounded limits impractical and causal ordering must never be
+  violated. Callers must monitor buffer depth; if a dependency can never be satisfied (e.g. the
+  producing topic was deleted), records accumulate without bound on the RocksDB state store and
+  the Kafka changelog.
+- `CausalBoundedBufferLimit` — a new public sealed interface that refines `CausalBufferLimit` and
+  is implemented by all evicting limit types (`ofSize`, `ofDuration`, `first`). The `first()`
+  factory now accepts `CausalBoundedBufferLimit` arguments rather than `CausalBufferLimit`,
+  making `first(unbounded())` a compile error.
+
+### Changed
+- The "holding" debug log line now identifies the held record by topic UUID rather than topic name,
+  includes the record's effective dependencies (`deps`), and renames the shortfall label from `gap`
+  to `frontier behind at`. All three fields (record identity, deps, shortfall) now use the same UUID
+  format so they can be compared directly. Example:
+  `Holding UUID-0 @2 (buffer depth: 1, deps: ParsleyClock{UUID-0@8}, frontier behind at: ParsleyClock{UUID-0@1})`
+
+### Tests
+- Added two `ParsleyEngineTest` cases verifying that a contiguous-frontier jump releases every
+  buffered record whose dependency falls anywhere in the jumped range — not just records waiting on
+  the final boundary offset. One test covers five records each waiting on a distinct intermediate
+  offset (8–12) within a 4→12 jump; the other is a minimal reproduction with a single record
+  waiting on offset 10.
+
 ### Fixed
 - When a Kafka topic is dropped and recreated its UUID changes, causing the old UUID to leave the
   processor's `consumedTopicIds`. Buffered records whose only dependencies named the old UUID had

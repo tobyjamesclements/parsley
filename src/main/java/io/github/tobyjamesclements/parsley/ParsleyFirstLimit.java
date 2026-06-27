@@ -5,7 +5,7 @@ import java.util.List;
 /**
  * Evicts when the first of {@code limits} fires; copies {@code limits} defensively.
  */
-record ParsleyFirstLimit(List<CausalBufferLimit> limits) implements CausalBufferLimit {
+record ParsleyFirstLimit(List<CausalBoundedBufferLimit> limits) implements CausalBoundedBufferLimit {
     ParsleyFirstLimit {
         limits = List.copyOf(limits);
         if (limits.isEmpty()) {

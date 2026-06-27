@@ -219,8 +219,8 @@ final class ParsleyEngine<K, V> {
             candidateIndex.index(seq, dependencies, frontier);
             int depth = buffer.size();
             ParsleyClock gap = dependencies.missing(frontier);
-            log.debug("Holding {}-{} @{} (buffer depth: {}, gap: {})",
-                    message.topic(), message.partition(), message.offset(), depth, gap);
+            log.debug("Holding {}-{} @{} (buffer depth: {}, deps: {}, frontier behind at: {})",
+                    message.topicId(), message.partition(), message.offset(), depth, dependencies, gap);
             audit.recordHeld(message.topic(), message.partition(), message.offset(), depth, CausalDependencies.of(gap));
             metrics.recordBuffered();
             reportBufferState();
@@ -643,6 +643,7 @@ final class ParsleyEngine<K, V> {
      */
     static Optional<Integer> sizeLimitOf(CausalBufferLimit limit) {
         return switch (limit) {
+            case ParsleyUnboundedLimit ul -> Optional.empty();
             case ParsleySizeLimit sl -> Optional.of(sl.messages());
             case ParsleyDurationLimit dl -> Optional.empty();
             case ParsleyFirstLimit fl -> fl.limits().stream()
@@ -663,6 +664,7 @@ final class ParsleyEngine<K, V> {
      */
     static Optional<Duration> durationLimitOf(CausalBufferLimit limit) {
         return switch (limit) {
+            case ParsleyUnboundedLimit ul -> Optional.empty();
             case ParsleyDurationLimit dl -> Optional.of(dl.duration());
             case ParsleySizeLimit sl -> Optional.empty();
             case ParsleyFirstLimit fl -> fl.limits().stream()

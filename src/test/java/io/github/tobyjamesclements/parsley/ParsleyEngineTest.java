@@ -976,6 +976,100 @@ class ParsleyEngineTest {
     }
 
     /**
+     * When the contiguous frontier jumps from one value to a much higher one in a single step,
+     * every buffered record whose dependency falls <em>anywhere</em> in that advanced range must
+     * be released in the same cascade — not only records waiting on exactly the new boundary.
+     *
+     * <p>T1@5 holds the gap while T1@6–T1@12 pile up in the forwarded index. Five records each
+     * wait on a different T1/0 offset inside that range (8, 9, 10, 11, 12). When T2@0 closes the
+     * gap and releases T1@5, the frontier walks from 4 to 12 in one step, and the candidate-index
+     * scan of {@code [0, 12]} must find all five — not just the record waiting on 12.
+     *
+     * <p>Asserts all five are forwarded in the same cascade, without any eviction trigger, and
+     * the buffer is empty afterward.
+     */
+    @Test
+    void frontierJumpReleasesAllWaitingRecordsAcrossTheJumpedRange() {
+        ParsleyEngine<String, String> engine = engineWith(CausalBufferLimit.ofSize(100));
+
+        // T1@5 holds the gap; T1's baseline is seeded to 4 (offset - 1).
+        processRecord(engine, incomingRecord(T1, 5, ParsleyClock.empty().observe(T2_ID, 0, 0)));
+        assertEquals(4L, engine.frontier().offsetFor(T1_ID, 0),
+                "baseline must seed T1/0 frontier at offset - 1 = 4");
+
+        // T1@6–T1@12 forward immediately, piling up in the forwarded index above the gap.
+        for (long offset = 6; offset <= 12; offset++) {
+            processRecord(engine, incomingRecord(T1, offset, ParsleyClock.empty()));
+        }
+        assertEquals(4L, engine.frontier().offsetFor(T1_ID, 0),
+                "frontier must stall at 4 while the gap at T1@5 remains open");
+
+        // Five records, each waiting on a distinct T1/0 offset spanning the entire jump range.
+        processRecord(engine, incomingRecord(T1, 13, ParsleyClock.empty().observe(T1_ID, 0, 8)));
+        processRecord(engine, incomingRecord(T1, 14, ParsleyClock.empty().observe(T1_ID, 0, 9)));
+        processRecord(engine, incomingRecord(T1, 15, ParsleyClock.empty().observe(T1_ID, 0, 10)));
+        processRecord(engine, incomingRecord(T1, 16, ParsleyClock.empty().observe(T1_ID, 0, 11)));
+        processRecord(engine, incomingRecord(T1, 17, ParsleyClock.empty().observe(T1_ID, 0, 12)));
+        assertEquals(6, buffer.size(), "T1@5 and T1@13–T1@17 must all be held before the trigger");
+        forwarded.clear();
+
+        // T2@0 closes the gap: T1@5 releases, the frontier walks to 12 in one step, and all five
+        // waiting records must be released in the same cascade — none left for eviction to handle.
+        processRecord(engine, incomingRecord(T2, 0, ParsleyClock.empty()));
+
+        assertEquals(
+                List.of(0L, 5L, 13L, 14L, 15L, 16L, 17L),
+                forwarded.stream().map(ParsleyMessage::offset).toList(),
+                "after the 4→12 frontier jump every record waiting in the range 8–12 must be "
+                        + "released eagerly — range scan must cover all newly-satisfied offsets, not just 12");
+        assertEquals(17L, engine.frontier().offsetFor(T1_ID, 0),
+                "frontier must advance through the full release cascade to 17");
+        assertEquals(0, buffer.size(),
+                "buffer must be empty — all releases must be driven by the frontier advance, not eviction");
+    }
+
+    /**
+     * A buffered record whose required dependency offset is strictly inside (neither at the bottom
+     * nor the top of) a frontier jump range must be released in the same cascade as the jump —
+     * the candidate-index range scan must cover the whole range, not just the exact new boundary.
+     *
+     * <p>The frontier jumps 4 → 12 when T2@0 releases T1@5, but the single waiting record depends
+     * on T1/0 at offset 10, which is interior to the jumped range. It must be released immediately
+     * in that cascade without any eviction trigger.
+     *
+     * <p>Asserts the intermediate-offset record is forwarded and the buffer is empty afterward.
+     */
+    @Test
+    void frontierJumpReleasesRecordWaitingOnIntermediateOffsetNotJustFinalOffset() {
+        ParsleyEngine<String, String> engine = engineWith(CausalBufferLimit.ofSize(100));
+
+        // T1@5 holds the gap; T1@6–T1@12 pile up in the forwarded index above it.
+        processRecord(engine, incomingRecord(T1, 5, ParsleyClock.empty().observe(T2_ID, 0, 0)));
+        for (long offset = 6; offset <= 12; offset++) {
+            processRecord(engine, incomingRecord(T1, offset, ParsleyClock.empty()));
+        }
+        assertEquals(4L, engine.frontier().offsetFor(T1_ID, 0),
+                "frontier must stall at 4 until the gap is closed");
+
+        // One record waiting on offset 10 — strictly inside the 4→12 jump range.
+        processRecord(engine, incomingRecord(T1, 13, ParsleyClock.empty().observe(T1_ID, 0, 10)));
+        assertEquals(2, buffer.size(), "T1@5 and T1@13 must both be held");
+        forwarded.clear();
+
+        // T2@0 closes the gap; frontier jumps 4→12. T1@13 (waiting on 10, not 12) must be found.
+        processRecord(engine, incomingRecord(T2, 0, ParsleyClock.empty()));
+
+        assertEquals(
+                List.of(0L, 5L, 13L),
+                forwarded.stream().map(ParsleyMessage::offset).toList(),
+                "T1@13 depends on T1/0 offset 10 (interior to the 4→12 jump) and must be released "
+                        + "eagerly — offset 10 must be found by the range scan, not missed because "
+                        + "the frontier landed on 12");
+        assertEquals(0, buffer.size(),
+                "buffer must be empty — the intermediate-offset record must not remain until eviction");
+    }
+
+    /**
      * The same catch-up jump happens when the gap-closing record resolves by eviction rather than a
      * natural release — eviction and release feed the exact same contiguous-clock bookkeeping, with
      * no special-casing between them.

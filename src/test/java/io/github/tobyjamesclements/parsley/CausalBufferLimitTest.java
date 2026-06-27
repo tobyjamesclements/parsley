@@ -87,8 +87,8 @@ class CausalBufferLimitTest {
      */
     @Test
     void firstHoldsConstituents() {
-        CausalBufferLimit duration = CausalBufferLimit.ofDuration(Duration.ofSeconds(1));
-        CausalBufferLimit size = CausalBufferLimit.ofSize(5);
+        CausalBoundedBufferLimit duration = CausalBufferLimit.ofDuration(Duration.ofSeconds(1));
+        CausalBoundedBufferLimit size = CausalBufferLimit.ofSize(5);
         ParsleyFirstLimit first =
                 assertInstanceOf(ParsleyFirstLimit.class, CausalBufferLimit.first(duration, size));
         assertEquals(2, first.limits().size(), "first() must hold both configured limits");
