@@ -6,19 +6,19 @@
 
 ```
 onRecord(record):
-    establishBaselineIfFirstSeen(record.coordinate)   # one-time per coordinate, folds in
+    frontier.seedIfFirstSeen(record.coordinate)        # one-time per coordinate, folds in
                                                         # everything below the first-seen offset
-    deps = effectiveDependencies(record.dependencies)  # strip a self-referential entry
+    deps = effectiveDependencies(record.dependencies)  # scope to in-scope coords, strip self-ref
 
-    if frontier.dominates(deps):
-        extendContiguous(record.coordinate)            # advance frontier, fire FrontierCallback
+    if frontier.isDeliverable(deps):
+        frontier.deliver(record.coordinate)            # advance frontier, fire FrontierCallback
         out.add(record)
-        drainInto(record.coordinate)                    # cascade releases (see below)
+        propagate(record.coordinate)                   # cascade releases (see below)
     else:
-        buffer.add(record)                              # hold until satisfied
+        buffer.add(record)                             # hold until satisfied
         candidateIndex.index(record, deps)
         if buffer.size() >= sizeLimit:
-            out.addAll(evictOverflow())                 # bring buffer back under the limit
+            out.addAll(evictOverflow())                # bring buffer back under the limit
 
     return out
 
@@ -26,25 +26,30 @@ evictOverflow() / evictExpired():
     candidates = oldest/expired buffered entries
     evictOrFail(candidates):
         if failOnEvictionLimit:
-            throw ParsleyBufferEvictionLimitException   # candidates remain buffered
+            throw ParsleyBufferEvictionLimitException  # candidates remain buffered
         else:
-            evictSequences(candidates)                  # force-forward out of causal order,
-                                                          # cascading via drainInto per release
+            evictSequences(candidates)                 # force-forward out of causal order,
+                                                         # cascading via propagate per release
 ```
 
 Each piece is covered in its own section below: [`onRecord()` algorithm](#onrecord-algorithm)
-for admission, [Drain cascade](#drain-cascade-draininto) for the cascade, and
+for admission, [Propagation cascade](#propagation-cascade-propagate) for the cascade, and
 [Eviction](#eviction) for the fail/continue policy split.
 
 ## Key state
 
 | Field | Type | Purpose |
 |---|---|---|
-| `frontier` | `ParsleyClock` | Highest admitted offset per `(topicId, partition)` |
+| `frontier` | `ParsleyFrontier` | Causal state: contiguous frontier clock, forwarded-offset index, baseline seeding |
 | `buffer` | `ParsleyBufferStore<K,V>` | Durable set of held records |
 | `candidateIndex` | `ParsleyCandidateIndex` | Secondary index: coordinate -> candidate record IDs |
 | `sizeLimit` | `int` | Buffer depth at which eviction triggers |
 | `evictionInterval` | `Duration` | Optional interval for time-based eviction |
+
+`ParsleyFrontier` owns the three Lamport operations: `isDeliverable(deps)` (the delivery
+predicate), `deliver(coordinate, callback)` (advance the frontier and notify), and
+`seedIfFirstSeen(coordinate)` (establish the baseline for a newly observed coordinate). See the
+[causal consistency model](causal-consistency.md) page for the theoretical context.
 
 ## `onRecord()` algorithm
 
@@ -54,16 +59,18 @@ for admission, [Drain cascade](#drain-cascade-draininto) for the cascade, and
 2. Strip self-referential entries from the dependencies. A `(topicId, partition)` entry whose
    required offset equals the record's own source offset on that coordinate is removed
    (`ParsleyClock.without`). This prevents a record from blocking on its own position in the log.
-3. If `frontier.dominates(deps)`: advance frontier, add the record to output, call `drainInto()`.
+3. If `frontier.isDeliverable(deps)`: advance frontier, add the record to output, call `propagate()`.
 4. Otherwise: add record to buffer (assigned an insertion sequence and a `bufferedAt` timestamp), index unsatisfied coordinates in the candidate index. If buffer depth >= `sizeLimit`, call `evictOverflow()`.
 
 A missing or undecodable dependency header always falls into the satisfied branch (step 3). It never
 reaches the buffer. The frontier still advances on these records, so buffered records waiting on that
 coordinate are not permanently stalled.
 
-## Drain cascade (`drainInto`)
+## Propagation cascade (`propagate`)
 
-When the frontier advances on coordinate `C`, `drainInto` uses a worklist algorithm to cascade releases without scanning the full buffer.
+When the frontier advances on coordinate `C`, `propagate` uses a worklist algorithm to cascade
+releases without scanning the full buffer. This is Lamport's transitivity rule in code: if A → B
+and A has been delivered, B can now be delivered; and if B → C, C follows in the same pass.
 
 ```
 toScan = {C}
@@ -73,12 +80,12 @@ while toScan not empty:
     for each candidate:
       entry = buffer.get(candidate.recordId)
       if entry == null: prune stale index entry, skip
-      if frontier.dominates(entry.dependencies.without(self)):
+      if frontier.isDeliverable(entry.dependencies.without(self)):
         releasable.add(entry)
   toScan = {}
   for each releasable entry:
     buffer.remove(sequence)
-    advance frontier at entry's source coordinate
+    frontier.deliver(entry's source coordinate)
     toScan.add(entry's source coordinate)
     output.add(entry.record)
 ```
