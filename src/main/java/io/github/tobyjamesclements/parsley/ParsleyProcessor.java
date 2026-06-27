@@ -216,7 +216,11 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
     private void deliver(List<ParsleyMessage<KIn, VIn>> admitted) {
         for (int i = 0; i < admitted.size(); i++) {
             ParsleyMessage<KIn, VIn> message = admitted.get(i);
-            stampFrontier = snapshots.get(i);
+            // Merge the node's own frontier snapshot with the record's original inbound deps so
+            // that transitive ancestry (coordinates from upstream nodes this node does not consume)
+            // is carried through to the outgoing stamp. Downstream nodes can then enforce ordering
+            // against those coordinates via their own effectiveDependencies filtering.
+            stampFrontier = snapshots.get(i).merge(message.dependencies());
             deliveryMetadata = new ParsleyRecordMetadata(message.topic(), message.partition(), message.offset());
             // User headers + the producer's dependencies only; the source coordinate is surfaced via
             // context.recordMetadata(), and ParsleyProcessorContext re-stamps the frontier on forward.

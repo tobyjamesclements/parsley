@@ -58,3 +58,12 @@ All notable changes to this project are documented in this file. The format is b
   consumes, so a downstream processor routinely sees dependencies it can never observe; these no
   longer block, evict, or fail the task. A dependency on a coordinate the processor *does* consume
   but has not yet observed still blocks, as before.
+- Outgoing stamps now carry the full transitive causal ancestry. Previously, a node's output was
+  stamped with only its own frontier, discarding the inbound record's dependency coordinates. In a
+  multi-hop topology (T1 → Node A → T2 → Node B → T3), a downstream node C subscribing to T1 and
+  T3 had no way to enforce the transitively-derived ordering T1@x → T3@z because the T1 coordinate
+  was silently dropped by Node B. The stamp is now the node's frontier snapshot merged with the
+  inbound record's dependencies, so transitive ancestry flows through intermediate nodes as opaque
+  carry-through. Downstream nodes still apply `effectiveDependencies` filtering: only coordinates
+  on topics they directly subscribe to gate admission; transitive coordinates on unsubscribed topics
+  remain vacuously satisfied.

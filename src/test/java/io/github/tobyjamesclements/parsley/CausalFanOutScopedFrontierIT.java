@@ -154,11 +154,14 @@ class CausalFanOutScopedFrontierIT {
      * dependency ({@code SHARED@1} gates the unique-topic records) so each admission frontier is
      * deterministic.
      *
-     * <p>Asserts that each processor stamps forwarded records with the high-water of only its own
-     * source topics: A's stamp is {@code {SHARED@1, A_ONLY@0}} and B's is {@code {SHARED@1, B_ONLY@0}}
-     * — exact equality proving the other's unique topic never leaks in and the upstream {@code SRC}
-     * coordinates are vacuously satisfied (dropped, and never blocking delivery). The shared topic
-     * contributes the identical {@code SHARED@1} coordinate to both scoped frontiers.
+     * <p>Asserts that each processor stamps forwarded records with the high-water of its own source
+     * topics merged with the full inbound transitive ancestry: A's stamp is
+     * {@code {SHARED@1, A_ONLY@0, SRC1@2, SRC2@1}} and B's is
+     * {@code {SHARED@1, B_ONLY@0, SRC1@2, SRC2@1}}. The upstream SRC coordinates are vacuously
+     * satisfied (never block delivery), but they are carried through as transitive ancestry so that
+     * any downstream node subscribing to SRC1/SRC2 can enforce ordering. The other processor's
+     * unique topic never leaks in; the shared topic contributes the identical SHARED@1 coordinate
+     * to both stamps.
      */
     @Test
     void scopedFrontiersStayIndependentAcrossTwoProcessorsSharingATopic() throws Exception {
@@ -198,16 +201,24 @@ class CausalFanOutScopedFrontierIT {
                     producer.send(afterShared0.stamp(new ProducerRecord<>(SHARED, "sk", "s1"))).get();
                 }
 
+                // Transitive ancestry: SRC1/SRC2 are vacuously satisfied (not effective) but
+                // carried through the stamp for downstream nodes that might subscribe to them.
                 CausalDependencies expectedShared1 = CausalDependencies.builder(topics)
                         .require(SHARED, 0, 1)
+                        .require(SRC1, 0, 2)
+                        .require(SRC2, 0, 1)
                         .build();
                 CausalDependencies expectedA0 = CausalDependencies.builder(topics)
                         .require(SHARED, 0, 1)
                         .require(A_ONLY, 0, 0)
+                        .require(SRC1, 0, 2)
+                        .require(SRC2, 0, 1)
                         .build();
                 CausalDependencies expectedB0 = CausalDependencies.builder(topics)
                         .require(SHARED, 0, 1)
                         .require(B_ONLY, 0, 0)
+                        .require(SRC1, 0, 2)
+                        .require(SRC2, 0, 1)
                         .build();
 
                 try (KafkaConsumer<String, byte[]> aConsumer = new KafkaConsumer<>(stampConsumerConfig(bootstrap));
@@ -218,15 +229,15 @@ class CausalFanOutScopedFrontierIT {
                     Map<String, CausalDependencies> bStamps = pollStamps(bConsumer, 3);
 
                     assertEquals(expectedShared1, aStamps.get("S1"),
-                            "the shared topic contributes SHARED@1 to processor A's scoped frontier");
+                            "SHARED@1 + transitive SRC ancestry in processor A's stamp");
                     assertEquals(expectedShared1, bStamps.get("S1"),
-                            "the shared topic contributes the identical SHARED@1 to processor B's scoped frontier");
+                            "SHARED@1 + transitive SRC ancestry in processor B's stamp");
                     assertEquals(expectedA0, aStamps.get("A0"),
-                            "processor A's scoped frontier is SHARED+A_ONLY high-water only — B_ONLY never "
-                                    + "leaks in and the upstream SRC coordinates are vacuously satisfied");
+                            "processor A's stamp carries SHARED+A_ONLY frontier plus transitive SRC ancestry; "
+                                    + "B_ONLY never leaks in");
                     assertEquals(expectedB0, bStamps.get("B0"),
-                            "processor B's scoped frontier is SHARED+B_ONLY high-water only — A_ONLY never "
-                                    + "leaks in and the upstream SRC coordinates are vacuously satisfied");
+                            "processor B's stamp carries SHARED+B_ONLY frontier plus transitive SRC ancestry; "
+                                    + "A_ONLY never leaks in");
                 }
             }
         }

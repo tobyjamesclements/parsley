@@ -872,20 +872,20 @@ class CausalProcessorsTopologyTest {
     }
 
     /**
-     * Inbound dependency entries are used only to gate admissibility; they are never merged
-     * into the frontier or re-stamped onto the output record.
+     * Out-of-scope coordinates in an inbound record's stamp are never used for gating (they are
+     * vacuously satisfied), but they ARE carried through in the outgoing stamp as transitive
+     * ancestry so that downstream nodes subscribing to those topics can enforce ordering.
      *
-     * <p>This is the most important regression guard: a record carrying dependencies over
-     * hundreds of partitions of an un-consumed topic ({@code ghost}) must still carry only its own
-     * source coordinate on the output. Those entries are out of this processor's scope, so the
-     * record is admitted immediately rather than held; either way the inbound deps must not amplify
-     * the output header size.
+     * <p>This is the Lamport-correctness guard: a record carrying dependencies over 500 partitions
+     * of an unconsumed topic ({@code ghost}) is admitted immediately — ghost deps are not effective
+     * here — and the output record carries all 500 ghost coordinates plus the source coordinate.
+     * A downstream node subscribing to ghost can then enforce causal ordering against them.
      *
-     * Asserts that a record with 500 inbound dependency entries produces an output stamped
-     * with exactly one dependency (the record's own source coordinate).
+     * Asserts the record is admitted immediately and the stamp contains the source coordinate
+     * merged with all inbound transitive coordinates.
      */
     @Test
-    void aLargeInboundDependencySetIsNeverFoldedIntoTheStampedOutput() {
+    void transitiveCoordinatesAreCarriedThroughStampsWithoutGatingThisNode() {
         CausalDependencies.Builder bigBuilder = CausalDependencies.builder(TOPICS);
         for (int p = 0; p < 500; p++) {
             bigBuilder.require("ghost", p, 1_000 + p);
@@ -907,11 +907,81 @@ class CausalProcessorsTopologyTest {
 
             t1.pipeInput(new TestRecord<>("k", "v", depsHeader(big)));
 
+            assertEquals(List.of("v"), processed,
+                    "ghost deps are not effective — record must be admitted immediately without eviction");
             CausalDependencies stamped = outDeps(out.readRecord());
-            assertEquals(CausalDependencies.builder(TOPICS).require("t1", 0, 0).build(), stamped,
-                    "a 500-partition inbound dependency set must not enlarge the stamped output");
-            assertEquals(1, stamped.clock().size(),
-                    "the stamped output must carry only the source coordinate");
+            assertEquals(501, stamped.clock().size(),
+                    "source coord (t1/p0) + 500 ghost transitive coords must all appear in the stamp");
+            assertEquals(0L, stamped.clock().offsetFor(T1_ID, 0),
+                    "source coordinate must be at offset 0 in the stamp");
+            for (int p = 0; p < 500; p++) {
+                assertEquals(1_000L + p, stamped.clock().offsetFor(GHOST_ID, p),
+                        "ghost partition " + p + " must be carried through as a transitive coord");
+            }
+        }
+    }
+
+    /**
+     * Lamport causal consistency for multi-hop topologies: a downstream node subscribing to a
+     * final output topic but not the intermediate topics can still enforce ordering against
+     * grandparent topic coordinates carried transitively in the stamp.
+     *
+     * <h2>Scenario</h2>
+     * <pre>
+     *   "t1" ──→ proc_A ──→ "t2" ──→ proc_B ──→ "t3"
+     *                                                ↓
+     *                          "t1" ──→ proc_C({"t1","t3"}) ──→ "out"
+     * </pre>
+     *
+     * proc_B stamps "t3" records with its frontier merged with the "t2" record's inbound deps
+     * (which include {T1_ID@0} from proc_A). proc_C sees {T1_ID@0, T2_ID@0} in the t3 stamp;
+     * T2_ID is out of scope (vacuously satisfied), but T1_ID is in scope — proc_C must hold
+     * t3@0 until T1_ID@0 enters its own frontier.
+     *
+     * <p>This test exercises proc_C directly with a pre-stamped t3 record carrying the transitive
+     * ancestry that proc_B would produce.
+     *
+     * Asserts: t3@0 is held until t1@0 arrives, then released in causal order.
+     */
+    @Test
+    void downstreamNodeHonorsTransitiveDependencyOnGrandparentTopic() {
+        // Stamp proc_B would put on t3@0: its own frontier {T2_ID@0} merged with the inbound
+        // t2@0 deps {T1_ID@0} — the transitive ancestry from proc_A.
+        CausalDependencies t3Stamp = CausalDependencies.builder(TOPICS)
+                .require("t1", 0, 0)   // transitive: proc_A saw t1@0
+                .require("t2", 0, 0)   // proc_B's own frontier
+                .build();
+
+        // proc_C subscribes to {t1, t3}; t2 is an intermediate topic it does not consume.
+        Topology topology = topology(
+                CausalProcessors.builder(upperCaser()).addBufferStore("parsley", CausalBufferLimit.ofSize(100))
+                        .addBuffer(CausalBuffer.of("t1", Serdes.String(), Serdes.String()))
+                        .addBuffer(CausalBuffer.of("t3", Serdes.String(), Serdes.String()))
+                        .topicAdmin(ADMIN).build(),
+                List.of("t1", "t3"));
+
+        try (TopologyTestDriver driver = new TopologyTestDriver(topology, config(null))) {
+            TestInputTopic<String, String> t1 =
+                    driver.createInputTopic("t1", new StringSerializer(), new StringSerializer());
+            TestInputTopic<String, String> t3 =
+                    driver.createInputTopic("t3", new StringSerializer(), new StringSerializer());
+            TestOutputTopic<String, String> out =
+                    driver.createOutputTopic("out", new StringDeserializer(), new StringDeserializer());
+
+            // t3@0 carries {T1_ID@0, T2_ID@0}. T2_ID is out of scope → vacuously satisfied.
+            // T1_ID@0 is in scope but proc_C's frontier is empty → held.
+            t3.pipeInput(new TestRecord<>("k", "t3-val", depsHeader(t3Stamp)));
+            assertTrue(out.isEmpty(),
+                    "t3@0 must be held: T1_ID@0 is a transitive dep in scope but not yet satisfied");
+            assertEquals(1, storeSize(driver.getKeyValueStore("parsley-buffer")),
+                    "t3@0 must be buffered awaiting T1_ID@0");
+
+            // t1@0 arrives: T1_ID@0 enters proc_C's frontier → t3@0 is released.
+            t1.pipeInput(new TestRecord<>("k", "t1-val", depsHeader(CausalDependencies.empty())));
+            assertEquals(0, storeSize(driver.getKeyValueStore("parsley-buffer")),
+                    "t3@0 must drain once T1_ID@0 is satisfied");
+            assertEquals(List.of("T1-VAL", "T3-VAL"), out.readValuesToList(),
+                    "t1@0 admitted first, t3@0 released immediately after");
         }
     }
 
@@ -957,8 +1027,14 @@ class CausalProcessorsTopologyTest {
                     "the record must be admitted, not held or evicted, despite out-of-scope dependencies");
             TestRecord<String, String> emitted = out.readRecord();
             assertEquals("HELLO", emitted.value(), "the delegate must run on the admitted record");
-            assertEquals(CausalDependencies.builder(TOPICS).require("t1", 0, 0).build(), outDeps(emitted),
-                    "the output must be stamped with only the record's own source coordinate");
+            assertEquals(
+                    CausalDependencies.builder(TOPICS)
+                            .require("t1", 0, 0)   // own frontier (source coord)
+                            .require("ghost", 0, 5) // transitive: carried through, not effective
+                            .require("t1", 7, 9)    // transitive: different partition, also carried
+                            .build(),
+                    outDeps(emitted),
+                    "out-of-scope transitive coords must be carried through the stamp unchanged");
         }
     }
 
