@@ -219,8 +219,9 @@ final class ParsleyEngine<K, V> {
             candidateIndex.index(seq, dependencies, frontier);
             int depth = buffer.size();
             ParsleyClock gap = dependencies.missing(frontier);
-            log.debug("Holding {}-{} @{} (buffer depth: {}, deps: {}, frontier behind at: {})",
-                    message.topicId(), message.partition(), message.offset(), depth, dependencies, gap);
+            ParsleyClock relevant = frontier.retaining((tid, p) -> dependencies.offsetFor(tid, p) >= 0);
+            log.debug("Holding {}-{} @{} (buffer depth: {}, deps: {}, frontier: {})",
+                    message.topicId(), message.partition(), message.offset(), depth, dependencies, relevant);
             audit.recordHeld(message.topic(), message.partition(), message.offset(), depth, CausalDependencies.of(gap));
             metrics.recordBuffered();
             reportBufferState();

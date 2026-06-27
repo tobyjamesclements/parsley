@@ -20,10 +20,11 @@ All notable changes to this project are documented in this file. The format is b
 
 ### Changed
 - The "holding" debug log line now identifies the held record by topic UUID rather than topic name,
-  includes the record's effective dependencies (`deps`), and renames the shortfall label from `gap`
-  to `frontier behind at`. All three fields (record identity, deps, shortfall) now use the same UUID
-  format so they can be compared directly. Example:
-  `Holding UUID-0 @2 (buffer depth: 1, deps: ParsleyClock{UUID-0@8}, frontier behind at: ParsleyClock{UUID-0@1})`
+  and logs the actual frontier value (restricted to the record's dependency coordinates) rather than
+  a per-record shortfall. The frontier is monotonically non-decreasing for a given coordinate, so
+  it can be tracked across log lines without confusion. `deps` and `frontier` use the same UUID
+  format and coordinate set so they can be read in parallel. Example:
+  `Holding UUID-0 @2 (buffer depth: 1, deps: ParsleyClock{UUID-0@8}, frontier: ParsleyClock{UUID-0@7})`
 
 ### Tests
 - Added two `ParsleyEngineTest` cases verifying that a contiguous-frontier jump releases every
