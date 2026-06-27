@@ -109,6 +109,7 @@ interface ParsleyMetrics {
     static Wired wire(ProcessorContext<?, ?> context, Optional<Integer> sizeLimit, Optional<Duration> durationLimit) {
         StreamsMetrics sm = context.metrics();
         String taskId = context.taskId().toString();
+        String parsleyId = context.applicationId() + "-" + taskId;
 
         Sensor buffered  = sm.addRateTotalSensor("parsley", taskId, "records-buffered",  Sensor.RecordingLevel.INFO);
         Sensor released  = sm.addRateTotalSensor("parsley", taskId, "records-released",  Sensor.RecordingLevel.INFO);
@@ -118,22 +119,22 @@ interface ParsleyMetrics {
         Sensor clockResErr = sm.addRateTotalSensor("parsley", taskId, "clock-resolution-errors", Sensor.RecordingLevel.INFO);
         Sensor evictionLimitExceeded = sm.addRateTotalSensor("parsley", taskId, "eviction-limit-exceeded", Sensor.RecordingLevel.INFO);
 
-        Sensor depth = gauge(sm, taskId, "buffer-depth",
+        Sensor depth = gauge(sm, parsleyId, "buffer-depth",
                 "Current number of records held in the causal buffer");
-        Sensor oldestBufferedAt = gauge(sm, taskId, "buffer-oldest-buffered-at-ms",
+        Sensor oldestBufferedAt = gauge(sm, parsleyId, "buffer-oldest-buffered-at-ms",
                 "Buffer-admission time (epoch millis) of the oldest held record, or 0 if the buffer is empty");
 
         List<Sensor> sensors = new ArrayList<>(List.of(buffered, released, evicted, violation, deserErr,
                 clockResErr, evictionLimitExceeded, depth, oldestBufferedAt));
 
         sizeLimit.ifPresent(limit -> {
-            Sensor sizeLimitGauge = gauge(sm, taskId, "buffer-size-limit",
+            Sensor sizeLimitGauge = gauge(sm, parsleyId, "buffer-size-limit",
                     "Configured maximum buffer size (message count) before the size limit evicts");
             sizeLimitGauge.record(limit);
             sensors.add(sizeLimitGauge);
         });
         durationLimit.ifPresent(duration -> {
-            Sensor durationLimitGauge = gauge(sm, taskId, "buffer-duration-limit-ms",
+            Sensor durationLimitGauge = gauge(sm, parsleyId, "buffer-duration-limit-ms",
                     "Configured maximum buffer duration (millis) before the duration limit evicts");
             durationLimitGauge.record(duration.toMillis());
             sensors.add(durationLimitGauge);
