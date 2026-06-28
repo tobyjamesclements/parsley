@@ -1262,8 +1262,10 @@ policy in full.</p>
 <p>Every eviction under the <code>continue</code> policy, and every fail-fast firing under the default policy, is
 logged with the current frontier, the required dependencies, and the causal gap. The causal gap is a
 per-coordinate shortfall that shows exactly how far the frontier was behind at the time the limit
-fired. Each firing is also counted by a metric. Eviction is surfaced operationally through these logs
-and metrics. It is not reported as a per-record signal on the delivered record.</p>
+fired. Each firing is also counted by a metric. Register a <code>CausalAudit</code> to receive these as
+per-record callbacks (<code>recordViolation</code> for evictions under <code>continue</code>, <code>recordEvictionLimitExceeded</code>
+for fail-fast firings under <code>fail</code>) in addition to, or instead of, relying on logs and metrics. See
+<a href="../audit-logging/">Audit logging</a>.</p>
 <h2 id="co-partitioning">Co-partitioning</h2>
 <p>Parsley evaluates dependencies against the partitions assigned to a single consumer instance. For the
 guarantee to hold, an instance must be assigned every partition in a causally related set. The

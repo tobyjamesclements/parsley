@@ -1246,10 +1246,11 @@ time-based backstop.</p>
   once the evicted record's coordinate closes its gap, buffered records waiting on it catch up in the
   same step and are not permanently stalled.</li>
 </ul>
-<p>Either way, eviction is surfaced operationally rather than as a per-record signal. Parsley logs every
-eviction or fail-fast at <code>WARN</code> or <code>ERROR</code> with the causal gap, which is the per-coordinate shortfall
-between what was required and what the frontier had observed. It also counts the event through its
-eviction metric, or its eviction-limit-exceeded metric under the <code>fail</code> policy.</p>
+<p>Either way, Parsley logs the event at <code>WARN</code> or <code>ERROR</code> with the causal gap, which is the
+per-coordinate shortfall between what was required and what the frontier had observed. It also counts
+the event through its eviction metric, or its eviction-limit-exceeded metric under the <code>fail</code> policy.
+Register a <code>CausalAudit</code> (see <a href="../audit-logging/">Audit logging</a>) to receive <code>recordViolation</code> or
+<code>recordEvictionLimitExceeded</code> as a per-record callback.</p>
 <hr />
 <h2 id="unresolvable-clock-fail-fast-or-forward-empty">Unresolvable clock: fail fast, or forward empty</h2>
 <p>A record's causal dependencies travel in its <code>parsley-causal-dependencies</code> header. When that header is

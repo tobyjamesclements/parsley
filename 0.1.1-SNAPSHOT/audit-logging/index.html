@@ -1127,8 +1127,9 @@
 <h1 id="audit-logging">Audit logging</h1>
 <p><code>CausalAudit</code> is an optional, client-supplied seam that receives every per-record event in the
 causal-buffering lifecycle. The events are forwarded, held, released, evicted (a causal violation),
-and undecodable, together with processor startup and shutdown. Register one to route these events
-wherever your audit or compliance trail needs them, such as a SIEM, a durable audit store, or
+eviction-limit-exceeded (fail-fast under the default policy), deserialization failure, and
+clock-resolution failure, together with processor startup and shutdown. Register one to route these
+events wherever your audit or compliance trail needs them, such as a SIEM, a durable audit store, or
 structured logs. Parsley does not decide where they go. Without one registered, the events are
 discarded.</p>
 <h2 id="registering-an-audit">Registering an audit</h2>
@@ -1176,6 +1177,16 @@ overhead.</p>
 <td><code>recordDeserializationFailure</code></td>
 <td>A held record could no longer be deserialised on the forward path, for example after an incompatible Schema Registry change while it was buffered.</td>
 <td>topic, partition, offset, an operator-facing reason string, whether the record was dropped or left buffered for recovery</td>
+</tr>
+<tr>
+<td><code>recordEvictionLimitExceeded</code></td>
+<td>A <code>CausalBufferLimit</code> fired and <code>parsley.buffer.eviction.failure.policy = fail</code> (the default): the task is about to fail fast; the record remains buffered rather than being delivered out of causal order.</td>
+<td>topic, partition, offset, the gap still unmet</td>
+</tr>
+<tr>
+<td><code>recordClockResolutionFailure</code></td>
+<td>An inbound record's <code>parsley-causal-dependencies</code> header could not be decoded into a clock (corrupt, truncated, or unsupported wire version).</td>
+<td>topic, partition, offset, an operator-facing reason string, whether the task is being failed (<code>fail</code> default) or the record forwarded with empty dependencies (<code>continue</code>)</td>
 </tr>
 <tr>
 <td><code>processorInitialized</code></td>

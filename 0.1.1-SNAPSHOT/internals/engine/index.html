@@ -1324,17 +1324,20 @@ predicate), <code>deliver(coordinate, callback)</code> (advance the frontier and
 <h2 id="onrecord-algorithm"><code>onRecord()</code> algorithm</h2>
 <ol>
 <li>The dependency clock is decoded once at the boundary (<code>ParsleyMessage.from</code>): a missing header
-   (logged at <code>DEBUG</code>) or an undecodable one (logged at <code>WARN</code>) becomes an empty, vacuously
-   satisfied clock, so the engine always receives a typed <code>ParsleyClock</code>.</li>
+   (logged at <code>DEBUG</code>) becomes an empty, vacuously satisfied clock. An undecodable header is handled
+   by <code>ParsleyProcessor.onUnresolvableClock()</code> before the engine is called: under the default <code>fail</code>
+   policy the task is failed fast; under <code>continue</code> the clock is replaced with <code>ParsleyClock.empty()</code>
+   (logged at <code>WARN</code>) and the engine receives it as vacuously satisfied. Either way, the engine
+   always receives a typed <code>ParsleyClock</code>.</li>
 <li>Strip self-referential entries from the dependencies. A <code>(topicId, partition)</code> entry whose
    required offset equals the record's own source offset on that coordinate is removed
    (<code>ParsleyClock.without</code>). This prevents a record from blocking on its own position in the log.</li>
 <li>If <code>frontier.isDeliverable(deps)</code>: advance frontier, add the record to output, call <code>propagate()</code>.</li>
 <li>Otherwise: add record to buffer (assigned an insertion sequence and a <code>bufferedAt</code> timestamp), index unsatisfied coordinates in the candidate index. If buffer depth &gt;= <code>sizeLimit</code>, call <code>evictOverflow()</code>.</li>
 </ol>
-<p>A missing or undecodable dependency header always falls into the satisfied branch (step 3). It never
-reaches the buffer. The frontier still advances on these records, so buffered records waiting on that
-coordinate are not permanently stalled.</p>
+<p>A missing header, or an undecodable one under <code>continue</code> policy, always falls into the satisfied
+branch (step 3). It never reaches the buffer. The frontier still advances on these records, so
+buffered records waiting on that coordinate are not permanently stalled.</p>
 <h2 id="propagation-cascade-propagate">Propagation cascade (<code>propagate</code>)</h2>
 <p>When the frontier advances on coordinate <code>C</code>, <code>propagate</code> uses a worklist algorithm to cascade
 releases without scanning the full buffer. This is Lamport's transitivity rule in code: if A → B

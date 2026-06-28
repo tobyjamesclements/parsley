@@ -1138,10 +1138,10 @@
 
 <h1 id="migration">Migration</h1>
 <p>Adopting Parsley in a cluster where some producers do not yet stamp the
-<code>parsley-causal-dependencies</code> header requires no special configuration. A record with a missing or
-undecodable header is treated as having an empty, vacuously satisfied dependency set and is forwarded
-immediately. Because such a record is never buffered, the eviction policy never applies to it, so
-there is no migration setting to choose and nothing to tighten later.</p>
+<code>parsley-causal-dependencies</code> header requires no special configuration. A record with a missing
+header is treated as having an empty, vacuously satisfied dependency set and is forwarded immediately.
+Because such a record is never buffered, the eviction policy never applies to it, so there is no
+migration setting to choose and nothing to tighten later.</p>
 <h2 id="recommended-migration-strategy">Recommended migration strategy</h2>
 <h3 id="phase-1-introduce-parsley-processors-and-tolerate-unstamped-producers">Phase 1: introduce Parsley processors and tolerate unstamped producers</h3>
 <p>Turn on <code>CausalProcessors</code> against the full topic set immediately. Records from producers that do not
@@ -1165,10 +1165,11 @@ records.</p>
 <li>A record with no header still feeds the frontier exactly like any other delivery. Records buffered
   downstream of a still-unmigrated producer therefore catch up once that coordinate's gap closes, and
   they are not permanently stalled.</li>
-<li>A present but undecodable header indicates a genuine bug rather than a migration artefact. Parsley
-  logs it at <code>WARN</code> and treats it as an empty, vacuously satisfied dependency set, so it does not
-  block delivery. Alert on it separately from missing-header records, because it indicates corruption
-  rather than an unmigrated producer.</li>
+<li>A present but undecodable header indicates a genuine bug rather than a migration artefact. Under
+  the default <code>fail</code> policy it logs at <code>ERROR</code> and fails the task. Under <code>continue</code> it logs at
+  <code>WARN</code> and forwards the record with empty dependencies. Alert on it separately from missing-header
+  records, because it indicates corruption rather than an unmigrated producer. See
+  <a href="../configuration/#unresolvable-clock-fail-fast-or-forward-empty">Configuration: unresolvable clock</a>.</li>
 </ul>
 
 
