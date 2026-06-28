@@ -1099,9 +1099,9 @@
 
 
 <h1 id="parsley">Parsley</h1>
-<p>Parsley is a stream-processing library that adds causal consistency to Kafka. It builds Kafka
-Streams topologies from causally consistent processors, and it provides edge operations that stamp
-and propagate causal dependencies to and from plain Kafka clients.</p>
+<p>Parsley is a library that adds causal delivery order to Kafka Streams processors. It builds Kafka
+Streams topologies from processors that enforce causal delivery order, and provides edge operations
+that stamp and propagate causal dependencies to and from plain Kafka clients.</p>
 <h2 id="the-problem">The problem</h2>
 <p>Kafka guarantees ordering only within a single partition. When a system derives decisions from
 events across several topics, that guarantee is not enough.</p>
@@ -1113,9 +1113,10 @@ order whose causal premise, the price at offset 27, it has not yet seen.</p>
 topic races ahead of a write to another. The price update at offset 27 happened before the order, so
 a causally consistent system would process the price before the order regardless of which topic each
 arrived on. Kafka's per-partition ordering does not prevent the violation. Parsley does.</p>
-<p>The guarantee Parsley provides is causal consistency: if event A causally precedes event B, every
-consumer observes A before B. This is stronger than eventual consistency and weaker than
-linearisability.</p>
+<p>The guarantee Parsley provides is causal delivery order: when the required conditions hold, if
+event A causally precedes event B, every Kafka Streams processor that subscribes to both topics
+processes A before B. In the consistency hierarchy this sits above eventual consistency and below
+linearisability. See <a href="streams/">Streams integration</a> for the required conditions.</p>
 <h2 id="how-it-works">How it works</h2>
 <p>Every record carries the producer's causal dependencies in a header. The dependencies are a snapshot
 of the offsets the producer had observed when it sent the record. When a record arrives, the

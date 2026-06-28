@@ -1205,9 +1205,12 @@
 
 
 <h1 id="causal-consistency-model">Causal consistency model</h1>
-<p>This page explains what causal consistency means in Parsley's context, why traditional causal
-consistency algorithms do not translate directly to Kafka stream processing, and how Parsley's
-algorithm is designed around the constraints that Kafka imposes.</p>
+<p>Parsley's concrete guarantee is causal delivery order for a Kafka Streams processor: records are
+delivered to <code>process()</code> only after their declared dependencies have been satisfied, subject to the
+conditions in <a href="../../streams/">Streams integration</a>. That guarantee is narrower than the
+system-level causal consistency property described below. This page covers the theoretical model
+the guarantee is built on, explains why traditional causal consistency algorithms do not apply
+directly to Kafka stream processing, and describes Parsley's algorithm.</p>
 <h2 id="lamports-happened-before-relation">Lamport's happened-before relation</h2>
 <p>Leslie Lamport's 1978 paper "Time, Clocks, and the Ordering of Events in a Distributed System"
 defines a partial order on events called the happened-before relation, written A → B. It holds
