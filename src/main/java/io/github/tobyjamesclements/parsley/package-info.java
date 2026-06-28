@@ -1,5 +1,5 @@
 /**
- * Parsley: causal consistency for Kafka. A single package whose public surface is interfaces and
+ * Parsley: causal delivery order for Kafka Streams processors. A single package whose public surface is interfaces and
  * records; all implementations are package-private and obtained through factory methods.
  *
  * <h2>Entry point (interface with a static factory)</h2>

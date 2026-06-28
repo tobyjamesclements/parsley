@@ -1,10 +1,11 @@
 # Parsley
 
-Causal consistency for Kafka. Producers stamp each record with its causal dependencies. Consumers and
+Causal delivery order for Kafka Streams. Producers stamp each record with its causal dependencies.
 Kafka Streams processors hold back any record whose dependencies have not yet been observed, and
 release the record once the frontier catches up.
 
-The guarantee is that if A causally precedes B, every consumer observes A before B.
+When co-partitioning and closed processor effects hold, if A causally precedes B, every Kafka
+Streams processor that subscribes to both topics processes A before B.
 
 ## Install
 

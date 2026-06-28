@@ -1,8 +1,11 @@
 # Causal consistency model
 
-This page explains what causal consistency means in Parsley's context, why traditional causal
-consistency algorithms do not translate directly to Kafka stream processing, and how Parsley's
-algorithm is designed around the constraints that Kafka imposes.
+Parsley's concrete guarantee is causal delivery order for a Kafka Streams processor: records are
+delivered to `process()` only after their declared dependencies have been satisfied, subject to the
+conditions in [Streams integration](../streams.md). That guarantee is narrower than the
+system-level causal consistency property described below. This page covers the theoretical model
+the guarantee is built on, explains why traditional causal consistency algorithms do not apply
+directly to Kafka stream processing, and describes Parsley's algorithm.
 
 ## Lamport's happened-before relation
 

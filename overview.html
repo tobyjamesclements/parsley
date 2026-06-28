@@ -1,10 +1,11 @@
 <!DOCTYPE html>
 <html lang="en">
 <body>
-<p>Parsley is a Java library that provides <strong>causal consistency</strong> over Kafka. It ensures
-that every consumer processes messages in the correct causal order, even when records originate from
-multiple topics and partitions. It does this by encoding each message's causal dependencies onto the
-message and buffering records until those dependencies have been observed.</p>
+<p>Parsley is a Java library that provides <strong>causal delivery order</strong> for Kafka Streams
+processors. When the required conditions are met, every wrapped processor processes records in causal
+order, even when records originate from multiple topics and partitions. It does this by encoding each
+message's causal dependencies onto the message and buffering records until those dependencies have
+been observed.</p>
 
 <p>The entire public surface lives in a single package, {@link io.github.tobyjamesclements.parsley}.
 It consists of interfaces and value types. Every implementation is package-private and obtained

@@ -6,6 +6,11 @@ All notable changes to this project are documented in this file. The format is b
 
 ## [Unreleased]
 
+### Changed
+- Documentation reframed to describe Parsley's guarantee as causal delivery order for Kafka
+  Streams processors, given specific conditions (co-partitioned topics, closed processor effects).
+  The previous framing ("causal consistency for Kafka") overstated the scope of the guarantee.
+
 ### Added
 - `CausalBufferLimit.unbounded()` — a new limit that never evicts. Records are held until their
   causal dependencies are satisfied regardless of depth or wait time. Intended for deployments

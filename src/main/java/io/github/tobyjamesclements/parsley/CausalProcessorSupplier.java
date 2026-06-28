@@ -26,21 +26,8 @@ import org.apache.kafka.streams.processor.api.ProcessorSupplier;
  * }</pre>
  *
  * <h2>The guarantee</h2>
- * Every record reaches the user's {@code process()} exactly once — Parsley never drops or
- * diverts a record. Within {@code process()}, every state read reflects all causally-prior
- * writes, and every state write and {@code forward} is a causally-ordered, dependency-stamped
- * event, in the common case: the record's dependencies were observed before delivery, whether
- * immediately or after a wait, including trivially for records claiming none. The exception is
- * eviction — when the configured {@link CausalBufferLimit} fires before a held record's
- * dependencies are satisfied, the default ({@code parsley.buffer.eviction.failure.policy = fail})
- * fails the task fast rather than delivering the record out of causal order; setting the policy to
- * {@code continue} delivers it anyway, suspending the guarantee for that one record. Either
- * outcome is signalled to any registered {@link CausalAudit} (via
- * {@link CausalAudit#recordEvictionLimitExceeded} or {@link CausalAudit#recordViolation}
- * respectively), logged, and counted by the buffer's violation metric.
- *
- * <p>The guarantee further depends on two preconditions that hold across the whole processor,
- * not per-record:
+ * Parsley guarantees causal delivery order subject to two conditions that hold across the whole
+ * processor, not per-record:
  *
  * <ol>
  *   <li><strong>Closed effects.</strong> The processor's only side effects are reads/writes to its
@@ -53,6 +40,18 @@ import org.apache.kafka.streams.processor.api.ProcessorSupplier;
  *       events. Parsley does not detect or enforce this (consistent with existing library
  *       behaviour) — a misconfigured topology silently evaluates against an incomplete frontier.
  * </ol>
+ *
+ * <p>When those conditions hold: every record B whose causal dependencies include record A is not
+ * forwarded to {@code process()} until A has been processed. Every record reaches {@code process()}
+ * exactly once — Parsley never drops or diverts a record. Records claiming no dependencies, or
+ * carrying an undecodable header, are treated as vacuously satisfied and delivered immediately.
+ * The exception is eviction — when the configured {@link CausalBufferLimit} fires before a held
+ * record's dependencies are satisfied, the default ({@code parsley.buffer.eviction.failure.policy = fail})
+ * fails the task fast rather than delivering the record out of causal order; setting the policy to
+ * {@code continue} delivers it anyway, trading ordering for availability for that record. Either
+ * outcome is signalled to any registered {@link CausalAudit} (via
+ * {@link CausalAudit#recordEvictionLimitExceeded} or {@link CausalAudit#recordViolation}
+ * respectively), logged, and counted by the buffer's violation metric.
  *
  * <p>Outgoing messages are stamped with the current frontier transparently as they are forwarded —
  * nothing extra is needed on egress, because Streams sinks propagate record headers to the produced

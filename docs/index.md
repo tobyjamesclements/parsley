@@ -1,8 +1,8 @@
 # Parsley
 
-Parsley is a stream-processing library that adds causal consistency to Kafka. It builds Kafka
-Streams topologies from causally consistent processors, and it provides edge operations that stamp
-and propagate causal dependencies to and from plain Kafka clients.
+Parsley is a library that adds causal delivery order to Kafka Streams processors. It builds Kafka
+Streams topologies from processors that enforce causal delivery order, and provides edge operations
+that stamp and propagate causal dependencies to and from plain Kafka clients.
 
 ## The problem
 
@@ -19,9 +19,10 @@ topic races ahead of a write to another. The price update at offset 27 happened 
 a causally consistent system would process the price before the order regardless of which topic each
 arrived on. Kafka's per-partition ordering does not prevent the violation. Parsley does.
 
-The guarantee Parsley provides is causal consistency: if event A causally precedes event B, every
-consumer observes A before B. This is stronger than eventual consistency and weaker than
-linearisability.
+The guarantee Parsley provides is causal delivery order: when the required conditions hold, if
+event A causally precedes event B, every Kafka Streams processor that subscribes to both topics
+processes A before B. In the consistency hierarchy this sits above eventual consistency and below
+linearisability. See [Streams integration](streams.md) for the required conditions.
 
 ## How it works
 

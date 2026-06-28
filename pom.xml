@@ -10,7 +10,7 @@
     <packaging>jar</packaging>
 
     <name>Parsley</name>
-    <description>Causal consistency for Kafka producers, consumers, and Streams via vector clocks.</description>
+    <description>Causal delivery order for Kafka Streams processors via vector clocks.</description>
     <url>https://github.com/tobyjamesclements/parsley</url>
 
     <licenses>

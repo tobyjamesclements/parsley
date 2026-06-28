@@ -20,9 +20,9 @@ import java.util.function.LongSupplier;
  *
  * <p>The processor feeds incoming records to {@link #onRecord} and forwards the returned
  * records downstream, in order. Every record is delivered — there is no drop, no diversion. A
- * record is delivered in causal order once the frontier satisfies its dependencies (whether
- * immediately, after a wait, or trivially — no dependencies claimed, or an undecodable header, both
- * treated as an empty, vacuously satisfied set).
+ * record is forwarded only after its declared dependencies have been satisfied by the frontier
+ * (whether immediately, after a wait, or trivially — no dependencies claimed, or an undecodable
+ * header, both treated as a vacuously satisfied set).
  *
  * <p>The engine also owns limit-driven eviction: when a {@link CausalBufferLimit} fires, the default
  * ({@code parsley.buffer.eviction.failure.policy = fail}) is to fail the task fast instead, leaving
