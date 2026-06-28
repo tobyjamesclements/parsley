@@ -94,9 +94,10 @@ public final class CausalProcessors {
          * {@code name} stable across restarts, and unique per causal processor sharing a topology.
          *
          * @param name  the state-store namespace
-         * @param limit the buffer eviction trigger — how long to wait for a record's dependencies
-         *              before forwarding it anyway (out of causal order, logged and counted by the
-         *              violation metric)
+         * @param limit the buffer eviction trigger — how long or how many records to hold before
+         *              acting: by default ({@code parsley.buffer.eviction.failure.policy = fail})
+         *              the task fails fast; set the policy to {@code continue} to forward the record
+         *              out of causal order instead, logged and counted by the violation metric
          * @return this builder
          */
         public Builder<KIn, VIn, KOut, VOut> addBufferStore(String name, CausalBufferLimit limit) {

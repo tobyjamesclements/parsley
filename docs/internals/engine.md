@@ -54,17 +54,20 @@ predicate), `deliver(coordinate, callback)` (advance the frontier and notify), a
 ## `onRecord()` algorithm
 
 1. The dependency clock is decoded once at the boundary (`ParsleyMessage.from`): a missing header
-   (logged at `DEBUG`) or an undecodable one (logged at `WARN`) becomes an empty, vacuously
-   satisfied clock, so the engine always receives a typed `ParsleyClock`.
+   (logged at `DEBUG`) becomes an empty, vacuously satisfied clock. An undecodable header is handled
+   by `ParsleyProcessor.onUnresolvableClock()` before the engine is called: under the default `fail`
+   policy the task is failed fast; under `continue` the clock is replaced with `ParsleyClock.empty()`
+   (logged at `WARN`) and the engine receives it as vacuously satisfied. Either way, the engine
+   always receives a typed `ParsleyClock`.
 2. Strip self-referential entries from the dependencies. A `(topicId, partition)` entry whose
    required offset equals the record's own source offset on that coordinate is removed
    (`ParsleyClock.without`). This prevents a record from blocking on its own position in the log.
 3. If `frontier.isDeliverable(deps)`: advance frontier, add the record to output, call `propagate()`.
 4. Otherwise: add record to buffer (assigned an insertion sequence and a `bufferedAt` timestamp), index unsatisfied coordinates in the candidate index. If buffer depth >= `sizeLimit`, call `evictOverflow()`.
 
-A missing or undecodable dependency header always falls into the satisfied branch (step 3). It never
-reaches the buffer. The frontier still advances on these records, so buffered records waiting on that
-coordinate are not permanently stalled.
+A missing header, or an undecodable one under `continue` policy, always falls into the satisfied
+branch (step 3). It never reaches the buffer. The frontier still advances on these records, so
+buffered records waiting on that coordinate are not permanently stalled.
 
 ## Propagation cascade (`propagate`)
 

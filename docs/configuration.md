@@ -60,10 +60,11 @@ When the configured `CausalBufferLimit` fires before a held record's dependencie
   once the evicted record's coordinate closes its gap, buffered records waiting on it catch up in the
   same step and are not permanently stalled.
 
-Either way, eviction is surfaced operationally rather than as a per-record signal. Parsley logs every
-eviction or fail-fast at `WARN` or `ERROR` with the causal gap, which is the per-coordinate shortfall
-between what was required and what the frontier had observed. It also counts the event through its
-eviction metric, or its eviction-limit-exceeded metric under the `fail` policy.
+Either way, Parsley logs the event at `WARN` or `ERROR` with the causal gap, which is the
+per-coordinate shortfall between what was required and what the frontier had observed. It also counts
+the event through its eviction metric, or its eviction-limit-exceeded metric under the `fail` policy.
+Register a `CausalAudit` (see [Audit logging](audit-logging.md)) to receive `recordViolation` or
+`recordEvictionLimitExceeded` as a per-record callback.
 
 ---
 

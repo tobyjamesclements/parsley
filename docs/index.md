@@ -36,9 +36,9 @@ If the frontier never catches up and the configured `CausalBufferLimit` fires, t
 governed by `parsley.buffer.eviction.failure.policy`. By default this policy is `fail`: Parsley fails
 the task and leaves the record in the buffer for retry, which preserves causal order at the cost of
 availability. Setting the policy to `continue` instead forwards the held record out of causal order
-once the limit fires. In neither case does Parsley add a per-record status to the delivered record.
-Eviction is reported through logs and a metric. The [Configuration](configuration.md) page describes
-the policy in full.
+once the limit fires. Either way, the event is logged with the causal gap and counted by a metric.
+Register a `CausalAudit` to receive it as a per-record callback. The
+[Configuration](configuration.md) page describes the policy in full.
 
 ## Public API
 

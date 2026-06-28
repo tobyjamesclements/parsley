@@ -1,10 +1,10 @@
 # Migration
 
 Adopting Parsley in a cluster where some producers do not yet stamp the
-`parsley-causal-dependencies` header requires no special configuration. A record with a missing or
-undecodable header is treated as having an empty, vacuously satisfied dependency set and is forwarded
-immediately. Because such a record is never buffered, the eviction policy never applies to it, so
-there is no migration setting to choose and nothing to tighten later.
+`parsley-causal-dependencies` header requires no special configuration. A record with a missing
+header is treated as having an empty, vacuously satisfied dependency set and is forwarded immediately.
+Because such a record is never buffered, the eviction policy never applies to it, so there is no
+migration setting to choose and nothing to tighten later.
 
 ## Recommended migration strategy
 
@@ -37,7 +37,8 @@ records.
 - A record with no header still feeds the frontier exactly like any other delivery. Records buffered
   downstream of a still-unmigrated producer therefore catch up once that coordinate's gap closes, and
   they are not permanently stalled.
-- A present but undecodable header indicates a genuine bug rather than a migration artefact. Parsley
-  logs it at `WARN` and treats it as an empty, vacuously satisfied dependency set, so it does not
-  block delivery. Alert on it separately from missing-header records, because it indicates corruption
-  rather than an unmigrated producer.
+- A present but undecodable header indicates a genuine bug rather than a migration artefact. Under
+  the default `fail` policy it logs at `ERROR` and fails the task. Under `continue` it logs at
+  `WARN` and forwards the record with empty dependencies. Alert on it separately from missing-header
+  records, because it indicates corruption rather than an unmigrated producer. See
+  [Configuration: unresolvable clock](configuration.md#unresolvable-clock-fail-fast-or-forward-empty).

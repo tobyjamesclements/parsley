@@ -92,8 +92,10 @@ policy in full.
 Every eviction under the `continue` policy, and every fail-fast firing under the default policy, is
 logged with the current frontier, the required dependencies, and the causal gap. The causal gap is a
 per-coordinate shortfall that shows exactly how far the frontier was behind at the time the limit
-fired. Each firing is also counted by a metric. Eviction is surfaced operationally through these logs
-and metrics. It is not reported as a per-record signal on the delivered record.
+fired. Each firing is also counted by a metric. Register a `CausalAudit` to receive these as
+per-record callbacks (`recordViolation` for evictions under `continue`, `recordEvictionLimitExceeded`
+for fail-fast firings under `fail`) in addition to, or instead of, relying on logs and metrics. See
+[Audit logging](audit-logging.md).
 
 ## Co-partitioning
 

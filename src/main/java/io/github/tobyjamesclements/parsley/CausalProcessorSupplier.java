@@ -32,9 +32,12 @@ import org.apache.kafka.streams.processor.api.ProcessorSupplier;
  * event, in the common case: the record's dependencies were observed before delivery, whether
  * immediately or after a wait, including trivially for records claiming none. The exception is
  * eviction — when the configured {@link CausalBufferLimit} fires before a held record's
- * dependencies are satisfied, the record is delivered anyway (out of causal order), suspending the
- * guarantee for that one record. Evictions are not signalled per-record; they are logged with the
- * causal gap and counted by the buffer's violation metric.
+ * dependencies are satisfied, the default ({@code parsley.buffer.eviction.failure.policy = fail})
+ * fails the task fast rather than delivering the record out of causal order; setting the policy to
+ * {@code continue} delivers it anyway, suspending the guarantee for that one record. Either
+ * outcome is signalled to any registered {@link CausalAudit} (via
+ * {@link CausalAudit#recordEvictionLimitExceeded} or {@link CausalAudit#recordViolation}
+ * respectively), logged, and counted by the buffer's violation metric.
  *
  * <p>The guarantee further depends on two preconditions that hold across the whole processor,
  * not per-record:

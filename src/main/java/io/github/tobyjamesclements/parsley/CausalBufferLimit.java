@@ -14,9 +14,11 @@ import java.util.List;
  *   <li>{@link #unbounded()} — never evict; hold records until their dependencies are satisfied
  * </ul>
  *
- * <p>When a bounded limit fires, the evicted record is always forwarded to the user's processor —
- * Parsley never drops a record — delivered out of causal order, logged with the causal gap, and
- * counted by the buffer's violation metric.
+ * <p>When a bounded limit fires, the outcome depends on
+ * {@code parsley.buffer.eviction.failure.policy}: the default ({@code fail}) fails the Streams task
+ * fast rather than delivering the record out of causal order; {@code continue} evicts and forwards
+ * it out of order instead, logging the causal gap and counting the violation metric. Either way,
+ * Parsley never drops or silently loses a record.
  */
 public sealed interface CausalBufferLimit permits CausalBoundedBufferLimit, ParsleyUnboundedLimit {
 

@@ -18,10 +18,13 @@ through a static factory: {@link io.github.tobyjamesclements.parsley.CausalProce
   <dd>The positions a consumer must have observed before a record stamped with them may be delivered.
   They are a producer's snapshot of what it had seen when it sent the record. They are carried as
   {@link io.github.tobyjamesclements.parsley.CausalDependencies} in a
-  {@code parsley-causal-dependencies} header. Build one from a consumed record with
-  {@link io.github.tobyjamesclements.parsley.CausalDependencies#from from}, combine several for a
-  fan-in with {@link io.github.tobyjamesclements.parsley.CausalDependencies#merge merge}, and attach
-  it to an outbound record with {@link io.github.tobyjamesclements.parsley.CausalDependencies#stamp stamp}.</dd>
+  {@code parsley-causal-dependencies} header. Build one from a consumed record by starting with
+  {@link io.github.tobyjamesclements.parsley.CausalDependencies#using using} to bind a topic
+  resolver, then folding in each record with
+  {@link io.github.tobyjamesclements.parsley.CausalDependencies#observe observe}. Combine several
+  for a fan-in with {@link io.github.tobyjamesclements.parsley.CausalDependencies#merge merge}, and
+  attach the result to an outbound record with
+  {@link io.github.tobyjamesclements.parsley.CausalDependencies#stamp stamp}.</dd>
 
   <dt><strong>Causal frontier</strong></dt>
   <dd>The highest offset a causal processor has <em>contiguously</em> admitted on each topic-partition.
@@ -50,6 +53,7 @@ through a static factory: {@link io.github.tobyjamesclements.parsley.CausalProce
   <tbody>
     <tr><td>{@link io.github.tobyjamesclements.parsley.CausalProcessorSupplier}</td><td>Wraps a user Kafka Streams {@code Processor} so that its state access and its {@code forward} calls run behind the causal guarantee. It is built through {@link io.github.tobyjamesclements.parsley.CausalProcessors}.</td></tr>
     <tr><td>{@link io.github.tobyjamesclements.parsley.CausalDependencies}</td><td>Stamps and reads causal dependencies directly on plain {@code ProducerRecord} and {@code ConsumerRecord} objects, for talking to a Parsley topology from outside Kafka Streams.</td></tr>
+    <tr><td>{@link io.github.tobyjamesclements.parsley.CausalAudit}</td><td>Optional callback interface supplied to the builder via {@link io.github.tobyjamesclements.parsley.CausalProcessors.Builder#withAudit withAudit}. Receives per-record buffering events — forwarded, held, released, evicted, and deserialization failures — carrying record identity and causal metadata only, never the record payload.</td></tr>
   </tbody>
 </table>
 
@@ -65,7 +69,7 @@ builder.stream(List.of("prices", "orders"), Consumed.with(Serdes.String(), order
        .to("output-topic");
 
 // At the edge, from a plain Kafka client
-CausalDependencies deps = CausalDependencies.from(topics, consumedRecord);
+CausalDependencies deps = CausalDependencies.using(topics).observe(consumedRecord);
 producer.send(deps.stamp(new ProducerRecord<>("orders", key, value)));
 }</pre>
 </body>

@@ -2,8 +2,9 @@
 
 `CausalAudit` is an optional, client-supplied seam that receives every per-record event in the
 causal-buffering lifecycle. The events are forwarded, held, released, evicted (a causal violation),
-and undecodable, together with processor startup and shutdown. Register one to route these events
-wherever your audit or compliance trail needs them, such as a SIEM, a durable audit store, or
+eviction-limit-exceeded (fail-fast under the default policy), deserialization failure, and
+clock-resolution failure, together with processor startup and shutdown. Register one to route these
+events wherever your audit or compliance trail needs them, such as a SIEM, a durable audit store, or
 structured logs. Parsley does not decide where they go. Without one registered, the events are
 discarded.
 
@@ -32,6 +33,8 @@ overhead.
 | `recordReleased` | A previously held record became satisfiable and drained, in causal order. | topic, partition, offset, buffer depth after release |
 | `recordViolation` | A held record was evicted and forwarded out of order because a `CausalBufferLimit` fired first. | topic, partition, offset, the gap still unmet at eviction |
 | `recordDeserializationFailure` | A held record could no longer be deserialised on the forward path, for example after an incompatible Schema Registry change while it was buffered. | topic, partition, offset, an operator-facing reason string, whether the record was dropped or left buffered for recovery |
+| `recordEvictionLimitExceeded` | A `CausalBufferLimit` fired and `parsley.buffer.eviction.failure.policy = fail` (the default): the task is about to fail fast; the record remains buffered rather than being delivered out of causal order. | topic, partition, offset, the gap still unmet |
+| `recordClockResolutionFailure` | An inbound record's `parsley-causal-dependencies` header could not be decoded into a clock (corrupt, truncated, or unsupported wire version). | topic, partition, offset, an operator-facing reason string, whether the task is being failed (`fail` default) or the record forwarded with empty dependencies (`continue`) |
 | `processorInitialized` | A task's processor started up. | task id, whether a persisted frontier was restored |
 | `processorClosing` | A task's processor is shutting down. | task id |
 

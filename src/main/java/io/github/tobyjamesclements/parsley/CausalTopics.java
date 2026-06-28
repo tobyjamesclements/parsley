@@ -10,7 +10,7 @@ import java.util.Objects;
  * Resolves a topic name to its stable Kafka UUID — the identity {@link CausalDependencies} key their
  * coordinates by, so that a topic deleted and recreated under the same name is treated as a different
  * topic. A {@code ConsumerRecord} carries only the topic <em>name</em>; building a UUID-keyed
- * dependency from it (via {@link CausalDependencies#from} or {@link CausalDependencies#builder}) needs
+ * dependency from it (via {@link CausalDependencies#using} or {@link CausalDependencies#builder}) needs
  * this mapping.
  *
  * <h2>Usage</h2>
