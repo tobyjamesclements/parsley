@@ -101,7 +101,7 @@ interface ParsleyMetrics {
      *
      * <p>{@code sizeLimit} and {@code durationLimit} are the buffer's configured {@link
      * CausalBufferLimit}, resolved by the caller before the {@link ParsleyEngine} exists (so they are
-     * known to {@link ParsleyEngine#sizeLimitOf} / {@link ParsleyEngine#durationLimitOf}). Each is
+     * known to {@link ParsleyLimits#sizeLimitOf} / {@link ParsleyLimits#durationLimitOf}). Each is
      * registered as a constant gauge only when that limit kind is actually configured, so a gap to a
      * limit can be computed downstream (e.g. {@code buffer-size-limit - buffer-depth}) without pushing
      * a precomputed value that goes stale the instant after it is recorded.

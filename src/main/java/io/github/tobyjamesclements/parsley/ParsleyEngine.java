@@ -169,8 +169,8 @@ final class ParsleyEngine<K, V> {
         this.clock = clock;
         this.skipOnDecodeFailure = skipOnDecodeFailure;
         this.failOnEvictionLimit = failOnEvictionLimit;
-        this.sizeLimit = sizeLimitOf(limit).orElse(Integer.MAX_VALUE);
-        this.evictionInterval = durationLimitOf(limit).orElse(null);
+        this.sizeLimit = ParsleyLimits.sizeLimitOf(limit).orElse(Integer.MAX_VALUE);
+        this.evictionInterval = ParsleyLimits.durationLimitOf(limit).orElse(null);
         // Populate the candidate index for any records already in the buffer (e.g., restored from
         // a state store after a restart). This is a one-time O(n) pass at construction. It decodes
         // only the dependency clock (never the user-serde key/value), so a record whose value can no
@@ -551,45 +551,4 @@ final class ParsleyEngine<K, V> {
         metrics.recordViolation();
     }
 
-    /**
-     * Resolves the configured {@link ParsleySizeLimit}, if any, from {@code limit} — including one
-     * nested inside a {@link ParsleyFirstLimit}. Shared with {@code ParsleyProcessor}, which needs
-     * the same resolution before a {@link ParsleyEngine} exists, to register the
-     * {@code buffer-size-limit} metric.
-     *
-     * @param limit the configured buffer limit
-     * @return the size limit's message count, or empty if no {@link ParsleySizeLimit} is configured
-     */
-    static Optional<Integer> sizeLimitOf(CausalBufferLimit limit) {
-        return switch (limit) {
-            case ParsleyUnboundedLimit ul -> Optional.empty();
-            case ParsleySizeLimit sl -> Optional.of(sl.messages());
-            case ParsleyDurationLimit dl -> Optional.empty();
-            case ParsleyFirstLimit fl -> fl.limits().stream()
-                    .map(ParsleyEngine::sizeLimitOf)
-                    .flatMap(Optional::stream)
-                    .findFirst();
-        };
-    }
-
-    /**
-     * Resolves the configured {@link ParsleyDurationLimit}, if any, from {@code limit} — including
-     * one nested inside a {@link ParsleyFirstLimit}. Shared with {@code ParsleyProcessor}, which
-     * needs the same resolution before a {@link ParsleyEngine} exists, to register the
-     * {@code buffer-duration-limit-ms} metric.
-     *
-     * @param limit the configured buffer limit
-     * @return the duration limit, or empty if no {@link ParsleyDurationLimit} is configured
-     */
-    static Optional<Duration> durationLimitOf(CausalBufferLimit limit) {
-        return switch (limit) {
-            case ParsleyUnboundedLimit ul -> Optional.empty();
-            case ParsleyDurationLimit dl -> Optional.of(dl.duration());
-            case ParsleySizeLimit sl -> Optional.empty();
-            case ParsleyFirstLimit fl -> fl.limits().stream()
-                    .map(ParsleyEngine::durationLimitOf)
-                    .flatMap(Optional::stream)
-                    .findFirst();
-        };
-    }
 }

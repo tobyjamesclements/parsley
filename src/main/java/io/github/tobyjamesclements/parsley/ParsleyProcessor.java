@@ -134,7 +134,7 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
         ParsleyForwardedIndex forwardedIndex = new RocksForwardedIndex(forwardedIndexStore);
 
         this.wiredMetrics = ParsleyMetrics.wire(context,
-                ParsleyEngine.sizeLimitOf(limit), ParsleyEngine.durationLimitOf(limit));
+                ParsleyLimits.sizeLimitOf(limit), ParsleyLimits.durationLimitOf(limit));
 
         // A dependency is gated only if this task actually consumes its coordinate: a registered
         // input topic, on the partition this task owns. Streams co-partitions a sub-topology's
