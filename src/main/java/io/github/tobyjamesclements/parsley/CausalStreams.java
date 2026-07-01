@@ -2,6 +2,7 @@ package io.github.tobyjamesclements.parsley;
 
 import org.apache.kafka.common.serialization.Serde;
 import org.apache.kafka.streams.Topology;
+import org.apache.kafka.streams.processor.StreamPartitioner;
 import org.apache.kafka.streams.processor.api.ProcessorSupplier;
 import org.jspecify.annotations.Nullable;
 
@@ -74,6 +75,7 @@ public final class CausalStreams {
         private final Properties config = new Properties();
         private CausalAudit audit = CausalAudit.NOOP;
         private @Nullable ParsleyTopicAdmin topicAdmin = null;
+        private @Nullable StreamPartitioner<? super KOut, ? super VOut> partitioner = null;
 
         private Builder(ProcessorSupplier<KIn, VIn, KOut, VOut> userSupplier) {
             this.userSupplier = userSupplier;
@@ -133,6 +135,24 @@ public final class CausalStreams {
         public Builder<KIn, VIn, KOut, VOut> addSink(
                 String name, String topic, Serde<KOut> keySerde, Serde<VOut> valueSerde) {
             sinks.add(new Sink<>(name, topic, keySerde, valueSerde));
+            return this;
+        }
+
+        /**
+         * Sets the {@link StreamPartitioner} applied to <strong>every</strong> sink this stage
+         * declares (default: Kafka's own default key-hash partitioner) — never configurable
+         * per-sink, so two causal sinks in the same stage can never drift onto different
+         * partitioners. A watermark carries a null value and reuses its triggering record's key, so
+         * {@code partitioner} must read only the key (never the value) — a coarser-than-key shard
+         * function (e.g. a composite-key prefix) is the intended use, not a value-based one, which
+         * cannot route a null-value watermark.
+         *
+         * @param partitioner the partitioner to apply uniformly to every sink; must read only the key
+         * @return this builder
+         */
+        public Builder<KIn, VIn, KOut, VOut> withPartitioner(
+                StreamPartitioner<? super KOut, ? super VOut> partitioner) {
+            this.partitioner = partitioner;
             return this;
         }
 
@@ -218,8 +238,13 @@ public final class CausalStreams {
             }
             topology.addProcessor(processorName, causalSupplier, sourceNames);
             for (Sink<KOut, VOut> sink : sinks) {
-                topology.addSink(sink.name(), sink.topic(),
-                        sink.keySerde().serializer(), sink.valueSerde().serializer(), processorName);
+                if (partitioner != null) {
+                    topology.addSink(sink.name(), sink.topic(),
+                            sink.keySerde().serializer(), sink.valueSerde().serializer(), partitioner, processorName);
+                } else {
+                    topology.addSink(sink.name(), sink.topic(),
+                            sink.keySerde().serializer(), sink.valueSerde().serializer(), processorName);
+                }
             }
             return topology;
         }

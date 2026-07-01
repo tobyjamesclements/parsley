@@ -42,8 +42,13 @@ All notable changes to this project are documented in this file. The format is b
   `CausalProcessors` internally rather than reimplementing the causal engine. Builds a `Topology`
   for a single causal stage from registered `CausalBuffer` sources and named sinks, so it drops
   straight into `new KafkaStreams(topology, props)`. This first cut wires sources, one
-  causal-decorated processor, and sinks; sink partitioner enforcement, co-partition validation
-  across sinks, `cleanup.policy` assertion, heartbeats, and quiesce follow in later increments.
+  causal-decorated processor, and sinks; co-partition validation across sinks, `cleanup.policy`
+  assertion, heartbeats, and quiesce follow in later increments.
+- `CausalStreams.Builder#withPartitioner` — applies one `StreamPartitioner` uniformly to every sink
+  a causal stage declares (default: Kafka's own key-hash partitioner), so two causal sinks in the
+  same stage can never drift onto different partitioners. Must read only the key — a watermark
+  carries a null value and reuses its triggering record's key, so a value-based partitioner cannot
+  route it.
 - `parsley.topology.validation` — startup validation of the one co-partitioning precondition a
   processor can observe, that its causal input topics share a partition count. `warn` (default) logs a
   mismatch and continues, `strict` fails the task fast, `off` disables the check. Output-side

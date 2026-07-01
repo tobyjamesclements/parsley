@@ -10,6 +10,7 @@ import org.apache.kafka.streams.TestInputTopic;
 import org.apache.kafka.streams.TestOutputTopic;
 import org.apache.kafka.streams.Topology;
 import org.apache.kafka.streams.TopologyTestDriver;
+import org.apache.kafka.streams.processor.StreamPartitioner;
 import org.apache.kafka.streams.processor.api.Processor;
 import org.apache.kafka.streams.processor.api.ProcessorContext;
 import org.apache.kafka.streams.processor.api.ProcessorSupplier;
@@ -21,10 +22,13 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Properties;
+import java.util.Set;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
  * Exercises {@link CausalStreams} — the topology-owning high-level causal API — through a real
@@ -190,5 +194,68 @@ class CausalStreamsTopologyTest {
         IllegalStateException e = assertThrows(IllegalStateException.class, builder::build,
                 "build() must fail without at least one sink");
         assertEquals(true, e.getMessage().contains("sink"), "message must name the missing sink");
+    }
+
+    /**
+     * {@link CausalStreams.Builder#withPartitioner} applies the same {@link StreamPartitioner} to
+     * every sink the stage declares — a delegate that branches to two named sinks must see both
+     * sink topics invoke the custom partitioner, proving there is no per-sink drift back onto the
+     * Kafka default.
+     *
+     * Asserts the recording partitioner was invoked once for each of the two sink topics, each with
+     * the key of the record routed to it.
+     */
+    @Test
+    void withPartitionerAppliesTheSamePartitionerToEverySink() {
+        RecordingPartitioner<String, String> recorder = new RecordingPartitioner<>();
+        ProcessorSupplier<String, String, String, String> brancher = () -> new Processor<>() {
+            private ProcessorContext<String, String> ctx;
+
+            @Override
+            public void init(ProcessorContext<String, String> context) {
+                this.ctx = context;
+            }
+
+            @Override
+            public void process(Record<String, String> record) {
+                String sink = record.value().equals("toA") ? "sink-a" : "sink-b";
+                ctx.forward(record, sink);
+            }
+        };
+
+        Topology topology = CausalStreams.builder(brancher)
+                .addBufferStore("parsley", CausalBufferLimit.ofSize(100))
+                .addSource(CausalBuffer.of("t1", Serdes.String(), Serdes.String()))
+                .addSink("sink-a", "out-a", Serdes.String(), Serdes.String())
+                .addSink("sink-b", "out-b", Serdes.String(), Serdes.String())
+                .withPartitioner(recorder)
+                .topicAdmin(ADMIN)
+                .build();
+
+        try (TopologyTestDriver driver = new TopologyTestDriver(topology, config())) {
+            TestInputTopic<String, String> t1 =
+                    driver.createInputTopic("t1", new StringSerializer(), new StringSerializer());
+
+            t1.pipeInput(new TestRecord<>("k", "toA", depsHeader(CausalDependencies.empty())));
+            t1.pipeInput(new TestRecord<>("k", "toB", depsHeader(CausalDependencies.empty())));
+
+            assertTrue(recorder.invocations.contains("out-a:k"),
+                    "the custom partitioner must be invoked for sink-a's topic");
+            assertTrue(recorder.invocations.contains("out-b:k"),
+                    "the custom partitioner must be invoked for sink-b's topic, not just sink-a — proving "
+                            + "no per-sink drift back onto the Kafka default");
+        }
+    }
+
+    /** Records every {@code (topic, key)} pair it is asked to partition, for asserting uniform wiring. */
+    private static final class RecordingPartitioner<K, V> implements StreamPartitioner<K, V> {
+
+        private final Set<String> invocations = new java.util.HashSet<>();
+
+        @Override
+        public Optional<Set<Integer>> partitions(String topic, K key, V value, int numPartitions) {
+            invocations.add(topic + ":" + key);
+            return Optional.empty();
+        }
     }
 }
