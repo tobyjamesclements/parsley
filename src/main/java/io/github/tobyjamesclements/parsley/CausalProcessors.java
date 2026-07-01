@@ -8,6 +8,7 @@ import java.util.Collection;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Properties;
+import java.util.Set;
 import java.util.function.Function;
 
 /**
@@ -77,6 +78,7 @@ public final class CausalProcessors {
         private Function<Map<String, Object>, ParsleyTopicAdmin> adminFactory = ParsleyTopicAdmin::ofConfigs;
         private @Nullable ParsleyConfig configOverride = null;
         private CausalAudit audit = CausalAudit.NOOP;
+        private Set<String> additionalPartitionCountTopics = Set.of();
 
         private Builder(ProcessorSupplier<KIn, VIn, KOut, VOut> userSupplier) {
             this.userSupplier = userSupplier;
@@ -229,6 +231,23 @@ public final class CausalProcessors {
         }
 
         /**
+         * Folds partition counts for {@code topics} into the startup co-partitioning check
+         * ({@code parsley.topology.validation}) alongside the registered input buffers, without
+         * consuming them or resolving their UUIDs. Used by {@link CausalStreams}, which knows this
+         * stage's sink topics and can validate them for co-partitioning even though this decorator
+         * never reads from or writes to them itself. A topic that cannot be described (e.g. a sink
+         * not yet created) is skipped for this check rather than failing the task — unlike a
+         * registered input buffer, a sink is not required to exist before the stage starts.
+         *
+         * @param topics extra topic names to include in the partition-count parity check
+         * @return this builder
+         */
+        Builder<KIn, VIn, KOut, VOut> additionalPartitionCountTopics(Set<String> topics) {
+            this.additionalPartitionCountTopics = Set.copyOf(topics);
+            return this;
+        }
+
+        /**
          * Builds the {@link CausalProcessorSupplier}.
          *
          * @return a decorated supplier ready for {@code stream(...).process(...)}
@@ -252,7 +271,8 @@ public final class CausalProcessors {
             return new ParsleyProcessorSupplier<>(
                     userSupplier, bufferLimit, keySerdeByTopic, valueSerdeByTopic,
                     store + "-frontier", store + "-buffer", store + "-candidate-index", store + "-forwarded-index",
-                    resolved.keySet(), adminFactory, effectiveConfig, ParsleyAudit.wrap(audit));
+                    resolved.keySet(), additionalPartitionCountTopics, adminFactory, effectiveConfig,
+                    ParsleyAudit.wrap(audit));
         }
 
         /** Classpath {@code parsley.properties} as a base layer, overlaid with builder-supplied keys. */

@@ -84,10 +84,12 @@ final class ParsleyConfig {
      *   <li>{@code strict}: fail the task fast at {@code init()}.</li>
      * </ul>
      *
-     * <p>Only the constraints the decorator can observe are checked here — it knows its input topics
-     * (from the registered buffers) but not its sink topics, so output-side constraints such as a
-     * watermark-bearing topic's {@code cleanup.policy} remain the user's responsibility (they are
-     * enforced by the topology-owning high-level API).
+     * <p>Only the constraints the decorator can observe are checked here — it knows its registered
+     * input buffers, and, when built through the topology-owning {@code CausalStreams} API, that
+     * stage's sink topics too (folded into the same partition-count check). A sink not yet created
+     * is skipped for this check rather than failing the task. Output-side constraints the decorator
+     * still cannot see, such as a watermark-bearing topic's {@code cleanup.policy}, remain the
+     * user's responsibility (or a later, more specific check in the high-level API).
      */
     static final String TOPOLOGY_VALIDATION = "parsley.topology.validation";
 

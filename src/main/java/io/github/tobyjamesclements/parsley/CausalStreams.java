@@ -8,9 +8,11 @@ import org.jspecify.annotations.Nullable;
 
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Properties;
+import java.util.Set;
 
 /**
  * Builds a {@link Topology} around a single causal stage: one or more causal source topics feeding
@@ -216,11 +218,16 @@ public final class CausalStreams {
                         "at least one sink is required; call addSink(...) for every output topic");
             }
 
+            Set<String> sinkTopics = new LinkedHashSet<>();
+            for (Sink<KOut, VOut> sink : sinks) {
+                sinkTopics.add(sink.topic());
+            }
             CausalProcessors.Builder<KIn, VIn, KOut, VOut> causalBuilder = CausalProcessors.builder(userSupplier)
                     .addBufferStore(storeName, limit)
                     .addBuffers(sources.values())
                     .withConfigs(toMap(config))
-                    .withAudit(audit);
+                    .withAudit(audit)
+                    .additionalPartitionCountTopics(sinkTopics);
             if (topicAdmin != null) {
                 causalBuilder.topicAdmin(topicAdmin);
             }

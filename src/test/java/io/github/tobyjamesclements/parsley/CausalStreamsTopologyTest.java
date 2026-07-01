@@ -10,6 +10,7 @@ import org.apache.kafka.streams.TestInputTopic;
 import org.apache.kafka.streams.TestOutputTopic;
 import org.apache.kafka.streams.Topology;
 import org.apache.kafka.streams.TopologyTestDriver;
+import org.apache.kafka.streams.errors.StreamsException;
 import org.apache.kafka.streams.processor.StreamPartitioner;
 import org.apache.kafka.streams.processor.api.Processor;
 import org.apache.kafka.streams.processor.api.ProcessorContext;
@@ -18,7 +19,11 @@ import org.apache.kafka.streams.processor.api.Record;
 import org.apache.kafka.streams.test.TestRecord;
 import org.junit.jupiter.api.Test;
 
+import java.io.File;
+import java.io.IOException;
+import java.nio.file.Files;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -47,11 +52,18 @@ class CausalStreamsTopologyTest {
     // --- helpers -------------------------------------------------------------------------------
 
     private static Properties config() {
+        return config(null);
+    }
+
+    private static Properties config(File stateDir) {
         Properties props = new Properties();
         props.put(StreamsConfig.APPLICATION_ID_CONFIG, "causal-streams-test");
         props.put(StreamsConfig.BOOTSTRAP_SERVERS_CONFIG, "dummy:1234");
         props.put(StreamsConfig.DEFAULT_KEY_SERDE_CLASS_CONFIG, Serdes.String().getClass());
         props.put(StreamsConfig.DEFAULT_VALUE_SERDE_CLASS_CONFIG, Serdes.String().getClass());
+        if (stateDir != null) {
+            props.put(StreamsConfig.STATE_DIR_CONFIG, stateDir.getAbsolutePath());
+        }
         return props;
     }
 
@@ -247,6 +259,93 @@ class CausalStreamsTopologyTest {
         }
     }
 
+    /**
+     * Under {@code parsley.topology.validation=strict}, a sink topic with a partition count that
+     * mismatches the stage's source fails startup fast — {@link CausalStreams} folds sink partition
+     * counts into the same co-partitioning check the decorator runs on its inputs.
+     *
+     * Asserts driver construction throws, wrapping an {@link IllegalStateException} naming the
+     * mismatch and the strict mode.
+     */
+    @Test
+    void mismatchedSinkPartitionCountFailsStartupUnderStrictValidation() throws IOException {
+        ParsleyTopicAdmin mismatched = TestTopicAdmin.of(
+                Map.of("t1", T1_ID), Map.of("t1", 2, "out", 3));
+        Topology topology = CausalStreams.builder(upperCaser())
+                .addBufferStore("parsley", CausalBufferLimit.ofSize(100))
+                .addSource(CausalBuffer.of("t1", Serdes.String(), Serdes.String()))
+                .addSink("out-sink", "out", Serdes.String(), Serdes.String())
+                .withConfig(ParsleyConfig.TOPOLOGY_VALIDATION, "strict")
+                .topicAdmin(mismatched)
+                .build();
+
+        StreamsException thrown = assertThrows(StreamsException.class,
+                () -> new TopologyTestDriver(topology, config(tempStateDir())),
+                "strict validation must fail startup on a source/sink partition-count mismatch");
+        assertEquals(IllegalStateException.class, thrown.getCause().getClass(),
+                "the wrapped cause must be the strict-validation failure");
+        assertTrue(thrown.getCause().getMessage().contains("mismatched partition counts"),
+                "the message must name the mismatch: " + thrown.getCause().getMessage());
+    }
+
+    /**
+     * Under the default {@code parsley.topology.validation=warn}, a sink topic with a mismatched
+     * partition count is logged but does not fail startup.
+     *
+     * Asserts the topology constructs and processes normally despite the mismatch.
+     */
+    @Test
+    void mismatchedSinkPartitionCountWarnsButStartsUnderDefaultValidation() {
+        ParsleyTopicAdmin mismatched = TestTopicAdmin.of(
+                Map.of("t1", T1_ID), Map.of("t1", 2, "out", 3));
+        Topology topology = CausalStreams.builder(upperCaser())
+                .addBufferStore("parsley", CausalBufferLimit.ofSize(100))
+                .addSource(CausalBuffer.of("t1", Serdes.String(), Serdes.String()))
+                .addSink("out-sink", "out", Serdes.String(), Serdes.String())
+                .topicAdmin(mismatched)
+                .build();
+
+        try (TopologyTestDriver driver = new TopologyTestDriver(topology, config())) {
+            driver.createInputTopic("t1", new StringSerializer(), new StringSerializer())
+                    .pipeInput(new TestRecord<>("k", "live", depsHeader(CausalDependencies.empty())));
+            assertEquals(List.of("live"), processed,
+                    "warn-mode validation must not fail startup: the task starts and processes normally");
+        }
+    }
+
+    /**
+     * A sink topic whose partition count cannot be resolved (e.g. not yet created) is skipped for
+     * the co-partitioning check rather than failing the task — unlike a registered input buffer, a
+     * sink is not required to exist before the stage starts, even under strict validation.
+     *
+     * Asserts the topology constructs and processes normally under strict validation despite the
+     * sink's partition count being unresolvable.
+     */
+    @Test
+    void unresolvableSinkPartitionCountIsSkippedEvenUnderStrictValidation() {
+        ParsleyTopicAdmin admin = new PartitionCountFailingAdmin(Map.of("t1", T1_ID), Set.of("out"));
+        Topology topology = CausalStreams.builder(upperCaser())
+                .addBufferStore("parsley", CausalBufferLimit.ofSize(100))
+                .addSource(CausalBuffer.of("t1", Serdes.String(), Serdes.String()))
+                .addSink("out-sink", "out", Serdes.String(), Serdes.String())
+                .withConfig(ParsleyConfig.TOPOLOGY_VALIDATION, "strict")
+                .topicAdmin(admin)
+                .build();
+
+        try (TopologyTestDriver driver = new TopologyTestDriver(topology, config())) {
+            driver.createInputTopic("t1", new StringSerializer(), new StringSerializer())
+                    .pipeInput(new TestRecord<>("k", "live", depsHeader(CausalDependencies.empty())));
+            assertEquals(List.of("live"), processed,
+                    "an unresolvable sink partition count must be skipped, not fail even strict validation");
+        }
+    }
+
+    /** A fresh, unique state directory — required when a test expects driver construction itself to
+     * fail, since a failed construction cannot be closed to release its RocksDB locks. */
+    private static File tempStateDir() throws IOException {
+        return Files.createTempDirectory("causal-streams-test-").toFile();
+    }
+
     /** Records every {@code (topic, key)} pair it is asked to partition, for asserting uniform wiring. */
     private static final class RecordingPartitioner<K, V> implements StreamPartitioner<K, V> {
 
@@ -256,6 +355,51 @@ class CausalStreamsTopologyTest {
         public Optional<Set<Integer>> partitions(String topic, K key, V value, int numPartitions) {
             invocations.add(topic + ":" + key);
             return Optional.empty();
+        }
+    }
+
+    /**
+     * A {@link ParsleyTopicAdmin} test double that resolves the given topic UUIDs (partition count 1
+     * unless overridden) but throws when asked for the partition count of any topic in
+     * {@code unresolvableTopics} — simulating a sink that does not exist yet.
+     */
+    private static final class PartitionCountFailingAdmin implements ParsleyTopicAdmin {
+
+        private final Map<String, Uuid> topicIds;
+        private final Set<String> unresolvableTopics;
+
+        PartitionCountFailingAdmin(Map<String, Uuid> topicIds, Set<String> unresolvableTopics) {
+            this.topicIds = topicIds;
+            this.unresolvableTopics = unresolvableTopics;
+        }
+
+        @Override
+        public Map<String, Uuid> topicIds(List<String> topics) {
+            Map<String, Uuid> resolved = new HashMap<>();
+            topics.forEach(t -> resolved.put(t, topicIds.get(t)));
+            return resolved;
+        }
+
+        @Override
+        public Map<String, Integer> partitionCounts(List<String> topics) throws Exception {
+            for (String topic : topics) {
+                if (unresolvableTopics.contains(topic)) {
+                    throw new Exception("topic '" + topic + "' does not exist");
+                }
+            }
+            Map<String, Integer> counts = new HashMap<>();
+            topics.forEach(t -> counts.put(t, 1));
+            return counts;
+        }
+
+        @Override
+        public void createTopic(String name, int partitions) {
+            // no broker in tests
+        }
+
+        @Override
+        public void close() {
+            // nothing to close
         }
     }
 }

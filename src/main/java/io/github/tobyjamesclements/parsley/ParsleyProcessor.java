@@ -17,6 +17,7 @@ import org.slf4j.LoggerFactory;
 
 import java.time.Duration;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -56,6 +57,7 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
     private final String candidateIndexStoreName;
     private final String forwardedIndexStoreName;
     private final Set<String> topics;
+    private final Set<String> additionalPartitionCountTopics;
     private final Function<Map<String, Object>, ParsleyTopicAdmin> adminFactory;
     private final ParsleyConfig config;
     private final CausalAudit audit;
@@ -89,6 +91,7 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
                      String candidateIndexStoreName,
                      String forwardedIndexStoreName,
                      Set<String> topics,
+                     Set<String> additionalPartitionCountTopics,
                      Function<Map<String, Object>, ParsleyTopicAdmin> adminFactory,
                      ParsleyConfig config,
                      CausalAudit audit) {
@@ -100,6 +103,7 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
         this.candidateIndexStoreName = candidateIndexStoreName;
         this.forwardedIndexStoreName = forwardedIndexStoreName;
         this.topics = topics;
+        this.additionalPartitionCountTopics = additionalPartitionCountTopics;
         this.adminFactory = adminFactory;
         this.config = config;
         this.audit = audit;
@@ -410,7 +414,8 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
         Map<String, Integer> partitionCounts;
         try (ParsleyTopicAdmin admin = adminFactory.apply(context.appConfigs())) {
             resolved = admin.topicIds(topicList);
-            partitionCounts = admin.partitionCounts(topicList);
+            partitionCounts = new HashMap<>(admin.partitionCounts(topicList));
+            partitionCounts.putAll(additionalPartitionCounts(admin));
         } catch (Exception e) {
             throw new IllegalStateException(
                     "failed to resolve topic metadata for causal buffers " + topics
@@ -428,11 +433,32 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
     }
 
     /**
-     * Warns or fails (per {@code parsley.topology.validation}) when the causal input topics do not
-     * share a partition count. Co-partitioning requires an equal partition count across all
-     * causally-related topics so that a single task owns the complete partition set for a related
-     * group; unequal counts make that impossible and let the completeness frontier evaluate against an
-     * incomplete partition set. A single input topic (or {@code off}) is always vacuously fine.
+     * Best-effort partition counts for {@link #additionalPartitionCountTopics} — extra topics (e.g.
+     * a {@link CausalStreams} sink) folded into the co-partitioning check without being consumed.
+     * Unlike a registered input buffer, such a topic is not required to exist yet (a sink is often
+     * auto-created on first write), so a failure here is logged and skipped rather than failing the
+     * task.
+     */
+    private Map<String, Integer> additionalPartitionCounts(ParsleyTopicAdmin admin) {
+        if (additionalPartitionCountTopics.isEmpty()) {
+            return Map.of();
+        }
+        try {
+            return admin.partitionCounts(new ArrayList<>(additionalPartitionCountTopics));
+        } catch (Exception e) {
+            log.warn("Could not resolve partition counts for {} (they may not exist yet); "
+                    + "skipping the co-partitioning check for them", additionalPartitionCountTopics, e);
+            return Map.of();
+        }
+    }
+
+    /**
+     * Warns or fails (per {@code parsley.topology.validation}) when the causal input topics — and,
+     * when built through {@link CausalStreams}, this stage's sink topics too — do not share a
+     * partition count. Co-partitioning requires an equal partition count across all causally-related
+     * topics so that a single task owns the complete partition set for a related group; unequal
+     * counts make that impossible and let the completeness frontier evaluate against an incomplete
+     * partition set. A single topic in the check (or {@code off}) is always vacuously fine.
      */
     private void validatePartitionParity(Map<String, Integer> partitionCounts) {
         ParsleyConfig.ValidationMode mode = config.topologyValidation();

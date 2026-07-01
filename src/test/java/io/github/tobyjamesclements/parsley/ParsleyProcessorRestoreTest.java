@@ -71,7 +71,7 @@ class ParsleyProcessorRestoreTest {
                 new ParsleySerializer<>(new ParsleyResolver<>(t -> Serdes.String(), t -> Serdes.String()));
         ParsleyProcessor<String, String, String, String> processor = new ParsleyProcessor<>(
                 delegate, CausalBufferLimit.ofSize(100), serializer,
-                "frontier", "buffer", "candidate-index", "forwarded-index", Set.of("t1"),
+                "frontier", "buffer", "candidate-index", "forwarded-index", Set.of("t1"), Set.of(),
                 configs -> ADMIN, ParsleyConfig.from(new Properties()), audit);
 
         MockProcessorContext<String, String> context = new MockProcessorContext<>();
@@ -145,7 +145,7 @@ class ParsleyProcessorRestoreTest {
         continueOnEviction.setProperty("parsley.buffer.eviction.failure.policy", "continue");
         ParsleyProcessor<String, String, String, String> processor = new ParsleyProcessor<>(
                 delegate, CausalBufferLimit.ofSize(2), serializer,
-                "frontier", "buffer", "candidate-index", "forwarded-index", Set.of("t1"),
+                "frontier", "buffer", "candidate-index", "forwarded-index", Set.of("t1"), Set.of(),
                 configs -> ADMIN, ParsleyConfig.from(continueOnEviction), CausalAudit.NOOP);
 
         MockProcessorContext<String, String> context = new MockProcessorContext<>();
