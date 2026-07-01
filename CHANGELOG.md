@@ -38,6 +38,12 @@ All notable changes to this project are documented in this file. The format is b
   The previous framing ("causal consistency for Kafka") overstated the scope of the guarantee.
 
 ### Added
+- `CausalStreams` — the topology-owning high-level causal API (Layer 2), composing
+  `CausalProcessors` internally rather than reimplementing the causal engine. Builds a `Topology`
+  for a single causal stage from registered `CausalBuffer` sources and named sinks, so it drops
+  straight into `new KafkaStreams(topology, props)`. This first cut wires sources, one
+  causal-decorated processor, and sinks; sink partitioner enforcement, co-partition validation
+  across sinks, `cleanup.policy` assertion, heartbeats, and quiesce follow in later increments.
 - `parsley.topology.validation` — startup validation of the one co-partitioning precondition a
   processor can observe, that its causal input topics share a partition count. `warn` (default) logs a
   mismatch and continues, `strict` fails the task fast, `off` disables the check. Output-side
