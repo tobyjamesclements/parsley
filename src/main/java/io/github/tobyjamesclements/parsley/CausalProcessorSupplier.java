@@ -26,19 +26,27 @@ import org.apache.kafka.streams.processor.api.ProcessorSupplier;
  * }</pre>
  *
  * <h2>The guarantee</h2>
- * Parsley guarantees causal delivery order subject to two conditions that hold across the whole
- * processor, not per-record:
+ * Parsley guarantees causal delivery order subject to the conditions below, which hold across the
+ * whole processor, not per-record. Parsley cannot verify most of them, so they are a contract on how
+ * the topology is built; see the Streams integration preconditions in the documentation for the full
+ * list, including the branching and topic-compaction constraints.
  *
  * <ol>
+ *   <li><strong>Your key is your shard.</strong> Every causally-related topic is partitioned by the
+ *       record key with a matching partition count, so each task owns the complete partition set for a
+ *       causally-related group. The key is the unit of causal locality. An advanced user may partition
+ *       by a coarser function of the key with a custom {@code StreamPartitioner} that reads the key,
+ *       not the value. Parsley checks only that the input topics share a partition count, at startup,
+ *       governed by {@code parsley.topology.validation}; the rest is not detected, and a misconfigured
+ *       topology silently evaluates against an incomplete frontier.
+ *   <li><strong>The key is preserved across the processor.</strong> Changing the key moves a record to
+ *       a different shard and breaks co-partitioning downstream, so key-changing operations (a
+ *       {@code groupBy}, or a join on a derived key) belong outside the causally-related segment.
  *   <li><strong>Closed effects.</strong> The processor's only side effects are reads/writes to its
  *       connected, changelogged state stores and {@code forward}. No global stores, no external I/O
  *       (no HTTP, no self-constructed producers). This is the boundary of soundness: Parsley owns
  *       every egress only if {@code forward} is the sole egress. It cannot be enforced in code — it
  *       is the contract boundary.
- *   <li><strong>Co-partitioning.</strong> All causally-related input and output topics are
- *       co-partitioned so each instance owns the complete partition set for the causally-related
- *       events. Parsley does not detect or enforce this (consistent with existing library
- *       behaviour) — a misconfigured topology silently evaluates against an incomplete frontier.
  * </ol>
  *
  * <p>When those conditions hold: every record B whose causal dependencies include record A is not
@@ -55,8 +63,10 @@ import org.apache.kafka.streams.processor.api.ProcessorSupplier;
  *
  * <p>Outgoing messages are stamped with the current frontier transparently as they are forwarded —
  * nothing extra is needed on egress, because Streams sinks propagate record headers to the produced
- * messages. Held records are persisted to a changelog-backed buffer store (serialised with the serdes
- * you supply, resolved per source topic) so they survive a restart.
+ * messages. When the delegate forwards nothing for a delivered input, Parsley emits a protocol
+ * watermark carrying the same frontier, keyed with that input record's key so it routes to the
+ * record's partition. Held records are persisted to a changelog-backed buffer store (serialised with
+ * the serdes you supply, resolved per source topic) so they survive a restart.
  */
 public interface CausalProcessorSupplier<KIn, VIn, KOut, VOut> extends ProcessorSupplier<KIn, VIn, KOut, VOut> {
 }

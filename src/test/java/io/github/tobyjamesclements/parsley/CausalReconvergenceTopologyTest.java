@@ -185,8 +185,9 @@ class CausalReconvergenceTopologyTest {
      * <p>This test uses a {@link MockProcessorContext} rather than {@link TopologyTestDriver} so that
      * the watermark emitted directly via the outer processor context is captured and inspectable.
      *
-     * Asserts the output topic contains a watermark record (null key, null value, marker header)
-     * and no business value, even though a genuine business record was delivered to the delegate.
+     * Asserts the output topic contains a watermark record (keyed with the triggering record's key so
+     * it co-routes to that record's partition, null value, marker header) and no business value, even
+     * though a genuine business record was delivered to the delegate.
      */
     @Test
     void filterProcessorEmitsWatermarkForEveryDeliveredInput() {
@@ -209,8 +210,8 @@ class CausalReconvergenceTopologyTest {
                     "one watermark must be emitted because the filter delegate forwarded nothing");
             assertEquals(0, business.size(),
                     "no business records must appear: the filter dropped the input");
-            assertNull(watermarks.get(0).key(),
-                    "watermark key must be null");
+            assertEquals("k", watermarks.get(0).key(),
+                    "watermark must reuse the triggering record's key so it co-routes to that partition");
             assertNull(watermarks.get(0).value(),
                     "watermark value must be null");
             assertTrue(hasWatermarkHeader(watermarks.get(0)),

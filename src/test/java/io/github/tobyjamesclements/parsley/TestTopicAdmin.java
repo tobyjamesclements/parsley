@@ -15,13 +15,23 @@ import java.util.Map;
 final class TestTopicAdmin implements ParsleyTopicAdmin {
 
     private final Map<String, Uuid> topicIds;
+    private final Map<String, Integer> partitionCounts;
 
-    private TestTopicAdmin(Map<String, Uuid> topicIds) {
+    private TestTopicAdmin(Map<String, Uuid> topicIds, Map<String, Integer> partitionCounts) {
         this.topicIds = topicIds;
+        this.partitionCounts = partitionCounts;
     }
 
     static TestTopicAdmin of(Map<String, Uuid> topicIds) {
-        return new TestTopicAdmin(Map.copyOf(topicIds));
+        return new TestTopicAdmin(Map.copyOf(topicIds), Map.of());
+    }
+
+    /**
+     * Resolves the given UUIDs and reports the given per-topic partition counts, for exercising the
+     * co-partitioning parity check. Topics absent from {@code partitionCounts} report a count of 1.
+     */
+    static TestTopicAdmin of(Map<String, Uuid> topicIds, Map<String, Integer> partitionCounts) {
+        return new TestTopicAdmin(Map.copyOf(topicIds), Map.copyOf(partitionCounts));
     }
 
     @Override
@@ -40,7 +50,7 @@ final class TestTopicAdmin implements ParsleyTopicAdmin {
     @Override
     public Map<String, Integer> partitionCounts(List<String> topics) {
         Map<String, Integer> counts = new HashMap<>();
-        topics.forEach(t -> counts.put(t, 1));
+        topics.forEach(t -> counts.put(t, partitionCounts.getOrDefault(t, 1)));
         return counts;
     }
 

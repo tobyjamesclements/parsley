@@ -203,7 +203,9 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
         // channel-clock update actually advanced completeness, so an unrelated held record does not
         // flood downstream with no-op watermarks.
         if (admitted.isEmpty() && !engine.completeness().equals(completenessBefore)) {
-            forwardWatermark();
+            // Key the heartbeat with the buffered record's own key so it routes to that record's
+            // partition, matching where its eventual business output will land.
+            forwardWatermark(record.key());
         }
     }
 
@@ -247,7 +249,9 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
             // this node's causal progress. Without this, a non-emitting processor silently stalls
             // downstream completeness, breaking the inductive correctness of multi-layer topologies.
             if (stampingContext.forwardCount() == 0) {
-                forwardWatermark();
+                // Reuse the delivered record's key so the stand-in watermark routes to the same
+                // partition its business output would have.
+                forwardWatermark(message.key());
             }
         }
         deliveryMetadata = null;
@@ -255,10 +259,11 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
     }
 
     /**
-     * Returns {@code true} if {@code record} is a Parsley protocol watermark, identified by the
-     * presence of the {@link ParsleyHeader#WATERMARK} header. Watermarks carry null key/null value
-     * and must never be forwarded to the user delegate or buffered — they exist only to propagate
-     * causal completeness progress through non-emitting layers.
+     * Returns {@code true} if {@code record} is a Parsley protocol watermark, identified solely by the
+     * presence of the {@link ParsleyHeader#WATERMARK} header — never by its key, which carries the
+     * triggering record's key for routing. Watermarks carry a null value and must never be forwarded
+     * to the user delegate or buffered — they exist only to propagate causal completeness progress
+     * through non-emitting layers.
      */
     private boolean isWatermark(Record<KIn, VIn> record) {
         for (Header h : record.headers()) {
@@ -311,30 +316,43 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
         deliver(released);
 
         // Always re-emit a watermark downstream so the completeness boundary propagates through
-        // non-subscribing layers even when no business records were released.
-        forwardWatermark();
+        // non-subscribing layers even when no business records were released. Reuse the incoming
+        // watermark's own key: upstream keyed it to route to this partition, so re-emitting under the
+        // same key keeps the propagated watermark on the co-partitioned downstream partition.
+        forwardWatermark(record.key());
     }
 
     /**
      * Forwards a protocol watermark carrying this node's current {@link ParsleyEngine#completeness()
-     * completeness frontier} to all downstream children. The watermark carries null key and null
-     * value (distinguishable from business tombstones by the {@link ParsleyHeader#WATERMARK} header)
-     * and bypasses the business-forward counter in {@link ParsleyProcessorContext} so it does not
-     * prevent watermark emission for a genuinely non-emitting delegate invocation.
+     * completeness frontier} to all downstream children, keyed with {@code triggerKey} — the key of
+     * the input record that triggered this emission. Reusing that key routes the watermark, through
+     * whatever partitioner the business records use, to the same partition those records land on, so a
+     * downstream task's channel clock for that partition advances even across a sink boundary. With a
+     * null key (the previous behaviour) a sink partitioner sends the watermark to an arbitrary
+     * partition, so a downstream task can starve waiting on a channel that never advances.
      *
-     * <p>Null key/value are intentional: watermark records have no business payload; they are
-     * protocol metadata only. Any non-Parsley consumer of a topic containing watermarks will see
-     * tombstone-shaped records — Parsley's own consumers skip them.
+     * <p>The watermark carries a null value and is distinguished from a business tombstone by the
+     * {@link ParsleyHeader#WATERMARK} header; downstream Parsley consumers skip it by that header, not
+     * by its key. It bypasses the business-forward counter in {@link ParsleyProcessorContext} (it is
+     * forwarded through the raw context, not the stamping proxy) so it does not prevent watermark
+     * emission for a genuinely non-emitting delegate invocation, and its frontier header is written
+     * here directly rather than by the proxy.
+     *
+     * <p>The {@code KIn}-to-{@code KOut} cast is sound under the co-partitioning contract: a causal
+     * processor must not change the key across the node (doing so reshards the causally-related
+     * events), so the input and output key types coincide. A null-keyed input yields a null-keyed
+     * watermark, which degrades to arbitrary routing — consistent with the fact that null-keyed
+     * records are not shard-partitioned to begin with.
      */
-    @SuppressWarnings("NullAway") // watermark records carry null key/value by protocol design
-    private void forwardWatermark() {
+    @SuppressWarnings({"NullAway", "unchecked"}) // null value by design; KIn==KOut under the co-partitioning contract
+    private void forwardWatermark(@Nullable KIn triggerKey) {
         Headers wm = ParsleyHeader.mutableHeaders();
         wm.add(ParsleyHeader.WATERMARK, new byte[0]);
         wm.add(ParsleyHeader.CAUSAL_DEPENDENCIES, engine.completeness().toBytes());
         // Use 0L as the watermark timestamp: a watermark's timestamp carries no business meaning —
         // only its headers matter for causal gating — so 0L is safe in all execution contexts
         // (MockProcessorContext may not have time initialised).
-        context.forward(new Record<>(null, null, 0L, wm));
+        context.forward(new Record<>((KOut) (Object) triggerKey, null, 0L, wm));
     }
 
     private ParsleyMessage<KIn, VIn> ingest(Record<KIn, VIn> record) {
@@ -387,12 +405,15 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
      * {@code appConfigs()} so it inherits broker security settings.
      */
     private Map<String, Uuid> resolveTopicUuids(ProcessorContext<KOut, VOut> context) {
+        List<String> topicList = new ArrayList<>(topics);
         Map<String, Uuid> resolved;
+        Map<String, Integer> partitionCounts;
         try (ParsleyTopicAdmin admin = adminFactory.apply(context.appConfigs())) {
-            resolved = admin.topicIds(new ArrayList<>(topics));
+            resolved = admin.topicIds(topicList);
+            partitionCounts = admin.partitionCounts(topicList);
         } catch (Exception e) {
             throw new IllegalStateException(
-                    "failed to resolve topic UUIDs for causal buffers " + topics
+                    "failed to resolve topic metadata for causal buffers " + topics
                             + "; ensure the topics exist and the broker is reachable", e);
         }
         for (String topic : topics) {
@@ -400,6 +421,33 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
                 throw new IllegalStateException("broker did not return a UUID for topic '" + topic + "'");
             }
         }
+        // Validate outside the resolve try/catch so a strict-mode failure surfaces as itself rather
+        // than being wrapped as a broker-reachability error.
+        validatePartitionParity(partitionCounts);
         return resolved;
+    }
+
+    /**
+     * Warns or fails (per {@code parsley.topology.validation}) when the causal input topics do not
+     * share a partition count. Co-partitioning requires an equal partition count across all
+     * causally-related topics so that a single task owns the complete partition set for a related
+     * group; unequal counts make that impossible and let the completeness frontier evaluate against an
+     * incomplete partition set. A single input topic (or {@code off}) is always vacuously fine.
+     */
+    private void validatePartitionParity(Map<String, Integer> partitionCounts) {
+        ParsleyConfig.ValidationMode mode = config.topologyValidation();
+        if (mode == ParsleyConfig.ValidationMode.OFF || partitionCounts.size() < 2) {
+            return;
+        }
+        if (Set.copyOf(partitionCounts.values()).size() <= 1) {
+            return;
+        }
+        String detail = "causal input topics have mismatched partition counts " + partitionCounts
+                + "; co-partitioning requires an equal partition count across all causally-related "
+                + "input topics so each task owns the complete partition set for a related group";
+        if (mode == ParsleyConfig.ValidationMode.STRICT) {
+            throw new IllegalStateException("parsley.topology.validation=strict: " + detail);
+        }
+        log.warn("parsley.topology.validation=warn: {}", detail);
     }
 }

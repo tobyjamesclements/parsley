@@ -140,9 +140,12 @@ visibility, placed on topology construction rather than hidden in the engine. Tw
 The completeness minimum advances only as channels advertise progress, so a node must keep
 advertising even when it produces no business output. A consumed message that yields no business
 record — a filter that drops it, a record held in the buffer, a not-yet-ready aggregate — emits a
-*protocol watermark*: a record with null key and value, marked with the `_parsley_watermark` header,
+*protocol watermark*: a record with a null value, marked with the `_parsley_watermark` header,
 carrying the node's current completeness frontier (emitted when a held record advances completeness,
-or when a delivered record produces no forward). A downstream node folds the carried frontier into
+or when a delivered record produces no forward). The watermark is keyed with the triggering record's
+key so it routes to the same partition that record's business output would, which keeps completeness
+propagation correct across a sink boundary; it is identified by the header, never by its key. A
+downstream node folds the carried frontier into
 that source channel's clock and re-runs its drain, then re-emits its own watermark, so progress
 propagates contiguously through layers that produce no business records. Parsley's own processors
 consume watermarks internally (`ParsleyProcessor` / `ParsleyEngine.onWatermark`); a plain Kafka

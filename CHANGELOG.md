@@ -23,12 +23,14 @@ All notable changes to this project are documented in this file. The format is b
   both a topic and a topic derived from it** (the ancestor channel can never confirm the descendant).
   See `docs/internals/causal-consistency.md`.
 - **Breaking (wire).** Forwarded records carry the producing node's completeness frontier in the
-  `parsley-causal-dependencies` header. Nodes emit *protocol watermark* records — null key and value,
-  marked with a `_parsley_watermark` header carrying that frontier — for every consumed message that
-  produces no business output (a dropped/buffered record that advances completeness, or a delivered
-  record the delegate did not forward), so completeness propagates contiguously through layers that
-  produce no business output. A non-Parsley consumer of such a topic sees tombstone-shaped records and
-  must skip them. The per-input-channel clocks that back `completeness()` are stored alongside the
+  `parsley-causal-dependencies` header. Nodes emit *protocol watermark* records — a null value, keyed
+  with the triggering input record's key, marked with a `_parsley_watermark` header carrying that
+  frontier — for every consumed message that produces no business output (a dropped/buffered record
+  that advances completeness, or a delivered record the delegate did not forward), so completeness
+  propagates contiguously through layers that produce no business output. The watermark reuses the
+  triggering record's key so it routes to the same partition that record's output would, keeping
+  completeness propagation correct across a sink boundary; it is identified only by the header, never
+  by its key. A non-Parsley consumer of such a topic sees tombstone-shaped records and must skip them. The per-input-channel clocks that back `completeness()` are stored alongside the
   contiguous frontier clock in the single `"f"` value of the existing `{ns}-frontier` store, so no
   additional changelog topic is introduced.
 - Documentation reframed to describe Parsley's guarantee as causal delivery order for Kafka
@@ -36,6 +38,11 @@ All notable changes to this project are documented in this file. The format is b
   The previous framing ("causal consistency for Kafka") overstated the scope of the guarantee.
 
 ### Added
+- `parsley.topology.validation` — startup validation of the one co-partitioning precondition a
+  processor can observe, that its causal input topics share a partition count. `warn` (default) logs a
+  mismatch and continues, `strict` fails the task fast, `off` disables the check. Output-side
+  conditions such as a watermark-bearing topic's `cleanup.policy` are not checked here, because the
+  processor does not know its sink topics.
 - `CausalDependencies.isWatermark(ConsumerRecord)` — identifies a protocol watermark so a plain
   Kafka client consuming a Parsley-produced topic can fold its carried completeness frontier with
   `observe` while skipping it as a business record. `observe` now folds a watermark's carried

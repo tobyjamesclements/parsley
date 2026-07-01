@@ -72,17 +72,41 @@ final class ParsleyConfig {
      */
     static final String CLOCK_RESOLUTION_FAILURE_POLICY = "parsley.clock.resolution.failure.policy";
 
+    /**
+     * {@code parsley.topology.validation} — how the low-level processor reacts to a topology
+     * misconfiguration it can detect at startup (currently: the causal input topics not sharing a
+     * partition count, which makes co-partitioning impossible — each task cannot own the complete
+     * partition set for a causally-related group):
+     * <ul>
+     *   <li>{@code off}: no check.</li>
+     *   <li>{@code warn} (default): log a prominent warning and continue — visible without breaking an
+     *       existing deployment that silently relied on the misconfiguration.</li>
+     *   <li>{@code strict}: fail the task fast at {@code init()}.</li>
+     * </ul>
+     *
+     * <p>Only the constraints the decorator can observe are checked here — it knows its input topics
+     * (from the registered buffers) but not its sink topics, so output-side constraints such as a
+     * watermark-bearing topic's {@code cleanup.policy} remain the user's responsibility (they are
+     * enforced by the topology-owning high-level API).
+     */
+    static final String TOPOLOGY_VALIDATION = "parsley.topology.validation";
+
     enum FailurePolicy { FAIL, CONTINUE }
+
+    /** How {@link #TOPOLOGY_VALIDATION} reacts to a detectable topology misconfiguration. */
+    enum ValidationMode { OFF, WARN, STRICT }
 
     private final FailurePolicy deserializationFailurePolicy;
     private final FailurePolicy evictionFailurePolicy;
     private final FailurePolicy clockResolutionFailurePolicy;
+    private final ValidationMode topologyValidation;
 
     private ParsleyConfig(FailurePolicy deserializationFailurePolicy, FailurePolicy evictionFailurePolicy,
-                          FailurePolicy clockResolutionFailurePolicy) {
+                          FailurePolicy clockResolutionFailurePolicy, ValidationMode topologyValidation) {
         this.deserializationFailurePolicy = deserializationFailurePolicy;
         this.evictionFailurePolicy = evictionFailurePolicy;
         this.clockResolutionFailurePolicy = clockResolutionFailurePolicy;
+        this.topologyValidation = topologyValidation;
     }
 
     /** Whether a buffer-decode failure should be skipped ({@code continue}) rather than fail fast. */
@@ -98,6 +122,11 @@ final class ParsleyConfig {
     /** Whether an undecodable causal-dependencies header should fail the task fast rather than forward empty. */
     boolean failOnUnresolvableClock() {
         return clockResolutionFailurePolicy == FailurePolicy.FAIL;
+    }
+
+    /** How to react to a detectable topology misconfiguration at startup. */
+    ValidationMode topologyValidation() {
+        return topologyValidation;
     }
 
     /** Loads from the {@code parsley.properties} classpath resource, or defaults if it is absent. */
@@ -128,7 +157,8 @@ final class ParsleyConfig {
         return new ParsleyConfig(
                 failurePolicy(props, DESERIALIZATION_FAILURE_POLICY),
                 failurePolicy(props, EVICTION_FAILURE_POLICY),
-                failurePolicy(props, CLOCK_RESOLUTION_FAILURE_POLICY));
+                failurePolicy(props, CLOCK_RESOLUTION_FAILURE_POLICY),
+                validationMode(props));
     }
 
     private static FailurePolicy failurePolicy(Properties props, String key) {
@@ -137,6 +167,16 @@ final class ParsleyConfig {
             return FailurePolicy.valueOf(value.toUpperCase(Locale.ROOT));
         } catch (IllegalArgumentException e) {
             throw new IllegalStateException(key + " must be 'fail' or 'continue', got '" + value + "'");
+        }
+    }
+
+    private static ValidationMode validationMode(Properties props) {
+        String value = props.getProperty(TOPOLOGY_VALIDATION, "warn").trim();
+        try {
+            return ValidationMode.valueOf(value.toUpperCase(Locale.ROOT));
+        } catch (IllegalArgumentException e) {
+            throw new IllegalStateException(
+                    TOPOLOGY_VALIDATION + " must be 'off', 'warn' or 'strict', got '" + value + "'");
         }
     }
 }

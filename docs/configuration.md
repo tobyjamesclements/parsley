@@ -134,6 +134,14 @@ parsley.buffer.eviction.failure.policy = fail
 #   continue           forwards the record with empty (vacuously satisfied) dependencies,
 #                      out of causal order (logged and counted as a violation)
 parsley.clock.resolution.failure.policy = fail
+
+# How a causal processor reacts at startup to a detectable topology misconfiguration. Currently the
+# only detectable case is the causal input topics not sharing a partition count, which makes
+# co-partitioning impossible.
+#   warn     (default) logs the mismatch and continues
+#   strict             fails the task fast at startup
+#   off                disables the check
+parsley.topology.validation = warn
 ```
 
 | Key | Default | Values |
@@ -141,6 +149,7 @@ parsley.clock.resolution.failure.policy = fail
 | `parsley.buffer.deserialization.failure.policy` | `fail` | `fail`, `continue` |
 | `parsley.buffer.eviction.failure.policy` | `fail` | `fail`, `continue` |
 | `parsley.clock.resolution.failure.policy` | `fail` | `fail`, `continue` |
+| `parsley.topology.validation` | `warn` | `off`, `warn`, `strict` |
 
 `parsley.buffer.deserialization.failure.policy = continue` is best-effort and lossy. See
 [Troubleshooting](troubleshooting.md) for the full semantics, including why it is not mapped from
@@ -156,3 +165,11 @@ case.
 causal-dependencies header fails the task rather than be forwarded on unknown premises. Set it to
 `continue` to forward such a record with empty dependencies, best-effort, accepting that this is
 lossy of causal order.
+
+`parsley.topology.validation = warn` logs a prominent warning at startup when the causal input topics
+do not share a partition count, which makes co-partitioning impossible, and lets the task start. This
+is visible without breaking a deployment that already ran with the mismatch. Set it to `strict` to
+fail the task fast instead, or `off` to skip the check. The check covers only the input topics a
+processor registers through its buffers; it does not see the processor's output topics, so output-side
+conditions such as a watermark-bearing topic's `cleanup.policy` remain the operator's responsibility.
+See the [Streams integration preconditions](streams.md#preconditions) for the full contract.

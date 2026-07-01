@@ -25,7 +25,7 @@ On a forwarded business record this header carries the producing node's **comple
 
 ## `_parsley_watermark` header (protocol watermark)
 
-A protocol watermark is a record with null key and null value carrying two headers: `_parsley_watermark` (an empty-byte marker) and `parsley-causal-dependencies` (the emitting node's completeness frontier, encoded exactly as above). A node emits one in place of a business record when a delivered input produced no downstream output, so completeness still propagates through non-emitting layers. Consumers identify a watermark by the presence of the `_parsley_watermark` header (`CausalDependencies.isWatermark`); a non-Parsley consumer sees a tombstone-shaped record and should skip it.
+A protocol watermark is a record with a null value, keyed with the triggering record's key, carrying two headers: `_parsley_watermark` (an empty-byte marker) and `parsley-causal-dependencies` (the emitting node's completeness frontier, encoded exactly as above). A node emits one in place of a business record when a delivered input produced no downstream output, so completeness still propagates through non-emitting layers. The key is reused so the watermark routes to the same partition the record's business output would; consumers identify it by the header, never by its key. Consumers identify a watermark by the presence of the `_parsley_watermark` header (`CausalDependencies.isWatermark`); a non-Parsley consumer sees a tombstone-shaped record and should skip it.
 
 ## Buffer record (`ParsleySerializer` v3)
 

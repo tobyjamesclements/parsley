@@ -50,16 +50,58 @@ directly.
 
 ## Preconditions
 
-Two preconditions apply before the guarantee holds.
+The guarantee holds subject to the conditions below. They apply across the whole processor, not per
+record, and Parsley cannot verify most of them, so treat them as a contract on how the topology is
+built. Parsley can check one part at startup; see [Startup validation](#startup-validation).
+
+**Your key is your shard.** Partition every causally related topic by the record key, with the same
+partition count on each, so that a single task instance owns the complete partition set for a related
+group. The key is the unit of causal locality: causally related records must share a key so they land
+on the same partition on every topic. Parsley evaluates dependencies only against the partitions a
+task owns, so a topology that is not partitioned this way evaluates the completeness frontier against
+an incomplete partition set. An advanced user may partition by a coarser function of the key with a
+custom `StreamPartitioner`, for example by hashing a `tenant` prefix out of a `tenant:order` key, as
+long as that partitioner reads the key rather than the value. A partitioner that reads the value
+cannot route a protocol watermark, which carries no value; put the correlation in the key instead.
+
+**Do not change the key across a causal processor.** The key selects the partition, so changing it
+moves a record to a different shard and breaks co-partitioning for everything downstream. Key-changing
+operations such as a `groupBy` or a join on a derived key belong outside the causally related segment.
 
 **Closed effects.** Your `Processor.process()` must produce all side effects through
 `ProcessorContext.forward()`. Any effect that escapes the processor, such as a direct database write
 or an HTTP call that is not gated on the frontier, can act on a causal premise that the consumer has
 not confirmed.
 
-**Co-partitioning.** All causally related topics must be co-partitioned so that a single task
-instance owns the complete partition set for a related group. See
-[Co-partitioning](concepts.md#co-partitioning) in Concepts.
+**Forward uniformly to all children.** A causal processor advertises its progress downstream by
+stamping its business output, or by emitting a protocol watermark when the delegate forwards nothing
+for a delivered input. That watermark reaches every downstream child. If the delegate routes business
+records selectively to some named children and not others, the children that received nothing are not
+separately watermarked, so keep a causal processor's forwarding uniform across its children.
+
+**Watermark-bearing topics must not be compacted.** A protocol watermark has a null value, so log
+compaction treats it as a tombstone and may delete it before a slow consumer reads it, dropping the
+completeness signal. Set `cleanup.policy=delete` on any topic that carries watermarks, which is any
+output topic of a causal processor. Parsley does not manage this topic configuration at this level.
+
+**Choose your delivery guarantee.** Parsley stamps each record with its own dependencies, so a
+redelivered record re-evaluates identically against the frontier. At-least-once processing is
+therefore safe, and exactly-once (`processing.guarantee=exactly_once_v2`) is a choice you make for
+delivery deduplication, not a requirement of the causal guarantee.
+
+A single causal stage that reads its sources and forwards to its outputs is sound on its own. A
+multi-stage pipeline, where one causal processor's output topic is consumed by another causal
+processor, relies on the key being preserved through each stage so that a stage's watermark routes to
+the same partition its business records do. This is why the key must not change across a node.
+
+## Startup validation
+
+`parsley.topology.validation` controls how a causal processor reacts at startup to the one
+precondition it can observe: the causal input topics sharing a partition count. The default `warn`
+logs a mismatch and continues, `strict` fails the task fast, and `off` disables the check. The
+processor knows its input topics from the registered buffers but not its output topics, so output-side
+conditions such as a watermark-bearing topic's `cleanup.policy` are not checked here. See
+[Configuration](configuration.md).
 
 The guarantee holds for every record delivered in causal order. When a held record's dependencies are
 still not satisfied and the configured `CausalBufferLimit` fires, the outcome depends on

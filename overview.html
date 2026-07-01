@@ -41,9 +41,11 @@ through a static factory: {@link io.github.tobyjamesclements.parsley.CausalProce
   separate public type.</dd>
 
   <dt><strong>Protocol watermark</strong></dt>
-  <dd>A record with null key and value, marked with a {@code _parsley_watermark} header, that carries a
-  node's completeness frontier downstream when a delivered input produced no business output. It keeps
-  causal progress flowing through filters and not-yet-emitting aggregates. Parsley's processors handle
+  <dd>A record with a null value, keyed with the triggering record's key, marked with a
+  {@code _parsley_watermark} header, that carries a node's completeness frontier downstream when a
+  delivered input produced no business output. Reusing the key routes it to the same partition the
+  record's output would. It keeps causal progress flowing through filters and not-yet-emitting
+  aggregates. Parsley's processors handle
   watermarks internally; a plain Kafka client detects them with
   {@link io.github.tobyjamesclements.parsley.CausalDependencies#isWatermark isWatermark}.</dd>
 

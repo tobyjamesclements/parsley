@@ -70,7 +70,7 @@ process(Record<KIn,VIn>)
 
 Each admitted record is stamped with `engine.completeness()` — the per-coordinate minimum across every input channel (each channel's advertised dependencies plus its own contiguous delivered position; see [Causal consistency model](causal-consistency.md#the-completeness-frontier)). A record is delivered only once every input channel has confirmed every coordinate it depends on; the same value is stamped on forwarded records and watermarks.
 
-When the delegate forwards no business record for a delivered input (`forwardCount() == 0`), the processor emits a protocol watermark in its place: a null-key/null-value record carrying `engine.completeness()` and the `_parsley_watermark` header, so a non-emitting node still advances downstream completeness. On the receiving side `handleWatermark()` decodes the carried frontier, calls `engine.onWatermark(topicId, partition, frontier)` to update that source channel's clock and drain any newly releasable records, then re-emits a watermark downstream.
+When the delegate forwards no business record for a delivered input (`forwardCount() == 0`), the processor emits a protocol watermark in its place: a null-value record keyed with the triggering record's key (so it routes to that record's partition), carrying `engine.completeness()` and the `_parsley_watermark` header, so a non-emitting node still advances downstream completeness. On the receiving side `handleWatermark()` decodes the carried frontier, calls `engine.onWatermark(topicId, partition, frontier)` to update that source channel's clock and drain any newly releasable records, then re-emits a watermark downstream.
 
 ## `ParsleyProcessorContext`
 

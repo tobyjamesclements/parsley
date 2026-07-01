@@ -112,6 +112,16 @@ class CausalProcessorsTopologyTest {
         };
     }
 
+    /** A user processor that consumes every record and forwards nothing (a pure filter/sink). */
+    private ProcessorSupplier<String, String, String, String> dropper() {
+        return () -> new Processor<>() {
+            @Override
+            public void process(Record<String, String> record) {
+                processed.add(record.value());
+            }
+        };
+    }
+
     private static Topology topology(
             ProcessorSupplier<String, String, String, String> decorated, List<String> inputTopics) {
         StreamsBuilder builder = new StreamsBuilder();
@@ -1501,10 +1511,131 @@ class CausalProcessorsTopologyTest {
                 "startup must fail when the admin itself throws");
         assertEquals(IllegalStateException.class, thrown.getCause().getClass(),
                 "the wrapped cause must be the resolveTopicUuids catch-and-rethrow");
-        assertTrue(thrown.getCause().getMessage().contains("failed to resolve topic UUIDs for causal buffers"),
+        assertTrue(thrown.getCause().getMessage().contains("failed to resolve topic metadata for causal buffers"),
                 "the wrapping message must name the failed resolution: " + thrown.getCause().getMessage());
         assertEquals(TimeoutException.class, thrown.getCause().getCause().getClass(),
                 "the original admin failure must be preserved as the innermost cause");
+    }
+
+    /**
+     * A non-emitting delegate produces one protocol watermark per delivered input, and that watermark
+     * reuses the triggering record's key so it routes, through whatever partitioner the business
+     * records use, to the same partition the record's output would have landed on. With a null key
+     * (the previous behaviour) a sink partitioner would send it to an arbitrary partition and a
+     * downstream task could starve.
+     *
+     * Asserts the emitted watermark carries the triggering key ("alpha"), a null value, and the
+     * watermark marker header.
+     */
+    @Test
+    void watermarkReusesTriggeringRecordKeySoItCoRoutesWithThatKeysRecords() {
+        Topology topology = topology(
+                CausalProcessors.builder(dropper()).addBufferStore("parsley", CausalBufferLimit.ofSize(100))
+                        .addBuffer(CausalBuffer.of("t1", Serdes.String(), Serdes.String())).topicAdmin(ADMIN).build(),
+                List.of("t1"));
+
+        try (TopologyTestDriver driver = new TopologyTestDriver(topology, config(null))) {
+            TestInputTopic<String, String> t1 =
+                    driver.createInputTopic("t1", new StringSerializer(), new StringSerializer());
+            TestOutputTopic<String, String> out =
+                    driver.createOutputTopic("out", new StringDeserializer(), new StringDeserializer());
+
+            t1.pipeInput(new TestRecord<>("alpha", "dropped", depsHeader(CausalDependencies.empty())));
+
+            List<TestRecord<String, String>> emitted = out.readRecordsToList();
+            assertEquals(1, emitted.size(), "a non-emitting delegate must emit exactly one watermark");
+            TestRecord<String, String> watermark = emitted.get(0);
+            assertTrue(watermark.headers().lastHeader(ParsleyHeader.WATERMARK) != null,
+                    "the emitted record must carry the _parsley_watermark marker header");
+            assertEquals("alpha", watermark.key(),
+                    "the watermark must reuse the triggering record's key so it co-routes to that partition");
+            assertEquals(null, watermark.value(), "a watermark carries no business value");
+        }
+    }
+
+    /**
+     * Under the default {@code parsley.topology.validation=warn}, causal input topics with mismatched
+     * partition counts are logged but do not fail startup — visible without breaking a deployment that
+     * silently relied on the misconfiguration.
+     *
+     * Asserts the topology constructs (init completes) despite t2 and t3 having different counts.
+     */
+    @Test
+    void mismatchedInputPartitionCountsWarnButStartUnderDefaultValidation() {
+        ParsleyTopicAdmin mismatched = TestTopicAdmin.of(
+                Map.of("t2", T2_ID, "t3", T3_ID), Map.of("t2", 2, "t3", 3));
+        Topology topology = topology(
+                CausalProcessors.builder(upperCaser()).addBufferStore("parsley", CausalBufferLimit.ofSize(100))
+                        .addBuffer(CausalBuffer.of("t2", Serdes.String(), Serdes.String()))
+                        .addBuffer(CausalBuffer.of("t3", Serdes.String(), Serdes.String()))
+                        .topicAdmin(mismatched).build(),
+                List.of("t2", "t3"));
+
+        // Construction runs init(); warn mode must not throw, and the task must be live afterwards.
+        try (TopologyTestDriver driver = new TopologyTestDriver(topology, config(null))) {
+            driver.createInputTopic("t2", new StringSerializer(), new StringSerializer())
+                    .pipeInput(new TestRecord<>("k", "live", depsHeader(CausalDependencies.empty())));
+            assertEquals(List.of("live"), processed,
+                    "warn-mode validation must not fail startup: the task starts and processes normally");
+        }
+    }
+
+    /**
+     * Under {@code parsley.topology.validation=strict}, causal input topics with mismatched partition
+     * counts fail startup fast, since co-partitioning is impossible and the completeness frontier
+     * would evaluate against an incomplete partition set.
+     *
+     * Asserts driver construction throws, wrapping an {@link IllegalStateException} whose message names
+     * the strict mode and the mismatch.
+     */
+    @Test
+    void mismatchedInputPartitionCountsFailStartupUnderStrictValidation() throws IOException {
+        ParsleyTopicAdmin mismatched = TestTopicAdmin.of(
+                Map.of("t2", T2_ID, "t3", T3_ID), Map.of("t2", 2, "t3", 3));
+        Topology topology = topology(
+                CausalProcessors.builder(upperCaser()).addBufferStore("parsley", CausalBufferLimit.ofSize(100))
+                        .addBuffer(CausalBuffer.of("t2", Serdes.String(), Serdes.String()))
+                        .addBuffer(CausalBuffer.of("t3", Serdes.String(), Serdes.String()))
+                        .withConfig(ParsleyConfig.TOPOLOGY_VALIDATION, "strict")
+                        .topicAdmin(mismatched).build(),
+                List.of("t2", "t3"));
+
+        StreamsException thrown = assertThrows(StreamsException.class,
+                () -> new TopologyTestDriver(topology, config(tempStateDir())),
+                "strict validation must fail startup on a partition-count mismatch");
+        assertEquals(IllegalStateException.class, thrown.getCause().getClass(),
+                "the wrapped cause must be the strict-validation failure");
+        assertTrue(thrown.getCause().getMessage().contains("mismatched partition counts"),
+                "the message must name the mismatch: " + thrown.getCause().getMessage());
+        assertTrue(thrown.getCause().getMessage().contains("strict"),
+                "the message must name the strict mode: " + thrown.getCause().getMessage());
+    }
+
+    /**
+     * Under {@code parsley.topology.validation=strict}, causal input topics that share a partition
+     * count pass validation and start normally — a guard against the parity check false-positiving on a
+     * correctly co-partitioned topology.
+     *
+     * Asserts the topology constructs with two equally-partitioned inputs under strict mode.
+     */
+    @Test
+    void equalInputPartitionCountsPassStrictValidation() {
+        ParsleyTopicAdmin equal = TestTopicAdmin.of(
+                Map.of("t2", T2_ID, "t3", T3_ID), Map.of("t2", 4, "t3", 4));
+        Topology topology = topology(
+                CausalProcessors.builder(upperCaser()).addBufferStore("parsley", CausalBufferLimit.ofSize(100))
+                        .addBuffer(CausalBuffer.of("t2", Serdes.String(), Serdes.String()))
+                        .addBuffer(CausalBuffer.of("t3", Serdes.String(), Serdes.String()))
+                        .withConfig(ParsleyConfig.TOPOLOGY_VALIDATION, "strict")
+                        .topicAdmin(equal).build(),
+                List.of("t2", "t3"));
+
+        try (TopologyTestDriver driver = new TopologyTestDriver(topology, config(null))) {
+            driver.createInputTopic("t2", new StringSerializer(), new StringSerializer())
+                    .pipeInput(new TestRecord<>("k", "ok", depsHeader(CausalDependencies.empty())));
+            assertEquals(List.of("ok"), processed,
+                    "strict validation must pass when input partition counts match: the task processes normally");
+        }
     }
 
     /** A fresh, unique state directory — required when a test expects driver construction itself to

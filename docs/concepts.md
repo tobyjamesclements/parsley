@@ -112,8 +112,15 @@ for fail-fast firings under `fail`) in addition to, or instead of, relying on lo
 
 Parsley evaluates dependencies against the partitions assigned to a single consumer instance. For the
 guarantee to hold, an instance must be assigned every partition in a causally related set. The
-standard way to arrange this is to co-partition related topics so that causally related messages
-share the same partition number across topics, which lets each instance own partition `N` everywhere.
+standard way to arrange this is to partition related topics by the record key with a matching
+partition count, so that causally related messages, which share a key, land on the same partition
+number across topics and each instance owns partition `N` everywhere. The key is the shard: the unit
+that keeps causally related events together on one partition. An advanced user can partition by a
+coarser function of the key with a custom `StreamPartitioner`, provided the partitioner reads the key
+rather than the value, since a protocol watermark carries no value to read.
 
-Parsley does not detect or enforce co-partitioning. A misconfigured topology evaluates against an
-incomplete partition set silently.
+Parsley does not enforce co-partitioning, and most of it cannot be checked, so a misconfigured
+topology evaluates against an incomplete partition set. Parsley can check one necessary part at
+startup, that the causal input topics share a partition count, controlled by
+`parsley.topology.validation` (`warn` by default, `strict` to fail fast, `off` to disable). See the
+[Streams integration](streams.md#startup-validation) preconditions for the full contract.
