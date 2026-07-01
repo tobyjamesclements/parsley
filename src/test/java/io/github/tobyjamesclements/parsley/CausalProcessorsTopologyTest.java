@@ -1527,7 +1527,18 @@ class CausalProcessorsTopologyTest {
 
     private static ParsleyClock frontierIn(TopologyTestDriver driver, String frontierStoreName) {
         KeyValueStore<String, byte[]> store = driver.getKeyValueStore(frontierStoreName);
-        return ParsleyClock.fromBytes(store.get("f"));
+        byte[] blob = store.get("f");
+        if (blob == null) {
+            return ParsleyClock.empty();
+        }
+        // The "f" value holds the combined ParsleyFrontier blob: [frontier-len:4][frontier bytes]
+        // [channel-count:4]... — extract just the leading frontier clock.
+        try (java.io.DataInputStream dis =
+                     new java.io.DataInputStream(new java.io.ByteArrayInputStream(blob))) {
+            return ParsleyClock.fromBytes(dis.readNBytes(dis.readInt()));
+        } catch (java.io.IOException e) {
+            throw new IllegalStateException(e);
+        }
     }
 
     private static int storeSize(KeyValueStore<String, byte[]> store) {

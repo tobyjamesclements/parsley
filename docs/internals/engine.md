@@ -15,7 +15,7 @@ onRecord(record):
 
     if completeness().dominates(deps):                 # the gate: every input channel has confirmed
                                                         #   every depended coordinate
-        frontier.deliver(record.coordinate)            # advance frontier, fire FrontierCallback
+        frontier.deliver(record.coordinate)            # advance frontier, self-persist "f"
         out.add(record)
         propagate(record.coordinate)                   # cascade releases (see below)
     else:
@@ -55,8 +55,7 @@ for admission, [Propagation cascade](#propagation-cascade-propagate) for the cas
 
 | Field | Type | Purpose |
 |---|---|---|
-| `frontier` | `ParsleyFrontier` | Causal state: contiguous frontier clock, forwarded-offset index, baseline seeding |
-| `channelStore` | `ParsleyChannelClockStore` | Durable per-input-channel clock: the dependencies advertised on each `(topicId, partition)` this node consumes; seeded at registration so silent channels are present in the completeness fold |
+| `frontier` | `ParsleyFrontier` | All causal state: contiguous frontier clock, per-input-channel clocks, `completeness()`, forwarded-offset index, and baseline seeding — self-persisting as the single `"f"` value. Channel clocks are the dependencies advertised on each `(topicId, partition)` this node consumes, seeded at registration so silent channels are present in the completeness fold |
 | `buffer` | `ParsleyBufferStore<K,V>` | Durable set of held records |
 | `candidateIndex` | `ParsleyCandidateIndex` | Secondary index: coordinate -> candidate record IDs |
 | `sizeLimit` | `int` | Buffer depth at which eviction triggers |
@@ -166,7 +165,7 @@ at eviction time.
 
 ## Frontier persistence ordering
 
-`FrontierCallback` fires inside `advanceFrontier()`, before the record is added to the output list. The `ParsleyProcessor` persists the frontier to the state store inside this callback. This ordering guarantees that the changelog write for the frontier advance is durable before the record reaches the user processor.
+`ParsleyFrontier` self-persists its single `"f"` value inside `deliver()` (and `seedIfFirstSeen()`), before control returns to the engine and the record is added to the output list. This ordering guarantees that the changelog write for the frontier advance is durable before the record reaches the user processor. There is no separate callback: the frontier owns its persistence.
 
 ## Buffer store
 

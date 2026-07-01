@@ -27,7 +27,6 @@ final class ParsleyProcessorSupplier<KIn, VIn, KOut, VOut>
     private final String bufferStoreName;
     private final String candidateIndexStoreName;
     private final String forwardedIndexStoreName;
-    private final String channelFrontierStoreName;
     private final Set<String> topics;
     private final Function<Map<String, Object>, ParsleyTopicAdmin> adminFactory;
     private final ParsleyConfig config;
@@ -41,7 +40,6 @@ final class ParsleyProcessorSupplier<KIn, VIn, KOut, VOut>
                                       String bufferStoreName,
                                       String candidateIndexStoreName,
                                       String forwardedIndexStoreName,
-                                      String channelFrontierStoreName,
                                       Set<String> topics,
                                       Function<Map<String, Object>, ParsleyTopicAdmin> adminFactory,
                                       ParsleyConfig config,
@@ -54,7 +52,6 @@ final class ParsleyProcessorSupplier<KIn, VIn, KOut, VOut>
         this.bufferStoreName = bufferStoreName;
         this.candidateIndexStoreName = candidateIndexStoreName;
         this.forwardedIndexStoreName = forwardedIndexStoreName;
-        this.channelFrontierStoreName = channelFrontierStoreName;
         this.topics = topics;
         this.adminFactory = adminFactory;
         this.config = config;
@@ -67,7 +64,7 @@ final class ParsleyProcessorSupplier<KIn, VIn, KOut, VOut>
                 userSupplier.get(), limit,
                 new ParsleySerializer<>(new ParsleyResolver<>(keySerdeByTopic, valueSerdeByTopic)),
                 frontierStoreName, bufferStoreName, candidateIndexStoreName, forwardedIndexStoreName,
-                channelFrontierStoreName, topics, adminFactory, config, audit);
+                topics, adminFactory, config, audit);
     }
 
     /** The buffer eviction limit this supplier was built with. Package-private for tests. */
@@ -91,7 +88,6 @@ final class ParsleyProcessorSupplier<KIn, VIn, KOut, VOut>
         stores.add(ParsleyStores.bufferStore(bufferStoreName));
         stores.add(ParsleyStores.candidateIndexStore(candidateIndexStoreName));
         stores.add(ParsleyStores.forwardedIndexStore(forwardedIndexStoreName));
-        stores.add(ParsleyStores.channelFrontierStore(channelFrontierStoreName));
         return stores;
     }
 }

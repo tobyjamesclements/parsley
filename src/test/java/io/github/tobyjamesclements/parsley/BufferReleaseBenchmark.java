@@ -103,7 +103,6 @@ public class BufferReleaseBenchmark {
         return new ParsleyEngine<>(
                 BENCH_LIMIT,
                 ParsleyClock.empty(),
-                f -> {},
                 new RocksBufferStore<>(bufferKV, serializer),
                 new RocksCandidateIndex(waitKV),
                 new RocksForwardedIndex(forwardedKV),

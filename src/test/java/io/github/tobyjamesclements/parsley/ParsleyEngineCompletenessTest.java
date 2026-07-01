@@ -4,7 +4,6 @@ import org.apache.kafka.common.TopicPartition;
 import org.apache.kafka.common.Uuid;
 import org.junit.jupiter.api.Test;
 
-import java.util.ArrayList;
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -35,12 +34,11 @@ class ParsleyEngineCompletenessTest {
     // T4 is a coordinate unique to one branch (appears only in T1 records).
     private static final Uuid T4_ID = Uuid.randomUuid();
 
-    // Fan-in scope: only T1 and T2 are consumed by this node; T3/T4 are upstream ancestors.
-    // Deps on out-of-scope coordinates are vacuously satisfied and the record forwards immediately.
+    // The node consumes T1 and T2; T3/T4 are upstream ancestors carried in deps. SCOPE is used only
+    // for the engine's diagnostics/pruning, not as a delivery filter (the gate waits for all channels).
     private static final ParsleyClock.CoordinatePredicate SCOPE = (topicId, partition) ->
             partition == 0 && (topicId.equals(T1_ID) || topicId.equals(T2_ID));
 
-    private final List<ParsleyClock> frontiers = new ArrayList<>();
     private final MockBufferStore<String, String> buffer = new MockBufferStore<>();
 
     // --- tests ----------------------------------------------------------------------------------
@@ -58,8 +56,7 @@ class ParsleyEngineCompletenessTest {
      */
     @Test
     void fanInCompleteness_reportsSharedAncestorAtMinAcrossBranches() {
-        MockChannelClockStore channelStore = new MockChannelClockStore();
-        ParsleyEngine<String, String> engine = fanInEngine(channelStore);
+        ParsleyEngine<String, String> engine = fanInEngine();
 
         // T1@10 carries dep {T3: 5} — the fast branch advanced T3 further.
         engine.onRecord(record(T1, 10, T1_ID, clock(T3_ID, 5)));
@@ -88,8 +85,7 @@ class ParsleyEngineCompletenessTest {
      */
     @Test
     void coordinateOnOnlyOneChannelIsDroppedNotConfirmedByAllChannels() {
-        MockChannelClockStore channelStore = new MockChannelClockStore();
-        ParsleyEngine<String, String> engine = fanInEngine(channelStore);
+        ParsleyEngine<String, String> engine = fanInEngine();
 
         // T1@10 carries deps {T3: 5, T4: 2}; T4 is unique to this branch.
         engine.onRecord(record(T1, 10, T1_ID, clock(T3_ID, 5).observe(T4_ID, 0, 2)));
@@ -118,15 +114,10 @@ class ParsleyEngineCompletenessTest {
      */
     @Test
     void singleInputRelayCompletenessRisesToLatestDeps() {
-        MockChannelClockStore channelStore = new MockChannelClockStore();
         // Single-channel engine: only T1 in scope.
         ParsleyClock.CoordinatePredicate singleScope =
                 (topicId, partition) -> partition == 0 && topicId.equals(T1_ID);
-        ParsleyEngine<String, String> engine = new ParsleyEngine<>(
-                CausalBufferLimit.ofSize(100), ParsleyClock.empty(),
-                singleScope, channelStore, frontiers::add, buffer, new MockCandidateIndex(),
-                new MockForwardedIndex(), ParsleyMetrics.NOOP, CausalAudit.NOOP,
-                System::currentTimeMillis, false, false);
+        ParsleyEngine<String, String> engine = engineOver(newFrontier(), singleScope);
 
         // First record: T1@0 with dep {T3: 3}. Use offset 0 so the frontier seeds cleanly.
         engine.onRecord(record(T1, 0, T1_ID, clock(T3_ID, 3)));
@@ -148,40 +139,31 @@ class ParsleyEngineCompletenessTest {
     }
 
     /**
-     * After a simulated restart — new engine instance, same channel store, same restored frontier —
-     * {@code completeness()} returns an identical result to the pre-restart value.
-     *
-     * <p>Because the channel store is changelog-backed (represented here by the shared
-     * {@link MockChannelClockStore}), completeness is recomputed identically without replaying
-     * any records: both the per-channel clocks and the frontier are restored.
+     * After a simulated restart — a new {@link ParsleyFrontier} over the same changelog-backed store —
+     * {@code completeness()} returns an identical result to the pre-restart value, without replaying
+     * any records: the frontier clock and the per-channel clocks both restore from the single "f" blob.
      *
      * Asserts that the completeness frontier is identical after restart.
      */
     @Test
     void completenessRestoredIdenticallyAfterSimulatedRestart() {
-        MockChannelClockStore sharedChannelStore = new MockChannelClockStore();
-        ParsleyEngine<String, String> first = fanInEngine(sharedChannelStore);
+        TestKeyValueStore<String, byte[]> sharedStore =
+                new TestKeyValueStore<String, byte[]>(java.util.Comparator.naturalOrder());
+        ParsleyFrontier firstFrontier = new ParsleyFrontier(sharedStore, new MockForwardedIndex());
+        ParsleyEngine<String, String> first = engineOver(firstFrontier, SCOPE);
 
         // Deliver one record from each branch.
-        engine_onRecord(first, record(T1, 10, T1_ID, clock(T3_ID, 5)));
-        engine_onRecord(first, record(T2, 7, T2_ID, clock(T3_ID, 3)));
+        first.onRecord(record(T1, 10, T1_ID, clock(T3_ID, 5)));
+        first.onRecord(record(T2, 7, T2_ID, clock(T3_ID, 3)));
 
         ParsleyClock completenessBeforeRestart = first.completeness();
-        ParsleyClock persistedFrontier = first.frontier();
 
-        // Simulate restart: same channel store (restored from changelog), same frontier.
-        List<ParsleyClock> restarted_frontiers = new ArrayList<>();
-        MockBufferStore<String, String> emptyBuffer = new MockBufferStore<>();
-        ParsleyEngine<String, String> restarted = new ParsleyEngine<>(
-                CausalBufferLimit.ofSize(100), persistedFrontier,
-                SCOPE, sharedChannelStore, restarted_frontiers::add, emptyBuffer,
-                new MockCandidateIndex(), new MockForwardedIndex(), ParsleyMetrics.NOOP,
-                CausalAudit.NOOP, System::currentTimeMillis, false, false);
+        // Simulate restart: a fresh ParsleyFrontier over the same store reloads the "f" blob (frontier
+        // clock + channel clocks). A fresh forwarded index is fine — it only affects future deliveries.
+        ParsleyFrontier restartedFrontier = new ParsleyFrontier(sharedStore, new MockForwardedIndex());
 
-        ParsleyClock completenessAfterRestart = restarted.completeness();
-
-        assertEquals(completenessBeforeRestart, completenessAfterRestart,
-                "completeness must be identical after restart when channel store and frontier are restored");
+        assertEquals(completenessBeforeRestart, restartedFrontier.completeness(),
+                "completeness must be identical after restart when the frontier store is restored");
     }
 
     /**
@@ -193,8 +175,7 @@ class ParsleyEngineCompletenessTest {
      */
     @Test
     void completenessEqualsOwnFrontierWhenNoChannelClocksRecorded() {
-        MockChannelClockStore channelStore = new MockChannelClockStore();
-        ParsleyEngine<String, String> engine = fanInEngine(channelStore);
+        ParsleyEngine<String, String> engine = fanInEngine();
 
         assertEquals(engine.frontier(), engine.completeness(),
                 "completeness must equal the node's own frontier when no channel clocks have been recorded");
@@ -213,10 +194,10 @@ class ParsleyEngineCompletenessTest {
      */
     @Test
     void fanInRecordHeldUntilEveryChannelConfirmsSharedAncestor() {
-        MockChannelClockStore channelStore = new MockChannelClockStore();
-        channelStore.update(T1_ID, 0, ParsleyClock.empty());
-        channelStore.update(T2_ID, 0, ParsleyClock.empty());
-        ParsleyEngine<String, String> engine = fanInEngine(channelStore);
+        ParsleyFrontier frontier = newFrontier();
+        frontier.channelUpdate(T1_ID, 0, ParsleyClock.empty());
+        frontier.channelUpdate(T2_ID, 0, ParsleyClock.empty());
+        ParsleyEngine<String, String> engine = engineOver(frontier, SCOPE);
 
         // T1@0 depends on shared ancestor T3@5; the T2 channel has not confirmed T3 → held.
         List<ParsleyMessage<String, String>> out1 = engine.onRecord(record(T1, 0, T1_ID, clock(T3_ID, 5)));
@@ -228,19 +209,65 @@ class ParsleyEngineCompletenessTest {
                 "T2@0 delivers and releases the held T1@0 once both channels confirm T3@5");
     }
 
+    /**
+     * An intra-topic dependency — a record depending on an earlier offset of its <em>own</em> input
+     * topic — is satisfied immediately. It is treated like any other dependency (no special stripping
+     * beyond the exact self-cycle), but the record's own channel already confirms its own topic's
+     * progress, so a backward dependency on that same topic never has to wait on a sibling.
+     *
+     * Asserts a single-input node forwards a record that depends on an earlier offset of its own topic.
+     */
+    @Test
+    void intraTopicDependencyOnOwnTopicIsSatisfiedImmediately() {
+        // Single-input node consuming only T1.
+        ParsleyClock.CoordinatePredicate t1Only =
+                (topicId, partition) -> partition == 0 && topicId.equals(T1_ID);
+        ParsleyFrontier frontier = newFrontier();
+        frontier.channelUpdate(T1_ID, 0, ParsleyClock.empty());
+        ParsleyEngine<String, String> engine = engineOver(frontier, t1Only);
+
+        assertEquals(1, engine.onRecord(record(T1, 0, T1_ID, ParsleyClock.empty())).size(),
+                "T1@0 with no dependencies delivers immediately");
+        // T1@1 depends on T1@0 — an earlier offset of its own topic (intra-topic).
+        assertEquals(1, engine.onRecord(record(T1, 1, T1_ID, clock(T1_ID, 0))).size(),
+                "an intra-topic dependency (on the record's own topic) is satisfied immediately");
+    }
+
+    /**
+     * An inter-topic dependency on a coordinate a sibling channel owns is held until that sibling
+     * confirms it — the strict cross-channel gate. Distinct from the intra-topic case above: here the
+     * dependency names a different input topic, whose channel must catch up first.
+     *
+     * Asserts a T1 record depending on T2@0 is held until the T2 channel delivers T2@0, then releases.
+     */
+    @Test
+    void interTopicDependencyIsHeldUntilTheSiblingChannelConfirmsIt() {
+        ParsleyFrontier frontier = newFrontier();
+        frontier.channelUpdate(T1_ID, 0, ParsleyClock.empty());
+        frontier.channelUpdate(T2_ID, 0, ParsleyClock.empty());
+        ParsleyEngine<String, String> engine = engineOver(frontier, SCOPE);
+
+        assertEquals(List.of(), engine.onRecord(record(T1, 0, T1_ID, clock(T2_ID, 0))),
+                "an inter-topic dependency is held until the sibling channel confirms it");
+        assertEquals(2, engine.onRecord(record(T2, 0, T2_ID, ParsleyClock.empty())).size(),
+                "T2@0 delivers and releases the held T1@0 once the T2 channel confirms T2@0");
+    }
+
     // --- helpers --------------------------------------------------------------------------------
 
-    private ParsleyEngine<String, String> fanInEngine(MockChannelClockStore channelStore) {
-        return new ParsleyEngine<>(
-                CausalBufferLimit.ofSize(100), ParsleyClock.empty(),
-                SCOPE, channelStore, frontiers::add, buffer, new MockCandidateIndex(),
-                new MockForwardedIndex(), ParsleyMetrics.NOOP, CausalAudit.NOOP,
+    private static ParsleyFrontier newFrontier() {
+        return new ParsleyFrontier(ParsleyClock.empty(), new MockForwardedIndex());
+    }
+
+    private ParsleyEngine<String, String> engineOver(ParsleyFrontier frontier,
+                                                     ParsleyClock.CoordinatePredicate scope) {
+        return new ParsleyEngine<>(CausalBufferLimit.ofSize(100), frontier, scope, buffer,
+                new MockCandidateIndex(), ParsleyMetrics.NOOP, CausalAudit.NOOP,
                 System::currentTimeMillis, false, false);
     }
 
-    private static void engine_onRecord(ParsleyEngine<String, String> engine,
-                                        ParsleyMessage<String, String> msg) {
-        engine.onRecord(msg);
+    private ParsleyEngine<String, String> fanInEngine() {
+        return engineOver(newFrontier(), SCOPE);
     }
 
     private static ParsleyMessage<String, String> record(TopicPartition tp, long offset,

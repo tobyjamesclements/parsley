@@ -53,15 +53,13 @@ class ParsleyProcessorRestoreTest {
         ParsleyClock restoredFrontier = ParsleyClock.empty().observe(T1_ID, 0, 5);
         TestKeyValueStore<String, byte[]> frontierStore =
                 new TestKeyValueStore<String, byte[]>(Comparator.naturalOrder(), "frontier");
-        frontierStore.put(ParsleyStores.FRONTIER_KEY, restoredFrontier.toBytes());
+        frontierStore.put(ParsleyStores.FRONTIER_KEY, frontierBlob(restoredFrontier));
         TestKeyValueStore<Long, byte[]> bufferStore =
                 new TestKeyValueStore<Long, byte[]>(Comparator.naturalOrder(), "buffer");
         TestKeyValueStore<byte[], byte[]> candidateIndexStore =
                 new TestKeyValueStore<byte[], byte[]>(Arrays::compareUnsigned, "candidate-index");
         TestKeyValueStore<byte[], byte[]> forwardedIndexStore =
                 new TestKeyValueStore<byte[], byte[]>(Arrays::compareUnsigned, "forwarded-index");
-        TestKeyValueStore<byte[], byte[]> channelFrontierStore =
-                new TestKeyValueStore<byte[], byte[]>(Arrays::compareUnsigned, "channel-frontier");
 
         RecordingCausalAudit audit = new RecordingCausalAudit();
         List<String> processed = new ArrayList<>();
@@ -73,7 +71,7 @@ class ParsleyProcessorRestoreTest {
                 new ParsleySerializer<>(new ParsleyResolver<>(t -> Serdes.String(), t -> Serdes.String()));
         ParsleyProcessor<String, String, String, String> processor = new ParsleyProcessor<>(
                 delegate, CausalBufferLimit.ofSize(100), serializer,
-                "frontier", "buffer", "candidate-index", "forwarded-index", "channel-frontier", Set.of("t1"),
+                "frontier", "buffer", "candidate-index", "forwarded-index", Set.of("t1"),
                 configs -> ADMIN, ParsleyConfig.from(new Properties()), audit);
 
         MockProcessorContext<String, String> context = new MockProcessorContext<>();
@@ -81,7 +79,6 @@ class ParsleyProcessorRestoreTest {
         context.addStateStore(bufferStore);
         context.addStateStore(candidateIndexStore);
         context.addStateStore(forwardedIndexStore);
-        context.addStateStore(channelFrontierStore);
 
         processor.init(context);
 
@@ -127,8 +124,6 @@ class ParsleyProcessorRestoreTest {
                 new TestKeyValueStore<byte[], byte[]>(Arrays::compareUnsigned, "candidate-index");
         TestKeyValueStore<byte[], byte[]> forwardedIndexStore =
                 new TestKeyValueStore<byte[], byte[]>(Arrays::compareUnsigned, "forwarded-index");
-        TestKeyValueStore<byte[], byte[]> channelFrontierStore =
-                new TestKeyValueStore<byte[], byte[]>(Arrays::compareUnsigned, "channel-frontier");
 
         ParsleySerializer<String, String> serializer =
                 new ParsleySerializer<>(new ParsleyResolver<>(t -> Serdes.String(), t -> Serdes.String()));
@@ -150,7 +145,7 @@ class ParsleyProcessorRestoreTest {
         continueOnEviction.setProperty("parsley.buffer.eviction.failure.policy", "continue");
         ParsleyProcessor<String, String, String, String> processor = new ParsleyProcessor<>(
                 delegate, CausalBufferLimit.ofSize(2), serializer,
-                "frontier", "buffer", "candidate-index", "forwarded-index", "channel-frontier", Set.of("t1"),
+                "frontier", "buffer", "candidate-index", "forwarded-index", Set.of("t1"),
                 configs -> ADMIN, ParsleyConfig.from(continueOnEviction), CausalAudit.NOOP);
 
         MockProcessorContext<String, String> context = new MockProcessorContext<>();
@@ -158,7 +153,6 @@ class ParsleyProcessorRestoreTest {
         context.addStateStore(bufferStore);
         context.addStateStore(candidateIndexStore);
         context.addStateStore(forwardedIndexStore);
-        context.addStateStore(channelFrontierStore);
 
         processor.init(context);
 
@@ -173,5 +167,22 @@ class ParsleyProcessorRestoreTest {
                 "the genuinely oldest excess record must be evicted and reach the delegate");
         assertTrue(restoredOverflowPunctuator.cancelled(),
                 "the punctuation must cancel itself after firing once, so it never re-fires on later ticks");
+    }
+
+    // Builds the combined ParsleyFrontier "f" blob for a frontier clock with no channel clocks:
+    // [frontier-len:4][frontier bytes][channel-count:4 = 0]. Mirrors ParsleyFrontier#toBytes so a
+    // restored frontier can be seeded into the frontier store.
+    private static byte[] frontierBlob(ParsleyClock frontier) {
+        try (java.io.ByteArrayOutputStream baos = new java.io.ByteArrayOutputStream();
+             java.io.DataOutputStream dos = new java.io.DataOutputStream(baos)) {
+            byte[] f = frontier.toBytes();
+            dos.writeInt(f.length);
+            dos.write(f);
+            dos.writeInt(0);
+            dos.flush();
+            return baos.toByteArray();
+        } catch (java.io.IOException e) {
+            throw new IllegalStateException(e);
+        }
     }
 }

@@ -276,10 +276,10 @@ class CausalReconvergenceTopologyTest {
      * Watermark propagation — a non-subscribing relay layer re-emits received watermarks, so a
      * grandchild node's completeness advances even when no business record flows on that path.
      *
-     * <p>This is tested at the {@link ParsleyEngine} level using {@link MockChannelClockStore}:
-     * after {@link ParsleyEngine#onWatermark} is called with a frontier carrying an ancestor
-     * coordinate, {@link ParsleyEngine#completeness()} must reflect it. This proves the channel
-     * clock is updated by the watermark receipt, which is the mechanism that enables inductive
+     * <p>This is tested at the {@link ParsleyEngine} level over a channel-tracking {@link
+     * ParsleyFrontier}: after {@link ParsleyEngine#onWatermark} is called with a frontier carrying an
+     * ancestor coordinate, {@link ParsleyEngine#completeness()} must reflect it. This proves the
+     * channel clock is updated by the watermark receipt, which is the mechanism that enables inductive
      * propagation through non-subscribing layers.
      *
      * Asserts that completeness rises to include the watermark's ancestor coordinate immediately
@@ -290,14 +290,12 @@ class CausalReconvergenceTopologyTest {
         // T1 is the only subscribed topic. ANC_ID is an out-of-scope ancestor.
         ParsleyClock.CoordinatePredicate scope = (topicId, partition) ->
                 partition == 0 && topicId.equals(T1_ID);
-        MockChannelClockStore channelStore = new MockChannelClockStore();
-        List<ParsleyClock> frontiers = new ArrayList<>();
         MockBufferStore<String, String> buffer = new MockBufferStore<>();
 
         ParsleyEngine<String, String> engine = new ParsleyEngine<>(
-                CausalBufferLimit.ofSize(100), ParsleyClock.empty(),
-                scope, channelStore, frontiers::add, buffer, new MockCandidateIndex(),
-                new MockForwardedIndex(), ParsleyMetrics.NOOP, CausalAudit.NOOP,
+                CausalBufferLimit.ofSize(100),
+                new ParsleyFrontier(ParsleyClock.empty(), new MockForwardedIndex()),
+                scope, buffer, new MockCandidateIndex(), ParsleyMetrics.NOOP, CausalAudit.NOOP,
                 System::currentTimeMillis, false, false);
 
         // Before any watermark, completeness has no ANC coordinate.

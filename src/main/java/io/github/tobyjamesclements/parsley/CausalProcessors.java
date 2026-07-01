@@ -87,11 +87,11 @@ public final class CausalProcessors {
          * pairing of a store name with how it is sized, mirroring
          * {@link org.apache.kafka.streams.state.Stores}.
          *
-         * <p>{@code name} is the state-store namespace: the frontier store is {@code name + "-frontier"},
-         * the held-record buffer store {@code name + "-buffer"}, the candidate index
-         * {@code name + "-candidate-index"}, the forwarded-offset index
-         * {@code name + "-forwarded-index"}, and the per-channel completeness frontier
-         * {@code name + "-channel-frontier"}. These name the backing changelog topics, so keep
+         * <p>{@code name} is the state-store namespace: the frontier store is {@code name + "-frontier"}
+         * (holding the contiguous frontier clock and the per-channel clocks as one value), the
+         * held-record buffer store {@code name + "-buffer"}, the candidate index
+         * {@code name + "-candidate-index"}, and the forwarded-offset index
+         * {@code name + "-forwarded-index"}. These name the backing changelog topics, so keep
          * {@code name} stable across restarts, and unique per causal processor sharing a topology.
          *
          * @param name  the state-store namespace
@@ -252,7 +252,6 @@ public final class CausalProcessors {
             return new ParsleyProcessorSupplier<>(
                     userSupplier, bufferLimit, keySerdeByTopic, valueSerdeByTopic,
                     store + "-frontier", store + "-buffer", store + "-candidate-index", store + "-forwarded-index",
-                    store + "-channel-frontier",
                     resolved.keySet(), adminFactory, effectiveConfig, ParsleyAudit.wrap(audit));
         }
 

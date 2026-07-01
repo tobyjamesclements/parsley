@@ -41,7 +41,7 @@ class CausalBufferEvictionLimitFailureTest {
     void sizeLimitFailsFastByDefaultAndLeavesTheRecordBuffered() {
         MockBufferStore<String, String> buffer = new MockBufferStore<>();
         ParsleyEngine<String, String> engine = new ParsleyEngine<>(
-                CausalBufferLimit.ofSize(1), ParsleyClock.empty(), c -> {},
+                CausalBufferLimit.ofSize(1), ParsleyClock.empty(),
                 buffer, new MockCandidateIndex(), new MockForwardedIndex(), ParsleyMetrics.NOOP,
                 CausalAudit.NOOP, System::currentTimeMillis, false, /* failOnEvictionLimit */ true);
 
@@ -64,7 +64,7 @@ class CausalBufferEvictionLimitFailureTest {
         MockBufferStore<String, String> buffer = new MockBufferStore<>();
         AtomicLong clock = new AtomicLong(0L);
         ParsleyEngine<String, String> engine = new ParsleyEngine<>(
-                CausalBufferLimit.ofDuration(java.time.Duration.ofMillis(200)), ParsleyClock.empty(), c -> {},
+                CausalBufferLimit.ofDuration(java.time.Duration.ofMillis(200)), ParsleyClock.empty(),
                 buffer, new MockCandidateIndex(), new MockForwardedIndex(), ParsleyMetrics.NOOP,
                 CausalAudit.NOOP, clock::get, false, /* failOnEvictionLimit */ true);
 
@@ -84,7 +84,7 @@ class CausalBufferEvictionLimitFailureTest {
     void continuePolicyStillEvictsAndForwardsAsBefore() {
         MockBufferStore<String, String> buffer = new MockBufferStore<>();
         ParsleyEngine<String, String> engine = new ParsleyEngine<>(
-                CausalBufferLimit.ofSize(1), ParsleyClock.empty(), c -> {},
+                CausalBufferLimit.ofSize(1), ParsleyClock.empty(),
                 buffer, new MockCandidateIndex(), new MockForwardedIndex(), ParsleyMetrics.NOOP,
                 CausalAudit.NOOP, System::currentTimeMillis, false, /* failOnEvictionLimit */ false);
 
@@ -108,7 +108,7 @@ class CausalBufferEvictionLimitFailureTest {
         RecordingCausalAudit audit = new RecordingCausalAudit();
         ParsleyClock unmet = ParsleyClock.empty().observe(T1_ID, 0, 99);
         ParsleyEngine<String, String> engine = new ParsleyEngine<>(
-                CausalBufferLimit.ofSize(1), ParsleyClock.empty(), c -> {},
+                CausalBufferLimit.ofSize(1), ParsleyClock.empty(),
                 buffer, new MockCandidateIndex(), new MockForwardedIndex(), metrics, audit,
                 System::currentTimeMillis, false, /* failOnEvictionLimit */ true);
 
@@ -138,7 +138,7 @@ class CausalBufferEvictionLimitFailureTest {
         buffer.add(message(T2, 1, T2_ID, unmet), 0L);
 
         ParsleyEngine<String, String> engine = new ParsleyEngine<>(
-                CausalBufferLimit.ofSize(1), ParsleyClock.empty(), c -> {},
+                CausalBufferLimit.ofSize(1), ParsleyClock.empty(),
                 buffer, new MockCandidateIndex(), new MockForwardedIndex(), ParsleyMetrics.NOOP,
                 CausalAudit.NOOP, System::currentTimeMillis, false, /* failOnEvictionLimit */ true);
 
@@ -160,7 +160,7 @@ class CausalBufferEvictionLimitFailureTest {
         buffer.add(message(T2, 0, T2_ID, unmet), 0L);
 
         ParsleyEngine<String, String> engine = new ParsleyEngine<>(
-                CausalBufferLimit.ofSize(1), ParsleyClock.empty(), c -> {},
+                CausalBufferLimit.ofSize(1), ParsleyClock.empty(),
                 buffer, new MockCandidateIndex(), new MockForwardedIndex(), ParsleyMetrics.NOOP,
                 CausalAudit.NOOP, System::currentTimeMillis, false, /* failOnEvictionLimit */ true);
 

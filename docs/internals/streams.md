@@ -8,23 +8,24 @@ Implements `CausalProcessorSupplier<KIn,VIn,KOut,VOut>`.
 
 **`get()`** returns a new `ParsleyProcessor` instance per call (one per task).
 
-**`stores()`** returns the union of the user's declared stores and the three Parsley stores:
+**`stores()`** returns the union of the user's declared stores and the four Parsley stores:
 
 | Store | Key serde | Value serde |
 |---|---|---|
 | `{ns}-frontier` | `String` | `byte[]` |
 | `{ns}-buffer` | `Long` | `byte[]` |
 | `{ns}-candidate-index` | `byte[]` | `byte[]` |
+| `{ns}-forwarded-index` | `byte[]` | `byte[]` |
 
-All three are created with `Stores.persistentKeyValueStore(...)`, so they are changelog-backed and durable across restarts.
+All four are created with `Stores.persistentKeyValueStore(...)`, so they are changelog-backed and durable across restarts. The `{ns}-frontier` store's single `"f"` value holds both the contiguous frontier clock and the per-input-channel clocks (see [Wire format](wire-format.md#the-ns-frontier-f-value)).
 
 ## `ParsleyProcessor` init sequence
 
 0. Resolve each registered `CausalBuffer` topic's stable UUID from the broker via a `ParsleyTopicAdmin` built from `context.appConfigs()` (the topology decorator has no broker config until init), populating the `topicUuids` map. Closed immediately after.
 1. Retrieve the state stores from the processor context by name.
-2. Read frontier from `{ns}-frontier` at key `"f"`. Start from `ParsleyClock.empty()` if absent.
+2. Construct a `ParsleyFrontier` over the `{ns}-frontier` store: it loads the frontier clock and channel clocks from the single `"f"` value (empty if absent) and self-persists that value on every change. Prune it to the current in-scope coordinates, then seed a channel entry for every consumed input topic-partition so a silent channel holds its own coordinate in the completeness fold.
 3. Construct `ParsleyEngine` with:
-    - A `FrontierCallback` (internal) that writes the new frontier to the frontier store on each advance.
+    - The `ParsleyFrontier` (which owns the forwarded index and self-persists — no separate frontier callback).
     - A `RocksBufferStore` wrapping the buffer store and a `ParsleySerializer`.
     - A `RocksCandidateIndex` wrapping the candidate-index store.
 4. Wrap the real context in a `ParsleyProcessorContext` (stamping proxy).

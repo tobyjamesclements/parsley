@@ -88,13 +88,30 @@ The namespace is the `name` passed to `CausalProcessors.builder(...).addBufferSt
 
 | Store | Key serde | Value serde | Purpose |
 |---|---|---|---|
-| `{ns}-frontier` | `String` | `byte[]` | Single entry at key `"f"`: serialised `ParsleyClock` (the node's contiguous delivered frontier) |
+| `{ns}-frontier` | `String` | `byte[]` | Single entry at key `"f"`: the combined `ParsleyFrontier` blob — the node's contiguous delivered frontier clock plus the per-input-channel clocks (see below) |
 | `{ns}-buffer` | `Long` | `byte[]` | Insertion sequence -> `bufferedAt` + serialised `ParsleyMessage` |
 | `{ns}-candidate-index` | `byte[]` | `byte[]` (empty) | 36-byte composite key -> presence marker |
 | `{ns}-forwarded-index` | `byte[]` | `byte[]` (empty) | 28-byte `(topicId, partition, offset)` key -> presence marker: offsets forwarded ahead of the contiguous frontier |
-| `{ns}-channel-frontier` | `byte[]` | `byte[]` | 20-byte `(topicId, partition)` key -> serialised `ParsleyClock`: the dependencies advertised on that input channel, folded by `completeness()` (per-coordinate min across all input channels) |
 
-All five stores are persistent and changelog-backed. Changelog topic names follow the Kafka Streams pattern: `{applicationId}-{storeName}-changelog`.
+All four stores are persistent and changelog-backed. Changelog topic names follow the Kafka Streams pattern: `{applicationId}-{storeName}-changelog`.
+
+### The `{ns}-frontier` `"f"` value
+
+`ParsleyFrontier` folds two structures into the single `"f"` value (loaded once at init, rewritten on
+change; the changelog dedups repeated puts by key per commit):
+
+```
+[frontier-clock-len:4][frontier ParsleyClock bytes][channel-count:4]
+  then, per channel:
+  [topicId MSB:8][topicId LSB:8][partition:4][channel-clock-len:4][channel ParsleyClock bytes]
+```
+
+The frontier clock is the node's contiguous delivered frontier. Each channel clock is the dependencies
+advertised on that input channel `(topicId, partition)`, max-merged over the records and watermarks
+received on it. `completeness()` — the per-coordinate minimum across all input channels (each channel's
+advertised dependencies plus its own contiguous delivered position) — is computed from this value in
+memory. The forwarded-offset index stays its own keyed store (`{ns}-forwarded-index`): it is growable
+and order-sensitive, so folding it into `"f"` would increase Rocks I/O.
 
 ## Topic UUIDs
 

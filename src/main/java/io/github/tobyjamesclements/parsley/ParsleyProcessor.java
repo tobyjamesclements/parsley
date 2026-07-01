@@ -55,7 +55,6 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
     private final String bufferStoreName;
     private final String candidateIndexStoreName;
     private final String forwardedIndexStoreName;
-    private final String channelFrontierStoreName;
     private final Set<String> topics;
     private final Function<Map<String, Object>, ParsleyTopicAdmin> adminFactory;
     private final ParsleyConfig config;
@@ -72,7 +71,6 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
     private KeyValueStore<Long, byte[]> bufferStore;
     private KeyValueStore<byte[], byte[]> candidateIndexStore;
     private KeyValueStore<byte[], byte[]> forwardedIndexStore;
-    private KeyValueStore<byte[], byte[]> channelFrontierStore;
     private ParsleyEngine<KIn, VIn> engine;
     private ParsleyMetrics.Wired wiredMetrics;
     // The stamping proxy context handed to the delegate. Held here so deliver() can check the
@@ -90,7 +88,6 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
                      String bufferStoreName,
                      String candidateIndexStoreName,
                      String forwardedIndexStoreName,
-                     String channelFrontierStoreName,
                      Set<String> topics,
                      Function<Map<String, Object>, ParsleyTopicAdmin> adminFactory,
                      ParsleyConfig config,
@@ -102,7 +99,6 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
         this.bufferStoreName = bufferStoreName;
         this.candidateIndexStoreName = candidateIndexStoreName;
         this.forwardedIndexStoreName = forwardedIndexStoreName;
-        this.channelFrontierStoreName = channelFrontierStoreName;
         this.topics = topics;
         this.adminFactory = adminFactory;
         this.config = config;
@@ -117,70 +113,51 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
         this.bufferStore = context.getStateStore(bufferStoreName);
         this.candidateIndexStore = context.getStateStore(candidateIndexStoreName);
         this.forwardedIndexStore = context.getStateStore(forwardedIndexStoreName);
-        this.channelFrontierStore = context.getStateStore(channelFrontierStoreName);
 
-        ParsleyClock initialFrontier = ParsleyClock.empty();
-        byte[] stored = frontierStore.get(ParsleyStores.FRONTIER_KEY);
-        if (stored != null) {
-            initialFrontier = ParsleyClock.fromBytes(stored);
-        }
-        if (stored != null) {
-            log.info("Processor initialized [task: {}] — frontier restored: {}", context.taskId(), initialFrontier);
-        } else {
-            log.info("Processor initialized [task: {}] — frontier empty (fresh start)", context.taskId());
-        }
-        audit.processorInitialized(context.taskId().toString(), stored != null);
-
-        ParsleyEngine.FrontierCallback listener = frontier ->
-                frontierStore.put(ParsleyStores.FRONTIER_KEY, frontier.toBytes());
+        boolean restored = frontierStore.get(ParsleyStores.FRONTIER_KEY) != null;
 
         ParsleyBufferStore<KIn, VIn> buffer = new RocksBufferStore<>(bufferStore, serializer);
         ParsleyCandidateIndex candidateIndex = new RocksCandidateIndex(candidateIndexStore);
         ParsleyForwardedIndex forwardedIndex = new RocksForwardedIndex(forwardedIndexStore);
-        ParsleyChannelClockStore channelClockStore = new RocksChannelClockStore(channelFrontierStore);
+        // The single owner of the persisted causal metadata: loads the frontier clock and channel
+        // clocks from key "f" of the frontier store and rewrites that value on change. The forwarded
+        // index keeps its own keyed store (growable, order-sensitive) and is injected here.
+        ParsleyFrontier frontier = new ParsleyFrontier(frontierStore, forwardedIndex);
+
+        if (restored) {
+            log.info("Processor initialized [task: {}] — frontier restored: {}", context.taskId(), frontier.snapshot());
+        } else {
+            log.info("Processor initialized [task: {}] — frontier empty (fresh start)", context.taskId());
+        }
+        audit.processorInitialized(context.taskId().toString(), restored);
 
         this.wiredMetrics = ParsleyMetrics.wire(context,
                 ParsleyLimits.sizeLimitOf(limit), ParsleyLimits.durationLimitOf(limit));
 
-        // A dependency is gated only if this task actually consumes its coordinate: a registered
-        // input topic, on the partition this task owns. Streams co-partitions a sub-topology's
-        // sources, so the task owns partition taskId().partition() of every input topic — which is
-        // the partition of every record it consumes. Any other coordinate (a different partition, or
-        // a topic outside the registered buffers) carries no obligation here and is vacuously
-        // satisfied. Derived here, never persisted, so it is recomputed identically after a rebalance.
+        // The coordinates this task consumes: a registered input topic, on the partition this task
+        // owns. Streams co-partitions a sub-topology's sources, so the task owns partition
+        // taskId().partition() of every input topic. Derived here, never persisted, so it is
+        // recomputed identically after a rebalance. Used for restore-time pruning and eviction-gap
+        // diagnostics — not as a delivery filter (the gate waits for every channel; see completeness()).
         Set<Uuid> consumedTopicIds = Set.copyOf(topicUuids.values());
         int taskPartition = context.taskId().partition();
         ParsleyClock.CoordinatePredicate inScope = (topicId, partition) ->
                 partition == taskPartition && consumedTopicIds.contains(topicId);
 
-        // Prune coordinates that no longer belong to this processor's scope — topic UUIDs change
-        // when a topic is dropped and recreated, leaving stale entries in the persisted clock.
-        // Pruning here keeps the stored frontier compact and ensures the initial stampFrontier
-        // does not carry coordinates that drainRestoredSatisfied would otherwise need to ignore.
-        initialFrontier = initialFrontier.retaining(inScope);
-        this.stampFrontier = initialFrontier;
-
-        // Prune channel-clock entries whose topic UUID is no longer in scope (e.g. after topic
-        // deletion and recreation with a new UUID). A stale entry would hold the completeness min
-        // at zero for a coordinate that can never advance, pinning the completeness frontier forever.
-        for (ParsleyChannelClockStore.ChannelEntry entry : channelClockStore.allEntries()) {
-            if (!inScope.test(entry.topicId(), entry.partition())) {
-                channelClockStore.remove(entry.topicId(), entry.partition());
-            }
-        }
-
-        // Seed an entry for every consumed input channel so the completeness frontier — the
-        // per-coordinate min across ALL input channels — includes a channel that has not yet observed
-        // anything (it contributes nothing, holding the min until it advertises). Without this, a
-        // silent channel would simply be absent from the min, and a record could be delivered before
-        // that channel confirmed the dependency.
+        // Prune restored causal state to the current scope — topic UUIDs change when a topic is
+        // dropped and recreated, leaving stale frontier/channel entries that would pin the completeness
+        // min on a coordinate that can never advance. Then seed an entry for every consumed input
+        // channel so a channel that has not yet advertised anything is present in the min (holding it
+        // down until it does), rather than absent — which would let a record deliver before that
+        // channel confirmed the dependency.
+        frontier.pruneToScope(inScope);
         for (Uuid topicId : consumedTopicIds) {
-            channelClockStore.update(topicId, taskPartition, ParsleyClock.empty());
+            frontier.channelUpdate(topicId, taskPartition, ParsleyClock.empty());
         }
 
-        this.engine = new ParsleyEngine<>(limit, initialFrontier, inScope, channelClockStore,
-                listener, buffer, candidateIndex, forwardedIndex, wiredMetrics.metrics(), audit,
-                context::currentSystemTimeMs, config.skipOnDecodeFailure(), config.failOnEvictionLimit());
+        this.engine = new ParsleyEngine<>(limit, frontier, inScope, buffer, candidateIndex,
+                wiredMetrics.metrics(), audit, context::currentSystemTimeMs,
+                config.skipOnDecodeFailure(), config.failOnEvictionLimit());
         // Initialise stampFrontier from completeness() so the stamping proxy reflects the restored
         // channel-clock state (not just the in-scope frontier) from the first forward onward.
         this.stampFrontier = engine.completeness();

@@ -27,7 +27,6 @@ class ParsleyEngineTest {
             partition == 0 && (topicId.equals(T1_ID) || topicId.equals(T2_ID));
 
     private final List<ParsleyMessage<String, String>> forwarded = new ArrayList<>();
-    private final List<ParsleyClock> frontiers = new ArrayList<>();
     private final MockBufferStore<String, String> buffer = new MockBufferStore<>();
     private final MockForwardedIndex forwardedIndex = new MockForwardedIndex();
 
@@ -154,7 +153,6 @@ class ParsleyEngineTest {
         buffer.add(incomingRecord(T2, 0, ParsleyClock.empty().observe(T1_ID, 0, 3)), 0L);
         ParsleyEngine<String, String> engine = engineWith(CausalBufferLimit.ofSize(100));
         assertEquals(ParsleyClock.empty(), engine.frontier(), "pre-buffered records must not advance the frontier on construction");
-        assertTrue(frontiers.isEmpty(), "pre-buffered records must not fire the frontier listener on construction");
 
         processRecord(engine, incomingRecord(T1, 3, ParsleyClock.empty()));
 
@@ -315,7 +313,7 @@ class ParsleyEngineTest {
         countingBuffer.add(incomingRecord(T2, 0, ParsleyClock.empty().observe(T1_ID, 0, 99)), 0L);
 
         ParsleyEngine<String, String> engine = new ParsleyEngine<>(CausalBufferLimit.ofSize(2),
-                ParsleyClock.empty(), frontiers::add, countingBuffer, new MockCandidateIndex(),
+                ParsleyClock.empty(), countingBuffer, new MockCandidateIndex(),
                 forwardedIndex, ParsleyMetrics.NOOP, CausalAudit.NOOP, System::currentTimeMillis, false, false);
         int callsAfterConstruction = countingBuffer.indexEntriesCalls;
 
@@ -341,7 +339,7 @@ class ParsleyEngineTest {
         reversedBuffer.add(incomingRecord(T2, 1, unmet), 1L); // newest: sequence 1
 
         ParsleyEngine<String, String> engine = new ParsleyEngine<>(CausalBufferLimit.ofSize(2),
-                ParsleyClock.empty(), frontiers::add, reversedBuffer, new MockCandidateIndex(),
+                ParsleyClock.empty(), reversedBuffer, new MockCandidateIndex(),
                 forwardedIndex, ParsleyMetrics.NOOP, CausalAudit.NOOP, System::currentTimeMillis, false, false);
 
         List<ParsleyMessage<String, String>> result = engine.evictOverflow();
@@ -375,7 +373,7 @@ class ParsleyEngineTest {
         buffer.add(incomingRecord(T2, 2, unmet), 2L);
 
         ParsleyEngine<String, String> engine = new ParsleyEngine<>(CausalBufferLimit.ofSize(2),
-                ParsleyClock.empty(), frontiers::add, buffer, new MockCandidateIndex(),
+                ParsleyClock.empty(), buffer, new MockCandidateIndex(),
                 forwardedIndex, capturing, CausalAudit.NOOP, System::currentTimeMillis, false, false);
 
         engine.evictOverflow();
@@ -403,7 +401,7 @@ class ParsleyEngineTest {
             @Override public void reportState(int depth, OptionalLong oldest) {}
         };
         ParsleyEngine<String, String> engine = new ParsleyEngine<>(CausalBufferLimit.ofSize(1),
-                ParsleyClock.empty(), frontiers::add, buffer, new MockCandidateIndex(),
+                ParsleyClock.empty(), buffer, new MockCandidateIndex(),
                 forwardedIndex, capturing, CausalAudit.NOOP, System::currentTimeMillis, false, false);
 
         engine.onRecord(incomingRecord(T2, 0, ParsleyClock.empty().observe(T1_ID, 0, 99)));
@@ -498,23 +496,6 @@ class ParsleyEngineTest {
     }
 
     /**
-     * The frontier listener is invoked before each record is forwarded, receiving the
-     * frontier as it stands at the moment of forwarding.
-     *
-     * Asserts that after one record is forwarded, the last frontier snapshot delivered to
-     * the listener matches the engine's current frontier.
-     */
-    @Test
-    void frontierListenerFiresBeforeEachForward() {
-        ParsleyEngine<String, String> engine = engineWith(CausalBufferLimit.ofSize(100));
-
-        processRecord(engine, incomingRecord(T1, 3, ParsleyClock.empty()));
-
-        assertEquals(engine.frontier(), frontiers.get(frontiers.size() - 1),
-                "frontier listener must receive the current frontier before each forward");
-    }
-
-    /**
      * The metrics callbacks fire at the correct lifecycle points: {@code recordBuffered}
      * fires when a record enters the buffer, {@code recordReleased} fires when it is drained
      * (receiving the count of released records), and {@code reportState} fires alongside both,
@@ -541,7 +522,7 @@ class ParsleyEngineTest {
         };
         ParsleyEngine<String, String> engine = new ParsleyEngine<>(
                 CausalBufferLimit.ofSize(100),
-                ParsleyClock.empty(), frontiers::add, buffer,
+                ParsleyClock.empty(), buffer,
                 new MockCandidateIndex(), forwardedIndex, capturing);
 
         engine.onRecord(incomingRecord(T2, 0, ParsleyClock.empty().observe(T1_ID, 0, 3)));
@@ -575,7 +556,7 @@ class ParsleyEngineTest {
         };
         ParsleyEngine<String, String> engine = new ParsleyEngine<>(
                 CausalBufferLimit.ofSize(1),
-                ParsleyClock.empty(), frontiers::add, buffer,
+                ParsleyClock.empty(), buffer,
                 new MockCandidateIndex(), forwardedIndex, capturing, CausalAudit.NOOP,
                 System::currentTimeMillis, false, false);
 
@@ -1074,7 +1055,7 @@ class ParsleyEngineTest {
         MockBufferStore<String, String> sharedBuffer = new MockBufferStore<>();
 
         ParsleyEngine<String, String> first = new ParsleyEngine<>(CausalBufferLimit.ofSize(100),
-                ParsleyClock.empty(), f -> {}, sharedBuffer, new MockCandidateIndex(),
+                ParsleyClock.empty(), sharedBuffer, new MockCandidateIndex(),
                 sharedForwardedIndex, ParsleyMetrics.NOOP);
 
         // T1@5 is held; T1@6, T1@7, T1@8 each forward immediately, piling up above the gap.
@@ -1091,7 +1072,7 @@ class ParsleyEngineTest {
         // contents (standing in for "restored from its own changelog") — no separate "ceiling"
         // value is needed; the forwarded index alone remembers that 6, 7, and 8 already went out.
         ParsleyEngine<String, String> restarted = new ParsleyEngine<>(CausalBufferLimit.ofSize(100),
-                persistedFrontier, f -> {}, sharedBuffer, new MockCandidateIndex(),
+                persistedFrontier, sharedBuffer, new MockCandidateIndex(),
                 sharedForwardedIndex, ParsleyMetrics.NOOP);
 
         List<ParsleyMessage<String, String>> released =
@@ -1146,7 +1127,7 @@ class ParsleyEngineTest {
     void baselineSeedNeverRefiresWhenTheRestoredFrontierAlreadyHasRealProgress() {
         ParsleyClock restoredFrontier = ParsleyClock.empty().observe(T1_ID, 0, 0);
         ParsleyEngine<String, String> engine = new ParsleyEngine<>(CausalBufferLimit.ofSize(100),
-                restoredFrontier, frontiers::add, buffer, new MockCandidateIndex(),
+                restoredFrontier, buffer, new MockCandidateIndex(),
                 forwardedIndex, ParsleyMetrics.NOOP);
 
         // The first record this (restarted) instance ever sees on T1/0 is offset 10 — far above
@@ -1166,29 +1147,31 @@ class ParsleyEngineTest {
     // explicitly rather than via the convenience constructors (which now default to fail-fast,
     // matching ParsleyConfig's production default).
 
+    // These helpers build an engine over an untracked in-memory frontier — completeness() is the node's
+    // own frontier — exercising the frontier/buffer/eviction mechanics in isolation. The cross-channel
+    // completeness layer is covered by ParsleyEngineCompletenessTest.
+
     private ParsleyEngine<String, String> engineWith(CausalBufferLimit limit) {
-        return new ParsleyEngine<>(limit, ParsleyClock.empty(), frontiers::add, buffer,
+        return new ParsleyEngine<>(limit, ParsleyClock.empty(), buffer,
                 new MockCandidateIndex(), forwardedIndex, ParsleyMetrics.NOOP, CausalAudit.NOOP,
                 System::currentTimeMillis, false, false);
     }
 
-    // As engineWith, but gates only the given in-scope coordinates — dependencies on any other
-    // coordinate are vacuously satisfied, mirroring what ParsleyProcessor supplies in production.
     private ParsleyEngine<String, String> engineConsuming(CausalBufferLimit limit,
                                                           ParsleyClock.CoordinatePredicate inScope) {
-        return new ParsleyEngine<>(limit, ParsleyClock.empty(), inScope, frontiers::add, buffer,
+        return new ParsleyEngine<>(limit, ParsleyClock.empty(), inScope, buffer,
                 new MockCandidateIndex(), forwardedIndex, ParsleyMetrics.NOOP, CausalAudit.NOOP,
                 System::currentTimeMillis, false, false);
     }
 
     private ParsleyEngine<String, String> engineWithClock(CausalBufferLimit limit,
                                                            java.util.function.LongSupplier clock) {
-        return new ParsleyEngine<>(limit, ParsleyClock.empty(), frontiers::add, buffer,
+        return new ParsleyEngine<>(limit, ParsleyClock.empty(), buffer,
                 new MockCandidateIndex(), forwardedIndex, ParsleyMetrics.NOOP, CausalAudit.NOOP, clock, false, false);
     }
 
     private ParsleyEngine<String, String> engineWithAudit(CausalBufferLimit limit, CausalAudit audit) {
-        return new ParsleyEngine<>(limit, ParsleyClock.empty(), frontiers::add, buffer,
+        return new ParsleyEngine<>(limit, ParsleyClock.empty(), buffer,
                 new MockCandidateIndex(), forwardedIndex, ParsleyMetrics.NOOP, audit,
                 System::currentTimeMillis, false, false);
     }

@@ -47,7 +47,7 @@ class CausalBufferDeserializationFailureTest {
         PoisonBufferStore<String, String> buffer = new PoisonBufferStore<>();
         CountingMetrics metrics = new CountingMetrics();
         ParsleyEngine<String, String> engine = new ParsleyEngine<>(
-                CausalBufferLimit.ofSize(100), ParsleyClock.empty(), c -> {},
+                CausalBufferLimit.ofSize(100), ParsleyClock.empty(),
                 buffer, new MockCandidateIndex(), new MockForwardedIndex(), metrics);
 
         // Buffer a T2 record that depends on T1@3 — held, not yet decoded.
@@ -83,7 +83,7 @@ class CausalBufferDeserializationFailureTest {
         // ...but constructing the engine (which rebuilds the index from indexEntries()) must not.
         MockCandidateIndex index = new MockCandidateIndex();
         assertDoesNotThrow(
-                () -> new ParsleyEngine<>(CausalBufferLimit.ofSize(100), ParsleyClock.empty(), c -> {},
+                () -> new ParsleyEngine<>(CausalBufferLimit.ofSize(100), ParsleyClock.empty(),
                         buffer, index, new MockForwardedIndex(), ParsleyMetrics.NOOP),
                 "index restore must not deserialise the value, so a poison record cannot block startup");
     }
@@ -233,7 +233,7 @@ class CausalBufferDeserializationFailureTest {
         CountingMetrics metrics = new CountingMetrics();
         RecordingCausalAudit audit = new RecordingCausalAudit();
         ParsleyEngine<String, String> engine = new ParsleyEngine<>(
-                CausalBufferLimit.ofSize(100), ParsleyClock.empty(), c -> {},
+                CausalBufferLimit.ofSize(100), ParsleyClock.empty(),
                 buffer, new MockCandidateIndex(), new MockForwardedIndex(), metrics, audit,
                 System::currentTimeMillis, /* skip */ true, /* failOnEvictionLimit */ false);
 
@@ -267,7 +267,7 @@ class CausalBufferDeserializationFailureTest {
         CountingMetrics metrics = new CountingMetrics();
         RecordingCausalAudit audit = new RecordingCausalAudit();
         ParsleyEngine<String, String> engine = new ParsleyEngine<>(
-                CausalBufferLimit.ofSize(1), ParsleyClock.empty(), c -> {},
+                CausalBufferLimit.ofSize(1), ParsleyClock.empty(),
                 buffer, new MockCandidateIndex(), new MockForwardedIndex(), metrics, audit,
                 System::currentTimeMillis, /* skip */ true, /* failOnEvictionLimit */ false);
 
@@ -297,7 +297,7 @@ class CausalBufferDeserializationFailureTest {
     void continueModePoisonDropCatchesUpThroughEverythingAlreadyForwardedAboveIt() {
         PoisonBufferStore<String, String> buffer = new PoisonBufferStore<>();
         ParsleyEngine<String, String> engine = new ParsleyEngine<>(
-                CausalBufferLimit.ofSize(100), ParsleyClock.empty(), c -> {},
+                CausalBufferLimit.ofSize(100), ParsleyClock.empty(),
                 buffer, new MockCandidateIndex(), new MockForwardedIndex(), ParsleyMetrics.NOOP,
                 CausalAudit.NOOP, System::currentTimeMillis, /* skip */ true, /* failOnEvictionLimit */ false);
 
@@ -333,7 +333,7 @@ class CausalBufferDeserializationFailureTest {
     void continueModePoisonDropViaEvictionCascadesThroughEverythingAlreadyForwardedAboveIt() {
         PoisonBufferStore<String, String> buffer = new PoisonBufferStore<>();
         ParsleyEngine<String, String> engine = new ParsleyEngine<>(
-                CausalBufferLimit.ofSize(3), ParsleyClock.empty(), c -> {},
+                CausalBufferLimit.ofSize(3), ParsleyClock.empty(),
                 buffer, new MockCandidateIndex(), new MockForwardedIndex(), ParsleyMetrics.NOOP,
                 CausalAudit.NOOP, System::currentTimeMillis, /* skip */ true, /* failOnEvictionLimit */ false);
 

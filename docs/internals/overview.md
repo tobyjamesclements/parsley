@@ -32,12 +32,12 @@ All share a common set of value types and a single causal engine.
 | `ParsleyMessage` | Typed engine envelope: source coordinate + dependency clock as fields, user headers separate |
 | `ParsleyHeader` | A `(key, value)` header plus the header-key vocabulary (`_parsley_*`, reserved keys, factories) |
 | `ParsleyProcessor` | Kafka Streams processor wrapping the user processor and driving the engine; emits and consumes protocol watermarks |
-| `ParsleyProcessorSupplier` | Processor factory; registers Parsley's five state stores |
+| `ParsleyProcessorSupplier` | Processor factory; registers Parsley's four state stores |
 | `ParsleyProcessorContext` | Stamping proxy: replaces the context given to the user processor; counts business forwards to drive watermark emission |
 | `ParsleyBufferStore` / `RocksBufferStore` | Durable buffer of held records |
 | `ParsleyCandidateIndex` / `RocksCandidateIndex` | Secondary index: coordinate -> candidate record IDs |
 | `ParsleyForwardedIndex` / `RocksForwardedIndex` | Offsets forwarded ahead of the contiguous frontier, so the boundary stays gap-free across restarts |
-| `ParsleyChannelClockStore` / `RocksChannelClockStore` | Per-input-channel clock (own delivered position + observed dependencies); the completeness frontier is the per-coordinate min across all input channels |
+| `ParsleyFrontier` | Owns all causal metadata a node persists — the contiguous delivered frontier clock, the per-input-channel clocks, and `completeness()` (the per-coordinate min across all input channels) — self-persisting as the single `"f"` value of the frontier store; holds the forwarded index as a collaborator |
 | `ParsleySerializer` | Binary serde for `ParsleyMessage` (buffer store wire format) |
 
 ## End-to-end flow

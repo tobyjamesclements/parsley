@@ -112,7 +112,7 @@ public class StateRestorationBenchmark {
         // Pre-populate the buffer store with bufferSize records, each with an unsatisfied
         // dependency, as if a crash occurred with that many held records.
         ParsleyEngine<String, String> engine = new ParsleyEngine<>(
-                limit, ParsleyClock.empty(), f -> {},
+                limit, ParsleyClock.empty(),
                 new RocksBufferStore<>(bufferKV, serializer), new RocksCandidateIndex(waitKV),
                 new RocksForwardedIndex(forwardedKV), ParsleyMetrics.NOOP);
         for (int i = 0; i < bufferSize; i++) {
@@ -149,7 +149,7 @@ public class StateRestorationBenchmark {
         RocksBufferStore<String, String> buf = new RocksBufferStore<>(bufferKV, serializer);
         RocksCandidateIndex idx = new RocksCandidateIndex(waitKV);
         RocksForwardedIndex fwd = new RocksForwardedIndex(forwardedKV);
-        return new ParsleyEngine<>(limit, ParsleyClock.empty(), f -> {},
+        return new ParsleyEngine<>(limit, ParsleyClock.empty(),
                 buf, idx, fwd, ParsleyMetrics.NOOP);
     }
 

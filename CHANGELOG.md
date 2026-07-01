@@ -28,8 +28,9 @@ All notable changes to this project are documented in this file. The format is b
   produces no business output (a dropped/buffered record that advances completeness, or a delivered
   record the delegate did not forward), so completeness propagates contiguously through layers that
   produce no business output. A non-Parsley consumer of such a topic sees tombstone-shaped records and
-  must skip them. A new changelog-backed state store `{ns}-channel-frontier` is registered per causal
-  processor, so existing deployments gain one additional changelog topic.
+  must skip them. The per-input-channel clocks that back `completeness()` are stored alongside the
+  contiguous frontier clock in the single `"f"` value of the existing `{ns}-frontier` store, so no
+  additional changelog topic is introduced.
 - Documentation reframed to describe Parsley's guarantee as causal delivery order for Kafka
   Streams processors, given specific conditions (co-partitioned topics, closed processor effects).
   The previous framing ("causal consistency for Kafka") overstated the scope of the guarantee.
