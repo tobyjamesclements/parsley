@@ -147,14 +147,26 @@ public final class CausalDependencies {
      * has consumed keeps a single instance and {@code observe}s into it across records. Repeated
      * positions on a coordinate take the maximum offset, so re-observing is safe.
      *
+     * <p>A Parsley protocol watermark (see {@link #isWatermark(ConsumerRecord)}) is folded specially:
+     * only the completeness frontier it carries is unioned in — its own {@code (topic, partition,
+     * offset)} is <em>not</em>, because a watermark is metadata occupying an offset with no business
+     * payload, and folding that offset would force downstream to wait on a record that delivers
+     * nothing. This mirrors how a Parsley engine folds a received watermark
+     * ({@code ParsleyEngine.onWatermark}), so a plain-client session advances across a service that
+     * emitted only watermarks on this path while staying consistent with engine-side frontiers. The
+     * watermark itself must not be surfaced to application code as a business record; gate that with
+     * {@link #isWatermark(ConsumerRecord)}.
+     *
      * <p>Requires a resolver to be bound — created via {@link #using(CausalTopics)} or
      * {@link #builder(CausalTopics)}, or carried through a prior {@code observe} / {@code merge}.
      *
      * @param record the consumed record to fold in; must not be {@code null}
-     * @return a new {@code CausalDependencies} extended with {@code record}'s past and own position
+     * @return a new {@code CausalDependencies} extended with {@code record}'s past and (for a business
+     *         record) its own position
      * @throws IllegalStateException    if no resolver is bound, or if {@code record} carries a
      *                                  malformed dependencies header
-     * @throws IllegalArgumentException if {@code record}'s topic cannot be resolved to a UUID
+     * @throws IllegalArgumentException if {@code record}'s topic cannot be resolved to a UUID (business
+     *                                  records only; a watermark's topic is never resolved)
      */
     public CausalDependencies observe(ConsumerRecord<?, ?> record) {
         if (topics == null) {
@@ -164,9 +176,27 @@ public final class CausalDependencies {
         }
         Objects.requireNonNull(record, "record must not be null");
         ParsleyClock carried = fromHeaders(record.headers()).map(deps -> deps.clock).orElse(ParsleyClock.empty());
-        ParsleyClock extended = clock.merge(carried)
-                .observe(topics.topicId(record.topic()), record.partition(), record.offset());
+        ParsleyClock merged = clock.merge(carried);
+        ParsleyClock extended = isWatermark(record)
+                ? merged
+                : merged.observe(topics.topicId(record.topic()), record.partition(), record.offset());
         return new CausalDependencies(extended, topics);
+    }
+
+    /**
+     * Returns {@code true} if {@code record} is a Parsley protocol watermark: a metadata record that
+     * carries a node's completeness frontier but no business payload (null key, null value). A plain
+     * Kafka client should still {@link #observe(ConsumerRecord) observe} a watermark — so its running
+     * frontier advances across a service that emitted only watermarks on this path — but must not
+     * surface it to application code as a business record. The usual consumer loop is to
+     * {@code observe} every record and {@code continue} past those for which this returns {@code true}.
+     *
+     * @param record the consumed record to test; must not be {@code null}
+     * @return {@code true} if the record carries the Parsley watermark marker header
+     */
+    public static boolean isWatermark(ConsumerRecord<?, ?> record) {
+        Objects.requireNonNull(record, "record must not be null");
+        return record.headers().lastHeader(ParsleyHeader.WATERMARK) != null;
     }
 
     /**

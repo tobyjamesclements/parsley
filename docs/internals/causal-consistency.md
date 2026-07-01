@@ -50,102 +50,117 @@ visibility into every event the dependency clock references.
 
 ## Why Kafka stream processing is different
 
-A Kafka stream processor subscribes to a fixed set of input topics. It receives messages on
-those topics only. It has no visibility into messages on any other topic.
+A Kafka stream processor subscribes to a fixed set of input topics and receives messages on those
+topics only. A producer stamps the causal dependencies header with its own frontier — the highest
+offset it had observed on each topic-partition it consumed — and that frontier routinely spans
+topics a downstream consumer never reads. A processor subscribing to T1 and T3 will receive records
+whose dependency clocks include a coordinate for T2, an intermediate topic it has no connection to.
 
-A producer in a Kafka pipeline stamps the causal dependencies header with its own frontier — the
-highest offset it had observed on each topic and partition it consumed. That frontier can, and
-routinely does, span topics a downstream consumer never reads. A processor subscribing to topics T1
-and T3 will receive records whose dependency clocks include coordinates for T2, even if T2 is an
-intermediate topic that this processor has no connection to.
+The traditional algorithms above assume total visibility: a node enforcing causal order receives, or
+will receive, every event its dependency clocks reference. Kafka's subscription model does not
+provide this for free — the processor will never receive T2's messages, so it cannot satisfy a
+dependency on T2 through its own delivery.
 
-Under the total visibility assumption this coordinate is not a problem: the processor will
-eventually receive the messages that advance it. Under Kafka's subscription model it is
-unanswerable: the processor will never receive those messages, so it could never satisfy the
-dependency through normal delivery. Holding the record until T2's coordinate is met means holding
-it forever.
-
-The total visibility assumption does not hold in Kafka stream processing. Algorithms that depend
-on it cannot be applied directly.
+Parsley's response is to **require total visibility of the topology** rather than weaken the
+guarantee. The delivery rule is strict: a record is delivered only once *every* input channel has
+confirmed *every* coordinate the record depends on. For that to be answerable, the topology must
+route every depended-upon coordinate through every input branch of the node (the
+[topology contract](#the-topology-contract)). The alternative — scoping a coordinate out when the
+node does not consume it, treating it as vacuously satisfied — is unsound: it lets a node deliver a
+record before a sibling branch confirms a shared ancestor, and lets a lagging or recovering branch
+later introduce an earlier-ordered record after the fact. Parsley does not scope; it waits for every
+channel.
 
 ## Parsley's algorithm
 
-Parsley's algorithm is built around a different principle:
+> A record is delivered only once every input channel has confirmed every coordinate the record
+> depends on.
 
-> A node enforces the causal order pertinent to the state it holds, and propagates causal
-> metadata so that other nodes can do the same.
+### The completeness frontier
 
-The two halves are handled separately.
+For each coordinate, the **completeness frontier** is the greatest offset that every input channel
+has confirmed. It is the per-coordinate minimum across all input channels
+(`ParsleyClock.intersectMin`), computed in `ParsleyEngine.completeness()`. Each channel contributes:
 
-### Enforcing causal order for state you hold
+- the dependencies its records and watermarks have advertised (the pairwise-max over what it has
+  seen on that channel), and
+- its own contiguous delivered position — the `ParsleyFrontier` offset for the channel's own
+  coordinate.
 
-A processor owns the state associated with the input topics and partitions it is assigned. Its
-delivery predicate is scoped to exactly those coordinates. A dependency on a coordinate the
-processor does not own — a topic it does not subscribe to, or a partition belonging to a different
-task — is vacuously satisfied. The processor cannot advance that coordinate, so it does not wait
-on it.
+A coordinate that any input channel has **not** observed is absent from the completeness frontier
+entirely: it is not confirmed by all branches, so a dependency on it is not yet satisfiable. Channels
+are seeded at registration, so a silent channel holds the minimum down rather than being absent from
+the fold.
 
-This is implemented in `ParsleyEngine.effectiveDependencies()`. Before the delivery predicate is
-evaluated, the full dependency clock is filtered to `inScope`: only coordinates on the processor's
-registered input topics, on the partition the task owns, remain. The filtered clock is what gates
-admission. Coordinates removed by this filter are not dropped from the stamp; they are dropped
-only from the gating decision.
+### The delivery gate
 
-Scoping the delivery predicate this way reflects what it means to hold state. A processor running
-a join against T1 and T2 has taken a consistency obligation over T1 and T2. A record it
-forwards carries that obligation. It has no obligation over T3 because it holds no T3 state.
-Waiting on T3 coordinates would impose a consistency obligation the processor is not equipped to
-meet.
-
-### Propagating causal metadata for downstream nodes
-
-Scoping the delivery predicate solves the liveness problem — records are not held on
-unanswerable dependencies — but it creates a correctness risk. Consider a pipeline:
-
-```
-T1 ---> Node A ---> T2 ---> Node B ---> T3
-```
-
-Node A subscribes to T1 and produces T2. Node B subscribes to T2 and produces T3. When Node B
-forwards a T3 record, it stamps its own frontier, which covers T2. If a downstream Node C
-subscribes to T1 and T3, it needs to know that T3 depends on T1. But if Node B stamps only its
-T2 frontier, the T1 coordinate is lost. Node C cannot enforce the T1 → T3 ordering and admits T3
-records before the corresponding T1 records are delivered — a Lamport violation.
-
-The fix is to carry causal metadata through intermediate nodes. When Node B forwards a T3 record,
-it stamps the full transitive ancestry: its own frontier merged with the dependency clock of the
-T2 record it consumed. The T2 record's dependency clock includes T1 coordinates from Node A.
-Node B did not act on those coordinates — they were out of scope for Node B — but it carries
-them forward.
-
-Node C receives a T3 record stamped with both T2 and T1 coordinates. T2 is out of Node C's scope
-(vacuously satisfied). T1 is in scope. Node C's delivery predicate waits on T1's coordinate and
-holds T3 until T1 is met.
-
-This is implemented in `ParsleyProcessor.deliver()`:
+A record is delivered when the completeness frontier dominates its dependency clock, with only the
+record's own self-cycle removed (a record never waits on its own offset). That is the entire gate,
+`ParsleyEngine.isDeliverable()`:
 
 ```java
-stampFrontier = snapshots.get(i).merge(message.dependencies());
+completeness().dominates(deps.withoutSelfReference())
 ```
 
-The outgoing stamp is the node's own frontier snapshot (what this node enforced) merged with the
-inbound record's original dependencies (what upstream nodes enforced and carried through). Each
-node adds its own causal evidence and forwards everything it received, regardless of whether it
-could act on it.
+There is no in-scope filtering and no vacuously-satisfied dependency. A dependency on coordinate K is
+satisfied only when every input channel has advertised K to at least the required offset; until then
+the record is buffered. Forwarded records and protocol watermarks are stamped with this same
+completeness frontier (`ParsleyProcessor` reads `engine.completeness()`).
 
-### The frontier is a contiguous watermark
+### Why every channel must confirm
 
-One further difference from traditional vector clocks: Parsley's frontier for a given coordinate
-is a contiguous watermark, not a running maximum. It represents the highest offset delivered
-without a gap. A later record on a partition can be forwarded before an earlier record that is
-still held on the same partition. The frontier only advances past the held record's position once
-that record is itself delivered, whether by normal release or by eviction.
+The protocol cannot prove that a causally-earlier message will not later arrive on some other input
+channel until that channel has advertised past the dependency. A channel that is behind — or crashed
+and recovering — is exactly the case where, on catching up, it emits records that belong earlier in
+the order. Holding a record until every channel confirms its dependencies is therefore the guarantee
+working, not a stall. This is strictly stronger than the happened-before minimum, and it is what lets
+Parsley enforce a transitive ordering (`T1 → ... → T3`) at a node that does not consume the
+intermediate topics — provided the contract below is met.
 
-This matters because the delivery predicate checks `frontier >= required`. If the frontier jumped
-over a gap, a downstream record waiting on an offset inside the gap would be released on
-bookkeeping alone, without the record at that offset ever having been delivered. The contiguous
-watermark ensures the predicate reflects actual delivery history, not observed-but-undelivered
-offsets.
+### The topology contract
+
+Because every input channel must confirm a declared coordinate, the topology must be built so that
+**every input branch of a node observes (consumes and watermarks) every coordinate any branch's
+records depend on.** This is the metadata overhead of causal consistency without built-in total
+visibility, placed on topology construction rather than hidden in the engine. Two consequences:
+
+- **Independent inputs.** A node joining unrelated sources will hold a record depending on a
+  coordinate that a sibling input never observes (its channel never confirms that coordinate, so the
+  completeness minimum never includes it). To make such a record deliverable, route the coordinate
+  through every input branch — have each branch consume and pass it through, emitting watermarks even
+  when it runs no business logic.
+- **No ancestor with its own descendant.** A node must not consume both a topic `T` and a topic
+  derived from `T`. The `T` channel can never confirm the derived topic — `T` records are produced
+  before the derived records exist — so a dependency on the derived topic is never satisfied. Consume
+  only the derived topic; the ancestor's progress arrives transitively through the derived topic's
+  completeness stamp.
+
+### Protocol watermarks (heartbeats)
+
+The completeness minimum advances only as channels advertise progress, so a node must keep
+advertising even when it produces no business output. A consumed message that yields no business
+record — a filter that drops it, a record held in the buffer, a not-yet-ready aggregate — emits a
+*protocol watermark*: a record with null key and value, marked with the `_parsley_watermark` header,
+carrying the node's current completeness frontier (emitted when a held record advances completeness,
+or when a delivered record produces no forward). A downstream node folds the carried frontier into
+that source channel's clock and re-runs its drain, then re-emits its own watermark, so progress
+propagates contiguously through layers that produce no business records. Parsley's own processors
+consume watermarks internally (`ParsleyProcessor` / `ParsleyEngine.onWatermark`); a plain Kafka
+client folds them into its running frontier with `CausalDependencies.observe` while skipping them as
+business records, which it detects with `CausalDependencies.isWatermark`.
+
+### Each channel's own coordinate is a contiguous boundary
+
+A channel's contribution for its own coordinate is a *contiguous* delivered boundary, not a running
+maximum: the highest offset delivered on that channel without a gap. A later record on a partition
+can be forwarded before an earlier record still held on the same partition; the boundary only
+advances past the held record's position once that record is itself delivered (by release or
+eviction). This matters because completeness feeds the `dominates` check: if a channel's own
+coordinate jumped over a gap, a record waiting on an offset inside the gap would be released on
+bookkeeping alone, without the record at that offset having been delivered. The contiguous boundary
+ensures completeness reflects actual delivery history, not observed-but-undelivered offsets. (It is
+distinct from the *protocol watermark* records above, which carry a completeness frontier between
+nodes.)
 
 ## Violations
 
@@ -154,8 +169,8 @@ policy (`parsley.buffer.eviction.failure.policy = fail`), the engine throws rath
 a record whose dependencies are not met, and the task restarts. No violation reaches downstream.
 
 Under the `continue` policy, the record is delivered out of causal order. Its outgoing stamp
-carries whatever frontier snapshot existed at eviction time, which may not dominate the record's
-declared dependencies. Downstream nodes receiving that stamp may release records they would
+carries the node's completeness frontier at eviction time, which does not dominate the evicted
+record's declared dependencies. Downstream nodes receiving that stamp may release records they would
 otherwise have held. The violation is transitive. The `continue` policy is an explicit trade of
 Lamport's guarantee for availability under a full buffer; it is logged, metered, and documented
 as a deliberate choice.

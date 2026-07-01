@@ -49,6 +49,9 @@ final class ParsleyProcessorContext<KOut, VOut> implements ProcessorContext<KOut
     private final ProcessorContext<KOut, VOut> delegate;
     private final Supplier<ParsleyClock> frontier;
     private final Supplier<Optional<RecordMetadata>> deliveredMetadata;
+    // Counts business forward() calls since the last resetForwardCount(); read by ParsleyProcessor
+    // to detect non-emitting delegate invocations and emit a watermark in their place.
+    private int forwardCount = 0;
 
     ParsleyProcessorContext(ProcessorContext<KOut, VOut> delegate,
                              Supplier<ParsleyClock> frontier,
@@ -58,13 +61,33 @@ final class ParsleyProcessorContext<KOut, VOut> implements ProcessorContext<KOut
         this.deliveredMetadata = deliveredMetadata;
     }
 
+    /**
+     * Resets the business-forward counter to zero. Called by {@link ParsleyProcessor} before
+     * invoking {@code delegate.process(...)} for each delivered record, so the count reflects
+     * only the forwards the delegate makes for that specific input.
+     */
+    void resetForwardCount() {
+        forwardCount = 0;
+    }
+
+    /**
+     * Returns the number of business {@link #forward} calls made since the last
+     * {@link #resetForwardCount()}. Zero means the delegate did not forward anything for the
+     * current input record, triggering watermark emission in {@link ParsleyProcessor}.
+     */
+    int forwardCount() {
+        return forwardCount;
+    }
+
     @Override
     public <K extends KOut, V extends VOut> void forward(Record<K, V> record) {
+        forwardCount++;
         delegate.forward(stamp(record));
     }
 
     @Override
     public <K extends KOut, V extends VOut> void forward(Record<K, V> record, String childName) {
+        forwardCount++;
         delegate.forward(stamp(record), childName);
     }
 

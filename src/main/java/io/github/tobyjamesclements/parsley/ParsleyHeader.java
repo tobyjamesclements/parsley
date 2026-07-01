@@ -26,6 +26,15 @@ record ParsleyHeader(String key, byte @Nullable [] value) {
     /** Header carrying a record's serialised causal dependency clock. */
     static final String CAUSAL_DEPENDENCIES = "parsley-causal-dependencies";
 
+    /**
+     * Header marking a record as a Parsley protocol watermark. A watermark carries no business
+     * payload (null key, null value) and exists solely to propagate the emitting node's completeness
+     * frontier to downstream processors when the user delegate did not forward any business record
+     * for the delivered input. The {@code _parsley_} prefix means it is stripped from user view by
+     * {@code ParsleyMessage.userHeaders} and from any public header API.
+     */
+    static final String WATERMARK = "_parsley_watermark";
+
     // Explicit canonical constructor: NullAway does not propagate the type-use @Nullable from an
     // array record component to the implicit constructor parameter, so annotate it here directly.
     ParsleyHeader(String key, byte @Nullable [] value) {

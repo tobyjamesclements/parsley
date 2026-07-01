@@ -2,6 +2,8 @@ package io.github.tobyjamesclements.parsley;
 
 import org.apache.kafka.common.TopicPartition;
 import org.apache.kafka.common.Uuid;
+import org.apache.kafka.common.header.Header;
+import org.apache.kafka.common.header.Headers;
 import org.apache.kafka.streams.processor.Cancellable;
 import org.apache.kafka.streams.processor.PunctuationType;
 import org.apache.kafka.streams.processor.api.Processor;
@@ -53,6 +55,7 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
     private final String bufferStoreName;
     private final String candidateIndexStoreName;
     private final String forwardedIndexStoreName;
+    private final String channelFrontierStoreName;
     private final Set<String> topics;
     private final Function<Map<String, Object>, ParsleyTopicAdmin> adminFactory;
     private final ParsleyConfig config;
@@ -64,16 +67,17 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
     // has no broker config until then). Used by ingest() to stamp each record's causal identity.
     private Map<String, Uuid> topicUuids = Map.of();
 
-    // Frontier snapshots captured per-record-admission; zips 1:1 with engine.onRecord() returns.
-    private final List<ParsleyClock> snapshots = new ArrayList<>();
-
     private ProcessorContext<KOut, VOut> context;
     private KeyValueStore<String, byte[]> frontierStore;
     private KeyValueStore<Long, byte[]> bufferStore;
     private KeyValueStore<byte[], byte[]> candidateIndexStore;
     private KeyValueStore<byte[], byte[]> forwardedIndexStore;
+    private KeyValueStore<byte[], byte[]> channelFrontierStore;
     private ParsleyEngine<KIn, VIn> engine;
     private ParsleyMetrics.Wired wiredMetrics;
+    // The stamping proxy context handed to the delegate. Held here so deliver() can check the
+    // per-record forward count and emit a watermark when the delegate forwarded nothing.
+    private ParsleyProcessorContext<KOut, VOut> stampingContext;
     // Read live by the stamping proxy; volatile as belt-and-suspenders (single task thread owns this).
     private volatile ParsleyClock stampFrontier = ParsleyClock.empty();
     private volatile @Nullable RecordMetadata deliveryMetadata;
@@ -86,6 +90,7 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
                      String bufferStoreName,
                      String candidateIndexStoreName,
                      String forwardedIndexStoreName,
+                     String channelFrontierStoreName,
                      Set<String> topics,
                      Function<Map<String, Object>, ParsleyTopicAdmin> adminFactory,
                      ParsleyConfig config,
@@ -97,6 +102,7 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
         this.bufferStoreName = bufferStoreName;
         this.candidateIndexStoreName = candidateIndexStoreName;
         this.forwardedIndexStoreName = forwardedIndexStoreName;
+        this.channelFrontierStoreName = channelFrontierStoreName;
         this.topics = topics;
         this.adminFactory = adminFactory;
         this.config = config;
@@ -111,6 +117,7 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
         this.bufferStore = context.getStateStore(bufferStoreName);
         this.candidateIndexStore = context.getStateStore(candidateIndexStoreName);
         this.forwardedIndexStore = context.getStateStore(forwardedIndexStoreName);
+        this.channelFrontierStore = context.getStateStore(channelFrontierStoreName);
 
         ParsleyClock initialFrontier = ParsleyClock.empty();
         byte[] stored = frontierStore.get(ParsleyStores.FRONTIER_KEY);
@@ -124,14 +131,13 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
         }
         audit.processorInitialized(context.taskId().toString(), stored != null);
 
-        ParsleyEngine.FrontierCallback listener = frontier -> {
-            frontierStore.put(ParsleyStores.FRONTIER_KEY, frontier.toBytes());
-            snapshots.add(frontier);
-        };
+        ParsleyEngine.FrontierCallback listener = frontier ->
+                frontierStore.put(ParsleyStores.FRONTIER_KEY, frontier.toBytes());
 
         ParsleyBufferStore<KIn, VIn> buffer = new RocksBufferStore<>(bufferStore, serializer);
         ParsleyCandidateIndex candidateIndex = new RocksCandidateIndex(candidateIndexStore);
         ParsleyForwardedIndex forwardedIndex = new RocksForwardedIndex(forwardedIndexStore);
+        ParsleyChannelClockStore channelClockStore = new RocksChannelClockStore(channelFrontierStore);
 
         this.wiredMetrics = ParsleyMetrics.wire(context,
                 ParsleyLimits.sizeLimitOf(limit), ParsleyLimits.durationLimitOf(limit));
@@ -154,13 +160,34 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
         initialFrontier = initialFrontier.retaining(inScope);
         this.stampFrontier = initialFrontier;
 
-        this.engine = new ParsleyEngine<>(limit, initialFrontier, inScope,
+        // Prune channel-clock entries whose topic UUID is no longer in scope (e.g. after topic
+        // deletion and recreation with a new UUID). A stale entry would hold the completeness min
+        // at zero for a coordinate that can never advance, pinning the completeness frontier forever.
+        for (ParsleyChannelClockStore.ChannelEntry entry : channelClockStore.allEntries()) {
+            if (!inScope.test(entry.topicId(), entry.partition())) {
+                channelClockStore.remove(entry.topicId(), entry.partition());
+            }
+        }
+
+        // Seed an entry for every consumed input channel so the completeness frontier — the
+        // per-coordinate min across ALL input channels — includes a channel that has not yet observed
+        // anything (it contributes nothing, holding the min until it advertises). Without this, a
+        // silent channel would simply be absent from the min, and a record could be delivered before
+        // that channel confirmed the dependency.
+        for (Uuid topicId : consumedTopicIds) {
+            channelClockStore.update(topicId, taskPartition, ParsleyClock.empty());
+        }
+
+        this.engine = new ParsleyEngine<>(limit, initialFrontier, inScope, channelClockStore,
                 listener, buffer, candidateIndex, forwardedIndex, wiredMetrics.metrics(), audit,
                 context::currentSystemTimeMs, config.skipOnDecodeFailure(), config.failOnEvictionLimit());
+        // Initialise stampFrontier from completeness() so the stamping proxy reflects the restored
+        // channel-clock state (not just the in-scope frontier) from the first forward onward.
+        this.stampFrontier = engine.completeness();
 
-        ProcessorContext<KOut, VOut> stamping = new ParsleyProcessorContext<>(
+        this.stampingContext = new ParsleyProcessorContext<>(
                 context, () -> stampFrontier, () -> Optional.ofNullable(deliveryMetadata));
-        delegate.init(stamping);
+        delegate.init(stampingContext);
 
         // Enforce the size limit once against a buffer restored from a changelog (e.g. after a
         // restart following a reconfiguration that lowered the limit); onRecord()'s inline check
@@ -185,7 +212,22 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
 
     @Override
     public void process(Record<KIn, VIn> record) {
-        deliver(gate(ingest(record)));
+        if (isWatermark(record)) {
+            handleWatermark(record);
+            return;
+        }
+        ParsleyClock completenessBefore = engine.completeness();
+        List<ParsleyMessage<KIn, VIn>> admitted = gate(ingest(record));
+        deliver(admitted);
+        // Advertise this node's progress so downstream channel clocks advance gap-free. A delivered
+        // record advertises through its business output's completeness stamp — or, if the delegate
+        // forwarded nothing, the watermark emitted in deliver(). A consumed record that was buffered
+        // produces neither, so emit a heartbeat watermark — but only when its receipt-time
+        // channel-clock update actually advanced completeness, so an unrelated held record does not
+        // flood downstream with no-op watermarks.
+        if (admitted.isEmpty() && !engine.completeness().equals(completenessBefore)) {
+            forwardWatermark();
+        }
     }
 
     @Override
@@ -197,38 +239,125 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
     }
 
     private List<ParsleyMessage<KIn, VIn>> gate(ParsleyMessage<KIn, VIn> record) {
-        snapshots.clear();
         return engine.onRecord(record);
     }
 
     private List<ParsleyMessage<KIn, VIn>> evict() {
-        snapshots.clear();
         return engine.evictExpired();
     }
 
     private List<ParsleyMessage<KIn, VIn>> evictRestoredOverflow() {
-        snapshots.clear();
         List<ParsleyMessage<KIn, VIn>> out = new ArrayList<>(engine.drainRestoredSatisfied());
         out.addAll(engine.evictOverflow());
         return out;
     }
 
     private void deliver(List<ParsleyMessage<KIn, VIn>> admitted) {
-        for (int i = 0; i < admitted.size(); i++) {
-            ParsleyMessage<KIn, VIn> message = admitted.get(i);
-            // Merge the node's own frontier snapshot with the record's original inbound deps so
-            // that transitive ancestry (coordinates from upstream nodes this node does not consume)
-            // is carried through to the outgoing stamp. Downstream nodes can then enforce ordering
-            // against those coordinates via their own effectiveDependencies filtering.
-            stampFrontier = snapshots.get(i).merge(message.dependencies());
+        for (ParsleyMessage<KIn, VIn> message : admitted) {
+            // The stamp is the node's completeness frontier — the per-channel-min-then-frontier-max
+            // boundary that is sound across all input branches. This replaces the old per-record
+            // frontier-snapshot-merged-with-inbound-deps approach, which was correct only in
+            // single-layer topologies. Downstream nodes receive the sound multi-layer boundary.
+            stampFrontier = engine.completeness();
             deliveryMetadata = new ParsleyRecordMetadata(message.topic(), message.partition(), message.offset());
             // User headers + the producer's dependencies only; the source coordinate is surfaced via
             // context.recordMetadata(), and ParsleyProcessorContext re-stamps the frontier on forward.
+            stampingContext.resetForwardCount();
             delegate.process(new Record<>(message.key(), message.value(), message.timestamp(),
                     message.headersWithDependencies()));
+            // If the delegate did not forward any business record for this input, emit a watermark
+            // carrying the current completeness frontier so that downstream nodes still learn about
+            // this node's causal progress. Without this, a non-emitting processor silently stalls
+            // downstream completeness, breaking the inductive correctness of multi-layer topologies.
+            if (stampingContext.forwardCount() == 0) {
+                forwardWatermark();
+            }
         }
         deliveryMetadata = null;
-        stampFrontier = engine.frontier();
+        stampFrontier = engine.completeness();
+    }
+
+    /**
+     * Returns {@code true} if {@code record} is a Parsley protocol watermark, identified by the
+     * presence of the {@link ParsleyHeader#WATERMARK} header. Watermarks carry null key/null value
+     * and must never be forwarded to the user delegate or buffered — they exist only to propagate
+     * causal completeness progress through non-emitting layers.
+     */
+    private boolean isWatermark(Record<KIn, VIn> record) {
+        for (Header h : record.headers()) {
+            if (ParsleyHeader.WATERMARK.equals(h.key())) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * Handles a received protocol watermark: decodes its carried completeness frontier, updates the
+     * per-channel clock for the watermark's source channel, performs a full-buffer drain to release
+     * any records newly satisfying the two-part gate, and re-emits a watermark downstream carrying
+     * this node's updated completeness frontier. The watermark is never forwarded to the user
+     * delegate and never buffered.
+     *
+     * <p>The downstream re-emission (inductive propagation) ensures that a node which never
+     * produces business records on this path still advertises its causal progress, so a grandchild
+     * node's channel clock can advance without any business record on the path.
+     */
+    private void handleWatermark(Record<KIn, VIn> record) {
+        Optional<RecordMetadata> meta = context.recordMetadata();
+        String topic = meta.map(RecordMetadata::topic).orElse("");
+        int partition = meta.map(RecordMetadata::partition).orElse(0);
+        Uuid topicId = topicUuids.get(topic);
+        if (topicId == null) {
+            // Watermark on an unregistered topic — not expected in a correctly wired topology, but
+            // fail safe rather than crash so a misconfiguration does not fail a healthy task.
+            log.warn("Received watermark on unregistered topic '{}'; ignoring", topic);
+            return;
+        }
+
+        // Decode the completeness frontier carried in the parsley-causal-dependencies header.
+        ParsleyClock frontierClock = ParsleyClock.empty();
+        for (Header h : record.headers()) {
+            if (ParsleyHeader.CAUSAL_DEPENDENCIES.equals(h.key()) && h.value() != null) {
+                try {
+                    frontierClock = ParsleyClock.fromBytes(h.value());
+                } catch (Exception e) {
+                    log.warn("Failed to decode watermark frontier on {}-{}; treating as empty",
+                            topic, partition, e);
+                }
+                break;
+            }
+        }
+
+        // Update the channel clock and drain any newly releasable records.
+        List<ParsleyMessage<KIn, VIn>> released = engine.onWatermark(topicId, partition, frontierClock);
+        deliver(released);
+
+        // Always re-emit a watermark downstream so the completeness boundary propagates through
+        // non-subscribing layers even when no business records were released.
+        forwardWatermark();
+    }
+
+    /**
+     * Forwards a protocol watermark carrying this node's current {@link ParsleyEngine#completeness()
+     * completeness frontier} to all downstream children. The watermark carries null key and null
+     * value (distinguishable from business tombstones by the {@link ParsleyHeader#WATERMARK} header)
+     * and bypasses the business-forward counter in {@link ParsleyProcessorContext} so it does not
+     * prevent watermark emission for a genuinely non-emitting delegate invocation.
+     *
+     * <p>Null key/value are intentional: watermark records have no business payload; they are
+     * protocol metadata only. Any non-Parsley consumer of a topic containing watermarks will see
+     * tombstone-shaped records — Parsley's own consumers skip them.
+     */
+    @SuppressWarnings("NullAway") // watermark records carry null key/value by protocol design
+    private void forwardWatermark() {
+        Headers wm = ParsleyHeader.mutableHeaders();
+        wm.add(ParsleyHeader.WATERMARK, new byte[0]);
+        wm.add(ParsleyHeader.CAUSAL_DEPENDENCIES, engine.completeness().toBytes());
+        // Use 0L as the watermark timestamp: a watermark's timestamp carries no business meaning —
+        // only its headers matter for causal gating — so 0L is safe in all execution contexts
+        // (MockProcessorContext may not have time initialised).
+        context.forward(new Record<>(null, null, 0L, wm));
     }
 
     private ParsleyMessage<KIn, VIn> ingest(Record<KIn, VIn> record) {

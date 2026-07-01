@@ -21,6 +21,12 @@ Size: `5 + 28 × n` bytes. The wire version is `0x01`, and deserialization throw
 
 Topic IDs are Kafka `Uuid` values stored as two `long` fields (most-significant bits, then least-significant bits).
 
+On a forwarded business record this header carries the producing node's **completeness frontier** (`ParsleyEngine.completeness()`), not just the record's own dependencies. The encoding is identical; only the value's meaning differs by context.
+
+## `_parsley_watermark` header (protocol watermark)
+
+A protocol watermark is a record with null key and null value carrying two headers: `_parsley_watermark` (an empty-byte marker) and `parsley-causal-dependencies` (the emitting node's completeness frontier, encoded exactly as above). A node emits one in place of a business record when a delivered input produced no downstream output, so completeness still propagates through non-emitting layers. Consumers identify a watermark by the presence of the `_parsley_watermark` header (`CausalDependencies.isWatermark`); a non-Parsley consumer sees a tombstone-shaped record and should skip it.
+
 ## Buffer record (`ParsleySerializer` v3)
 
 The `{ns}-buffer` state store value has two layers: `RocksBufferStore` prepends the buffer-admission
@@ -82,11 +88,13 @@ The namespace is the `name` passed to `CausalProcessors.builder(...).addBufferSt
 
 | Store | Key serde | Value serde | Purpose |
 |---|---|---|---|
-| `{ns}-frontier` | `String` | `byte[]` | Single entry at key `"f"`: serialised `ParsleyClock` |
+| `{ns}-frontier` | `String` | `byte[]` | Single entry at key `"f"`: serialised `ParsleyClock` (the node's contiguous delivered frontier) |
 | `{ns}-buffer` | `Long` | `byte[]` | Insertion sequence -> `bufferedAt` + serialised `ParsleyMessage` |
 | `{ns}-candidate-index` | `byte[]` | `byte[]` (empty) | 36-byte composite key -> presence marker |
+| `{ns}-forwarded-index` | `byte[]` | `byte[]` (empty) | 28-byte `(topicId, partition, offset)` key -> presence marker: offsets forwarded ahead of the contiguous frontier |
+| `{ns}-channel-frontier` | `byte[]` | `byte[]` | 20-byte `(topicId, partition)` key -> serialised `ParsleyClock`: the dependencies advertised on that input channel, folded by `completeness()` (per-coordinate min across all input channels) |
 
-All three stores are persistent and changelog-backed. Changelog topic names follow the Kafka Streams pattern: `{applicationId}-{storeName}-changelog`.
+All five stores are persistent and changelog-backed. Changelog topic names follow the Kafka Streams pattern: `{applicationId}-{storeName}-changelog`.
 
 ## Topic UUIDs
 

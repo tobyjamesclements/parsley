@@ -37,6 +37,12 @@ input; a stateful node keeps one instance and observes into it across records. T
 dependencies a record already carries, without folding in a new position, use
 `CausalDependencies.fromRecord(record)`.
 
+When you consume a topic a Parsley topology produces, some records are *protocol watermarks*: null
+key and value, carrying a completeness frontier so causal progress flows through processors that
+produce no output for a given input. Still `observe(record)` them, so your frontier advances across a
+service that emitted only watermarks on this path, but skip them as business records — test with
+`CausalDependencies.isWatermark(record)` and `continue` past those it flags.
+
 The frontier is persisted before each record is forwarded, so it survives restarts and rebalances.
 
 ## The causal buffer
@@ -61,17 +67,22 @@ A `CausalBufferLimit` bounds how long or how large the buffer may grow before ev
 
 ## Delivery and eviction
 
-A record whose dependencies the frontier has already observed is delivered in causal order. This is
-the common case, and it covers a record delivered immediately, a record delivered after a wait, and a
-record that claims no dependencies or carries an undecodable header, both of which are treated as
-vacuously satisfied.
+A record is delivered in causal order once its dependencies are confirmed by every input channel of
+the processor. This covers a record delivered immediately, a record delivered after a wait, and a
+record that claims no dependencies or carries an undecodable header (an empty dependency set, trivially
+satisfied).
 
-Dependencies on coordinates this processor does not consume are also treated as vacuously satisfied.
-A producer stamps its full causal frontier, which can span topics and partitions a given processor
-never reads. The processor waits only on the coordinates it actually consumes, meaning the topics
-registered as causal buffers on the partitions its task owns, and treats every other coordinate as
-already met. Without this, a dependency the processor could never observe would hold a record until
-eviction.
+The gate is strict: a dependency on coordinate K is satisfied only when *every* input channel the
+processor consumes has advertised K to at least the required offset. A producer stamps its full causal
+frontier, which can span topics a given processor does not read directly — and the processor waits for
+all of its input channels to confirm those coordinates rather than ignoring them. This is what lets the
+processor enforce an ordering that runs through topics it does not itself consume, but it means the
+**topology must route every depended-upon coordinate through every input branch** of a node (consuming
+and watermarking it, even with no business logic). A coordinate that some input branch never observes
+holds the record indefinitely. Two corollaries: a join of fully independent sources will hold a record
+that depends on a coordinate an unrelated input never sees, and a node must not consume both a topic and
+a topic derived from it (the ancestor channel can never confirm the descendant). See the
+[causal consistency model](internals/causal-consistency.md) for the full contract.
 
 When a held record's dependencies are still not satisfied and the configured `CausalBufferLimit`
 fires, what happens next is governed by `parsley.buffer.eviction.failure.policy`. The default is

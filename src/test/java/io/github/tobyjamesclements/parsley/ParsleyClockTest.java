@@ -195,4 +195,65 @@ class ParsleyClockTest {
         assertTrue(ParsleyClock.empty().observe(oldUuid, 0, 5L).dominates(required),
                 "old-UUID frontier at matching offset must dominate the dependency");
     }
+
+    /**
+     * When both clocks record the same (topicId, partition) coordinate, mergeMin takes the lower of
+     * the two offsets, bounding the result at the slowest of the two clocks.
+     *
+     * Asserts that the result clock contains the minimum offset for each coordinate present in both.
+     */
+    @Test
+    void mergeMinBothPresentTakesMin() {
+        ParsleyClock a = ParsleyClock.empty().observe(T1_ID, 0, 7).observe(T2_ID, 0, 3);
+        ParsleyClock b = ParsleyClock.empty().observe(T1_ID, 0, 2).observe(T2_ID, 0, 9);
+        assertEquals(
+                ParsleyClock.empty().observe(T1_ID, 0, 2).observe(T2_ID, 0, 3),
+                a.mergeMin(b),
+                "mergeMin must take the minimum offset for each coordinate present in both clocks");
+    }
+
+    /**
+     * A coordinate present in only one clock is kept at its value: unknown is not zero. A channel that
+     * has never mentioned a coordinate does not pin it down.
+     *
+     * Asserts that a coordinate unique to either side appears unchanged in the result.
+     */
+    @Test
+    void mergeMinPresentOnOneSideKept() {
+        ParsleyClock a = ParsleyClock.empty().observe(T1_ID, 0, 5);
+        ParsleyClock b = ParsleyClock.empty().observe(T2_ID, 0, 3);
+        assertEquals(
+                ParsleyClock.empty().observe(T1_ID, 0, 5).observe(T2_ID, 0, 3),
+                a.mergeMin(b),
+                "mergeMin must keep a coordinate present in only one clock at its original value");
+    }
+
+    /**
+     * mergeMin with an empty clock is an identity in both directions: merging any clock with empty
+     * returns a clock equal to the non-empty one.
+     *
+     * Asserts that mergeMin(a, empty) and mergeMin(empty, a) both equal a.
+     */
+    @Test
+    void mergeMinEmptyIsIdentity() {
+        ParsleyClock a = ParsleyClock.empty().observe(T1_ID, 0, 4).observe(T2_ID, 0, 1);
+        assertEquals(a, a.mergeMin(ParsleyClock.empty()),
+                "mergeMin with an empty clock on the right must return the original clock");
+        assertEquals(a, ParsleyClock.empty().mergeMin(a),
+                "mergeMin with an empty clock on the left must return the original clock");
+    }
+
+    /**
+     * mergeMin is commutative: merging a with b produces the same result as merging b with a.
+     *
+     * Asserts that mergeMin(a, b) equals mergeMin(b, a) for clocks with both shared and unique
+     * coordinates.
+     */
+    @Test
+    void mergeMinIsCommutative() {
+        ParsleyClock a = ParsleyClock.empty().observe(T1_ID, 0, 7).observe(T2_ID, 0, 1);
+        ParsleyClock b = ParsleyClock.empty().observe(T1_ID, 0, 3).observe(T2_ID, 0, 8);
+        assertEquals(a.mergeMin(b), b.mergeMin(a),
+                "mergeMin must be commutative: the order of arguments must not affect the result");
+    }
 }

@@ -6,21 +6,31 @@
 
 ```
 onRecord(record):
+    channelAdvanced = !channelClock(record.channel).dominates(record.dependencies)
+    channelStore.update(record.channel, record.dependencies)  # receipt-time: record the branch's
+                                                               # proven completeness before gating
     frontier.seedIfFirstSeen(record.coordinate)        # one-time per coordinate, folds in
                                                         # everything below the first-seen offset
-    deps = effectiveDependencies(record.dependencies)  # scope to in-scope coords, strip self-ref
+    deps = record.dependencies.withoutSelfReference()  # strip the record's own offset only
 
-    if frontier.isDeliverable(deps):
+    if completeness().dominates(deps):                 # the gate: every input channel has confirmed
+                                                        #   every depended coordinate
         frontier.deliver(record.coordinate)            # advance frontier, fire FrontierCallback
         out.add(record)
         propagate(record.coordinate)                   # cascade releases (see below)
     else:
         buffer.add(record)                             # hold until satisfied
-        candidateIndex.index(record, deps)
+        candidateIndex.index(record, deps, completeness())
         if buffer.size() >= sizeLimit:
             out.addAll(evictOverflow())                # bring buffer back under the limit
 
+    if channelAdvanced and channelStore.size() > 1:    # a fan-in branch advanced: re-scan, since a
+        out.addAll(drainSatisfied())                   # channel advance can lift completeness for held records
     return out
+
+onWatermark(channel, carriedFrontier):
+    channelStore.update(channel, carriedFrontier)      # advance the source channel's clock
+    return drainSatisfied()                             # release records the new completeness permits
 
 evictOverflow() / evictExpired():
     candidates = oldest/expired buffered entries
@@ -32,6 +42,11 @@ evictOverflow() / evictExpired():
                                                          # cascading via propagate per release
 ```
 
+`completeness()` is the per-coordinate minimum across every input channel (`ParsleyClock.intersectMin`):
+a record is deliverable only once every channel has confirmed every coordinate it depends on. See the
+[causal consistency model](causal-consistency.md) for why the gate is strict and the topology contract
+it implies.
+
 Each piece is covered in its own section below: [`onRecord()` algorithm](#onrecord-algorithm)
 for admission, [Propagation cascade](#propagation-cascade-propagate) for the cascade, and
 [Eviction](#eviction) for the fail/continue policy split.
@@ -41,6 +56,7 @@ for admission, [Propagation cascade](#propagation-cascade-propagate) for the cas
 | Field | Type | Purpose |
 |---|---|---|
 | `frontier` | `ParsleyFrontier` | Causal state: contiguous frontier clock, forwarded-offset index, baseline seeding |
+| `channelStore` | `ParsleyChannelClockStore` | Durable per-input-channel clock: the dependencies advertised on each `(topicId, partition)` this node consumes; seeded at registration so silent channels are present in the completeness fold |
 | `buffer` | `ParsleyBufferStore<K,V>` | Durable set of held records |
 | `candidateIndex` | `ParsleyCandidateIndex` | Secondary index: coordinate -> candidate record IDs |
 | `sizeLimit` | `int` | Buffer depth at which eviction triggers |
@@ -48,8 +64,16 @@ for admission, [Propagation cascade](#propagation-cascade-propagate) for the cas
 
 `ParsleyFrontier` owns the three Lamport operations: `isDeliverable(deps)` (the delivery
 predicate), `deliver(coordinate, callback)` (advance the frontier and notify), and
-`seedIfFirstSeen(coordinate)` (establish the baseline for a newly observed coordinate). See the
-[causal consistency model](causal-consistency.md) page for the theoretical context.
+`seedIfFirstSeen(coordinate)` (establish the baseline for a newly observed coordinate).
+
+`channelStore` backs the delivery gate and the node's outbound stamp. `completeness()` is the
+per-coordinate minimum across every input channel (`ParsleyClock.intersectMin`): each channel
+contributes the dependencies it has advertised plus its own contiguous delivered position, and a
+coordinate any channel has not observed is absent from the result. The single gate is
+`completeness().dominates(deps.withoutSelfReference())` — a record is delivered only once every input
+channel has confirmed every coordinate it depends on. The same `completeness()` stamps forwarded
+records and protocol watermarks. See the [causal consistency model](causal-consistency.md) for why the
+gate is strict and the topology contract it implies.
 
 ## `onRecord()` algorithm
 
@@ -59,15 +83,16 @@ predicate), `deliver(coordinate, callback)` (advance the frontier and notify), a
    policy the task is failed fast; under `continue` the clock is replaced with `ParsleyClock.empty()`
    (logged at `WARN`) and the engine receives it as vacuously satisfied. Either way, the engine
    always receives a typed `ParsleyClock`.
-2. Strip self-referential entries from the dependencies. A `(topicId, partition)` entry whose
-   required offset equals the record's own source offset on that coordinate is removed
-   (`ParsleyClock.without`). This prevents a record from blocking on its own position in the log.
-3. If `frontier.isDeliverable(deps)`: advance frontier, add the record to output, call `propagate()`.
-4. Otherwise: add record to buffer (assigned an insertion sequence and a `bufferedAt` timestamp), index unsatisfied coordinates in the candidate index. If buffer depth >= `sizeLimit`, call `evictOverflow()`.
+2. Update the source channel's clock with the record's dependencies, at receipt time, before the gate. This is how a channel advertises its progress: a record's carried frontier is its branch's proven completeness the moment it arrives, regardless of whether this node has delivered the record yet. Recording it here lets `completeness()` advance as soon as a channel advertises a coordinate, and prevents a mutual deadlock between two sibling records that each depend on a shared ancestor. Whether this advanced the channel is remembered for step 6.
+3. Strip the self-cycle from the dependencies. A `(topicId, partition)` entry whose required offset equals the record's own source offset on that coordinate is removed (`ParsleyClock.without`), so a record never blocks on its own position. This is the *only* dependency preprocessing — there is no in-scope filtering.
+4. Apply the gate: `completeness().dominates(deps)`. `completeness()` is the per-coordinate minimum across every input channel, so a coordinate is satisfied only when every channel has confirmed it. If it passes: advance frontier, add the record to output, call `propagate()`.
+5. Otherwise: add record to buffer (assigned an insertion sequence and a `bufferedAt` timestamp), index its unsatisfied coordinates (those `completeness()` does not yet cover) in the candidate index. If buffer depth >= `sizeLimit`, call `evictOverflow()`.
+6. If the receipt-time channel update in step 2 advanced this channel *and* the node has more than one input channel, run `drainSatisfied()` — a full-buffer re-scan — to release any held record the lifted completeness now permits. This release is not reachable through the candidate index that drives `propagate()` (which keys on frontier advances). A single-channel node's completeness is its own frontier, fully covered by `propagate`, so it skips this.
 
-A missing header, or an undecodable one under `continue` policy, always falls into the satisfied
-branch (step 3). It never reaches the buffer. The frontier still advances on these records, so
-buffered records waiting on that coordinate are not permanently stalled.
+A missing header, or an undecodable one under `continue` policy, becomes an empty dependency clock,
+which `completeness().dominates` satisfies trivially (step 4). It never reaches the buffer. The
+frontier still advances on these records, so buffered records waiting on that coordinate are not
+permanently stalled.
 
 ## Propagation cascade (`propagate`)
 

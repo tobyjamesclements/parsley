@@ -60,6 +60,8 @@ class ParsleyProcessorRestoreTest {
                 new TestKeyValueStore<byte[], byte[]>(Arrays::compareUnsigned, "candidate-index");
         TestKeyValueStore<byte[], byte[]> forwardedIndexStore =
                 new TestKeyValueStore<byte[], byte[]>(Arrays::compareUnsigned, "forwarded-index");
+        TestKeyValueStore<byte[], byte[]> channelFrontierStore =
+                new TestKeyValueStore<byte[], byte[]>(Arrays::compareUnsigned, "channel-frontier");
 
         RecordingCausalAudit audit = new RecordingCausalAudit();
         List<String> processed = new ArrayList<>();
@@ -71,7 +73,7 @@ class ParsleyProcessorRestoreTest {
                 new ParsleySerializer<>(new ParsleyResolver<>(t -> Serdes.String(), t -> Serdes.String()));
         ParsleyProcessor<String, String, String, String> processor = new ParsleyProcessor<>(
                 delegate, CausalBufferLimit.ofSize(100), serializer,
-                "frontier", "buffer", "candidate-index", "forwarded-index", Set.of("t1"),
+                "frontier", "buffer", "candidate-index", "forwarded-index", "channel-frontier", Set.of("t1"),
                 configs -> ADMIN, ParsleyConfig.from(new Properties()), audit);
 
         MockProcessorContext<String, String> context = new MockProcessorContext<>();
@@ -79,6 +81,7 @@ class ParsleyProcessorRestoreTest {
         context.addStateStore(bufferStore);
         context.addStateStore(candidateIndexStore);
         context.addStateStore(forwardedIndexStore);
+        context.addStateStore(channelFrontierStore);
 
         processor.init(context);
 
@@ -124,6 +127,8 @@ class ParsleyProcessorRestoreTest {
                 new TestKeyValueStore<byte[], byte[]>(Arrays::compareUnsigned, "candidate-index");
         TestKeyValueStore<byte[], byte[]> forwardedIndexStore =
                 new TestKeyValueStore<byte[], byte[]>(Arrays::compareUnsigned, "forwarded-index");
+        TestKeyValueStore<byte[], byte[]> channelFrontierStore =
+                new TestKeyValueStore<byte[], byte[]>(Arrays::compareUnsigned, "channel-frontier");
 
         ParsleySerializer<String, String> serializer =
                 new ParsleySerializer<>(new ParsleyResolver<>(t -> Serdes.String(), t -> Serdes.String()));
@@ -145,7 +150,7 @@ class ParsleyProcessorRestoreTest {
         continueOnEviction.setProperty("parsley.buffer.eviction.failure.policy", "continue");
         ParsleyProcessor<String, String, String, String> processor = new ParsleyProcessor<>(
                 delegate, CausalBufferLimit.ofSize(2), serializer,
-                "frontier", "buffer", "candidate-index", "forwarded-index", Set.of("t1"),
+                "frontier", "buffer", "candidate-index", "forwarded-index", "channel-frontier", Set.of("t1"),
                 configs -> ADMIN, ParsleyConfig.from(continueOnEviction), CausalAudit.NOOP);
 
         MockProcessorContext<String, String> context = new MockProcessorContext<>();
@@ -153,6 +158,7 @@ class ParsleyProcessorRestoreTest {
         context.addStateStore(bufferStore);
         context.addStateStore(candidateIndexStore);
         context.addStateStore(forwardedIndexStore);
+        context.addStateStore(channelFrontierStore);
 
         processor.init(context);
 

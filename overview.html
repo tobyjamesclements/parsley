@@ -25,16 +25,27 @@ through a static factory: {@link io.github.tobyjamesclements.parsley.CausalProce
   {@link io.github.tobyjamesclements.parsley.CausalDependencies#observe observe}. Combine several
   for a fan-in with {@link io.github.tobyjamesclements.parsley.CausalDependencies#merge merge}, and
   attach the result to an outbound record with
-  {@link io.github.tobyjamesclements.parsley.CausalDependencies#stamp stamp}.</dd>
+  {@link io.github.tobyjamesclements.parsley.CausalDependencies#stamp stamp}. When consuming a topic
+  a Parsley topology produces, fold every record in with {@code observe} but skip those for which
+  {@link io.github.tobyjamesclements.parsley.CausalDependencies#isWatermark isWatermark} returns true,
+  which are protocol metadata rather than business records.</dd>
 
   <dt><strong>Causal frontier</strong></dt>
   <dd>The highest offset a causal processor has <em>contiguously</em> admitted on each topic-partition.
   It is never a coordinate the processor merely happens to have seen something later on, because a
   later-offset record may be forwarded before an earlier one that is still held on the same partition.
   The frontier is keyed by topic UUID, so topic deletion and recreation produce a distinct identity
-  even when the name is reused. A record is delivered once the frontier dominates its dependencies.
-  The frontier is internal to {@link io.github.tobyjamesclements.parsley.CausalProcessors} and is not
-  a separate public type.</dd>
+  even when the name is reused. A record is delivered once every input channel has confirmed every
+  coordinate the record depends on (the per-coordinate minimum across all input channels). The
+  frontier is internal to {@link io.github.tobyjamesclements.parsley.CausalProcessors} and is not a
+  separate public type.</dd>
+
+  <dt><strong>Protocol watermark</strong></dt>
+  <dd>A record with null key and value, marked with a {@code _parsley_watermark} header, that carries a
+  node's completeness frontier downstream when a delivered input produced no business output. It keeps
+  causal progress flowing through filters and not-yet-emitting aggregates. Parsley's processors handle
+  watermarks internally; a plain Kafka client detects them with
+  {@link io.github.tobyjamesclements.parsley.CausalDependencies#isWatermark isWatermark}.</dd>
 
   <dt><strong>Causal buffer</strong></dt>
   <dd>Records whose dependencies are not yet satisfied are held in a changelog-backed buffer and

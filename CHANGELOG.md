@@ -7,11 +7,39 @@ All notable changes to this project are documented in this file. The format is b
 ## [Unreleased]
 
 ### Changed
+- **Breaking (semantics): strict completeness gate across all input channels.** A record is now
+  delivered only once *every* input channel of the processor has confirmed *every* coordinate the
+  record depends on. The delivery gate is a single check, `completeness().dominates(deps)`, where
+  `completeness()` is the per-coordinate minimum across all input channels (each channel's advertised
+  dependencies plus its own contiguous delivered position). The previous model scoped a dependency
+  out when the processor did not consume that coordinate (treating it as vacuously satisfied); that
+  scoping is removed, because it was unsound at a reconvergence point and let a lagging or recovering
+  branch introduce an earlier-ordered record after the fact.
+
+  This imposes a **topology contract**: every input branch of a node must observe (consume and
+  watermark) every coordinate any branch's records depend on, or records depending on an unconfirmed
+  coordinate are held indefinitely. In particular, a join of fully independent sources will hold a
+  record depending on a coordinate an unrelated input never observes, and **a node must not consume
+  both a topic and a topic derived from it** (the ancestor channel can never confirm the descendant).
+  See `docs/internals/causal-consistency.md`.
+- **Breaking (wire).** Forwarded records carry the producing node's completeness frontier in the
+  `parsley-causal-dependencies` header. Nodes emit *protocol watermark* records — null key and value,
+  marked with a `_parsley_watermark` header carrying that frontier — for every consumed message that
+  produces no business output (a dropped/buffered record that advances completeness, or a delivered
+  record the delegate did not forward), so completeness propagates contiguously through layers that
+  produce no business output. A non-Parsley consumer of such a topic sees tombstone-shaped records and
+  must skip them. A new changelog-backed state store `{ns}-channel-frontier` is registered per causal
+  processor, so existing deployments gain one additional changelog topic.
 - Documentation reframed to describe Parsley's guarantee as causal delivery order for Kafka
   Streams processors, given specific conditions (co-partitioned topics, closed processor effects).
   The previous framing ("causal consistency for Kafka") overstated the scope of the guarantee.
 
 ### Added
+- `CausalDependencies.isWatermark(ConsumerRecord)` — identifies a protocol watermark so a plain
+  Kafka client consuming a Parsley-produced topic can fold its carried completeness frontier with
+  `observe` while skipping it as a business record. `observe` now folds a watermark's carried
+  frontier only and never its own position, matching engine-side handling so client and engine
+  frontiers stay consistent.
 - `CausalBufferLimit.unbounded()` — a new limit that never evicts. Records are held until their
   causal dependencies are satisfied regardless of depth or wait time. Intended for deployments
   where uncoordinated producers make bounded limits impractical and causal ordering must never be
@@ -63,12 +91,20 @@ All notable changes to this project are documented in this file. The format is b
   consumes, so a downstream processor routinely sees dependencies it can never observe; these no
   longer block, evict, or fail the task. A dependency on a coordinate the processor *does* consume
   but has not yet observed still blocks, as before.
-- Outgoing stamps now carry the full transitive causal ancestry. Previously, a node's output was
-  stamped with only its own frontier, discarding the inbound record's dependency coordinates. In a
-  multi-hop topology (T1 → Node A → T2 → Node B → T3), a downstream node C subscribing to T1 and
-  T3 had no way to enforce the transitively-derived ordering T1@x → T3@z because the T1 coordinate
-  was silently dropped by Node B. The stamp is now the node's frontier snapshot merged with the
-  inbound record's dependencies, so transitive ancestry flows through intermediate nodes as opaque
-  carry-through. Downstream nodes still apply `effectiveDependencies` filtering: only coordinates
-  on topics they directly subscribe to gate admission; transitive coordinates on unsubscribed topics
-  remain vacuously satisfied.
+- Multi-layer causal ordering is now sound across nodes that fan in or reconverge. A node's output
+  was previously stamped with only its own frontier, discarding the inbound record's transitive
+  ancestry: in a multi-hop topology (T1 → Node A → T2 → Node B → T3), a downstream node C
+  subscribing to T1 and T3 could not enforce T1@x → T3@z because Node B silently dropped the T1
+  coordinate. Nodes now stamp their completeness frontier — their own contiguous frontier
+  max-merged with a per-coordinate minimum across every input channel's last-seen clock — so
+  transitive ancestry flows through intermediate nodes, and a fan-in advertises completeness only
+  up to its slowest branch rather than over-claiming with a maximum (the interim per-record
+  max-merge stamp, never released, was correct only when no two input branches shared an ancestor).
+  Downstream nodes still apply `effectiveDependencies` filtering, and the delivery gate gained a
+  second part (`ancestorsSettled`) that holds a record until every sibling input branch that knows a
+  shared out-of-scope ancestor has caught up to it — closing a reconvergence race where two branches
+  sharing an ancestor could deliver out of order.
+- Fixed a mutual deadlock between two sibling records that each depend on a shared ancestor and each
+  arrive before the other is delivered. The engine now records a record's carried frontier on its
+  source channel at receipt time, before gating, so a shared ancestor is confirmed by a sibling
+  branch's business record (not only by a watermark) without either record waiting on the other.

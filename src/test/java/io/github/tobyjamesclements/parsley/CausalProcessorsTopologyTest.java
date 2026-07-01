@@ -408,61 +408,6 @@ class CausalProcessorsTopologyTest {
     }
 
     /**
-     * {@code deliver()} stamps each delivered record with the exact frontier snapshot captured at the
-     * moment <em>that specific record</em> was admitted ({@code snapshots.get(i)}), not a snapshot
-     * left over from an earlier, unrelated {@code process()} call — the per-call
-     * {@code snapshots.clear()} in {@code gate()} is what prevents that.
-     *
-     * <p>Call A buffers T2@0 (depending on T1@0) then sends T1@0 itself, which both releases T2@0
-     * <em>and</em> forwards on its own: two deliveries from one {@code process()} call, populating
-     * two snapshot entries, neither of which yet includes the t3 dimension at all. Call B then sends
-     * a lone, unrelated T3@0 on a third topic — its own delivery must be stamped with a frontier that
-     * includes T3@0, which is only possible if it used the snapshot taken during <em>its own</em>
-     * call rather than a leftover entry from call A (where t3 didn't exist yet).
-     */
-    @Test
-    void deliverStampsEachRecordWithItsOwnSnapshotNotALeftoverFromAnEarlierCall() {
-        Topology topology = topology(
-                CausalProcessors.builder(upperCaser()).addBufferStore("parsley", CausalBufferLimit.ofSize(100))
-                        .addBuffer(CausalBuffer.of("t1", Serdes.String(), Serdes.String()))
-                        .addBuffer(CausalBuffer.of("t2", Serdes.String(), Serdes.String()))
-                        .addBuffer(CausalBuffer.of("t3", Serdes.String(), Serdes.String()))
-                        .topicAdmin(ADMIN).build(),
-                List.of("t1", "t2", "t3"));
-
-        try (TopologyTestDriver driver = new TopologyTestDriver(topology, config(null))) {
-            TestInputTopic<String, String> t1 =
-                    driver.createInputTopic("t1", new StringSerializer(), new StringSerializer());
-            TestInputTopic<String, String> t2 =
-                    driver.createInputTopic("t2", new StringSerializer(), new StringSerializer());
-            TestInputTopic<String, String> t3 =
-                    driver.createInputTopic("t3", new StringSerializer(), new StringSerializer());
-            TestOutputTopic<String, String> out =
-                    driver.createOutputTopic("out", new StringDeserializer(), new StringDeserializer());
-
-            // T2@0 depends on T1@0 — held, nothing delivered yet.
-            t2.pipeInput(new TestRecord<>("k", "t2-val",
-                    depsHeader(CausalDependencies.builder(TOPICS).require("t1", 0, 0).build())));
-
-            // Call A: T1@0 has no dependencies of its own, so it forwards immediately — and its
-            // arrival also satisfies T2@0's requirement, releasing it too. Two deliveries, one call.
-            t1.pipeInput(new TestRecord<>("k", "t1-val", depsHeader(CausalDependencies.empty())));
-
-            // Call B: a lone, unrelated T3@0 on a topic that didn't exist during call A at all.
-            t3.pipeInput(new TestRecord<>("k", "t3-val", depsHeader(CausalDependencies.empty())));
-
-            List<TestRecord<String, String>> outputs = out.readRecordsToList();
-            assertEquals(3, outputs.size(), "T2@0, T1@0, and T3@0 must all be delivered");
-
-            CausalDependencies stampedOnT3 = outDeps(outputs.get(2));
-            assertEquals(0L, stampedOnT3.clock().offsetFor(T3_ID, 0),
-                    "T3@0's own delivery must be stamped with a frontier that includes T3@0 itself — "
-                            + "only possible using its own call's snapshot, not a leftover entry from "
-                            + "call A's cascade (before t3 existed in the frontier at all): " + stampedOnT3);
-        }
-    }
-
-    /**
      * While delivering a buffered-then-released record, {@code context.recordMetadata()} reports
      * that record's own true source coordinate — not the real Streams record that triggered its
      * release. This is what lets a delegate correctly attribute state to the record it is actually
@@ -922,70 +867,6 @@ class CausalProcessorsTopologyTest {
     }
 
     /**
-     * Lamport causal consistency for multi-hop topologies: a downstream node subscribing to a
-     * final output topic but not the intermediate topics can still enforce ordering against
-     * grandparent topic coordinates carried transitively in the stamp.
-     *
-     * <h2>Scenario</h2>
-     * <pre>
-     *   "t1" ──→ proc_A ──→ "t2" ──→ proc_B ──→ "t3"
-     *                                                ↓
-     *                          "t1" ──→ proc_C({"t1","t3"}) ──→ "out"
-     * </pre>
-     *
-     * proc_B stamps "t3" records with its frontier merged with the "t2" record's inbound deps
-     * (which include {T1_ID@0} from proc_A). proc_C sees {T1_ID@0, T2_ID@0} in the t3 stamp;
-     * T2_ID is out of scope (vacuously satisfied), but T1_ID is in scope — proc_C must hold
-     * t3@0 until T1_ID@0 enters its own frontier.
-     *
-     * <p>This test exercises proc_C directly with a pre-stamped t3 record carrying the transitive
-     * ancestry that proc_B would produce.
-     *
-     * Asserts: t3@0 is held until t1@0 arrives, then released in causal order.
-     */
-    @Test
-    void downstreamNodeHonorsTransitiveDependencyOnGrandparentTopic() {
-        // Stamp proc_B would put on t3@0: its own frontier {T2_ID@0} merged with the inbound
-        // t2@0 deps {T1_ID@0} — the transitive ancestry from proc_A.
-        CausalDependencies t3Stamp = CausalDependencies.builder(TOPICS)
-                .require("t1", 0, 0)   // transitive: proc_A saw t1@0
-                .require("t2", 0, 0)   // proc_B's own frontier
-                .build();
-
-        // proc_C subscribes to {t1, t3}; t2 is an intermediate topic it does not consume.
-        Topology topology = topology(
-                CausalProcessors.builder(upperCaser()).addBufferStore("parsley", CausalBufferLimit.ofSize(100))
-                        .addBuffer(CausalBuffer.of("t1", Serdes.String(), Serdes.String()))
-                        .addBuffer(CausalBuffer.of("t3", Serdes.String(), Serdes.String()))
-                        .topicAdmin(ADMIN).build(),
-                List.of("t1", "t3"));
-
-        try (TopologyTestDriver driver = new TopologyTestDriver(topology, config(null))) {
-            TestInputTopic<String, String> t1 =
-                    driver.createInputTopic("t1", new StringSerializer(), new StringSerializer());
-            TestInputTopic<String, String> t3 =
-                    driver.createInputTopic("t3", new StringSerializer(), new StringSerializer());
-            TestOutputTopic<String, String> out =
-                    driver.createOutputTopic("out", new StringDeserializer(), new StringDeserializer());
-
-            // t3@0 carries {T1_ID@0, T2_ID@0}. T2_ID is out of scope → vacuously satisfied.
-            // T1_ID@0 is in scope but proc_C's frontier is empty → held.
-            t3.pipeInput(new TestRecord<>("k", "t3-val", depsHeader(t3Stamp)));
-            assertTrue(out.isEmpty(),
-                    "t3@0 must be held: T1_ID@0 is a transitive dep in scope but not yet satisfied");
-            assertEquals(1, storeSize(driver.getKeyValueStore("parsley-buffer")),
-                    "t3@0 must be buffered awaiting T1_ID@0");
-
-            // t1@0 arrives: T1_ID@0 enters proc_C's frontier → t3@0 is released.
-            t1.pipeInput(new TestRecord<>("k", "t1-val", depsHeader(CausalDependencies.empty())));
-            assertEquals(0, storeSize(driver.getKeyValueStore("parsley-buffer")),
-                    "t3@0 must drain once T1_ID@0 is satisfied");
-            assertEquals(List.of("T1-VAL", "T3-VAL"), out.readValuesToList(),
-                    "t1@0 admitted first, t3@0 released immediately after");
-        }
-    }
-
-    /**
      * A dependency on a coordinate this processor does not consume — a topic outside its registered
      * buffers, or a partition this task does not own — is vacuously satisfied: the record is admitted
      * immediately, even under the default fail-fast eviction policy with a one-record buffer that
@@ -1393,77 +1274,6 @@ class CausalProcessorsTopologyTest {
     }
 
     /**
-     * Materialized chain: a clocked sidecar record ("t5") whose dependency points to the
-     * derived topic ("t4") is buffered in proc2 until proc1 materializes that record.
-     *
-     * <h2>Topology</h2>
-     * <pre>
-     *   "t2" ──→ proc1("node1") ──→ "t4" (materialized)
-     *                                       ↓
-     *   "t2" ─────────────────────→ proc2("node2") ──→ "out"
-     *   "t5" ─────────────────────→ proc2("node2")
-     * </pre>
-     *
-     * Asserts that the sidecar is held while t4@0 is absent from proc2's frontier, and
-     * released (last, in causal order) once the dependency is satisfied.
-     */
-    @Test
-    void bufferClockedSidecarUntilDerivedTopicArrivesInMaterializedChain() {
-        StreamsBuilder builder = new StreamsBuilder();
-        Consumed<String, String> consumed = Consumed.with(Serdes.String(), Serdes.String());
-        Produced<String, String> produced = Produced.with(Serdes.String(), Serdes.String());
-
-        var t2Src    = builder.stream("t2",    consumed);
-        var t4Src    = builder.stream("t4",    consumed);
-        var t5Src = builder.stream("t5", consumed);
-
-        t2Src
-                .process(CausalProcessors.builder(upperCaser()).addBufferStore("node1", CausalBufferLimit.ofSize(100))
-                        .addBuffer(CausalBuffer.of("t2", Serdes.String(), Serdes.String())).topicAdmin(ADMIN).build())
-                .to("t4", produced);
-
-        // proc2 takes proc1's materialised output, the original t2 (to bootstrap T2 frontier),
-        // and the independent "t5" stream.
-        t4Src.merge(t2Src).merge(t5Src)
-                .process(CausalProcessors.builder(upperCaser()).addBufferStore("node2", CausalBufferLimit.ofSize(100))
-                        .addBuffers(List.of("t4", "t2", "t5"), Serdes.String(), Serdes.String()).topicAdmin(ADMIN)
-                        .build())
-                .to("out", produced);
-
-        try (TopologyTestDriver driver = new TopologyTestDriver(builder.build(), config(null))) {
-            TestInputTopic<String, String> t2 =
-                    driver.createInputTopic("t2", new StringSerializer(), new StringSerializer());
-            TestInputTopic<String, String> t5 =
-                    driver.createInputTopic("t5", new StringSerializer(), new StringSerializer());
-            TestOutputTopic<String, String> out =
-                    driver.createOutputTopic("out", new StringDeserializer(), new StringDeserializer());
-
-            // t5-record (sidecar) arrives before t4@0 has been produced — must be buffered.
-            t5.pipeInput(new TestRecord<>("k", "t5-val",
-                    depsHeader(CausalDependencies.builder(TOPICS).require("t4", 0, 0).build())));
-            assertTrue(out.isEmpty(), "sidecar must be held: t4@0 not yet in proc2's frontier");
-            assertEquals(1, storeSize(driver.getKeyValueStore("node2-buffer")),
-                    "sidecar must be in proc2's buffer");
-
-            // t2-record arrives: proc1 materialises t4@0 (stamped {T2_ID@0}).
-            // proc2's direct t2 subscription advances its T2 frontier, allowing it to admit
-            // t4@0, which advances its T4 frontier and drains the sidecar.
-            t2.pipeInput(new TestRecord<>("k", "t2-val", depsHeader(CausalDependencies.empty())));
-
-            assertEquals(0, storeSize(driver.getKeyValueStore("node2-buffer")),
-                    "sidecar must have drained once t4@0 was admitted by proc2");
-            List<String> values = out.readValuesToList();
-            assertEquals(3, values.size(), "t2-val (direct), t2-val (via t4), and t5-val");
-            assertEquals(2, values.stream().filter("T2-VAL"::equals).count(),
-                    "two T2-VAL records: direct and via t4");
-            assertEquals(1, values.stream().filter("T5-VAL"::equals).count(),
-                    "one T5-VAL record released after t4@0 satisfied its dependency");
-            assertEquals("T5-VAL", values.get(values.size() - 1),
-                    "sidecar must be last: buffered until t4@0 advanced the T4 frontier");
-        }
-    }
-
-    /**
      * Fused chain: a clocked sidecar record ("t5") whose dependency points to the upstream
      * source ("t1") is buffered in proc2 until proc1 processes a "t1" record and fuses to proc2.
      *
@@ -1519,59 +1329,6 @@ class CausalProcessorsTopologyTest {
                     "sidecar must have drained once T1_ID@0 was in proc2's frontier");
             assertEquals(List.of("T1-VAL", "T5-VAL"), out.readValuesToList(),
                     "t1-val admitted first (self-dep stripped), t5-val drains immediately after");
-        }
-    }
-
-    /**
-     * Materialized chain: an unclocked sidecar record (no causal-dependencies header) is treated
-     * as trivially satisfied — {@code CausalDependencies.empty()} — so it is admitted immediately
-     * and never enters the buffer, regardless of where the materialized chain's frontier stands.
-     *
-     * Asserts that the unclocked record is forwarded immediately, stamped SATISFIED, and the
-     * buffer remains empty.
-     */
-    @Test
-    void admitUnclockedSidecarImmediatelyInMaterializedChain() {
-        StreamsBuilder builder = new StreamsBuilder();
-        Consumed<String, String> consumed = Consumed.with(Serdes.String(), Serdes.String());
-        Produced<String, String> produced = Produced.with(Serdes.String(), Serdes.String());
-
-        var t2Src    = builder.stream("t2",    consumed);
-        var t4Src    = builder.stream("t4",    consumed);
-        var t5Src = builder.stream("t5", consumed);
-
-        t2Src
-                .process(CausalProcessors.builder(upperCaser()).addBufferStore("node1", CausalBufferLimit.ofSize(100))
-                        .addBuffer(CausalBuffer.of("t2", Serdes.String(), Serdes.String())).topicAdmin(ADMIN).build())
-                .to("t4", produced);
-
-        t4Src.merge(t2Src).merge(t5Src)
-                .process(CausalProcessors.builder(upperCaser()).addBufferStore("node2", CausalBufferLimit.ofSize(100))
-                        .addBuffers(List.of("t4", "t2", "t5"), Serdes.String(), Serdes.String()).topicAdmin(ADMIN)
-                        .build())
-                .to("out", produced);
-
-        try (TopologyTestDriver driver = new TopologyTestDriver(builder.build(), config(null))) {
-            TestInputTopic<String, String> t2 =
-                    driver.createInputTopic("t2", new StringSerializer(), new StringSerializer());
-            TestInputTopic<String, String> t5 =
-                    driver.createInputTopic("t5", new StringSerializer(), new StringSerializer());
-            TestOutputTopic<String, String> out =
-                    driver.createOutputTopic("out", new StringDeserializer(), new StringDeserializer());
-
-            // Unclocked t5-record: no parsley-causal-dependencies header → treated as
-            // CausalDependencies.empty() → trivially satisfied → forwarded immediately.
-            t5.pipeInput(new TestRecord<>("k", "t5-val"));
-            TestRecord<String, String> emitted = out.readRecord();
-            assertEquals("T5-VAL", emitted.value(),
-                    "unclocked record must be forwarded immediately, trivially satisfied");
-            assertEquals(0, storeSize(driver.getKeyValueStore("node2-buffer")),
-                    "unclocked record must never enter the buffer");
-
-            // Normal materialized flow continues without interference from the unclocked record.
-            t2.pipeInput(new TestRecord<>("k", "t2-val", depsHeader(CausalDependencies.empty())));
-            assertEquals(2, out.readValuesToList().size(),
-                    "t2-val direct and t4-derived must both appear after the unclocked record");
         }
     }
 

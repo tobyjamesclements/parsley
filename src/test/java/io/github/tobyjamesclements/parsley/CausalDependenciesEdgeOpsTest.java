@@ -12,6 +12,7 @@ import java.util.Map;
 import java.util.Optional;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -211,6 +212,76 @@ class CausalDependenciesEdgeOpsTest {
         ConsumerRecord<String, String> consumed = new ConsumerRecord<>("unknown", 0, 0L, "k", "v");
         assertThrows(IllegalArgumentException.class, () -> CausalDependencies.using(TOPICS).observe(consumed),
                 "observe must throw when the consumed record's topic cannot be resolved to a UUID");
+    }
+
+    /**
+     * {@code isWatermark} distinguishes a Parsley protocol watermark — identified by its marker header
+     * — from an ordinary business record, so a plain Kafka client can decide which records to surface
+     * to application code.
+     *
+     * Asserts that a record carrying the watermark marker header is reported as a watermark, and a
+     * plain business record is not.
+     */
+    @Test
+    void isWatermarkDistinguishesWatermarksFromBusinessRecords() {
+        ConsumerRecord<String, String> business = new ConsumerRecord<>("orders", 0, 1L, "k", "v");
+        ConsumerRecord<String, String> watermark =
+                watermarkRecord("orders", 0, 2L, CausalDependencies.empty());
+
+        assertFalse(CausalDependencies.isWatermark(business),
+                "a business record must not be reported as a watermark");
+        assertTrue(CausalDependencies.isWatermark(watermark),
+                "a record carrying the watermark marker header must be reported as a watermark");
+    }
+
+    /**
+     * {@code observe} folds a watermark's carried completeness frontier into the accumulator but never
+     * its own position: a watermark is protocol metadata occupying an offset with no business payload,
+     * so counting that offset would force downstream to wait on a record that delivers nothing. This
+     * mirrors how a Parsley engine folds a received watermark.
+     *
+     * Asserts that observing a watermark on {@code orders@99} carrying {@code prices@4} yields exactly
+     * {@code prices@4} — the carried frontier, with no {@code orders} coordinate from the watermark's
+     * own position.
+     */
+    @Test
+    void observeFoldsAWatermarksCarriedFrontierButNotItsOwnPosition() {
+        CausalDependencies carriedFrontier = CausalDependencies.builder(TOPICS).require("prices", 0, 4).build();
+        ConsumerRecord<String, String> watermark = watermarkRecord("orders", 0, 99L, carriedFrontier);
+
+        CausalDependencies expected = CausalDependencies.builder(TOPICS).require("prices", 0, 4).build();
+        assertEquals(expected, CausalDependencies.using(TOPICS).observe(watermark),
+                "observe must fold a watermark's carried frontier but not its own (topic, partition, offset)");
+    }
+
+    /**
+     * A running {@code observe} accumulator advances across a service that emitted only a watermark on
+     * this path: the watermark's carried frontier lifts the client's frontier to upstream completeness
+     * the client never saw a business record for, keeping the per-coordinate maximum.
+     *
+     * Asserts that after a business record on {@code prices@2} and then a watermark carrying
+     * {@code prices@6}, the frontier is {@code prices@6} — advanced by the watermark — with no
+     * coordinate for the watermark's own topic.
+     */
+    @Test
+    void observeAdvancesARunningFrontierAcrossAWatermarkOnlyService() {
+        ConsumerRecord<String, String> price = new ConsumerRecord<>("prices", 0, 2L, "k", "v");
+        CausalDependencies upstreamComplete = CausalDependencies.builder(TOPICS).require("prices", 0, 6).build();
+        ConsumerRecord<String, String> watermark = watermarkRecord("orders", 0, 50L, upstreamComplete);
+
+        CausalDependencies frontier = CausalDependencies.using(TOPICS).observe(price).observe(watermark);
+
+        CausalDependencies expected = CausalDependencies.builder(TOPICS).require("prices", 0, 6).build();
+        assertEquals(expected, frontier,
+                "a watermark must advance the running frontier to the upstream completeness it carries");
+    }
+
+    private static ConsumerRecord<String, String> watermarkRecord(
+            String topic, int partition, long offset, CausalDependencies carriedFrontier) {
+        ConsumerRecord<String, String> watermark = new ConsumerRecord<>(topic, partition, offset, null, null);
+        watermark.headers().add(ParsleyHeader.WATERMARK, new byte[0]);
+        watermark.headers().add(ParsleyHeader.CAUSAL_DEPENDENCIES, carriedFrontier.toBytes());
+        return watermark;
     }
 
     private static ConsumerRecord<String, String> asConsumerRecord(ProducerRecord<String, String> record) {

@@ -54,10 +54,9 @@ import java.util.function.LongSupplier;
  * every frontier advancement <em>before</em> the corresponding record is returned for
  * forwarding, so persisting the frontier in the listener is guaranteed to happen before the
  * record leaves the engine. It fires exactly once per record in the list {@link #onRecord} (or an
- * eviction method) returns, in the same order — {@code ParsleyProcessor} zips frontier snapshots to
- * returned records by position — so an advance with no corresponding out-bound record (a
- * poison-drop, or the baseline seed above) must go through the silent variants instead and never
- * notify the listener directly.
+ * eviction method) returns — so an advance with no corresponding out-bound record (a poison-drop, or
+ * the baseline seed above) must go through the silent variants instead and never notify the listener
+ * directly.
  *
  * <p><strong>Drain algorithm:</strong> the engine uses a {@link ParsleyCandidateIndex} to avoid a full
  * buffer scan on every frontier advance. When a coordinate advances, only records indexed on
@@ -90,11 +89,24 @@ final class ParsleyEngine<K, V> {
     private final ParsleyBufferStore<K, V> buffer;
     private final ParsleyCandidateIndex candidateIndex;
     private final FrontierCallback frontierListener;
+    private final ParsleyChannelClockStore channelStore;
     private final ParsleyMetrics metrics;
     private final CausalAudit audit;
     private final LongSupplier clock;
     private final boolean skipOnDecodeFailure;
     private final boolean failOnEvictionLimit;
+
+    /**
+     * No-op {@link ParsleyChannelClockStore} used by test-facing convenience constructors that do
+     * not supply a real channel store. {@link #completeness()} returns {@link #frontier()} when
+     * this is in use (no channel clocks recorded).
+     */
+    private static final ParsleyChannelClockStore NOOP_CHANNEL_STORE = new ParsleyChannelClockStore() {
+        @Override public void update(Uuid topicId, int partition, ParsleyClock clock) {}
+        @Override public ParsleyClock get(Uuid topicId, int partition) { return ParsleyClock.empty(); }
+        @Override public void remove(Uuid topicId, int partition) {}
+        @Override public List<ParsleyChannelClockStore.ChannelEntry> allEntries() { return List.of(); }
+    };
 
     private ParsleyFrontier frontier;
     private int sizeLimit;
@@ -158,9 +170,35 @@ final class ParsleyEngine<K, V> {
                  LongSupplier clock,
                  boolean skipOnDecodeFailure,
                  boolean failOnEvictionLimit) {
+        // Chains to the full constructor with the no-op channel store; all existing test callers
+        // of this signature are unaffected, and completeness() returns frontier() when invoked.
+        this(limit, initialFrontier, inScope, NOOP_CHANNEL_STORE, frontierListener, buffer,
+                candidateIndex, forwardedIndex, metrics, audit, clock, skipOnDecodeFailure,
+                failOnEvictionLimit);
+    }
+
+    /**
+     * Full production constructor. Accepts a {@link ParsleyChannelClockStore} so that
+     * {@link #completeness()} can track the per-channel inbound frontier and return a
+     * sound completeness boundary across all input branches.
+     */
+    ParsleyEngine(CausalBufferLimit limit,
+                 ParsleyClock initialFrontier,
+                 ParsleyClock.CoordinatePredicate inScope,
+                 ParsleyChannelClockStore channelStore,
+                 FrontierCallback frontierListener,
+                 ParsleyBufferStore<K, V> buffer,
+                 ParsleyCandidateIndex candidateIndex,
+                 ParsleyForwardedIndex forwardedIndex,
+                 ParsleyMetrics metrics,
+                 CausalAudit audit,
+                 LongSupplier clock,
+                 boolean skipOnDecodeFailure,
+                 boolean failOnEvictionLimit) {
         this.limit = limit;
         this.inScope = inScope;
         this.frontierListener = frontierListener;
+        this.channelStore = channelStore;
         this.buffer = buffer;
         this.candidateIndex = candidateIndex;
         this.frontier = new ParsleyFrontier(initialFrontier, forwardedIndex);
@@ -178,8 +216,8 @@ final class ParsleyEngine<K, V> {
         // not block startup; that failure surfaces later, on the forward path.
         for (ParsleyBufferStore.IndexEntry entry : buffer.indexEntries()) {
             candidateIndex.index(entry.sequence(),
-                    effectiveDependencies(entry.dependencies(), entry.topicId(), entry.partition(), entry.offset()),
-                    frontier.snapshot());
+                    withoutSelfReference(entry.dependencies(), entry.topicId(), entry.partition(), entry.offset()),
+                    completeness());
         }
     }
 
@@ -191,34 +229,54 @@ final class ParsleyEngine<K, V> {
      */
     List<ParsleyMessage<K, V>> onRecord(ParsleyMessage<K, V> message) {
         List<ParsleyMessage<K, V>> out = new ArrayList<>();
+
+        // Receipt-time channel-clock update (BEFORE the gate). A record's carried frontier is the
+        // upstream branch's *proven* completeness, valid the moment it arrives regardless of whether
+        // this node has delivered it. Recording it here lets the completeness min advance as soon as a
+        // channel advertises a coordinate, and prevents a mutual deadlock where two sibling records
+        // each depending on a shared ancestor S@k each wait for the other's channel to confirm S@k.
+        ParsleyClock channelBefore = channelStore.get(message.topicId(), message.partition());
+        boolean channelAdvanced = !channelBefore.dominates(message.dependencies());
+        channelStore.update(message.topicId(), message.partition(), message.dependencies());
+
         if (frontier.seedIfFirstSeen(message.topicId(), message.partition(), message.offset())) {
             propagate(out, message.topicId(), message.partition());
         }
 
-        ParsleyClock dependencies = effectiveDependencies(message.dependencies(), message);
+        ParsleyClock deps = withoutSelfReference(message.dependencies(),
+                message.topicId(), message.partition(), message.offset());
 
-        if (frontier.isDeliverable(dependencies)) {
+        if (isDeliverable(message)) {
             log.debug("Forwarding {}-{} @{} (satisfied immediately)",
                     message.topic(), message.partition(), message.offset());
             audit.recordForwarded(message.topic(), message.partition(), message.offset());
             frontier.deliver(message.topicId(), message.partition(), message.offset(), frontierListener);
+            channelStore.update(message.topicId(), message.partition(), message.dependencies());
             out.add(message);
             propagate(out, message.topicId(), message.partition());
         } else {
             long seq = buffer.add(message, clock.getAsLong());
-            candidateIndex.index(seq, dependencies, frontier.snapshot());
+            candidateIndex.index(seq, deps, completeness());
             int depth = buffer.size();
-            ParsleyClock snap = frontier.snapshot();
-            ParsleyClock gap = dependencies.missing(snap);
-            ParsleyClock relevant = snap.retaining((tid, p) -> dependencies.offsetFor(tid, p) >= 0);
-            log.debug("Holding {}-{} @{} (buffer depth: {}, deps: {}, frontier: {})",
-                    message.topicId(), message.partition(), message.offset(), depth, dependencies, relevant);
+            ParsleyClock comp = completeness();
+            ParsleyClock gap = deps.missing(comp);
+            log.debug("Holding {}-{} @{} (buffer depth: {}, deps: {}, completeness: {})",
+                    message.topicId(), message.partition(), message.offset(), depth, deps, comp);
             audit.recordHeld(message.topic(), message.partition(), message.offset(), depth, CausalDependencies.of(gap));
             metrics.recordBuffered();
             reportBufferState();
             if (depth >= sizeLimit) {
                 out.addAll(evictOverflow());
             }
+        }
+
+        // A channel-clock advance can satisfy the completeness gate for records already held that are
+        // waiting on a coordinate this channel just advertised. That release is not reachable through
+        // the candidate index that drives propagate() (which keys on frontier advances), so re-scan
+        // the buffer. Bounded to a fan-in (>1 channel) that actually advanced: a single-channel
+        // processor's completeness is its own frontier, fully covered by propagate.
+        if (channelAdvanced && channelStore.allEntries().size() > 1) {
+            out.addAll(drainSatisfied());
         }
         return out;
     }
@@ -275,36 +333,87 @@ final class ParsleyEngine<K, V> {
     }
 
     /**
-     * Releases every buffered record whose effective dependencies (in-scope coordinates, self-ref
-     * stripped) are already dominated by the current frontier. Called once, via the 1ms post-init
-     * punctuator in {@link ParsleyProcessor}, to drain records that were satisfied between the last
-     * committed frontier and the last committed buffer-removal — a window that exists under
-     * {@code at_least_once} processing. On fresh starts (empty buffer) this returns empty.
+     * Releases every buffered record that passes the two-part causal gate against the current
+     * frontier and channel-clock state. Used on two call paths:
+     * <ol>
+     *   <li>Via {@link #drainRestoredSatisfied()} — once, from the 1ms post-init punctuator in
+     *       {@link ParsleyProcessor}, to drain records that were satisfied between the last
+     *       committed frontier and the last committed buffer-removal (the at-least-once window).
+     *       On fresh starts (empty buffer) this returns empty.
+     *   <li>Via {@link #onWatermark(Uuid, int, ParsleyClock)} — after a watermark advances a
+     *       channel clock, which can unlock records held by the cross-channel ancestor check (part
+     *       2 of the gate) even when the in-scope frontier has not advanced.
+     * </ol>
      *
-     * <p>Iterates {@link ParsleyBufferStore#entries()} (a snapshot in causal arrival order). The
-     * {@link ParsleyBufferStore#get(long)} guard skips entries already removed by a {@link
-     * #propagate} cascade from an earlier step in this same pass.
+     * <p>This is an O(buffer-depth) full scan by design — correctness-first choice; the
+     * candidate-index fast path in {@link #propagate} handles the common frontier-advance case.
+     *
+     * <p>Iterates {@link #orderedIndex()} (index metadata in causal arrival order) and gates each
+     * entry on its dependency clock alone — never decoding the user value — so a held, undecodable
+     * record that is not releasable is skipped without deserialisation. Only a record that passes the
+     * gate is fetched (and, if its value is undecodable on that forward path, handled by the same
+     * poison policy as {@link #propagate}). The {@link ParsleyBufferStore#get(long)} {@code null}
+     * guard skips entries already removed by a propagate cascade earlier in this same pass.
      */
-    List<ParsleyMessage<K, V>> drainRestoredSatisfied() {
+    private List<ParsleyMessage<K, V>> drainSatisfied() {
         List<ParsleyMessage<K, V>> out = new ArrayList<>();
-        for (ParsleyBufferStore.Entry<K, V> entry : buffer.entries()) {
-            if (buffer.get(entry.sequence()) == null) continue;
-            ParsleyMessage<K, V> record = entry.record();
-            ParsleyClock effective = effectiveDependencies(record.dependencies(), record);
-            // Empty effective deps means all raw dependencies were filtered as out-of-scope —
-            // vacuously satisfied. This arises when a topic UUID changes across a restart (the
-            // old UUID leaves consumedTopicIds, so its coords are dropped from effectiveDeps).
-            // Such a record must be released here; no future onRecord will trigger propagate for
-            // the dropped coordinate, so it would otherwise be stuck in the buffer indefinitely.
-            if (effective.isEmpty() || frontier.isDeliverable(effective)) {
-                buffer.remove(entry.sequence());
-                audit.recordForwarded(record.topic(), record.partition(), record.offset());
-                frontier.deliver(record.topicId(), record.partition(), record.offset(), frontierListener);
-                out.add(record);
-                propagate(out, record.topicId(), record.partition());
+        for (ParsleyBufferStore.IndexEntry meta : orderedIndex()) {
+            // The completeness gate, on metadata only: every declared coordinate (self-cycle stripped)
+            // is within the per-coordinate min across all input channels. A record whose dependencies
+            // name a coordinate no input channel will ever confirm stays held — the topology contract,
+            // not a special case to short-circuit.
+            if (!isDeliverable(meta.dependencies(), meta.topicId(), meta.partition(), meta.offset())) {
+                continue;
             }
+            ParsleyBufferStore.Entry<K, V> entry;
+            try {
+                entry = buffer.get(meta.sequence());
+            } catch (ParsleyBufferDeserializationException e) {
+                if (tryDropPoison(e, meta.sequence())) {
+                    frontier.deliverSilently(e.topicId(), e.partition(), e.offset());
+                    continue;
+                }
+                throw e;                                                   // fail fast
+            }
+            if (entry == null) continue;                                   // removed by a cascade this pass
+            ParsleyMessage<K, V> record = entry.record();
+            buffer.remove(meta.sequence());
+            audit.recordForwarded(record.topic(), record.partition(), record.offset());
+            frontier.deliver(record.topicId(), record.partition(), record.offset(), frontierListener);
+            channelStore.update(record.topicId(), record.partition(), record.dependencies());
+            out.add(record);
+            propagate(out, record.topicId(), record.partition());
         }
         return out;
+    }
+
+    /**
+     * Delegates to {@link #drainSatisfied()}. Called once, via the 1ms post-init punctuator in
+     * {@link ParsleyProcessor}, to drain records that were satisfied between the last committed
+     * frontier and the last committed buffer-removal.
+     */
+    List<ParsleyMessage<K, V>> drainRestoredSatisfied() {
+        return drainSatisfied();
+    }
+
+    /**
+     * Handles a received protocol watermark: updates the per-channel clock for the source channel
+     * with the carried frontier, then performs a full-buffer drain to release any buffered records
+     * that the cross-channel ancestor check (part 2 of the two-part gate) now permits.
+     *
+     * <p>The drain is O(buffer-depth). Records released here are delivered via the normal
+     * {@link ParsleyProcessor#deliver} path. The caller ({@link ParsleyProcessor}) subsequently
+     * emits a downstream watermark carrying the updated {@link #completeness()} frontier to
+     * propagate progress to the next layer.
+     *
+     * @param sourceTopicId  the topic UUID of the watermark's source channel
+     * @param sourcePartition the partition of the watermark's source channel
+     * @param frontierClock  the completeness frontier carried by the watermark
+     * @return the records released from the buffer by the drain; possibly empty
+     */
+    List<ParsleyMessage<K, V>> onWatermark(Uuid sourceTopicId, int sourcePartition, ParsleyClock frontierClock) {
+        channelStore.update(sourceTopicId, sourcePartition, frontierClock);
+        return drainSatisfied();
     }
 
     /** The buffer's metadata index, oldest-first (by insertion sequence); never decodes a value. */
@@ -373,6 +482,7 @@ final class ParsleyEngine<K, V> {
             reportEviction(entry.record(), entry.dependencies());
             buffer.remove(sequence);
             frontier.deliver(entry.record().topicId(), entry.record().partition(), entry.record().offset(), frontierListener);
+            channelStore.update(entry.record().topicId(), entry.record().partition(), entry.record().dependencies());
             toForward.add(entry.record());
             propagate(toForward, entry.record().topicId(), entry.record().partition());
             evicted++;
@@ -391,6 +501,46 @@ final class ParsleyEngine<K, V> {
      */
     ParsleyClock frontier() {
         return frontier.snapshot();
+    }
+
+    /**
+     * Returns the causal completeness frontier: for each coordinate, the greatest offset that
+     * <em>every</em> input channel has confirmed.
+     *
+     * <p>It is the per-coordinate {@link ParsleyClock#intersectMin(ParsleyClock) intersection-minimum}
+     * across all input channels. Each channel contributes the dependencies its records and watermarks
+     * have advertised, plus its own contiguous delivered position (the {@link ParsleyFrontier} offset
+     * for its coordinate), so the channel that owns a coordinate supplies that coordinate's delivered
+     * value. A coordinate that any input channel has not observed is absent from the result entirely —
+     * a dependency on it is therefore not satisfied until that channel advertises it. This is the
+     * delivery gate and the outbound stamp.
+     *
+     * <p>The model is strict by design: a dependency on coordinate {@code K} is satisfied only when
+     * all input channels have observed {@code K}, because the protocol cannot prove a causally-earlier
+     * message will not later arrive on a channel that has not yet advertised past {@code K}. The
+     * topology must therefore make every input branch observe (consume and watermark) every coordinate
+     * any branch depends on; otherwise records depending on an unobserved coordinate are held
+     * indefinitely. See {@code docs/internals/causal-consistency.md}.
+     *
+     * <p>When no channel clocks have been recorded (e.g. the no-op store used by test constructors),
+     * this returns {@link #frontier()} unchanged.
+     *
+     * @return the completeness frontier; never {@code null}
+     */
+    ParsleyClock completeness() {
+        ParsleyClock snapshot = frontier.snapshot();
+        ParsleyClock result = null;
+        for (ParsleyChannelClockStore.ChannelEntry entry : channelStore.allEntries()) {
+            // Each channel's view = the dependencies it has advertised, plus its own delivered
+            // position so the owning channel supplies its coordinate's contiguous value.
+            long ownDelivered = snapshot.offsetFor(entry.topicId(), entry.partition());
+            ParsleyClock channel = ownDelivered >= 0
+                    ? entry.clock().observe(entry.topicId(), entry.partition(), ownDelivered)
+                    : entry.clock();
+            result = (result == null) ? channel : result.intersectMin(channel);
+        }
+        // No channel clocks (no-op store / cold start): fall back to the node's own frontier.
+        return result == null ? snapshot : result;
     }
 
     /**
@@ -444,11 +594,8 @@ final class ParsleyEngine<K, V> {
                         }
                         if (entry == null) {
                             stale.add(candidate);
-                        } else {
-                            ParsleyClock deps = effectiveDependencies(entry.dependencies(), entry.record());
-                            if (frontier.isDeliverable(deps)) {
-                                releasable.add(entry);
-                            }
+                        } else if (isDeliverable(entry.record())) {
+                            releasable.add(entry);
                         }
                     }
                 }
@@ -462,6 +609,7 @@ final class ParsleyEngine<K, V> {
                 audit.recordReleased(entry.record().topic(), entry.record().partition(),
                         entry.record().offset(), buffer.size());
                 frontier.deliver(entry.record().topicId(), entry.record().partition(), entry.record().offset(), frontierListener);
+                channelStore.update(entry.record().topicId(), entry.record().partition(), entry.record().dependencies());
                 toScan.computeIfAbsent(entry.record().topicId(), k -> new HashSet<>())
                         .add(entry.record().partition());
                 out.add(entry.record());
@@ -487,37 +635,38 @@ final class ParsleyEngine<K, V> {
     }
 
     /**
-     * Returns {@code deps} with the record's <em>exact</em> source coordinate removed if present — a
-     * record depending on its own {@code (topicId, partition, offset)} has, by being delivered, met
-     * that dependency, so it must not wait on itself (this is what keeps the self-referential stamp on
-     * a fused chain from deadlocking). A backward same-partition dependency ({@code req < offset}) is
-     * retained and flows through the normal frontier check unchanged — satisfiable by waiting, since
-     * the frontier reaches {@code req} strictly before it reaches the record's own offset.
-     *
-     * <p>A <em>forward</em> same-partition dependency ({@code req > offset}, naming a later offset on
-     * the record's own partition) is retained too, but is never satisfiable by waiting: a dependency
-     * clock is always a snapshot of some producer's frontier at write time, so a producer can never
-     * have legitimately observed an offset on its own output partition that doesn't exist yet — this
-     * shape can only arise from a hand-constructed, causally impossible {@code CausalDependencies}.
-     * Since the contiguous frontier cannot pass coordinate {@code (topicId, partition)} past {@code
-     * req} without first passing through {@code offset} itself (the very record waiting on {@code
-     * req}), it can only ever be resolved by eviction (forced, out of causal order, counted as a
-     * violation) — never by a natural release.
+     * The causal delivery gate: every coordinate {@code record} depends on (its own self-cycle
+     * stripped) is within the {@link #completeness()} frontier — i.e. confirmed by every input
+     * channel. This is the single source of truth for "may this record be delivered now", used on
+     * every release path ({@link #onRecord}, {@link #drainSatisfied}, {@link #propagate}).
      */
-    private ParsleyClock effectiveDependencies(ParsleyClock deps, ParsleyMessage<K, V> record) {
-        return effectiveDependencies(deps, record.topicId(), record.partition(), record.offset());
+    private boolean isDeliverable(ParsleyMessage<K, V> record) {
+        return isDeliverable(record.dependencies(), record.topicId(), record.partition(), record.offset());
     }
 
-    private ParsleyClock effectiveDependencies(ParsleyClock deps, Uuid topicId, int partition, long offset) {
-        // Drop coordinates this engine does not consume first: a dependency on a partition this task
-        // does not own, or a topic outside its registered buffers, is vacuously satisfied — there is
-        // nothing here to wait on. The record's own source coordinate is always in scope, so the
-        // self-reference strip below still applies.
-        ParsleyClock scoped = deps.retaining(inScope);
-        if (scoped.offsetFor(topicId, partition) == offset) {
-            return scoped.without(topicId, partition);
+    /**
+     * Metadata overload of the gate: evaluates deliverability from a record's dependency clock and
+     * source coordinate alone, without decoding its user value. Used by {@link #drainSatisfied} so a
+     * held, undecodable record that is not releasable is never deserialised.
+     */
+    private boolean isDeliverable(ParsleyClock dependencies, Uuid topicId, int partition, long offset) {
+        return completeness().dominates(withoutSelfReference(dependencies, topicId, partition, offset));
+    }
+
+    /**
+     * Returns {@code deps} with the record's <em>exact</em> source coordinate removed if present — a
+     * record depending on its own {@code (topicId, partition, offset)} has, by being delivered, met
+     * that dependency, so it must not wait on itself (this keeps a self-referential stamp on a fused
+     * chain from deadlocking). A backward same-partition dependency ({@code req < offset}) is retained
+     * and flows through the gate unchanged. This self-cycle strip is the <em>only</em> dependency
+     * preprocessing: there is no in-scope filtering — a dependency on any coordinate must be confirmed
+     * by every input channel (see {@link #completeness()}).
+     */
+    private ParsleyClock withoutSelfReference(ParsleyClock deps, Uuid topicId, int partition, long offset) {
+        if (deps.offsetFor(topicId, partition) == offset) {
+            return deps.without(topicId, partition);
         }
-        return scoped;
+        return deps;
     }
 
     /**
