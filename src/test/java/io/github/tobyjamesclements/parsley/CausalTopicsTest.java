@@ -46,6 +46,11 @@ class CausalTopicsTest {
             }
 
             @Override
+            public Map<String, String> cleanupPolicies(List<String> topics) {
+                return Map.of();
+            }
+
+            @Override
             public void close() {
             }
         };

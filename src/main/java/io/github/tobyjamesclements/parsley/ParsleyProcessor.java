@@ -2,6 +2,7 @@ package io.github.tobyjamesclements.parsley;
 
 import org.apache.kafka.common.TopicPartition;
 import org.apache.kafka.common.Uuid;
+import org.apache.kafka.common.config.TopicConfig;
 import org.apache.kafka.common.header.Header;
 import org.apache.kafka.common.header.Headers;
 import org.apache.kafka.streams.processor.Cancellable;
@@ -412,10 +413,12 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
         List<String> topicList = new ArrayList<>(topics);
         Map<String, Uuid> resolved;
         Map<String, Integer> partitionCounts;
+        Map<String, String> cleanupPolicies;
         try (ParsleyTopicAdmin admin = adminFactory.apply(context.appConfigs())) {
             resolved = admin.topicIds(topicList);
             partitionCounts = new HashMap<>(admin.partitionCounts(topicList));
             partitionCounts.putAll(additionalPartitionCounts(admin));
+            cleanupPolicies = additionalCleanupPolicies(admin);
         } catch (Exception e) {
             throw new IllegalStateException(
                     "failed to resolve topic metadata for causal buffers " + topics
@@ -429,6 +432,7 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
         // Validate outside the resolve try/catch so a strict-mode failure surfaces as itself rather
         // than being wrapped as a broker-reachability error.
         validatePartitionParity(partitionCounts);
+        validateCleanupPolicy(cleanupPolicies);
         return resolved;
     }
 
@@ -448,6 +452,23 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
         } catch (Exception e) {
             log.warn("Could not resolve partition counts for {} (they may not exist yet); "
                     + "skipping the co-partitioning check for them", additionalPartitionCountTopics, e);
+            return Map.of();
+        }
+    }
+
+    /**
+     * Best-effort {@code cleanup.policy} lookup for {@link #additionalPartitionCountTopics} — same
+     * not-required-to-exist-yet reasoning as {@link #additionalPartitionCounts}.
+     */
+    private Map<String, String> additionalCleanupPolicies(ParsleyTopicAdmin admin) {
+        if (additionalPartitionCountTopics.isEmpty()) {
+            return Map.of();
+        }
+        try {
+            return admin.cleanupPolicies(new ArrayList<>(additionalPartitionCountTopics));
+        } catch (Exception e) {
+            log.warn("Could not resolve cleanup.policy for {} (they may not exist yet); "
+                    + "skipping the watermark-safety check for them", additionalPartitionCountTopics, e);
             return Map.of();
         }
     }
@@ -475,5 +496,33 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
             throw new IllegalStateException("parsley.topology.validation=strict: " + detail);
         }
         log.warn("parsley.topology.validation=warn: {}", detail);
+    }
+
+    /**
+     * Warns or fails (per {@code parsley.topology.validation}) when a {@link CausalStreams} sink
+     * topic's {@code cleanup.policy} includes {@code compact}. A protocol watermark is a null-key,
+     * null-value record wire-indistinguishable from a compaction tombstone, so under compaction it
+     * can be removed from the log before a slow consumer reads it — silently losing the completeness
+     * frontier it carried. {@code compact,delete} is equally unsafe: compaction still runs.
+     */
+    private void validateCleanupPolicy(Map<String, String> cleanupPolicies) {
+        ParsleyConfig.ValidationMode mode = config.topologyValidation();
+        if (mode == ParsleyConfig.ValidationMode.OFF) {
+            return;
+        }
+        for (Map.Entry<String, String> entry : cleanupPolicies.entrySet()) {
+            String policy = entry.getValue();
+            if (policy == null || !policy.contains(TopicConfig.CLEANUP_POLICY_COMPACT)) {
+                continue;
+            }
+            String detail = "sink topic '" + entry.getKey() + "' has cleanup.policy=" + policy
+                    + "; a Parsley watermark is a null-value record wire-indistinguishable from a "
+                    + "compaction tombstone and can be compacted away before a slow consumer reads it "
+                    + "— set cleanup.policy=delete";
+            if (mode == ParsleyConfig.ValidationMode.STRICT) {
+                throw new IllegalStateException("parsley.topology.validation=strict: " + detail);
+            }
+            log.warn("parsley.topology.validation=warn: {}", detail);
+        }
     }
 }

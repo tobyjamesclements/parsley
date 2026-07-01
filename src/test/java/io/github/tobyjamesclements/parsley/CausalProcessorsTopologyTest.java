@@ -1464,6 +1464,7 @@ class CausalProcessorsTopologyTest {
             @Override public Map<String, Uuid> topicIds(List<String> topics) { return Map.of(); }
             @Override public Map<String, Integer> partitionCounts(List<String> topics) { return Map.of(); }
             @Override public void createTopic(String name, int partitions) {}
+            @Override public Map<String, String> cleanupPolicies(List<String> topics) { return Map.of(); }
             @Override public void close() {}
         };
         Topology topology = topology(
@@ -1498,6 +1499,7 @@ class CausalProcessorsTopologyTest {
             }
             @Override public Map<String, Integer> partitionCounts(List<String> topics) { return Map.of(); }
             @Override public void createTopic(String name, int partitions) {}
+            @Override public Map<String, String> cleanupPolicies(List<String> topics) { return Map.of(); }
             @Override public void close() {}
         };
         Topology topology = topology(

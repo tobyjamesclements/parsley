@@ -1,9 +1,13 @@
 package io.github.tobyjamesclements.parsley;
 
 import org.apache.kafka.clients.admin.Admin;
+import org.apache.kafka.clients.admin.Config;
+import org.apache.kafka.clients.admin.ConfigEntry;
 import org.apache.kafka.clients.admin.NewTopic;
 import org.apache.kafka.clients.admin.TopicDescription;
 import org.apache.kafka.common.Uuid;
+import org.apache.kafka.common.config.ConfigResource;
+import org.apache.kafka.common.config.TopicConfig;
 
 import java.util.HashMap;
 import java.util.List;
@@ -12,10 +16,11 @@ import java.util.Set;
 
 /**
  * Narrow abstraction over the Kafka Admin operations Parsley performs at startup: resolving input
- * topics' stable UUIDs (the causal identity), reading their partition counts (to size the consumer
- * outbox topic), and creating the outbox topic. Keeping the interface narrow lets tests implement it
- * without the full ~40-method {@link Admin} surface, and lets the processor path resolve UUIDs at
- * {@code init()} from {@link #ofConfigs}.
+ * topics' stable UUIDs (the causal identity), reading their partition counts and {@code
+ * cleanup.policy} (for the {@code parsley.topology.validation} checks), and creating the outbox
+ * topic. Keeping the interface narrow lets tests implement it without the full ~40-method
+ * {@link Admin} surface, and lets the processor path resolve UUIDs at {@code init()} from
+ * {@link #ofConfigs}.
  */
 interface ParsleyTopicAdmin extends AutoCloseable {
 
@@ -45,6 +50,15 @@ interface ParsleyTopicAdmin extends AutoCloseable {
      * @param partitions the desired partition count
      */
     void createTopic(String name, int partitions) throws Exception;
+
+    /**
+     * Returns the effective {@code cleanup.policy} for each name in {@code topics} — the topic's own
+     * override if set, otherwise the broker default.
+     *
+     * @param topics the topic names to look up
+     * @return each topic's effective {@code cleanup.policy}; must include every requested topic
+     */
+    Map<String, String> cleanupPolicies(List<String> topics) throws Exception;
 
     /**
      * Returns a {@link ParsleyTopicAdmin} backed by a real Kafka {@link Admin} connected to
@@ -89,6 +103,11 @@ interface ParsleyTopicAdmin extends AutoCloseable {
             }
 
             @Override
+            public Map<String, String> cleanupPolicies(List<String> topics) throws Exception {
+                return delegate.cleanupPolicies(topics);
+            }
+
+            @Override
             public void close() {
                 admin.close();
             }
@@ -125,6 +144,20 @@ interface ParsleyTopicAdmin extends AutoCloseable {
             @Override
             public void createTopic(String name, int partitions) throws Exception {
                 admin.createTopics(Set.of(new NewTopic(name, partitions, (short) 1))).all().get();
+            }
+
+            @Override
+            public Map<String, String> cleanupPolicies(List<String> topics) throws Exception {
+                List<ConfigResource> resources = topics.stream()
+                        .map(topic -> new ConfigResource(ConfigResource.Type.TOPIC, topic))
+                        .toList();
+                Map<ConfigResource, Config> configs = admin.describeConfigs(resources).all().get();
+                Map<String, String> policies = new HashMap<>();
+                configs.forEach((resource, config) -> {
+                    ConfigEntry entry = config.get(TopicConfig.CLEANUP_POLICY_CONFIG);
+                    policies.put(resource.name(), entry != null ? entry.value() : TopicConfig.CLEANUP_POLICY_DELETE);
+                });
+                return policies;
             }
 
             @Override

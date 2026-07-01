@@ -74,9 +74,12 @@ final class ParsleyConfig {
 
     /**
      * {@code parsley.topology.validation} — how the low-level processor reacts to a topology
-     * misconfiguration it can detect at startup (currently: the causal input topics not sharing a
-     * partition count, which makes co-partitioning impossible — each task cannot own the complete
-     * partition set for a causally-related group):
+     * misconfiguration it can detect at startup: the causal topics not sharing a partition count
+     * (co-partitioning is impossible — each task cannot own the complete partition set for a
+     * causally-related group), and, for a {@code CausalStreams} stage's sink topics, a
+     * {@code cleanup.policy} that includes {@code compact} (a protocol watermark is a null-value
+     * record wire-indistinguishable from a compaction tombstone and can be compacted away before a
+     * slow consumer reads it):
      * <ul>
      *   <li>{@code off}: no check.</li>
      *   <li>{@code warn} (default): log a prominent warning and continue — visible without breaking an
@@ -86,10 +89,8 @@ final class ParsleyConfig {
      *
      * <p>Only the constraints the decorator can observe are checked here — it knows its registered
      * input buffers, and, when built through the topology-owning {@code CausalStreams} API, that
-     * stage's sink topics too (folded into the same partition-count check). A sink not yet created
-     * is skipped for this check rather than failing the task. Output-side constraints the decorator
-     * still cannot see, such as a watermark-bearing topic's {@code cleanup.policy}, remain the
-     * user's responsibility (or a later, more specific check in the high-level API).
+     * stage's sink topics too (folded into the same partition-count check, plus the cleanup.policy
+     * check). A sink not yet created is skipped for both checks rather than failing the task.
      */
     static final String TOPOLOGY_VALIDATION = "parsley.topology.validation";
 

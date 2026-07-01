@@ -16,14 +16,17 @@ final class TestTopicAdmin implements ParsleyTopicAdmin {
 
     private final Map<String, Uuid> topicIds;
     private final Map<String, Integer> partitionCounts;
+    private final Map<String, String> cleanupPolicies;
 
-    private TestTopicAdmin(Map<String, Uuid> topicIds, Map<String, Integer> partitionCounts) {
+    private TestTopicAdmin(Map<String, Uuid> topicIds, Map<String, Integer> partitionCounts,
+            Map<String, String> cleanupPolicies) {
         this.topicIds = topicIds;
         this.partitionCounts = partitionCounts;
+        this.cleanupPolicies = cleanupPolicies;
     }
 
     static TestTopicAdmin of(Map<String, Uuid> topicIds) {
-        return new TestTopicAdmin(Map.copyOf(topicIds), Map.of());
+        return new TestTopicAdmin(Map.copyOf(topicIds), Map.of(), Map.of());
     }
 
     /**
@@ -31,7 +34,17 @@ final class TestTopicAdmin implements ParsleyTopicAdmin {
      * co-partitioning parity check. Topics absent from {@code partitionCounts} report a count of 1.
      */
     static TestTopicAdmin of(Map<String, Uuid> topicIds, Map<String, Integer> partitionCounts) {
-        return new TestTopicAdmin(Map.copyOf(topicIds), Map.copyOf(partitionCounts));
+        return new TestTopicAdmin(Map.copyOf(topicIds), Map.copyOf(partitionCounts), Map.of());
+    }
+
+    /**
+     * Resolves the given UUIDs, reports the given per-topic partition counts, and reports the given
+     * per-topic {@code cleanup.policy}, for exercising the sink cleanup-policy check. Topics absent
+     * from {@code cleanupPolicies} report {@code "delete"}.
+     */
+    static TestTopicAdmin of(Map<String, Uuid> topicIds, Map<String, Integer> partitionCounts,
+            Map<String, String> cleanupPolicies) {
+        return new TestTopicAdmin(Map.copyOf(topicIds), Map.copyOf(partitionCounts), Map.copyOf(cleanupPolicies));
     }
 
     @Override
@@ -57,6 +70,13 @@ final class TestTopicAdmin implements ParsleyTopicAdmin {
     @Override
     public void createTopic(String name, int partitions) {
         // no broker in tests
+    }
+
+    @Override
+    public Map<String, String> cleanupPolicies(List<String> topics) {
+        Map<String, String> policies = new HashMap<>();
+        topics.forEach(t -> policies.put(t, cleanupPolicies.getOrDefault(t, "delete")));
+        return policies;
     }
 
     @Override

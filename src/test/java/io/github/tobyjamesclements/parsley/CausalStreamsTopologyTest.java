@@ -340,6 +340,111 @@ class CausalStreamsTopologyTest {
         }
     }
 
+    /**
+     * Under {@code parsley.topology.validation=strict}, a sink topic whose {@code cleanup.policy}
+     * includes {@code compact} fails startup fast — a protocol watermark is a null-value record
+     * wire-indistinguishable from a compaction tombstone and could otherwise be compacted away
+     * before a slow consumer reads it.
+     *
+     * Asserts driver construction throws, wrapping an {@link IllegalStateException} naming the
+     * sink and its cleanup.policy.
+     */
+    @Test
+    void compactedSinkCleanupPolicyFailsStartupUnderStrictValidation() throws IOException {
+        ParsleyTopicAdmin compacted = TestTopicAdmin.of(
+                Map.of("t1", T1_ID), Map.of(), Map.of("out", "compact"));
+        Topology topology = CausalStreams.builder(upperCaser())
+                .addBufferStore("parsley", CausalBufferLimit.ofSize(100))
+                .addSource(CausalBuffer.of("t1", Serdes.String(), Serdes.String()))
+                .addSink("out-sink", "out", Serdes.String(), Serdes.String())
+                .withConfig(ParsleyConfig.TOPOLOGY_VALIDATION, "strict")
+                .topicAdmin(compacted)
+                .build();
+
+        StreamsException thrown = assertThrows(StreamsException.class,
+                () -> new TopologyTestDriver(topology, config(tempStateDir())),
+                "strict validation must fail startup when a sink's cleanup.policy includes compact");
+        assertEquals(IllegalStateException.class, thrown.getCause().getClass(),
+                "the wrapped cause must be the strict-validation failure");
+        assertTrue(thrown.getCause().getMessage().contains("cleanup.policy=compact"),
+                "the message must name the sink's cleanup.policy: " + thrown.getCause().getMessage());
+    }
+
+    /**
+     * A sink topic's {@code cleanup.policy=compact,delete} is equally unsafe as plain {@code compact}
+     * — compaction still runs and can remove a watermark before it is read — so it must also fail
+     * strict validation.
+     *
+     * Asserts driver construction throws for a {@code compact,delete} sink under strict validation.
+     */
+    @Test
+    void compactAndDeleteSinkCleanupPolicyFailsStartupUnderStrictValidation() throws IOException {
+        ParsleyTopicAdmin compacted = TestTopicAdmin.of(
+                Map.of("t1", T1_ID), Map.of(), Map.of("out", "compact,delete"));
+        Topology topology = CausalStreams.builder(upperCaser())
+                .addBufferStore("parsley", CausalBufferLimit.ofSize(100))
+                .addSource(CausalBuffer.of("t1", Serdes.String(), Serdes.String()))
+                .addSink("out-sink", "out", Serdes.String(), Serdes.String())
+                .withConfig(ParsleyConfig.TOPOLOGY_VALIDATION, "strict")
+                .topicAdmin(compacted)
+                .build();
+
+        StreamsException thrown = assertThrows(StreamsException.class,
+                () -> new TopologyTestDriver(topology, config(tempStateDir())),
+                "strict validation must fail startup for compact,delete too — compaction still runs");
+        assertEquals(IllegalStateException.class, thrown.getCause().getClass(),
+                "the wrapped cause must be the strict-validation failure");
+    }
+
+    /**
+     * Under the default {@code parsley.topology.validation=warn}, a compacted sink is logged but does
+     * not fail startup.
+     *
+     * Asserts the topology constructs and processes normally despite the compacted sink.
+     */
+    @Test
+    void compactedSinkCleanupPolicyWarnsButStartsUnderDefaultValidation() {
+        ParsleyTopicAdmin compacted = TestTopicAdmin.of(
+                Map.of("t1", T1_ID), Map.of(), Map.of("out", "compact"));
+        Topology topology = CausalStreams.builder(upperCaser())
+                .addBufferStore("parsley", CausalBufferLimit.ofSize(100))
+                .addSource(CausalBuffer.of("t1", Serdes.String(), Serdes.String()))
+                .addSink("out-sink", "out", Serdes.String(), Serdes.String())
+                .topicAdmin(compacted)
+                .build();
+
+        try (TopologyTestDriver driver = new TopologyTestDriver(topology, config())) {
+            driver.createInputTopic("t1", new StringSerializer(), new StringSerializer())
+                    .pipeInput(new TestRecord<>("k", "live", depsHeader(CausalDependencies.empty())));
+            assertEquals(List.of("live"), processed,
+                    "warn-mode validation must not fail startup: the task starts and processes normally");
+        }
+    }
+
+    /**
+     * A {@code delete}-policy sink (the default, and the safe choice) passes strict validation — a
+     * guard against the cleanup-policy check false-positiving on a correctly configured sink.
+     *
+     * Asserts the topology constructs and processes normally under strict validation.
+     */
+    @Test
+    void deleteSinkCleanupPolicyPassesStrictValidation() {
+        Topology topology = CausalStreams.builder(upperCaser())
+                .addBufferStore("parsley", CausalBufferLimit.ofSize(100))
+                .addSource(CausalBuffer.of("t1", Serdes.String(), Serdes.String()))
+                .addSink("out-sink", "out", Serdes.String(), Serdes.String())
+                .withConfig(ParsleyConfig.TOPOLOGY_VALIDATION, "strict")
+                .topicAdmin(ADMIN)
+                .build();
+
+        try (TopologyTestDriver driver = new TopologyTestDriver(topology, config())) {
+            driver.createInputTopic("t1", new StringSerializer(), new StringSerializer())
+                    .pipeInput(new TestRecord<>("k", "live", depsHeader(CausalDependencies.empty())));
+            assertEquals(List.of("live"), processed,
+                    "strict validation must pass for a delete-policy sink: the task processes normally");
+        }
+    }
+
     /** A fresh, unique state directory — required when a test expects driver construction itself to
      * fail, since a failed construction cannot be closed to release its RocksDB locks. */
     private static File tempStateDir() throws IOException {
@@ -395,6 +500,13 @@ class CausalStreamsTopologyTest {
         @Override
         public void createTopic(String name, int partitions) {
             // no broker in tests
+        }
+
+        @Override
+        public Map<String, String> cleanupPolicies(List<String> topics) {
+            Map<String, String> policies = new HashMap<>();
+            topics.forEach(t -> policies.put(t, "delete"));
+            return policies;
         }
 
         @Override
