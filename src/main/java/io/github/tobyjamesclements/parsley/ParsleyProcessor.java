@@ -417,8 +417,8 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
         try (ParsleyTopicAdmin admin = adminFactory.apply(context.appConfigs())) {
             resolved = admin.topicIds(topicList);
             partitionCounts = new HashMap<>(admin.partitionCounts(topicList));
-            partitionCounts.putAll(additionalPartitionCounts(admin));
-            cleanupPolicies = additionalCleanupPolicies(admin);
+            partitionCounts.putAll(additionalTopicInfo(admin, "partition count", ParsleyTopicAdmin::partitionCounts));
+            cleanupPolicies = additionalTopicInfo(admin, "cleanup.policy", ParsleyTopicAdmin::cleanupPolicies);
         } catch (Exception e) {
             throw new IllegalStateException(
                     "failed to resolve topic metadata for causal buffers " + topics
@@ -437,40 +437,42 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
     }
 
     /**
-     * Best-effort partition counts for {@link #additionalPartitionCountTopics} — extra topics (e.g.
-     * a {@link CausalStreams} sink) folded into the co-partitioning check without being consumed.
-     * Unlike a registered input buffer, such a topic is not required to exist yet (a sink is often
-     * auto-created on first write), so a failure here is logged and skipped rather than failing the
-     * task.
+     * Best-effort, per-topic resolution of {@code describe} over {@link #additionalPartitionCountTopics}
+     * — extra topics (e.g. a {@link CausalStreams} sink) folded into validation without being
+     * consumed. Unlike a registered input buffer, such a topic is not required to exist yet (a sink
+     * is often auto-created on first write), so a topic that cannot be described is logged and
+     * omitted from the result rather than failing the task.
+     *
+     * <p>Resolved <strong>one topic at a time</strong>, deliberately not batched: the real
+     * {@link ParsleyTopicAdmin} calls this delegates to (via {@code describeTopics}/
+     * {@code describeConfigs}) fail their <em>entire</em> batch if any single topic in it errors, so
+     * batching all sink topics together would let one not-yet-created sink mask a genuine
+     * misconfiguration on another, already-existing sink — even under {@code strict}. Skipped
+     * entirely under {@code parsley.topology.validation=off}, so a disabled check costs no admin
+     * round-trip.
      */
-    private Map<String, Integer> additionalPartitionCounts(ParsleyTopicAdmin admin) {
-        if (additionalPartitionCountTopics.isEmpty()) {
+    private <T> Map<String, T> additionalTopicInfo(
+            ParsleyTopicAdmin admin, String what, TopicDescriptor<T> describe) {
+        if (additionalPartitionCountTopics.isEmpty()
+                || config.topologyValidation() == ParsleyConfig.ValidationMode.OFF) {
             return Map.of();
         }
-        try {
-            return admin.partitionCounts(new ArrayList<>(additionalPartitionCountTopics));
-        } catch (Exception e) {
-            log.warn("Could not resolve partition counts for {} (they may not exist yet); "
-                    + "skipping the co-partitioning check for them", additionalPartitionCountTopics, e);
-            return Map.of();
+        Map<String, T> result = new HashMap<>();
+        for (String topic : additionalPartitionCountTopics) {
+            try {
+                result.putAll(describe.describe(admin, List.of(topic)));
+            } catch (Exception e) {
+                log.warn("Could not resolve {} for sink topic '{}' (it may not exist yet); "
+                        + "skipping the check for it", what, topic, e);
+            }
         }
+        return result;
     }
 
-    /**
-     * Best-effort {@code cleanup.policy} lookup for {@link #additionalPartitionCountTopics} — same
-     * not-required-to-exist-yet reasoning as {@link #additionalPartitionCounts}.
-     */
-    private Map<String, String> additionalCleanupPolicies(ParsleyTopicAdmin admin) {
-        if (additionalPartitionCountTopics.isEmpty()) {
-            return Map.of();
-        }
-        try {
-            return admin.cleanupPolicies(new ArrayList<>(additionalPartitionCountTopics));
-        } catch (Exception e) {
-            log.warn("Could not resolve cleanup.policy for {} (they may not exist yet); "
-                    + "skipping the watermark-safety check for them", additionalPartitionCountTopics, e);
-            return Map.of();
-        }
+    /** A {@link ParsleyTopicAdmin} lookup keyed by topic name, for {@link #additionalTopicInfo}. */
+    @FunctionalInterface
+    private interface TopicDescriptor<T> {
+        Map<String, T> describe(ParsleyTopicAdmin admin, List<String> topics) throws Exception;
     }
 
     /**
@@ -489,9 +491,9 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
         if (Set.copyOf(partitionCounts.values()).size() <= 1) {
             return;
         }
-        String detail = "causal input topics have mismatched partition counts " + partitionCounts
+        String detail = "causal topics have mismatched partition counts " + partitionCounts
                 + "; co-partitioning requires an equal partition count across all causally-related "
-                + "input topics so each task owns the complete partition set for a related group";
+                + "topics so each task owns the complete partition set for a related group";
         if (mode == ParsleyConfig.ValidationMode.STRICT) {
             throw new IllegalStateException("parsley.topology.validation=strict: " + detail);
         }

@@ -47,10 +47,12 @@ All notable changes to this project are documented in this file. The format is b
   partition counts are folded into the same parity check as the causal input topics (previously
   input-only, since the decorator alone cannot see its sinks), and each sink's `cleanup.policy` is
   checked for `compact` — a protocol watermark is a null-value record wire-indistinguishable from a
-  compaction tombstone and can be compacted away before a slow consumer reads it. A sink topic that
-  cannot be described (e.g. not yet created) is skipped for both checks rather than failing the
-  task, even under `strict` — unlike a registered input buffer, a sink is not required to exist
-  before the stage starts. `ParsleyTopicAdmin` gained a `cleanupPolicies` method to support this.
+  compaction tombstone and can be compacted away before a slow consumer reads it. Each sink is
+  resolved independently: a sink that cannot be described (e.g. not yet created) is skipped for
+  both checks rather than failing the task, even under `strict`, without masking a genuine
+  misconfiguration on a different sink in the same stage. Both checks are skipped entirely (no
+  admin round-trip) when validation is `off`. `ParsleyTopicAdmin` gained a `cleanupPolicies` method
+  to support this.
 - `CausalStreams.Builder#withPartitioner` — applies one `StreamPartitioner` uniformly to every sink
   a causal stage declares (default: Kafka's own key-hash partitioner), so two causal sinks in the
   same stage can never drift onto different partitioners. Must read only the key — a watermark

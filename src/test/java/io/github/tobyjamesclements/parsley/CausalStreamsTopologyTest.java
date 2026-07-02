@@ -323,7 +323,7 @@ class CausalStreamsTopologyTest {
      */
     @Test
     void unresolvableSinkPartitionCountIsSkippedEvenUnderStrictValidation() {
-        ParsleyTopicAdmin admin = new PartitionCountFailingAdmin(Map.of("t1", T1_ID), Set.of("out"));
+        ParsleyTopicAdmin admin = FlakySinkAdmin.withUnresolvable(Map.of("t1", T1_ID), Set.of("out"));
         Topology topology = CausalStreams.builder(upperCaser())
                 .addBufferStore("parsley", CausalBufferLimit.ofSize(100))
                 .addSource(CausalBuffer.of("t1", Serdes.String(), Serdes.String()))
@@ -445,6 +445,88 @@ class CausalStreamsTopologyTest {
         }
     }
 
+    /**
+     * A sink whose partition count cannot be resolved must not mask a genuine partition-count
+     * mismatch on a DIFFERENT sink in the same stage: each sink is checked independently, so one
+     * not-yet-created sink cannot hide another sink's real misconfiguration, even under strict
+     * validation.
+     *
+     * Asserts driver construction still throws for {@code out-a}'s mismatch despite {@code out-b}
+     * being unresolvable.
+     */
+    @Test
+    void unresolvableSinkDoesNotMaskAPartitionMismatchOnAnotherSink() throws IOException {
+        ParsleyTopicAdmin admin = new FlakySinkAdmin(
+                Map.of("t1", T1_ID), Map.of("t1", 2, "out-a", 3), Map.of(), Set.of("out-b"));
+        Topology topology = CausalStreams.builder(upperCaser())
+                .addBufferStore("parsley", CausalBufferLimit.ofSize(100))
+                .addSource(CausalBuffer.of("t1", Serdes.String(), Serdes.String()))
+                .addSink("sink-a", "out-a", Serdes.String(), Serdes.String())
+                .addSink("sink-b", "out-b", Serdes.String(), Serdes.String())
+                .withConfig(ParsleyConfig.TOPOLOGY_VALIDATION, "strict")
+                .topicAdmin(admin)
+                .build();
+
+        StreamsException thrown = assertThrows(StreamsException.class,
+                () -> new TopologyTestDriver(topology, config(tempStateDir())),
+                "strict validation must still catch out-a's mismatch despite out-b being unresolvable");
+        assertTrue(thrown.getCause().getMessage().contains("mismatched partition counts"),
+                "the message must name the mismatch: " + thrown.getCause().getMessage());
+    }
+
+    /**
+     * A sink whose cleanup.policy cannot be resolved must not mask a genuine {@code compact} policy
+     * on a DIFFERENT sink in the same stage — the same independent-per-sink guarantee as partition
+     * counts, for the cleanup-policy check.
+     *
+     * Asserts driver construction still throws for {@code out-a}'s compact policy despite
+     * {@code out-b} being unresolvable.
+     */
+    @Test
+    void unresolvableSinkDoesNotMaskACompactPolicyOnAnotherSink() throws IOException {
+        ParsleyTopicAdmin admin = new FlakySinkAdmin(
+                Map.of("t1", T1_ID), Map.of(), Map.of("out-a", "compact"), Set.of("out-b"));
+        Topology topology = CausalStreams.builder(upperCaser())
+                .addBufferStore("parsley", CausalBufferLimit.ofSize(100))
+                .addSource(CausalBuffer.of("t1", Serdes.String(), Serdes.String()))
+                .addSink("sink-a", "out-a", Serdes.String(), Serdes.String())
+                .addSink("sink-b", "out-b", Serdes.String(), Serdes.String())
+                .withConfig(ParsleyConfig.TOPOLOGY_VALIDATION, "strict")
+                .topicAdmin(admin)
+                .build();
+
+        StreamsException thrown = assertThrows(StreamsException.class,
+                () -> new TopologyTestDriver(topology, config(tempStateDir())),
+                "strict validation must still catch out-a's compact policy despite out-b being unresolvable");
+        assertTrue(thrown.getCause().getMessage().contains("cleanup.policy=compact"),
+                "the message must name out-a's policy: " + thrown.getCause().getMessage());
+    }
+
+    /**
+     * Under {@code parsley.topology.validation=off}, sink validation must not even attempt the admin
+     * round-trips for partition counts or cleanup policies — not merely discard their results.
+     *
+     * Asserts a sink admin that fails every call is never actually invoked when validation is off.
+     */
+    @Test
+    void validationOffNeverCallsTheSinkAdminAtAll() {
+        CountingSinkAdmin admin = new CountingSinkAdmin(Map.of("t1", T1_ID));
+        Topology topology = CausalStreams.builder(upperCaser())
+                .addBufferStore("parsley", CausalBufferLimit.ofSize(100))
+                .addSource(CausalBuffer.of("t1", Serdes.String(), Serdes.String()))
+                .addSink("out-sink", "out", Serdes.String(), Serdes.String())
+                .withConfig(ParsleyConfig.TOPOLOGY_VALIDATION, "off")
+                .topicAdmin(admin)
+                .build();
+
+        try (TopologyTestDriver driver = new TopologyTestDriver(topology, config())) {
+            driver.createInputTopic("t1", new StringSerializer(), new StringSerializer())
+                    .pipeInput(new TestRecord<>("k", "live", depsHeader(CausalDependencies.empty())));
+            assertEquals(0, admin.sinkPartitionCountCalls, "off must skip the sink partition-count admin call entirely");
+            assertEquals(0, admin.sinkCleanupPolicyCalls, "off must skip the sink cleanup-policy admin call entirely");
+        }
+    }
+
     /** A fresh, unique state directory — required when a test expects driver construction itself to
      * fail, since a failed construction cannot be closed to release its RocksDB locks. */
     private static File tempStateDir() throws IOException {
@@ -464,18 +546,31 @@ class CausalStreamsTopologyTest {
     }
 
     /**
-     * A {@link ParsleyTopicAdmin} test double that resolves the given topic UUIDs (partition count 1
-     * unless overridden) but throws when asked for the partition count of any topic in
-     * {@code unresolvableTopics} — simulating a sink that does not exist yet.
+     * A {@link ParsleyTopicAdmin} test double that resolves the given topic UUIDs and reports the
+     * given per-topic partition counts (default 1) and cleanup policies (default {@code "delete"}),
+     * but throws when {@code partitionCounts}/{@code cleanupPolicies} is asked about any topic in
+     * {@code unresolvableTopics} — simulating a sink that does not exist yet. Unlike
+     * {@link TestTopicAdmin}, this throws <strong>per call</strong> if ANY requested topic is
+     * unresolvable (matching the real {@code Admin}'s all-or-nothing batch behaviour), which is what
+     * exercises {@link ParsleyProcessor}'s per-topic resolution of sink checks.
      */
-    private static final class PartitionCountFailingAdmin implements ParsleyTopicAdmin {
+    private static final class FlakySinkAdmin implements ParsleyTopicAdmin {
 
         private final Map<String, Uuid> topicIds;
+        private final Map<String, Integer> partitionCounts;
+        private final Map<String, String> cleanupPolicies;
         private final Set<String> unresolvableTopics;
 
-        PartitionCountFailingAdmin(Map<String, Uuid> topicIds, Set<String> unresolvableTopics) {
+        FlakySinkAdmin(Map<String, Uuid> topicIds, Map<String, Integer> partitionCounts,
+                Map<String, String> cleanupPolicies, Set<String> unresolvableTopics) {
             this.topicIds = topicIds;
+            this.partitionCounts = partitionCounts;
+            this.cleanupPolicies = cleanupPolicies;
             this.unresolvableTopics = unresolvableTopics;
+        }
+
+        static FlakySinkAdmin withUnresolvable(Map<String, Uuid> topicIds, Set<String> unresolvableTopics) {
+            return new FlakySinkAdmin(topicIds, Map.of(), Map.of(), unresolvableTopics);
         }
 
         @Override
@@ -487,14 +582,26 @@ class CausalStreamsTopologyTest {
 
         @Override
         public Map<String, Integer> partitionCounts(List<String> topics) throws Exception {
+            failIfAnyUnresolvable(topics);
+            Map<String, Integer> counts = new HashMap<>();
+            topics.forEach(t -> counts.put(t, partitionCounts.getOrDefault(t, 1)));
+            return counts;
+        }
+
+        @Override
+        public Map<String, String> cleanupPolicies(List<String> topics) throws Exception {
+            failIfAnyUnresolvable(topics);
+            Map<String, String> policies = new HashMap<>();
+            topics.forEach(t -> policies.put(t, cleanupPolicies.getOrDefault(t, "delete")));
+            return policies;
+        }
+
+        private void failIfAnyUnresolvable(List<String> topics) throws Exception {
             for (String topic : topics) {
                 if (unresolvableTopics.contains(topic)) {
                     throw new Exception("topic '" + topic + "' does not exist");
                 }
             }
-            Map<String, Integer> counts = new HashMap<>();
-            topics.forEach(t -> counts.put(t, 1));
-            return counts;
         }
 
         @Override
@@ -503,10 +610,57 @@ class CausalStreamsTopologyTest {
         }
 
         @Override
+        public void close() {
+            // nothing to close
+        }
+    }
+
+    /**
+     * A {@link ParsleyTopicAdmin} test double that resolves the given (input) topic UUIDs and counts
+     * how many times it is asked for a SINK's partition count or cleanup.policy — i.e. any
+     * {@code partitionCounts}/{@code cleanupPolicies} call whose topics are not all known input
+     * topics. Used to prove {@code parsley.topology.validation=off} skips the sink admin round-trips
+     * entirely, not merely discards their results.
+     */
+    private static final class CountingSinkAdmin implements ParsleyTopicAdmin {
+
+        private final Map<String, Uuid> topicIds;
+        int sinkPartitionCountCalls = 0;
+        int sinkCleanupPolicyCalls = 0;
+
+        CountingSinkAdmin(Map<String, Uuid> topicIds) {
+            this.topicIds = topicIds;
+        }
+
+        @Override
+        public Map<String, Uuid> topicIds(List<String> topics) {
+            Map<String, Uuid> resolved = new HashMap<>();
+            topics.forEach(t -> resolved.put(t, topicIds.get(t)));
+            return resolved;
+        }
+
+        @Override
+        public Map<String, Integer> partitionCounts(List<String> topics) {
+            if (!topicIds.keySet().containsAll(topics)) {
+                sinkPartitionCountCalls++;
+            }
+            Map<String, Integer> counts = new HashMap<>();
+            topics.forEach(t -> counts.put(t, 1));
+            return counts;
+        }
+
+        @Override
         public Map<String, String> cleanupPolicies(List<String> topics) {
+            // cleanupPolicies is only ever called for sink topics — never for registered inputs.
+            sinkCleanupPolicyCalls++;
             Map<String, String> policies = new HashMap<>();
             topics.forEach(t -> policies.put(t, "delete"));
             return policies;
+        }
+
+        @Override
+        public void createTopic(String name, int partitions) {
+            // no broker in tests
         }
 
         @Override

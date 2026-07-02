@@ -225,7 +225,7 @@ public final class CausalStreams {
             CausalProcessors.Builder<KIn, VIn, KOut, VOut> causalBuilder = CausalProcessors.builder(userSupplier)
                     .addBufferStore(storeName, limit)
                     .addBuffers(sources.values())
-                    .withConfigs(toMap(config))
+                    .withConfig(config)
                     .withAudit(audit)
                     .additionalPartitionCountTopics(sinkTopics);
             if (topicAdmin != null) {
@@ -245,21 +245,13 @@ public final class CausalStreams {
             }
             topology.addProcessor(processorName, causalSupplier, sourceNames);
             for (Sink<KOut, VOut> sink : sinks) {
-                if (partitioner != null) {
-                    topology.addSink(sink.name(), sink.topic(),
-                            sink.keySerde().serializer(), sink.valueSerde().serializer(), partitioner, processorName);
-                } else {
-                    topology.addSink(sink.name(), sink.topic(),
-                            sink.keySerde().serializer(), sink.valueSerde().serializer(), processorName);
-                }
+                // partitioner may be null here — Topology.addSink's partitioner-accepting overload
+                // treats that identically to the no-partitioner overload (falls back to the default
+                // key-hash partitioner), so one call covers both cases.
+                topology.addSink(sink.name(), sink.topic(),
+                        sink.keySerde().serializer(), sink.valueSerde().serializer(), partitioner, processorName);
             }
             return topology;
-        }
-
-        private static Map<String, Object> toMap(Properties props) {
-            Map<String, Object> map = new LinkedHashMap<>();
-            props.forEach((key, value) -> map.put(String.valueOf(key), value));
-            return map;
         }
 
         private record Sink<K, V>(String name, String topic, Serde<K> keySerde, Serde<V> valueSerde) {
