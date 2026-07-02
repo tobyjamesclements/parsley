@@ -260,6 +260,74 @@ class CausalStreamsTopologyTest {
     }
 
     /**
+     * A delivered record the delegate forwards to only ONE named sink still causes Parsley's
+     * stand-in watermark (emitted because the delegate's forward count for this input was zero — see
+     * {@link ParsleyProcessor#deliver}) to reach EVERY sink connected to the processor node, not just
+     * the one the delegate targeted. This is Kafka Streams' own broadcast behaviour for an unqualified
+     * {@code context.forward(record)} (used for watermark emission, unlike the delegate's own
+     * possibly-named business forward) — exercised here through a real multi-sink
+     * {@link CausalStreams} topology, not just a raw {@code context.forward} call.
+     *
+     * Asserts: the record that IS forwarded (business output) reaches only its named sink, and the
+     * record that is NOT forwarded triggers a watermark reaching BOTH sinks.
+     */
+    @Test
+    void watermarkForANonEmittingRecordReachesEverySinkNotJustTheNamedOne() {
+        ProcessorSupplier<String, String, String, String> brancher = () -> new Processor<>() {
+            private ProcessorContext<String, String> ctx;
+
+            @Override
+            public void init(ProcessorContext<String, String> context) {
+                this.ctx = context;
+            }
+
+            @Override
+            public void process(Record<String, String> record) {
+                if (record.value().equals("emit")) {
+                    ctx.forward(record, "sink-a");
+                }
+                // "drop": forward nothing — Parsley must emit a stand-in watermark for this input.
+            }
+        };
+
+        Topology topology = CausalStreams.builder(brancher)
+                .addBufferStore("parsley", CausalBufferLimit.ofSize(100))
+                .addSource(CausalBuffer.of("t1", Serdes.String(), Serdes.String()))
+                .addSink("sink-a", "out-a", Serdes.String(), Serdes.String())
+                .addSink("sink-b", "out-b", Serdes.String(), Serdes.String())
+                .topicAdmin(ADMIN)
+                .build();
+
+        try (TopologyTestDriver driver = new TopologyTestDriver(topology, config())) {
+            TestInputTopic<String, String> t1 =
+                    driver.createInputTopic("t1", new StringSerializer(), new StringSerializer());
+            TestOutputTopic<String, String> outA =
+                    driver.createOutputTopic("out-a", new StringDeserializer(), new StringDeserializer());
+            TestOutputTopic<String, String> outB =
+                    driver.createOutputTopic("out-b", new StringDeserializer(), new StringDeserializer());
+
+            t1.pipeInput(new TestRecord<>("k", "emit", depsHeader(CausalDependencies.empty())));
+            t1.pipeInput(new TestRecord<>("k", "drop", depsHeader(CausalDependencies.empty())));
+
+            TestRecord<String, String> businessRecord = outA.readRecord();
+            assertEquals("emit", businessRecord.value(), "the named-sink forward must reach sink-a");
+
+            TestRecord<String, String> watermarkOnA = outA.readRecord();
+            assertTrue(isWatermark(watermarkOnA), "the non-emitting record's watermark must reach sink-a");
+            TestRecord<String, String> watermarkOnB = outB.readRecord();
+            assertTrue(isWatermark(watermarkOnB),
+                    "the non-emitting record's watermark must ALSO reach sink-b, not just the named sink-a — "
+                            + "Parsley's watermark forward is unqualified and Kafka Streams broadcasts it to "
+                            + "every sink connected to the processor node");
+        }
+    }
+
+    /** Whether {@code record} carries Parsley's protocol-watermark header. */
+    private static boolean isWatermark(TestRecord<String, String> record) {
+        return record.headers().lastHeader(ParsleyHeader.WATERMARK) != null;
+    }
+
+    /**
      * Under {@code parsley.topology.validation=strict}, a sink topic with a partition count that
      * mismatches the stage's source fails startup fast — {@link CausalStreams} folds sink partition
      * counts into the same co-partitioning check the decorator runs on its inputs.

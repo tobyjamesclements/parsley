@@ -42,7 +42,11 @@ All notable changes to this project are documented in this file. The format is b
   `CausalProcessors` internally rather than reimplementing the causal engine. Builds a `Topology`
   for a single causal stage from registered `CausalBuffer` sources and named sinks, so it drops
   straight into `new KafkaStreams(topology, props)`. This first cut wires sources, one
-  causal-decorated processor, and sinks; heartbeats and quiesce follow in later increments.
+  causal-decorated processor, and sinks; quiesce follows in a later increment. A delivered record
+  the delegate forwards to only one named sink still has its stand-in watermark (emitted when the
+  delegate forwards nothing for a given input) reach every sink connected to the processor node —
+  Kafka Streams' own broadcast behaviour for an unqualified `context.forward`, now exercised through
+  a real multi-sink topology.
 - `parsley.topology.validation` now also covers a `CausalStreams` stage's sink topics: sink
   partition counts are folded into the same parity check as the causal input topics (previously
   input-only, since the decorator alone cannot see its sinks), and each sink's `cleanup.policy` is
