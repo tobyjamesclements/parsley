@@ -72,7 +72,7 @@ class ParsleyProcessorRestoreTest {
         ParsleyProcessor<String, String, String, String> processor = new ParsleyProcessor<>(
                 delegate, CausalBufferLimit.ofSize(100), serializer,
                 "frontier", "buffer", "candidate-index", "forwarded-index", Set.of("t1"), Set.of(),
-                configs -> ADMIN, ParsleyConfig.from(new Properties()), audit, null, null);
+                configs -> ADMIN, ParsleyConfig.from(new Properties()), audit, null);
 
         MockProcessorContext<String, String> context = new MockProcessorContext<>();
         context.addStateStore(frontierStore);
@@ -146,7 +146,7 @@ class ParsleyProcessorRestoreTest {
         ParsleyProcessor<String, String, String, String> processor = new ParsleyProcessor<>(
                 delegate, CausalBufferLimit.ofSize(2), serializer,
                 "frontier", "buffer", "candidate-index", "forwarded-index", Set.of("t1"), Set.of(),
-                configs -> ADMIN, ParsleyConfig.from(continueOnEviction), CausalAudit.NOOP, null, null);
+                configs -> ADMIN, ParsleyConfig.from(continueOnEviction), CausalAudit.NOOP, null);
 
         MockProcessorContext<String, String> context = new MockProcessorContext<>();
         context.addStateStore(frontierStore);

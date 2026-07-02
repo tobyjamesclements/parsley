@@ -2,7 +2,6 @@ package io.github.tobyjamesclements.parsley;
 
 import org.apache.kafka.common.Uuid;
 import org.apache.kafka.common.header.Headers;
-import org.apache.kafka.common.serialization.ByteArraySerializer;
 import org.apache.kafka.common.serialization.Serdes;
 import org.apache.kafka.common.serialization.StringDeserializer;
 import org.apache.kafka.common.serialization.StringSerializer;
@@ -43,14 +42,12 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  */
 class CausalStreamsTopologyTest {
 
-    // t1/t2 = single- and dual-source test topics; out = the sink. t3 = a non-consumed dependency
-    // topic used by the epoch tests (a coordinate no channel confirms unless its dep is stripped).
+    // t1/t2 = single- and dual-source test topics; out = the sink.
     private static final Uuid T1_ID = Uuid.randomUuid();
     private static final Uuid T2_ID = Uuid.randomUuid();
-    private static final Uuid T3_ID = Uuid.randomUuid();
 
     private static final ParsleyTopicAdmin ADMIN = TestTopicAdmin.of(Map.of("t1", T1_ID, "t2", T2_ID));
-    private static final CausalTopics TOPICS = CausalTopics.of(Map.of("t1", T1_ID, "t2", T2_ID, "t3", T3_ID));
+    private static final CausalTopics TOPICS = CausalTopics.of(Map.of("t1", T1_ID, "t2", T2_ID));
 
     private final List<String> processed = new ArrayList<>();
 
@@ -359,81 +356,6 @@ class CausalStreamsTopologyTest {
     /** Whether {@code record} carries Parsley's protocol-watermark header. */
     private static boolean isWatermark(TestRecord<String, String> record) {
         return record.headers().lastHeader(ParsleyHeader.WATERMARK) != null;
-    }
-
-    /**
-     * A record depending on a coordinate below its authored topology-epoch {@code startsAt} bound is
-     * delivered, not held: {@link CausalStreams} wires the epoch topic into a global store, and the
-     * gate strips the out-of-domain dependency before the completeness check. The dependency is on
-     * {@code t3}, which this two-source stage ({@code t1}, {@code t2}) never consumes, so without the
-     * bound the completeness minimum would never include {@code t3} and the record would be held
-     * forever.
-     *
-     * Asserts the record reaches the delegate and the sink once the epoch bound (authored into the
-     * epoch topic) strips its below-bound {@code t3} dependency.
-     */
-    @Test
-    void epochBoundStripsAnOutOfDomainDependencyEndToEnd() {
-        Topology topology = CausalStreams.builder(upperCaser())
-                .addBufferStore("parsley", CausalBufferLimit.ofSize(100))
-                .addSource(CausalBuffer.of("t1", Serdes.String(), Serdes.String()))
-                .addSource(CausalBuffer.of("t2", Serdes.String(), Serdes.String()))
-                .addSink("out-sink", "out", Serdes.String(), Serdes.String())
-                .withConfig(ParsleyConfig.EPOCH_TOPIC, "epoch")
-                .topicAdmin(ADMIN)
-                .build();
-
-        try (TopologyTestDriver driver = new TopologyTestDriver(topology, config())) {
-            TestInputTopic<byte[], byte[]> epoch = driver.createInputTopic(
-                    "epoch", new ByteArraySerializer(), new ByteArraySerializer());
-            TestInputTopic<String, String> t1 =
-                    driver.createInputTopic("t1", new StringSerializer(), new StringSerializer());
-            TestOutputTopic<String, String> out =
-                    driver.createOutputTopic("out", new StringDeserializer(), new StringDeserializer());
-
-            // Author a startsAt bound of 5 for t3, then a t1 record depending on t3@2 (below the bound).
-            epoch.pipeInput(ParsleyEpoch.key(T3_ID, 0), ParsleyEpoch.value(5L));
-            t1.pipeInput(new TestRecord<>("k", "live",
-                    depsHeader(CausalDependencies.builder(TOPICS).require("t3", 0, 2).build())));
-
-            assertEquals(List.of("live"), processed,
-                    "the below-bound t3 dependency must be stripped, letting the record deliver");
-            assertEquals("LIVE", out.readRecord().value(), "the delivered record must reach the sink");
-        }
-    }
-
-    /**
-     * The control for {@link #epochBoundStripsAnOutOfDomainDependencyEndToEnd}: with no epoch bound
-     * authored for {@code t3}, the same record is held — the coordinate is absent from the epoch topic,
-     * reads as {@link ParsleyEpoch#NO_BOUND}, and is gated normally, so the two-source completeness
-     * minimum (which never includes the non-consumed {@code t3}) holds it. Proves the delivery in the
-     * companion test is caused by the authored bound, not by the feature being enabled.
-     *
-     * Asserts the record never reaches the delegate while its unbounded, unconfirmable dependency stands.
-     */
-    @Test
-    void withoutAnAuthoredBoundTheOutOfDomainDependencyStillHolds() {
-        Topology topology = CausalStreams.builder(upperCaser())
-                .addBufferStore("parsley", CausalBufferLimit.ofSize(100))
-                .addSource(CausalBuffer.of("t1", Serdes.String(), Serdes.String()))
-                .addSource(CausalBuffer.of("t2", Serdes.String(), Serdes.String()))
-                .addSink("out-sink", "out", Serdes.String(), Serdes.String())
-                .withConfig(ParsleyConfig.EPOCH_TOPIC, "epoch")
-                .topicAdmin(ADMIN)
-                .build();
-
-        try (TopologyTestDriver driver = new TopologyTestDriver(topology, config())) {
-            driver.createInputTopic("epoch", new ByteArraySerializer(), new ByteArraySerializer());
-            TestInputTopic<String, String> t1 =
-                    driver.createInputTopic("t1", new StringSerializer(), new StringSerializer());
-
-            // No epoch record authored for t3: its dependency is gated normally and never confirmed.
-            t1.pipeInput(new TestRecord<>("k", "held",
-                    depsHeader(CausalDependencies.builder(TOPICS).require("t3", 0, 2).build())));
-
-            assertTrue(processed.isEmpty(),
-                    "with no authored bound, the unconfirmable t3 dependency must hold the record");
-        }
     }
 
     /**

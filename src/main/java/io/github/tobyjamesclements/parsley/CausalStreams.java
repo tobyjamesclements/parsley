@@ -1,11 +1,9 @@
 package io.github.tobyjamesclements.parsley;
 
 import org.apache.kafka.common.serialization.Serde;
-import org.apache.kafka.common.serialization.Serdes;
 import org.apache.kafka.streams.Topology;
 import org.apache.kafka.streams.processor.StreamPartitioner;
 import org.apache.kafka.streams.processor.api.ProcessorSupplier;
-import org.apache.kafka.streams.state.Stores;
 import org.jspecify.annotations.Nullable;
 
 import java.util.ArrayList;
@@ -278,37 +276,10 @@ public final class CausalStreams {
             if (topicAdmin != null) {
                 causalBuilder.topicAdmin(topicAdmin);
             }
-
-            // Topology epoch: when parsley.topology.epoch.topic is configured, mirror that compacted
-            // topic into a global store (one always-current replica per instance) and tell the
-            // processor to read startsAt bounds from it. Absent, epoch bounding is disabled and nothing
-            // below is wired — the gate behaves exactly as it does without the feature.
-            Properties effectiveProps = ParsleyConfig.loadProperties();
-            effectiveProps.putAll(config);
-            String epochTopic = ParsleyConfig.from(effectiveProps).epochTopic();
-            String epochStoreName = storeName + "-epoch";
-            if (epochTopic != null) {
-                causalBuilder.epochStoreName(epochStoreName);
-            }
             CausalProcessorSupplier<KIn, VIn, KOut, VOut> causalSupplier = causalBuilder.build();
 
             String processorName = storeName + "-processor";
             Topology topology = new Topology();
-            if (epochTopic != null) {
-                // Global store, logging disabled (it sources directly from the compacted epoch topic,
-                // which is its own durable log — a global store has no changelog). Keyed and valued as
-                // raw bytes: the (topicId, partition) key and startsAt value are encoded by ParsleyEpoch.
-                topology.addGlobalStore(
-                        Stores.keyValueStoreBuilder(
-                                        Stores.persistentKeyValueStore(epochStoreName),
-                                        Serdes.ByteArray(), Serdes.ByteArray())
-                                .withLoggingDisabled(),
-                        epochStoreName + "-source",
-                        Serdes.ByteArray().deserializer(), Serdes.ByteArray().deserializer(),
-                        epochTopic,
-                        epochStoreName + "-updater",
-                        () -> new ParsleyEpochStoreUpdater(epochStoreName));
-            }
             String[] sourceNames = new String[sources.size()];
             int i = 0;
             for (CausalBuffer<KIn, VIn> buffer : sources.values()) {

@@ -63,8 +63,6 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
     private final ParsleyConfig config;
     private final CausalAudit audit;
     private final @Nullable CausalQuiesce quiesce;
-    // The epoch global store's name, or null when epoch bounding is disabled; read live at gate time.
-    private final @Nullable String epochStoreName;
 
     // All mutable state below is confined to the single Kafka Streams thread that owns this task.
 
@@ -99,8 +97,7 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
                      Function<Map<String, Object>, ParsleyTopicAdmin> adminFactory,
                      ParsleyConfig config,
                      CausalAudit audit,
-                     @Nullable CausalQuiesce quiesce,
-                     @Nullable String epochStoreName) {
+                     @Nullable CausalQuiesce quiesce) {
         this.delegate = delegate;
         this.limit = limit;
         this.serializer = serializer;
@@ -114,7 +111,6 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
         this.config = config;
         this.audit = audit;
         this.quiesce = quiesce;
-        this.epochStoreName = epochStoreName;
     }
 
     @Override
@@ -167,19 +163,9 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
             frontier.channelUpdate(topicId, taskPartition, ParsleyClock.empty());
         }
 
-        // The topology epoch's startsAt bounds, read live from the global store CausalStreams wired
-        // (when configured); NONE when epoch bounding is disabled (the low-level path, or no epoch
-        // topic configured), so the gate's strip step is then a no-op.
-        ParsleyEpoch.View epochView = ParsleyEpoch.View.NONE;
-        if (epochStoreName != null) {
-            org.apache.kafka.streams.state.ReadOnlyKeyValueStore<byte[], byte[]> epochStore =
-                    context.getStateStore(epochStoreName);
-            epochView = ParsleyEpoch.over(epochStore);
-        }
-
         this.engine = new ParsleyEngine<>(limit, frontier, inScope, buffer, candidateIndex,
                 wiredMetrics.metrics(), audit, context::currentSystemTimeMs,
-                config.skipOnDecodeFailure(), config.failOnEvictionLimit(), epochView);
+                config.skipOnDecodeFailure(), config.failOnEvictionLimit());
         // Initialise stampFrontier from completeness() so the stamping proxy reflects the restored
         // channel-clock state (not just the in-scope frontier) from the first forward onward.
         this.stampFrontier = engine.completeness();

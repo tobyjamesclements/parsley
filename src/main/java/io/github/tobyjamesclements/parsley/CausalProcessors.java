@@ -89,7 +89,6 @@ public final class CausalProcessors {
         private CausalAudit audit = CausalAudit.NOOP;
         private Set<String> additionalPartitionCountTopics = Set.of();
         private @Nullable CausalQuiesce quiesce = null;
-        private @Nullable String epochStoreName = null;
 
         private Builder(ProcessorSupplier<KIn, VIn, KOut, VOut> userSupplier) {
             this.userSupplier = userSupplier;
@@ -272,21 +271,6 @@ public final class CausalProcessors {
         }
 
         /**
-         * Names the epoch global store this processor should read {@code startsAt} bounds from at
-         * gate time. Set only by {@link CausalStreams}, which registers that global store on the
-         * topology it owns; the low-level {@code CausalProcessors} path leaves it null (epoch
-         * bounding disabled), since a {@code ProcessorSupplier} cannot declare a topology-level
-         * global store through its per-task {@link #stores()}.
-         *
-         * @param epochStoreName the epoch global store's name
-         * @return this builder
-         */
-        Builder<KIn, VIn, KOut, VOut> epochStoreName(String epochStoreName) {
-            this.epochStoreName = epochStoreName;
-            return this;
-        }
-
-        /**
          * Builds the {@link CausalProcessorSupplier}.
          *
          * @return a decorated supplier ready for {@code stream(...).process(...)}
@@ -311,7 +295,7 @@ public final class CausalProcessors {
                     userSupplier, bufferLimit, keySerdeByTopic, valueSerdeByTopic,
                     store + "-frontier", store + "-buffer", store + "-candidate-index", store + "-forwarded-index",
                     resolved.keySet(), additionalPartitionCountTopics, adminFactory, effectiveConfig,
-                    ParsleyAudit.wrap(audit), quiesce, epochStoreName);
+                    ParsleyAudit.wrap(audit), quiesce);
         }
 
         /** Classpath {@code parsley.properties} as a base layer, overlaid with builder-supplied keys. */
