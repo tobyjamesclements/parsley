@@ -34,6 +34,10 @@ final class ParsleyProcessorSupplier<KIn, VIn, KOut, VOut>
     private final ParsleyConfig config;
     private final CausalAudit audit;
     private final @Nullable CausalQuiesce quiesce;
+    // The epoch global store's name, or null when epoch bounding is disabled. The global store itself
+    // is registered at the topology level (by CausalStreams), not in stores(); this only names it so
+    // the processor can look it up at init(). Null in the low-level CausalProcessors path.
+    private final @Nullable String epochStoreName;
 
     ParsleyProcessorSupplier(ProcessorSupplier<KIn, VIn, KOut, VOut> userSupplier,
                                       CausalBufferLimit limit,
@@ -48,7 +52,8 @@ final class ParsleyProcessorSupplier<KIn, VIn, KOut, VOut>
                                       Function<Map<String, Object>, ParsleyTopicAdmin> adminFactory,
                                       ParsleyConfig config,
                                       CausalAudit audit,
-                                      @Nullable CausalQuiesce quiesce) {
+                                      @Nullable CausalQuiesce quiesce,
+                                      @Nullable String epochStoreName) {
         this.userSupplier = userSupplier;
         this.limit = limit;
         this.keySerdeByTopic = keySerdeByTopic;
@@ -63,6 +68,7 @@ final class ParsleyProcessorSupplier<KIn, VIn, KOut, VOut>
         this.config = config;
         this.audit = audit;
         this.quiesce = quiesce;
+        this.epochStoreName = epochStoreName;
     }
 
     @Override
@@ -71,7 +77,7 @@ final class ParsleyProcessorSupplier<KIn, VIn, KOut, VOut>
                 userSupplier.get(), limit,
                 new ParsleySerializer<>(new ParsleyResolver<>(keySerdeByTopic, valueSerdeByTopic)),
                 frontierStoreName, bufferStoreName, candidateIndexStoreName, forwardedIndexStoreName,
-                topics, additionalPartitionCountTopics, adminFactory, config, audit, quiesce);
+                topics, additionalPartitionCountTopics, adminFactory, config, audit, quiesce, epochStoreName);
     }
 
     /** The buffer eviction limit this supplier was built with. Package-private for tests. */

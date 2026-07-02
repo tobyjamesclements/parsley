@@ -178,6 +178,60 @@ class ParsleyClockTest {
     }
 
     /**
+     * {@code strippedBelow} drops a dependency below its coordinate's {@code startsAt} bound (an
+     * out-of-domain reference to a prior epoch) while keeping a dependency at or above the bound, and
+     * keeps a coordinate with no bound entirely ({@link Long#MAX_VALUE}).
+     *
+     * Asserts the stripped clock keeps only the at/above-bound and unbounded coordinates, and that an
+     * empty frontier then dominates it despite not dominating the originals.
+     */
+    @Test
+    void strippedBelowDropsDependenciesBelowTheStartsAtBound() {
+        // T1: bound 10 (T1@3 below → stripped; would need offset 3 otherwise). T2: no bound (kept).
+        ParsleyEpoch.View bound = (topicId, partition) ->
+                topicId.equals(T1_ID) && partition == 0 ? 10L : ParsleyEpoch.NO_BOUND;
+        ParsleyClock deps = ParsleyClock.empty()
+                .observe(T1_ID, 0, 3).observe(T2_ID, 0, 5);
+
+        ParsleyClock stripped = deps.strippedBelow(bound);
+
+        assertEquals(ParsleyClock.empty().observe(T2_ID, 0, 5), stripped,
+                "T1@3 (below startsAt 10) must be stripped; T2@5 (unbounded) must be kept");
+        assertFalse(ParsleyClock.empty().dominates(deps),
+                "the unstripped dependencies are not satisfied by an empty frontier");
+        assertTrue(ParsleyClock.empty().observe(T2_ID, 0, 5).dominates(stripped),
+                "once the below-bound dependency is stripped, only the surviving one gates");
+    }
+
+    /**
+     * A dependency exactly at its coordinate's {@code startsAt} bound is kept — the bound is the
+     * lowest offset that still participates in the epoch, not the first excluded one.
+     *
+     * Asserts a dependency at the bound survives stripping.
+     */
+    @Test
+    void strippedBelowKeepsADependencyExactlyAtTheBound() {
+        ParsleyEpoch.View bound = (topicId, partition) -> 10L;
+        ParsleyClock deps = ParsleyClock.empty().observe(T1_ID, 0, 10);
+        assertEquals(deps, deps.strippedBelow(bound),
+                "a dependency exactly at startsAt is inside the domain and must be kept");
+    }
+
+    /**
+     * {@code strippedBelow} returns the same instance — not a copy — when nothing is below its bound,
+     * so the common no-strip case (including the disabled {@link ParsleyEpoch.View#NONE}) allocates
+     * nothing on the gating path.
+     *
+     * Asserts the returned clock is reference-identical to the original under NONE.
+     */
+    @Test
+    void strippedBelowReturnsSameInstanceWhenNothingStripped() {
+        ParsleyClock deps = ParsleyClock.empty().observe(T1_ID, 0, 3).observe(T2_ID, 0, 5);
+        assertSame(deps, deps.strippedBelow(ParsleyEpoch.View.NONE),
+                "strippedBelow must not allocate when every coordinate is at or above its bound");
+    }
+
+    /**
      * A dependency on a coordinate under an old topic UUID is not dominated by a frontier that has
      * advanced under a new UUID for the same topic name and partition. Topic UUIDs uniquely identify
      * incarnations.

@@ -1140,6 +1140,58 @@ class ParsleyEngineTest {
                         + "seenCoordinates was fresh");
     }
 
+    /**
+     * A record depending on a coordinate below its topology-epoch {@code startsAt} bound is delivered:
+     * the below-bound dependency is stripped before the completeness check, so a coordinate no channel
+     * will ever confirm no longer holds the record forever.
+     *
+     * <p>The record on T1 depends on T2@2, but the epoch bounds T2 at {@code startsAt = 5}, so T2@2 is
+     * an out-of-domain reference (a prior, closed epoch) and is stripped. Without the bound the record
+     * would be held indefinitely (nothing ever delivers T2@2).
+     *
+     * Asserts the record forwards immediately despite the unsatisfied-but-stripped dependency.
+     */
+    @Test
+    void dependencyBelowEpochBoundIsStrippedAndRecordDelivers() {
+        ParsleyEpoch.View bound = (topicId, partition) ->
+                topicId.equals(T2_ID) ? 5L : ParsleyEpoch.NO_BOUND;
+        ParsleyEngine<String, String> engine = engineWithEpoch(CausalBufferLimit.ofSize(100), bound);
+
+        processRecord(engine, incomingRecord(T1, 0, ParsleyClock.empty().observe(T2_ID, 0, 2)));
+
+        assertEquals(1, forwarded.size(),
+                "a record whose only unsatisfied dependency is below the epoch bound must deliver, not hold");
+        assertEquals(0, engine.bufferSize(), "the record must not be buffered");
+    }
+
+    /**
+     * A dependency at or above the epoch {@code startsAt} bound is gated normally: it is in-domain, so
+     * it is not stripped, and the record is held until the frontier confirms it — no behaviour change
+     * from a bound-free engine.
+     *
+     * <p>The record on T1 depends on T2@5 with the epoch bounding T2 at {@code startsAt = 5}. T2@5 is
+     * exactly at the bound (in-domain), so it is not stripped and the record is held until T2@5 is
+     * delivered on its own channel.
+     *
+     * Asserts the record is held while the in-domain dependency is unmet, then released once it arrives.
+     */
+    @Test
+    void dependencyAtOrAboveEpochBoundIsGatedNormally() {
+        ParsleyEpoch.View bound = (topicId, partition) ->
+                topicId.equals(T2_ID) ? 5L : ParsleyEpoch.NO_BOUND;
+        ParsleyEngine<String, String> engine = engineWithEpoch(CausalBufferLimit.ofSize(100), bound);
+
+        processRecord(engine, incomingRecord(T1, 0, ParsleyClock.empty().observe(T2_ID, 0, 5)));
+        assertEquals(0, forwarded.size(), "an in-domain dependency at the bound must still gate the record");
+        assertEquals(1, engine.bufferSize(), "the record must be held until its in-domain dependency is met");
+
+        // Deliver T2 up to offset 5 on its own channel; the held record must then release.
+        processRecord(engine, incomingRecord(T2, 5, ParsleyClock.empty()));
+        assertTrue(forwarded.size() >= 2,
+                "once T2@5 is confirmed, the held record releases (both records forwarded)");
+        assertEquals(0, engine.bufferSize(), "the buffer must drain once the in-domain dependency is met");
+    }
+
     // --- helpers --------------------------------------------------------------------------------
 
     // failOnEvictionLimit=false (continue) below: these helpers back tests that assert the
@@ -1162,6 +1214,13 @@ class ParsleyEngineTest {
         return new ParsleyEngine<>(limit, ParsleyClock.empty(), inScope, buffer,
                 new MockCandidateIndex(), forwardedIndex, ParsleyMetrics.NOOP, CausalAudit.NOOP,
                 System::currentTimeMillis, false, false);
+    }
+
+    private ParsleyEngine<String, String> engineWithEpoch(CausalBufferLimit limit,
+                                                          ParsleyEpoch.View epochView) {
+        return new ParsleyEngine<>(limit, new ParsleyFrontier(ParsleyClock.empty(), forwardedIndex, false),
+                (topicId, partition) -> true, buffer, new MockCandidateIndex(), ParsleyMetrics.NOOP,
+                CausalAudit.NOOP, System::currentTimeMillis, false, false, epochView);
     }
 
     private ParsleyEngine<String, String> engineWithClock(CausalBufferLimit limit,

@@ -1,5 +1,6 @@
 package io.github.tobyjamesclements.parsley;
 
+import org.jspecify.annotations.Nullable;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -94,6 +95,17 @@ final class ParsleyConfig {
      */
     static final String TOPOLOGY_VALIDATION = "parsley.topology.validation";
 
+    /**
+     * {@code parsley.topology.epoch.topic} — the name of the compacted internal topic carrying the
+     * topology epoch's {@code startsAt} bounds (see {@link ParsleyEpoch}). When set, a
+     * {@link CausalStreams} stage wires a Kafka Streams global store over it, and the delivery gate
+     * strips any dependency below its coordinate's {@code startsAt} bound. When absent (the default),
+     * epoch bounding is fully disabled: no global store is wired and the gate behaves exactly as it
+     * does without this feature. Only honoured by the topology-owning {@link CausalStreams} API; the
+     * low-level {@code CausalProcessors} path does not wire the global store.
+     */
+    static final String EPOCH_TOPIC = "parsley.topology.epoch.topic";
+
     enum FailurePolicy { FAIL, CONTINUE }
 
     /** How {@link #TOPOLOGY_VALIDATION} reacts to a detectable topology misconfiguration. */
@@ -103,13 +115,16 @@ final class ParsleyConfig {
     private final FailurePolicy evictionFailurePolicy;
     private final FailurePolicy clockResolutionFailurePolicy;
     private final ValidationMode topologyValidation;
+    private final @Nullable String epochTopic;
 
     private ParsleyConfig(FailurePolicy deserializationFailurePolicy, FailurePolicy evictionFailurePolicy,
-                          FailurePolicy clockResolutionFailurePolicy, ValidationMode topologyValidation) {
+                          FailurePolicy clockResolutionFailurePolicy, ValidationMode topologyValidation,
+                          @Nullable String epochTopic) {
         this.deserializationFailurePolicy = deserializationFailurePolicy;
         this.evictionFailurePolicy = evictionFailurePolicy;
         this.clockResolutionFailurePolicy = clockResolutionFailurePolicy;
         this.topologyValidation = topologyValidation;
+        this.epochTopic = epochTopic;
     }
 
     /** Whether a buffer-decode failure should be skipped ({@code continue}) rather than fail fast. */
@@ -130,6 +145,14 @@ final class ParsleyConfig {
     /** How to react to a detectable topology misconfiguration at startup. */
     ValidationMode topologyValidation() {
         return topologyValidation;
+    }
+
+    /**
+     * The configured epoch topic name, or {@code null} if {@link #EPOCH_TOPIC} is unset — in which
+     * case epoch bounding is disabled and the gate never strips.
+     */
+    @Nullable String epochTopic() {
+        return epochTopic;
     }
 
     /** Loads from the {@code parsley.properties} classpath resource, or defaults if it is absent. */
@@ -161,7 +184,17 @@ final class ParsleyConfig {
                 failurePolicy(props, DESERIALIZATION_FAILURE_POLICY),
                 failurePolicy(props, EVICTION_FAILURE_POLICY),
                 failurePolicy(props, CLOCK_RESOLUTION_FAILURE_POLICY),
-                validationMode(props));
+                validationMode(props),
+                epochTopic(props));
+    }
+
+    private static @Nullable String epochTopic(Properties props) {
+        String value = props.getProperty(EPOCH_TOPIC);
+        if (value == null) {
+            return null;
+        }
+        String trimmed = value.trim();
+        return trimmed.isEmpty() ? null : trimmed;
     }
 
     private static FailurePolicy failurePolicy(Properties props, String key) {

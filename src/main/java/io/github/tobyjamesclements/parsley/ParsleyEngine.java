@@ -85,6 +85,9 @@ final class ParsleyEngine<K, V> {
     // The single owner of all persisted causal metadata: the contiguous frontier clock, the channel
     // clocks, and the forwarded-offset index. completeness() and channel state live here.
     private final ParsleyFrontier frontier;
+    // The topology epoch's startsAt bounds, read live at gate time; NONE (every coordinate unbounded)
+    // when epoch bounding is disabled, so the strip step is then a no-op.
+    private final ParsleyEpoch.View epochView;
     private int sizeLimit;
     // Set only for a duration-based limit; null for size/first limits (guarded at every read).
     private @Nullable Duration evictionInterval;
@@ -146,9 +149,9 @@ final class ParsleyEngine<K, V> {
     }
 
     /**
-     * Full constructor. Takes a pre-built {@link ParsleyFrontier} — the single owner of the frontier
-     * clock, channel clocks, and forwarded index — so callers control its persistence (a store-backed
-     * frontier in production, an in-memory one in tests).
+     * Full constructor without an epoch view — delegates to the epoch-aware constructor with
+     * {@link ParsleyEpoch.View#NONE} (no stripping). Used by every caller that does not bound the
+     * causal domain (all tests, the low-level {@code CausalProcessors} path).
      */
     ParsleyEngine(CausalBufferLimit limit,
                  ParsleyFrontier frontier,
@@ -160,8 +163,31 @@ final class ParsleyEngine<K, V> {
                  LongSupplier clock,
                  boolean skipOnDecodeFailure,
                  boolean failOnEvictionLimit) {
+        this(limit, frontier, inScope, buffer, candidateIndex, metrics, audit, clock,
+                skipOnDecodeFailure, failOnEvictionLimit, ParsleyEpoch.View.NONE);
+    }
+
+    /**
+     * Full constructor. Takes a pre-built {@link ParsleyFrontier} — the single owner of the frontier
+     * clock, channel clocks, and forwarded index — so callers control its persistence (a store-backed
+     * frontier in production, an in-memory one in tests) — and a {@link ParsleyEpoch.View} supplying
+     * the topology epoch's {@code startsAt} bounds, consulted by the gate to strip out-of-domain
+     * dependencies ({@link ParsleyEpoch.View#NONE} disables stripping).
+     */
+    ParsleyEngine(CausalBufferLimit limit,
+                 ParsleyFrontier frontier,
+                 ParsleyClock.CoordinatePredicate inScope,
+                 ParsleyBufferStore<K, V> buffer,
+                 ParsleyCandidateIndex candidateIndex,
+                 ParsleyMetrics metrics,
+                 CausalAudit audit,
+                 LongSupplier clock,
+                 boolean skipOnDecodeFailure,
+                 boolean failOnEvictionLimit,
+                 ParsleyEpoch.View epochView) {
         this.limit = limit;
         this.frontier = frontier;
+        this.epochView = epochView;
         this.inScope = inScope;
         this.buffer = buffer;
         this.candidateIndex = candidateIndex;
@@ -605,9 +631,18 @@ final class ParsleyEngine<K, V> {
      * Metadata overload of the gate: evaluates deliverability from a record's dependency clock and
      * source coordinate alone, without decoding its user value. Used by {@link #drainSatisfied} so a
      * held, undecodable record that is not releasable is never deserialised.
+     *
+     * <p>Two dependency preprocessing steps run before the completeness check, both view-only (they
+     * never rewrite recorded state): the record's exact self-cycle is removed
+     * ({@link #withoutSelfReference}), and any dependency below its coordinate's topology-epoch
+     * {@code startsAt} bound is stripped ({@link ParsleyClock#strippedBelow}) — an out-of-domain
+     * reference to a prior, closed epoch that no channel in this epoch will ever confirm. With epoch
+     * bounding disabled the strip is a no-op (every bound is {@link Long#MAX_VALUE}).
      */
     private boolean isDeliverable(ParsleyClock dependencies, Uuid topicId, int partition, long offset) {
-        return completeness().dominates(withoutSelfReference(dependencies, topicId, partition, offset));
+        ParsleyClock effective = withoutSelfReference(dependencies, topicId, partition, offset)
+                .strippedBelow(epochView);
+        return completeness().dominates(effective);
     }
 
     /**
