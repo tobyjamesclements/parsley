@@ -54,6 +54,11 @@ All notable changes to this project are documented in this file. The format is b
   delivery path (a held record's dependency becoming satisfied by a later message), never by
   fabricating completeness. This is a stall-avoidance optimization, not a correctness requirement:
   every held record is already changelog-backed and survives an ungraceful stop regardless.
+- `CausalProcessors.builder(...)` now rejects a `userSupplier` that is already a
+  `CausalProcessorSupplier` with an `IllegalArgumentException`, instead of silently building a
+  nested double-decoration that would buffer and stamp every record twice and corrupt the frontier.
+  `CausalStreams` composes `CausalProcessors` internally, so the same guard protects it with no
+  separate check.
 - `parsley.topology.validation` now also covers a `CausalStreams` stage's sink topics: sink
   partition counts are folded into the same parity check as the causal input topics (previously
   input-only, since the decorator alone cannot see its sinks), and each sink's `cleanup.policy` is

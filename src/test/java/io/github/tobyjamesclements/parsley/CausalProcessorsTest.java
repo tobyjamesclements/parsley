@@ -163,6 +163,27 @@ class CausalProcessorsTest {
                 "withConfig(Properties) must apply the supplied policy");
     }
 
+    /**
+     * {@code CausalProcessors.builder(...)} rejects a {@code userSupplier} that is already a
+     * {@link CausalProcessorSupplier} — decorating an already-decorated supplier would buffer and
+     * stamp every record twice, nested, silently corrupting the frontier.
+     *
+     * Asserts an {@link IllegalArgumentException} naming the double-decoration.
+     */
+    @Test
+    void builderRejectsAnAlreadyDecoratedSupplier() {
+        CausalProcessorSupplier<String, String, String, String> alreadyDecorated =
+                builderWith(CausalBufferLimit.ofSize(1))
+                        .addBuffer(CausalBuffer.of("t1", Serdes.String(), Serdes.String()))
+                        .build();
+
+        IllegalArgumentException e = assertThrows(IllegalArgumentException.class,
+                () -> CausalProcessors.builder(alreadyDecorated),
+                "builder(...) must reject an already-decorated supplier");
+        assertTrue(e.getMessage().contains("CausalProcessorSupplier"),
+                "the message must name the double-decoration: " + e.getMessage());
+    }
+
     // --- helpers --------------------------------------------------------------------------------
 
     private static CausalProcessors.Builder<String, String, String, String> builderWith(CausalBufferLimit limit) {

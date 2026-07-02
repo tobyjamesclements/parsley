@@ -51,9 +51,18 @@ public final class CausalProcessors {
      * @param <KOut>       the forwarded key type
      * @param <VOut>       the forwarded value type
      * @return a {@link Builder} for a {@code CausalProcessorSupplier}
+     * @throws IllegalArgumentException if {@code userSupplier} is already a
+     *         {@link CausalProcessorSupplier} — decorating an already-decorated supplier would
+     *         buffer and stamp every record twice, nested, silently corrupting the frontier
      */
     public static <KIn, VIn, KOut, VOut> Builder<KIn, VIn, KOut, VOut> builder(
             ProcessorSupplier<KIn, VIn, KOut, VOut> userSupplier) {
+        if (userSupplier instanceof CausalProcessorSupplier) {
+            throw new IllegalArgumentException(
+                    "userSupplier is already a CausalProcessorSupplier; decorating it again would "
+                            + "buffer and stamp every record twice, nested, silently corrupting the "
+                            + "frontier — pass the original, undecorated supplier instead");
+        }
         return new Builder<>(userSupplier);
     }
 

@@ -211,6 +211,35 @@ class CausalStreamsTopologyTest {
     }
 
     /**
+     * {@link CausalStreams.Builder#build()} rejects a {@code userSupplier} that is already a
+     * {@link CausalProcessorSupplier} — the double-wrap guard lives in
+     * {@link CausalProcessors#builder}, which {@code CausalStreams} composes internally, so this
+     * proves the protection is inherited rather than needing a second, separate check here.
+     *
+     * Asserts an {@link IllegalArgumentException} naming the double-decoration.
+     */
+    @Test
+    void buildRejectsAnAlreadyDecoratedSupplier() {
+        CausalProcessorSupplier<String, String, String, String> alreadyDecorated =
+                CausalProcessors.builder(upperCaser())
+                        .addBufferStore("parsley", CausalBufferLimit.ofSize(100))
+                        .addBuffer(CausalBuffer.of("t1", Serdes.String(), Serdes.String()))
+                        .build();
+
+        CausalStreams.Builder<String, String, String, String> builder =
+                CausalStreams.builder(alreadyDecorated)
+                        .addBufferStore("parsley", CausalBufferLimit.ofSize(100))
+                        .addSource(CausalBuffer.of("t1", Serdes.String(), Serdes.String()))
+                        .addSink("out-sink", "out", Serdes.String(), Serdes.String())
+                        .topicAdmin(ADMIN);
+
+        IllegalArgumentException e = assertThrows(IllegalArgumentException.class, builder::build,
+                "build() must reject an already-decorated supplier");
+        assertTrue(e.getMessage().contains("CausalProcessorSupplier"),
+                "the message must name the double-decoration: " + e.getMessage());
+    }
+
+    /**
      * {@link CausalStreams.Builder#withPartitioner} applies the same {@link StreamPartitioner} to
      * every sink the stage declares — a delegate that branches to two named sinks must see both
      * sink topics invoke the custom partitioner, proving there is no per-sink drift back onto the
