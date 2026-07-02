@@ -5,6 +5,10 @@ writes, and its `forward` calls all execute behind the causal guarantee. The wra
 and nothing extra is required on egress, because Streams sinks carry the stamped header out to the
 topic.
 
+`CausalStreams` builds on top of `CausalProcessors` and owns the surrounding topology — see
+[The high-level API: CausalStreams](#the-high-level-api-causalstreams) below for when to reach for it
+instead.
+
 ## Building a causal processor
 
 Write an ordinary `Processor<K, V, KOut, VOut>` and wrap its supplier with `CausalProcessors.builder`.
@@ -96,12 +100,14 @@ the same partition its business records do. This is why the key must not change 
 
 ## Startup validation
 
-`parsley.topology.validation` controls how a causal processor reacts at startup to the one
-precondition it can observe: the causal input topics sharing a partition count. The default `warn`
-logs a mismatch and continues, `strict` fails the task fast, and `off` disables the check. The
-processor knows its input topics from the registered buffers but not its output topics, so output-side
-conditions such as a watermark-bearing topic's `cleanup.policy` are not checked here. See
-[Configuration](configuration.md).
+`parsley.topology.validation` controls how a causal processor reacts at startup to a detectable
+topology misconfiguration. The default `warn` logs a mismatch and continues, `strict` fails the task
+fast, and `off` disables the checks. A bare `CausalProcessors` decorator only ever sees its own
+registered input topics, so it can check one precondition: that they share a partition count. A
+`CausalStreams` stage owns its sinks too, so it widens the same check to also cover sink partition
+counts and each sink's `cleanup.policy` — see
+[The high-level API: CausalStreams](#the-high-level-api-causalstreams) below. See
+[Configuration](configuration.md) for the full key reference.
 
 The guarantee holds for every record delivered in causal order. When a held record's dependencies are
 still not satisfied and the configured `CausalBufferLimit` fires, the outcome depends on
@@ -111,6 +117,63 @@ In both cases the firing is logged with the causal gap and counted by a metric r
 on the record. See [Configuration](configuration.md) for the policy, and register a `CausalAudit`
 (see [Audit logging](audit-logging.md)) to receive this event, and every other causal-buffering
 event, as a per-record callback instead of a log line.
+
+## The high-level API: CausalStreams
+
+`CausalStreams` is the topology-owning entry point: it builds the `Topology` itself — sources,
+processor, and sinks — around the same `CausalProcessors` decorator, rather than handing you a
+`CausalProcessorSupplier` to drop into a `StreamsBuilder` you wire yourself. It composes the
+decorator; it does not reimplement the causal engine.
+
+```java
+CausalQuiesce quiesce = CausalQuiesce.create();
+
+Topology topology = CausalStreams.builder(userSupplier)
+        .addBufferStore("parsley", CausalBufferLimit.ofDuration(limit))
+        .addSource(CausalBuffer.of("prices", Serdes.String(), priceSerde))
+        .addSource(CausalBuffer.of("orders", Serdes.String(), orderSerde))
+        .addSink("enriched-sink", "enriched-output", Serdes.String(), enrichedSerde)
+        .withQuiesce(quiesce)
+        .build();
+
+KafkaStreams streams = new KafkaStreams(topology, props);
+streams.start();
+```
+
+Reach for `CausalStreams` instead of the low-level decorator whenever a stage needs a guarantee that
+requires owning the sinks, which the decorator structurally cannot do on its own:
+
+- **A uniform sink partitioner.** `Builder#withPartitioner` applies one `StreamPartitioner` to every
+  sink the stage declares (default: Kafka's own key-hash partitioner), so causal sinks in the same
+  stage can never drift onto different partitioners — a real risk once a topology has more than one
+  sink and only some calls remember to set a custom one. The partitioner must read only the key,
+  never the value, for the same reason as the [shard precondition](#preconditions) above: a protocol
+  watermark carries no value to read.
+- **Co-partitioning validation across sinks.** `parsley.topology.validation` (see
+  [Startup validation](#startup-validation)) folds sink partition counts into the same parity check
+  it runs on inputs, and checks each sink's `cleanup.policy` for `compact` — a protocol watermark is
+  a null-value record wire-indistinguishable from a compaction tombstone, so a compacted
+  watermark-bearing topic can silently drop the completeness signal before a slow consumer reads it.
+  Each sink is resolved independently, so one sink that does not exist yet never masks a genuine
+  misconfiguration on a different sink in the same stage, even under `strict`.
+- **Path integrity by construction.** A stage `CausalStreams` builds is exactly sources → one
+  causal-decorated processor → sinks. There is no method on the builder that inserts a plain,
+  non-Parsley node in between, so a hop that would silently drop the causal-dependencies header, or
+  swallow a non-emitting invocation without a watermark, cannot be constructed through this API.
+- **Coordinated graceful shutdown.** Register a `CausalQuiesce` with `Builder#withQuiesce`, call
+  `requestQuiesce()` from your own shutdown path, then poll `isSafeToClose()` before calling
+  `KafkaStreams#close`. A registered task keeps processing exactly as it does without quiesce — it
+  only reports itself drained once its buffer empties through the ordinary delivery path, never by
+  fabricating completeness. This is a stall-avoidance optimization, not a correctness requirement:
+  every held record is already changelog-backed and survives an ungraceful stop regardless of
+  whether quiesce was ever requested.
+- **A double-wrap guard.** Passing an already-decorated `CausalProcessorSupplier` back into
+  `CausalProcessors.builder(...)` (which `CausalStreams` calls internally) throws immediately,
+  rather than silently building a nested double-decoration that would buffer and stamp every record
+  twice.
+
+Everything under [Preconditions](#preconditions) still applies unchanged — `CausalStreams` manages
+more of the topology for you, but the causal guarantee itself has the same requirements either way.
 
 ## Restart and recovery
 

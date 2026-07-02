@@ -22,21 +22,50 @@ import java.util.Set;
  * {@link org.apache.kafka.streams.StreamsBuilder}, but for a causal stage. It composes the
  * low-level {@link CausalProcessors} decorator internally rather than reimplementing the causal
  * engine; use {@link CausalProcessors} directly when you already own a multi-stage topology and
- * only need the decorator for one {@code process(...)} call.
+ * only need the decorator for one {@code process(...)} call. Reach for {@code CausalStreams}
+ * instead whenever a stage needs a guarantee the decorator alone cannot provide, because they
+ * require owning the sinks: a uniform sink partitioner ({@link Builder#withPartitioner}),
+ * co-partitioning validation that also covers sink topics (not just inputs), and a sink
+ * {@code cleanup.policy} check — both described on {@code parsley.topology.validation}.
  *
  * <pre>{@code
+ * CausalQuiesce quiesce = CausalQuiesce.create();
+ *
  * Topology topology = CausalStreams.builder(userSupplier)
  *         .addBufferStore("parsley", CausalBufferLimit.ofDuration(limit))
  *         .addSource(CausalBuffer.of("prices", Serdes.String(), priceSerde))
  *         .addSource(CausalBuffer.of("orders", Serdes.String(), orderSerde))
  *         .addSink("enriched-sink", "enriched-output", Serdes.String(), enrichedSerde)
+ *         .withPartitioner(tenantPrefixPartitioner)
+ *         .withQuiesce(quiesce)
  *         .build();
  *
- * new KafkaStreams(topology, props).start();
+ * KafkaStreams streams = new KafkaStreams(topology, props);
+ * streams.start();
+ *
+ * Runtime.getRuntime().addShutdownHook(new Thread(() -> {
+ *     quiesce.requestQuiesce();
+ *     while (!quiesce.isSafeToClose()) {
+ *         Thread.sleep(100);
+ *     }
+ *     streams.close();
+ * }));
  * }</pre>
  *
  * <p>See {@link CausalProcessorSupplier} for the causal guarantee and its preconditions — they
- * apply unchanged here.
+ * apply unchanged here, restated in terms of what this builder owns:
+ *
+ * <ul>
+ *   <li><strong>Your key is your shard.</strong> Every source and sink this stage declares shares
+ *       one partitioner ({@link Builder#withPartitioner}, default Kafka's own key-hash partitioner)
+ *       so a shard never drifts onto different partitions across topics. That partitioner must
+ *       read only the key, never the value — a protocol watermark carries no value.
+ *   <li><strong>Path integrity holds by construction.</strong> A stage this builder produces is
+ *       exactly sources → one causal-decorated processor → sinks; there is no method that inserts
+ *       a plain, non-Parsley node in between, so a hop that would silently drop the
+ *       causal-dependencies header or swallow a non-emitting invocation without a watermark cannot
+ *       be constructed through this API.
+ * </ul>
  */
 public final class CausalStreams {
 

@@ -135,12 +135,12 @@ parsley.buffer.eviction.failure.policy = fail
 #                      out of causal order (logged and counted as a violation)
 parsley.clock.resolution.failure.policy = fail
 
-# How a causal processor reacts at startup to a detectable topology misconfiguration. Currently the
-# only detectable case is the causal input topics not sharing a partition count, which makes
-# co-partitioning impossible.
+# How a causal processor reacts at startup to a detectable topology misconfiguration: the causal
+# input topics not sharing a partition count (co-partitioning impossible), and, for a CausalStreams
+# stage, its sink topics' partition counts and cleanup.policy too.
 #   warn     (default) logs the mismatch and continues
 #   strict             fails the task fast at startup
-#   off                disables the check
+#   off                disables the checks
 parsley.topology.validation = warn
 ```
 
@@ -169,7 +169,13 @@ lossy of causal order.
 `parsley.topology.validation = warn` logs a prominent warning at startup when the causal input topics
 do not share a partition count, which makes co-partitioning impossible, and lets the task start. This
 is visible without breaking a deployment that already ran with the mismatch. Set it to `strict` to
-fail the task fast instead, or `off` to skip the check. The check covers only the input topics a
-processor registers through its buffers; it does not see the processor's output topics, so output-side
-conditions such as a watermark-bearing topic's `cleanup.policy` remain the operator's responsibility.
-See the [Streams integration preconditions](streams.md#preconditions) for the full contract.
+fail the task fast instead, or `off` to skip the checks. A bare `CausalProcessors` decorator only
+ever sees its own registered input topics, so that partition-count parity check is all it can run. A
+`CausalStreams` stage owns its sinks too, so the same key widens to fold sink partition counts into
+the parity check and to check each sink's `cleanup.policy` for `compact` (a protocol watermark is a
+null-value record wire-indistinguishable from a compaction tombstone). Each sink is resolved
+independently, so one sink that does not exist yet never masks a genuine misconfiguration on a
+different sink in the same stage, even under `strict`; both sink-side checks are skipped entirely
+(no admin round-trip) when validation is `off`. See
+[The high-level API: CausalStreams](streams.md#the-high-level-api-causalstreams) and the
+[Streams integration preconditions](streams.md#preconditions) for the full contract.

@@ -40,12 +40,38 @@ All notable changes to this project are documented in this file. The format is b
 ### Added
 - `CausalStreams` — the topology-owning high-level causal API (Layer 2), composing
   `CausalProcessors` internally rather than reimplementing the causal engine. Builds a `Topology`
-  for a single causal stage from registered `CausalBuffer` sources and named sinks, so it drops
-  straight into `new KafkaStreams(topology, props)`. A delivered record the delegate forwards to
-  only one named sink still has its stand-in watermark (emitted when the delegate forwards nothing
-  for a given input) reach every sink connected to the processor node — Kafka Streams' own
-  broadcast behaviour for an unqualified `context.forward`, now exercised through a real multi-sink
-  topology.
+  for a single causal stage — one or more `CausalBuffer` sources feeding a causal-decorated
+  processor, forwarding to one or more named sinks — so it drops straight into
+  `new KafkaStreams(topology, props)`. Use it instead of the low-level `CausalProcessors` decorator
+  whenever a topology needs sink-side guarantees the decorator alone cannot provide: a uniform sink
+  partitioner, co-partitioning validation across sinks (not just inputs), and a `cleanup.policy`
+  check (below). Path integrity — no non-Parsley processor spliced between causal nodes — holds by
+  construction: the builder exposes no way to add one.
+  - `CausalStreams.Builder#withPartitioner` applies one `StreamPartitioner` uniformly to every sink
+    a stage declares (default: Kafka's own key-hash partitioner), so causal sinks in the same stage
+    can never drift onto different partitioners. Must read only the key — a watermark carries a
+    null value and reuses its triggering record's key, so a value-based partitioner cannot route it.
+  - A delivered record the delegate forwards to only one named sink still has its stand-in
+    watermark (emitted when the delegate forwards nothing for a given input) reach every sink
+    connected to the processor node — Kafka Streams' own broadcast behaviour for an unqualified
+    `context.forward`, now exercised through a real multi-sink topology.
+  - `CausalProcessors.builder(...)` rejects a `userSupplier` that is already a
+    `CausalProcessorSupplier` with an `IllegalArgumentException`, instead of silently building a
+    nested double-decoration that would buffer and stamp every record twice and corrupt the
+    frontier. The guard lives at this single entry point, so `CausalStreams` (which calls it
+    internally) is protected with no separate check.
+- `parsley.topology.validation` — startup validation of topology misconfigurations a causal
+  processor can detect: its causal input topics not sharing a partition count, which makes
+  co-partitioning impossible, and, when built through `CausalStreams`, that stage's sink topics too
+  — both their partition counts (folded into the same parity check) and their `cleanup.policy`
+  (checked for `compact`, since a protocol watermark is a null-value record wire-indistinguishable
+  from a compaction tombstone and can be compacted away before a slow consumer reads it). `warn`
+  (default) logs a mismatch and continues, `strict` fails the task fast, `off`
+  disables the checks entirely (no admin round-trip). A bare `CausalProcessors` decorator only ever
+  sees its own input topics, so the sink-side checks apply only through `CausalStreams`. Each sink
+  is resolved independently, so one sink that cannot be described (e.g. not yet created) never
+  masks a genuine misconfiguration on a different sink in the same stage, even under `strict`.
+  `ParsleyTopicAdmin` gained a `cleanupPolicies` method to support this.
 - `CausalQuiesce` — a shared handle for coordinating graceful shutdown across every causal task in
   one application instance. Register it with `CausalProcessors.Builder#withQuiesce` /
   `CausalStreams.Builder#withQuiesce`; call `requestQuiesce()` from your own shutdown path and poll
@@ -54,31 +80,6 @@ All notable changes to this project are documented in this file. The format is b
   delivery path (a held record's dependency becoming satisfied by a later message), never by
   fabricating completeness. This is a stall-avoidance optimization, not a correctness requirement:
   every held record is already changelog-backed and survives an ungraceful stop regardless.
-- `CausalProcessors.builder(...)` now rejects a `userSupplier` that is already a
-  `CausalProcessorSupplier` with an `IllegalArgumentException`, instead of silently building a
-  nested double-decoration that would buffer and stamp every record twice and corrupt the frontier.
-  `CausalStreams` composes `CausalProcessors` internally, so the same guard protects it with no
-  separate check.
-- `parsley.topology.validation` now also covers a `CausalStreams` stage's sink topics: sink
-  partition counts are folded into the same parity check as the causal input topics (previously
-  input-only, since the decorator alone cannot see its sinks), and each sink's `cleanup.policy` is
-  checked for `compact` — a protocol watermark is a null-value record wire-indistinguishable from a
-  compaction tombstone and can be compacted away before a slow consumer reads it. Each sink is
-  resolved independently: a sink that cannot be described (e.g. not yet created) is skipped for
-  both checks rather than failing the task, even under `strict`, without masking a genuine
-  misconfiguration on a different sink in the same stage. Both checks are skipped entirely (no
-  admin round-trip) when validation is `off`. `ParsleyTopicAdmin` gained a `cleanupPolicies` method
-  to support this.
-- `CausalStreams.Builder#withPartitioner` — applies one `StreamPartitioner` uniformly to every sink
-  a causal stage declares (default: Kafka's own key-hash partitioner), so two causal sinks in the
-  same stage can never drift onto different partitioners. Must read only the key — a watermark
-  carries a null value and reuses its triggering record's key, so a value-based partitioner cannot
-  route it.
-- `parsley.topology.validation` — startup validation of the one co-partitioning precondition a
-  processor can observe, that its causal input topics share a partition count. `warn` (default) logs a
-  mismatch and continues, `strict` fails the task fast, `off` disables the check. Output-side
-  conditions such as a watermark-bearing topic's `cleanup.policy` are not checked here, because the
-  processor does not know its sink topics.
 - `CausalDependencies.isWatermark(ConsumerRecord)` — identifies a protocol watermark so a plain
   Kafka client consuming a Parsley-produced topic can fold its carried completeness frontier with
   `observe` while skipping it as a business record. `observe` now folds a watermark's carried

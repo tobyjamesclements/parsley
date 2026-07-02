@@ -43,12 +43,14 @@ Register a `CausalAudit` to receive it as a per-record callback. The
 
 ## Public API
 
-The library is a single jar built around one entry point and a set of edge operations. They share a
+The library is a single jar built around two entry points and a set of edge operations. They share a
 common vocabulary of value types.
 
 | API | Purpose |
 |---|---|
-| `CausalProcessorSupplier` | Wraps a Kafka Streams `Processor` behind the causal guarantee. This is the core of the library. |
+| `CausalProcessorSupplier` | Wraps a Kafka Streams `Processor` behind the causal guarantee. The low-level entry point: you build and own the surrounding topology. |
+| `CausalStreams` | Owns the topology itself — sources, processor, and sinks — around the same causal guarantee, composing `CausalProcessorSupplier` internally. The high-level entry point, for guarantees that require owning the sinks (a uniform sink partitioner, co-partitioning validation across sinks, coordinated graceful shutdown). |
+| `CausalQuiesce` | Coordinates graceful shutdown across every causal task in one application instance, registered with either entry point. |
 | `CausalDependencies.using` / `observe` / `stamp` / `merge` | Maintain a consumer-side frontier and stamp causal context onto records produced to plain Kafka clients at the topology edge. |
 | `CausalTopics` | Resolves topic names to their stable Kafka UUIDs for building dependencies. |
 
@@ -57,7 +59,8 @@ common vocabulary of value types.
 - [Concepts](concepts.md) covers causal dependencies, the frontier, the buffer, and how eviction is
   handled.
 - [Getting started](getting-started.md) covers installation and stamping causal context at the edge.
-- [Streams integration](streams.md) covers wrapping a `Processor`, the preconditions, and recovery.
+- [Streams integration](streams.md) covers wrapping a `Processor`, `CausalStreams`, the
+  preconditions, and recovery.
 - [Configuration](configuration.md) covers buffer limits, the eviction and deserialization policies,
   and header size.
 - [Audit logging](audit-logging.md) covers routing per-record causal events to your own audit trail.

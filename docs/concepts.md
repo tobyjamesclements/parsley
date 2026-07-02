@@ -119,8 +119,12 @@ that keeps causally related events together on one partition. An advanced user c
 coarser function of the key with a custom `StreamPartitioner`, provided the partitioner reads the key
 rather than the value, since a protocol watermark carries no value to read.
 
-Parsley does not enforce co-partitioning, and most of it cannot be checked, so a misconfigured
-topology evaluates against an incomplete partition set. Parsley can check one necessary part at
-startup, that the causal input topics share a partition count, controlled by
-`parsley.topology.validation` (`warn` by default, `strict` to fail fast, `off` to disable). See the
-[Streams integration](streams.md#startup-validation) preconditions for the full contract.
+Parsley does not enforce co-partitioning end to end, and most of it cannot be checked, so a
+misconfigured topology evaluates against an incomplete partition set. A bare `CausalProcessors`
+decorator can check one necessary part at startup, that its causal input topics share a partition
+count, controlled by `parsley.topology.validation` (`warn` by default, `strict` to fail fast, `off`
+to disable). `CausalStreams` (see [Streams integration](streams.md#the-high-level-api-causalstreams))
+owns the sinks too, so it widens the same check to the sink topics, and applies one partitioner
+uniformly across every sink it declares so a shard cannot drift onto different partitions across
+topics by accident. See the [Streams integration](streams.md#startup-validation) preconditions for
+the full contract.
