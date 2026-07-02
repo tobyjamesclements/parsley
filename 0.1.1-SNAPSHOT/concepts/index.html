@@ -1199,6 +1199,11 @@ produce. A one-to-one relay is <code>using(topics).observe(record)</code>; a fan
 input; a stateful node keeps one instance and observes into it across records. To read back the
 dependencies a record already carries, without folding in a new position, use
 <code>CausalDependencies.fromRecord(record)</code>.</p>
+<p>When you consume a topic a Parsley topology produces, some records are <em>protocol watermarks</em>: null
+key and value, carrying a completeness frontier so causal progress flows through processors that
+produce no output for a given input. Still <code>observe(record)</code> them, so your frontier advances across a
+service that emitted only watermarks on this path, but skip them as business records — test with
+<code>CausalDependencies.isWatermark(record)</code> and <code>continue</code> past those it flags.</p>
 <p>The frontier is persisted before each record is forwarded, so it survives restarts and rebalances.</p>
 <h2 id="the-causal-buffer">The causal buffer</h2>
 <p>A record whose dependencies are not yet satisfied is held in the causal buffer. Held records survive
@@ -1236,16 +1241,21 @@ further releases occur.</p>
 </tbody>
 </table>
 <h2 id="delivery-and-eviction">Delivery and eviction</h2>
-<p>A record whose dependencies the frontier has already observed is delivered in causal order. This is
-the common case, and it covers a record delivered immediately, a record delivered after a wait, and a
-record that claims no dependencies or carries an undecodable header, both of which are treated as
-vacuously satisfied.</p>
-<p>Dependencies on coordinates this processor does not consume are also treated as vacuously satisfied.
-A producer stamps its full causal frontier, which can span topics and partitions a given processor
-never reads. The processor waits only on the coordinates it actually consumes, meaning the topics
-registered as causal buffers on the partitions its task owns, and treats every other coordinate as
-already met. Without this, a dependency the processor could never observe would hold a record until
-eviction.</p>
+<p>A record is delivered in causal order once its dependencies are confirmed by every input channel of
+the processor. This covers a record delivered immediately, a record delivered after a wait, and a
+record that claims no dependencies or carries an undecodable header (an empty dependency set, trivially
+satisfied).</p>
+<p>The gate is strict: a dependency on coordinate K is satisfied only when <em>every</em> input channel the
+processor consumes has advertised K to at least the required offset. A producer stamps its full causal
+frontier, which can span topics a given processor does not read directly — and the processor waits for
+all of its input channels to confirm those coordinates rather than ignoring them. This is what lets the
+processor enforce an ordering that runs through topics it does not itself consume, but it means the
+<strong>topology must route every depended-upon coordinate through every input branch</strong> of a node (consuming
+and watermarking it, even with no business logic). A coordinate that some input branch never observes
+holds the record indefinitely. Two corollaries: a join of fully independent sources will hold a record
+that depends on a coordinate an unrelated input never sees, and a node must not consume both a topic and
+a topic derived from it (the ancestor channel can never confirm the descendant). See the
+<a href="../internals/causal-consistency/">causal consistency model</a> for the full contract.</p>
 <p>When a held record's dependencies are still not satisfied and the configured <code>CausalBufferLimit</code>
 fires, what happens next is governed by <code>parsley.buffer.eviction.failure.policy</code>. The default is
 <code>fail</code>. Under <code>fail</code>, Parsley fails the task rather than deliver the record out of causal order. The
@@ -1269,10 +1279,21 @@ for fail-fast firings under <code>fail</code>) in addition to, or instead of, re
 <h2 id="co-partitioning">Co-partitioning</h2>
 <p>Parsley evaluates dependencies against the partitions assigned to a single consumer instance. For the
 guarantee to hold, an instance must be assigned every partition in a causally related set. The
-standard way to arrange this is to co-partition related topics so that causally related messages
-share the same partition number across topics, which lets each instance own partition <code>N</code> everywhere.</p>
-<p>Parsley does not detect or enforce co-partitioning. A misconfigured topology evaluates against an
-incomplete partition set silently.</p>
+standard way to arrange this is to partition related topics by the record key with a matching
+partition count, so that causally related messages, which share a key, land on the same partition
+number across topics and each instance owns partition <code>N</code> everywhere. The key is the shard: the unit
+that keeps causally related events together on one partition. An advanced user can partition by a
+coarser function of the key with a custom <code>StreamPartitioner</code>, provided the partitioner reads the key
+rather than the value, since a protocol watermark carries no value to read.</p>
+<p>Parsley does not enforce co-partitioning end to end, and most of it cannot be checked, so a
+misconfigured topology evaluates against an incomplete partition set. A bare <code>CausalProcessors</code>
+decorator can check one necessary part at startup, that its causal input topics share a partition
+count, controlled by <code>parsley.topology.validation</code> (<code>warn</code> by default, <code>strict</code> to fail fast, <code>off</code>
+to disable). <code>CausalStreams</code> (see <a href="../streams/#the-high-level-api-causalstreams">Streams integration</a>)
+owns the sinks too, so it widens the same check to the sink topics, and applies one partitioner
+uniformly across every sink it declares so a shard cannot drift onto different partitions across
+topics by accident. See the <a href="../streams/#startup-validation">Streams integration</a> preconditions for
+the full contract.</p>
 
 
 

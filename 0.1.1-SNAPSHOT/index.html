@@ -1132,7 +1132,7 @@ once the limit fires. Either way, the event is logged with the causal gap and co
 Register a <code>CausalAudit</code> to receive it as a per-record callback. The
 <a href="configuration/">Configuration</a> page describes the policy in full.</p>
 <h2 id="public-api">Public API</h2>
-<p>The library is a single jar built around one entry point and a set of edge operations. They share a
+<p>The library is a single jar built around two entry points and a set of edge operations. They share a
 common vocabulary of value types.</p>
 <table>
 <thead>
@@ -1144,7 +1144,15 @@ common vocabulary of value types.</p>
 <tbody>
 <tr>
 <td><code>CausalProcessorSupplier</code></td>
-<td>Wraps a Kafka Streams <code>Processor</code> behind the causal guarantee. This is the core of the library.</td>
+<td>Wraps a Kafka Streams <code>Processor</code> behind the causal guarantee. The low-level entry point: you build and own the surrounding topology.</td>
+</tr>
+<tr>
+<td><code>CausalStreams</code></td>
+<td>Owns the topology itself — sources, processor, and sinks — around the same causal guarantee, composing <code>CausalProcessorSupplier</code> internally. The high-level entry point, for guarantees that require owning the sinks (a uniform sink partitioner, co-partitioning validation across sinks, coordinated graceful shutdown).</td>
+</tr>
+<tr>
+<td><code>CausalQuiesce</code></td>
+<td>Coordinates graceful shutdown across every causal task in one application instance, registered with either entry point.</td>
 </tr>
 <tr>
 <td><code>CausalDependencies.using</code> / <code>observe</code> / <code>stamp</code> / <code>merge</code></td>
@@ -1161,7 +1169,8 @@ common vocabulary of value types.</p>
 <li><a href="concepts/">Concepts</a> covers causal dependencies, the frontier, the buffer, and how eviction is
   handled.</li>
 <li><a href="getting-started/">Getting started</a> covers installation and stamping causal context at the edge.</li>
-<li><a href="streams/">Streams integration</a> covers wrapping a <code>Processor</code>, the preconditions, and recovery.</li>
+<li><a href="streams/">Streams integration</a> covers wrapping a <code>Processor</code>, <code>CausalStreams</code>, the
+  preconditions, and recovery.</li>
 <li><a href="configuration/">Configuration</a> covers buffer limits, the eviction and deserialization policies,
   and header size.</li>
 <li><a href="audit-logging/">Audit logging</a> covers routing per-record causal events to your own audit trail.</li>

@@ -1309,6 +1309,14 @@ absent file, or an absent key, falls back to the defaults below.</p>
 <a id="__codelineno-3-18" name="__codelineno-3-18" href="#__codelineno-3-18"></a><span class="c1">#   continue           forwards the record with empty (vacuously satisfied) dependencies,</span>
 <a id="__codelineno-3-19" name="__codelineno-3-19" href="#__codelineno-3-19"></a><span class="c1">#                      out of causal order (logged and counted as a violation)</span>
 <a id="__codelineno-3-20" name="__codelineno-3-20" href="#__codelineno-3-20"></a><span class="na">parsley.clock.resolution.failure.policy</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s">fail</span>
+<a id="__codelineno-3-21" name="__codelineno-3-21" href="#__codelineno-3-21"></a>
+<a id="__codelineno-3-22" name="__codelineno-3-22" href="#__codelineno-3-22"></a><span class="c1"># How a causal processor reacts at startup to a detectable topology misconfiguration: the causal</span>
+<a id="__codelineno-3-23" name="__codelineno-3-23" href="#__codelineno-3-23"></a><span class="c1"># input topics not sharing a partition count (co-partitioning impossible), and, for a CausalStreams</span>
+<a id="__codelineno-3-24" name="__codelineno-3-24" href="#__codelineno-3-24"></a><span class="c1"># stage, its sink topics&#39; partition counts and cleanup.policy too.</span>
+<a id="__codelineno-3-25" name="__codelineno-3-25" href="#__codelineno-3-25"></a><span class="c1">#   warn     (default) logs the mismatch and continues</span>
+<a id="__codelineno-3-26" name="__codelineno-3-26" href="#__codelineno-3-26"></a><span class="c1">#   strict             fails the task fast at startup</span>
+<a id="__codelineno-3-27" name="__codelineno-3-27" href="#__codelineno-3-27"></a><span class="c1">#   off                disables the checks</span>
+<a id="__codelineno-3-28" name="__codelineno-3-28" href="#__codelineno-3-28"></a><span class="na">parsley.topology.validation</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s">warn</span>
 </code></pre></div>
 <table>
 <thead>
@@ -1334,6 +1342,11 @@ absent file, or an absent key, falls back to the defaults below.</p>
 <td><code>fail</code></td>
 <td><code>fail</code>, <code>continue</code></td>
 </tr>
+<tr>
+<td><code>parsley.topology.validation</code></td>
+<td><code>warn</code></td>
+<td><code>off</code>, <code>warn</code>, <code>strict</code></td>
+</tr>
 </tbody>
 </table>
 <p><code>parsley.buffer.deserialization.failure.policy = continue</code> is best-effort and lossy. See
@@ -1348,6 +1361,19 @@ case.</p>
 causal-dependencies header fails the task rather than be forwarded on unknown premises. Set it to
 <code>continue</code> to forward such a record with empty dependencies, best-effort, accepting that this is
 lossy of causal order.</p>
+<p><code>parsley.topology.validation = warn</code> logs a prominent warning at startup when the causal input topics
+do not share a partition count, which makes co-partitioning impossible, and lets the task start. This
+is visible without breaking a deployment that already ran with the mismatch. Set it to <code>strict</code> to
+fail the task fast instead, or <code>off</code> to skip the checks. A bare <code>CausalProcessors</code> decorator only
+ever sees its own registered input topics, so that partition-count parity check is all it can run. A
+<code>CausalStreams</code> stage owns its sinks too, so the same key widens to fold sink partition counts into
+the parity check and to check each sink's <code>cleanup.policy</code> for <code>compact</code> (a protocol watermark is a
+null-value record wire-indistinguishable from a compaction tombstone). Each sink is resolved
+independently, so one sink that does not exist yet never masks a genuine misconfiguration on a
+different sink in the same stage, even under <code>strict</code>; both sink-side checks are skipped entirely
+(no admin round-trip) when validation is <code>off</code>. See
+<a href="../streams/#the-high-level-api-causalstreams">The high-level API: CausalStreams</a> and the
+<a href="../streams/#preconditions">Streams integration preconditions</a> for the full contract.</p>
 
 
 

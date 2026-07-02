@@ -476,6 +476,28 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#startup-validation" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Startup validation
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#the-high-level-api-causalstreams" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The high-level API: CausalStreams
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#restart-and-recovery" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1061,6 +1083,28 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#startup-validation" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Startup validation
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#the-high-level-api-causalstreams" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The high-level API: CausalStreams
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#restart-and-recovery" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1107,6 +1151,9 @@
 writes, and its <code>forward</code> calls all execute behind the causal guarantee. The wrapping is transparent,
 and nothing extra is required on egress, because Streams sinks carry the stamped header out to the
 topic.</p>
+<p><code>CausalStreams</code> builds on top of <code>CausalProcessors</code> and owns the surrounding topology — see
+<a href="#the-high-level-api-causalstreams">The high-level API: CausalStreams</a> below for when to reach for it
+instead.</p>
 <h2 id="building-a-causal-processor">Building a causal processor</h2>
 <p>Write an ordinary <code>Processor&lt;K, V, KOut, VOut&gt;</code> and wrap its supplier with <code>CausalProcessors.builder</code>.</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="n">ProcessorSupplier</span><span class="o">&lt;</span><span class="n">String</span><span class="p">,</span><span class="w"> </span><span class="n">Order</span><span class="p">,</span><span class="w"> </span><span class="n">String</span><span class="p">,</span><span class="w"> </span><span class="n">Enriched</span><span class="o">&gt;</span><span class="w"> </span><span class="n">user</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">new</span><span class="w"> </span><span class="n">ProcessorSupplier</span><span class="o">&lt;&gt;</span><span class="p">()</span><span class="w"> </span><span class="p">{</span>
@@ -1141,14 +1188,51 @@ on top of any <code>parsley.properties</code> classpath resource. For example:</
 any stores declared by your <code>ProcessorSupplier.stores()</code>. You never interact with these stores
 directly.</p>
 <h2 id="preconditions">Preconditions</h2>
-<p>Two preconditions apply before the guarantee holds.</p>
+<p>The guarantee holds subject to the conditions below. They apply across the whole processor, not per
+record, and Parsley cannot verify most of them, so treat them as a contract on how the topology is
+built. Parsley can check one part at startup; see <a href="#startup-validation">Startup validation</a>.</p>
+<p><strong>Your key is your shard.</strong> Partition every causally related topic by the record key, with the same
+partition count on each, so that a single task instance owns the complete partition set for a related
+group. The key is the unit of causal locality: causally related records must share a key so they land
+on the same partition on every topic. Parsley evaluates dependencies only against the partitions a
+task owns, so a topology that is not partitioned this way evaluates the completeness frontier against
+an incomplete partition set. An advanced user may partition by a coarser function of the key with a
+custom <code>StreamPartitioner</code>, for example by hashing a <code>tenant</code> prefix out of a <code>tenant:order</code> key, as
+long as that partitioner reads the key rather than the value. A partitioner that reads the value
+cannot route a protocol watermark, which carries no value; put the correlation in the key instead.</p>
+<p><strong>Do not change the key across a causal processor.</strong> The key selects the partition, so changing it
+moves a record to a different shard and breaks co-partitioning for everything downstream. Key-changing
+operations such as a <code>groupBy</code> or a join on a derived key belong outside the causally related segment.</p>
 <p><strong>Closed effects.</strong> Your <code>Processor.process()</code> must produce all side effects through
 <code>ProcessorContext.forward()</code>. Any effect that escapes the processor, such as a direct database write
 or an HTTP call that is not gated on the frontier, can act on a causal premise that the consumer has
 not confirmed.</p>
-<p><strong>Co-partitioning.</strong> All causally related topics must be co-partitioned so that a single task
-instance owns the complete partition set for a related group. See
-<a href="../concepts/#co-partitioning">Co-partitioning</a> in Concepts.</p>
+<p><strong>Forward uniformly to all children.</strong> A causal processor advertises its progress downstream by
+stamping its business output, or by emitting a protocol watermark when the delegate forwards nothing
+for a delivered input. That watermark reaches every downstream child. If the delegate routes business
+records selectively to some named children and not others, the children that received nothing are not
+separately watermarked, so keep a causal processor's forwarding uniform across its children.</p>
+<p><strong>Watermark-bearing topics must not be compacted.</strong> A protocol watermark has a null value, so log
+compaction treats it as a tombstone and may delete it before a slow consumer reads it, dropping the
+completeness signal. Set <code>cleanup.policy=delete</code> on any topic that carries watermarks, which is any
+output topic of a causal processor. Parsley does not manage this topic configuration at this level.</p>
+<p><strong>Choose your delivery guarantee.</strong> Parsley stamps each record with its own dependencies, so a
+redelivered record re-evaluates identically against the frontier. At-least-once processing is
+therefore safe, and exactly-once (<code>processing.guarantee=exactly_once_v2</code>) is a choice you make for
+delivery deduplication, not a requirement of the causal guarantee.</p>
+<p>A single causal stage that reads its sources and forwards to its outputs is sound on its own. A
+multi-stage pipeline, where one causal processor's output topic is consumed by another causal
+processor, relies on the key being preserved through each stage so that a stage's watermark routes to
+the same partition its business records do. This is why the key must not change across a node.</p>
+<h2 id="startup-validation">Startup validation</h2>
+<p><code>parsley.topology.validation</code> controls how a causal processor reacts at startup to a detectable
+topology misconfiguration. The default <code>warn</code> logs a mismatch and continues, <code>strict</code> fails the task
+fast, and <code>off</code> disables the checks. A bare <code>CausalProcessors</code> decorator only ever sees its own
+registered input topics, so it can check one precondition: that they share a partition count. A
+<code>CausalStreams</code> stage owns its sinks too, so it widens the same check to also cover sink partition
+counts and each sink's <code>cleanup.policy</code> — see
+<a href="#the-high-level-api-causalstreams">The high-level API: CausalStreams</a> below. See
+<a href="../configuration/">Configuration</a> for the full key reference.</p>
 <p>The guarantee holds for every record delivered in causal order. When a held record's dependencies are
 still not satisfied and the configured <code>CausalBufferLimit</code> fires, the outcome depends on
 <code>parsley.buffer.eviction.failure.policy</code>. Under the default <code>fail</code> policy, Parsley fails the task and
@@ -1157,6 +1241,58 @@ In both cases the firing is logged with the causal gap and counted by a metric r
 on the record. See <a href="../configuration/">Configuration</a> for the policy, and register a <code>CausalAudit</code>
 (see <a href="../audit-logging/">Audit logging</a>) to receive this event, and every other causal-buffering
 event, as a per-record callback instead of a log line.</p>
+<h2 id="the-high-level-api-causalstreams">The high-level API: CausalStreams</h2>
+<p><code>CausalStreams</code> is the topology-owning entry point: it builds the <code>Topology</code> itself — sources,
+processor, and sinks — around the same <code>CausalProcessors</code> decorator, rather than handing you a
+<code>CausalProcessorSupplier</code> to drop into a <code>StreamsBuilder</code> you wire yourself. It composes the
+decorator; it does not reimplement the causal engine.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="n">CausalQuiesce</span><span class="w"> </span><span class="n">quiesce</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">CausalQuiesce</span><span class="p">.</span><span class="na">create</span><span class="p">();</span>
+<a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a>
+<a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a><span class="n">Topology</span><span class="w"> </span><span class="n">topology</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">CausalStreams</span><span class="p">.</span><span class="na">builder</span><span class="p">(</span><span class="n">userSupplier</span><span class="p">)</span>
+<a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a><span class="w">        </span><span class="p">.</span><span class="na">addBufferStore</span><span class="p">(</span><span class="s">&quot;parsley&quot;</span><span class="p">,</span><span class="w"> </span><span class="n">CausalBufferLimit</span><span class="p">.</span><span class="na">ofDuration</span><span class="p">(</span><span class="n">limit</span><span class="p">))</span>
+<a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a><span class="w">        </span><span class="p">.</span><span class="na">addSource</span><span class="p">(</span><span class="n">CausalBuffer</span><span class="p">.</span><span class="na">of</span><span class="p">(</span><span class="s">&quot;prices&quot;</span><span class="p">,</span><span class="w"> </span><span class="n">Serdes</span><span class="p">.</span><span class="na">String</span><span class="p">(),</span><span class="w"> </span><span class="n">priceSerde</span><span class="p">))</span>
+<a id="__codelineno-2-6" name="__codelineno-2-6" href="#__codelineno-2-6"></a><span class="w">        </span><span class="p">.</span><span class="na">addSource</span><span class="p">(</span><span class="n">CausalBuffer</span><span class="p">.</span><span class="na">of</span><span class="p">(</span><span class="s">&quot;orders&quot;</span><span class="p">,</span><span class="w"> </span><span class="n">Serdes</span><span class="p">.</span><span class="na">String</span><span class="p">(),</span><span class="w"> </span><span class="n">orderSerde</span><span class="p">))</span>
+<a id="__codelineno-2-7" name="__codelineno-2-7" href="#__codelineno-2-7"></a><span class="w">        </span><span class="p">.</span><span class="na">addSink</span><span class="p">(</span><span class="s">&quot;enriched-sink&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;enriched-output&quot;</span><span class="p">,</span><span class="w"> </span><span class="n">Serdes</span><span class="p">.</span><span class="na">String</span><span class="p">(),</span><span class="w"> </span><span class="n">enrichedSerde</span><span class="p">)</span>
+<a id="__codelineno-2-8" name="__codelineno-2-8" href="#__codelineno-2-8"></a><span class="w">        </span><span class="p">.</span><span class="na">withQuiesce</span><span class="p">(</span><span class="n">quiesce</span><span class="p">)</span>
+<a id="__codelineno-2-9" name="__codelineno-2-9" href="#__codelineno-2-9"></a><span class="w">        </span><span class="p">.</span><span class="na">build</span><span class="p">();</span>
+<a id="__codelineno-2-10" name="__codelineno-2-10" href="#__codelineno-2-10"></a>
+<a id="__codelineno-2-11" name="__codelineno-2-11" href="#__codelineno-2-11"></a><span class="n">KafkaStreams</span><span class="w"> </span><span class="n">streams</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">new</span><span class="w"> </span><span class="n">KafkaStreams</span><span class="p">(</span><span class="n">topology</span><span class="p">,</span><span class="w"> </span><span class="n">props</span><span class="p">);</span>
+<a id="__codelineno-2-12" name="__codelineno-2-12" href="#__codelineno-2-12"></a><span class="n">streams</span><span class="p">.</span><span class="na">start</span><span class="p">();</span>
+</code></pre></div>
+<p>Reach for <code>CausalStreams</code> instead of the low-level decorator whenever a stage needs a guarantee that
+requires owning the sinks, which the decorator structurally cannot do on its own:</p>
+<ul>
+<li><strong>A uniform sink partitioner.</strong> <code>Builder#withPartitioner</code> applies one <code>StreamPartitioner</code> to every
+  sink the stage declares (default: Kafka's own key-hash partitioner), so causal sinks in the same
+  stage can never drift onto different partitioners — a real risk once a topology has more than one
+  sink and only some calls remember to set a custom one. The partitioner must read only the key,
+  never the value, for the same reason as the <a href="#preconditions">shard precondition</a> above: a protocol
+  watermark carries no value to read.</li>
+<li><strong>Co-partitioning validation across sinks.</strong> <code>parsley.topology.validation</code> (see
+  <a href="#startup-validation">Startup validation</a>) folds sink partition counts into the same parity check
+  it runs on inputs, and checks each sink's <code>cleanup.policy</code> for <code>compact</code> — a protocol watermark is
+  a null-value record wire-indistinguishable from a compaction tombstone, so a compacted
+  watermark-bearing topic can silently drop the completeness signal before a slow consumer reads it.
+  Each sink is resolved independently, so one sink that does not exist yet never masks a genuine
+  misconfiguration on a different sink in the same stage, even under <code>strict</code>.</li>
+<li><strong>Path integrity by construction.</strong> A stage <code>CausalStreams</code> builds is exactly sources → one
+  causal-decorated processor → sinks. There is no method on the builder that inserts a plain,
+  non-Parsley node in between, so a hop that would silently drop the causal-dependencies header, or
+  swallow a non-emitting invocation without a watermark, cannot be constructed through this API.</li>
+<li><strong>Coordinated graceful shutdown.</strong> Register a <code>CausalQuiesce</code> with <code>Builder#withQuiesce</code>, call
+  <code>requestQuiesce()</code> from your own shutdown path, then poll <code>isSafeToClose()</code> before calling
+  <code>KafkaStreams#close</code>. A registered task keeps processing exactly as it does without quiesce — it
+  only reports itself drained once its buffer empties through the ordinary delivery path, never by
+  fabricating completeness. This is a stall-avoidance optimization, not a correctness requirement:
+  every held record is already changelog-backed and survives an ungraceful stop regardless of
+  whether quiesce was ever requested.</li>
+<li><strong>A double-wrap guard.</strong> Passing an already-decorated <code>CausalProcessorSupplier</code> back into
+  <code>CausalProcessors.builder(...)</code> (which <code>CausalStreams</code> calls internally) throws immediately,
+  rather than silently building a nested double-decoration that would buffer and stamp every record
+  twice.</li>
+</ul>
+<p>Everything under <a href="#preconditions">Preconditions</a> still applies unchanged — <code>CausalStreams</code> manages
+more of the topology for you, but the causal guarantee itself has the same requirements either way.</p>
 <h2 id="restart-and-recovery">Restart and recovery</h2>
 <p>The causal buffer and the frontier are kept in durable state stores. On a restart or a rebalance the
 following happens.</p>

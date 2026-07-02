@@ -1177,7 +1177,7 @@ internal implementation.</p>
 <tbody>
 <tr>
 <td><code>CausalDependencies</code></td>
-<td>Public facade over a <code>ParsleyClock</code>: the causal requirements stamped onto each record, plus the <code>using</code>/<code>observe</code>/<code>stamp</code>/<code>merge</code> edge operations</td>
+<td>Public facade over a <code>ParsleyClock</code>: the causal requirements stamped onto each record, plus the <code>using</code>/<code>observe</code>/<code>stamp</code>/<code>merge</code> edge operations and <code>isWatermark</code> for skipping protocol watermarks on the consumer side</td>
 </tr>
 <tr>
 <td><code>CausalTopics</code></td>
@@ -1220,15 +1220,15 @@ internal implementation.</p>
 </tr>
 <tr>
 <td><code>ParsleyProcessor</code></td>
-<td>Kafka Streams processor wrapping the user processor and driving the engine</td>
+<td>Kafka Streams processor wrapping the user processor and driving the engine; emits and consumes protocol watermarks</td>
 </tr>
 <tr>
 <td><code>ParsleyProcessorSupplier</code></td>
-<td>Processor factory; registers the three Parsley state stores</td>
+<td>Processor factory; registers Parsley's four state stores</td>
 </tr>
 <tr>
 <td><code>ParsleyProcessorContext</code></td>
-<td>Stamping proxy: replaces the context given to the user processor</td>
+<td>Stamping proxy: replaces the context given to the user processor; counts business forwards to drive watermark emission</td>
 </tr>
 <tr>
 <td><code>ParsleyBufferStore</code> / <code>RocksBufferStore</code></td>
@@ -1237,6 +1237,14 @@ internal implementation.</p>
 <tr>
 <td><code>ParsleyCandidateIndex</code> / <code>RocksCandidateIndex</code></td>
 <td>Secondary index: coordinate -&gt; candidate record IDs</td>
+</tr>
+<tr>
+<td><code>ParsleyForwardedIndex</code> / <code>RocksForwardedIndex</code></td>
+<td>Offsets forwarded ahead of the contiguous frontier, so the boundary stays gap-free across restarts</td>
+</tr>
+<tr>
+<td><code>ParsleyFrontier</code></td>
+<td>Owns all causal metadata a node persists — the contiguous delivered frontier clock, the per-input-channel clocks, and <code>completeness()</code> (the per-coordinate min across all input channels) — self-persisting as the single <code>"f"</code> value of the frontier store; holds the forwarded index as a collaborator</td>
 </tr>
 <tr>
 <td><code>ParsleySerializer</code></td>
@@ -1253,14 +1261,18 @@ internal implementation.</p>
 <a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a>
 <a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a>Causal processor (Streams)
 <a id="__codelineno-0-8" name="__codelineno-0-8" href="#__codelineno-0-8"></a>  ParsleyProcessor.process(record)
-<a id="__codelineno-0-9" name="__codelineno-0-9" href="#__codelineno-0-9"></a>    -&gt; ingest: wrap in ParsleyMessage, embed source coordinates
-<a id="__codelineno-0-10" name="__codelineno-0-10" href="#__codelineno-0-10"></a>    -&gt; gate:   ParsleyEngine.onRecord()
-<a id="__codelineno-0-11" name="__codelineno-0-11" href="#__codelineno-0-11"></a>                 satisfied   -&gt; advance frontier, drain cascade
-<a id="__codelineno-0-12" name="__codelineno-0-12" href="#__codelineno-0-12"></a>                 unsatisfied -&gt; buffer (RocksBufferStore) + index (RocksCandidateIndex)
-<a id="__codelineno-0-13" name="__codelineno-0-13" href="#__codelineno-0-13"></a>                 no header   -&gt; trivially satisfied (empty dependencies)
-<a id="__codelineno-0-14" name="__codelineno-0-14" href="#__codelineno-0-14"></a>    -&gt; deliver: user processor receives records via ParsleyProcessorContext
-<a id="__codelineno-0-15" name="__codelineno-0-15" href="#__codelineno-0-15"></a>                forwarded records carry the stamped frontier dependencies
-<a id="__codelineno-0-16" name="__codelineno-0-16" href="#__codelineno-0-16"></a>                (Streams sinks carry the header out to the output topic)
+<a id="__codelineno-0-9" name="__codelineno-0-9" href="#__codelineno-0-9"></a>    -&gt; watermark? -&gt; ParsleyEngine.onWatermark(): advance channel clock, drain, re-emit
+<a id="__codelineno-0-10" name="__codelineno-0-10" href="#__codelineno-0-10"></a>    -&gt; ingest: wrap in ParsleyMessage, embed source coordinates
+<a id="__codelineno-0-11" name="__codelineno-0-11" href="#__codelineno-0-11"></a>    -&gt; gate:   ParsleyEngine.onRecord()
+<a id="__codelineno-0-12" name="__codelineno-0-12" href="#__codelineno-0-12"></a>                 completeness().dominates(deps) — every input channel has confirmed every
+<a id="__codelineno-0-13" name="__codelineno-0-13" href="#__codelineno-0-13"></a>                   depended coordinate (per-coordinate min across all input channels)
+<a id="__codelineno-0-14" name="__codelineno-0-14" href="#__codelineno-0-14"></a>                 satisfied   -&gt; advance frontier, drain cascade
+<a id="__codelineno-0-15" name="__codelineno-0-15" href="#__codelineno-0-15"></a>                 unsatisfied -&gt; buffer (RocksBufferStore) + index (RocksCandidateIndex)
+<a id="__codelineno-0-16" name="__codelineno-0-16" href="#__codelineno-0-16"></a>                 no header   -&gt; trivially satisfied (empty dependencies)
+<a id="__codelineno-0-17" name="__codelineno-0-17" href="#__codelineno-0-17"></a>    -&gt; deliver: user processor receives records via ParsleyProcessorContext
+<a id="__codelineno-0-18" name="__codelineno-0-18" href="#__codelineno-0-18"></a>                forwarded records carry the node&#39;s completeness frontier
+<a id="__codelineno-0-19" name="__codelineno-0-19" href="#__codelineno-0-19"></a>                an input that emits no business record -&gt; a protocol watermark instead
+<a id="__codelineno-0-20" name="__codelineno-0-20" href="#__codelineno-0-20"></a>                (Streams sinks carry the header out to the output topic)
 </code></pre></div>
 <h2 id="further-reading">Further reading</h2>
 <ul>

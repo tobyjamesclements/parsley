@@ -874,6 +874,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#_parsley_watermark-header-protocol-watermark" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        _parsley_watermark header (protocol watermark)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#buffer-record-parsleyserializer-v3" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -903,6 +914,23 @@
       
     </span>
   </a>
+  
+    <nav class="md-nav" aria-label="State store names and serdes">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#the-ns-frontier-f-value" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The {ns}-frontier "f" value
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
   
 </li>
       
@@ -1063,6 +1091,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#_parsley_watermark-header-protocol-watermark" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        _parsley_watermark header (protocol watermark)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#buffer-record-parsleyserializer-v3" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1092,6 +1131,23 @@
       
     </span>
   </a>
+  
+    <nav class="md-nav" aria-label="State store names and serdes">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#the-ns-frontier-f-value" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The {ns}-frontier "f" value
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
   
 </li>
       
@@ -1141,6 +1197,9 @@ encoding.</p>
 </code></pre></div>
 <p>Size: <code>5 + 28 × n</code> bytes. The wire version is <code>0x01</code>, and deserialization throws <code>IllegalStateException</code> on a mismatch.</p>
 <p>Topic IDs are Kafka <code>Uuid</code> values stored as two <code>long</code> fields (most-significant bits, then least-significant bits).</p>
+<p>On a forwarded business record this header carries the producing node's <strong>completeness frontier</strong> (<code>ParsleyEngine.completeness()</code>), not just the record's own dependencies. The encoding is identical; only the value's meaning differs by context.</p>
+<h2 id="_parsley_watermark-header-protocol-watermark"><code>_parsley_watermark</code> header (protocol watermark)</h2>
+<p>A protocol watermark is a record with a null value, keyed with the triggering record's key, carrying two headers: <code>_parsley_watermark</code> (an empty-byte marker) and <code>parsley-causal-dependencies</code> (the emitting node's completeness frontier, encoded exactly as above). A node emits one in place of a business record when a delivered input produced no downstream output, so completeness still propagates through non-emitting layers. The key is reused so the watermark routes to the same partition the record's business output would; consumers identify it by the header, never by its key. Consumers identify a watermark by the presence of the <code>_parsley_watermark</code> header (<code>CausalDependencies.isWatermark</code>); a non-Parsley consumer sees a tombstone-shaped record and should skip it.</p>
 <h2 id="buffer-record-parsleyserializer-v3">Buffer record (<code>ParsleySerializer</code> v3)</h2>
 <p>The <code>{ns}-buffer</code> state store value has two layers: <code>RocksBufferStore</code> prepends the buffer-admission
 time to the <code>ParsleySerializer</code>-encoded record.</p>
@@ -1200,7 +1259,7 @@ path.</p>
 <td><code>{ns}-frontier</code></td>
 <td><code>String</code></td>
 <td><code>byte[]</code></td>
-<td>Single entry at key <code>"f"</code>: serialised <code>ParsleyClock</code></td>
+<td>Single entry at key <code>"f"</code>: the combined <code>ParsleyFrontier</code> blob — the node's contiguous delivered frontier clock plus the per-input-channel clocks (see below)</td>
 </tr>
 <tr>
 <td><code>{ns}-buffer</code></td>
@@ -1214,9 +1273,28 @@ path.</p>
 <td><code>byte[]</code> (empty)</td>
 <td>36-byte composite key -&gt; presence marker</td>
 </tr>
+<tr>
+<td><code>{ns}-forwarded-index</code></td>
+<td><code>byte[]</code></td>
+<td><code>byte[]</code> (empty)</td>
+<td>28-byte <code>(topicId, partition, offset)</code> key -&gt; presence marker: offsets forwarded ahead of the contiguous frontier</td>
+</tr>
 </tbody>
 </table>
-<p>All three stores are persistent and changelog-backed. Changelog topic names follow the Kafka Streams pattern: <code>{applicationId}-{storeName}-changelog</code>.</p>
+<p>All four stores are persistent and changelog-backed. Changelog topic names follow the Kafka Streams pattern: <code>{applicationId}-{storeName}-changelog</code>.</p>
+<h3 id="the-ns-frontier-f-value">The <code>{ns}-frontier</code> <code>"f"</code> value</h3>
+<p><code>ParsleyFrontier</code> folds two structures into the single <code>"f"</code> value (loaded once at init, rewritten on
+change; the changelog dedups repeated puts by key per commit):</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a>[frontier-clock-len:4][frontier ParsleyClock bytes][channel-count:4]
+<a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a>  then, per channel:
+<a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a>  [topicId MSB:8][topicId LSB:8][partition:4][channel-clock-len:4][channel ParsleyClock bytes]
+</code></pre></div>
+<p>The frontier clock is the node's contiguous delivered frontier. Each channel clock is the dependencies
+advertised on that input channel <code>(topicId, partition)</code>, max-merged over the records and watermarks
+received on it. <code>completeness()</code> — the per-coordinate minimum across all input channels (each channel's
+advertised dependencies plus its own contiguous delivered position) — is computed from this value in
+memory. The forwarded-offset index stays its own keyed store (<code>{ns}-forwarded-index</code>): it is growable
+and order-sensitive, so folding it into <code>"f"</code> would increase Rocks I/O.</p>
 <h2 id="topic-uuids">Topic UUIDs</h2>
 <p>Topic UUIDs are not derived or guessed. They are resolved from the broker through <code>AdminClient</code>. The
 processor resolves them at <code>init()</code> from the task's <code>appConfigs()</code> for every topic registered as a

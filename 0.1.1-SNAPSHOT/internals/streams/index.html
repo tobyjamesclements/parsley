@@ -1131,7 +1131,7 @@
 <h2 id="parsleyprocessorsupplier"><code>ParsleyProcessorSupplier</code></h2>
 <p>Implements <code>CausalProcessorSupplier&lt;KIn,VIn,KOut,VOut&gt;</code>.</p>
 <p><strong><code>get()</code></strong> returns a new <code>ParsleyProcessor</code> instance per call (one per task).</p>
-<p><strong><code>stores()</code></strong> returns the union of the user's declared stores and the three Parsley stores:</p>
+<p><strong><code>stores()</code></strong> returns the union of the user's declared stores and the four Parsley stores:</p>
 <table>
 <thead>
 <tr>
@@ -1156,16 +1156,21 @@
 <td><code>byte[]</code></td>
 <td><code>byte[]</code></td>
 </tr>
+<tr>
+<td><code>{ns}-forwarded-index</code></td>
+<td><code>byte[]</code></td>
+<td><code>byte[]</code></td>
+</tr>
 </tbody>
 </table>
-<p>All three are created with <code>Stores.persistentKeyValueStore(...)</code>, so they are changelog-backed and durable across restarts.</p>
+<p>All four are created with <code>Stores.persistentKeyValueStore(...)</code>, so they are changelog-backed and durable across restarts. The <code>{ns}-frontier</code> store's single <code>"f"</code> value holds both the contiguous frontier clock and the per-input-channel clocks (see <a href="../wire-format/#the-ns-frontier-f-value">Wire format</a>).</p>
 <h2 id="parsleyprocessor-init-sequence"><code>ParsleyProcessor</code> init sequence</h2>
 <ol>
 <li>Resolve each registered <code>CausalBuffer</code> topic's stable UUID from the broker via a <code>ParsleyTopicAdmin</code> built from <code>context.appConfigs()</code> (the topology decorator has no broker config until init), populating the <code>topicUuids</code> map. Closed immediately after.</li>
-<li>Retrieve the three stores from the processor context by name.</li>
-<li>Read frontier from <code>{ns}-frontier</code> at key <code>"f"</code>. Start from <code>ParsleyClock.empty()</code> if absent.</li>
+<li>Retrieve the state stores from the processor context by name.</li>
+<li>Construct a <code>ParsleyFrontier</code> over the <code>{ns}-frontier</code> store: it loads the frontier clock and channel clocks from the single <code>"f"</code> value (empty if absent) and self-persists that value on every change. Prune it to the current in-scope coordinates, then seed a channel entry for every consumed input topic-partition so a silent channel holds its own coordinate in the completeness fold.</li>
 <li>Construct <code>ParsleyEngine</code> with:<ul>
-<li>A <code>FrontierCallback</code> (internal) that writes the new frontier to the frontier store and appends a snapshot to a local list used for per-record delivery-time stamping.</li>
+<li>The <code>ParsleyFrontier</code> (which owns the forwarded index and self-persists — no separate frontier callback).</li>
 <li>A <code>RocksBufferStore</code> wrapping the buffer store and a <code>ParsleySerializer</code>.</li>
 <li>A <code>RocksCandidateIndex</code> wrapping the candidate-index store.</li>
 </ul>
@@ -1180,34 +1185,45 @@
 </ol>
 <h2 id="process-path"><code>process()</code> path</h2>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>process(Record&lt;KIn,VIn&gt;)
-<a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>  ingest(record)
-<a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a>    reads source metadata from context.recordMetadata()
-<a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a>    resolves topicId from topicUuids map (broker-resolved at init for each registered CausalBuffer; throws IllegalStateException if absent)
-<a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a>    returns ParsleyMessage.from(record, source, offset, topicId)
-<a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a>
-<a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a>  gate(parsleyRecord)
-<a id="__codelineno-0-8" name="__codelineno-0-8" href="#__codelineno-0-8"></a>    clears snapshot list
-<a id="__codelineno-0-9" name="__codelineno-0-9" href="#__codelineno-0-9"></a>    calls engine.onRecord(parsleyRecord)
-<a id="__codelineno-0-10" name="__codelineno-0-10" href="#__codelineno-0-10"></a>    returns list of admitted records + collected snapshots
-<a id="__codelineno-0-11" name="__codelineno-0-11" href="#__codelineno-0-11"></a>
-<a id="__codelineno-0-12" name="__codelineno-0-12" href="#__codelineno-0-12"></a>  deliver(admittedRecords, snapshots)
-<a id="__codelineno-0-13" name="__codelineno-0-13" href="#__codelineno-0-13"></a>    for each (record, snapshot):
-<a id="__codelineno-0-14" name="__codelineno-0-14" href="#__codelineno-0-14"></a>      set stampFrontier = snapshot
-<a id="__codelineno-0-15" name="__codelineno-0-15" href="#__codelineno-0-15"></a>      set deliveryMetadata = record&#39;s source coordinate
-<a id="__codelineno-0-16" name="__codelineno-0-16" href="#__codelineno-0-16"></a>      delegate.process(record.toConsumerRecord() as Record)
-<a id="__codelineno-0-17" name="__codelineno-0-17" href="#__codelineno-0-17"></a>    restore stampFrontier = engine.frontier()
-<a id="__codelineno-0-18" name="__codelineno-0-18" href="#__codelineno-0-18"></a>    clear deliveryMetadata
+<a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>  if isWatermark(record):                 # carries the _parsley_watermark header
+<a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a>    handleWatermark(record); return
+<a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a>
+<a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a>  ingest(record)
+<a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a>    reads source metadata from context.recordMetadata()
+<a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a>    resolves topicId from topicUuids map (broker-resolved at init for each registered CausalBuffer; throws IllegalStateException if absent)
+<a id="__codelineno-0-8" name="__codelineno-0-8" href="#__codelineno-0-8"></a>    returns ParsleyMessage.from(record, source, offset, topicId)
+<a id="__codelineno-0-9" name="__codelineno-0-9" href="#__codelineno-0-9"></a>
+<a id="__codelineno-0-10" name="__codelineno-0-10" href="#__codelineno-0-10"></a>  gate(parsleyRecord)
+<a id="__codelineno-0-11" name="__codelineno-0-11" href="#__codelineno-0-11"></a>    returns engine.onRecord(parsleyRecord)   # list of admitted records
+<a id="__codelineno-0-12" name="__codelineno-0-12" href="#__codelineno-0-12"></a>
+<a id="__codelineno-0-13" name="__codelineno-0-13" href="#__codelineno-0-13"></a>  deliver(admittedRecords)
+<a id="__codelineno-0-14" name="__codelineno-0-14" href="#__codelineno-0-14"></a>    for each record:
+<a id="__codelineno-0-15" name="__codelineno-0-15" href="#__codelineno-0-15"></a>      set stampFrontier = engine.completeness()
+<a id="__codelineno-0-16" name="__codelineno-0-16" href="#__codelineno-0-16"></a>      set deliveryMetadata = record&#39;s source coordinate
+<a id="__codelineno-0-17" name="__codelineno-0-17" href="#__codelineno-0-17"></a>      stampingContext.resetForwardCount()
+<a id="__codelineno-0-18" name="__codelineno-0-18" href="#__codelineno-0-18"></a>      delegate.process(record.toConsumerRecord() as Record)
+<a id="__codelineno-0-19" name="__codelineno-0-19" href="#__codelineno-0-19"></a>      if stampingContext.forwardCount() == 0:   # delegate emitted nothing
+<a id="__codelineno-0-20" name="__codelineno-0-20" href="#__codelineno-0-20"></a>        forwardWatermark()                       # null/null record carrying engine.completeness()
+<a id="__codelineno-0-21" name="__codelineno-0-21" href="#__codelineno-0-21"></a>    clear deliveryMetadata
+<a id="__codelineno-0-22" name="__codelineno-0-22" href="#__codelineno-0-22"></a>    set stampFrontier = engine.completeness()
+<a id="__codelineno-0-23" name="__codelineno-0-23" href="#__codelineno-0-23"></a>
+<a id="__codelineno-0-24" name="__codelineno-0-24" href="#__codelineno-0-24"></a>  # a consumed record that was buffered (nothing delivered) emits a heartbeat watermark only if
+<a id="__codelineno-0-25" name="__codelineno-0-25" href="#__codelineno-0-25"></a>  # its receipt-time channel update advanced completeness, so progress still propagates downstream
+<a id="__codelineno-0-26" name="__codelineno-0-26" href="#__codelineno-0-26"></a>  if admittedRecords.isEmpty() and completeness() advanced:
+<a id="__codelineno-0-27" name="__codelineno-0-27" href="#__codelineno-0-27"></a>    forwardWatermark()
 </code></pre></div>
-<p>The snapshot list collects the frontier state after each individual advance inside <code>engine.onRecord()</code>. During delivery, each admitted record is paired with its corresponding snapshot so that the stamped dependencies reflect the frontier at the exact moment the record was admitted, not the final post-cascade frontier.</p>
+<p>Each admitted record is stamped with <code>engine.completeness()</code> — the per-coordinate minimum across every input channel (each channel's advertised dependencies plus its own contiguous delivered position; see <a href="../causal-consistency/#the-completeness-frontier">Causal consistency model</a>). A record is delivered only once every input channel has confirmed every coordinate it depends on; the same value is stamped on forwarded records and watermarks.</p>
+<p>When the delegate forwards no business record for a delivered input (<code>forwardCount() == 0</code>), the processor emits a protocol watermark in its place: a null-value record keyed with the triggering record's key (so it routes to that record's partition), carrying <code>engine.completeness()</code> and the <code>_parsley_watermark</code> header, so a non-emitting node still advances downstream completeness. On the receiving side <code>handleWatermark()</code> decodes the carried frontier, calls <code>engine.onWatermark(topicId, partition, frontier)</code> to update that source channel's clock and drain any newly releasable records, then re-emits a watermark downstream.</p>
 <h2 id="parsleyprocessorcontext"><code>ParsleyProcessorContext</code></h2>
 <p>Wraps <code>ProcessorContext&lt;KOut,VOut&gt;</code>. Intercepts <code>forward()</code> to stamp the causal frontier onto outgoing records.</p>
 <p><strong><code>forward(Record&lt;K,V&gt;)</code>:</strong></p>
 <ol>
+<li>Increment the business-forward counter (read by <code>ParsleyProcessor</code> after each <code>delegate.process(...)</code>; a count of zero means the delegate emitted nothing and triggers watermark emission).</li>
 <li>Build a new <code>RecordHeaders</code> from the record's existing headers, excluding any <code>parsley-causal-dependencies</code> header.</li>
-<li>Add <code>parsley-causal-dependencies</code> from <code>frontier.get().toBytes()</code> (the <code>Supplier&lt;ParsleyClock&gt;</code> is read at call time).</li>
+<li>Add <code>parsley-causal-dependencies</code> from <code>frontier.get().toBytes()</code> (the <code>Supplier&lt;ParsleyClock&gt;</code> is read at call time, and supplies the completeness frontier).</li>
 <li>Call <code>delegate.forward(record.withHeaders(stamped))</code>.</li>
 </ol>
-<p>The original record object is never mutated. The frontier is read live. A <code>forward()</code> during admit sees the post-admit frontier, and a <code>forward()</code> from a punctuator sees the frontier at punctuator fire time.</p>
+<p>The original record object is never mutated. The frontier is read live. A <code>forward()</code> during admit sees the post-admit frontier, and a <code>forward()</code> from a punctuator sees the frontier at punctuator fire time. The processor resets the forward counter before each delivered record via <code>resetForwardCount()</code>.</p>
 <p><strong><code>recordMetadata()</code>:</strong> Returns the source coordinate metadata of the record currently being delivered (set by <code>deliver()</code> above) when inside a delivery call. Returns the delegate's <code>recordMetadata()</code> otherwise. This gives the user processor access to the causal position of the triggering record.</p>
 <p>All other <code>ProcessorContext</code> methods delegate verbatim.</p>
 <h2 id="state-store-namespace">State store namespace</h2>
