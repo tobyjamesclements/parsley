@@ -154,14 +154,22 @@ class CausalFanOutScopedFrontierIT {
      * dependency ({@code SHARED@1} gates the unique-topic records) so each admission frontier is
      * deterministic.
      *
-     * <p>Asserts that each processor stamps forwarded records with the high-water of its own source
-     * topics merged with the full inbound transitive ancestry: A's stamp is
-     * {@code {SHARED@1, A_ONLY@0, SRC1@2, SRC2@1}} and B's is
-     * {@code {SHARED@1, B_ONLY@0, SRC1@2, SRC2@1}}. The upstream SRC coordinates are vacuously
-     * satisfied (never block delivery), but they are carried through as transitive ancestry so that
-     * any downstream node subscribing to SRC1/SRC2 can enforce ordering. The other processor's
-     * unique topic never leaks in; the shared topic contributes the identical SHARED@1 coordinate
-     * to both stamps.
+     * <p>Completeness is the per-coordinate minimum across every one of a processor's input channels
+     * ({@link ParsleyFrontier#completeness()} / {@code ParsleyClock.intersectMin}): a coordinate
+     * missing from even one channel's view is dropped entirely, not carried through regardless (see
+     * {@code ParsleyEngineCompletenessTest.coordinateOnOnlyOneChannelIsDroppedNotConfirmedByAllChannels}
+     * for the unit-level analog, and the "Independent inputs" topology-contract note in
+     * {@code docs/internals/causal-consistency.md}). {@code SRC1}/{@code SRC2} survive for both
+     * processors because the upstream client stamps them onto every record on every topic, so both of
+     * a processor's channels witness them. Each processor's own unique topic ({@code A_ONLY} for A,
+     * {@code B_ONLY} for B) does not: it is witnessed only by that one channel — the shared topic never
+     * carries a dependency on it — so it is dropped from both stamps, which is why {@code expectedA0},
+     * {@code expectedB0}, and {@code expectedShared1} below are all identical. This isn't a scenario
+     * limitation: for either unique-topic coordinate to survive, the shared topic would need to carry a
+     * dependency on it, which would make the record undeliverable to whichever sibling processor has no
+     * channel for that topic at all (the delivery gate holds forever rather than dropping the
+     * coordinate) — so there is no topology shape in which one processor's unique topic can appear in
+     * its stamp while remaining absent from the sibling's.
      */
     @Test
     void scopedFrontiersStayIndependentAcrossTwoProcessorsSharingATopic() throws Exception {
@@ -201,22 +209,13 @@ class CausalFanOutScopedFrontierIT {
                     producer.send(afterShared0.stamp(new ProducerRecord<>(SHARED, "sk", "s1"))).get();
                 }
 
-                // Transitive ancestry: SRC1/SRC2 are vacuously satisfied (not effective) but
-                // carried through the stamp for downstream nodes that might subscribe to them.
-                CausalDependencies expectedShared1 = CausalDependencies.builder(topics)
+                // SRC1/SRC2 survive completeness because every channel of both processors witnesses
+                // them (the upstream client stamps them onto every record on every topic). Each
+                // processor's own unique topic (A_ONLY / B_ONLY) does not: it is witnessed by only one
+                // of that processor's two channels, so it is dropped by the per-channel minimum — for
+                // both processors alike, which is why all three expected values below coincide.
+                CausalDependencies expected = CausalDependencies.builder(topics)
                         .require(SHARED, 0, 1)
-                        .require(SRC1, 0, 2)
-                        .require(SRC2, 0, 1)
-                        .build();
-                CausalDependencies expectedA0 = CausalDependencies.builder(topics)
-                        .require(SHARED, 0, 1)
-                        .require(A_ONLY, 0, 0)
-                        .require(SRC1, 0, 2)
-                        .require(SRC2, 0, 1)
-                        .build();
-                CausalDependencies expectedB0 = CausalDependencies.builder(topics)
-                        .require(SHARED, 0, 1)
-                        .require(B_ONLY, 0, 0)
                         .require(SRC1, 0, 2)
                         .require(SRC2, 0, 1)
                         .build();
@@ -228,16 +227,16 @@ class CausalFanOutScopedFrontierIT {
                     Map<String, CausalDependencies> aStamps = pollStamps(aConsumer, 3);
                     Map<String, CausalDependencies> bStamps = pollStamps(bConsumer, 3);
 
-                    assertEquals(expectedShared1, aStamps.get("S1"),
-                            "SHARED@1 + transitive SRC ancestry in processor A's stamp");
-                    assertEquals(expectedShared1, bStamps.get("S1"),
-                            "SHARED@1 + transitive SRC ancestry in processor B's stamp");
-                    assertEquals(expectedA0, aStamps.get("A0"),
-                            "processor A's stamp carries SHARED+A_ONLY frontier plus transitive SRC ancestry; "
-                                    + "B_ONLY never leaks in");
-                    assertEquals(expectedB0, bStamps.get("B0"),
-                            "processor B's stamp carries SHARED+B_ONLY frontier plus transitive SRC ancestry; "
-                                    + "A_ONLY never leaks in");
+                    assertEquals(expected, aStamps.get("S1"),
+                            "SHARED@1 + SRC ancestry witnessed by both of processor A's channels");
+                    assertEquals(expected, bStamps.get("S1"),
+                            "SHARED@1 + SRC ancestry witnessed by both of processor B's channels");
+                    assertEquals(expected, aStamps.get("A0"),
+                            "processor A's stamp carries SHARED+SRC completeness; A_ONLY is dropped "
+                                    + "because only the A_ONLY channel witnesses it, not SHARED");
+                    assertEquals(expected, bStamps.get("B0"),
+                            "processor B's stamp carries SHARED+SRC completeness; B_ONLY is dropped "
+                                    + "because only the B_ONLY channel witnesses it, not SHARED");
                 }
             }
         }
