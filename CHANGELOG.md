@@ -41,12 +41,19 @@ All notable changes to this project are documented in this file. The format is b
 - `CausalStreams` — the topology-owning high-level causal API (Layer 2), composing
   `CausalProcessors` internally rather than reimplementing the causal engine. Builds a `Topology`
   for a single causal stage from registered `CausalBuffer` sources and named sinks, so it drops
-  straight into `new KafkaStreams(topology, props)`. This first cut wires sources, one
-  causal-decorated processor, and sinks; quiesce follows in a later increment. A delivered record
-  the delegate forwards to only one named sink still has its stand-in watermark (emitted when the
-  delegate forwards nothing for a given input) reach every sink connected to the processor node —
-  Kafka Streams' own broadcast behaviour for an unqualified `context.forward`, now exercised through
-  a real multi-sink topology.
+  straight into `new KafkaStreams(topology, props)`. A delivered record the delegate forwards to
+  only one named sink still has its stand-in watermark (emitted when the delegate forwards nothing
+  for a given input) reach every sink connected to the processor node — Kafka Streams' own
+  broadcast behaviour for an unqualified `context.forward`, now exercised through a real multi-sink
+  topology.
+- `CausalQuiesce` — a shared handle for coordinating graceful shutdown across every causal task in
+  one application instance. Register it with `CausalProcessors.Builder#withQuiesce` /
+  `CausalStreams.Builder#withQuiesce`; call `requestQuiesce()` from your own shutdown path and poll
+  `isSafeToClose()` before calling `KafkaStreams#close`. A registered task keeps processing exactly
+  as it does today — it only reports itself drained once its buffer empties through the ordinary
+  delivery path (a held record's dependency becoming satisfied by a later message), never by
+  fabricating completeness. This is a stall-avoidance optimization, not a correctness requirement:
+  every held record is already changelog-backed and survives an ungraceful stop regardless.
 - `parsley.topology.validation` now also covers a `CausalStreams` stage's sink topics: sink
   partition counts are folded into the same parity check as the causal input topics (previously
   input-only, since the decorator alone cannot see its sinks), and each sink's `cleanup.policy` is

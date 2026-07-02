@@ -78,6 +78,7 @@ public final class CausalStreams {
         private CausalAudit audit = CausalAudit.NOOP;
         private @Nullable ParsleyTopicAdmin topicAdmin = null;
         private @Nullable StreamPartitioner<? super KOut, ? super VOut> partitioner = null;
+        private @Nullable CausalQuiesce quiesce = null;
 
         private Builder(ProcessorSupplier<KIn, VIn, KOut, VOut> userSupplier) {
             this.userSupplier = userSupplier;
@@ -196,6 +197,18 @@ public final class CausalStreams {
         }
 
         /**
+         * Registers this stage's tasks with a {@link CausalQuiesce} for coordinated graceful
+         * shutdown. See {@link CausalProcessors.Builder#withQuiesce} — same semantics.
+         *
+         * @param quiesce the quiesce coordinator every task instance registers with
+         * @return this builder
+         */
+        public Builder<KIn, VIn, KOut, VOut> withQuiesce(CausalQuiesce quiesce) {
+            this.quiesce = quiesce;
+            return this;
+        }
+
+        /**
          * Builds the {@link Topology}: one source node per registered {@link CausalBuffer}, one
          * processor node running {@code userSupplier} behind the causal guarantee (composing
          * {@link CausalProcessors} internally), and one sink node per registered sink — all wired
@@ -228,6 +241,9 @@ public final class CausalStreams {
                     .withConfig(config)
                     .withAudit(audit)
                     .additionalPartitionCountTopics(sinkTopics);
+            if (quiesce != null) {
+                causalBuilder.withQuiesce(quiesce);
+            }
             if (topicAdmin != null) {
                 causalBuilder.topicAdmin(topicAdmin);
             }

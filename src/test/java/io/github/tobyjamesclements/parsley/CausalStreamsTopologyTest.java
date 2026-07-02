@@ -22,6 +22,7 @@ import org.junit.jupiter.api.Test;
 import java.io.File;
 import java.io.IOException;
 import java.nio.file.Files;
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
@@ -46,6 +47,7 @@ class CausalStreamsTopologyTest {
     private static final Uuid T2_ID = Uuid.randomUuid();
 
     private static final ParsleyTopicAdmin ADMIN = TestTopicAdmin.of(Map.of("t1", T1_ID, "t2", T2_ID));
+    private static final CausalTopics TOPICS = CausalTopics.of(Map.of("t1", T1_ID, "t2", T2_ID));
 
     private final List<String> processed = new ArrayList<>();
 
@@ -325,6 +327,51 @@ class CausalStreamsTopologyTest {
     /** Whether {@code record} carries Parsley's protocol-watermark header. */
     private static boolean isWatermark(TestRecord<String, String> record) {
         return record.headers().lastHeader(ParsleyHeader.WATERMARK) != null;
+    }
+
+    /**
+     * A stage registered with a {@link CausalQuiesce} keeps that quiesce's readiness signal in sync
+     * with its actual buffer depth: a held record (unsatisfied dependency) must keep
+     * {@code isSafeToClose} false even after quiesce is requested, and delivering that record via the
+     * ordinary satisfying-message path (never a synthetic watermark) must flip it back to true.
+     *
+     * Asserts {@code isSafeToClose} is false while a record is held, then true once it drains.
+     */
+    @Test
+    void quiesceTracksTheBufferThroughTheOrdinaryDeliveryPath() {
+        CausalQuiesce quiesce = CausalQuiesce.create();
+        Topology topology = CausalStreams.builder(upperCaser())
+                .addBufferStore("parsley", CausalBufferLimit.ofDuration(Duration.ofMinutes(5)))
+                .addSource(CausalBuffer.of("t1", Serdes.String(), Serdes.String()))
+                .addSource(CausalBuffer.of("t2", Serdes.String(), Serdes.String()))
+                .addSink("out-sink", "out", Serdes.String(), Serdes.String())
+                .withQuiesce(quiesce)
+                .topicAdmin(ADMIN)
+                .build();
+
+        try (TopologyTestDriver driver = new TopologyTestDriver(topology, config())) {
+            TestInputTopic<String, String> t1 =
+                    driver.createInputTopic("t1", new StringSerializer(), new StringSerializer());
+            TestInputTopic<String, String> t2 =
+                    driver.createInputTopic("t2", new StringSerializer(), new StringSerializer());
+
+            // Depends on t2@0, a channel this stage consumes but has not yet seen any traffic on —
+            // held until a real t2 record arrives.
+            t1.pipeInput(new TestRecord<>("k", "held",
+                    depsHeader(CausalDependencies.builder(TOPICS).require("t2", 0, 0).build())));
+
+            quiesce.requestQuiesce();
+            assertEquals(false, quiesce.isSafeToClose(), "a held record must keep the stage unsafe to close");
+
+            // Satisfies the held record's dependency (t2@0) — draining the buffer to empty through
+            // the ordinary delivery path, never a synthetic watermark.
+            t2.pipeInput(new TestRecord<>("k", "trigger", depsHeader(CausalDependencies.empty())));
+
+            assertEquals(List.of("trigger", "held"), processed,
+                    "the held record must drain once its dependency is satisfied");
+            assertTrue(quiesce.isSafeToClose(),
+                    "the buffer is now empty and quiesce was requested: safe to close");
+        }
     }
 
     /**

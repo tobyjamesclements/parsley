@@ -62,6 +62,7 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
     private final Function<Map<String, Object>, ParsleyTopicAdmin> adminFactory;
     private final ParsleyConfig config;
     private final CausalAudit audit;
+    private final @Nullable CausalQuiesce quiesce;
 
     // All mutable state below is confined to the single Kafka Streams thread that owns this task.
 
@@ -95,7 +96,8 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
                      Set<String> additionalPartitionCountTopics,
                      Function<Map<String, Object>, ParsleyTopicAdmin> adminFactory,
                      ParsleyConfig config,
-                     CausalAudit audit) {
+                     CausalAudit audit,
+                     @Nullable CausalQuiesce quiesce) {
         this.delegate = delegate;
         this.limit = limit;
         this.serializer = serializer;
@@ -108,6 +110,7 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
         this.adminFactory = adminFactory;
         this.config = config;
         this.audit = audit;
+        this.quiesce = quiesce;
     }
 
     @Override
@@ -190,6 +193,13 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
         // has no other periodic tick at all).
         context.schedule(METRICS_REFRESH_INTERVAL, PunctuationType.WALL_CLOCK_TIME,
                 timestamp -> engine.reportBufferState());
+
+        // Registered last, once init() has otherwise succeeded, so a failed init never leaves a
+        // phantom task permanently blocking CausalQuiesce#isSafeToClose.
+        if (quiesce != null) {
+            quiesce.register(context.taskId());
+            updateQuiesceState();
+        }
     }
 
     @Override
@@ -218,6 +228,9 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
     public void close() {
         log.info("Processor closing [task: {}]", context.taskId());
         audit.processorClosing(context.taskId().toString());
+        if (quiesce != null) {
+            quiesce.unregister(context.taskId());
+        }
         delegate.close();
         wiredMetrics.close(context.metrics());
     }
@@ -261,6 +274,21 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
         }
         deliveryMetadata = null;
         stampFrontier = engine.completeness();
+        updateQuiesceState();
+    }
+
+    /**
+     * Reports this task's drained state to {@link #quiesce}, if registered: drained once quiesce has
+     * been requested and the buffer is empty. Called after every buffer-depth-changing event (every
+     * path that can hold, release, or evict a record funnels through {@link #deliver}), so the
+     * signal reflects the current buffer depth without polling. Never fabricates completeness — this
+     * only observes the buffer depth the ordinary delivery path already produced.
+     */
+    private void updateQuiesceState() {
+        if (quiesce == null) {
+            return;
+        }
+        quiesce.setDrained(context.taskId(), quiesce.isQuiesceRequested() && engine.bufferSize() == 0);
     }
 
     /**

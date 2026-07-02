@@ -586,6 +586,11 @@ final class ParsleyEngine<K, V> {
         metrics.reportState(buffer.size(), buffer.oldestBufferedAt());
     }
 
+    /** The buffer's current depth — the number of held records awaiting satisfied dependencies. */
+    int bufferSize() {
+        return buffer.size();
+    }
+
     /**
      * The causal delivery gate: every coordinate {@code record} depends on (its own self-cycle
      * stripped) is within the {@link #completeness()} frontier — i.e. confirmed by every input

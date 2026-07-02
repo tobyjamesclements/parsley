@@ -79,6 +79,7 @@ public final class CausalProcessors {
         private @Nullable ParsleyConfig configOverride = null;
         private CausalAudit audit = CausalAudit.NOOP;
         private Set<String> additionalPartitionCountTopics = Set.of();
+        private @Nullable CausalQuiesce quiesce = null;
 
         private Builder(ProcessorSupplier<KIn, VIn, KOut, VOut> userSupplier) {
             this.userSupplier = userSupplier;
@@ -209,6 +210,19 @@ public final class CausalProcessors {
         }
 
         /**
+         * Registers this processor's tasks with a {@link CausalQuiesce} for coordinated graceful
+         * shutdown. Optional — without one, tasks process and close exactly as they do today, with no
+         * quiesce tracking.
+         *
+         * @param quiesce the quiesce coordinator every task instance registers with
+         * @return this builder
+         */
+        public Builder<KIn, VIn, KOut, VOut> withQuiesce(CausalQuiesce quiesce) {
+            this.quiesce = quiesce;
+            return this;
+        }
+
+        /**
          * Overrides the {@link ParsleyTopicAdmin} used to resolve topic UUIDs at startup (default: a
          * live {@link org.apache.kafka.clients.admin.Admin} built from the task's {@code appConfigs()}).
          * For tests running under {@code TopologyTestDriver} with no broker.
@@ -272,7 +286,7 @@ public final class CausalProcessors {
                     userSupplier, bufferLimit, keySerdeByTopic, valueSerdeByTopic,
                     store + "-frontier", store + "-buffer", store + "-candidate-index", store + "-forwarded-index",
                     resolved.keySet(), additionalPartitionCountTopics, adminFactory, effectiveConfig,
-                    ParsleyAudit.wrap(audit));
+                    ParsleyAudit.wrap(audit), quiesce);
         }
 
         /** Classpath {@code parsley.properties} as a base layer, overlaid with builder-supplied keys. */
