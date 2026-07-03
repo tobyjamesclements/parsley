@@ -54,6 +54,9 @@ final class ParsleyEpochRuntime implements AutoCloseable {
     private volatile long committedEpochId;
     private volatile ParsleyClock committedLowerBounds = ParsleyClock.empty();
     private volatile boolean roundOpen;
+    // Whether the transport has folded the whole startup backlog. The owner must not commit before this,
+    // or a just-started runtime would commit a stale epoch believing the topology empty.
+    private volatile boolean bootstrapped;
 
     private volatile boolean running;
     private @Nullable Thread thread;
@@ -109,6 +112,11 @@ final class ParsleyEpochRuntime implements AutoCloseable {
         return roundOpen;
     }
 
+    /** Whether the runtime has folded the whole startup backlog, so {@link #committedEpochId()} is accurate — the join wait blocks on this. */
+    boolean isBootstrapped() {
+        return bootstrapped;
+    }
+
     /** Starts the background thread that drives the protocol until {@link #close}. Idempotent. */
     synchronized void start() {
         if (running) {
@@ -152,6 +160,7 @@ final class ParsleyEpochRuntime implements AutoCloseable {
             }
         }
         roundOpen = fold.isRoundOpen();
+        bootstrapped = transport.caughtUp();
         driveOwner();
     }
 
@@ -162,7 +171,9 @@ final class ParsleyEpochRuntime implements AutoCloseable {
      * A round owned by a remote instance is left for that instance to commit.
      */
     private void driveOwner() {
-        if (!fold.isRoundOpen()) {
+        // Never commit before the whole startup backlog is folded: committedEpochId would be stale and
+        // the round would be decided against a topology this runtime has not yet fully observed.
+        if (!bootstrapped || !fold.isRoundOpen()) {
             return;
         }
         String owner = fold.roundOwner();

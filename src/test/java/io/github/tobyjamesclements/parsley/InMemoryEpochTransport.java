@@ -31,10 +31,13 @@ final class InMemoryEpochTransport implements ParsleyEpochTransport {
     }
 
     private final SharedLog log;
+    private final int bootstrapTarget;
     private int cursor;
 
     InMemoryEpochTransport(SharedLog log) {
         this.log = log;
+        // The backlog present at construction — this reader is caught up once it has folded past it.
+        this.bootstrapTarget = log.events().size();
     }
 
     @Override
@@ -47,6 +50,11 @@ final class InMemoryEpochTransport implements ParsleyEpochTransport {
         List<EpochEvent> fresh = new ArrayList<>(log.events.subList(cursor, log.events.size()));
         cursor = log.events.size();
         return fresh;
+    }
+
+    @Override
+    public boolean caughtUp() {
+        return cursor >= bootstrapTarget;
     }
 
     @Override

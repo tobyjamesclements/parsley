@@ -49,6 +49,9 @@ final class ParsleyKafkaEpochTransport implements ParsleyEpochTransport {
     private final TopicPartition partition;
     private final Producer<byte[], byte[]> producer;
     private final Consumer<byte[], byte[]> consumer;
+    // The log's end offset at startup, captured lazily on the first caughtUp() check; the reader is
+    // bootstrapped once its position reaches it. -1 until captured.
+    private long bootstrapEndOffset = -1;
 
     /** Builds the raw clients from {@code appConfigs} and assigns the consumer to the log's one partition. */
     ParsleyKafkaEpochTransport(Map<String, Object> appConfigs, String topic) {
@@ -93,6 +96,16 @@ final class ParsleyKafkaEpochTransport implements ParsleyEpochTransport {
             events.add(EpochEvent.fromBytes(record.value()));
         }
         return events;
+    }
+
+    @Override
+    public boolean caughtUp() {
+        // Capture the end offset once (a snapshot of the backlog to fold); the log keeps growing but
+        // bootstrap means "read up to what existed at startup", so we do not chase a moving end.
+        if (bootstrapEndOffset < 0) {
+            bootstrapEndOffset = consumer.endOffsets(List.of(partition)).getOrDefault(partition, 0L);
+        }
+        return consumer.position(partition) >= bootstrapEndOffset;
     }
 
     @Override

@@ -39,6 +39,14 @@ interface ParsleyEpochTransport extends AutoCloseable {
      */
     List<EpochEvent> poll(Duration timeout);
 
+    /**
+     * Whether this reader has folded the log up to the end offset that existed when it started — i.e. it
+     * has seen the whole backlog and is now merely tailing. The per-round owner must not commit before
+     * this is {@code true}, or a just-started runtime would believe the topology empty and commit a stale
+     * epoch. Queried only from the single runtime thread (after a {@link #poll}).
+     */
+    boolean caughtUp();
+
     /** Releases the underlying clients / resources. */
     @Override
     void close();

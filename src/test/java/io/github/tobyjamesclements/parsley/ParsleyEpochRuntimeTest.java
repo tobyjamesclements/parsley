@@ -4,6 +4,7 @@ import org.apache.kafka.common.Uuid;
 import org.junit.jupiter.api.Test;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
@@ -120,8 +121,73 @@ class ParsleyEpochRuntimeTest {
         assertEquals(a.committedLowerBounds(), b.committedLowerBounds(), "both nodes agree on the lower bounds");
     }
 
+    /**
+     * The round owner does not commit until its transport has caught up with the startup backlog: a
+     * just-started runtime that has not yet folded the whole log must not decide a round against a
+     * topology it has only partially observed (which would commit a stale epoch).
+     */
+    @Test
+    void ownerDoesNotCommitUntilBootstrapped() {
+        GatedTransport transport = new GatedTransport();
+        ParsleyEpochRuntime runtime = new ParsleyEpochRuntime(transport);
+        runtime.join("A");                                          // A is local to this runtime
+        transport.seed(new EpochEvent.SnapshotRequested("A"));      // opens a round A owns
+
+        // Not caught up yet: the round is folded open but the owner must not commit.
+        for (int i = 0; i < 5; i++) {
+            runtime.runOnce();
+        }
+        assertEquals(0L, runtime.committedEpochId(), "the owner must not commit before the backlog is folded");
+        assertFalse(runtime.isBootstrapped(), "the runtime is not yet bootstrapped");
+
+        // Caught up: the owner may now commit the round it owns.
+        transport.markCaughtUp();
+        for (int i = 0; i < 5; i++) {
+            runtime.runOnce();
+        }
+        assertTrue(runtime.isBootstrapped(), "the runtime is bootstrapped once the transport has caught up");
+        assertEquals(1L, runtime.committedEpochId(), "the owner commits the round once bootstrapped");
+    }
+
     private static ParsleyEpochRuntime runtimeOver(InMemoryEpochTransport.SharedLog log) {
         return new ParsleyEpochRuntime(new InMemoryEpochTransport(log));
+    }
+
+    /** A transport whose {@link #caughtUp()} is controllable, to exercise the bootstrap gate. */
+    private static final class GatedTransport implements ParsleyEpochTransport {
+        private final java.util.List<EpochEvent> events = new java.util.ArrayList<>();
+        private int cursor;
+        private boolean caughtUp;
+
+        /** Appends an event as if produced by another node (bypassing the runtime's outbox). */
+        void seed(EpochEvent event) {
+            events.add(event);
+        }
+
+        void markCaughtUp() {
+            caughtUp = true;
+        }
+
+        @Override
+        public void append(EpochEvent event) {
+            events.add(event);
+        }
+
+        @Override
+        public java.util.List<EpochEvent> poll(java.time.Duration timeout) {
+            java.util.List<EpochEvent> fresh = new java.util.ArrayList<>(events.subList(cursor, events.size()));
+            cursor = events.size();
+            return fresh;
+        }
+
+        @Override
+        public boolean caughtUp() {
+            return caughtUp;
+        }
+
+        @Override
+        public void close() {
+        }
     }
 
     /**
