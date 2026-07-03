@@ -50,6 +50,8 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
 
     private static final Duration METRICS_REFRESH_INTERVAL = Duration.ofSeconds(5);
 
+    private static final Duration EPOCH_POLL_INTERVAL = Duration.ofMillis(200);
+
     private final Processor<KIn, VIn, KOut, VOut> delegate;
     private final CausalBufferLimit limit;
     private final ParsleySerializer<KIn, VIn> serializer;
@@ -64,12 +66,28 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
     private final CausalAudit audit;
     private final @Nullable CausalQuiesce quiesce;
     private final ParsleyEpochSnapshotPublisher snapshotPublisher;
+    // The per-instance epoch coordination handle, or null when no topology coordination is configured
+    // (epoch 0). A source-layer task polls it to initiate the in-band snapshot/boundary waves.
+    private final @Nullable ParsleyEpochRuntime epochRuntime;
+    // The external (topology-source) input topics: those produced by systems outside this topology, so
+    // no in-band marker ever arrives on them. A task consuming one is source-layer for that coordinate
+    // and must self-initiate the wave and adopt the coordinate's floor from the log.
+    private final Set<String> externalSourceTopics;
 
     // All mutable state below is confined to the single Kafka Streams thread that owns this task.
 
     // Source topic name -> stable UUID, resolved from the broker at init() (the topology decorator
     // has no broker config until then). Used by ingest() to stamp each record's causal identity.
     private Map<String, Uuid> topicUuids = Map.of();
+
+    // The subset of topicUuids that are external topology sources (resolved at init); non-empty iff this
+    // task is source-layer. The most-recent business key seen on this task's owned partition — reused to
+    // route a self-injected marker back to that partition lane (null until the first record). And the
+    // last snapshot-round / committed epoch this task has already acted on, so each is injected once.
+    private Set<Uuid> externalSourceTopicIds = Set.of();
+    private @Nullable KIn lastSeenKey;
+    private long lastSnapshotRoundEpoch;
+    private long lastAdoptedEpoch;
 
     private ProcessorContext<KOut, VOut> context;
     private KeyValueStore<String, byte[]> frontierStore;
@@ -118,6 +136,27 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
                      CausalAudit audit,
                      @Nullable CausalQuiesce quiesce,
                      ParsleyEpochSnapshotPublisher snapshotPublisher) {
+        this(delegate, limit, serializer, frontierStoreName, bufferStoreName, candidateIndexStoreName,
+                forwardedIndexStoreName, topics, additionalPartitionCountTopics, adminFactory, config,
+                audit, quiesce, snapshotPublisher, null, Set.of());
+    }
+
+    ParsleyProcessor(Processor<KIn, VIn, KOut, VOut> delegate,
+                     CausalBufferLimit limit,
+                     ParsleySerializer<KIn, VIn> serializer,
+                     String frontierStoreName,
+                     String bufferStoreName,
+                     String candidateIndexStoreName,
+                     String forwardedIndexStoreName,
+                     Set<String> topics,
+                     Set<String> additionalPartitionCountTopics,
+                     Function<Map<String, Object>, ParsleyTopicAdmin> adminFactory,
+                     ParsleyConfig config,
+                     CausalAudit audit,
+                     @Nullable CausalQuiesce quiesce,
+                     ParsleyEpochSnapshotPublisher snapshotPublisher,
+                     @Nullable ParsleyEpochRuntime epochRuntime,
+                     Set<String> externalSourceTopics) {
         this.delegate = delegate;
         this.limit = limit;
         this.serializer = serializer;
@@ -131,7 +170,11 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
         this.config = config;
         this.audit = audit;
         this.quiesce = quiesce;
-        this.snapshotPublisher = snapshotPublisher;
+        // A configured runtime is also the snapshot publisher: publishing to the log is exactly what the
+        // WS3 seam does, so a runtime supersedes any explicitly-passed publisher.
+        this.snapshotPublisher = epochRuntime != null ? epochRuntime::publishFrontier : snapshotPublisher;
+        this.epochRuntime = epochRuntime;
+        this.externalSourceTopics = Set.copyOf(externalSourceTopics);
     }
 
     @Override
@@ -177,6 +220,13 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
         ParsleyClock.CoordinatePredicate inScope = (topicId, partition) ->
                 partition == taskPartition && consumedTopicIds.contains(topicId);
 
+        // The external (topology-source) coordinates this task owns: no in-band marker will ever arrive
+        // on them, so if this set is non-empty the task is source-layer and self-initiates the wave.
+        this.externalSourceTopicIds = externalSourceTopics.stream()
+                .map(topicUuids::get)
+                .filter(id -> id != null)
+                .collect(java.util.stream.Collectors.toUnmodifiableSet());
+
         // Prune restored causal state to the current scope — topic UUIDs change when a topic is
         // dropped and recreated, leaving stale frontier/channel entries that would pin the completeness
         // min on a coordinate that can never advance. Then seed an entry for every consumed input
@@ -219,6 +269,14 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
         context.schedule(METRICS_REFRESH_INTERVAL, PunctuationType.WALL_CLOCK_TIME,
                 timestamp -> engine.reportBufferState());
 
+        // A source-layer task self-initiates the in-band wave off the coordination log, so it must react
+        // even while idle (no inbound records to piggy-back on). Poll the runtime on a wall-clock tick as
+        // well as on process(). Scheduled only when coordination is configured — epoch 0 adds no tick.
+        if (epochRuntime != null) {
+            context.schedule(EPOCH_POLL_INTERVAL, PunctuationType.WALL_CLOCK_TIME,
+                    timestamp -> pollEpochCoordination());
+        }
+
         // Registered last, once init() has otherwise succeeded, so a failed init never leaves a
         // phantom task permanently blocking CausalQuiesce#isSafeToClose.
         if (quiesce != null) {
@@ -241,6 +299,9 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
             handleEpochSnapshot(record);
             return;
         }
+        // Remember the most-recent business key seen on this task's owned partition; a source-layer task
+        // reuses it to route a self-injected marker back onto that partition lane.
+        lastSeenKey = record.key();
         ParsleyClock completenessBefore = engine.completeness();
         List<ParsleyMessage<KIn, VIn>> admitted = gate(ingest(record));
         deliver(admitted);
@@ -255,6 +316,9 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
             // partition, matching where its eventual business output will land.
             forwardWatermark(record.key());
         }
+        // A source-layer task also checks the coordination log after each record, so a round that opened
+        // (or an epoch that committed) is acted on promptly without waiting for the wall-clock tick.
+        pollEpochCoordination();
     }
 
     @Override
@@ -461,6 +525,63 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
                 }
                 return;
             }
+        }
+    }
+
+    /**
+     * A source-layer task's reaction to the coordination log: when a snapshot round opens, publish this
+     * node's completeness and inject the snapshot marker downstream; when a new epoch commits, adopt the
+     * epoch's floor for this task's external-source coordinates and inject the boundary marker downstream.
+     * A no-op for a non-source-layer task (driven purely by received in-band markers) and for epoch 0
+     * (no runtime). Called both from {@link #process} and a wall-clock punctuator so an idle source-layer
+     * task still reacts.
+     */
+    private void pollEpochCoordination() {
+        ParsleyEpochRuntime runtime = epochRuntime;
+        if (runtime == null || externalSourceTopicIds.isEmpty()) {
+            return;
+        }
+        long committed = runtime.committedEpochId();
+        if (committed > lastAdoptedEpoch) {
+            adoptAndInjectBoundary(new EpochBoundary(committed, runtime.committedLowerBounds()));
+            lastAdoptedEpoch = committed;
+        }
+        if (runtime.isRoundOpen()) {
+            long round = committed + 1;   // the epoch a commit of the currently open round would carry
+            if (round != lastSnapshotRoundEpoch) {
+                injectSnapshot();
+                lastSnapshotRoundEpoch = round;
+            }
+        }
+    }
+
+    /**
+     * Publishes this node's completeness for the open round (so the owner's merge-min includes it) and
+     * relays the snapshot marker downstream on the last-seen key, opening the in-band cut for the next
+     * layer. If no key has been seen yet the marker cannot be routed to this partition — skipped, which
+     * is harmless because nothing downstream depends on a partition that has produced nothing.
+     */
+    private void injectSnapshot() {
+        snapshotPublisher.publish(context.taskId().toString(), engine.completeness());
+        if (lastSeenKey != null) {
+            forwardEpochSnapshot(lastSeenKey);
+        }
+    }
+
+    /**
+     * Adopts {@code boundary} for this task's external-source coordinates — a topology-source channel's
+     * floor arrives from the log, since no in-band marker will ever reach it (break #1) — then relays the
+     * boundary downstream on the last-seen key so the next layer transitions in-band.
+     */
+    private void adoptAndInjectBoundary(EpochBoundary boundary) {
+        int partition = context.taskId().partition();
+        List<ParsleyMessage<KIn, VIn>> released = new ArrayList<>();
+        for (Uuid topicId : externalSourceTopicIds) {
+            released.addAll(engine.onEpochBoundary(boundary, topicId, partition));
+        }
+        deliver(released);
+        if (lastSeenKey != null) {
+            forwardEpochBoundary(lastSeenKey, boundary.toBytes());
         }
     }
 

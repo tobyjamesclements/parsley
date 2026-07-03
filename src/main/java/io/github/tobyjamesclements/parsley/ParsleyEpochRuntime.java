@@ -48,10 +48,12 @@ final class ParsleyEpochRuntime implements AutoCloseable {
     // round's EpochCommitted exactly once (the commit round-trips through the log and advances the fold).
     private long lastCommitAppendedFor;
 
-    // Mirrors of the folded decision, published for cross-thread readers (e.g. a future WS4b joiner that
-    // blocks until its epoch commits). Volatile: written by the runtime thread, read by any thread.
+    // Mirrors of the folded decision, published for cross-thread readers (a source-layer task polls these
+    // to drive the in-band wave; a joiner blocks on committedEpochId). Volatile: written by the runtime
+    // thread, read by any thread.
     private volatile long committedEpochId;
     private volatile ParsleyClock committedLowerBounds = ParsleyClock.empty();
+    private volatile boolean roundOpen;
 
     private volatile boolean running;
     private @Nullable Thread thread;
@@ -92,6 +94,11 @@ final class ParsleyEpochRuntime implements AutoCloseable {
     /** The lower bounds of the last committed epoch (empty before any commit). */
     ParsleyClock committedLowerBounds() {
         return committedLowerBounds;
+    }
+
+    /** Whether a snapshot round is currently open (a source-layer task publishes + injects on this). */
+    boolean isRoundOpen() {
+        return roundOpen;
     }
 
     /** Starts the background thread that drives the protocol until {@link #close}. Idempotent. */
@@ -136,6 +143,7 @@ final class ParsleyEpochRuntime implements AutoCloseable {
                 log.debug("Epoch {} committed with lower bounds {}", commit.epochId(), commit.lowerBounds());
             }
         }
+        roundOpen = fold.isRoundOpen();
         driveOwner();
     }
 
