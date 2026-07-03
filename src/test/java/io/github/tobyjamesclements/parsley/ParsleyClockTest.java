@@ -188,7 +188,7 @@ class ParsleyClockTest {
     @Test
     void strippedBelowDropsDependenciesBelowTheStartsAtBound() {
         // T1: bound 10 (T1@3 below → stripped; would need offset 3 otherwise). T2: no bound (kept).
-        ParsleyEpoch.View bound = (topicId, partition) ->
+        ParsleyEpoch bound = (topicId, partition) ->
                 topicId.equals(T1_ID) && partition == 0 ? 10L : ParsleyEpoch.NO_BOUND;
         ParsleyClock deps = ParsleyClock.empty()
                 .observe(T1_ID, 0, 3).observe(T2_ID, 0, 5);
@@ -211,7 +211,7 @@ class ParsleyClockTest {
      */
     @Test
     void strippedBelowKeepsADependencyExactlyAtTheBound() {
-        ParsleyEpoch.View bound = (topicId, partition) -> 10L;
+        ParsleyEpoch bound = (topicId, partition) -> 10L;
         ParsleyClock deps = ParsleyClock.empty().observe(T1_ID, 0, 10);
         assertEquals(deps, deps.strippedBelow(bound),
                 "a dependency exactly at startsAt is inside the domain and must be kept");
@@ -219,7 +219,7 @@ class ParsleyClockTest {
 
     /**
      * {@code strippedBelow} returns the same instance — not a copy — when nothing is below its bound,
-     * so the common no-strip case (including the disabled {@link ParsleyEpoch.View#NONE}) allocates
+     * so the common no-strip case (including the disabled {@link ParsleyEpoch#NONE}) allocates
      * nothing on the gating path.
      *
      * Asserts the returned clock is reference-identical to the original under NONE.
@@ -227,8 +227,33 @@ class ParsleyClockTest {
     @Test
     void strippedBelowReturnsSameInstanceWhenNothingStripped() {
         ParsleyClock deps = ParsleyClock.empty().observe(T1_ID, 0, 3).observe(T2_ID, 0, 5);
-        assertSame(deps, deps.strippedBelow(ParsleyEpoch.View.NONE),
+        assertSame(deps, deps.strippedBelow(ParsleyEpoch.NONE),
                 "strippedBelow must not allocate when every coordinate is at or above its bound");
+    }
+
+    /**
+     * The bound is applied per {@code (topicId, partition)}: an entry exactly one below its own
+     * coordinate's bound is stripped, while an entry at the bound of a different partition is kept, even
+     * on the same topic.
+     *
+     * Asserts partition 0 (bound 10) strips its offset-9 entry while partition 1 (bound 4) keeps its
+     * offset-4 entry.
+     */
+    @Test
+    void strippedBelowAppliesTheBoundPerPartition() {
+        // Same topic, different per-partition bounds: p0 → 10, p1 → 4.
+        ParsleyEpoch bound = (topicId, partition) ->
+                topicId.equals(T1_ID) ? (partition == 0 ? 10L : 4L) : ParsleyEpoch.NO_BOUND;
+        ParsleyClock deps = ParsleyClock.empty()
+                .observe(T1_ID, 0, 9)   // one below p0's bound of 10 → stripped
+                .observe(T1_ID, 1, 4);  // exactly at p1's bound of 4 → kept
+
+        ParsleyClock stripped = deps.strippedBelow(bound);
+
+        assertEquals(-1L, stripped.offsetFor(T1_ID, 0),
+                "T1-0@9 is one below its partition's bound (10) and must be stripped");
+        assertEquals(4L, stripped.offsetFor(T1_ID, 1),
+                "T1-1@4 is exactly at its partition's bound (4) and must be kept");
     }
 
     /**

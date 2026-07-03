@@ -49,6 +49,11 @@ final class ParsleyFrontier {
     // Coordinates observed at least once; guards the one-time baseline seed in seedIfFirstSeen.
     private final Set<CoordKey> seenCoordinates = new HashSet<>();
     private final ParsleyForwardedIndex forwardedIndex;
+    // The topology epoch's lower bounds — the per-coordinate floor consulted on every clock this
+    // frontier builds or merges (deliver, seedIfFirstSeen, completeness, channelUpdate), so no causal
+    // clock ever carries an entry below the floor. NONE (every coordinate unbounded) disables it, so
+    // the floor is a no-op and behaviour matches epoch 0.
+    private final ParsleyEpoch epoch;
     // The frontier state store, holding this frontier+channels blob at key "f"; null for in-memory
     // (test) instances, which skip persistence.
     private final @Nullable KeyValueStore<String, byte[]> store;
@@ -63,34 +68,63 @@ final class ParsleyFrontier {
      * need a durable frontier.
      */
     ParsleyFrontier(ParsleyClock initial, ParsleyForwardedIndex forwardedIndex) {
-        this(initial, forwardedIndex, true);
+        this(initial, forwardedIndex, true, ParsleyEpoch.NONE);
     }
 
     /**
-     * In-memory instance with channel tracking optionally disabled. With {@code trackChannels = false},
-     * {@link #completeness()} is the node's own frontier and {@link #channelUpdate} is a no-op — the
-     * single-layer, frontier-only mode used to test frontier/buffer mechanics in isolation.
+     * In-memory instance with channel tracking optionally disabled and no epoch floor
+     * ({@link ParsleyEpoch#NONE}). With {@code trackChannels = false}, {@link #completeness()} is the
+     * node's own frontier and {@link #channelUpdate} is a no-op — the single-layer, frontier-only mode
+     * used to test frontier/buffer mechanics in isolation.
      */
     ParsleyFrontier(ParsleyClock initial, ParsleyForwardedIndex forwardedIndex, boolean trackChannels) {
+        this(initial, forwardedIndex, trackChannels, ParsleyEpoch.NONE);
+    }
+
+    /**
+     * In-memory instance with channel tracking optionally disabled and an explicit epoch floor. With
+     * {@code trackChannels = false}, {@link #completeness()} is the node's own frontier and
+     * {@link #channelUpdate} is a no-op.
+     */
+    ParsleyFrontier(ParsleyClock initial, ParsleyForwardedIndex forwardedIndex, boolean trackChannels,
+                    ParsleyEpoch epoch) {
         this.frontier = initial;
         this.forwardedIndex = forwardedIndex;
+        this.epoch = epoch;
         this.store = null;
         this.trackChannels = trackChannels;
     }
 
     /**
-     * Durable instance: loads the frontier clock and channel clocks from key {@code "f"} of
-     * {@code store} (empty if absent), and rewrites that single value on every subsequent change.
+     * Durable instance with no epoch floor ({@link ParsleyEpoch#NONE}): loads the frontier clock and
+     * channel clocks from key {@code "f"} of {@code store} (empty if absent), and rewrites that single
+     * value on every subsequent change.
      */
     ParsleyFrontier(KeyValueStore<String, byte[]> store, ParsleyForwardedIndex forwardedIndex) {
+        this(store, forwardedIndex, ParsleyEpoch.NONE);
+    }
+
+    /**
+     * Durable instance with an explicit epoch floor: loads the frontier clock and channel clocks from
+     * key {@code "f"} of {@code store} (empty if absent), and rewrites that single value on every
+     * subsequent change.
+     */
+    ParsleyFrontier(KeyValueStore<String, byte[]> store, ParsleyForwardedIndex forwardedIndex,
+                    ParsleyEpoch epoch) {
         this.store = store;
         this.forwardedIndex = forwardedIndex;
+        this.epoch = epoch;
         this.trackChannels = true;
         byte[] blob = store.get(ParsleyStores.FRONTIER_KEY);
         this.frontier = ParsleyClock.empty();
         if (blob != null) {
             load(blob);
         }
+    }
+
+    /** The topology epoch's lower bounds this frontier floors against; {@link ParsleyEpoch#NONE} if unbounded. */
+    ParsleyEpoch epoch() {
+        return epoch;
     }
 
     /** The current contiguous frontier clock. */
@@ -104,6 +138,12 @@ final class ParsleyFrontier {
      * channels, each channel contributing its advertised dependencies plus its own contiguous delivered
      * position. A coordinate any channel has not observed is absent, so a dependency on it is not yet
      * satisfiable. With no channel clocks recorded, this is the node's own frontier.
+     *
+     * <p>The result is floored to the epoch's lower bounds ({@link ParsleyClock#strippedBelow}): a
+     * coordinate's own contiguous position sits at the epoch origin ({@code startsAt - 1}) until an
+     * in-domain offset is delivered, and that below-floor origin must not appear in the completeness
+     * frontier — which is both the delivery gate and the outbound stamp. Under {@link ParsleyEpoch#NONE}
+     * the floor is a no-op.
      */
     ParsleyClock completeness() {
         ParsleyClock result = null;
@@ -118,31 +158,55 @@ final class ParsleyFrontier {
             result = (result == null) ? view : result.intersectMin(view);
         }
         // No channel clocks (cold start): fall back to the node's own frontier.
-        return result == null ? frontier : result;
+        return (result == null ? frontier : result).strippedBelow(epoch);
     }
 
     /**
      * Records that the record at {@code (topicId, partition, offset)} was delivered: marks the offset
      * forwarded, walks the longest contiguous run now achievable, advances the frontier, and persists.
+     *
+     * <p>A <em>below-floor</em> delivery ({@code offset < startsAt}) is a no-op on the causal frontier:
+     * the record still feeds state and is forwarded by the engine, but an out-of-domain offset must not
+     * advance the causal frontier (it stays at the epoch origin until an in-domain offset is delivered)
+     * nor enter the forwarded index. Under {@link ParsleyEpoch#NONE} every offset is in-domain.
      */
     void deliver(Uuid topicId, int partition, long offset) {
+        if (offset < epoch.startsAt(topicId, partition)) {
+            return;
+        }
         frontier = frontier.observe(topicId, partition, mergeForward(topicId, partition, offset));
         persist();
     }
 
     /**
-     * Establishes the contiguous frontier's starting point the first time this coordinate is observed.
-     * The first offset seen need not be 0 (finite retention, fresh consumer group); anything below it
-     * is outside the engine's purview, not an unfillable gap, so folding {@code offset - 1} into the
-     * frontier lets the contiguous walk start there. Returns {@code true} if a seed was applied (the
-     * caller should then cascade). The coordinate is marked seen on the first call even if the record
-     * is held, so a later record cannot re-trigger the seed and skip the still-held earlier one.
+     * Establishes the contiguous frontier's starting point the first time this coordinate is observed,
+     * floored to the epoch origin. The first offset seen need not be 0 (finite retention, fresh consumer
+     * group); anything below it is outside the engine's purview, not an unfillable gap, so folding
+     * {@code offset - 1} into the frontier lets the contiguous walk start there. Returns {@code true} if
+     * a seed was applied (the caller should then cascade). The coordinate is marked seen on the first
+     * call even if the record is held, so a later record cannot re-trigger the seed and skip the
+     * still-held earlier one.
+     *
+     * <p>The epoch generalises the per-channel origin into a domain-wide one: the causal frontier for a
+     * coordinate begins at the <em>epoch origin</em> {@code startsAt - 1} (nothing below the floor is
+     * in-domain), so the seed target is {@code max(firstOffset - 1, startsAt - 1)}. A below-floor
+     * first sighting therefore still anchors the frontier at the origin (not below it), and a restored
+     * value sitting below the origin is lifted to it. Under {@link ParsleyEpoch#NONE} the origin is
+     * {@code -1}, so this reduces exactly to the original "seed to {@code offset - 1} only when the
+     * coordinate is unrecorded" behaviour.
      */
     boolean seedIfFirstSeen(Uuid topicId, int partition, long offset) {
         if (!seenCoordinates.add(new CoordKey(topicId, partition))) return false;
-        if (offset <= 0) return false;
-        if (frontier.offsetFor(topicId, partition) >= 0) return false;
-        frontier = frontier.observe(topicId, partition, offset - 1);
+        long startsAt = epoch.startsAt(topicId, partition);
+        // The epoch origin: startsAt - 1, or -1 (absent) with no epoch floor. Guarded against the
+        // NO_BOUND (Long.MIN_VALUE) underflow.
+        long floorOrigin = startsAt > 0 ? startsAt - 1 : -1L;
+        long current = frontier.offsetFor(topicId, partition);
+        // An unrecorded coordinate folds everything below its first offset into the frontier; a recorded
+        // one is left as-is. Either way, never below the epoch origin.
+        long seedTo = Math.max(current < 0 ? offset - 1 : current, floorOrigin);
+        if (seedTo < 0 || seedTo <= current) return false;
+        frontier = frontier.observe(topicId, partition, seedTo);
         persist();
         return true;
     }
@@ -156,15 +220,19 @@ final class ParsleyFrontier {
     /**
      * Max-merges {@code clock} into channel {@code (topicId, partition)}'s advertised dependencies
      * (monotonic: the stored clock never decreases) and persists. A first call for a channel
-     * initialises it from {@code clock}.
+     * initialises it from {@code clock}. The advertised clock is floored to the epoch's lower bounds
+     * first ({@link ParsleyClock#strippedBelow}), so a channel never records — and so completeness
+     * never confirms — a below-floor, out-of-domain position. Under {@link ParsleyEpoch#NONE} the
+     * floor is a no-op.
      */
     void channelUpdate(Uuid topicId, int partition, ParsleyClock clock) {
         if (!trackChannels) {
             return;
         }
+        ParsleyClock floored = clock.strippedBelow(epoch);
         CoordKey key = new CoordKey(topicId, partition);
         ParsleyClock existing = channels.get(key);
-        channels.put(key, existing == null ? clock : existing.merge(clock));
+        channels.put(key, existing == null ? floored : existing.merge(floored));
         persist();
     }
 

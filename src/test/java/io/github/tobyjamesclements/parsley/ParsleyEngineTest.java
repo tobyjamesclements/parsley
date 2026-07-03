@@ -1153,7 +1153,7 @@ class ParsleyEngineTest {
      */
     @Test
     void dependencyBelowEpochBoundIsStrippedAndRecordDelivers() {
-        ParsleyEpoch.View bound = (topicId, partition) ->
+        ParsleyEpoch bound = (topicId, partition) ->
                 topicId.equals(T2_ID) ? 5L : ParsleyEpoch.NO_BOUND;
         ParsleyEngine<String, String> engine = engineWithEpoch(CausalBufferLimit.ofSize(100), bound);
 
@@ -1177,7 +1177,7 @@ class ParsleyEngineTest {
      */
     @Test
     void dependencyAtOrAboveEpochBoundIsGatedNormally() {
-        ParsleyEpoch.View bound = (topicId, partition) ->
+        ParsleyEpoch bound = (topicId, partition) ->
                 topicId.equals(T2_ID) ? 5L : ParsleyEpoch.NO_BOUND;
         ParsleyEngine<String, String> engine = engineWithEpoch(CausalBufferLimit.ofSize(100), bound);
 
@@ -1190,6 +1190,57 @@ class ParsleyEngineTest {
         assertTrue(forwarded.size() >= 2,
                 "once T2@5 is confirmed, the held record releases (both records forwarded)");
         assertEquals(0, engine.bufferSize(), "the buffer must drain once the in-domain dependency is met");
+    }
+
+    /**
+     * A below-floor record is delivered (it feeds state) but does not anchor the causal frontier: with
+     * T1 floored at 100, a T1@5 record with no dependencies forwards immediately, yet the completeness
+     * frontier gains no T1 position — the out-of-domain offset is not something downstream may depend on.
+     *
+     * Asserts the record forwards while completeness omits the below-floor coordinate.
+     */
+    @Test
+    void belowFloorRecordDeliversButDoesNotAdvanceCompleteness() {
+        ParsleyEpoch bound = (topicId, partition) -> topicId.equals(T1_ID) ? 100L : ParsleyEpoch.NO_BOUND;
+        ParsleyEngine<String, String> engine = engineWithEpochTrackingChannels(CausalBufferLimit.ofSize(100), bound);
+
+        processRecord(engine, incomingRecord(T1, 5, ParsleyClock.empty()));
+
+        assertEquals(1, forwarded.size(), "a below-floor record with no unmet dependency must deliver");
+        assertEquals(0, engine.bufferSize(), "the below-floor record must not be buffered");
+        assertEquals(-1L, engine.completeness().offsetFor(T1_ID, 0),
+                "the below-floor delivery must not surface in the completeness frontier");
+    }
+
+    /**
+     * The load-bearing case for frontier flooring: below-floor history arriving with a gap must not
+     * stall the in-domain frontier. With T1 floored at 100, records T1@5 and T1@7 (offset 6 missing)
+     * are delivered below the floor, then in-domain T1@100 arrives. A later record depending on T1@100
+     * must deliver — the below-floor gap at 6 is out of domain and cannot stall the epoch-origin walk to
+     * 100. Without frontier flooring the contiguous walk would stall at 5 and the dependent record would
+     * be held forever.
+     *
+     * Asserts the T1@100-dependent record forwards once T1@100 is delivered.
+     */
+    @Test
+    void belowFloorGapDoesNotStallTheInDomainFrontier() {
+        ParsleyEpoch bound = (topicId, partition) -> topicId.equals(T1_ID) ? 100L : ParsleyEpoch.NO_BOUND;
+        ParsleyEngine<String, String> engine = engineWithEpoch(CausalBufferLimit.ofSize(100), bound);
+
+        // Below-floor replay with a gap at offset 6 — all out of domain, none advances the frontier.
+        processRecord(engine, incomingRecord(T1, 5, ParsleyClock.empty()));
+        processRecord(engine, incomingRecord(T1, 7, ParsleyClock.empty()));
+        // First in-domain delivery: the frontier walks from the epoch origin 99 to 100, gap-unaffected.
+        processRecord(engine, incomingRecord(T1, 100, ParsleyClock.empty()));
+
+        int before = forwarded.size();
+        // A record whose only dependency is the delivered in-domain T1@100.
+        processRecord(engine, incomingRecord(T2, 0, ParsleyClock.empty().observe(T1_ID, 0, 100)));
+
+        assertEquals(before + 1, forwarded.size(),
+                "a record depending on the delivered in-domain T1@100 must forward — the below-floor "
+                        + "gap at offset 6 must not stall the frontier below the floor");
+        assertEquals(0, engine.bufferSize(), "nothing may remain held once the in-domain dependency is met");
     }
 
     // --- helpers --------------------------------------------------------------------------------
@@ -1217,10 +1268,24 @@ class ParsleyEngineTest {
     }
 
     private ParsleyEngine<String, String> engineWithEpoch(CausalBufferLimit limit,
-                                                          ParsleyEpoch.View epochView) {
-        return new ParsleyEngine<>(limit, new ParsleyFrontier(ParsleyClock.empty(), forwardedIndex, false),
+                                                          ParsleyEpoch epoch) {
+        return new ParsleyEngine<>(limit,
+                new ParsleyFrontier(ParsleyClock.empty(), forwardedIndex, false, epoch),
                 (topicId, partition) -> true, buffer, new MockCandidateIndex(), ParsleyMetrics.NOOP,
-                CausalAudit.NOOP, System::currentTimeMillis, false, false, epochView);
+                CausalAudit.NOOP, System::currentTimeMillis, false, false);
+    }
+
+    /**
+     * As {@link #engineWithEpoch}, but with channel tracking on so {@link ParsleyEngine#completeness()}
+     * is the cross-channel min (not the node's own frontier) — needed to exercise below-floor deliveries
+     * whose in-domain progress must still surface through completeness.
+     */
+    private ParsleyEngine<String, String> engineWithEpochTrackingChannels(CausalBufferLimit limit,
+                                                                          ParsleyEpoch epoch) {
+        return new ParsleyEngine<>(limit,
+                new ParsleyFrontier(ParsleyClock.empty(), forwardedIndex, true, epoch),
+                (topicId, partition) -> true, buffer, new MockCandidateIndex(), ParsleyMetrics.NOOP,
+                CausalAudit.NOOP, System::currentTimeMillis, false, false);
     }
 
     private ParsleyEngine<String, String> engineWithClock(CausalBufferLimit limit,

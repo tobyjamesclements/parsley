@@ -178,7 +178,7 @@ final class ParsleyClock {
      * never confirm such a coordinate does not hold the record forever. A coordinate with no bound
      * reads as {@link ParsleyEpoch#NO_BOUND} (the minimum {@code startsAt}) and is always kept.
      */
-    ParsleyClock strippedBelow(ParsleyEpoch.View bound) {
+    ParsleyClock strippedBelow(ParsleyEpoch bound) {
         boolean anyStripped = false;
         outer:
         for (Map.Entry<Uuid, Map<Integer, Long>> byTopic : offsets.entrySet()) {
