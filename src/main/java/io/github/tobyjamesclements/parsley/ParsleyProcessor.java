@@ -63,6 +63,7 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
     private final ParsleyConfig config;
     private final CausalAudit audit;
     private final @Nullable CausalQuiesce quiesce;
+    private final ParsleyEpochSnapshotPublisher snapshotPublisher;
 
     // All mutable state below is confined to the single Kafka Streams thread that owns this task.
 
@@ -98,6 +99,25 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
                      ParsleyConfig config,
                      CausalAudit audit,
                      @Nullable CausalQuiesce quiesce) {
+        this(delegate, limit, serializer, frontierStoreName, bufferStoreName, candidateIndexStoreName,
+                forwardedIndexStoreName, topics, additionalPartitionCountTopics, adminFactory, config,
+                audit, quiesce, ParsleyEpochSnapshotPublisher.NOOP);
+    }
+
+    ParsleyProcessor(Processor<KIn, VIn, KOut, VOut> delegate,
+                     CausalBufferLimit limit,
+                     ParsleySerializer<KIn, VIn> serializer,
+                     String frontierStoreName,
+                     String bufferStoreName,
+                     String candidateIndexStoreName,
+                     String forwardedIndexStoreName,
+                     Set<String> topics,
+                     Set<String> additionalPartitionCountTopics,
+                     Function<Map<String, Object>, ParsleyTopicAdmin> adminFactory,
+                     ParsleyConfig config,
+                     CausalAudit audit,
+                     @Nullable CausalQuiesce quiesce,
+                     ParsleyEpochSnapshotPublisher snapshotPublisher) {
         this.delegate = delegate;
         this.limit = limit;
         this.serializer = serializer;
@@ -111,6 +131,7 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
         this.config = config;
         this.audit = audit;
         this.quiesce = quiesce;
+        this.snapshotPublisher = snapshotPublisher;
     }
 
     @Override
@@ -214,6 +235,10 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
         }
         if (isEpochBoundary(record)) {
             handleEpochBoundary(record);
+            return;
+        }
+        if (isEpochSnapshot(record)) {
+            handleEpochSnapshot(record);
             return;
         }
         ParsleyClock completenessBefore = engine.completeness();
@@ -328,6 +353,34 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
             }
         }
         return false;
+    }
+
+    /**
+     * Returns {@code true} if {@code record} is a Parsley topology epoch-snapshot marker, identified by
+     * the {@link ParsleyHeader#EPOCH_SNAPSHOT} header. Like a watermark it carries no business payload
+     * and must never be forwarded to the user delegate or buffered — it triggers this node to publish
+     * its completeness frontier for the Mattern cut.
+     */
+    private boolean isEpochSnapshot(Record<KIn, VIn> record) {
+        for (Header h : record.headers()) {
+            if (ParsleyHeader.EPOCH_SNAPSHOT.equals(h.key())) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * Handles a received epoch-snapshot marker: publishes this node's current completeness frontier to
+     * the coordinator (tagged with the task id) via {@link ParsleyEpochSnapshotPublisher}, so the
+     * coordinator can merge-min the published clocks into the next epoch's lower bounds. The marker is
+     * never delivered to the user delegate, never buffered, and never re-emitted (the coordinator
+     * broadcasts it to every channel); a completeness watermark is re-emitted so this consumed,
+     * non-emitting input does not stall downstream completeness.
+     */
+    private void handleEpochSnapshot(Record<KIn, VIn> record) {
+        snapshotPublisher.publish(context.taskId().toString(), engine.completeness());
+        forwardWatermark(record.key());
     }
 
     /**

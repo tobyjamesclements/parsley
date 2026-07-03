@@ -44,6 +44,16 @@ record ParsleyHeader(String key, byte @Nullable [] value) {
      */
     static final String EPOCH_BOUNDARY = "_parsley_epoch_boundary";
 
+    /**
+     * Header marking a record as a Parsley topology epoch-snapshot marker — the first marker of the
+     * Mattern two-marker cut. Written by the Topology Co-ordinator to every input channel; on consuming
+     * it a processor publishes its current completeness frontier to the coordinator (see
+     * {@link ParsleyEpochSnapshotPublisher}), which merge-mins the published clocks into the next
+     * epoch's lower bounds. Like a watermark it carries no business payload and is never delivered to
+     * the user delegate or buffered; the {@code _parsley_} prefix strips it from user view.
+     */
+    static final String EPOCH_SNAPSHOT = "_parsley_epoch_snapshot";
+
     // Explicit canonical constructor: NullAway does not propagate the type-use @Nullable from an
     // array record component to the implicit constructor parameter, so annotate it here directly.
     ParsleyHeader(String key, byte @Nullable [] value) {
