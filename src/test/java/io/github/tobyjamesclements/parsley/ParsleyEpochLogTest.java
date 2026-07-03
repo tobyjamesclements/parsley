@@ -140,6 +140,34 @@ class ParsleyEpochLogTest {
                 "committing before every running member has published must be rejected");
     }
 
+    /**
+     * A stale or duplicate {@link EpochEvent.EpochCommitted} is ignored: the first commit for an epoch is
+     * authoritative, so a second commit for the same epoch (from an owner-plus-takeover, or a re-append)
+     * folds to a no-op and does not clobber a round that has since opened for the next epoch. This is the
+     * dedup-by-epochId property the leaderless protocol relies on for safe failover.
+     */
+    @Test
+    void duplicateOrStaleCommitIsIgnored() {
+        ParsleyEpochLog log = bootstrappedWithRunningMember("A");   // epoch 1, A running
+        // Open and commit epoch 2 normally.
+        log.apply(new EpochEvent.SnapshotRequested("A"));
+        log.apply(new EpochEvent.FrontierPublished("A", ParsleyClock.empty().observe(T1_ID, 0, 5)));
+        EpochEvent.EpochCommitted epochTwo = log.proposeCommit();
+        log.apply(epochTwo);
+        assertEquals(2L, log.committedEpochId(), "epoch 2 is committed");
+
+        // A new round for epoch 3 opens.
+        log.apply(new EpochEvent.SnapshotRequested("A"));
+        assertTrue(log.isRoundOpen(), "a round for epoch 3 is open");
+
+        // A duplicate of the epoch-2 commit now lands (e.g. a takeover re-append). It must be ignored,
+        // leaving the epoch-3 round untouched.
+        log.apply(epochTwo);
+        assertEquals(2L, log.committedEpochId(), "the settled epoch stays at 2 — the duplicate is a no-op");
+        assertTrue(log.isRoundOpen(), "the open epoch-3 round is not cleared by the stale commit");
+        assertEquals("A", log.roundOwner(), "the epoch-3 round keeps its owner");
+    }
+
     // --- helpers --------------------------------------------------------------------------------
 
     /** A log where {@code member} has joined and been committed into epoch 1 (so it is running). */

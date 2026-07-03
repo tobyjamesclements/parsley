@@ -64,6 +64,12 @@ final class ParsleyEpochLog {
                 }
             }
             case EpochEvent.EpochCommitted e -> {
+                // Dedup by epochId: the first commit for an epoch is authoritative; a stale or duplicate
+                // one (owner-plus-takeover, or a re-append) is ignored. Without this guard a duplicate
+                // EpochCommitted(E+1) landing after round N+1 has opened would wrongly clear that round.
+                if (e.epochId() <= committedEpochId) {
+                    break;
+                }
                 // Adopt the commit: advance the settled epoch, promote joiners, close the round.
                 committedEpochId = e.epochId();
                 runningMembers.addAll(pendingJoiners);
