@@ -34,6 +34,7 @@ final class ParsleyProcessorSupplier<KIn, VIn, KOut, VOut>
     private final ParsleyConfig config;
     private final CausalAudit audit;
     private final @Nullable CausalQuiesce quiesce;
+    private final @Nullable CausalCoordination coordination;
 
     ParsleyProcessorSupplier(ProcessorSupplier<KIn, VIn, KOut, VOut> userSupplier,
                                       CausalBufferLimit limit,
@@ -48,7 +49,8 @@ final class ParsleyProcessorSupplier<KIn, VIn, KOut, VOut>
                                       Function<Map<String, Object>, ParsleyTopicAdmin> adminFactory,
                                       ParsleyConfig config,
                                       CausalAudit audit,
-                                      @Nullable CausalQuiesce quiesce) {
+                                      @Nullable CausalQuiesce quiesce,
+                                      @Nullable CausalCoordination coordination) {
         this.userSupplier = userSupplier;
         this.limit = limit;
         this.keySerdeByTopic = keySerdeByTopic;
@@ -63,6 +65,7 @@ final class ParsleyProcessorSupplier<KIn, VIn, KOut, VOut>
         this.config = config;
         this.audit = audit;
         this.quiesce = quiesce;
+        this.coordination = coordination;
     }
 
     @Override
@@ -71,7 +74,8 @@ final class ParsleyProcessorSupplier<KIn, VIn, KOut, VOut>
                 userSupplier.get(), limit,
                 new ParsleySerializer<>(new ParsleyResolver<>(keySerdeByTopic, valueSerdeByTopic)),
                 frontierStoreName, bufferStoreName, candidateIndexStoreName, forwardedIndexStoreName,
-                topics, additionalPartitionCountTopics, adminFactory, config, audit, quiesce);
+                topics, additionalPartitionCountTopics, adminFactory, config, audit, quiesce,
+                ParsleyEpochSnapshotPublisher.NOOP, coordination);
     }
 
     /** The buffer eviction limit this supplier was built with. Package-private for tests. */

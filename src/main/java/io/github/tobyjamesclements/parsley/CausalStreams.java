@@ -108,6 +108,7 @@ public final class CausalStreams {
         private @Nullable ParsleyTopicAdmin topicAdmin = null;
         private @Nullable StreamPartitioner<? super KOut, ? super VOut> partitioner = null;
         private @Nullable CausalQuiesce quiesce = null;
+        private @Nullable CausalCoordination coordination = null;
 
         private Builder(ProcessorSupplier<KIn, VIn, KOut, VOut> userSupplier) {
             this.userSupplier = userSupplier;
@@ -238,6 +239,19 @@ public final class CausalStreams {
         }
 
         /**
+         * Registers this stage's tasks with a {@link CausalCoordination} to participate in topology-epoch
+         * coordination. See {@link CausalProcessors.Builder#withCoordination} — same semantics. Optional;
+         * without one the stage runs in epoch 0, exactly as today.
+         *
+         * @param coordination the coordination handle shared across every participating stage
+         * @return this builder
+         */
+        public Builder<KIn, VIn, KOut, VOut> withCoordination(CausalCoordination coordination) {
+            this.coordination = coordination;
+            return this;
+        }
+
+        /**
          * Builds the {@link Topology}: one source node per registered {@link CausalBuffer}, one
          * processor node running {@code userSupplier} behind the causal guarantee (composing
          * {@link CausalProcessors} internally), and one sink node per registered sink — all wired
@@ -272,6 +286,9 @@ public final class CausalStreams {
                     .additionalPartitionCountTopics(sinkTopics);
             if (quiesce != null) {
                 causalBuilder.withQuiesce(quiesce);
+            }
+            if (coordination != null) {
+                causalBuilder.withCoordination(coordination);
             }
             if (topicAdmin != null) {
                 causalBuilder.topicAdmin(topicAdmin);

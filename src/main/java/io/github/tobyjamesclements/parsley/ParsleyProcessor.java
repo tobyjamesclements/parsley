@@ -65,14 +65,15 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
     private final ParsleyConfig config;
     private final CausalAudit audit;
     private final @Nullable CausalQuiesce quiesce;
-    private final ParsleyEpochSnapshotPublisher snapshotPublisher;
+    // The publisher for the snapshot frontier. Non-final: when coordination is configured, init() installs
+    // the runtime-backed publisher (append to the epoch-events log) over whatever was passed.
+    private ParsleyEpochSnapshotPublisher snapshotPublisher;
     // The per-instance epoch coordination handle, or null when no topology coordination is configured
-    // (epoch 0). A source-layer task polls it to initiate the in-band snapshot/boundary waves.
-    private final @Nullable ParsleyEpochRuntime epochRuntime;
-    // The external (topology-source) input topics: those produced by systems outside this topology, so
-    // no in-band marker ever arrives on them. A task consuming one is source-layer for that coordinate
-    // and must self-initiate the wave and adopt the coordinate's floor from the log.
-    private final Set<String> externalSourceTopics;
+    // (epoch 0). Resolved to the shared runtime at init(); carries the external source topic names.
+    private final @Nullable CausalCoordination coordination;
+    // The shared epoch runtime resolved from the coordination handle at init(), or null in epoch 0. A
+    // source-layer task polls it to initiate the in-band snapshot/boundary waves.
+    private @Nullable ParsleyEpochRuntime epochRuntime;
 
     // All mutable state below is confined to the single Kafka Streams thread that owns this task.
 
@@ -138,7 +139,7 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
                      ParsleyEpochSnapshotPublisher snapshotPublisher) {
         this(delegate, limit, serializer, frontierStoreName, bufferStoreName, candidateIndexStoreName,
                 forwardedIndexStoreName, topics, additionalPartitionCountTopics, adminFactory, config,
-                audit, quiesce, snapshotPublisher, null, Set.of());
+                audit, quiesce, snapshotPublisher, null);
     }
 
     ParsleyProcessor(Processor<KIn, VIn, KOut, VOut> delegate,
@@ -155,8 +156,7 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
                      CausalAudit audit,
                      @Nullable CausalQuiesce quiesce,
                      ParsleyEpochSnapshotPublisher snapshotPublisher,
-                     @Nullable ParsleyEpochRuntime epochRuntime,
-                     Set<String> externalSourceTopics) {
+                     @Nullable CausalCoordination coordination) {
         this.delegate = delegate;
         this.limit = limit;
         this.serializer = serializer;
@@ -170,11 +170,9 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
         this.config = config;
         this.audit = audit;
         this.quiesce = quiesce;
-        // A configured runtime is also the snapshot publisher: publishing to the log is exactly what the
-        // WS3 seam does, so a runtime supersedes any explicitly-passed publisher.
-        this.snapshotPublisher = epochRuntime != null ? epochRuntime::publishFrontier : snapshotPublisher;
-        this.epochRuntime = epochRuntime;
-        this.externalSourceTopics = Set.copyOf(externalSourceTopics);
+        // May be replaced at init() by the runtime-backed publisher when coordination is configured.
+        this.snapshotPublisher = snapshotPublisher;
+        this.coordination = coordination;
     }
 
     @Override
@@ -220,8 +218,18 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
         ParsleyClock.CoordinatePredicate inScope = (topicId, partition) ->
                 partition == taskPartition && consumedTopicIds.contains(topicId);
 
-        // The external (topology-source) coordinates this task owns: no in-band marker will ever arrive
-        // on them, so if this set is non-empty the task is source-layer and self-initiates the wave.
+        // Resolve epoch coordination from the handle: build/share the per-instance runtime (from this
+        // task's appConfigs), publish snapshot frontiers to the log, and join as a member. The external
+        // (topology-source) coordinates this task owns come from the handle — no in-band marker will ever
+        // arrive on them, so if this set is non-empty the task is source-layer and self-initiates the wave.
+        Set<String> externalSourceTopics = Set.of();
+        if (coordination != null) {
+            ParsleyEpochRuntime runtime = coordination.runtimeFor(context.appConfigs());
+            this.epochRuntime = runtime;
+            this.snapshotPublisher = runtime::publishFrontier;
+            runtime.join(context.taskId().toString());
+            externalSourceTopics = coordination.sourceTopics();
+        }
         this.externalSourceTopicIds = externalSourceTopics.stream()
                 .map(topicUuids::get)
                 .filter(id -> id != null)

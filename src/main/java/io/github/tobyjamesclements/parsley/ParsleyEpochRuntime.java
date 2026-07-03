@@ -76,6 +76,14 @@ final class ParsleyEpochRuntime implements AutoCloseable {
         localMembers.remove(memberId);
     }
 
+    /** Any member local to this instance, or {@code null} if none has joined — used to attribute an operator-triggered snapshot to a local owner. */
+    @Nullable String anyLocalMember() {
+        for (String member : localMembers) {
+            return member;
+        }
+        return null;
+    }
+
     /** Proposes a snapshot round on behalf of {@code memberId}; the first such request after the last commit opens and owns the round. */
     void requestSnapshot(String memberId) {
         outbox.add(new EpochEvent.SnapshotRequested(memberId));

@@ -127,7 +127,7 @@ class ParsleyProcessorSourceLayerTest {
                     delegate, CausalBufferLimit.ofSize(100), serializer,
                     "frontier", "buffer", "candidate-index", "forwarded-index", Set.of("t1"), Set.of(),
                     configs -> ADMIN, ParsleyConfig.from(new Properties()), CausalAudit.NOOP, null,
-                    ParsleyEpochSnapshotPublisher.NOOP, runtime, Set.of("t1"));
+                    ParsleyEpochSnapshotPublisher.NOOP, CausalCoordination.forRuntime(runtime, Set.of("t1")));
             this.context = new MockProcessorContext<>();
             context.addStateStore(frontierStore);
             context.addStateStore(bufferStore);

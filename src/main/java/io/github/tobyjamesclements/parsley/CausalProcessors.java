@@ -89,6 +89,7 @@ public final class CausalProcessors {
         private CausalAudit audit = CausalAudit.NOOP;
         private Set<String> additionalPartitionCountTopics = Set.of();
         private @Nullable CausalQuiesce quiesce = null;
+        private @Nullable CausalCoordination coordination = null;
 
         private Builder(ProcessorSupplier<KIn, VIn, KOut, VOut> userSupplier) {
             this.userSupplier = userSupplier;
@@ -232,6 +233,19 @@ public final class CausalProcessors {
         }
 
         /**
+         * Registers this stage's tasks with a {@link CausalCoordination} to participate in topology-epoch
+         * coordination. Optional — without one, the stage runs in epoch 0 (no epoch-events log, no
+         * coordination thread), exactly as today.
+         *
+         * @param coordination the coordination handle shared across every participating stage
+         * @return this builder
+         */
+        public Builder<KIn, VIn, KOut, VOut> withCoordination(CausalCoordination coordination) {
+            this.coordination = coordination;
+            return this;
+        }
+
+        /**
          * Overrides the {@link ParsleyTopicAdmin} used to resolve topic UUIDs at startup (default: a
          * live {@link org.apache.kafka.clients.admin.Admin} built from the task's {@code appConfigs()}).
          * For tests running under {@code TopologyTestDriver} with no broker.
@@ -295,7 +309,7 @@ public final class CausalProcessors {
                     userSupplier, bufferLimit, keySerdeByTopic, valueSerdeByTopic,
                     store + "-frontier", store + "-buffer", store + "-candidate-index", store + "-forwarded-index",
                     resolved.keySet(), additionalPartitionCountTopics, adminFactory, effectiveConfig,
-                    ParsleyAudit.wrap(audit), quiesce);
+                    ParsleyAudit.wrap(audit), quiesce, coordination);
         }
 
         /** Classpath {@code parsley.properties} as a base layer, overlaid with builder-supplied keys. */

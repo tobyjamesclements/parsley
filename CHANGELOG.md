@@ -38,6 +38,19 @@ All notable changes to this project are documented in this file. The format is b
   The previous framing ("causal consistency for Kafka") overstated the scope of the guarantee.
 
 ### Added
+- `CausalCoordination` — the public handle that turns on **topology-epoch coordination**, so a causal
+  topology can evolve (add/replace a stage, recompile) across a well-defined epoch boundary without a
+  new node dragging obsolete pre-epoch history into causal time. Create one over a shared
+  single-partition epoch-events log topic and register it with every participating stage via
+  `CausalStreams.Builder#withCoordination` / `CausalProcessors.Builder#withCoordination` (mirroring
+  `withQuiesce`); call `requestEpochTransition()` to evolve the running topology through a boundary,
+  and `close()` in shutdown. The coordination is **leaderless**: every instance folds the totally
+  ordered epoch-events log identically (a per-round elected owner computes each epoch's floor as the
+  min over running members' completeness), and the floor propagates **in-band** via markers that
+  relay edge-by-edge through the DAG, so each node adopts it through the overlapping-epoch transition.
+  Entirely **optional** — without a `CausalCoordination` a topology runs in epoch 0, exactly as
+  before. (Joiner blocking for a node deployed into an already-running topology, and the Kafka
+  integration test, follow.)
 - `CausalStreams` — the topology-owning high-level causal API (Layer 2), composing
   `CausalProcessors` internally rather than reimplementing the causal engine. Builds a `Topology`
   for a single causal stage — one or more `CausalBuffer` sources feeding a causal-decorated
