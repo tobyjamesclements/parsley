@@ -127,8 +127,8 @@ class ParsleyFrontierTest {
 
         assertEquals(99L, frontier.snapshot().offsetFor(T1_ID, 0),
                 "below-floor replay (with a gap) must leave the frontier at the epoch origin, not stalled below it");
-        assertEquals(-1L, frontier.completeness().offsetFor(T1_ID, 0),
-                "no in-domain T1 has been delivered yet, so completeness omits T1");
+        assertTrue(frontier.completeness().offsetFor(T1_ID, 0) < 100L,
+                "no in-domain T1 has been delivered yet, so completeness sits below the floor (at the origin)");
 
         // The first in-domain delivery advances the frontier from the origin, unaffected by the gap.
         frontier.deliver(T1_ID, 0, 100);
@@ -139,22 +139,50 @@ class ParsleyFrontierTest {
     }
 
     /**
-     * Completeness is floored: a channel advertising a below-floor position on T1 does not let that
-     * position gate anything. With one channel advertising T1@5 (below floor 100) and another
-     * advertising an in-domain T1@150, the floored min omits T1 entirely — the below-floor channel has
-     * confirmed nothing in-domain.
+     * Completeness is the unfloored delivered frontier — the epoch does not strip it. A channel
+     * advertising a below-floor position on T1 is carried through as-is; flooring a <em>dependency</em>
+     * on it is the delivery gate's job (against the effective floor), not completeness's. This is the
+     * WS2 reversal of WS1's completeness flooring: the stamp is the plain delivered frontier so the
+     * epoch transition stays invisible in the data plane.
      *
-     * Asserts the below-floor advertisement is stripped so completeness carries no T1.
+     * Asserts the below-floor channel advertisement survives in completeness (min across channels).
      */
     @Test
-    void completenessIsFlooredToTheEpochBound() {
+    void completenessIsTheUnflooredDeliveredFrontier() {
         ParsleyFrontier frontier = flooredFrontier(FLOOR_T1_AT_100);
 
         frontier.channelUpdate(T2_ID, 0, ParsleyClock.empty().observe(T1_ID, 0, 5));    // below floor
         frontier.channelUpdate(ANC_ID, 0, ParsleyClock.empty().observe(T1_ID, 0, 150)); // in domain
 
-        assertEquals(-1L, frontier.completeness().offsetFor(T1_ID, 0),
-                "a below-floor channel advertisement must be stripped, so completeness confirms no T1");
+        assertEquals(5L, frontier.completeness().offsetFor(T1_ID, 0),
+                "completeness is unfloored: the min across channels keeps the below-floor T1@5, not stripped");
+    }
+
+    /**
+     * The epoch state persists inside the frontier's {@code "f"} blob: a store-backed frontier over a
+     * live {@link ParsleyEpochState} that adopts a boundary reloads with the same settled floor and the
+     * in-progress transition intact, so a mid-window restart resumes the transition. The frontier's
+     * epoch reference is restored in place.
+     */
+    @Test
+    void epochStateRoundTripsThroughTheFrontierBlob() {
+        TestKeyValueStore<String, byte[]> store =
+                new TestKeyValueStore<String, byte[]>(Comparator.naturalOrder(), "frontier");
+        ParsleyEpochState epoch = new ParsleyEpochState(ParsleyClock.empty().observe(T1_ID, 0, 5), 1);
+        ParsleyFrontier original = new ParsleyFrontier(store, new MockForwardedIndex(), epoch);
+
+        // Adopt an epoch-2 boundary (marker on one channel); the window stays open (nothing dominates it).
+        original.recordEpochMarker(2, ParsleyClock.empty().observe(T1_ID, 0, 20), T1_ID, 0);
+        assertTrue(epoch.isTransitioning(), "the boundary starts a transition");
+
+        // Reload into a fresh epoch state over the same store.
+        ParsleyEpochState reloadedEpoch = new ParsleyEpochState();
+        new ParsleyFrontier(store, new MockForwardedIndex(), reloadedEpoch);
+
+        assertEquals(1L, reloadedEpoch.settledEpochId(), "the settled epoch survives the blob round-trip");
+        assertEquals(5L, reloadedEpoch.startsAt(T1_ID, 0), "the effective floor stays F_{e-1}=5 mid-window after restart");
+        assertTrue(reloadedEpoch.isTransitioning(), "the in-progress transition survives the restart");
+        assertTrue(reloadedEpoch.hasMarker(T1_ID, 0), "the per-channel marker survives the restart");
     }
 
     /**

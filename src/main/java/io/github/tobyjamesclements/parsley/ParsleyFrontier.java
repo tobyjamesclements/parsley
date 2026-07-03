@@ -139,11 +139,11 @@ final class ParsleyFrontier {
      * position. A coordinate any channel has not observed is absent, so a dependency on it is not yet
      * satisfiable. With no channel clocks recorded, this is the node's own frontier.
      *
-     * <p>The result is floored to the epoch's lower bounds ({@link ParsleyClock#strippedBelow}): a
-     * coordinate's own contiguous position sits at the epoch origin ({@code startsAt - 1}) until an
-     * in-domain offset is delivered, and that below-floor origin must not appear in the completeness
-     * frontier — which is both the delivery gate and the outbound stamp. Under {@link ParsleyEpoch#NONE}
-     * the floor is a no-op.
+     * <p>This is the delivered frontier and the outbound stamp, carried as-is — <em>not</em> floored to
+     * the epoch. The epoch transition is invisible in the data plane: each node floors <em>incoming</em>
+     * dependencies against its own epoch locally (the gate and the below-floor {@link #deliver}/
+     * {@link #seedIfFirstSeen}), so the stamp only ever carries positions this node actually delivered,
+     * and a below-floor origin a downstream might see is floored out by that downstream's own gate.
      */
     ParsleyClock completeness() {
         ParsleyClock result = null;
@@ -158,7 +158,7 @@ final class ParsleyFrontier {
             result = (result == null) ? view : result.intersectMin(view);
         }
         // No channel clocks (cold start): fall back to the node's own frontier.
-        return (result == null ? frontier : result).strippedBelow(epoch);
+        return result == null ? frontier : result;
     }
 
     /**
@@ -220,25 +220,65 @@ final class ParsleyFrontier {
     /**
      * Max-merges {@code clock} into channel {@code (topicId, partition)}'s advertised dependencies
      * (monotonic: the stored clock never decreases) and persists. A first call for a channel
-     * initialises it from {@code clock}. The advertised clock is floored to the epoch's lower bounds
-     * first ({@link ParsleyClock#strippedBelow}), so a channel never records — and so completeness
-     * never confirms — a below-floor, out-of-domain position. Under {@link ParsleyEpoch#NONE} the
-     * floor is a no-op.
+     * initialises it from {@code clock}. Channel clocks are <em>not</em> floored here: a below-floor
+     * position a channel advertises is harmless — a dependency on it is stripped at the gate (against
+     * the effective floor), so it never gates anything, and completeness carries it only as the
+     * unfloored delivered frontier the stamp advertises.
      */
     void channelUpdate(Uuid topicId, int partition, ParsleyClock clock) {
         if (!trackChannels) {
             return;
         }
-        ParsleyClock floored = clock.strippedBelow(epoch);
         CoordKey key = new CoordKey(topicId, partition);
         ParsleyClock existing = channels.get(key);
-        channels.put(key, existing == null ? floored : existing.merge(floored));
+        channels.put(key, existing == null ? clock : existing.merge(clock));
         persist();
     }
 
     /** The number of channels currently recorded (including seeded, silent ones). */
     int channelCount() {
         return channels.size();
+    }
+
+    /**
+     * Records an epoch-boundary marker received on channel {@code (channelTopicId, channelPartition)}
+     * and persists. A no-op unless this frontier's epoch is a live {@link ParsleyEpochState} (tests and
+     * the epoch-0 default hold a static {@link ParsleyEpoch}). See {@link #tryAdvanceEpoch}.
+     */
+    void recordEpochMarker(long epochId, ParsleyClock lowerBounds, Uuid channelTopicId, int channelPartition) {
+        if (epoch instanceof ParsleyEpochState state) {
+            state.onBoundary(epochId, lowerBounds, channelTopicId, channelPartition);
+            persist();
+        }
+    }
+
+    /**
+     * Closes an in-progress epoch transition if it is ready — the boundary marker has been received on
+     * <em>every</em> input channel and the delivered frontier ({@link #completeness()}) dominates the
+     * pending floor {@code F_e} — promoting {@code F_e} to the settled floor and persisting. Returns
+     * {@code true} if it advanced (the caller should then re-drain, since a raised floor can strip a
+     * held replay record's below-floor dependencies). A no-op with no live {@link ParsleyEpochState} or
+     * no ready transition. Called after every engine operation that can advance completeness.
+     */
+    boolean tryAdvanceEpoch() {
+        if (!(epoch instanceof ParsleyEpochState state)) {
+            return false;
+        }
+        ParsleyClock pendingFloor = state.pendingFloor();
+        if (pendingFloor == null) {
+            return false;
+        }
+        for (CoordKey key : channels.keySet()) {
+            if (!state.hasMarker(key.topicId(), key.partition())) {
+                return false;
+            }
+        }
+        if (!completeness().dominates(pendingFloor)) {
+            return false;
+        }
+        state.promote();
+        persist();
+        return true;
     }
 
     /**
@@ -276,9 +316,13 @@ final class ParsleyFrontier {
     }
 
     /**
-     * Serialises the frontier clock and channel clocks into the single {@code "f"} value:
+     * Serialises the frontier clock, channel clocks, and epoch state into the single {@code "f"} value:
      * {@code [frontier-len:4][frontier bytes][channel-count:4]} then per channel
-     * {@code [topicId MSB:8][topicId LSB:8][partition:4][clock-len:4][clock bytes]}.
+     * {@code [topicId MSB:8][topicId LSB:8][partition:4][clock-len:4][clock bytes]}, then
+     * {@code [epoch-present:1]} and, when the epoch is a live {@link ParsleyEpochState},
+     * {@code [epoch-len:4][epoch bytes]}. The epoch state is persisted so a mid-transition restart —
+     * which resumes past the already-consumed boundary marker — resumes the pending window rather than
+     * losing it (which would leave the transition unable to close).
      */
     private byte[] toBytes() {
         try (ByteArrayOutputStream baos = new ByteArrayOutputStream();
@@ -294,6 +338,14 @@ final class ParsleyFrontier {
                 byte[] c = entry.getValue().toBytes();
                 dos.writeInt(c.length);
                 dos.write(c);
+            }
+            if (epoch instanceof ParsleyEpochState state) {
+                dos.writeBoolean(true);
+                byte[] e = state.toBytes();
+                dos.writeInt(e.length);
+                dos.write(e);
+            } else {
+                dos.writeBoolean(false);
             }
             dos.flush();
             return baos.toByteArray();
@@ -313,6 +365,17 @@ final class ParsleyFrontier {
                 int partition = dis.readInt();
                 byte[] c = dis.readNBytes(dis.readInt());
                 channels.put(new CoordKey(new Uuid(msb, lsb), partition), ParsleyClock.fromBytes(c));
+            }
+            // The epoch section is optional and trailing: a blob written before epoch state existed (or
+            // by a static-epoch frontier) simply ends after the channels. available() is exact over the
+            // backing ByteArrayInputStream.
+            if (dis.available() > 0 && dis.readBoolean()) {
+                byte[] e = dis.readNBytes(dis.readInt());
+                // Only a live ParsleyEpochState can restore epoch bytes; a static epoch (tests/epoch 0)
+                // never wrote them, so this branch is not reached for those.
+                if (epoch instanceof ParsleyEpochState state) {
+                    state.restore(e);
+                }
             }
         } catch (IOException e) {
             throw new IllegalStateException("ParsleyFrontier deserialisation failed", e);

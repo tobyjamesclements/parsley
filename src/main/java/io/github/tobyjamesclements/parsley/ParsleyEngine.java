@@ -246,7 +246,33 @@ final class ParsleyEngine<K, V> {
         if (channelAdvanced && frontier.channelCount() > 1) {
             out.addAll(drainSatisfied());
         }
+        // A normal delivery can advance completeness past a pending epoch boundary's floor, closing the
+        // transition window; a raised floor can then strip a held replay record's below-floor deps.
+        if (frontier.tryAdvanceEpoch()) {
+            out.addAll(drainSatisfied());
+        }
         return out;
+    }
+
+    /**
+     * Handles a received epoch-boundary marker: records the marker on its source channel in the
+     * {@link ParsleyEpochState}, then closes the transition window if it is now ready (marker on every
+     * channel and the delivered frontier dominating the new floor), draining any records the raised
+     * floor releases. Mirrors {@link #onWatermark}. The marker itself is never delivered or buffered;
+     * the caller ({@link ParsleyProcessor}) emits a downstream watermark so the completeness change
+     * propagates, but never re-emits the marker (the coordinator broadcasts it to every channel).
+     *
+     * @param boundary        the decoded boundary (epoch id + new lower bounds)
+     * @param channelTopicId  the topic UUID of the channel the marker arrived on
+     * @param channelPartition the partition of that channel
+     * @return the records released by a resulting window close; possibly empty
+     */
+    List<ParsleyMessage<K, V>> onEpochBoundary(EpochBoundary boundary, Uuid channelTopicId, int channelPartition) {
+        frontier.recordEpochMarker(boundary.epochId(), boundary.lowerBounds(), channelTopicId, channelPartition);
+        if (frontier.tryAdvanceEpoch()) {
+            return drainSatisfied();
+        }
+        return List.of();
     }
 
     /**
@@ -381,7 +407,12 @@ final class ParsleyEngine<K, V> {
      */
     List<ParsleyMessage<K, V>> onWatermark(Uuid sourceTopicId, int sourcePartition, ParsleyClock frontierClock) {
         frontier.channelUpdate(sourceTopicId, sourcePartition, frontierClock);
-        return drainSatisfied();
+        List<ParsleyMessage<K, V>> out = drainSatisfied();
+        // A watermark advances completeness, which can close a pending epoch transition window.
+        if (frontier.tryAdvanceEpoch()) {
+            out.addAll(drainSatisfied());
+        }
+        return out;
     }
 
     /** The buffer's metadata index, oldest-first (by insertion sequence); never decodes a value. */

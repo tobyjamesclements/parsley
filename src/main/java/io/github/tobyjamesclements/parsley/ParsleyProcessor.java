@@ -130,7 +130,11 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
         // The single owner of the persisted causal metadata: loads the frontier clock and channel
         // clocks from key "f" of the frontier store and rewrites that value on change. The forwarded
         // index keeps its own keyed store (growable, order-sensitive) and is injected here.
-        ParsleyFrontier frontier = new ParsleyFrontier(frontierStore, forwardedIndex);
+        // The task's epoch state: floors gating against the settled epoch and drives the overlapping
+        // epoch transition. Fresh here (epoch 0); its contents — including any in-progress transition —
+        // are restored from the frontier "f" blob by the ParsleyFrontier constructor below.
+        ParsleyEpochState epochState = new ParsleyEpochState();
+        ParsleyFrontier frontier = new ParsleyFrontier(frontierStore, forwardedIndex, epochState);
 
         if (restored) {
             log.info("Processor initialized [task: {}] — frontier restored: {}", context.taskId(), frontier.snapshot());
@@ -206,6 +210,10 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
     public void process(Record<KIn, VIn> record) {
         if (isWatermark(record)) {
             handleWatermark(record);
+            return;
+        }
+        if (isEpochBoundary(record)) {
+            handleEpochBoundary(record);
             return;
         }
         ParsleyClock completenessBefore = engine.completeness();
@@ -305,6 +313,62 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
             }
         }
         return false;
+    }
+
+    /**
+     * Returns {@code true} if {@code record} is a Parsley topology epoch-boundary marker, identified by
+     * the {@link ParsleyHeader#EPOCH_BOUNDARY} header. Like a watermark it carries no business payload
+     * and must never be forwarded to the user delegate or buffered — it exists only to drive each
+     * node's local overlapping-epoch transition.
+     */
+    private boolean isEpochBoundary(Record<KIn, VIn> record) {
+        for (Header h : record.headers()) {
+            if (ParsleyHeader.EPOCH_BOUNDARY.equals(h.key())) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * Handles a received epoch-boundary marker: decodes it, records it on its source channel and (if the
+     * transition is now ready) closes the epoch window in the engine, delivers any records the raised
+     * floor releases, and re-emits a watermark carrying this node's updated completeness so the change
+     * propagates downstream. The marker is never forwarded to the user delegate, never buffered, and —
+     * unlike a watermark — never re-emitted: the coordinator broadcasts it to every channel directly.
+     */
+    private void handleEpochBoundary(Record<KIn, VIn> record) {
+        Optional<RecordMetadata> meta = context.recordMetadata();
+        String topic = meta.map(RecordMetadata::topic).orElse("");
+        int partition = meta.map(RecordMetadata::partition).orElse(0);
+        Uuid topicId = topicUuids.get(topic);
+        if (topicId == null) {
+            log.warn("Received epoch boundary on unregistered topic '{}'; ignoring", topic);
+            return;
+        }
+
+        EpochBoundary boundary = null;
+        for (Header h : record.headers()) {
+            if (ParsleyHeader.EPOCH_BOUNDARY.equals(h.key()) && h.value() != null) {
+                try {
+                    boundary = EpochBoundary.fromBytes(h.value());
+                } catch (Exception e) {
+                    log.warn("Failed to decode epoch boundary on {}-{}; ignoring", topic, partition, e);
+                }
+                break;
+            }
+        }
+        if (boundary == null) {
+            return;
+        }
+
+        List<ParsleyMessage<KIn, VIn>> released = engine.onEpochBoundary(boundary, topicId, partition);
+        deliver(released);
+
+        // Propagate the completeness change downstream so the next layer's channel clocks advance; reuse
+        // the marker's key for routing, exactly like a re-emitted watermark. Never re-emit the marker
+        // itself — the coordinator writes it to every channel.
+        forwardWatermark(record.key());
     }
 
     /**

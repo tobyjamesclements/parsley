@@ -1193,14 +1193,15 @@ class ParsleyEngineTest {
     }
 
     /**
-     * A below-floor record is delivered (it feeds state) but does not anchor the causal frontier: with
-     * T1 floored at 100, a T1@5 record with no dependencies forwards immediately, yet the completeness
-     * frontier gains no T1 position — the out-of-domain offset is not something downstream may depend on.
+     * A below-floor record is delivered (it feeds state) but does not advance the causal frontier into
+     * the domain: with T1 floored at 100, a T1@5 record with no dependencies forwards immediately, and
+     * the frontier stays at the epoch origin (below the floor) rather than jumping to 5 — so nothing
+     * in-domain is confirmed.
      *
-     * Asserts the record forwards while completeness omits the below-floor coordinate.
+     * Asserts the record forwards while the completeness frontier stays below the floor (at the origin).
      */
     @Test
-    void belowFloorRecordDeliversButDoesNotAdvanceCompleteness() {
+    void belowFloorRecordDeliversButDoesNotAdvanceIntoTheDomain() {
         ParsleyEpoch bound = (topicId, partition) -> topicId.equals(T1_ID) ? 100L : ParsleyEpoch.NO_BOUND;
         ParsleyEngine<String, String> engine = engineWithEpochTrackingChannels(CausalBufferLimit.ofSize(100), bound);
 
@@ -1208,8 +1209,8 @@ class ParsleyEngineTest {
 
         assertEquals(1, forwarded.size(), "a below-floor record with no unmet dependency must deliver");
         assertEquals(0, engine.bufferSize(), "the below-floor record must not be buffered");
-        assertEquals(-1L, engine.completeness().offsetFor(T1_ID, 0),
-                "the below-floor delivery must not surface in the completeness frontier");
+        assertTrue(engine.completeness().offsetFor(T1_ID, 0) < 100L,
+                "the below-floor delivery must not advance completeness into the domain (it stays at the origin)");
     }
 
     /**
@@ -1241,6 +1242,64 @@ class ParsleyEngineTest {
                 "a record depending on the delivered in-domain T1@100 must forward — the below-floor "
                         + "gap at offset 6 must not stall the frontier below the floor");
         assertEquals(0, engine.bufferSize(), "nothing may remain held once the in-domain dependency is met");
+    }
+
+    /**
+     * The overlapping-epoch transition honours the old floor for in-flight records. Settled at epoch 1
+     * (floor T2@5), a boundary raises T2's floor to 20 (epoch 2) but stays in progress. During the
+     * window the effective floor is the old F_1=5, so a record depending on T2@10 — in {@code [5, 20)} —
+     * is held and waited for, not stripped as if below the new floor and released out of causal order.
+     *
+     * Asserts the in-flight record is held during the window and releases only once T2@10 is delivered.
+     */
+    @Test
+    void inFlightPriorEpochRecordIsGatedAgainstTheOldFloorDuringTheWindow() {
+        ParsleyEpochState epoch = new ParsleyEpochState(ParsleyClock.empty().observe(T2_ID, 0, 5), 1);
+        ParsleyEngine<String, String> engine = engineWithEpochState(CausalBufferLimit.ofSize(100), epoch);
+
+        // Receive the epoch-2 boundary (floor T2@20). The window opens but cannot close (nothing delivered).
+        engine.onEpochBoundary(new EpochBoundary(2, ParsleyClock.empty().observe(T2_ID, 0, 20)), T1_ID, 0);
+        assertTrue(epoch.isTransitioning(), "the epoch-2 transition is in progress");
+
+        // In-flight epoch-1 record depending on T2@10, which is in-domain under the old floor (5), not the new (20).
+        processRecord(engine, incomingRecord(T1, 0, ParsleyClock.empty().observe(T2_ID, 0, 10)));
+        assertEquals(0, forwarded.size(),
+                "the in-flight record must be held against the old floor, not stripped and released early");
+        assertEquals(1, engine.bufferSize(), "it waits for its in-domain epoch-1 dependency T2@10");
+
+        // Delivering T2@10 releases it in causal order; the window is still open (completeness < F_2=20).
+        processRecord(engine, incomingRecord(T2, 10, ParsleyClock.empty()));
+        assertTrue(forwarded.size() >= 2, "once T2@10 is delivered, the in-flight record releases in order");
+        assertEquals(0, engine.bufferSize(), "the buffer drains");
+        assertEquals(1L, epoch.settledEpochId(), "the window has not closed (completeness has not reached F_2=20)");
+    }
+
+    /**
+     * The transition window closes when the delivered frontier dominates the new floor, and only then
+     * does the new floor take effect. Delivering T2 up to 20 closes the epoch-2 window; afterwards a
+     * dependency on T2@15 — now below the effective floor 20 — is stripped and its record delivers.
+     *
+     * Asserts the settled epoch advances to 2 at the boundary and the new floor then governs stripping.
+     */
+    @Test
+    void windowClosesWhenCompletenessDominatesTheBoundaryThenTheNewFloorApplies() {
+        ParsleyEpochState epoch = new ParsleyEpochState(ParsleyClock.empty().observe(T2_ID, 0, 5), 1);
+        ParsleyEngine<String, String> engine = engineWithEpochState(CausalBufferLimit.ofSize(100), epoch);
+        engine.onEpochBoundary(new EpochBoundary(2, ParsleyClock.empty().observe(T2_ID, 0, 20)), T2_ID, 0);
+
+        // Deliver T2 contiguously up to the new floor 20 (all in-domain under the old floor 5).
+        for (long offset = 6; offset <= 20; offset++) {
+            processRecord(engine, incomingRecord(T2, offset, ParsleyClock.empty()));
+        }
+        assertEquals(2L, epoch.settledEpochId(), "the window closes once completeness dominates F_2=20");
+        assertEquals(20L, epoch.startsAt(T2_ID, 0), "epoch 2's floor is now the effective floor");
+
+        // A fresh record depending on T2@15 — now below the effective floor — is stripped and delivers.
+        int before = forwarded.size();
+        processRecord(engine, incomingRecord(T1, 0, ParsleyClock.empty().observe(T2_ID, 0, 15)));
+        assertEquals(before + 1, forwarded.size(),
+                "a dependency below the now-effective floor is stripped, so the record delivers immediately");
+        assertEquals(0, engine.bufferSize(), "nothing is held");
     }
 
     // --- helpers --------------------------------------------------------------------------------
@@ -1284,6 +1343,17 @@ class ParsleyEngineTest {
                                                                           ParsleyEpoch epoch) {
         return new ParsleyEngine<>(limit,
                 new ParsleyFrontier(ParsleyClock.empty(), forwardedIndex, true, epoch),
+                (topicId, partition) -> true, buffer, new MockCandidateIndex(), ParsleyMetrics.NOOP,
+                CausalAudit.NOOP, System::currentTimeMillis, false, false);
+    }
+
+    // A live ParsleyEpochState over a frontier-only (untracked-channels) engine: completeness() is the
+    // node's own frontier, and the transition window's per-channel marker check is vacuous (no channels),
+    // so the window closes purely on completeness dominating F_e — exactly what these transition tests
+    // exercise, without needing to stage watermarks.
+    private ParsleyEngine<String, String> engineWithEpochState(CausalBufferLimit limit, ParsleyEpochState epoch) {
+        return new ParsleyEngine<>(limit,
+                new ParsleyFrontier(ParsleyClock.empty(), forwardedIndex, false, epoch),
                 (topicId, partition) -> true, buffer, new MockCandidateIndex(), ParsleyMetrics.NOOP,
                 CausalAudit.NOOP, System::currentTimeMillis, false, false);
     }
