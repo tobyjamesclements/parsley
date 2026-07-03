@@ -2,6 +2,7 @@ package io.github.tobyjamesclements.parsley;
 
 import org.jspecify.annotations.Nullable;
 
+import java.time.Duration;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
@@ -45,8 +46,14 @@ import java.util.Set;
  */
 public final class CausalCoordination {
 
+    /** The default bound on how long a joining task waits for its epoch to commit before failing to retry. */
+    public static final Duration DEFAULT_JOIN_TIMEOUT = Duration.ofSeconds(60);
+
+    private static final Duration JOIN_POLL_INTERVAL = Duration.ofMillis(20);
+
     private final String epochEventsTopic;
     private final Set<String> sourceTopics;
+    private final Duration joinTimeout;
     // Set only by forRuntime(...) — a pre-built runtime (e.g. over an in-memory transport) that bypasses
     // the lazy Kafka build, so tests exercise the wiring without a broker.
     private final @Nullable ParsleyEpochRuntime injectedRuntime;
@@ -54,10 +61,18 @@ public final class CausalCoordination {
     private final Object lock = new Object();
     private @Nullable ParsleyEpochRuntime lazyRuntime;
 
-    private CausalCoordination(String epochEventsTopic, Set<String> sourceTopics,
+    // The join handshake, captured once per instance under joinLock (the first participating task drives
+    // it; the rest wait for the same commit).
+    private final Object joinLock = new Object();
+    private boolean joinInitiated;
+    private long joinEpoch;
+    private boolean joinRequired;
+
+    private CausalCoordination(String epochEventsTopic, Set<String> sourceTopics, Duration joinTimeout,
                                @Nullable ParsleyEpochRuntime injectedRuntime) {
         this.epochEventsTopic = epochEventsTopic;
         this.sourceTopics = sourceTopics;
+        this.joinTimeout = joinTimeout;
         this.injectedRuntime = injectedRuntime;
     }
 
@@ -72,8 +87,24 @@ public final class CausalCoordination {
      * @return a new coordination handle
      */
     public static CausalCoordination create(String epochEventsTopic, Set<String> sourceTopics) {
+        return create(epochEventsTopic, sourceTopics, DEFAULT_JOIN_TIMEOUT);
+    }
+
+    /**
+     * As {@link #create(String, Set)}, with an explicit {@code joinTimeout} — how long a task deployed
+     * into an already-running topology waits for its epoch boundary to commit before failing (so Kafka
+     * Streams restarts and retries the join) rather than proceeding on an unknown floor.
+     *
+     * @param epochEventsTopic the single-partition epoch-events log topic name
+     * @param sourceTopics     the topology's external source topic names
+     * @param joinTimeout      the bound on the join wait
+     * @return a new coordination handle
+     */
+    public static CausalCoordination create(String epochEventsTopic, Set<String> sourceTopics,
+                                            Duration joinTimeout) {
         Objects.requireNonNull(epochEventsTopic, "epochEventsTopic must not be null");
-        return new CausalCoordination(epochEventsTopic, Set.copyOf(sourceTopics), null);
+        Objects.requireNonNull(joinTimeout, "joinTimeout must not be null");
+        return new CausalCoordination(epochEventsTopic, Set.copyOf(sourceTopics), joinTimeout, null);
     }
 
     /**
@@ -81,7 +112,12 @@ public final class CausalCoordination {
      * {@link InMemoryEpochTransport}-backed runtime with no broker.
      */
     static CausalCoordination forRuntime(ParsleyEpochRuntime runtime, Set<String> sourceTopics) {
-        return new CausalCoordination("", Set.copyOf(sourceTopics), runtime);
+        return new CausalCoordination("", Set.copyOf(sourceTopics), DEFAULT_JOIN_TIMEOUT, runtime);
+    }
+
+    /** As {@link #forRuntime(ParsleyEpochRuntime, Set)} with an explicit join timeout (for timeout tests). */
+    static CausalCoordination forRuntime(ParsleyEpochRuntime runtime, Set<String> sourceTopics, Duration joinTimeout) {
+        return new CausalCoordination("", Set.copyOf(sourceTopics), joinTimeout, runtime);
     }
 
     /** The declared external source topics. */
@@ -108,6 +144,70 @@ public final class CausalCoordination {
             built.start();
             lazyRuntime = built;
             return built;
+        }
+    }
+
+    /**
+     * The joiner handshake, called from a fresh task's {@code init()}: a node deployed into an
+     * already-running (coordinated) topology must not begin consuming until an epoch computed <em>without
+     * it</em> commits, so it never drags the floor's min-over-running-members toward its offset-0 position.
+     *
+     * <p>Waits for the runtime to fold the log to the end ({@link ParsleyEpochRuntime#isBootstrapped()},
+     * so the committed epoch is accurate); then, once per instance, captures the join epoch and — only if
+     * the topology is at an <strong>established</strong> epoch (committed &gt; 0; epoch 0 is static, with
+     * no history to strip) — opens one snapshot round attributed to {@code memberId} and blocks every
+     * participating task until an epoch strictly after the join epoch commits. At epoch 0 it returns
+     * immediately (a cold start is unaffected). Throws (failing the task, so Streams restarts and retries)
+     * if the timeout elapses first — never proceeds on an unknown floor.
+     */
+    void awaitJoinCommit(ParsleyEpochRuntime runtime, String memberId) {
+        long deadlineNanos = System.nanoTime() + joinTimeout.toNanos();
+        awaitBootstrap(runtime, deadlineNanos);
+
+        long epoch;
+        boolean required;
+        synchronized (joinLock) {
+            if (!joinInitiated) {
+                joinInitiated = true;
+                joinEpoch = runtime.committedEpochId();
+                joinRequired = joinEpoch > 0;
+                if (joinRequired) {
+                    // Open the round the existing running nodes will answer; this joiner owns it, and its
+                    // instance drives the commit once they have published (their punctuator-driven poll).
+                    runtime.requestSnapshot(memberId);
+                }
+            }
+            epoch = joinEpoch;
+            required = joinRequired;
+        }
+        if (!required) {
+            return;
+        }
+        while (runtime.committedEpochId() <= epoch) {
+            if (System.nanoTime() > deadlineNanos) {
+                throw new IllegalStateException("topology-epoch join did not commit within " + joinTimeout
+                        + "; failing the task so Kafka Streams restarts and retries the join");
+            }
+            sleep();
+        }
+    }
+
+    private static void awaitBootstrap(ParsleyEpochRuntime runtime, long deadlineNanos) {
+        while (!runtime.isBootstrapped()) {
+            if (System.nanoTime() > deadlineNanos) {
+                throw new IllegalStateException(
+                        "topology-epoch coordination did not fold the epoch-events log within the join timeout");
+            }
+            sleep();
+        }
+    }
+
+    private static void sleep() {
+        try {
+            Thread.sleep(JOIN_POLL_INTERVAL.toMillis());
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new IllegalStateException("interrupted while awaiting the topology-epoch join commit", e);
         }
     }
 

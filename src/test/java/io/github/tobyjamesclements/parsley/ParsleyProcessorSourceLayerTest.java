@@ -63,45 +63,11 @@ class ParsleyProcessorSourceLayerTest {
                 "the injected marker reuses the last-seen key so it lands on this task's partition lane");
     }
 
-    /**
-     * A source-layer task, on seeing a committed epoch in the log, adopts the boundary for its external
-     * source coordinate and injects the boundary marker downstream — the floor for a topology-source
-     * channel arrives from the log, since no in-band boundary marker will ever reach it.
-     */
-    @Test
-    void sourceLayerTaskAdoptsAndInjectsBoundaryWhenAnEpochCommits() {
-        InMemoryEpochTransport.SharedLog log = new InMemoryEpochTransport.SharedLog();
-        ParsleyEpochRuntime runtime = new ParsleyEpochRuntime(new InMemoryEpochTransport(log));
-
-        InMemoryEpochTransport seeder = new InMemoryEpochTransport(log);
-        seeder.append(new EpochEvent.JoinRequested("X"));
-        seeder.append(new EpochEvent.SnapshotRequested("X"));
-        seeder.append(new EpochEvent.EpochCommitted(1, ParsleyClock.empty().observe(T1_ID, 0, 10)));
-        runtime.runOnce();
-        assertEquals(1L, runtime.committedEpochId(), "the seeded log commits epoch 1");
-
-        Fixture f = new Fixture(runtime);
-        f.processRecord("k", 5L);
-
-        List<? extends MockProcessorContext.CapturedForward<? extends String, ? extends String>> boundaries =
-                f.forwardedWith(ParsleyHeader.EPOCH_BOUNDARY);
-        assertEquals(1, boundaries.size(), "the source-layer task injects the boundary marker exactly once");
-        assertEquals("k", boundaries.get(0).record().key(),
-                "the injected boundary reuses the last-seen key so it lands on this task's partition lane");
-        EpochBoundary relayed = boundaryOf(boundaries.get(0).record());
-        assertEquals(1L, relayed.epochId(), "the injected boundary carries the committed epoch id");
-        assertEquals(10L, relayed.lowerBounds().offsetFor(T1_ID, 0),
-                "the injected boundary carries the committed floor for the source coordinate");
-    }
-
-    private static EpochBoundary boundaryOf(Record<? extends String, ? extends String> record) {
-        for (Header h : record.headers()) {
-            if (ParsleyHeader.EPOCH_BOUNDARY.equals(h.key()) && h.value() != null) {
-                return EpochBoundary.fromBytes(h.value());
-            }
-        }
-        throw new AssertionError("record carried no epoch-boundary header");
-    }
+    // The running-node boundary adopt-and-inject path (pollEpochCoordination on a node that was present
+    // through the transition) is covered end-to-end by CausalCoordinationTopologyTest, which asserts an
+    // epoch-boundary marker with a real floor reaches the sink. A FRESH node at committed>0 is instead a
+    // joiner (it blocks and direct-settles); that path is exercised in CausalCoordinationTest and, fully,
+    // by the WS4d Docker integration test.
 
     /** A wired source-layer processor over topic t1 (declared external) plus its MockProcessorContext. */
     private static final class Fixture {

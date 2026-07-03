@@ -48,6 +48,10 @@ class CausalCoordinationTopologyTest {
         InMemoryEpochTransport.SharedLog eventLog = new InMemoryEpochTransport.SharedLog();
         ParsleyEpochRuntime runtime = new ParsleyEpochRuntime(new InMemoryEpochTransport(eventLog));
         CausalCoordination coordination = CausalCoordination.forRuntime(runtime, Set.of("t1"));
+        // Bootstrap the runtime (empty log) before the driver's init() runs — a coordinated task's init
+        // blocks until the runtime has folded the backlog. This is a cold start (epoch 0), so no join
+        // round is opened and init proceeds once bootstrapped.
+        runtime.runOnce();
 
         Topology topology = CausalStreams.builder(upperCaser())
                 .addBufferStore("parsley", CausalBufferLimit.ofSize(100))

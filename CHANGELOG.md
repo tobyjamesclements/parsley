@@ -49,8 +49,10 @@ All notable changes to this project are documented in this file. The format is b
   min over running members' completeness), and the floor propagates **in-band** via markers that
   relay edge-by-edge through the DAG, so each node adopts it through the overlapping-epoch transition.
   Entirely **optional** — without a `CausalCoordination` a topology runs in epoch 0, exactly as
-  before. (Joiner blocking for a node deployed into an already-running topology, and the Kafka
-  integration test, follow.)
+  before. A node **deployed into an already-running** topology blocks at startup until an epoch
+  computed without it commits, then adopts that floor and replays its inputs from the start with
+  pre-epoch history stripped, so it never drags the shared floor down; on a configurable timeout it
+  fails to retry rather than proceed on an unknown floor. (The Kafka integration test follows.)
 - `CausalStreams` — the topology-owning high-level causal API (Layer 2), composing
   `CausalProcessors` internally rather than reimplementing the causal engine. Builds a `Topology`
   for a single causal stage — one or more `CausalBuffer` sources feeding a causal-decorated

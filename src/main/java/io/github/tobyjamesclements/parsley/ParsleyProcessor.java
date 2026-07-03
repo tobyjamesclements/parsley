@@ -192,10 +192,40 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
         // The single owner of the persisted causal metadata: loads the frontier clock and channel
         // clocks from key "f" of the frontier store and rewrites that value on change. The forwarded
         // index keeps its own keyed store (growable, order-sensitive) and is injected here.
-        // The task's epoch state: floors gating against the settled epoch and drives the overlapping
-        // epoch transition. Fresh here (epoch 0); its contents — including any in-progress transition —
-        // are restored from the frontier "f" blob by the ParsleyFrontier constructor below.
-        ParsleyEpochState epochState = new ParsleyEpochState();
+        // Resolve epoch coordination from the handle before building the epoch state: build/share the
+        // per-instance runtime (from this task's appConfigs), install the runtime-backed snapshot
+        // publisher, and join as a member. A fresh task deployed into an already-running topology BLOCKS
+        // here until an epoch computed without it commits, so it never drags the floor's min-over-running-
+        // members toward its offset-0 position; a restored task skips the block — it already joined and
+        // its floor is in the "f" blob.
+        Set<String> externalSourceTopics = Set.of();
+        if (coordination != null) {
+            ParsleyEpochRuntime runtime = coordination.runtimeFor(context.appConfigs());
+            this.epochRuntime = runtime;
+            this.snapshotPublisher = runtime::publishFrontier;
+            runtime.join(context.taskId().toString());
+            if (!restored) {
+                coordination.awaitJoinCommit(runtime, context.taskId().toString());
+            }
+            externalSourceTopics = coordination.sourceTopics();
+        }
+        this.externalSourceTopicIds = externalSourceTopics.stream()
+                .map(topicUuids::get)
+                .filter(id -> id != null)
+                .collect(java.util.stream.Collectors.toUnmodifiableSet());
+
+        // The task's epoch state floors gating against the settled epoch. A fresh task that joined an
+        // established epoch settles DIRECTLY at the committed floor F_{k+1}: it has no in-flight prior-
+        // epoch records, so every below-floor replay record is pre-epoch history to strip — no overlap
+        // window. Otherwise it starts fresh at epoch 0; a restored task's state (settled floor plus any
+        // in-progress transition) is loaded from the frontier "f" blob by the ParsleyFrontier constructor.
+        ParsleyEpochState epochState;
+        if (epochRuntime != null && !restored && epochRuntime.committedEpochId() > 0) {
+            epochState = new ParsleyEpochState(epochRuntime.committedLowerBounds(), epochRuntime.committedEpochId());
+            this.lastAdoptedEpoch = epochRuntime.committedEpochId();
+        } else {
+            epochState = new ParsleyEpochState();
+        }
         ParsleyFrontier frontier = new ParsleyFrontier(frontierStore, forwardedIndex, epochState);
 
         if (restored) {
@@ -217,23 +247,6 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
         int taskPartition = context.taskId().partition();
         ParsleyClock.CoordinatePredicate inScope = (topicId, partition) ->
                 partition == taskPartition && consumedTopicIds.contains(topicId);
-
-        // Resolve epoch coordination from the handle: build/share the per-instance runtime (from this
-        // task's appConfigs), publish snapshot frontiers to the log, and join as a member. The external
-        // (topology-source) coordinates this task owns come from the handle — no in-band marker will ever
-        // arrive on them, so if this set is non-empty the task is source-layer and self-initiates the wave.
-        Set<String> externalSourceTopics = Set.of();
-        if (coordination != null) {
-            ParsleyEpochRuntime runtime = coordination.runtimeFor(context.appConfigs());
-            this.epochRuntime = runtime;
-            this.snapshotPublisher = runtime::publishFrontier;
-            runtime.join(context.taskId().toString());
-            externalSourceTopics = coordination.sourceTopics();
-        }
-        this.externalSourceTopicIds = externalSourceTopics.stream()
-                .map(topicUuids::get)
-                .filter(id -> id != null)
-                .collect(java.util.stream.Collectors.toUnmodifiableSet());
 
         // Prune restored causal state to the current scope — topic UUIDs change when a topic is
         // dropped and recreated, leaving stale frontier/channel entries that would pin the completeness
