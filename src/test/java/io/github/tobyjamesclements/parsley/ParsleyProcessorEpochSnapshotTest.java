@@ -20,7 +20,6 @@ import java.util.Set;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
-import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
  * Tests {@link ParsleyProcessor}'s handling of a received {@link ParsleyHeader#EPOCH_SNAPSHOT} marker:
@@ -46,11 +45,12 @@ class ParsleyProcessorEpochSnapshotTest {
 
     /**
      * An epoch-snapshot marker publishes this node's current completeness frontier (tagged with the
-     * task id) and nothing else: the user delegate never sees it, it is not buffered, and a completeness
-     * watermark is re-emitted so downstream progress is not stalled by the consumed marker.
+     * task id) and is relayed downstream: the user delegate never sees it, it is not buffered, but the
+     * marker is re-emitted on the same key so the in-band cut propagates through the DAG, carrying this
+     * node's completeness so the downstream channel clock advances from the same record.
      *
      * Asserts the publisher is called once with the post-delivery completeness (T1@5), the delegate saw
-     * only the business record, and a watermark (not the snapshot marker) is forwarded.
+     * only the business record, and the snapshot marker is relayed on the same key carrying completeness.
      */
     @Test
     void epochSnapshotMarkerPublishesCompletenessButIsNeverDelivered() {
@@ -105,10 +105,23 @@ class ParsleyProcessorEpochSnapshotTest {
 
         List<? extends MockProcessorContext.CapturedForward<? extends String, ? extends String>> forwarded =
                 context.forwarded();
-        assertTrue(forwarded.stream().anyMatch(f -> hasHeader(f.record(), ParsleyHeader.WATERMARK)),
-                "a completeness watermark must be re-emitted so the consumed marker does not stall downstream");
-        assertTrue(forwarded.stream().noneMatch(f -> hasHeader(f.record(), ParsleyHeader.EPOCH_SNAPSHOT)),
-                "the snapshot marker itself must never be re-emitted — the coordinator broadcasts it to every channel");
+        List<? extends MockProcessorContext.CapturedForward<? extends String, ? extends String>> relayed =
+                forwarded.stream().filter(f -> hasHeader(f.record(), ParsleyHeader.EPOCH_SNAPSHOT)).toList();
+        assertEquals(1, relayed.size(), "the snapshot marker must be relayed downstream exactly once");
+        assertEquals("k", relayed.get(0).record().key(),
+                "the relayed marker keeps the incoming key so it stays on the same partition lane");
+        assertEquals(5L, markerCompleteness(relayed.get(0).record()).offsetFor(T1_ID, 0),
+                "the relayed marker carries this node's completeness (T1@5) so the downstream clock advances");
+    }
+
+    /** Decodes the completeness clock a relayed marker carries in its causal-dependencies header. */
+    private static ParsleyClock markerCompleteness(Record<? extends String, ? extends String> record) {
+        for (Header h : record.headers()) {
+            if (ParsleyHeader.CAUSAL_DEPENDENCIES.equals(h.key()) && h.value() != null) {
+                return ParsleyClock.fromBytes(h.value());
+            }
+        }
+        throw new AssertionError("relayed marker carried no completeness header");
     }
 
     private static boolean hasHeader(Record<? extends String, ? extends String> record, String key) {

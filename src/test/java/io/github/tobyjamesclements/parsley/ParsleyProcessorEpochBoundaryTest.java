@@ -24,8 +24,8 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 /**
  * Tests {@link ParsleyProcessor}'s handling of a received {@link ParsleyHeader#EPOCH_BOUNDARY} marker:
  * it drives the local epoch transition but is never delivered to the user delegate or buffered, and it
- * re-emits a completeness watermark downstream (never the marker itself — the coordinator broadcasts
- * that to every channel).
+ * relays the marker downstream on the same key (carrying this node's completeness) so the boundary
+ * propagates edge by edge through the DAG and every task transitions its owned partitions.
  */
 class ParsleyProcessorEpochBoundaryTest {
 
@@ -33,15 +33,16 @@ class ParsleyProcessorEpochBoundaryTest {
     private static final ParsleyTopicAdmin ADMIN = TestTopicAdmin.of(Map.of("t1", T1_ID));
 
     /**
-     * An epoch-boundary control record is consumed for its transition effect only: the user delegate
-     * never sees it and it is not buffered, but the processor re-emits a watermark carrying its
-     * completeness frontier so downstream channel clocks keep advancing across the boundary.
+     * An epoch-boundary control record drives the local transition and is relayed downstream: the user
+     * delegate never sees it and it is not buffered, but the processor re-emits the marker on the same
+     * key, carrying its completeness frontier so downstream channel clocks keep advancing across the
+     * boundary.
      *
-     * Asserts the delegate never runs, nothing is buffered, and exactly one watermark (with a decodable
-     * completeness clock, not the boundary marker) is forwarded.
+     * Asserts the delegate never runs, nothing is buffered, and exactly one boundary marker (on the same
+     * key, carrying a completeness header) is relayed.
      */
     @Test
-    void epochBoundaryMarkerDrivesTheTransitionButIsNeverDeliveredAndReEmitsAWatermark() {
+    void epochBoundaryMarkerDrivesTheTransitionAndIsRelayedDownstream() {
         TestKeyValueStore<String, byte[]> frontierStore =
                 new TestKeyValueStore<String, byte[]>(Comparator.naturalOrder(), "frontier");
         TestKeyValueStore<Long, byte[]> bufferStore =
@@ -83,12 +84,14 @@ class ParsleyProcessorEpochBoundaryTest {
 
         List<? extends MockProcessorContext.CapturedForward<? extends String, ? extends String>> forwarded =
                 context.forwarded();
-        assertEquals(1, forwarded.size(), "the processor must re-emit exactly one downstream record for the marker");
+        assertEquals(1, forwarded.size(), "the processor must relay exactly one downstream record for the marker");
         Record<? extends String, ? extends String> emitted = forwarded.get(0).record();
-        assertTrue(hasHeader(emitted, ParsleyHeader.WATERMARK),
-                "the re-emitted record must be a completeness watermark, propagating progress downstream");
-        assertTrue(!hasHeader(emitted, ParsleyHeader.EPOCH_BOUNDARY),
-                "the boundary marker itself must not be re-emitted — the coordinator broadcasts it to every channel");
+        assertTrue(hasHeader(emitted, ParsleyHeader.EPOCH_BOUNDARY),
+                "the boundary marker must be relayed downstream so every task transitions its owned partitions");
+        assertEquals("k", emitted.key(),
+                "the relayed marker keeps the incoming key so it stays on the same partition lane");
+        assertTrue(hasHeader(emitted, ParsleyHeader.CAUSAL_DEPENDENCIES),
+                "the relayed marker carries this node's completeness so the downstream clock advances from it");
     }
 
     private static boolean hasHeader(Record<? extends String, ? extends String> record, String key) {
