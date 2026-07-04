@@ -5,6 +5,7 @@ import org.apache.kafka.common.Uuid;
 import org.apache.kafka.common.config.TopicConfig;
 import org.apache.kafka.common.header.Header;
 import org.apache.kafka.common.header.Headers;
+import org.apache.kafka.streams.StreamsConfig;
 import org.apache.kafka.streams.processor.Cancellable;
 import org.apache.kafka.streams.processor.PunctuationType;
 import org.apache.kafka.streams.processor.api.Processor;
@@ -89,6 +90,11 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
     private @Nullable KIn lastSeenKey;
     private long lastSnapshotRoundEpoch;
     private long lastAdoptedEpoch;
+    // This task's globally-unique member id on the shared epoch-events log: application.id + task id. The
+    // task id alone collides across the many applications that make up a production causal DAG (each app's
+    // "0_0" is a different node); the application.id prefix disambiguates them, while two instances of the
+    // same app share it (they are the same logical member, only one live at a time).
+    private String memberId = "";
 
     private ProcessorContext<KOut, VOut> context;
     private KeyValueStore<String, byte[]> frontierStore;
@@ -178,6 +184,7 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
     @Override
     public void init(ProcessorContext<KOut, VOut> context) {
         this.context = context;
+        this.memberId = memberId(context);
         this.topicUuids = resolveTopicUuids(context);
         this.frontierStore = context.getStateStore(frontierStoreName);
         this.bufferStore = context.getStateStore(bufferStoreName);
@@ -203,9 +210,9 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
             ParsleyEpochRuntime runtime = coordination.runtimeFor(context.appConfigs());
             this.epochRuntime = runtime;
             this.snapshotPublisher = runtime::publishFrontier;
-            runtime.join(context.taskId().toString());
+            runtime.join(memberId);
             if (!restored) {
-                coordination.awaitJoinCommit(runtime, context.taskId().toString());
+                coordination.awaitJoinCommit(runtime, memberId);
             }
             externalSourceTopics = coordination.sourceTopics();
         }
@@ -304,6 +311,19 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
             quiesce.register(context.taskId());
             updateQuiesceState();
         }
+    }
+
+    /**
+     * This task's globally-unique member id for the shared epoch-events log: {@code application.id/taskId}.
+     * The task id alone is not unique across the many applications of a production causal DAG (each app's
+     * {@code 0_0} is a different node), so the {@code application.id} from the task's config disambiguates
+     * them; two instances of the same app share it (the same logical member, only one live at a time).
+     * Falls back to the bare task id when no {@code application.id} is configured (e.g. a test context).
+     */
+    private String memberId(ProcessorContext<KOut, VOut> context) {
+        Object applicationId = context.appConfigs().get(StreamsConfig.APPLICATION_ID_CONFIG);
+        String task = context.taskId().toString();
+        return (applicationId == null || applicationId.toString().isEmpty()) ? task : applicationId + "/" + task;
     }
 
     @Override
@@ -467,7 +487,7 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
      * completeness advances this node's clock for the marker channel too.
      */
     private void handleEpochSnapshot(Record<KIn, VIn> record) {
-        snapshotPublisher.publish(context.taskId().toString(), engine.completeness());
+        snapshotPublisher.publish(memberId, engine.completeness());
         advanceChannelClockFromMarker(record);
         forwardEpochSnapshot(record.key());
     }
@@ -583,7 +603,7 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
      * is harmless because nothing downstream depends on a partition that has produced nothing.
      */
     private void injectSnapshot() {
-        snapshotPublisher.publish(context.taskId().toString(), engine.completeness());
+        snapshotPublisher.publish(memberId, engine.completeness());
         if (lastSeenKey != null) {
             forwardEpochSnapshot(lastSeenKey);
         }
