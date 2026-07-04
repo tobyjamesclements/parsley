@@ -187,6 +187,31 @@ class ParsleyEpochRuntimeTest {
         assertTrue(a.isEvicted("A"), "a local member evicted by another node is surfaced for re-join");
     }
 
+    /**
+     * The eviction flag clears once the member is re-admitted (running again), so a task that blocked back
+     * in and re-adopted the floor does not keep failing in a loop — the fix for a crashed-then-evicted
+     * member restarting.
+     */
+    @Test
+    void anEvictionFlagClearsOnceTheMemberIsReAdmitted() {
+        InMemoryEpochTransport.SharedLog log = new InMemoryEpochTransport.SharedLog();
+        ParsleyEpochRuntime a = runtimeOver(log);
+        a.join("A");
+        a.requestSnapshot("A");
+        settle(log, a);
+        assertTrue(a.isRunningMember("A"), "A is a running member (epoch 1)");
+
+        new InMemoryEpochTransport(log).append(new EpochEvent.Leave("A"));   // A is evicted
+        settle(log, a);
+        assertTrue(a.isEvicted("A"), "while evicted and not running, A is flagged");
+
+        a.join("A");                 // A restarts and re-joins
+        a.requestSnapshot("A");
+        settle(log, a);
+        assertTrue(a.isRunningMember("A"), "A is re-admitted as a running member");
+        assertFalse(a.isEvicted("A"), "the eviction flag clears on re-admission, so the task does not loop");
+    }
+
     private static ParsleyEpochRuntime runtimeOver(InMemoryEpochTransport.SharedLog log) {
         return new ParsleyEpochRuntime(new InMemoryEpochTransport(log));
     }

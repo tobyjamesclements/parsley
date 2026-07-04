@@ -133,9 +133,13 @@ final class ParsleyEpochRuntime implements AutoCloseable {
         return runningMembersMirror.contains(memberId);
     }
 
-    /** Whether {@code memberId} (a local member) has been evicted by another node — the task must fail and re-join. */
+    /**
+     * Whether {@code memberId} (a local member) has been evicted and is not currently a running member —
+     * the task must fail and re-join. Clears once the member is re-admitted (running again), so a task that
+     * blocked back in and re-adopted the floor does not keep failing in a loop.
+     */
     boolean isEvicted(String memberId) {
-        return evictedLocalMembers.contains(memberId);
+        return evictedLocalMembers.contains(memberId) && !isRunningMember(memberId);
     }
 
     /** The last committed epoch id ({@code 0} before any commit). */

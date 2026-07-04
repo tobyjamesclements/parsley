@@ -201,19 +201,19 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
         // index keeps its own keyed store (growable, order-sensitive) and is injected here.
         // Resolve epoch coordination from the handle before building the epoch state: build/share the
         // per-instance runtime (from this task's appConfigs), install the runtime-backed snapshot
-        // publisher, and join as a member. A fresh task deployed into an already-running topology BLOCKS
-        // here until an epoch computed without it commits, so it never drags the floor's min-over-running-
-        // members toward its offset-0 position; a restored task skips the block — it already joined and
-        // its floor is in the "f" blob.
+        // publisher, and join as a member, then block until this member is a running member. That block is
+        // called unconditionally — its block-until-running rule decides per case: a fresh joiner or an
+        // evicted-then-restarted member (not a running member) blocks until an epoch re-includes it, while
+        // a normal restart (still a running member on the log) and a cold start (epoch 0) return at once.
+        // NB: a restored task must NOT skip this — a member that crashed while evicted is restored yet must
+        // still block until re-admitted, or it would resume under its stale floor and self-evict in a loop.
         Set<String> externalSourceTopics = Set.of();
         if (coordination != null) {
             ParsleyEpochRuntime runtime = coordination.runtimeFor(context.appConfigs());
             this.epochRuntime = runtime;
             this.snapshotPublisher = runtime::publishFrontier;
             runtime.join(memberId);
-            if (!restored) {
-                coordination.awaitJoinCommit(runtime, memberId);
-            }
+            coordination.awaitJoinCommit(runtime, memberId);
             externalSourceTopics = coordination.sourceTopics();
         }
         this.externalSourceTopicIds = externalSourceTopics.stream()
