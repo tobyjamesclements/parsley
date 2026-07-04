@@ -22,7 +22,6 @@ import org.junit.jupiter.api.Test;
 import java.io.File;
 import java.io.IOException;
 import java.nio.file.Files;
-import java.time.Duration;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
@@ -37,8 +36,8 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * Exercises {@link CausalStreams} — the topology-owning high-level causal API — through a real
- * Kafka Streams topology using the {@link TopologyTestDriver} (no broker required).
+ * Exercises {@link CausalStreamsBuilder}/{@link CausalTopology} — the topology-owning causal API —
+ * through a real Kafka Streams topology using the {@link TopologyTestDriver} (no broker required).
  */
 class CausalStreamsTopologyTest {
 
@@ -69,6 +68,26 @@ class CausalStreamsTopologyTest {
         return props;
     }
 
+    /** Assembles {@code builder} against {@code admin} and default (warn) topology validation. */
+    private static Topology assemble(CausalStreamsBuilder builder, ParsleyTopicAdmin admin) {
+        return assemble(builder, admin, config(), CausalQuiesce.create());
+    }
+
+    private static Topology assemble(CausalStreamsBuilder builder, ParsleyTopicAdmin admin, Properties props) {
+        return assemble(builder, admin, props, CausalQuiesce.create());
+    }
+
+    private static Topology assemble(
+            CausalStreamsBuilder builder, ParsleyTopicAdmin admin, Properties props, CausalQuiesce quiesce) {
+        return builder.topicAdmin(admin).build().assemble(props, quiesce, null);
+    }
+
+    private static Properties strictValidation() {
+        Properties props = config();
+        props.put(ParsleyConfig.TOPOLOGY_VALIDATION, "strict");
+        return props;
+    }
+
     private static Headers depsHeader(CausalDependencies deps) {
         Headers headers = ParsleyHeader.mutableHeaders();
         headers.add("parsley-causal-dependencies", deps.toBytes());
@@ -96,20 +115,19 @@ class CausalStreamsTopologyTest {
     // --- tests ---------------------------------------------------------------------------------
 
     /**
-     * A single-source, single-sink causal stage: the built {@link Topology} wires a source for the
-     * one registered {@link CausalBuffer}, a causal-decorated processor, and the one registered sink,
-     * and an admitted record flows delegate-transformed through to the sink.
+     * A single-source, single-sink causal stage: the assembled {@link Topology} wires a source for the
+     * one registered topic, a causal-decorated processor, and the one registered sink, and an admitted
+     * record flows delegate-transformed through to the sink.
      *
      * Asserts the delegate runs and the sink receives the transformed, causally-stamped record.
      */
     @Test
     void singleSourceStageDeliversAdmittedRecordToItsSink() {
-        Topology topology = CausalStreams.builder(upperCaser())
-                .addBufferStore("parsley")
-                .addSource(CausalBuffer.of("t1", Serdes.String(), Serdes.String()))
-                .addSink("out-sink", "out", Serdes.String(), Serdes.String())
-                .topicAdmin(ADMIN)
-                .build();
+        CausalStreamsBuilder builder = new CausalStreamsBuilder();
+        builder.stream("t1", Serdes.String(), Serdes.String())
+                .process(upperCaser())
+                .to("out-sink", "out", Serdes.String(), Serdes.String());
+        Topology topology = assemble(builder, ADMIN);
 
         try (TopologyTestDriver driver = new TopologyTestDriver(topology, config())) {
             TestInputTopic<String, String> t1 =
@@ -133,13 +151,11 @@ class CausalStreamsTopologyTest {
      */
     @Test
     void twoSourceStageFansBothSourcesIntoTheSameProcessor() {
-        Topology topology = CausalStreams.builder(upperCaser())
-                .addBufferStore("parsley")
-                .addSource(CausalBuffer.of("t1", Serdes.String(), Serdes.String()))
-                .addSource(CausalBuffer.of("t2", Serdes.String(), Serdes.String()))
-                .addSink("out-sink", "out", Serdes.String(), Serdes.String())
-                .topicAdmin(ADMIN)
-                .build();
+        CausalStreamsBuilder builder = new CausalStreamsBuilder();
+        builder.stream(List.of("t1", "t2"), Serdes.String(), Serdes.String())
+                .process(upperCaser())
+                .to("out-sink", "out", Serdes.String(), Serdes.String());
+        Topology topology = assemble(builder, ADMIN);
 
         try (TopologyTestDriver driver = new TopologyTestDriver(topology, config())) {
             TestInputTopic<String, String> t1 =
@@ -160,33 +176,16 @@ class CausalStreamsTopologyTest {
     }
 
     /**
-     * {@link CausalStreams.Builder#build()} rejects a stage missing its buffer store.
-     *
-     * Asserts an {@link IllegalStateException} naming the missing buffer store.
-     */
-    @Test
-    void buildFailsWithoutABufferStore() {
-        CausalStreams.Builder<String, String, String, String> builder = CausalStreams.builder(upperCaser())
-                .addSource(CausalBuffer.of("t1", Serdes.String(), Serdes.String()))
-                .addSink("out-sink", "out", Serdes.String(), Serdes.String())
-                .topicAdmin(ADMIN);
-
-        IllegalStateException e = assertThrows(IllegalStateException.class, builder::build,
-                "build() must fail without a buffer store");
-        assertEquals(true, e.getMessage().contains("buffer store"), "message must name the missing buffer store");
-    }
-
-    /**
-     * {@link CausalStreams.Builder#build()} rejects a stage with no registered source.
+     * {@link CausalStreamsBuilder#build()} rejects a stage missing its source topic(s).
      *
      * Asserts an {@link IllegalStateException} naming the missing source.
      */
     @Test
     void buildFailsWithoutASource() {
-        CausalStreams.Builder<String, String, String, String> builder = CausalStreams.builder(upperCaser())
-                .addBufferStore("parsley")
-                .addSink("out-sink", "out", Serdes.String(), Serdes.String())
-                .topicAdmin(ADMIN);
+        CausalStreamsBuilder builder = new CausalStreamsBuilder();
+        builder.<String, String>stream(List.<String>of(), Serdes.String(), Serdes.String())
+                .process(upperCaser())
+                .to("out-sink", "out", Serdes.String(), Serdes.String());
 
         IllegalStateException e = assertThrows(IllegalStateException.class, builder::build,
                 "build() must fail without at least one source");
@@ -194,16 +193,14 @@ class CausalStreamsTopologyTest {
     }
 
     /**
-     * {@link CausalStreams.Builder#build()} rejects a stage with no registered sink.
+     * {@link CausalStreamsBuilder#build()} rejects a stage with no registered sink.
      *
      * Asserts an {@link IllegalStateException} naming the missing sink.
      */
     @Test
     void buildFailsWithoutASink() {
-        CausalStreams.Builder<String, String, String, String> builder = CausalStreams.builder(upperCaser())
-                .addBufferStore("parsley")
-                .addSource(CausalBuffer.of("t1", Serdes.String(), Serdes.String()))
-                .topicAdmin(ADMIN);
+        CausalStreamsBuilder builder = new CausalStreamsBuilder();
+        builder.stream("t1", Serdes.String(), Serdes.String()).process(upperCaser());
 
         IllegalStateException e = assertThrows(IllegalStateException.class, builder::build,
                 "build() must fail without at least one sink");
@@ -211,36 +208,37 @@ class CausalStreamsTopologyTest {
     }
 
     /**
-     * {@link CausalStreams.Builder#build()} rejects a {@code userSupplier} that is already a
-     * {@link CausalProcessorSupplier} — the double-wrap guard lives in
-     * {@link CausalProcessors#builder}, which {@code CausalStreams} composes internally, so this
-     * proves the protection is inherited rather than needing a second, separate check here.
+     * Assembling a stage whose {@code userSupplier} is already a package-private
+     * {@code CausalProcessorSupplier} rejects it — the double-wrap guard lives in
+     * {@code CausalProcessors#builder}, which {@link CausalTopology#assemble} composes internally, so
+     * this proves the protection is inherited rather than needing a second, separate check in the
+     * public builder.
      *
      * Asserts an {@link IllegalArgumentException} naming the double-decoration.
      */
     @Test
-    void buildRejectsAnAlreadyDecoratedSupplier() {
+    void assembleRejectsAnAlreadyDecoratedSupplier() {
         CausalProcessorSupplier<String, String, String, String> alreadyDecorated =
                 CausalProcessors.builder(upperCaser())
                         .addBufferStore("parsley")
                         .addBuffer(CausalBuffer.of("t1", Serdes.String(), Serdes.String()))
                         .build();
 
-        CausalStreams.Builder<String, String, String, String> builder =
-                CausalStreams.builder(alreadyDecorated)
-                        .addBufferStore("parsley")
-                        .addSource(CausalBuffer.of("t1", Serdes.String(), Serdes.String()))
-                        .addSink("out-sink", "out", Serdes.String(), Serdes.String())
-                        .topicAdmin(ADMIN);
+        CausalStreamsBuilder builder = new CausalStreamsBuilder();
+        builder.stream("t1", Serdes.String(), Serdes.String())
+                .process(alreadyDecorated)
+                .to("out-sink", "out", Serdes.String(), Serdes.String());
+        CausalTopology topology = builder.topicAdmin(ADMIN).build();
 
-        IllegalArgumentException e = assertThrows(IllegalArgumentException.class, builder::build,
-                "build() must reject an already-decorated supplier");
+        IllegalArgumentException e = assertThrows(IllegalArgumentException.class,
+                () -> topology.assemble(config(), CausalQuiesce.create(), null),
+                "assemble() must reject an already-decorated supplier");
         assertTrue(e.getMessage().contains("CausalProcessorSupplier"),
                 "the message must name the double-decoration: " + e.getMessage());
     }
 
     /**
-     * {@link CausalStreams.Builder#withPartitioner} applies the same {@link StreamPartitioner} to
+     * {@link CausalProcessedStream#withPartitioner} applies the same {@link StreamPartitioner} to
      * every sink the stage declares — a delegate that branches to two named sinks must see both
      * sink topics invoke the custom partitioner, proving there is no per-sink drift back onto the
      * Kafka default.
@@ -266,14 +264,13 @@ class CausalStreamsTopologyTest {
             }
         };
 
-        Topology topology = CausalStreams.builder(brancher)
-                .addBufferStore("parsley")
-                .addSource(CausalBuffer.of("t1", Serdes.String(), Serdes.String()))
-                .addSink("sink-a", "out-a", Serdes.String(), Serdes.String())
-                .addSink("sink-b", "out-b", Serdes.String(), Serdes.String())
-                .withPartitioner(recorder)
-                .topicAdmin(ADMIN)
-                .build();
+        CausalStreamsBuilder builder = new CausalStreamsBuilder();
+        builder.stream("t1", Serdes.String(), Serdes.String())
+                .process(brancher)
+                .to("sink-a", "out-a", Serdes.String(), Serdes.String())
+                .to("sink-b", "out-b", Serdes.String(), Serdes.String())
+                .withPartitioner(recorder);
+        Topology topology = assemble(builder, ADMIN);
 
         try (TopologyTestDriver driver = new TopologyTestDriver(topology, config())) {
             TestInputTopic<String, String> t1 =
@@ -297,7 +294,7 @@ class CausalStreamsTopologyTest {
      * the one the delegate targeted. This is Kafka Streams' own broadcast behaviour for an unqualified
      * {@code context.forward(record)} (used for watermark emission, unlike the delegate's own
      * possibly-named business forward) — exercised here through a real multi-sink
-     * {@link CausalStreams} topology, not just a raw {@code context.forward} call.
+     * {@link CausalStreamsBuilder} topology, not just a raw {@code context.forward} call.
      *
      * Asserts: the record that IS forwarded (business output) reaches only its named sink, and the
      * record that is NOT forwarded triggers a watermark reaching BOTH sinks.
@@ -321,13 +318,12 @@ class CausalStreamsTopologyTest {
             }
         };
 
-        Topology topology = CausalStreams.builder(brancher)
-                .addBufferStore("parsley")
-                .addSource(CausalBuffer.of("t1", Serdes.String(), Serdes.String()))
-                .addSink("sink-a", "out-a", Serdes.String(), Serdes.String())
-                .addSink("sink-b", "out-b", Serdes.String(), Serdes.String())
-                .topicAdmin(ADMIN)
-                .build();
+        CausalStreamsBuilder builder = new CausalStreamsBuilder();
+        builder.stream("t1", Serdes.String(), Serdes.String())
+                .process(brancher)
+                .to("sink-a", "out-a", Serdes.String(), Serdes.String())
+                .to("sink-b", "out-b", Serdes.String(), Serdes.String());
+        Topology topology = assemble(builder, ADMIN);
 
         try (TopologyTestDriver driver = new TopologyTestDriver(topology, config())) {
             TestInputTopic<String, String> t1 =
@@ -359,7 +355,7 @@ class CausalStreamsTopologyTest {
     }
 
     /**
-     * A stage registered with a {@link CausalQuiesce} keeps that quiesce's readiness signal in sync
+     * A stage assembled with a {@link CausalQuiesce} keeps that quiesce's readiness signal in sync
      * with its actual buffer depth: a held record (unsatisfied dependency) must keep
      * {@code isSafeToClose} false even after quiesce is requested, and delivering that record via the
      * ordinary satisfying-message path (never a synthetic watermark) must flip it back to true.
@@ -369,14 +365,11 @@ class CausalStreamsTopologyTest {
     @Test
     void quiesceTracksTheBufferThroughTheOrdinaryDeliveryPath() {
         CausalQuiesce quiesce = CausalQuiesce.create();
-        Topology topology = CausalStreams.builder(upperCaser())
-                .addBufferStore("parsley")
-                .addSource(CausalBuffer.of("t1", Serdes.String(), Serdes.String()))
-                .addSource(CausalBuffer.of("t2", Serdes.String(), Serdes.String()))
-                .addSink("out-sink", "out", Serdes.String(), Serdes.String())
-                .withQuiesce(quiesce)
-                .topicAdmin(ADMIN)
-                .build();
+        CausalStreamsBuilder builder = new CausalStreamsBuilder();
+        builder.stream(List.of("t1", "t2"), Serdes.String(), Serdes.String())
+                .process(upperCaser())
+                .to("out-sink", "out", Serdes.String(), Serdes.String());
+        Topology topology = assemble(builder, ADMIN, config(), quiesce);
 
         try (TopologyTestDriver driver = new TopologyTestDriver(topology, config())) {
             TestInputTopic<String, String> t1 =
@@ -405,8 +398,8 @@ class CausalStreamsTopologyTest {
 
     /**
      * Under {@code parsley.topology.validation=strict}, a sink topic with a partition count that
-     * mismatches the stage's source fails startup fast — {@link CausalStreams} folds sink partition
-     * counts into the same co-partitioning check the decorator runs on its inputs.
+     * mismatches the stage's source fails startup fast — {@link CausalTopology#assemble} folds sink
+     * partition counts into the same co-partitioning check the decorator runs on its inputs.
      *
      * Asserts driver construction throws, wrapping an {@link IllegalStateException} naming the
      * mismatch and the strict mode.
@@ -415,13 +408,11 @@ class CausalStreamsTopologyTest {
     void mismatchedSinkPartitionCountFailsStartupUnderStrictValidation() throws IOException {
         ParsleyTopicAdmin mismatched = TestTopicAdmin.of(
                 Map.of("t1", T1_ID), Map.of("t1", 2, "out", 3));
-        Topology topology = CausalStreams.builder(upperCaser())
-                .addBufferStore("parsley")
-                .addSource(CausalBuffer.of("t1", Serdes.String(), Serdes.String()))
-                .addSink("out-sink", "out", Serdes.String(), Serdes.String())
-                .withConfig(ParsleyConfig.TOPOLOGY_VALIDATION, "strict")
-                .topicAdmin(mismatched)
-                .build();
+        CausalStreamsBuilder builder = new CausalStreamsBuilder();
+        builder.stream("t1", Serdes.String(), Serdes.String())
+                .process(upperCaser())
+                .to("out-sink", "out", Serdes.String(), Serdes.String());
+        Topology topology = assemble(builder, mismatched, strictValidation());
 
         StreamsException thrown = assertThrows(StreamsException.class,
                 () -> new TopologyTestDriver(topology, config(tempStateDir())),
@@ -442,12 +433,11 @@ class CausalStreamsTopologyTest {
     void mismatchedSinkPartitionCountWarnsButStartsUnderDefaultValidation() {
         ParsleyTopicAdmin mismatched = TestTopicAdmin.of(
                 Map.of("t1", T1_ID), Map.of("t1", 2, "out", 3));
-        Topology topology = CausalStreams.builder(upperCaser())
-                .addBufferStore("parsley")
-                .addSource(CausalBuffer.of("t1", Serdes.String(), Serdes.String()))
-                .addSink("out-sink", "out", Serdes.String(), Serdes.String())
-                .topicAdmin(mismatched)
-                .build();
+        CausalStreamsBuilder builder = new CausalStreamsBuilder();
+        builder.stream("t1", Serdes.String(), Serdes.String())
+                .process(upperCaser())
+                .to("out-sink", "out", Serdes.String(), Serdes.String());
+        Topology topology = assemble(builder, mismatched);
 
         try (TopologyTestDriver driver = new TopologyTestDriver(topology, config())) {
             driver.createInputTopic("t1", new StringSerializer(), new StringSerializer())
@@ -468,13 +458,11 @@ class CausalStreamsTopologyTest {
     @Test
     void unresolvableSinkPartitionCountIsSkippedEvenUnderStrictValidation() {
         ParsleyTopicAdmin admin = FlakySinkAdmin.withUnresolvable(Map.of("t1", T1_ID), Set.of("out"));
-        Topology topology = CausalStreams.builder(upperCaser())
-                .addBufferStore("parsley")
-                .addSource(CausalBuffer.of("t1", Serdes.String(), Serdes.String()))
-                .addSink("out-sink", "out", Serdes.String(), Serdes.String())
-                .withConfig(ParsleyConfig.TOPOLOGY_VALIDATION, "strict")
-                .topicAdmin(admin)
-                .build();
+        CausalStreamsBuilder builder = new CausalStreamsBuilder();
+        builder.stream("t1", Serdes.String(), Serdes.String())
+                .process(upperCaser())
+                .to("out-sink", "out", Serdes.String(), Serdes.String());
+        Topology topology = assemble(builder, admin, strictValidation());
 
         try (TopologyTestDriver driver = new TopologyTestDriver(topology, config())) {
             driver.createInputTopic("t1", new StringSerializer(), new StringSerializer())
@@ -497,13 +485,11 @@ class CausalStreamsTopologyTest {
     void compactedSinkCleanupPolicyFailsStartupUnderStrictValidation() throws IOException {
         ParsleyTopicAdmin compacted = TestTopicAdmin.of(
                 Map.of("t1", T1_ID), Map.of(), Map.of("out", "compact"));
-        Topology topology = CausalStreams.builder(upperCaser())
-                .addBufferStore("parsley")
-                .addSource(CausalBuffer.of("t1", Serdes.String(), Serdes.String()))
-                .addSink("out-sink", "out", Serdes.String(), Serdes.String())
-                .withConfig(ParsleyConfig.TOPOLOGY_VALIDATION, "strict")
-                .topicAdmin(compacted)
-                .build();
+        CausalStreamsBuilder builder = new CausalStreamsBuilder();
+        builder.stream("t1", Serdes.String(), Serdes.String())
+                .process(upperCaser())
+                .to("out-sink", "out", Serdes.String(), Serdes.String());
+        Topology topology = assemble(builder, compacted, strictValidation());
 
         StreamsException thrown = assertThrows(StreamsException.class,
                 () -> new TopologyTestDriver(topology, config(tempStateDir())),
@@ -525,13 +511,11 @@ class CausalStreamsTopologyTest {
     void compactAndDeleteSinkCleanupPolicyFailsStartupUnderStrictValidation() throws IOException {
         ParsleyTopicAdmin compacted = TestTopicAdmin.of(
                 Map.of("t1", T1_ID), Map.of(), Map.of("out", "compact,delete"));
-        Topology topology = CausalStreams.builder(upperCaser())
-                .addBufferStore("parsley")
-                .addSource(CausalBuffer.of("t1", Serdes.String(), Serdes.String()))
-                .addSink("out-sink", "out", Serdes.String(), Serdes.String())
-                .withConfig(ParsleyConfig.TOPOLOGY_VALIDATION, "strict")
-                .topicAdmin(compacted)
-                .build();
+        CausalStreamsBuilder builder = new CausalStreamsBuilder();
+        builder.stream("t1", Serdes.String(), Serdes.String())
+                .process(upperCaser())
+                .to("out-sink", "out", Serdes.String(), Serdes.String());
+        Topology topology = assemble(builder, compacted, strictValidation());
 
         StreamsException thrown = assertThrows(StreamsException.class,
                 () -> new TopologyTestDriver(topology, config(tempStateDir())),
@@ -550,12 +534,11 @@ class CausalStreamsTopologyTest {
     void compactedSinkCleanupPolicyWarnsButStartsUnderDefaultValidation() {
         ParsleyTopicAdmin compacted = TestTopicAdmin.of(
                 Map.of("t1", T1_ID), Map.of(), Map.of("out", "compact"));
-        Topology topology = CausalStreams.builder(upperCaser())
-                .addBufferStore("parsley")
-                .addSource(CausalBuffer.of("t1", Serdes.String(), Serdes.String()))
-                .addSink("out-sink", "out", Serdes.String(), Serdes.String())
-                .topicAdmin(compacted)
-                .build();
+        CausalStreamsBuilder builder = new CausalStreamsBuilder();
+        builder.stream("t1", Serdes.String(), Serdes.String())
+                .process(upperCaser())
+                .to("out-sink", "out", Serdes.String(), Serdes.String());
+        Topology topology = assemble(builder, compacted);
 
         try (TopologyTestDriver driver = new TopologyTestDriver(topology, config())) {
             driver.createInputTopic("t1", new StringSerializer(), new StringSerializer())
@@ -573,13 +556,11 @@ class CausalStreamsTopologyTest {
      */
     @Test
     void deleteSinkCleanupPolicyPassesStrictValidation() {
-        Topology topology = CausalStreams.builder(upperCaser())
-                .addBufferStore("parsley")
-                .addSource(CausalBuffer.of("t1", Serdes.String(), Serdes.String()))
-                .addSink("out-sink", "out", Serdes.String(), Serdes.String())
-                .withConfig(ParsleyConfig.TOPOLOGY_VALIDATION, "strict")
-                .topicAdmin(ADMIN)
-                .build();
+        CausalStreamsBuilder builder = new CausalStreamsBuilder();
+        builder.stream("t1", Serdes.String(), Serdes.String())
+                .process(upperCaser())
+                .to("out-sink", "out", Serdes.String(), Serdes.String());
+        Topology topology = assemble(builder, ADMIN, strictValidation());
 
         try (TopologyTestDriver driver = new TopologyTestDriver(topology, config())) {
             driver.createInputTopic("t1", new StringSerializer(), new StringSerializer())
@@ -602,14 +583,12 @@ class CausalStreamsTopologyTest {
     void unresolvableSinkDoesNotMaskAPartitionMismatchOnAnotherSink() throws IOException {
         ParsleyTopicAdmin admin = new FlakySinkAdmin(
                 Map.of("t1", T1_ID), Map.of("t1", 2, "out-a", 3), Map.of(), Set.of("out-b"));
-        Topology topology = CausalStreams.builder(upperCaser())
-                .addBufferStore("parsley")
-                .addSource(CausalBuffer.of("t1", Serdes.String(), Serdes.String()))
-                .addSink("sink-a", "out-a", Serdes.String(), Serdes.String())
-                .addSink("sink-b", "out-b", Serdes.String(), Serdes.String())
-                .withConfig(ParsleyConfig.TOPOLOGY_VALIDATION, "strict")
-                .topicAdmin(admin)
-                .build();
+        CausalStreamsBuilder builder = new CausalStreamsBuilder();
+        builder.stream("t1", Serdes.String(), Serdes.String())
+                .process(upperCaser())
+                .to("sink-a", "out-a", Serdes.String(), Serdes.String())
+                .to("sink-b", "out-b", Serdes.String(), Serdes.String());
+        Topology topology = assemble(builder, admin, strictValidation());
 
         StreamsException thrown = assertThrows(StreamsException.class,
                 () -> new TopologyTestDriver(topology, config(tempStateDir())),
@@ -630,14 +609,12 @@ class CausalStreamsTopologyTest {
     void unresolvableSinkDoesNotMaskACompactPolicyOnAnotherSink() throws IOException {
         ParsleyTopicAdmin admin = new FlakySinkAdmin(
                 Map.of("t1", T1_ID), Map.of(), Map.of("out-a", "compact"), Set.of("out-b"));
-        Topology topology = CausalStreams.builder(upperCaser())
-                .addBufferStore("parsley")
-                .addSource(CausalBuffer.of("t1", Serdes.String(), Serdes.String()))
-                .addSink("sink-a", "out-a", Serdes.String(), Serdes.String())
-                .addSink("sink-b", "out-b", Serdes.String(), Serdes.String())
-                .withConfig(ParsleyConfig.TOPOLOGY_VALIDATION, "strict")
-                .topicAdmin(admin)
-                .build();
+        CausalStreamsBuilder builder = new CausalStreamsBuilder();
+        builder.stream("t1", Serdes.String(), Serdes.String())
+                .process(upperCaser())
+                .to("sink-a", "out-a", Serdes.String(), Serdes.String())
+                .to("sink-b", "out-b", Serdes.String(), Serdes.String());
+        Topology topology = assemble(builder, admin, strictValidation());
 
         StreamsException thrown = assertThrows(StreamsException.class,
                 () -> new TopologyTestDriver(topology, config(tempStateDir())),
@@ -655,13 +632,13 @@ class CausalStreamsTopologyTest {
     @Test
     void validationOffNeverCallsTheSinkAdminAtAll() {
         CountingSinkAdmin admin = new CountingSinkAdmin(Map.of("t1", T1_ID));
-        Topology topology = CausalStreams.builder(upperCaser())
-                .addBufferStore("parsley")
-                .addSource(CausalBuffer.of("t1", Serdes.String(), Serdes.String()))
-                .addSink("out-sink", "out", Serdes.String(), Serdes.String())
-                .withConfig(ParsleyConfig.TOPOLOGY_VALIDATION, "off")
-                .topicAdmin(admin)
-                .build();
+        Properties props = config();
+        props.put(ParsleyConfig.TOPOLOGY_VALIDATION, "off");
+        CausalStreamsBuilder builder = new CausalStreamsBuilder();
+        builder.stream("t1", Serdes.String(), Serdes.String())
+                .process(upperCaser())
+                .to("out-sink", "out", Serdes.String(), Serdes.String());
+        Topology topology = assemble(builder, admin, props);
 
         try (TopologyTestDriver driver = new TopologyTestDriver(topology, config())) {
             driver.createInputTopic("t1", new StringSerializer(), new StringSerializer())

@@ -16,7 +16,6 @@ import org.apache.kafka.common.serialization.StringDeserializer;
 import org.apache.kafka.common.serialization.StringSerializer;
 import org.apache.kafka.streams.KafkaStreams;
 import org.apache.kafka.streams.StreamsConfig;
-import org.apache.kafka.streams.Topology;
 import org.apache.kafka.streams.processor.api.Processor;
 import org.apache.kafka.streams.processor.api.ProcessorContext;
 import org.apache.kafka.streams.processor.api.ProcessorSupplier;
@@ -75,10 +74,9 @@ class CausalCoordinationIT {
         String appId = "coordination-it-" + UUID.randomUUID();
         Path stateDir = Files.createTempDirectory("parsley-coordination");
 
-        CausalCoordination coordination = CausalCoordination.create(EPOCH_EVENTS);
-        try (KafkaStreams streams = new KafkaStreams(topology(coordination), streamsConfig(bootstrap, appId, stateDir))) {
-            streams.start();
-            await().atMost(Duration.ofSeconds(30)).until(() -> streams.state() == KafkaStreams.State.RUNNING);
+        try (CausalStreams causalStreams = new CausalStreams(topology(), streamsConfig(bootstrap, appId, stateDir))) {
+            causalStreams.start();
+            await().atMost(Duration.ofSeconds(30)).until(() -> causalStreams.state() == KafkaStreams.State.RUNNING);
 
             try (KafkaProducer<String, String> producer = new KafkaProducer<>(producerConfig(bootstrap))) {
                 // Deliver some records so the node's completeness (hence the eventual floor) is non-empty.
@@ -90,8 +88,8 @@ class CausalCoordinationIT {
             // The node joins on init; wait until it is on the log, then promote it to running (epoch 1),
             // then evolve to epoch 2 — now running and with delivered records, so the floor is non-empty.
             awaitEvent(bootstrap, e -> e instanceof EpochEvent.JoinRequested);
-            requestUntilCommitted(coordination, bootstrap, 1L);
-            requestUntilCommitted(coordination, bootstrap, 2L);
+            requestUntilCommitted(causalStreams, bootstrap, 1L);
+            requestUntilCommitted(causalStreams, bootstrap, 2L);
 
             EpochEvent.EpochCommitted epochTwo = awaitEvent(bootstrap,
                     e -> e instanceof EpochEvent.EpochCommitted c && c.epochId() == 2L);
@@ -100,8 +98,6 @@ class CausalCoordinationIT {
 
             assertTrue(awaitBoundaryMarkerAtSink(bootstrap),
                     "the source-layer node injects the epoch boundary marker to its sink");
-        } finally {
-            coordination.close();
         }
     }
 
@@ -110,14 +106,14 @@ class CausalCoordinationIT {
      * coalesce into an already-open round; retrying is harmless (requests coalesce) and covers the race
      * between issuing the request and the running node publishing.
      */
-    private static void requestUntilCommitted(CausalCoordination coordination, String bootstrap, long targetEpoch) {
+    private static void requestUntilCommitted(CausalStreams causalStreams, String bootstrap, long targetEpoch) {
         await().atMost(Duration.ofSeconds(60)).until(() -> {
             if (readEpochEvents(bootstrap).stream()
                     .anyMatch(e -> e instanceof EpochEvent.EpochCommitted c && c.epochId() >= targetEpoch)) {
                 return true;
             }
             try {
-                coordination.requestEpochTransition();
+                causalStreams.requestEpochTransition();
             } catch (IllegalStateException notReadyYet) {
                 // No local member has joined/initialised yet; retry on the next tick.
             }
@@ -186,13 +182,12 @@ class CausalCoordinationIT {
         }
     }
 
-    private static Topology topology(CausalCoordination coordination) {
-        return CausalStreams.builder(upperCaser())
-                .addBufferStore("parsley")
-                .addSource(CausalBuffer.of(IN, Serdes.String(), Serdes.String()))
-                .addSink("out-sink", OUT, Serdes.String(), Serdes.String())
-                .withCoordination(coordination)
-                .build();
+    private static CausalTopology topology() {
+        CausalStreamsBuilder builder = new CausalStreamsBuilder();
+        builder.stream(IN, Serdes.String(), Serdes.String())
+                .process(upperCaser())
+                .to("out-sink", OUT, Serdes.String(), Serdes.String());
+        return builder.build();
     }
 
     private static ProcessorSupplier<String, String, String, String> upperCaser() {
@@ -224,6 +219,7 @@ class CausalCoordinationIT {
         props.put(StreamsConfig.DEFAULT_VALUE_SERDE_CLASS_CONFIG, Serdes.String().getClass().getName());
         props.put(StreamsConfig.COMMIT_INTERVAL_MS_CONFIG, 200);
         props.put(StreamsConfig.STATE_DIR_CONFIG, stateDir.toAbsolutePath().toString());
+        props.put(ParsleyConfig.COORDINATION_EPOCH_EVENTS_TOPIC, EPOCH_EVENTS);
         return props;
     }
 

@@ -7,31 +7,15 @@ import java.util.Map;
 import java.util.Objects;
 
 /**
- * The public handle that turns on topology-epoch coordination for a causal application. Create one,
- * register it with every {@link CausalProcessors} / {@link CausalStreams} builder whose stages should
- * participate (via {@code withCoordination(...)}), and close it from your shutdown path — the same shape
- * as {@link CausalQuiesce}:
+ * Turns on topology-epoch coordination for a {@link CausalStreams} runtime. {@code CausalStreams} builds
+ * one {@code CausalCoordination} internally — from {@code parsley.coordination.epoch-events-topic} in the
+ * {@code props} passed to its constructor — and wires it into every stage; there is no public handle. To
+ * evolve a running topology through an epoch boundary, call {@code CausalStreams#requestEpochTransition()};
+ * {@code CausalStreams#close()} runs the graceful decommission ({@link #leave()}) before stopping.
  *
- * <pre>{@code
- * CausalCoordination coordination = CausalCoordination.create("parsley-epoch-events");
- *
- * Topology topology = CausalStreams.builder(userSupplier)
- *         .addBufferStore("parsley")
- *         .addSource(CausalBuffer.of("prices", Serdes.String(), priceSerde))
- *         .addSink("enriched", "enriched-output", Serdes.String(), enrichedSerde)
- *         .withCoordination(coordination)   // "prices" is derived as an external source; "enriched-output" a sink
- *         .build();
- *
- * KafkaStreams streams = new KafkaStreams(topology, props);
- * streams.start();
- * // ... to evolve the running topology through an epoch boundary:
- * coordination.requestEpochTransition();
- * // ... in shutdown, after streams.close():
- * coordination.close();
- * }</pre>
- *
- * <p>Without a {@code CausalCoordination}, a topology runs in <strong>epoch 0</strong> exactly as before:
- * no epoch-events log, no coordination thread, every coordination path inert.
+ * <p>Without {@code parsley.coordination.epoch-events-topic} configured, a topology runs in
+ * <strong>epoch 0</strong> exactly as before: no epoch-events log, no coordination thread, every
+ * coordination path inert.
  *
  * <p><strong>What it owns.</strong> One {@link ParsleyEpochRuntime} per application instance — the
  * deterministic fold over the shared {@code epochEventsTopic} log plus the round-owner runtime. It is
@@ -42,7 +26,7 @@ import java.util.Objects;
  * <p><strong>Thread-safety:</strong> safe to share across every task's Kafka Streams thread and to call
  * {@link #requestEpochTransition()} / {@link #close()} from an unrelated thread.
  */
-public final class CausalCoordination {
+final class CausalCoordination {
 
     private static final Duration COORDINATION_POLL_INTERVAL = Duration.ofMillis(20);
 
@@ -77,7 +61,7 @@ public final class CausalCoordination {
      * @param epochEventsTopic the single-partition epoch-events log topic name
      * @return a new coordination handle
      */
-    public static CausalCoordination create(String epochEventsTopic) {
+    static CausalCoordination create(String epochEventsTopic) {
         return create(epochEventsTopic, CausalMembershipStrategy.blockUntilDrained());
     }
 
@@ -91,7 +75,7 @@ public final class CausalCoordination {
      * @param membershipStrategy how a blocked round treats members that have not published
      * @return a new coordination handle
      */
-    public static CausalCoordination create(String epochEventsTopic, CausalMembershipStrategy membershipStrategy) {
+    static CausalCoordination create(String epochEventsTopic, CausalMembershipStrategy membershipStrategy) {
         Objects.requireNonNull(epochEventsTopic, "epochEventsTopic must not be null");
         Objects.requireNonNull(membershipStrategy, "membershipStrategy must not be null");
         return new CausalCoordination(epochEventsTopic, membershipStrategy, null);
@@ -183,7 +167,7 @@ public final class CausalCoordination {
      * @throws IllegalStateException if no task has initialised coordination yet, or no local member has
      *                               joined (so there is nothing to attribute the request to)
      */
-    public void requestEpochTransition() {
+    void requestEpochTransition() {
         ParsleyEpochRuntime runtime = currentRuntime();
         if (runtime == null) {
             throw new IllegalStateException(
@@ -215,7 +199,7 @@ public final class CausalCoordination {
      * the caller must have stopped feeding this node new input before decommissioning — {@code leave()}
      * drains the in-flight buffer, not records that arrive after it returns.
      */
-    public void leave() {
+    void leave() {
         ParsleyEpochRuntime runtime = currentRuntime();
         if (runtime == null || runtime.anyLocalMember() == null) {
             return;
@@ -243,7 +227,7 @@ public final class CausalCoordination {
      * Stops the coordination runtime (its poll thread and Kafka clients). Idempotent; call it from your
      * shutdown path after {@code KafkaStreams#close}. A no-op if no task ever initialised coordination.
      */
-    public void close() {
+    void close() {
         ParsleyEpochRuntime runtime = currentRuntime();
         if (runtime != null) {
             runtime.close();

@@ -1,12 +1,20 @@
 /**
- * Parsley: causal delivery order for Kafka Streams processors. A single package whose public surface is interfaces and
- * records; all implementations are package-private and obtained through factory methods.
+ * Parsley: causal delivery order for Kafka Streams processors. A single package whose public surface is
+ * a concise, topology-level API modelled on Kafka Streams; the low-level processor decorator that powers
+ * it is package-private internal machinery.
  *
- * <h2>Entry point (interface with a static factory)</h2>
+ * <h2>Entry point</h2>
+ * Three roles mirroring Kafka Streams — {@code StreamsBuilder} / {@code Topology} / {@code KafkaStreams}:
  * <ul>
- *   <li>{@link io.github.tobyjamesclements.parsley.CausalProcessorSupplier} &mdash; {@code CausalProcessors.builder(...).build()} wraps your own
- *       Kafka Streams {@code Processor} so its state access and {@code forward}s run behind the causal
- *       guarantee; drop it into {@code stream(...).process(...)}</li>
+ *   <li>{@link io.github.tobyjamesclements.parsley.CausalStreamsBuilder} &mdash; declare one or more causal
+ *       stages: {@code stream(...)} one or more source topics, {@code .process(supplier)} to bind them to a
+ *       causal-decorated processor, {@code .to(...)} to declare its sink(s); {@code .build()} produces a
+ *       {@link io.github.tobyjamesclements.parsley.CausalTopology}</li>
+ *   <li>{@link io.github.tobyjamesclements.parsley.CausalTopology} &mdash; the built causal topology, ready
+ *       for {@code new CausalStreams(topology, props)}</li>
+ *   <li>{@link io.github.tobyjamesclements.parsley.CausalStreams} &mdash; the runtime: wraps the underlying
+ *       {@code KafkaStreams} instance, and owns graceful causal drain on {@code close()} and (when
+ *       {@code parsley.coordination.epoch-events-topic} is configured) topology-epoch coordination</li>
  * </ul>
  *
  * <h2>Edge operations</h2>
@@ -24,9 +32,6 @@
  *
  * <h2>Key value types</h2>
  * <ul>
- *   <li>{@link io.github.tobyjamesclements.parsley.CausalBuffer} &mdash; registers one causal source on the processor builder: a
- *       topic name paired with the serdes the buffer round-trips held records with (the topic's stable
- *       UUID is resolved from the broker automatically)</li>
  *   <li>{@link io.github.tobyjamesclements.parsley.CausalDependencies} &mdash; the causal requirements stamped on a record
  *       (what the consumer must have observed before the record may be delivered). Its serialised size
  *       grows with the number of relevant topic-partitions and counts against Kafka's

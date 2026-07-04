@@ -66,5 +66,5 @@ import org.apache.kafka.streams.processor.api.ProcessorSupplier;
  * record's partition. Held records are persisted to a changelog-backed buffer store (serialised with
  * the serdes you supply, resolved per source topic) so they survive a restart.
  */
-public interface CausalProcessorSupplier<KIn, VIn, KOut, VOut> extends ProcessorSupplier<KIn, VIn, KOut, VOut> {
+interface CausalProcessorSupplier<KIn, VIn, KOut, VOut> extends ProcessorSupplier<KIn, VIn, KOut, VOut> {
 }

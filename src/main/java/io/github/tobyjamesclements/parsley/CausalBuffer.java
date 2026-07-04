@@ -23,9 +23,9 @@ import java.util.Objects;
  * @param <K>        the key type
  * @param <V>        the value type
  */
-public record CausalBuffer<K, V>(String topic, Serde<K> keySerde, Serde<V> valueSerde) {
+record CausalBuffer<K, V>(String topic, Serde<K> keySerde, Serde<V> valueSerde) {
 
-    public CausalBuffer {
+    CausalBuffer {
         Objects.requireNonNull(topic, "topic must not be null");
         Objects.requireNonNull(keySerde, "keySerde must not be null");
         Objects.requireNonNull(valueSerde, "valueSerde must not be null");
@@ -41,7 +41,7 @@ public record CausalBuffer<K, V>(String topic, Serde<K> keySerde, Serde<V> value
      * @param <V>        the value type
      * @return a new {@code CausalBuffer}
      */
-    public static <K, V> CausalBuffer<K, V> of(String topic, Serde<K> keySerde, Serde<V> valueSerde) {
+    static <K, V> CausalBuffer<K, V> of(String topic, Serde<K> keySerde, Serde<V> valueSerde) {
         return new CausalBuffer<>(topic, keySerde, valueSerde);
     }
 }

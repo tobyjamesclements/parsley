@@ -28,8 +28,9 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
  * End-to-end proof that an already-running causal topology evolves through an epoch transition driven by
- * the public {@link CausalCoordination} API — over a real {@link TopologyTestDriver} stage (real serdes,
- * real forward path), with the coordination runtime driven synchronously over the in-memory transport.
+ * {@link CausalCoordination} (the mechanism {@link CausalStreams#requestEpochTransition()} delegates to)
+ * — over a real {@link TopologyTestDriver} stage (real serdes, real forward path), with the coordination
+ * runtime driven synchronously over the in-memory transport.
  */
 class CausalCoordinationTopologyTest {
 
@@ -37,14 +38,14 @@ class CausalCoordinationTopologyTest {
     private static final ParsleyTopicAdmin ADMIN = TestTopicAdmin.of(Map.of("t1", T1_ID));
 
     /**
-     * A running single-stage topology (t1 is an external source) is evolved twice through the public
+     * A running single-stage topology (t1 is an external source) is evolved twice through
      * {@code requestEpochTransition()}: the first cut promotes the node to a running member (empty floor),
      * the second — with the node now running and having delivered records — commits a non-empty floor
      * merged from its own completeness, which the source-layer node then injects as a boundary marker to
      * its sink. Asserts an epoch-2 boundary carrying a non-empty floor reaches the sink.
      */
     @Test
-    void runningTopologyEvolvesThroughAnEpochTransitionViaThePublicApi() {
+    void runningTopologyEvolvesThroughAnEpochTransition() {
         InMemoryEpochTransport.SharedLog eventLog = new InMemoryEpochTransport.SharedLog();
         ParsleyEpochRuntime runtime = new ParsleyEpochRuntime(new InMemoryEpochTransport(eventLog));
         CausalCoordination coordination = CausalCoordination.forRuntime(runtime);
@@ -53,13 +54,12 @@ class CausalCoordinationTopologyTest {
         // round is opened and init proceeds once bootstrapped.
         runtime.runOnce();
 
-        Topology topology = CausalStreams.builder(upperCaser())
-                .addBufferStore("parsley")
-                .addSource(CausalBuffer.of("t1", Serdes.String(), Serdes.String()))
-                .addSink("out-sink", "out", Serdes.String(), Serdes.String())
-                .withCoordination(coordination)
-                .topicAdmin(ADMIN)
-                .build();
+        CausalStreamsBuilder builder = new CausalStreamsBuilder();
+        builder.stream("t1", Serdes.String(), Serdes.String())
+                .process(upperCaser())
+                .to("out-sink", "out", Serdes.String(), Serdes.String());
+        Topology topology = builder.topicAdmin(ADMIN).build()
+                .assemble(config(), CausalQuiesce.create(), coordination);
 
         try (TopologyTestDriver driver = new TopologyTestDriver(topology, config())) {
             TestInputTopic<String, String> t1 =

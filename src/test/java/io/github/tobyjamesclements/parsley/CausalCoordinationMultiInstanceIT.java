@@ -14,7 +14,6 @@ import org.apache.kafka.common.serialization.Serdes;
 import org.apache.kafka.common.serialization.StringSerializer;
 import org.apache.kafka.streams.KafkaStreams;
 import org.apache.kafka.streams.StreamsConfig;
-import org.apache.kafka.streams.Topology;
 import org.apache.kafka.streams.processor.api.Processor;
 import org.apache.kafka.streams.processor.api.ProcessorContext;
 import org.apache.kafka.streams.processor.api.ProcessorSupplier;
@@ -77,13 +76,11 @@ class CausalCoordinationMultiInstanceIT {
         createTopics(bootstrap, 1, EPOCH_EVENTS);
         String appId = "multi-it-" + UUID.randomUUID();
 
-        CausalCoordination coordination1 = CausalCoordination.create(EPOCH_EVENTS);
-        CausalCoordination coordination2 = CausalCoordination.create(EPOCH_EVENTS);
         Path stateDir1 = Files.createTempDirectory("parsley-multi-1");
         Path stateDir2 = Files.createTempDirectory("parsley-multi-2");
 
-        try (KafkaStreams instance1 = new KafkaStreams(topology(coordination1), streamsConfig(bootstrap, appId, stateDir1));
-             KafkaStreams instance2 = new KafkaStreams(topology(coordination2), streamsConfig(bootstrap, appId, stateDir2))) {
+        try (CausalStreams instance1 = new CausalStreams(topology(), streamsConfig(bootstrap, appId, stateDir1));
+             CausalStreams instance2 = new CausalStreams(topology(), streamsConfig(bootstrap, appId, stateDir2))) {
             instance1.start();
             instance2.start();
             await().atMost(Duration.ofSeconds(60)).until(() ->
@@ -96,8 +93,8 @@ class CausalCoordinationMultiInstanceIT {
             }
 
             // Promote both tasks to running (epoch 1), then evolve to epoch 2 with a real floor.
-            requestUntilCommitted(coordination1, coordination2, bootstrap, 1L);
-            requestUntilCommitted(coordination1, coordination2, bootstrap, 2L);
+            requestUntilCommitted(instance1, instance2, bootstrap, 1L);
+            requestUntilCommitted(instance1, instance2, bootstrap, 2L);
 
             List<EpochEvent> log = awaitLogWithCommit(bootstrap, 2L);
             long distinctPublishers = log.stream()
@@ -116,27 +113,24 @@ class CausalCoordinationMultiInstanceIT {
             assertTrue(epochTwo.lowerBounds().offsetFor(topicId(bootstrap), 0) >= 0
                             && epochTwo.lowerBounds().offsetFor(topicId(bootstrap), 1) >= 0,
                     "epoch 2's floor must bound both partitions — the merge-min of the two instances' frontiers");
-        } finally {
-            coordination1.close();
-            coordination2.close();
         }
     }
 
-    private static void requestUntilCommitted(CausalCoordination c1, CausalCoordination c2,
+    private static void requestUntilCommitted(CausalStreams instance1, CausalStreams instance2,
                                               String bootstrap, long targetEpoch) {
         await().atMost(Duration.ofSeconds(90)).until(() -> {
             if (highestCommittedEpoch(bootstrap) >= targetEpoch) {
                 return true;
             }
-            requestQuietly(c1);
-            requestQuietly(c2);
+            requestQuietly(instance1);
+            requestQuietly(instance2);
             return false;
         });
     }
 
-    private static void requestQuietly(CausalCoordination coordination) {
+    private static void requestQuietly(CausalStreams causalStreams) {
         try {
-            coordination.requestEpochTransition();
+            causalStreams.requestEpochTransition();
         } catch (IllegalStateException notReadyYet) {
             // No local member has joined/initialised on this instance yet; retry on the next tick.
         }
@@ -188,13 +182,12 @@ class CausalCoordinationMultiInstanceIT {
         }
     }
 
-    private static Topology topology(CausalCoordination coordination) {
-        return CausalStreams.builder(upperCaser())
-                .addBufferStore("parsley")
-                .addSource(CausalBuffer.of(IN, Serdes.String(), Serdes.String()))
-                .addSink("out-sink", OUT, Serdes.String(), Serdes.String())
-                .withCoordination(coordination)
-                .build();
+    private static CausalTopology topology() {
+        CausalStreamsBuilder builder = new CausalStreamsBuilder();
+        builder.stream(IN, Serdes.String(), Serdes.String())
+                .process(upperCaser())
+                .to("out-sink", OUT, Serdes.String(), Serdes.String());
+        return builder.build();
     }
 
     private static ProcessorSupplier<String, String, String, String> upperCaser() {
@@ -220,6 +213,7 @@ class CausalCoordinationMultiInstanceIT {
         props.put(StreamsConfig.DEFAULT_VALUE_SERDE_CLASS_CONFIG, Serdes.String().getClass().getName());
         props.put(StreamsConfig.COMMIT_INTERVAL_MS_CONFIG, 200);
         props.put(StreamsConfig.STATE_DIR_CONFIG, stateDir.toAbsolutePath().toString());
+        props.put(ParsleyConfig.COORDINATION_EPOCH_EVENTS_TOPIC, EPOCH_EVENTS);
         return props;
     }
 

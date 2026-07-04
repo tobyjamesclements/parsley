@@ -7,6 +7,32 @@ All notable changes to this project are documented in this file. The format is b
 ## [Unreleased]
 
 ### Changed
+- **Breaking: concise, topology-level public API — `CausalStreamsBuilder` / `CausalTopology` /
+  `CausalStreams`.** The public surface collapses to three roles mirroring Kafka Streams'
+  `StreamsBuilder`/`Topology`/`KafkaStreams`. `CausalStreamsBuilder` declares one or more causal stages
+  (`stream(topic[s][, keySerde, valueSerde])` — deferring to the runtime's default serdes when omitted —
+  `.process(supplier)`, `.to(topic[, keySerde, valueSerde])`, `.withPartitioner`/`.withAudit`); combine
+  streams declared with different serdes with `CausalStream#merge`. `.build()` produces a `CausalTopology`
+  — a specification, not yet a real Kafka Streams `Topology`. The `CausalStreams` name is repurposed from
+  today's topology-owning builder (removed) to the **runtime**: `new CausalStreams(topology, props)` /
+  `.start()` / `.close()`, mirroring `new KafkaStreams(topology, props)`. Unlike the Kafka Streams DSL,
+  sources/sinks take plain `Serde`s rather than `Consumed`/`Produced` — neither exposes its serdes for
+  reading back, and Parsley's causal buffer needs the real `Serde` to round-trip a held record.
+
+  `CausalQuiesce` and `CausalCoordination` are no longer public, user-constructed handles — `CausalStreams`
+  owns one of each internally. Graceful causal drain is now unconditional and automatic: `close()` always
+  waits for every task's buffer to drain, then (if `parsley.coordination.epoch-events-topic` is configured)
+  permanently decommissions this instance's members before stopping the underlying `KafkaStreams` — so
+  there is no restart/leave distinction for a caller to get wrong (a restart now always rejoins as a fresh
+  member and waits to be re-admitted; slower, never unsafe). Evolve a running, coordinated topology through
+  an epoch boundary with `CausalStreams#requestEpochTransition()`. `application.id` supplies the epoch
+  member identity, as before.
+
+  `CausalProcessors`, `CausalProcessorSupplier`, and `CausalBuffer` are demoted to package-private — they
+  survive as `CausalStreamsBuilder`'s internal engine wiring. All prior `CausalStreams`/`CausalProcessors`
+  capability carries over: multiple input topics with per-topic serdes, multiple named sinks, a uniform
+  key-only sink partitioner, `CausalAudit`, and the startup co-partition + sink `cleanup.policy` validation
+  (`parsley.topology.validation`).
 - **Breaking: fail-closed causal delivery; buffer limits, eviction, and failure policies removed.** Causal
   delivery is now strictly fail-closed — there is no configuration that trades causal order for liveness.
   `CausalBufferLimit` (and `ofSize`/`ofDuration`/`first`/`unbounded`) is removed along with all buffer

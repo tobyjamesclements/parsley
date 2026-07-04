@@ -1,319 +1,141 @@
 package io.github.tobyjamesclements.parsley;
 
-import org.apache.kafka.common.serialization.Serde;
+import org.apache.kafka.streams.KafkaStreams;
 import org.apache.kafka.streams.Topology;
-import org.apache.kafka.streams.processor.StreamPartitioner;
-import org.apache.kafka.streams.processor.api.ProcessorSupplier;
 import org.jspecify.annotations.Nullable;
 
-import java.util.ArrayList;
-import java.util.LinkedHashMap;
-import java.util.LinkedHashSet;
-import java.util.List;
-import java.util.Map;
+import java.time.Duration;
 import java.util.Properties;
-import java.util.Set;
 
 /**
- * Builds a {@link Topology} around a single causal stage: one or more causal source topics feeding
- * a {@link CausalProcessors}-decorated processor, forwarding to one or more sink topics.
- *
- * <p>This is the high-level, topology-owning entry point — it plays the same role as
- * {@link org.apache.kafka.streams.StreamsBuilder}, but for a causal stage. It composes the
- * low-level {@link CausalProcessors} decorator internally rather than reimplementing the causal
- * engine; use {@link CausalProcessors} directly when you already own a multi-stage topology and
- * only need the decorator for one {@code process(...)} call. Reach for {@code CausalStreams}
- * instead whenever a stage needs a guarantee the decorator alone cannot provide, because they
- * require owning the sinks: a uniform sink partitioner ({@link Builder#withPartitioner}),
- * co-partitioning validation that also covers sink topics (not just inputs), and a sink
- * {@code cleanup.policy} check — both described on {@code parsley.topology.validation}.
+ * The causal application runtime: wraps the Kafka Streams instance a {@link CausalTopology} runs as, and
+ * owns the causal machinery a plain {@code KafkaStreams} doesn't know about — graceful causal drain on
+ * shutdown, and (when configured) topology-epoch coordination. Plays the same role
+ * {@link KafkaStreams} plays for a plain Kafka Streams application:
  *
  * <pre>{@code
- * CausalQuiesce quiesce = CausalQuiesce.create();
+ * CausalStreamsBuilder builder = new CausalStreamsBuilder();
+ * builder.stream("orders", Serdes.String(), orderSerde)
+ *        .process(new EnrichmentProcessorSupplier())
+ *        .to("orders.enriched", Serdes.String(), enrichedSerde);
+ * CausalTopology topology = builder.build();
  *
- * Topology topology = CausalStreams.builder(userSupplier)
- *         .addBufferStore("parsley")
- *         .addSource(CausalBuffer.of("prices", Serdes.String(), priceSerde))
- *         .addSource(CausalBuffer.of("orders", Serdes.String(), orderSerde))
- *         .addSink("enriched-sink", "enriched-output", Serdes.String(), enrichedSerde)
- *         .withPartitioner(tenantPrefixPartitioner)
- *         .withQuiesce(quiesce)
- *         .build();
+ * CausalStreams causalStreams = new CausalStreams(topology, props);
+ * causalStreams.start();
  *
- * KafkaStreams streams = new KafkaStreams(topology, props);
- * streams.start();
- *
- * Runtime.getRuntime().addShutdownHook(new Thread(() -> {
- *     quiesce.requestQuiesce();
- *     while (!quiesce.isSafeToClose()) {
- *         Thread.sleep(100);
- *     }
- *     streams.close();
- * }));
+ * Runtime.getRuntime().addShutdownHook(new Thread(causalStreams::close));
  * }</pre>
  *
- * <p>See {@link CausalProcessorSupplier} for the causal guarantee and its preconditions — they
- * apply unchanged here, restated in terms of what this builder owns:
+ * <p><strong>Topology-epoch coordination</strong> turns on by setting
+ * {@code parsley.coordination.epoch-events-topic} in {@code props}; {@code application.id} supplies the
+ * epoch member identity. Absent that key, the topology runs in epoch 0 — no epoch-events log, no
+ * coordination thread. Evolve a running, coordinated topology through an epoch boundary with
+ * {@link #requestEpochTransition()}.
  *
- * <ul>
- *   <li><strong>Your key is your shard.</strong> Every source and sink this stage declares shares
- *       one partitioner ({@link Builder#withPartitioner}, default Kafka's own key-hash partitioner)
- *       so a shard never drifts onto different partitions across topics. That partitioner must
- *       read only the key, never the value — a protocol watermark carries no value.
- *   <li><strong>Path integrity holds by construction.</strong> A stage this builder produces is
- *       exactly sources → one causal-decorated processor → sinks; there is no method that inserts
- *       a plain, non-Parsley node in between, so a hop that would silently drop the
- *       causal-dependencies header or swallow a non-emitting invocation without a watermark cannot
- *       be constructed through this API.
- * </ul>
+ * <p><strong>{@link #close()}</strong> always runs the full graceful shutdown: it waits for every task's
+ * causal buffer to drain through the ordinary delivery path, then — if coordination is configured —
+ * permanently decommissions this instance's members (so a restart always rejoins as a fresh member and
+ * waits to be re-admitted; slower than resuming as the same running member, but there is no restart/leave
+ * distinction for a caller to get wrong), before stopping the underlying {@code KafkaStreams}.
  */
-public final class CausalStreams {
+public final class CausalStreams implements AutoCloseable {
 
-    private CausalStreams() {}
+    private static final Duration QUIESCE_POLL_INTERVAL = Duration.ofMillis(100);
+
+    private final KafkaStreams kafkaStreams;
+    private final CausalQuiesce quiesce;
+    private final @Nullable CausalCoordination coordination;
 
     /**
-     * Starts building a {@link Topology} around a causal stage that wraps {@code userSupplier}.
+     * Assembles {@code topology} into a real Kafka Streams topology and wraps a {@code KafkaStreams}
+     * instance over it, using {@link CausalMembershipStrategy#blockUntilDrained()} if topology-epoch
+     * coordination is configured.
      *
-     * @param userSupplier the user's processor supplier (its declared state stores are unioned with
-     *                     Parsley's internal frontier and buffer stores)
-     * @param <KIn>        the input key type
-     * @param <VIn>        the input value type
-     * @param <KOut>       the forwarded key type
-     * @param <VOut>       the forwarded value type
-     * @return a {@link Builder} for the causal stage's {@code Topology}
+     * @param topology the causal topology to run
+     * @param props    standard Kafka Streams configuration plus Parsley's {@code parsley.*} keys
      */
-    public static <KIn, VIn, KOut, VOut> Builder<KIn, VIn, KOut, VOut> builder(
-            ProcessorSupplier<KIn, VIn, KOut, VOut> userSupplier) {
-        return new Builder<>(userSupplier);
+    public CausalStreams(CausalTopology topology, Properties props) {
+        this(topology, props, CausalMembershipStrategy.blockUntilDrained());
     }
 
     /**
-     * Builder for a single causal stage's {@link Topology}. A buffer store, at least one
-     * {@link CausalBuffer} source, and at least one sink are required.
+     * As {@link #CausalStreams(CausalTopology, Properties)}, with an explicit
+     * {@link CausalMembershipStrategy} governing how a blocked epoch transition treats a member that has
+     * not published.
      *
-     * @param <KIn>  the input key type
-     * @param <VIn>  the input value type
-     * @param <KOut> the forwarded key type
-     * @param <VOut> the forwarded value type
+     * @param topology           the causal topology to run
+     * @param props              standard Kafka Streams configuration plus Parsley's {@code parsley.*} keys
+     * @param membershipStrategy how a blocked epoch round treats members that have not published
      */
-    public static final class Builder<KIn, VIn, KOut, VOut> {
+    public CausalStreams(CausalTopology topology, Properties props, CausalMembershipStrategy membershipStrategy) {
+        this.quiesce = CausalQuiesce.create();
+        this.coordination = coordinationFrom(props, membershipStrategy);
+        Topology assembled = topology.assemble(props, quiesce, coordination);
+        this.kafkaStreams = new KafkaStreams(assembled, props);
+    }
 
-        private final ProcessorSupplier<KIn, VIn, KOut, VOut> userSupplier;
-        private @Nullable String storeName = null;
-        private final Map<String, CausalBuffer<KIn, VIn>> sources = new LinkedHashMap<>();
-        private final List<Sink<KOut, VOut>> sinks = new ArrayList<>();
-        private final Properties config = new Properties();
-        private CausalAudit audit = CausalAudit.NOOP;
-        private @Nullable ParsleyTopicAdmin topicAdmin = null;
-        private @Nullable StreamPartitioner<? super KOut, ? super VOut> partitioner = null;
-        private @Nullable CausalQuiesce quiesce = null;
-        private @Nullable CausalCoordination coordination = null;
+    private static @Nullable CausalCoordination coordinationFrom(
+            Properties props, CausalMembershipStrategy membershipStrategy) {
+        Properties merged = ParsleyConfig.loadProperties();
+        merged.putAll(props);
+        String epochEventsTopic = ParsleyConfig.from(merged).coordinationEpochEventsTopic();
+        return epochEventsTopic == null ? null : CausalCoordination.create(epochEventsTopic, membershipStrategy);
+    }
 
-        private Builder(ProcessorSupplier<KIn, VIn, KOut, VOut> userSupplier) {
-            this.userSupplier = userSupplier;
+    /** Starts the underlying {@code KafkaStreams} instance. */
+    public void start() {
+        kafkaStreams.start();
+    }
+
+    /** The underlying {@code KafkaStreams} instance's current state. */
+    public KafkaStreams.State state() {
+        return kafkaStreams.state();
+    }
+
+    /**
+     * Requests an epoch transition across the currently-running nodes, evolving a running, coordinated
+     * topology through an epoch boundary.
+     *
+     * @throws IllegalStateException if topology-epoch coordination is not configured (see
+     *         {@code parsley.coordination.epoch-events-topic}), or no task has initialised it yet
+     */
+    public void requestEpochTransition() {
+        if (coordination == null) {
+            throw new IllegalStateException("topology-epoch coordination is not configured — set "
+                    + "parsley.coordination.epoch-events-topic to enable it");
         }
+        coordination.requestEpochTransition();
+    }
 
-        /**
-         * Overrides the {@link ParsleyTopicAdmin} used to resolve topic UUIDs at startup (default: a
-         * live {@link org.apache.kafka.clients.admin.Admin} built from the task's {@code appConfigs()}).
-         * For tests running under {@code TopologyTestDriver} with no broker.
-         *
-         * @param topicAdmin the admin to resolve UUIDs with
-         * @return this builder
-         */
-        Builder<KIn, VIn, KOut, VOut> topicAdmin(ParsleyTopicAdmin topicAdmin) {
-            this.topicAdmin = topicAdmin;
-            return this;
-        }
-
-        /**
-         * Declares the buffer state store's namespace. The buffer is unbounded (see
-         * {@link CausalProcessors.Builder#addBufferStore} — same semantics).
-         *
-         * @param name the state-store namespace; also the base for this stage's generated topology
-         *             node names ({@code name + "-processor"}, {@code name + "-source-" + topic})
-         * @return this builder
-         */
-        public Builder<KIn, VIn, KOut, VOut> addBufferStore(String name) {
-            this.storeName = name;
-            return this;
-        }
-
-        /**
-         * Registers a causal source topic and adds its {@code Topology} source node. Required for
-         * every input topic this stage will see.
-         *
-         * @param buffer the source topic and its serdes; must not be {@code null}
-         * @return this builder
-         */
-        public Builder<KIn, VIn, KOut, VOut> addSource(CausalBuffer<KIn, VIn> buffer) {
-            sources.put(buffer.topic(), buffer);
-            return this;
-        }
-
-        /**
-         * Registers a causal sink topic and adds its {@code Topology} sink node, connected to this
-         * stage's processor node.
-         *
-         * @param name       the sink's topology node name — the delegate may {@code forward(record,
-         *                   name)} to target this sink specifically when the stage has more than one
-         * @param topic      the sink topic name
-         * @param keySerde   the key serde to serialise forwarded keys with
-         * @param valueSerde the value serde to serialise forwarded values with
-         * @return this builder
-         */
-        public Builder<KIn, VIn, KOut, VOut> addSink(
-                String name, String topic, Serde<KOut> keySerde, Serde<VOut> valueSerde) {
-            sinks.add(new Sink<>(name, topic, keySerde, valueSerde));
-            return this;
-        }
-
-        /**
-         * Sets the {@link StreamPartitioner} applied to <strong>every</strong> sink this stage
-         * declares (default: Kafka's own default key-hash partitioner) — never configurable
-         * per-sink, so two causal sinks in the same stage can never drift onto different
-         * partitioners. A watermark carries a null value and reuses its triggering record's key, so
-         * {@code partitioner} must read only the key (never the value) — a coarser-than-key shard
-         * function (e.g. a composite-key prefix) is the intended use, not a value-based one, which
-         * cannot route a null-value watermark.
-         *
-         * @param partitioner the partitioner to apply uniformly to every sink; must read only the key
-         * @return this builder
-         */
-        public Builder<KIn, VIn, KOut, VOut> withPartitioner(
-                StreamPartitioner<? super KOut, ? super VOut> partitioner) {
-            this.partitioner = partitioner;
-            return this;
-        }
-
-        /**
-         * Sets Parsley's own configuration from a map of key/value pairs. See
-         * {@link CausalProcessors.Builder#withConfigs} — same semantics.
-         *
-         * @param configs the configuration entries; values are recorded as their string form
-         * @return this builder
-         */
-        public Builder<KIn, VIn, KOut, VOut> withConfigs(Map<String, Object> configs) {
-            configs.forEach((key, value) -> config.setProperty(key, String.valueOf(value)));
-            return this;
-        }
-
-        /**
-         * Sets a single Parsley configuration entry. See {@link CausalProcessors.Builder#withConfig}
-         * — same semantics.
-         *
-         * @param key   the configuration key
-         * @param value the configuration value; recorded as its string form
-         * @return this builder
-         */
-        public Builder<KIn, VIn, KOut, VOut> withConfig(String key, Object value) {
-            config.setProperty(key, String.valueOf(value));
-            return this;
-        }
-
-        /**
-         * Registers a {@link CausalAudit} to receive this stage's per-record causal events. See
-         * {@link CausalProcessors.Builder#withAudit} — same semantics.
-         *
-         * @param audit the audit to notify; must not be {@code null}
-         * @return this builder
-         */
-        public Builder<KIn, VIn, KOut, VOut> withAudit(CausalAudit audit) {
-            this.audit = audit;
-            return this;
-        }
-
-        /**
-         * Registers this stage's tasks with a {@link CausalQuiesce} for coordinated graceful
-         * shutdown. See {@link CausalProcessors.Builder#withQuiesce} — same semantics.
-         *
-         * @param quiesce the quiesce coordinator every task instance registers with
-         * @return this builder
-         */
-        public Builder<KIn, VIn, KOut, VOut> withQuiesce(CausalQuiesce quiesce) {
-            this.quiesce = quiesce;
-            return this;
-        }
-
-        /**
-         * Registers this stage's tasks with a {@link CausalCoordination} to participate in topology-epoch
-         * coordination. See {@link CausalProcessors.Builder#withCoordination} — same semantics. Optional;
-         * without one the stage runs in epoch 0, exactly as today.
-         *
-         * @param coordination the coordination handle shared across every participating stage
-         * @return this builder
-         */
-        public Builder<KIn, VIn, KOut, VOut> withCoordination(CausalCoordination coordination) {
-            this.coordination = coordination;
-            return this;
-        }
-
-        /**
-         * Builds the {@link Topology}: one source node per registered {@link CausalBuffer}, one
-         * processor node running {@code userSupplier} behind the causal guarantee (composing
-         * {@link CausalProcessors} internally), and one sink node per registered sink — all wired
-         * together as a single causal stage.
-         *
-         * @return the assembled {@code Topology}, ready for {@code new KafkaStreams(topology, props)}
-         * @throws IllegalStateException if no buffer store, no source, or no sink was declared
-         */
-        public Topology build() {
-            if (storeName == null) {
-                throw new IllegalStateException(
-                        "a buffer store is required; call addBufferStore(name)");
+    /**
+     * Gracefully shuts down: waits — unbounded, no timeout — for every task's causal buffer to drain
+     * through the ordinary delivery path, then, if coordination is configured, permanently decommissions
+     * this instance's members from the epoch domain, then stops the underlying {@code KafkaStreams}, then
+     * closes the coordination runtime. Idempotent-safe to call even if {@link #start()} was never called.
+     */
+    @Override
+    public void close() {
+        if (kafkaStreams.state() != KafkaStreams.State.CREATED) {
+            quiesce.requestQuiesce();
+            while (!quiesce.isSafeToClose()) {
+                sleep();
             }
-            if (sources.isEmpty()) {
-                throw new IllegalStateException(
-                        "at least one source is required; call addSource(...) for every input topic");
-            }
-            if (sinks.isEmpty()) {
-                throw new IllegalStateException(
-                        "at least one sink is required; call addSink(...) for every output topic");
-            }
-
-            Set<String> sinkTopics = new LinkedHashSet<>();
-            for (Sink<KOut, VOut> sink : sinks) {
-                sinkTopics.add(sink.topic());
-            }
-            CausalProcessors.Builder<KIn, VIn, KOut, VOut> causalBuilder = CausalProcessors.builder(userSupplier)
-                    .addBufferStore(storeName)
-                    .addBuffers(sources.values())
-                    .withConfig(config)
-                    .withAudit(audit)
-                    .sinkTopics(sinkTopics);
-            if (quiesce != null) {
-                causalBuilder.withQuiesce(quiesce);
-            }
-            if (coordination != null) {
-                causalBuilder.withCoordination(coordination);
-            }
-            if (topicAdmin != null) {
-                causalBuilder.topicAdmin(topicAdmin);
-            }
-            CausalProcessorSupplier<KIn, VIn, KOut, VOut> causalSupplier = causalBuilder.build();
-
-            String processorName = storeName + "-processor";
-            Topology topology = new Topology();
-            String[] sourceNames = new String[sources.size()];
-            int i = 0;
-            for (CausalBuffer<KIn, VIn> buffer : sources.values()) {
-                String sourceName = storeName + "-source-" + buffer.topic();
-                topology.addSource(sourceName,
-                        buffer.keySerde().deserializer(), buffer.valueSerde().deserializer(), buffer.topic());
-                sourceNames[i++] = sourceName;
-            }
-            topology.addProcessor(processorName, causalSupplier, sourceNames);
-            for (Sink<KOut, VOut> sink : sinks) {
-                // partitioner may be null here — Topology.addSink's partitioner-accepting overload
-                // treats that identically to the no-partitioner overload (falls back to the default
-                // key-hash partitioner), so one call covers both cases.
-                topology.addSink(sink.name(), sink.topic(),
-                        sink.keySerde().serializer(), sink.valueSerde().serializer(), partitioner, processorName);
-            }
-            return topology;
         }
+        if (coordination != null) {
+            coordination.leave();
+        }
+        kafkaStreams.close();
+        if (coordination != null) {
+            coordination.close();
+        }
+    }
 
-        private record Sink<K, V>(String name, String topic, Serde<K> keySerde, Serde<V> valueSerde) {
+    private static void sleep() {
+        try {
+            Thread.sleep(QUIESCE_POLL_INTERVAL.toMillis());
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new IllegalStateException("interrupted while waiting for the causal buffer to drain", e);
         }
     }
 }

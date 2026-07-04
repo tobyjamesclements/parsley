@@ -34,7 +34,7 @@ import java.util.function.Function;
  *
  * <p>See {@link CausalProcessorSupplier} for the causal guarantee and its preconditions.
  */
-public final class CausalProcessors {
+final class CausalProcessors {
 
     private CausalProcessors() {}
 
@@ -54,7 +54,7 @@ public final class CausalProcessors {
      *         {@link CausalProcessorSupplier} — decorating an already-decorated supplier would
      *         buffer and stamp every record twice, nested, silently corrupting the frontier
      */
-    public static <KIn, VIn, KOut, VOut> Builder<KIn, VIn, KOut, VOut> builder(
+    static <KIn, VIn, KOut, VOut> Builder<KIn, VIn, KOut, VOut> builder(
             ProcessorSupplier<KIn, VIn, KOut, VOut> userSupplier) {
         if (userSupplier instanceof CausalProcessorSupplier) {
             throw new IllegalArgumentException(
@@ -76,7 +76,7 @@ public final class CausalProcessors {
      * @param <KOut> the forwarded key type
      * @param <VOut> the forwarded value type
      */
-    public static final class Builder<KIn, VIn, KOut, VOut> {
+    static final class Builder<KIn, VIn, KOut, VOut> {
 
         private final ProcessorSupplier<KIn, VIn, KOut, VOut> userSupplier;
         private @Nullable String storeName = null;
@@ -108,7 +108,7 @@ public final class CausalProcessors {
          * @param name the state-store namespace
          * @return this builder
          */
-        public Builder<KIn, VIn, KOut, VOut> addBufferStore(String name) {
+        Builder<KIn, VIn, KOut, VOut> addBufferStore(String name) {
             this.storeName = name;
             return this;
         }
@@ -121,7 +121,7 @@ public final class CausalProcessors {
          * @param buffer the source topic and its serdes; must not be {@code null}
          * @return this builder
          */
-        public Builder<KIn, VIn, KOut, VOut> addBuffer(CausalBuffer<KIn, VIn> buffer) {
+        Builder<KIn, VIn, KOut, VOut> addBuffer(CausalBuffer<KIn, VIn> buffer) {
             buffers.put(buffer.topic(), buffer);
             return this;
         }
@@ -132,7 +132,7 @@ public final class CausalProcessors {
          * @param buffers the source buffers; must not be {@code null}
          * @return this builder
          */
-        public Builder<KIn, VIn, KOut, VOut> addBuffers(Collection<CausalBuffer<KIn, VIn>> buffers) {
+        Builder<KIn, VIn, KOut, VOut> addBuffers(Collection<CausalBuffer<KIn, VIn>> buffers) {
             for (CausalBuffer<KIn, VIn> buffer : buffers) {
                 addBuffer(buffer);
             }
@@ -148,7 +148,7 @@ public final class CausalProcessors {
          * @param value  the value serde shared by all {@code topics}
          * @return this builder
          */
-        public Builder<KIn, VIn, KOut, VOut> addBuffers(
+        Builder<KIn, VIn, KOut, VOut> addBuffers(
                 Collection<String> topics, Serde<KIn> key, Serde<VIn> value) {
             for (String topic : topics) {
                 addBuffer(CausalBuffer.of(topic, key, value));
@@ -164,7 +164,7 @@ public final class CausalProcessors {
          * @param configs the configuration entries; values are recorded as their string form
          * @return this builder
          */
-        public Builder<KIn, VIn, KOut, VOut> withConfigs(Map<String, Object> configs) {
+        Builder<KIn, VIn, KOut, VOut> withConfigs(Map<String, Object> configs) {
             configs.forEach((key, value) -> config.setProperty(key, String.valueOf(value)));
             return this;
         }
@@ -177,7 +177,7 @@ public final class CausalProcessors {
          * @param props the configuration properties
          * @return this builder
          */
-        public Builder<KIn, VIn, KOut, VOut> withConfig(Properties props) {
+        Builder<KIn, VIn, KOut, VOut> withConfig(Properties props) {
             props.forEach((key, value) -> config.setProperty(String.valueOf(key), String.valueOf(value)));
             return this;
         }
@@ -190,7 +190,7 @@ public final class CausalProcessors {
          * @param value the configuration value; recorded as its string form
          * @return this builder
          */
-        public Builder<KIn, VIn, KOut, VOut> withConfig(String key, Object value) {
+        Builder<KIn, VIn, KOut, VOut> withConfig(String key, Object value) {
             config.setProperty(key, String.valueOf(value));
             return this;
         }
@@ -207,7 +207,7 @@ public final class CausalProcessors {
          * @param audit the audit to notify; must not be {@code null}
          * @return this builder
          */
-        public Builder<KIn, VIn, KOut, VOut> withAudit(CausalAudit audit) {
+        Builder<KIn, VIn, KOut, VOut> withAudit(CausalAudit audit) {
             this.audit = audit;
             return this;
         }
@@ -220,7 +220,7 @@ public final class CausalProcessors {
          * @param quiesce the quiesce coordinator every task instance registers with
          * @return this builder
          */
-        public Builder<KIn, VIn, KOut, VOut> withQuiesce(CausalQuiesce quiesce) {
+        Builder<KIn, VIn, KOut, VOut> withQuiesce(CausalQuiesce quiesce) {
             this.quiesce = quiesce;
             return this;
         }
@@ -233,7 +233,7 @@ public final class CausalProcessors {
          * @param coordination the coordination handle shared across every participating stage
          * @return this builder
          */
-        public Builder<KIn, VIn, KOut, VOut> withCoordination(CausalCoordination coordination) {
+        Builder<KIn, VIn, KOut, VOut> withCoordination(CausalCoordination coordination) {
             this.coordination = coordination;
             return this;
         }
@@ -280,7 +280,7 @@ public final class CausalProcessors {
          * @param topics the stage's output topic names
          * @return this builder
          */
-        public Builder<KIn, VIn, KOut, VOut> sinkTopics(Set<String> topics) {
+        Builder<KIn, VIn, KOut, VOut> sinkTopics(Set<String> topics) {
             this.sinkTopics = Set.copyOf(topics);
             return this;
         }
@@ -291,7 +291,7 @@ public final class CausalProcessors {
          * @return a decorated supplier ready for {@code stream(...).process(...)}
          * @throws IllegalStateException if no buffer store or no {@link CausalBuffer} was declared
          */
-        public CausalProcessorSupplier<KIn, VIn, KOut, VOut> build() {
+        CausalProcessorSupplier<KIn, VIn, KOut, VOut> build() {
             if (storeName == null) {
                 throw new IllegalStateException(
                         "a buffer store is required; call addBufferStore(name)");
