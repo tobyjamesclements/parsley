@@ -79,14 +79,14 @@ class CausalCoordinationEvictedRestartIT {
 
         // Y evicts a silent member after 3s (short, for the test).
         CausalCoordination coordinationY =
-                CausalCoordination.create(EPOCH_EVENTS, Set.of(YIN), CausalCoordination.DEFAULT_JOIN_TIMEOUT, Duration.ofSeconds(3));
-        CausalCoordination coordinationX1 = CausalCoordination.create(EPOCH_EVENTS, Set.of(PREREQ, IN));
+                CausalCoordination.create(EPOCH_EVENTS, CausalCoordination.DEFAULT_JOIN_TIMEOUT, Duration.ofSeconds(3));
+        CausalCoordination coordinationX1 = CausalCoordination.create(EPOCH_EVENTS);
         Path stateY = Files.createTempDirectory("parsley-evict-y");
         Path stateX1 = Files.createTempDirectory("parsley-evict-x1");
 
         KafkaStreams appY = new KafkaStreams(stageY(coordinationY), streamsConfig(bootstrap, appIdY, stateY));
         KafkaStreams appX = new KafkaStreams(stageX(coordinationX1), streamsConfig(bootstrap, appIdX, stateX1));
-        CausalCoordination coordinationX2 = CausalCoordination.create(EPOCH_EVENTS, Set.of(PREREQ, IN));
+        CausalCoordination coordinationX2 = CausalCoordination.create(EPOCH_EVENTS);
         KafkaStreams appXRestarted = null;
         try {
             appY.start();

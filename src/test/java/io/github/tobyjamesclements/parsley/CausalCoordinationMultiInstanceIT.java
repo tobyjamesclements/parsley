@@ -77,8 +77,8 @@ class CausalCoordinationMultiInstanceIT {
         createTopics(bootstrap, 1, EPOCH_EVENTS);
         String appId = "multi-it-" + UUID.randomUUID();
 
-        CausalCoordination coordination1 = CausalCoordination.create(EPOCH_EVENTS, Set.of(IN));
-        CausalCoordination coordination2 = CausalCoordination.create(EPOCH_EVENTS, Set.of(IN));
+        CausalCoordination coordination1 = CausalCoordination.create(EPOCH_EVENTS);
+        CausalCoordination coordination2 = CausalCoordination.create(EPOCH_EVENTS);
         Path stateDir1 = Files.createTempDirectory("parsley-multi-1");
         Path stateDir2 = Files.createTempDirectory("parsley-multi-2");
 

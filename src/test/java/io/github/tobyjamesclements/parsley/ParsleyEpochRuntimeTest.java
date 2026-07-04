@@ -1,6 +1,7 @@
 package io.github.tobyjamesclements.parsley;
 
 import org.apache.kafka.common.Uuid;
+import java.util.Set;
 import org.junit.jupiter.api.Test;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -27,7 +28,7 @@ class ParsleyEpochRuntimeTest {
         InMemoryEpochTransport.SharedLog log = new InMemoryEpochTransport.SharedLog();
         ParsleyEpochRuntime a = runtimeOver(log);
 
-        a.join("A");
+        a.join("A", Set.of(), Set.of());
         a.requestSnapshot("A");
         settle(log, a);
 
@@ -50,8 +51,8 @@ class ParsleyEpochRuntimeTest {
 
         // Bootstrap: both join, then A opens the first round — running is still empty, so it commits
         // epoch 1 vacuously and promotes both A and B to running members.
-        a.join("A");
-        b.join("B");
+        a.join("A", Set.of(), Set.of());
+        b.join("B", Set.of(), Set.of());
         settle(log, a, b);
         a.requestSnapshot("A");
         settle(log, a, b);
@@ -82,8 +83,8 @@ class ParsleyEpochRuntimeTest {
         ParsleyEpochRuntime a = runtimeOver(log);
         ParsleyEpochRuntime b = runtimeOver(log);
 
-        a.join("A");
-        b.join("B");
+        a.join("A", Set.of(), Set.of());
+        b.join("B", Set.of(), Set.of());
         settle(log, a, b);
         a.requestSnapshot("A");
         settle(log, a, b);   // epoch 1: both running
@@ -109,8 +110,8 @@ class ParsleyEpochRuntimeTest {
         ParsleyEpochRuntime a = runtimeOver(log);
         ParsleyEpochRuntime b = runtimeOver(log);
 
-        a.join("A");
-        b.join("B");
+        a.join("A", Set.of(), Set.of());
+        b.join("B", Set.of(), Set.of());
         settle(log, a, b);
         a.requestSnapshot("A");
         settle(log, a, b);
@@ -132,7 +133,7 @@ class ParsleyEpochRuntimeTest {
     void ownerDoesNotCommitUntilBootstrapped() {
         GatedTransport transport = new GatedTransport();
         ParsleyEpochRuntime runtime = new ParsleyEpochRuntime(transport);
-        runtime.join("A");                                          // A is local to this runtime
+        runtime.join("A", Set.of(), Set.of());                                          // A is local to this runtime
         transport.seed(new EpochEvent.SnapshotRequested("A"));      // opens a round A owns
 
         // Not caught up yet: the round is folded open but the owner must not commit.
@@ -160,12 +161,12 @@ class ParsleyEpochRuntimeTest {
         InMemoryEpochTransport.SharedLog log = new InMemoryEpochTransport.SharedLog();
         // Seed R as a running member (epoch 1); it then falls silent.
         InMemoryEpochTransport seeder = new InMemoryEpochTransport(log);
-        seeder.append(new EpochEvent.JoinRequested("R"));
+        seeder.append(new EpochEvent.JoinRequested("R", Set.of(), Set.of()));
         seeder.append(new EpochEvent.SnapshotRequested("R"));
         seeder.append(new EpochEvent.EpochCommitted(1, ParsleyClock.empty()));
 
         ParsleyEpochRuntime a = new ParsleyEpochRuntime(new InMemoryEpochTransport(log), java.time.Duration.ZERO);
-        a.join("A");
+        a.join("A", Set.of(), Set.of());
         a.requestSnapshot("A");   // opens round 2; running = {R}; R never publishes
         settle(log, a);
 
@@ -178,7 +179,7 @@ class ParsleyEpochRuntimeTest {
     void aLocalMemberEvictedByAnotherNodeIsSurfaced() {
         InMemoryEpochTransport.SharedLog log = new InMemoryEpochTransport.SharedLog();
         ParsleyEpochRuntime a = runtimeOver(log);
-        a.join("A");
+        a.join("A", Set.of(), Set.of());
         settle(log, a);
 
         new InMemoryEpochTransport(log).append(new EpochEvent.Leave("A"));   // another node evicts A
@@ -196,7 +197,7 @@ class ParsleyEpochRuntimeTest {
     void anEvictionFlagClearsOnceTheMemberIsReAdmitted() {
         InMemoryEpochTransport.SharedLog log = new InMemoryEpochTransport.SharedLog();
         ParsleyEpochRuntime a = runtimeOver(log);
-        a.join("A");
+        a.join("A", Set.of(), Set.of());
         a.requestSnapshot("A");
         settle(log, a);
         assertTrue(a.isRunningMember("A"), "A is a running member (epoch 1)");
@@ -205,7 +206,7 @@ class ParsleyEpochRuntimeTest {
         settle(log, a);
         assertTrue(a.isEvicted("A"), "while evicted and not running, A is flagged");
 
-        a.join("A");                 // A restarts and re-joins
+        a.join("A", Set.of(), Set.of());                 // A restarts and re-joins
         a.requestSnapshot("A");
         settle(log, a);
         assertTrue(a.isRunningMember("A"), "A is re-admitted as a running member");

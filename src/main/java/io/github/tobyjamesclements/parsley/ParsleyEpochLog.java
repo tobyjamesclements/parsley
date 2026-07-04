@@ -28,7 +28,9 @@ import java.util.Set;
  * <p>Membership: a {@link EpochEvent.JoinRequested} member is <em>pending</em> until the next commit,
  * then <em>running</em>. Running members are the ones whose publication a round waits for and whose
  * frontiers are folded into {@code lowerBounds}; a joiner (blocked, not yet consuming) publishes nothing
- * and does not constrain the cut. Removal/leave is out of scope (WS4 later).
+ * and does not constrain the cut. A {@link EpochEvent.Leave} removes a member (a graceful leave or an
+ * eviction). Each {@link EpochEvent.JoinRequested} also declares the member's input/sink topics, from
+ * which {@link #externalSourceTopics()} derives the DAG-wide source-topic registry.
  *
  * <p>Not thread-safe: a single consumer thread applies the log in order.
  */
@@ -39,6 +41,12 @@ final class ParsleyEpochLog {
     private final Set<String> pendingJoiners = new HashSet<>();
     private @Nullable String roundOwner;                       // non-null iff a round is open
     private final Map<String, ParsleyClock> publications = new HashMap<>();  // current round only
+    // Each declared member's input/sink topics — the DAG-wide source-topic registry. Keyed by memberId,
+    // populated on JoinRequested (pending or running), removed on Leave; persists across commits.
+    private final Map<String, MemberTopology> declarations = new HashMap<>();
+
+    /** A member's declared input channels (topics it consumes) and sink topics (topics it produces). */
+    record MemberTopology(Set<String> inputTopics, Set<String> sinkTopics) {}
 
     /** Applies one event in log order, updating the folded state. */
     void apply(EpochEvent event) {
@@ -48,6 +56,9 @@ final class ParsleyEpochLog {
                 if (!runningMembers.contains(e.memberId())) {
                     pendingJoiners.add(e.memberId());
                 }
+                // Record its declared topology for the source-topic registry (structural, so it counts as
+                // soon as declared — pending or running — see externalSourceTopics()).
+                declarations.put(e.memberId(), new MemberTopology(e.inputTopics(), e.sinkTopics()));
             }
             case EpochEvent.SnapshotRequested e -> {
                 // First request after the last commit opens the round and elects the owner; the rest
@@ -70,6 +81,7 @@ final class ParsleyEpochLog {
                 runningMembers.remove(e.memberId());
                 pendingJoiners.remove(e.memberId());
                 publications.remove(e.memberId());
+                declarations.remove(e.memberId());
             }
             case EpochEvent.EpochCommitted e -> {
                 // Dedup by epochId: the first commit for an epoch is authoritative; a stale or duplicate
@@ -111,6 +123,24 @@ final class ParsleyEpochLog {
     /** The members counted in the current cut (joined and committed in a prior epoch). */
     Set<String> runningMembers() {
         return Set.copyOf(runningMembers);
+    }
+
+    /**
+     * The topology's external source topics, derived DAG-wide from every declared member:
+     * {@code ∪inputTopics − ∪sinkTopics}. A topic some member consumes but no member produces is an
+     * external entry point — no in-band epoch marker ever reaches it, so a stage consuming one must
+     * self-initiate the wave and adopt that coordinate's floor from the log. Derived over all declared
+     * members (pending or running), so source-layer identity is correct from the very first round.
+     */
+    Set<String> externalSourceTopics() {
+        Set<String> external = new HashSet<>();
+        for (MemberTopology declaration : declarations.values()) {
+            external.addAll(declaration.inputTopics());
+        }
+        for (MemberTopology declaration : declarations.values()) {
+            external.removeAll(declaration.sinkTopics());
+        }
+        return external;
     }
 
     /** Whether {@code memberId} is currently a running member — the join block waits until this is true. */

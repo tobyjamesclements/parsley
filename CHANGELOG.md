@@ -56,7 +56,12 @@ All notable changes to this project are documented in this file. The format is b
   crashed app) cannot freeze the domain: a round that waits too long for it **evicts** it through the
   log after a configurable timeout, and — since a complete round is committed by any node, not a
   single owner — a gone owner cannot freeze it either. A clean decommission uses
-  `CausalCoordination.leave()`; a restart keeps the member in the domain and returns.
+  `CausalCoordination.leave()`; a restart keeps the member in the domain and returns. The topology's
+  **external source topics** (entry points produced outside the topology, on which no in-band marker
+  arrives) are **derived from the log**, not configured: every stage declares its input channels and
+  sink topics on join, and a topic some member consumes but no member produces is an external source.
+  Declare sink topics via `CausalStreams.addSink(...)` (automatic) or the new
+  `CausalProcessors.Builder#sinkTopics(...)` on the low-level path.
 - `CausalStreams` — the topology-owning high-level causal API (Layer 2), composing
   `CausalProcessors` internally rather than reimplementing the causal engine. Builds a `Topology`
   for a single causal stage — one or more `CausalBuffer` sources feeding a causal-decorated

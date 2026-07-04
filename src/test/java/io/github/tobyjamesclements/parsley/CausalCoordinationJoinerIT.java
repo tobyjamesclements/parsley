@@ -77,7 +77,7 @@ class CausalCoordinationJoinerIT {
 
         // Phase 1: run stage A alone and establish an epoch (non-empty floor from delivered t1 records).
         long epochAfterPhase1;
-        CausalCoordination coordination1 = CausalCoordination.create(EPOCH_EVENTS, Set.of(IN));
+        CausalCoordination coordination1 = CausalCoordination.create(EPOCH_EVENTS);
         Path stateDir1 = Files.createTempDirectory("parsley-joiner-1");
         try (KafkaStreams streams = new KafkaStreams(stageAOnly(coordination1), streamsConfig(bootstrap, appId, stateDir1))) {
             streams.start();
@@ -96,7 +96,7 @@ class CausalCoordinationJoinerIT {
         assertTrue(epochAfterPhase1 >= 2, "phase 1 must establish an epoch B can join into");
 
         // Phase 2: redeploy with stage B added. A restores (running member); B is a fresh joiner.
-        CausalCoordination coordination2 = CausalCoordination.create(EPOCH_EVENTS, Set.of(IN));
+        CausalCoordination coordination2 = CausalCoordination.create(EPOCH_EVENTS);
         Path stateDir2 = Files.createTempDirectory("parsley-joiner-2");
         try (KafkaStreams streams = new KafkaStreams(stageAPlusB(coordination2), streamsConfig(bootstrap, appId, stateDir2))) {
             streams.start();

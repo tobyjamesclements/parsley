@@ -75,7 +75,7 @@ class CausalCoordinationIT {
         String appId = "coordination-it-" + UUID.randomUUID();
         Path stateDir = Files.createTempDirectory("parsley-coordination");
 
-        CausalCoordination coordination = CausalCoordination.create(EPOCH_EVENTS, Set.of(IN));
+        CausalCoordination coordination = CausalCoordination.create(EPOCH_EVENTS);
         try (KafkaStreams streams = new KafkaStreams(topology(coordination), streamsConfig(bootstrap, appId, stateDir))) {
             streams.start();
             await().atMost(Duration.ofSeconds(30)).until(() -> streams.state() == KafkaStreams.State.RUNNING);

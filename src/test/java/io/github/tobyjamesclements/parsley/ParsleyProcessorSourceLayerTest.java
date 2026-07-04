@@ -44,11 +44,14 @@ class ParsleyProcessorSourceLayerTest {
 
         // Seed an open round owned by a non-local member, so the runtime folds it open without committing.
         InMemoryEpochTransport seeder = new InMemoryEpochTransport(log);
-        seeder.append(new EpochEvent.JoinRequested("X"));
+        seeder.append(new EpochEvent.JoinRequested("X", Set.of(), Set.of()));
         seeder.append(new EpochEvent.SnapshotRequested("X"));
         runtime.runOnce();
 
         Fixture f = new Fixture(runtime);
+        // The processor's init() declared its input topic t1 (no sink) as a member; fold that so the
+        // source-topic registry derives t1 as an external source before the first poll.
+        runtime.runOnce();
         // A business record sets the last-seen key and this node's completeness to T1@5.
         f.processRecord("k", 5L);
         // The poll at the end of process() sees the open round -> publish + inject snapshot.
@@ -93,7 +96,7 @@ class ParsleyProcessorSourceLayerTest {
                     delegate, CausalBufferLimit.ofSize(100), serializer,
                     "frontier", "buffer", "candidate-index", "forwarded-index", Set.of("t1"), Set.of(),
                     configs -> ADMIN, ParsleyConfig.from(new Properties()), CausalAudit.NOOP, null,
-                    ParsleyEpochSnapshotPublisher.NOOP, CausalCoordination.forRuntime(runtime, Set.of("t1")));
+                    ParsleyEpochSnapshotPublisher.NOOP, CausalCoordination.forRuntime(runtime));
             this.context = new MockProcessorContext<>();
             context.addStateStore(frontierStore);
             context.addStateStore(bufferStore);

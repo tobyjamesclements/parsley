@@ -5,7 +5,6 @@ import org.jspecify.annotations.Nullable;
 import java.time.Duration;
 import java.util.Map;
 import java.util.Objects;
-import java.util.Set;
 
 /**
  * The public handle that turns on topology-epoch coordination for a causal application. Create one,
@@ -14,14 +13,13 @@ import java.util.Set;
  * as {@link CausalQuiesce}:
  *
  * <pre>{@code
- * CausalCoordination coordination =
- *         CausalCoordination.create("parsley-epoch-events", Set.of("prices", "orders"));
+ * CausalCoordination coordination = CausalCoordination.create("parsley-epoch-events");
  *
  * Topology topology = CausalStreams.builder(userSupplier)
  *         .addBufferStore("parsley", CausalBufferLimit.ofDuration(limit))
  *         .addSource(CausalBuffer.of("prices", Serdes.String(), priceSerde))
  *         .addSink("enriched", "enriched-output", Serdes.String(), enrichedSerde)
- *         .withCoordination(coordination)
+ *         .withCoordination(coordination)   // "prices" is derived as an external source; "enriched-output" a sink
  *         .build();
  *
  * KafkaStreams streams = new KafkaStreams(topology, props);
@@ -55,7 +53,6 @@ public final class CausalCoordination {
     private static final Duration JOIN_POLL_INTERVAL = Duration.ofMillis(20);
 
     private final String epochEventsTopic;
-    private final Set<String> sourceTopics;
     private final Duration joinTimeout;
     // Set only by forRuntime(...) — a pre-built runtime (e.g. over an in-memory transport) that bypasses
     // the lazy Kafka build, so tests exercise the wiring without a broker.
@@ -66,48 +63,48 @@ public final class CausalCoordination {
     private final Object lock = new Object();
     private @Nullable ParsleyEpochRuntime lazyRuntime;
 
-    private CausalCoordination(String epochEventsTopic, Set<String> sourceTopics, Duration joinTimeout,
+    private CausalCoordination(String epochEventsTopic, Duration joinTimeout,
                                Duration evictionTimeout, @Nullable ParsleyEpochRuntime injectedRuntime) {
         this.epochEventsTopic = epochEventsTopic;
-        this.sourceTopics = sourceTopics;
         this.joinTimeout = joinTimeout;
         this.evictionTimeout = evictionTimeout;
         this.injectedRuntime = injectedRuntime;
     }
 
     /**
-     * Creates a coordination handle over the shared {@code epochEventsTopic} log, declaring the
-     * topology's external {@code sourceTopics} — the entry-point topics produced by systems outside this
-     * topology, on which no in-band epoch marker will ever arrive, so a stage consuming one self-initiates
-     * the epoch wave and adopts that coordinate's floor from the log.
+     * Creates a coordination handle over the shared {@code epochEventsTopic} log. The topology's external
+     * source topics — the entry-point topics produced by systems outside the topology, on which no in-band
+     * epoch marker ever arrives — are <strong>derived from the log</strong>: every participating stage
+     * declares its input channels and sink topics on join, and a topic some member consumes but no member
+     * produces is an external source (so a stage consuming one self-initiates the wave and adopts that
+     * coordinate's floor from the log). Declare sink topics via {@code CausalStreams.addSink(...)} — which
+     * does so automatically — or {@code CausalProcessors.Builder.sinkTopics(...)} on the low-level path.
      *
      * @param epochEventsTopic the single-partition epoch-events log topic name
-     * @param sourceTopics     the topology's external source topic names
      * @return a new coordination handle
      */
-    public static CausalCoordination create(String epochEventsTopic, Set<String> sourceTopics) {
-        return create(epochEventsTopic, sourceTopics, DEFAULT_JOIN_TIMEOUT, DEFAULT_EVICTION_TIMEOUT);
+    public static CausalCoordination create(String epochEventsTopic) {
+        return create(epochEventsTopic, DEFAULT_JOIN_TIMEOUT, DEFAULT_EVICTION_TIMEOUT);
     }
 
     /**
-     * As {@link #create(String, Set)}, with explicit timeouts. {@code joinTimeout} bounds how long a task
+     * As {@link #create(String)}, with explicit timeouts. {@code joinTimeout} bounds how long a task
      * deployed into an already-running topology waits for its epoch to commit before failing (so Kafka
      * Streams restarts and retries) rather than proceeding on an unknown floor. {@code evictionTimeout}
      * bounds how long a snapshot round waits for a member to publish before this instance evicts it (so a
      * gone member cannot freeze the domain); it must exceed a rolling restart.
      *
      * @param epochEventsTopic the single-partition epoch-events log topic name
-     * @param sourceTopics     the topology's external source topic names
      * @param joinTimeout      the bound on the join wait
      * @param evictionTimeout  the bound a round waits for a member before evicting it
      * @return a new coordination handle
      */
-    public static CausalCoordination create(String epochEventsTopic, Set<String> sourceTopics,
+    public static CausalCoordination create(String epochEventsTopic,
                                             Duration joinTimeout, Duration evictionTimeout) {
         Objects.requireNonNull(epochEventsTopic, "epochEventsTopic must not be null");
         Objects.requireNonNull(joinTimeout, "joinTimeout must not be null");
         Objects.requireNonNull(evictionTimeout, "evictionTimeout must not be null");
-        return new CausalCoordination(epochEventsTopic, Set.copyOf(sourceTopics), joinTimeout, evictionTimeout, null);
+        return new CausalCoordination(epochEventsTopic, joinTimeout, evictionTimeout, null);
     }
 
     /**
@@ -115,18 +112,13 @@ public final class CausalCoordination {
      * {@link InMemoryEpochTransport}-backed runtime with no broker. The runtime carries its own eviction
      * timeout; this handle's is unused on the injected path.
      */
-    static CausalCoordination forRuntime(ParsleyEpochRuntime runtime, Set<String> sourceTopics) {
-        return new CausalCoordination("", Set.copyOf(sourceTopics), DEFAULT_JOIN_TIMEOUT, DEFAULT_EVICTION_TIMEOUT, runtime);
+    static CausalCoordination forRuntime(ParsleyEpochRuntime runtime) {
+        return new CausalCoordination("", DEFAULT_JOIN_TIMEOUT, DEFAULT_EVICTION_TIMEOUT, runtime);
     }
 
-    /** As {@link #forRuntime(ParsleyEpochRuntime, Set)} with an explicit join timeout (for timeout tests). */
-    static CausalCoordination forRuntime(ParsleyEpochRuntime runtime, Set<String> sourceTopics, Duration joinTimeout) {
-        return new CausalCoordination("", Set.copyOf(sourceTopics), joinTimeout, DEFAULT_EVICTION_TIMEOUT, runtime);
-    }
-
-    /** The declared external source topics. */
-    Set<String> sourceTopics() {
-        return sourceTopics;
+    /** As {@link #forRuntime(ParsleyEpochRuntime)} with an explicit join timeout (for timeout tests). */
+    static CausalCoordination forRuntime(ParsleyEpochRuntime runtime, Duration joinTimeout) {
+        return new CausalCoordination("", joinTimeout, DEFAULT_EVICTION_TIMEOUT, runtime);
     }
 
     /**

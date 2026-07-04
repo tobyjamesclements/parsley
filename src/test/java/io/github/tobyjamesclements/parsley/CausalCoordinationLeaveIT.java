@@ -77,8 +77,8 @@ class CausalCoordinationLeaveIT {
 
         // App A evicts a silent member after 3s (short, for the test); the default is 30s.
         CausalCoordination coordinationA =
-                CausalCoordination.create(EPOCH_EVENTS, Set.of(IN), CausalCoordination.DEFAULT_JOIN_TIMEOUT, Duration.ofSeconds(3));
-        CausalCoordination coordinationB = CausalCoordination.create(EPOCH_EVENTS, Set.of());
+                CausalCoordination.create(EPOCH_EVENTS, CausalCoordination.DEFAULT_JOIN_TIMEOUT, Duration.ofSeconds(3));
+        CausalCoordination coordinationB = CausalCoordination.create(EPOCH_EVENTS);
         Path stateA = Files.createTempDirectory("parsley-leave-a");
         Path stateB = Files.createTempDirectory("parsley-leave-b");
 

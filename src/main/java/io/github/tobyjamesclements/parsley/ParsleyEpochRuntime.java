@@ -70,6 +70,8 @@ final class ParsleyEpochRuntime implements AutoCloseable {
     private volatile boolean bootstrapped;
     // Snapshot of the running-member set, for the join block to read from any thread.
     private volatile Set<String> runningMembersMirror = Set.of();
+    // Mirror of the fold's DAG-wide external source topics, refreshed each runOnce for cross-thread readers.
+    private volatile Set<String> externalSourceTopicsMirror = Set.of();
 
     private volatile boolean running;
     private @Nullable Thread thread;
@@ -86,11 +88,13 @@ final class ParsleyEpochRuntime implements AutoCloseable {
 
     /**
      * Announces {@code memberId} on the log and registers it as local, so this runtime folds and commits
-     * on its behalf. A task calls this once it is participating.
+     * on its behalf. A task calls this once it is participating, declaring its {@code inputTopics} (the
+     * channels it consumes) and {@code sinkTopics} (the topics it produces) for the DAG-wide source-topic
+     * registry (see {@link #externalSourceTopics()}).
      */
-    void join(String memberId) {
+    void join(String memberId, Set<String> inputTopics, Set<String> sinkTopics) {
         localMembers.add(memberId);
-        outbox.add(new EpochEvent.JoinRequested(memberId));
+        outbox.add(new EpochEvent.JoinRequested(memberId, Set.copyOf(inputTopics), Set.copyOf(sinkTopics)));
     }
 
     /** Stops treating {@code memberId} as local (its task left this instance). No log event yet — leave/removal is a later workstream. */
@@ -131,6 +135,11 @@ final class ParsleyEpochRuntime implements AutoCloseable {
     /** Whether {@code memberId} is currently a running member (folded from the log) — the join block waits on this. */
     boolean isRunningMember(String memberId) {
         return runningMembersMirror.contains(memberId);
+    }
+
+    /** The topology's external source topics, derived DAG-wide from every declared member's declaration. */
+    Set<String> externalSourceTopics() {
+        return externalSourceTopicsMirror;
     }
 
     /**
@@ -212,6 +221,7 @@ final class ParsleyEpochRuntime implements AutoCloseable {
         }
         roundOpen = fold.isRoundOpen();
         runningMembersMirror = fold.runningMembers();
+        externalSourceTopicsMirror = fold.externalSourceTopics();
         bootstrapped = transport.caughtUp();
         updateRoundTimer();
         driveCommit();

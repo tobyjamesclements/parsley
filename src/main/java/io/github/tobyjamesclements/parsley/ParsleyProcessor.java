@@ -61,7 +61,9 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
     private final String candidateIndexStoreName;
     private final String forwardedIndexStoreName;
     private final Set<String> topics;
-    private final Set<String> additionalPartitionCountTopics;
+    // The topics this stage produces. Feeds the partition-count parity check and, when coordination is
+    // configured, this member's declaration on the epoch-events log for the DAG-wide source-topic registry.
+    private final Set<String> sinkTopics;
     private final Function<Map<String, Object>, ParsleyTopicAdmin> adminFactory;
     private final ParsleyConfig config;
     private final CausalAudit audit;
@@ -70,7 +72,8 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
     // the runtime-backed publisher (append to the epoch-events log) over whatever was passed.
     private ParsleyEpochSnapshotPublisher snapshotPublisher;
     // The per-instance epoch coordination handle, or null when no topology coordination is configured
-    // (epoch 0). Resolved to the shared runtime at init(); carries the external source topic names.
+    // (epoch 0). Resolved to the shared runtime at init(); the source-topic registry is derived from the
+    // log, not carried here.
     private final @Nullable CausalCoordination coordination;
     // The shared epoch runtime resolved from the coordination handle at init(), or null in epoch 0. A
     // source-layer task polls it to initiate the in-band snapshot/boundary waves.
@@ -82,11 +85,10 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
     // has no broker config until then). Used by ingest() to stamp each record's causal identity.
     private Map<String, Uuid> topicUuids = Map.of();
 
-    // The subset of topicUuids that are external topology sources (resolved at init); non-empty iff this
-    // task is source-layer. The most-recent business key seen on this task's owned partition — reused to
-    // route a self-injected marker back to that partition lane (null until the first record). And the
-    // last snapshot-round / committed epoch this task has already acted on, so each is injected once.
-    private Set<Uuid> externalSourceTopicIds = Set.of();
+    // The most-recent business key seen on this task's owned partition — reused to route a self-injected
+    // marker back to that partition lane (null until the first record). And the last snapshot-round /
+    // committed epoch this task has already acted on, so each is injected once. (Whether this task is
+    // source-layer is derived per poll from the log's source-topic registry, not cached here.)
     private @Nullable KIn lastSeenKey;
     private long lastSnapshotRoundEpoch;
     private long lastAdoptedEpoch;
@@ -119,13 +121,13 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
                      String candidateIndexStoreName,
                      String forwardedIndexStoreName,
                      Set<String> topics,
-                     Set<String> additionalPartitionCountTopics,
+                     Set<String> sinkTopics,
                      Function<Map<String, Object>, ParsleyTopicAdmin> adminFactory,
                      ParsleyConfig config,
                      CausalAudit audit,
                      @Nullable CausalQuiesce quiesce) {
         this(delegate, limit, serializer, frontierStoreName, bufferStoreName, candidateIndexStoreName,
-                forwardedIndexStoreName, topics, additionalPartitionCountTopics, adminFactory, config,
+                forwardedIndexStoreName, topics, sinkTopics, adminFactory, config,
                 audit, quiesce, ParsleyEpochSnapshotPublisher.NOOP);
     }
 
@@ -137,14 +139,14 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
                      String candidateIndexStoreName,
                      String forwardedIndexStoreName,
                      Set<String> topics,
-                     Set<String> additionalPartitionCountTopics,
+                     Set<String> sinkTopics,
                      Function<Map<String, Object>, ParsleyTopicAdmin> adminFactory,
                      ParsleyConfig config,
                      CausalAudit audit,
                      @Nullable CausalQuiesce quiesce,
                      ParsleyEpochSnapshotPublisher snapshotPublisher) {
         this(delegate, limit, serializer, frontierStoreName, bufferStoreName, candidateIndexStoreName,
-                forwardedIndexStoreName, topics, additionalPartitionCountTopics, adminFactory, config,
+                forwardedIndexStoreName, topics, sinkTopics, adminFactory, config,
                 audit, quiesce, snapshotPublisher, null);
     }
 
@@ -156,7 +158,7 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
                      String candidateIndexStoreName,
                      String forwardedIndexStoreName,
                      Set<String> topics,
-                     Set<String> additionalPartitionCountTopics,
+                     Set<String> sinkTopics,
                      Function<Map<String, Object>, ParsleyTopicAdmin> adminFactory,
                      ParsleyConfig config,
                      CausalAudit audit,
@@ -171,7 +173,7 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
         this.candidateIndexStoreName = candidateIndexStoreName;
         this.forwardedIndexStoreName = forwardedIndexStoreName;
         this.topics = topics;
-        this.additionalPartitionCountTopics = additionalPartitionCountTopics;
+        this.sinkTopics = sinkTopics;
         this.adminFactory = adminFactory;
         this.config = config;
         this.audit = audit;
@@ -207,19 +209,15 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
         // a normal restart (still a running member on the log) and a cold start (epoch 0) return at once.
         // NB: a restored task must NOT skip this — a member that crashed while evicted is restored yet must
         // still block until re-admitted, or it would resume under its stale floor and self-evict in a loop.
-        Set<String> externalSourceTopics = Set.of();
         if (coordination != null) {
             ParsleyEpochRuntime runtime = coordination.runtimeFor(context.appConfigs());
             this.epochRuntime = runtime;
             this.snapshotPublisher = runtime::publishFrontier;
-            runtime.join(memberId);
+            // Declare this member's input channels and sink topics so the fold can derive the DAG-wide
+            // source-topic registry; then block until this member is a running member.
+            runtime.join(memberId, topics, sinkTopics);
             coordination.awaitJoinCommit(runtime, memberId);
-            externalSourceTopics = coordination.sourceTopics();
         }
-        this.externalSourceTopicIds = externalSourceTopics.stream()
-                .map(topicUuids::get)
-                .filter(id -> id != null)
-                .collect(java.util.stream.Collectors.toUnmodifiableSet());
 
         // The task's epoch state floors gating against the settled epoch. A fresh task that joined an
         // established epoch settles DIRECTLY at the committed floor F_{k+1}: it has no in-flight prior-
@@ -589,12 +587,16 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
             throw new IllegalStateException("task " + memberId
                     + " was evicted from the topology-epoch domain; failing so it re-joins under the current floor");
         }
+        // Whether this task is source-layer is derived per poll from the log's DAG-wide source-topic
+        // registry: the external source topics (inputs no member produces) that this task actually consumes.
+        // Derived, not configured, and re-read each poll because the registry grows as members join.
+        Set<Uuid> externalSourceTopicIds = resolveExternalSourceTopicIds(runtime);
         if (externalSourceTopicIds.isEmpty()) {
             return;
         }
         long committed = runtime.committedEpochId();
         if (committed > lastAdoptedEpoch) {
-            adoptAndInjectBoundary(new EpochBoundary(committed, runtime.committedLowerBounds()));
+            adoptAndInjectBoundary(new EpochBoundary(committed, runtime.committedLowerBounds()), externalSourceTopicIds);
             lastAdoptedEpoch = committed;
         }
         if (runtime.isRoundOpen()) {
@@ -604,6 +606,18 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
                 lastSnapshotRoundEpoch = round;
             }
         }
+    }
+
+    /**
+     * The external source coordinates this task owns: the topology's log-derived external source topics
+     * (inputs no member produces) intersected with this task's consumed topics, resolved to their broker
+     * UUIDs. Non-empty iff this task is source-layer for the current registry.
+     */
+    private Set<Uuid> resolveExternalSourceTopicIds(ParsleyEpochRuntime runtime) {
+        return runtime.externalSourceTopics().stream()
+                .map(topicUuids::get)
+                .filter(id -> id != null)
+                .collect(java.util.stream.Collectors.toUnmodifiableSet());
     }
 
     /**
@@ -624,7 +638,7 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
      * floor arrives from the log, since no in-band marker will ever reach it (break #1) — then relays the
      * boundary downstream on the last-seen key so the next layer transitions in-band.
      */
-    private void adoptAndInjectBoundary(EpochBoundary boundary) {
+    private void adoptAndInjectBoundary(EpochBoundary boundary, Set<Uuid> externalSourceTopicIds) {
         int partition = context.taskId().partition();
         List<ParsleyMessage<KIn, VIn>> released = new ArrayList<>();
         for (Uuid topicId : externalSourceTopicIds) {
@@ -823,7 +837,7 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
     }
 
     /**
-     * Best-effort, per-topic resolution of {@code describe} over {@link #additionalPartitionCountTopics}
+     * Best-effort, per-topic resolution of {@code describe} over {@link #sinkTopics}
      * — extra topics (e.g. a {@link CausalStreams} sink) folded into validation without being
      * consumed. Unlike a registered input buffer, such a topic is not required to exist yet (a sink
      * is often auto-created on first write), so a topic that cannot be described is logged and
@@ -839,12 +853,12 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
      */
     private <T> Map<String, T> additionalTopicInfo(
             ParsleyTopicAdmin admin, String what, TopicDescriptor<T> describe) {
-        if (additionalPartitionCountTopics.isEmpty()
+        if (sinkTopics.isEmpty()
                 || config.topologyValidation() == ParsleyConfig.ValidationMode.OFF) {
             return Map.of();
         }
         Map<String, T> result = new HashMap<>();
-        for (String topic : additionalPartitionCountTopics) {
+        for (String topic : sinkTopics) {
             try {
                 result.putAll(describe.describe(admin, List.of(topic)));
             } catch (Exception e) {

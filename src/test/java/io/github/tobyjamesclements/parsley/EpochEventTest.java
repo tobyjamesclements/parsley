@@ -1,6 +1,7 @@
 package io.github.tobyjamesclements.parsley;
 
 import org.apache.kafka.common.Uuid;
+import java.util.Set;
 import org.junit.jupiter.api.Test;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -14,11 +15,21 @@ class EpochEventTest {
     private static final Uuid T1_ID = Uuid.randomUuid();
     private static final Uuid T2_ID = Uuid.randomUuid();
 
-    /** A {@link EpochEvent.JoinRequested} round-trips with its member id. */
+    /** A {@link EpochEvent.JoinRequested} round-trips with its member id and declared input/sink topics. */
     @Test
     void joinRequestedRoundTrips() {
-        EpochEvent event = new EpochEvent.JoinRequested("task-0_1");
-        assertEquals(event, EpochEvent.fromBytes(event.toBytes()), "JoinRequested must round-trip");
+        EpochEvent event = new EpochEvent.JoinRequested(
+                "task-0_1", Set.of("orders", "prices"), Set.of("enriched"));
+        assertEquals(event, EpochEvent.fromBytes(event.toBytes()),
+                "JoinRequested must round-trip with its declared input and sink topics");
+    }
+
+    /** A {@link EpochEvent.JoinRequested} with no declared topics round-trips (empty sets survive). */
+    @Test
+    void joinRequestedWithNoTopicsRoundTrips() {
+        EpochEvent event = new EpochEvent.JoinRequested("task-0_5", Set.of(), Set.of());
+        assertEquals(event, EpochEvent.fromBytes(event.toBytes()),
+                "JoinRequested with empty topic sets must round-trip");
     }
 
     /** A {@link EpochEvent.SnapshotRequested} round-trips with its member id. */

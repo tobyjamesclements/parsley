@@ -6,6 +6,8 @@ import java.io.DataInputStream;
 import java.io.DataOutputStream;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
+import java.util.LinkedHashSet;
+import java.util.Set;
 
 /**
  * A record on the topology's single-partition {@code epoch-events} log — the shared, totally-ordered
@@ -37,8 +39,15 @@ sealed interface EpochEvent
     byte TAG_COMMIT = 4;
     byte TAG_LEAVE = 5;
 
-    /** A node announces itself; it becomes a running member (counted in the cut) at the next commit. */
-    record JoinRequested(String memberId) implements EpochEvent {}
+    /**
+     * A node announces itself; it becomes a running member (counted in the cut) at the next commit. The
+     * declared {@code inputTopics} (the channels it consumes) and {@code sinkTopics} (the topics it
+     * produces) feed the DAG-wide source-topic registry: the fold derives the topology's external source
+     * topics as {@code ∪inputTopics − ∪sinkTopics} over every declared member, so no node has to be told
+     * by hand which of its inputs are external.
+     */
+    record JoinRequested(String memberId, Set<String> inputTopics, Set<String> sinkTopics)
+            implements EpochEvent {}
 
     /** A node proposes a snapshot round; the first after the last commit opens it and owns it. */
     record SnapshotRequested(String memberId) implements EpochEvent {}
@@ -64,6 +73,8 @@ sealed interface EpochEvent
                 case JoinRequested e -> {
                     dos.writeByte(TAG_JOIN);
                     writeString(dos, e.memberId());
+                    writeStringSet(dos, e.inputTopics());
+                    writeStringSet(dos, e.sinkTopics());
                 }
                 case SnapshotRequested e -> {
                     dos.writeByte(TAG_SNAPSHOT);
@@ -100,7 +111,7 @@ sealed interface EpochEvent
         try (DataInputStream dis = new DataInputStream(new ByteArrayInputStream(bytes))) {
             byte tag = dis.readByte();
             return switch (tag) {
-                case TAG_JOIN -> new JoinRequested(readString(dis));
+                case TAG_JOIN -> new JoinRequested(readString(dis), readStringSet(dis), readStringSet(dis));
                 case TAG_SNAPSHOT -> new SnapshotRequested(readString(dis));
                 case TAG_FRONTIER -> new FrontierPublished(readString(dis), readClock(dis));
                 case TAG_COMMIT -> new EpochCommitted(dis.readLong(), readClock(dis));
@@ -120,6 +131,22 @@ sealed interface EpochEvent
 
     private static String readString(DataInputStream dis) throws IOException {
         return new String(dis.readNBytes(dis.readInt()), StandardCharsets.UTF_8);
+    }
+
+    private static void writeStringSet(DataOutputStream dos, Set<String> strings) throws IOException {
+        dos.writeInt(strings.size());
+        for (String s : strings) {
+            writeString(dos, s);
+        }
+    }
+
+    private static Set<String> readStringSet(DataInputStream dis) throws IOException {
+        int count = dis.readInt();
+        Set<String> strings = new LinkedHashSet<>();
+        for (int i = 0; i < count; i++) {
+            strings.add(readString(dis));
+        }
+        return strings;
     }
 
     private static void writeClock(DataOutputStream dos, ParsleyClock clock) throws IOException {

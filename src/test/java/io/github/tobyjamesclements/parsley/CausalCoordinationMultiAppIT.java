@@ -78,8 +78,8 @@ class CausalCoordinationMultiAppIT {
 
         // App A is source-layer (t1 is external); app B consumes mid (internal to the DAG), so it declares
         // no external sources and is driven by A's in-band markers relayed through mid.
-        CausalCoordination coordinationA = CausalCoordination.create(EPOCH_EVENTS, Set.of(IN));
-        CausalCoordination coordinationB = CausalCoordination.create(EPOCH_EVENTS, Set.of());
+        CausalCoordination coordinationA = CausalCoordination.create(EPOCH_EVENTS);
+        CausalCoordination coordinationB = CausalCoordination.create(EPOCH_EVENTS);
         Path stateA = Files.createTempDirectory("parsley-dag-a");
         Path stateB = Files.createTempDirectory("parsley-dag-b");
 

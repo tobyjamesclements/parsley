@@ -283,7 +283,7 @@ public final class CausalStreams {
                     .addBuffers(sources.values())
                     .withConfig(config)
                     .withAudit(audit)
-                    .additionalPartitionCountTopics(sinkTopics);
+                    .sinkTopics(sinkTopics);
             if (quiesce != null) {
                 causalBuilder.withQuiesce(quiesce);
             }

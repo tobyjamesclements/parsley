@@ -29,7 +29,7 @@ final class ParsleyProcessorSupplier<KIn, VIn, KOut, VOut>
     private final String candidateIndexStoreName;
     private final String forwardedIndexStoreName;
     private final Set<String> topics;
-    private final Set<String> additionalPartitionCountTopics;
+    private final Set<String> sinkTopics;
     private final Function<Map<String, Object>, ParsleyTopicAdmin> adminFactory;
     private final ParsleyConfig config;
     private final CausalAudit audit;
@@ -45,7 +45,7 @@ final class ParsleyProcessorSupplier<KIn, VIn, KOut, VOut>
                                       String candidateIndexStoreName,
                                       String forwardedIndexStoreName,
                                       Set<String> topics,
-                                      Set<String> additionalPartitionCountTopics,
+                                      Set<String> sinkTopics,
                                       Function<Map<String, Object>, ParsleyTopicAdmin> adminFactory,
                                       ParsleyConfig config,
                                       CausalAudit audit,
@@ -60,7 +60,7 @@ final class ParsleyProcessorSupplier<KIn, VIn, KOut, VOut>
         this.candidateIndexStoreName = candidateIndexStoreName;
         this.forwardedIndexStoreName = forwardedIndexStoreName;
         this.topics = topics;
-        this.additionalPartitionCountTopics = additionalPartitionCountTopics;
+        this.sinkTopics = sinkTopics;
         this.adminFactory = adminFactory;
         this.config = config;
         this.audit = audit;
@@ -74,7 +74,7 @@ final class ParsleyProcessorSupplier<KIn, VIn, KOut, VOut>
                 userSupplier.get(), limit,
                 new ParsleySerializer<>(new ParsleyResolver<>(keySerdeByTopic, valueSerdeByTopic)),
                 frontierStoreName, bufferStoreName, candidateIndexStoreName, forwardedIndexStoreName,
-                topics, additionalPartitionCountTopics, adminFactory, config, audit, quiesce,
+                topics, sinkTopics, adminFactory, config, audit, quiesce,
                 ParsleyEpochSnapshotPublisher.NOOP, coordination);
     }
 

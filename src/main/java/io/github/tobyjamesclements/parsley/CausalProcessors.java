@@ -87,7 +87,7 @@ public final class CausalProcessors {
         private Function<Map<String, Object>, ParsleyTopicAdmin> adminFactory = ParsleyTopicAdmin::ofConfigs;
         private @Nullable ParsleyConfig configOverride = null;
         private CausalAudit audit = CausalAudit.NOOP;
-        private Set<String> additionalPartitionCountTopics = Set.of();
+        private Set<String> sinkTopics = Set.of();
         private @Nullable CausalQuiesce quiesce = null;
         private @Nullable CausalCoordination coordination = null;
 
@@ -268,19 +268,27 @@ public final class CausalProcessors {
         }
 
         /**
-         * Folds partition counts for {@code topics} into the startup co-partitioning check
-         * ({@code parsley.topology.validation}) alongside the registered input buffers, without
-         * consuming them or resolving their UUIDs. Used by {@link CausalStreams}, which knows this
-         * stage's sink topics and can validate them for co-partitioning even though this decorator
-         * never reads from or writes to them itself. A topic that cannot be described (e.g. a sink
-         * not yet created) is skipped for this check rather than failing the task — unlike a
-         * registered input buffer, a sink is not required to exist before the stage starts.
+         * Declares the topics this stage produces. This serves two purposes:
+         * <ul>
+         *   <li>Their partition counts are folded into the startup co-partitioning check
+         *       ({@code parsley.topology.validation}) alongside the registered input buffers, without
+         *       consuming them or resolving their UUIDs. A topic that cannot be described (e.g. a sink
+         *       not yet created) is skipped rather than failing the task — unlike a registered input
+         *       buffer, a sink is not required to exist before the stage starts.
+         *   <li>When topology-epoch coordination is configured ({@link #withCoordination}), they form
+         *       this member's declaration on the shared log, from which the DAG-wide source-topic
+         *       registry is derived (an external source = a topic some member consumes but no member
+         *       produces). Declare them so a downstream consumer of a sink is not mistaken for a
+         *       source-layer stage.
+         * </ul>
+         * {@link CausalStreams} sets this automatically from its {@code addSink(...)} declarations; on
+         * the low-level decorator path, declare it here.
          *
-         * @param topics extra topic names to include in the partition-count parity check
+         * @param topics the stage's output topic names
          * @return this builder
          */
-        Builder<KIn, VIn, KOut, VOut> additionalPartitionCountTopics(Set<String> topics) {
-            this.additionalPartitionCountTopics = Set.copyOf(topics);
+        public Builder<KIn, VIn, KOut, VOut> sinkTopics(Set<String> topics) {
+            this.sinkTopics = Set.copyOf(topics);
             return this;
         }
 
@@ -308,7 +316,7 @@ public final class CausalProcessors {
             return new ParsleyProcessorSupplier<>(
                     userSupplier, bufferLimit, keySerdeByTopic, valueSerdeByTopic,
                     store + "-frontier", store + "-buffer", store + "-candidate-index", store + "-forwarded-index",
-                    resolved.keySet(), additionalPartitionCountTopics, adminFactory, effectiveConfig,
+                    resolved.keySet(), sinkTopics, adminFactory, effectiveConfig,
                     ParsleyAudit.wrap(audit), quiesce, coordination);
         }
 

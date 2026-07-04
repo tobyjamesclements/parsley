@@ -25,8 +25,8 @@ class CausalCoordinationTest {
     void requestEpochTransitionOpensAndCommitsARoundOwnedByALocalMember() {
         InMemoryEpochTransport.SharedLog log = new InMemoryEpochTransport.SharedLog();
         ParsleyEpochRuntime runtime = new ParsleyEpochRuntime(new InMemoryEpochTransport(log));
-        CausalCoordination coordination = CausalCoordination.forRuntime(runtime, Set.of());
-        runtime.join("A");   // a local member, as a participating task's init() would
+        CausalCoordination coordination = CausalCoordination.forRuntime(runtime);
+        runtime.join("A", Set.of(), Set.of());   // a local member, as a participating task's init() would
 
         coordination.requestEpochTransition();
         settle(log, runtime);
@@ -38,7 +38,7 @@ class CausalCoordinationTest {
     /** Requesting a transition before any task has initialised coordination fails with a clear message. */
     @Test
     void requestEpochTransitionBeforeAnyRuntimeFails() {
-        CausalCoordination coordination = CausalCoordination.create("epoch-events", Set.of());
+        CausalCoordination coordination = CausalCoordination.create("epoch-events");
         assertThrows(IllegalStateException.class, coordination::requestEpochTransition,
                 "with no initialised runtime there is nothing to request a transition on");
     }
@@ -48,7 +48,7 @@ class CausalCoordinationTest {
     void requestEpochTransitionWithNoLocalMemberFails() {
         ParsleyEpochRuntime runtime =
                 new ParsleyEpochRuntime(new InMemoryEpochTransport(new InMemoryEpochTransport.SharedLog()));
-        CausalCoordination coordination = CausalCoordination.forRuntime(runtime, Set.of());
+        CausalCoordination coordination = CausalCoordination.forRuntime(runtime);
         assertThrows(IllegalStateException.class, coordination::requestEpochTransition,
                 "no local member has joined, so the request cannot be attributed to a local owner");
     }
@@ -56,12 +56,12 @@ class CausalCoordinationTest {
     /** {@link CausalCoordination#close()} is idempotent and safe to call before any task initialised the runtime. */
     @Test
     void closeIsIdempotentAndSafeBeforeInit() {
-        CausalCoordination uninitialised = CausalCoordination.create("epoch-events", Set.of());
+        CausalCoordination uninitialised = CausalCoordination.create("epoch-events");
         uninitialised.close();   // no runtime built yet — a no-op
 
         ParsleyEpochRuntime runtime =
                 new ParsleyEpochRuntime(new InMemoryEpochTransport(new InMemoryEpochTransport.SharedLog()));
-        CausalCoordination coordination = CausalCoordination.forRuntime(runtime, Set.of());
+        CausalCoordination coordination = CausalCoordination.forRuntime(runtime);
         coordination.close();
         coordination.close();   // idempotent
     }
@@ -74,7 +74,7 @@ class CausalCoordinationTest {
     void awaitJoinCommitDoesNotBlockAtEpochZero() {
         InMemoryEpochTransport.SharedLog log = new InMemoryEpochTransport.SharedLog();
         ParsleyEpochRuntime runtime = new ParsleyEpochRuntime(new InMemoryEpochTransport(log));
-        CausalCoordination coordination = CausalCoordination.forRuntime(runtime, Set.of());
+        CausalCoordination coordination = CausalCoordination.forRuntime(runtime);
         runtime.start();
         try {
             coordination.awaitJoinCommit(runtime, "J");   // returns once bootstrapped; no round, no block
@@ -96,15 +96,15 @@ class CausalCoordinationTest {
         // Seed an established epoch 1 with a running member R, so the joiner's round cannot vacuously
         // complete and R (not live here) never publishes for it.
         InMemoryEpochTransport seeder = new InMemoryEpochTransport(log);
-        seeder.append(new EpochEvent.JoinRequested("R"));
+        seeder.append(new EpochEvent.JoinRequested("R", Set.of(), Set.of()));
         seeder.append(new EpochEvent.SnapshotRequested("R"));
         seeder.append(new EpochEvent.EpochCommitted(1, ParsleyClock.empty()));
 
         ParsleyEpochRuntime runtime = new ParsleyEpochRuntime(new InMemoryEpochTransport(log));
-        CausalCoordination coordination = CausalCoordination.forRuntime(runtime, Set.of(), Duration.ofMillis(300));
+        CausalCoordination coordination = CausalCoordination.forRuntime(runtime, Duration.ofMillis(300));
         runtime.start();
         try {
-            runtime.join("J");   // a local member to attribute (own) the joiner's round to
+            runtime.join("J", Set.of(), Set.of());   // a local member to attribute (own) the joiner's round to
             IllegalStateException failure = assertThrows(IllegalStateException.class,
                     () -> coordination.awaitJoinCommit(runtime, "J"),
                     "a joiner whose epoch never commits must fail after the timeout");
@@ -124,8 +124,8 @@ class CausalCoordinationTest {
     void leaveGracefullyRemovesLocalMembersWithoutTriggeringReJoin() {
         InMemoryEpochTransport.SharedLog log = new InMemoryEpochTransport.SharedLog();
         ParsleyEpochRuntime runtime = new ParsleyEpochRuntime(new InMemoryEpochTransport(log));
-        CausalCoordination coordination = CausalCoordination.forRuntime(runtime, Set.of());
-        runtime.join("A");
+        CausalCoordination coordination = CausalCoordination.forRuntime(runtime);
+        runtime.join("A", Set.of(), Set.of());
 
         coordination.leave();
         settle(log, runtime);
@@ -144,12 +144,12 @@ class CausalCoordinationTest {
     void awaitJoinCommitDoesNotBlockForAnAlreadyRunningMember() {
         InMemoryEpochTransport.SharedLog log = new InMemoryEpochTransport.SharedLog();
         InMemoryEpochTransport seeder = new InMemoryEpochTransport(log);
-        seeder.append(new EpochEvent.JoinRequested("M"));
+        seeder.append(new EpochEvent.JoinRequested("M", Set.of(), Set.of()));
         seeder.append(new EpochEvent.SnapshotRequested("M"));
         seeder.append(new EpochEvent.EpochCommitted(1, ParsleyClock.empty()));
 
         ParsleyEpochRuntime runtime = new ParsleyEpochRuntime(new InMemoryEpochTransport(log));
-        CausalCoordination coordination = CausalCoordination.forRuntime(runtime, Set.of());
+        CausalCoordination coordination = CausalCoordination.forRuntime(runtime);
         runtime.start();
         try {
             coordination.awaitJoinCommit(runtime, "M");   // M is already running -> returns without blocking
