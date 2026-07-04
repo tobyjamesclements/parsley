@@ -32,7 +32,7 @@ import java.util.Set;
  * CausalQuiesce quiesce = CausalQuiesce.create();
  *
  * Topology topology = CausalStreams.builder(userSupplier)
- *         .addBufferStore("parsley", CausalBufferLimit.ofDuration(limit))
+ *         .addBufferStore("parsley")
  *         .addSource(CausalBuffer.of("prices", Serdes.String(), priceSerde))
  *         .addSource(CausalBuffer.of("orders", Serdes.String(), orderSerde))
  *         .addSink("enriched-sink", "enriched-output", Serdes.String(), enrichedSerde)
@@ -100,7 +100,6 @@ public final class CausalStreams {
 
         private final ProcessorSupplier<KIn, VIn, KOut, VOut> userSupplier;
         private @Nullable String storeName = null;
-        private @Nullable CausalBufferLimit limit = null;
         private final Map<String, CausalBuffer<KIn, VIn>> sources = new LinkedHashMap<>();
         private final List<Sink<KOut, VOut>> sinks = new ArrayList<>();
         private final Properties config = new Properties();
@@ -128,17 +127,15 @@ public final class CausalStreams {
         }
 
         /**
-         * Declares the buffer state store and its eviction limit. See
-         * {@link CausalProcessors.Builder#addBufferStore} — same semantics.
+         * Declares the buffer state store's namespace. The buffer is unbounded (see
+         * {@link CausalProcessors.Builder#addBufferStore} — same semantics).
          *
-         * @param name  the state-store namespace; also the base for this stage's generated topology
-         *              node names ({@code name + "-processor"}, {@code name + "-source-" + topic})
-         * @param limit the buffer eviction trigger
+         * @param name the state-store namespace; also the base for this stage's generated topology
+         *             node names ({@code name + "-processor"}, {@code name + "-source-" + topic})
          * @return this builder
          */
-        public Builder<KIn, VIn, KOut, VOut> addBufferStore(String name, CausalBufferLimit limit) {
+        public Builder<KIn, VIn, KOut, VOut> addBufferStore(String name) {
             this.storeName = name;
-            this.limit = limit;
             return this;
         }
 
@@ -261,9 +258,9 @@ public final class CausalStreams {
          * @throws IllegalStateException if no buffer store, no source, or no sink was declared
          */
         public Topology build() {
-            if (storeName == null || limit == null) {
+            if (storeName == null) {
                 throw new IllegalStateException(
-                        "a buffer store is required; call addBufferStore(name, limit)");
+                        "a buffer store is required; call addBufferStore(name)");
             }
             if (sources.isEmpty()) {
                 throw new IllegalStateException(
@@ -279,7 +276,7 @@ public final class CausalStreams {
                 sinkTopics.add(sink.topic());
             }
             CausalProcessors.Builder<KIn, VIn, KOut, VOut> causalBuilder = CausalProcessors.builder(userSupplier)
-                    .addBufferStore(storeName, limit)
+                    .addBufferStore(storeName)
                     .addBuffers(sources.values())
                     .withConfig(config)
                     .withAudit(audit)

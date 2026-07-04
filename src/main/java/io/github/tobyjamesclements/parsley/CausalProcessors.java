@@ -15,17 +15,16 @@ import java.util.function.Function;
  * Factory for {@link CausalProcessorSupplier} — the decorating causal processor you drop into a Kafka
  * Streams topology with {@code stream(...).process(...)}.
  *
- * <p>Obtain a {@link Builder} with {@link #builder(ProcessorSupplier)}, declare the buffer store and
- * its eviction limit with {@link Builder#addBufferStore(String, CausalBufferLimit)}, register a
- * {@link CausalBuffer} for every input topic, then call {@link Builder#build()}:
+ * <p>Obtain a {@link Builder} with {@link #builder(ProcessorSupplier)}, declare the buffer store with
+ * {@link Builder#addBufferStore(String)}, register a {@link CausalBuffer} for every input topic, then
+ * call {@link Builder#build()}:
  *
  * <pre>{@code
  * builder.stream(List.of("prices", "orders"), Consumed.with(Serdes.String(), orderSerde))
  *        .process(CausalProcessors.builder(userSupplier)
- *                .addBufferStore("parsley", CausalBufferLimit.ofDuration(limit))
+ *                .addBufferStore("parsley")
  *                .addBuffer(CausalBuffer.of("prices", Serdes.String(), orderSerde))
  *                .addBuffer(CausalBuffer.of("orders", Serdes.String(), orderSerde))
- *                .withConfig("parsley.buffer.deserialization.failure.policy", "continue")
  *                .build())
  *        .to("output-topic");
  * }</pre>
@@ -41,8 +40,8 @@ public final class CausalProcessors {
 
     /**
      * Starts building a {@link CausalProcessorSupplier} that wraps {@code userSupplier} behind the
-     * causal guarantee. Declare the buffer store and its eviction limit with
-     * {@link Builder#addBufferStore(String, CausalBufferLimit)} before {@link Builder#build()}.
+     * causal guarantee. Declare the buffer store with {@link Builder#addBufferStore(String)} before
+     * {@link Builder#build()}.
      *
      * @param userSupplier the user's processor supplier (its declared state stores are unioned with
      *                     Parsley's internal frontier and buffer stores)
@@ -68,7 +67,7 @@ public final class CausalProcessors {
 
     /**
      * Builder for a {@link CausalProcessorSupplier}. A buffer store
-     * (via {@link #addBufferStore(String, CausalBufferLimit)}) and at least one {@link CausalBuffer}
+     * (via {@link #addBufferStore(String)}) and at least one {@link CausalBuffer}
      * (via {@link #addBuffer}/{@link #addBuffers}) are required; Parsley's own configuration is
      * optional.
      *
@@ -81,7 +80,6 @@ public final class CausalProcessors {
 
         private final ProcessorSupplier<KIn, VIn, KOut, VOut> userSupplier;
         private @Nullable String storeName = null;
-        private @Nullable CausalBufferLimit limit = null;
         private final Map<String, CausalBuffer<KIn, VIn>> buffers = new LinkedHashMap<>();
         private final Properties config = new Properties();
         private Function<Map<String, Object>, ParsleyTopicAdmin> adminFactory = ParsleyTopicAdmin::ofConfigs;
@@ -96,9 +94,9 @@ public final class CausalProcessors {
         }
 
         /**
-         * Declares the buffer state store and its eviction limit — the required Kafka-Streams-style
-         * pairing of a store name with how it is sized, mirroring
-         * {@link org.apache.kafka.streams.state.Stores}.
+         * Declares the buffer state store's namespace. The buffer is unbounded: a held record waits
+         * until its causal dependencies are satisfied (the buffer is changelog-backed and spills to
+         * disk, so it does not grow in memory). There is no eviction or size limit.
          *
          * <p>{@code name} is the state-store namespace: the frontier store is {@code name + "-frontier"}
          * (holding the contiguous frontier clock and the per-channel clocks as one value), the
@@ -107,16 +105,11 @@ public final class CausalProcessors {
          * {@code name + "-forwarded-index"}. These name the backing changelog topics, so keep
          * {@code name} stable across restarts, and unique per causal processor sharing a topology.
          *
-         * @param name  the state-store namespace
-         * @param limit the buffer eviction trigger — how long or how many records to hold before
-         *              acting: by default ({@code parsley.buffer.eviction.failure.policy = fail})
-         *              the task fails fast; set the policy to {@code continue} to forward the record
-         *              out of causal order instead, logged and counted by the violation metric
+         * @param name the state-store namespace
          * @return this builder
          */
-        public Builder<KIn, VIn, KOut, VOut> addBufferStore(String name, CausalBufferLimit limit) {
+        public Builder<KIn, VIn, KOut, VOut> addBufferStore(String name) {
             this.storeName = name;
-            this.limit = limit;
             return this;
         }
 
@@ -299,22 +292,21 @@ public final class CausalProcessors {
          * @throws IllegalStateException if no buffer store or no {@link CausalBuffer} was declared
          */
         public CausalProcessorSupplier<KIn, VIn, KOut, VOut> build() {
-            if (storeName == null || limit == null) {
+            if (storeName == null) {
                 throw new IllegalStateException(
-                        "a buffer store is required; call addBufferStore(name, limit)");
+                        "a buffer store is required; call addBufferStore(name)");
             }
             if (buffers.isEmpty()) {
                 throw new IllegalStateException(
                         "at least one CausalBuffer is required; call addBuffer(...) for every input topic");
             }
             String store = storeName;
-            CausalBufferLimit bufferLimit = limit;
             Map<String, CausalBuffer<KIn, VIn>> resolved = Map.copyOf(buffers);
             Function<String, Serde<KIn>> keySerdeByTopic = topic -> serdeFor(resolved, topic).keySerde();
             Function<String, Serde<VIn>> valueSerdeByTopic = topic -> serdeFor(resolved, topic).valueSerde();
             ParsleyConfig effectiveConfig = configOverride != null ? configOverride : effectiveConfig();
             return new ParsleyProcessorSupplier<>(
-                    userSupplier, bufferLimit, keySerdeByTopic, valueSerdeByTopic,
+                    userSupplier, keySerdeByTopic, valueSerdeByTopic,
                     store + "-frontier", store + "-buffer", store + "-candidate-index", store + "-forwarded-index",
                     resolved.keySet(), sinkTopics, adminFactory, effectiveConfig,
                     ParsleyAudit.wrap(audit), quiesce, coordination);

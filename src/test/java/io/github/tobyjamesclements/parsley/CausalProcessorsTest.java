@@ -13,7 +13,6 @@ import java.util.Set;
 import java.util.stream.Collectors;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -26,11 +25,11 @@ class CausalProcessorsTest {
                 public void process(Record<String, String> record) {}
             };
 
-    private static final String FAILURE_POLICY = "parsley.buffer.deserialization.failure.policy";
+    private static final String TOPOLOGY_VALIDATION = "parsley.topology.validation";
 
     /**
      * {@code CausalProcessors.Builder.build()} requires a buffer store to be declared via
-     * {@code addBufferStore(name, limit)} before the processor supplier can be constructed.
+     * {@code addBufferStore(name)} before the processor supplier can be constructed.
      *
      * Asserts that {@code IllegalStateException} is thrown when no buffer store was declared.
      */
@@ -39,7 +38,7 @@ class CausalProcessorsTest {
         CausalProcessors.Builder<String, String, String, String> b = CausalProcessors.builder(USER)
                 .addBuffer(CausalBuffer.of("t1", Serdes.String(), Serdes.String()));
         assertThrows(IllegalStateException.class, b::build,
-                "build() must throw when addBufferStore(name, limit) was not called");
+                "build() must throw when addBufferStore(name) was not called");
     }
 
     /**
@@ -51,7 +50,7 @@ class CausalProcessorsTest {
     @Test
     void buildRequiresABuffer() {
         CausalProcessors.Builder<String, String, String, String> b =
-                builderWith(CausalBufferLimit.ofSize(1));
+                builderWith();
         assertThrows(IllegalStateException.class, b::build,
                 "build() must throw when no CausalBuffer has been registered");
     }
@@ -66,7 +65,7 @@ class CausalProcessorsTest {
     @Test
     void buildsAValidSupplier() {
         CausalProcessorSupplier<String, String, String, String> supplier =
-                builderWith(CausalBufferLimit.ofSize(1))
+                builderWith()
                         .addBuffer(CausalBuffer.of("t1", Serdes.String(), Serdes.String()))
                         .build();
         assertNotNull(supplier, "build() must return a non-null supplier");
@@ -74,19 +73,16 @@ class CausalProcessorsTest {
     }
 
     /**
-     * {@code addBufferStore(name, limit)} sets the state-store namespace — the frontier, buffer,
-     * candidate-index, and forwarded-index store names are all derived from {@code name} — and
-     * carries the eviction limit through to the built supplier.
+     * {@code addBufferStore(name)} sets the state-store namespace — the frontier, buffer,
+     * candidate-index, and forwarded-index store names are all derived from {@code name}.
      *
-     * Asserts the four derived store names appear in {@code stores()} and the supplier reports the
-     * limit it was given.
+     * Asserts the four derived store names appear in {@code stores()}.
      */
     @Test
-    void addBufferStoreSetsNamespaceAndLimit() {
-        CausalBufferLimit limit = CausalBufferLimit.ofSize(7);
+    void addBufferStoreSetsNamespace() {
         ParsleyProcessorSupplier<String, String, String, String> supplier =
                 (ParsleyProcessorSupplier<String, String, String, String>) CausalProcessors.builder(USER)
-                        .addBufferStore("t1", limit)
+                        .addBufferStore("t1")
                         .addBuffer(CausalBuffer.of("t1", Serdes.String(), Serdes.String()))
                         .build();
 
@@ -99,68 +95,67 @@ class CausalProcessorsTest {
                 "candidate-index store must be named from the namespace");
         assertTrue(storeNames.contains("t1-forwarded-index"),
                 "forwarded-index store must be named from the namespace");
-        assertEquals(limit, supplier.limit(), "the supplier must carry the eviction limit it was given");
     }
 
     /**
-     * {@code withConfig(key, value)} sets a Parsley configuration entry that overrides the default
-     * deserialization-failure policy ({@code fail}).
+     * {@code withConfig(key, value)} sets a Parsley configuration entry that is threaded into the
+     * built supplier's effective {@link ParsleyConfig}.
      *
-     * Asserts that setting the policy to {@code continue} makes the effective config skip on decode
-     * failure, where the default would not.
+     * Asserts that setting {@code parsley.topology.validation} to {@code strict} makes the effective
+     * config report STRICT, where the default is WARN.
      */
     @Test
     void withConfigKeyValueOverridesDefault() {
         ParsleyProcessorSupplier<String, String, String, String> supplier =
-                (ParsleyProcessorSupplier<String, String, String, String>) builderWith(CausalBufferLimit.ofSize(1))
+                (ParsleyProcessorSupplier<String, String, String, String>) builderWith()
                         .addBuffer(CausalBuffer.of("t1", Serdes.String(), Serdes.String()))
-                        .withConfig(FAILURE_POLICY, "continue")
+                        .withConfig(TOPOLOGY_VALIDATION, "strict")
                         .build();
-        assertTrue(supplier.config().skipOnDecodeFailure(),
-                "withConfig(continue) must make the effective config skip on decode failure");
+        assertEquals(ParsleyConfig.ValidationMode.STRICT, supplier.config().topologyValidation(),
+                "withConfig(strict) must thread the value into the effective config");
     }
 
     /**
      * With no Parsley configuration supplied, the effective config falls back to its defaults, where
-     * the deserialization-failure policy is {@code fail} (do not skip).
+     * {@code parsley.topology.validation} is {@code warn}.
      *
-     * Asserts the default effective config does not skip on decode failure.
+     * Asserts the default effective config reports WARN.
      */
     @Test
-    void defaultConfigDoesNotSkipOnDecodeFailure() {
+    void defaultConfigUsesWarnValidation() {
         ParsleyProcessorSupplier<String, String, String, String> supplier =
-                (ParsleyProcessorSupplier<String, String, String, String>) builderWith(CausalBufferLimit.ofSize(1))
+                (ParsleyProcessorSupplier<String, String, String, String>) builderWith()
                         .addBuffer(CausalBuffer.of("t1", Serdes.String(), Serdes.String()))
                         .build();
-        assertFalse(supplier.config().skipOnDecodeFailure(),
-                "the default policy is 'fail', which must not skip on decode failure");
+        assertEquals(ParsleyConfig.ValidationMode.WARN, supplier.config().topologyValidation(),
+                "the default topology-validation mode is 'warn'");
     }
 
     /**
      * The {@code withConfigs(Map)} and {@code withConfig(Properties)} overloads both feed the
      * effective Parsley configuration, exactly as {@code withConfig(key, value)} does.
      *
-     * Asserts the {@code continue} policy lands via both the map and the properties overload.
+     * Asserts the {@code strict} validation mode lands via both the map and the properties overload.
      */
     @Test
     void withConfigsMapAndPropertiesApplied() {
         ParsleyProcessorSupplier<String, String, String, String> fromMap =
-                (ParsleyProcessorSupplier<String, String, String, String>) builderWith(CausalBufferLimit.ofSize(1))
+                (ParsleyProcessorSupplier<String, String, String, String>) builderWith()
                         .addBuffer(CausalBuffer.of("t1", Serdes.String(), Serdes.String()))
-                        .withConfigs(Map.of(FAILURE_POLICY, "continue"))
+                        .withConfigs(Map.of(TOPOLOGY_VALIDATION, "strict"))
                         .build();
-        assertTrue(fromMap.config().skipOnDecodeFailure(),
-                "withConfigs(Map) must apply the supplied policy");
+        assertEquals(ParsleyConfig.ValidationMode.STRICT, fromMap.config().topologyValidation(),
+                "withConfigs(Map) must apply the supplied value");
 
         Properties props = new Properties();
-        props.setProperty(FAILURE_POLICY, "continue");
+        props.setProperty(TOPOLOGY_VALIDATION, "strict");
         ParsleyProcessorSupplier<String, String, String, String> fromProps =
-                (ParsleyProcessorSupplier<String, String, String, String>) builderWith(CausalBufferLimit.ofSize(1))
+                (ParsleyProcessorSupplier<String, String, String, String>) builderWith()
                         .addBuffer(CausalBuffer.of("t2", Serdes.String(), Serdes.String()))
                         .withConfig(props)
                         .build();
-        assertTrue(fromProps.config().skipOnDecodeFailure(),
-                "withConfig(Properties) must apply the supplied policy");
+        assertEquals(ParsleyConfig.ValidationMode.STRICT, fromProps.config().topologyValidation(),
+                "withConfig(Properties) must apply the supplied value");
     }
 
     /**
@@ -173,7 +168,7 @@ class CausalProcessorsTest {
     @Test
     void builderRejectsAnAlreadyDecoratedSupplier() {
         CausalProcessorSupplier<String, String, String, String> alreadyDecorated =
-                builderWith(CausalBufferLimit.ofSize(1))
+                builderWith()
                         .addBuffer(CausalBuffer.of("t1", Serdes.String(), Serdes.String()))
                         .build();
 
@@ -186,7 +181,7 @@ class CausalProcessorsTest {
 
     // --- helpers --------------------------------------------------------------------------------
 
-    private static CausalProcessors.Builder<String, String, String, String> builderWith(CausalBufferLimit limit) {
-        return CausalProcessors.builder(USER).addBufferStore("parsley", limit);
+    private static CausalProcessors.Builder<String, String, String, String> builderWith() {
+        return CausalProcessors.builder(USER).addBufferStore("parsley");
     }
 }

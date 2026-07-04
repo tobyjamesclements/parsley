@@ -1,8 +1,7 @@
 package io.github.tobyjamesclements.parsley;
 
 /**
- * Receives Parsley's per-record causal-buffering events: forwarded, held, released, evicted
- * (causal violation), eviction-limit-exceeded (fail-fast instead of a violation), undecodable, and
+ * Receives Parsley's per-record causal-buffering events: forwarded, held, released, undecodable, and
  * unresolvable-clock (an undecodable dependencies header at ingest).
  * Register one with
  * {@link CausalProcessors.Builder#withAudit} to route these events wherever your audit/compliance
@@ -64,17 +63,6 @@ public interface CausalAudit {
     void recordReleased(String topic, int partition, long offset, int bufferDepthAfter);
 
     /**
-     * A held record was evicted and forwarded out of causal order because a
-     * {@link CausalBufferLimit} fired before its dependencies were satisfied — a causal violation.
-     *
-     * @param topic     the record's source topic
-     * @param partition the record's source partition
-     * @param offset    the record's source offset
-     * @param gap       the dependencies that remained unsatisfied at the time of eviction
-     */
-    void recordViolation(String topic, int partition, long offset, CausalDependencies gap);
-
-    /**
      * A held record could no longer be deserialised on the forward path (e.g. an incompatible
      * Schema Registry change while buffered).
      *
@@ -83,10 +71,10 @@ public interface CausalAudit {
      * @param offset    the record's source offset
      * @param reason    an operator-facing diagnostic (coordinate, dependencies, lengths, schema
      *                  id — never the payload bytes)
-     * @param dropped   {@code true} if the record was dropped and processing continued
-     *                  ({@code parsley.buffer.deserialization.failure.policy = continue});
-     *                  {@code false} if it remains in the buffer for recovery (the {@code fail}
-     *                  default)
+     * @param dropped   always {@code false} — delivery is fail-closed: the record is not dropped, it
+     *                  remains in the buffer changelog for recovery and the task fails fast (a future
+     *                  dead-letter path will divert a genuinely unrecoverable record out of the causal
+     *                  path)
      */
     void recordDeserializationFailure(String topic, int partition, long offset, String reason, boolean dropped);
 
@@ -99,24 +87,10 @@ public interface CausalAudit {
      * @param offset    the record's source offset
      * @param reason    an operator-facing diagnostic (coordinate, encoded header length — never the
      *                  payload bytes)
-     * @param failed    {@code true} if the task is being failed fast (the {@code fail} default of
-     *                  {@code parsley.clock.resolution.failure.policy}); {@code false} if the record
-     *                  was forwarded with empty dependencies ({@code continue})
+     * @param failed    always {@code true} — delivery is fail-closed: the task fails fast rather than
+     *                  forward a record whose dependencies header could not be decoded
      */
     void recordClockResolutionFailure(String topic, int partition, long offset, String reason, boolean failed);
-
-    /**
-     * A {@link CausalBufferLimit} fired on a held record whose dependencies were not yet satisfied,
-     * and {@code parsley.buffer.eviction.failure.policy = fail} (the default) is configured: the
-     * record was <strong>not</strong> evicted — it remains buffered — and the owning Streams task is
-     * about to fail fast rather than deliver it out of causal order.
-     *
-     * @param topic     the record's source topic
-     * @param partition the record's source partition
-     * @param offset    the record's source offset
-     * @param gap       the dependencies that remain unsatisfied
-     */
-    void recordEvictionLimitExceeded(String topic, int partition, long offset, CausalDependencies gap);
 
     /**
      * The processor for {@code taskId} initialized.
@@ -139,10 +113,8 @@ public interface CausalAudit {
         @Override public void recordForwarded(String topic, int partition, long offset) {}
         @Override public void recordHeld(String topic, int partition, long offset, int bufferDepth, CausalDependencies gap) {}
         @Override public void recordReleased(String topic, int partition, long offset, int bufferDepthAfter) {}
-        @Override public void recordViolation(String topic, int partition, long offset, CausalDependencies gap) {}
         @Override public void recordDeserializationFailure(String topic, int partition, long offset, String reason, boolean dropped) {}
         @Override public void recordClockResolutionFailure(String topic, int partition, long offset, String reason, boolean failed) {}
-        @Override public void recordEvictionLimitExceeded(String topic, int partition, long offset, CausalDependencies gap) {}
         @Override public void processorInitialized(String taskId, boolean frontierRestored) {}
         @Override public void processorClosing(String taskId) {}
     };

@@ -81,7 +81,6 @@ public class BufferReleaseBenchmark {
     // -------------------------------------------------------------------------
 
     static final int FIXED_N = 128; // n held constant in the k-curve and r-curve benchmarks
-    static final CausalBufferLimit BENCH_LIMIT = CausalBufferLimit.ofSize(Integer.MAX_VALUE / 2);
 
     // A stable Uuid per synthetic topic name, so a record's own SRC_TOPIC_ID header matches the
     // CausalPosition other records declare as a dependency on that same name (e.g. "trigger").
@@ -101,7 +100,6 @@ public class BufferReleaseBenchmark {
                                                        KeyValueStore<byte[], byte[]> forwardedKV,
                                                        ParsleySerializer<String, String> serializer) {
         return new ParsleyEngine<>(
-                BENCH_LIMIT,
                 ParsleyClock.empty(),
                 new RocksBufferStore<>(bufferKV, serializer),
                 new RocksCandidateIndex(waitKV),
@@ -132,7 +130,7 @@ public class BufferReleaseBenchmark {
         };
         StreamsBuilder builder = new StreamsBuilder();
         builder.stream("bench-in", Consumed.with(Serdes.String(), Serdes.String()))
-               .process(CausalProcessors.builder(noOp).addBufferStore("parsley", BENCH_LIMIT)
+               .process(CausalProcessors.builder(noOp).addBufferStore("parsley")
                        .addBuffer(CausalBuffer.of("bench-in", Serdes.String(), Serdes.String()))
                        .topicAdmin(TestTopicAdmin.of(java.util.Map.of("bench-in", topicId("bench-in"))))
                        .build())

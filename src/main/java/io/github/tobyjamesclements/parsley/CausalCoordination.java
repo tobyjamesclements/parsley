@@ -16,7 +16,7 @@ import java.util.Objects;
  * CausalCoordination coordination = CausalCoordination.create("parsley-epoch-events");
  *
  * Topology topology = CausalStreams.builder(userSupplier)
- *         .addBufferStore("parsley", CausalBufferLimit.ofDuration(limit))
+ *         .addBufferStore("parsley")
  *         .addSource(CausalBuffer.of("prices", Serdes.String(), priceSerde))
  *         .addSink("enriched", "enriched-output", Serdes.String(), enrichedSerde)
  *         .withCoordination(coordination)   // "prices" is derived as an external source; "enriched-output" a sink

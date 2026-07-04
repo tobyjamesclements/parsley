@@ -19,7 +19,7 @@ import org.apache.kafka.streams.processor.api.ProcessorSupplier;
  *
  * builder.stream(List.of("prices", "orders"), Consumed.with(Serdes.String(), orderSerde))
  *        .process(CausalProcessors.builder(user)
- *                                .addBufferStore("parsley", CausalBufferLimit.ofDuration(limit))
+ *                                .addBufferStore("parsley")
  *                                .addBuffers(List.of("prices", "orders"), Serdes.String(), orderSerde)
  *                                .build())
  *        .to("output-topic");
@@ -50,16 +50,14 @@ import org.apache.kafka.streams.processor.api.ProcessorSupplier;
  * </ol>
  *
  * <p>When those conditions hold: every record B whose causal dependencies include record A is not
- * forwarded to {@code process()} until A has been processed. Every record reaches {@code process()}
- * exactly once — Parsley never drops or diverts a record. Records claiming no dependencies, or
- * carrying an undecodable header, are treated as vacuously satisfied and delivered immediately.
- * The exception is eviction — when the configured {@link CausalBufferLimit} fires before a held
- * record's dependencies are satisfied, the default ({@code parsley.buffer.eviction.failure.policy = fail})
- * fails the task fast rather than delivering the record out of causal order; setting the policy to
- * {@code continue} delivers it anyway, trading ordering for availability for that record. Either
- * outcome is signalled to any registered {@link CausalAudit} (via
- * {@link CausalAudit#recordEvictionLimitExceeded} or {@link CausalAudit#recordViolation}
- * respectively), logged, and counted by the buffer's violation metric.
+ * forwarded to {@code process()} until A has been processed. Every record that is delivered reaches
+ * {@code process()} exactly once. Records claiming no dependencies are treated as vacuously satisfied
+ * and delivered immediately. Delivery is strictly fail-closed: a record whose dependencies are not yet
+ * satisfied is held — the buffer is unbounded and changelog-backed, so it spills to disk — and is
+ * never forwarded ahead of its dependencies. There is no eviction, buffer limit, or timeout that
+ * forwards a record out of causal order. A record whose payload or dependencies header cannot be
+ * decoded is a proven-impossible dependency; the task currently fails fast on it (a future dead-letter
+ * path will divert it out of the causal execution path instead).
  *
  * <p>Outgoing messages are stamped with the current frontier transparently as they are forwarded —
  * nothing extra is needed on egress, because Streams sinks propagate record headers to the produced

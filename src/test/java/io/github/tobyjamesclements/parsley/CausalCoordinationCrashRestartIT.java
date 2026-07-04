@@ -170,7 +170,7 @@ class CausalCoordinationCrashRestartIT {
         StreamsBuilder builder = new StreamsBuilder();
         builder.stream(List.of(PREREQ, IN), Consumed.with(Serdes.String(), Serdes.String()))
                 .process(CausalProcessors.builder(upperCaser())
-                        .addBufferStore("parsley-x", CausalBufferLimit.ofDuration(Duration.ofMinutes(10)))
+                        .addBufferStore("parsley-x")
                         .addBuffers(List.of(PREREQ, IN), Serdes.String(), Serdes.String())
                         .withCoordination(coordination)
                         .build())
@@ -182,7 +182,7 @@ class CausalCoordinationCrashRestartIT {
         StreamsBuilder builder = new StreamsBuilder();
         builder.stream(YIN, Consumed.with(Serdes.String(), Serdes.String()))
                 .process(CausalProcessors.builder(upperCaser())
-                        .addBufferStore("parsley-y", CausalBufferLimit.ofDuration(Duration.ofMinutes(10)))
+                        .addBufferStore("parsley-y")
                         .addBuffer(CausalBuffer.of(YIN, Serdes.String(), Serdes.String()))
                         .withCoordination(coordination)
                         .build())

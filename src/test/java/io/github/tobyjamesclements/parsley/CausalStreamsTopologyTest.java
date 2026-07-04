@@ -105,7 +105,7 @@ class CausalStreamsTopologyTest {
     @Test
     void singleSourceStageDeliversAdmittedRecordToItsSink() {
         Topology topology = CausalStreams.builder(upperCaser())
-                .addBufferStore("parsley", CausalBufferLimit.ofSize(100))
+                .addBufferStore("parsley")
                 .addSource(CausalBuffer.of("t1", Serdes.String(), Serdes.String()))
                 .addSink("out-sink", "out", Serdes.String(), Serdes.String())
                 .topicAdmin(ADMIN)
@@ -134,7 +134,7 @@ class CausalStreamsTopologyTest {
     @Test
     void twoSourceStageFansBothSourcesIntoTheSameProcessor() {
         Topology topology = CausalStreams.builder(upperCaser())
-                .addBufferStore("parsley", CausalBufferLimit.ofSize(100))
+                .addBufferStore("parsley")
                 .addSource(CausalBuffer.of("t1", Serdes.String(), Serdes.String()))
                 .addSource(CausalBuffer.of("t2", Serdes.String(), Serdes.String()))
                 .addSink("out-sink", "out", Serdes.String(), Serdes.String())
@@ -184,7 +184,7 @@ class CausalStreamsTopologyTest {
     @Test
     void buildFailsWithoutASource() {
         CausalStreams.Builder<String, String, String, String> builder = CausalStreams.builder(upperCaser())
-                .addBufferStore("parsley", CausalBufferLimit.ofSize(100))
+                .addBufferStore("parsley")
                 .addSink("out-sink", "out", Serdes.String(), Serdes.String())
                 .topicAdmin(ADMIN);
 
@@ -201,7 +201,7 @@ class CausalStreamsTopologyTest {
     @Test
     void buildFailsWithoutASink() {
         CausalStreams.Builder<String, String, String, String> builder = CausalStreams.builder(upperCaser())
-                .addBufferStore("parsley", CausalBufferLimit.ofSize(100))
+                .addBufferStore("parsley")
                 .addSource(CausalBuffer.of("t1", Serdes.String(), Serdes.String()))
                 .topicAdmin(ADMIN);
 
@@ -222,13 +222,13 @@ class CausalStreamsTopologyTest {
     void buildRejectsAnAlreadyDecoratedSupplier() {
         CausalProcessorSupplier<String, String, String, String> alreadyDecorated =
                 CausalProcessors.builder(upperCaser())
-                        .addBufferStore("parsley", CausalBufferLimit.ofSize(100))
+                        .addBufferStore("parsley")
                         .addBuffer(CausalBuffer.of("t1", Serdes.String(), Serdes.String()))
                         .build();
 
         CausalStreams.Builder<String, String, String, String> builder =
                 CausalStreams.builder(alreadyDecorated)
-                        .addBufferStore("parsley", CausalBufferLimit.ofSize(100))
+                        .addBufferStore("parsley")
                         .addSource(CausalBuffer.of("t1", Serdes.String(), Serdes.String()))
                         .addSink("out-sink", "out", Serdes.String(), Serdes.String())
                         .topicAdmin(ADMIN);
@@ -267,7 +267,7 @@ class CausalStreamsTopologyTest {
         };
 
         Topology topology = CausalStreams.builder(brancher)
-                .addBufferStore("parsley", CausalBufferLimit.ofSize(100))
+                .addBufferStore("parsley")
                 .addSource(CausalBuffer.of("t1", Serdes.String(), Serdes.String()))
                 .addSink("sink-a", "out-a", Serdes.String(), Serdes.String())
                 .addSink("sink-b", "out-b", Serdes.String(), Serdes.String())
@@ -322,7 +322,7 @@ class CausalStreamsTopologyTest {
         };
 
         Topology topology = CausalStreams.builder(brancher)
-                .addBufferStore("parsley", CausalBufferLimit.ofSize(100))
+                .addBufferStore("parsley")
                 .addSource(CausalBuffer.of("t1", Serdes.String(), Serdes.String()))
                 .addSink("sink-a", "out-a", Serdes.String(), Serdes.String())
                 .addSink("sink-b", "out-b", Serdes.String(), Serdes.String())
@@ -370,7 +370,7 @@ class CausalStreamsTopologyTest {
     void quiesceTracksTheBufferThroughTheOrdinaryDeliveryPath() {
         CausalQuiesce quiesce = CausalQuiesce.create();
         Topology topology = CausalStreams.builder(upperCaser())
-                .addBufferStore("parsley", CausalBufferLimit.ofDuration(Duration.ofMinutes(5)))
+                .addBufferStore("parsley")
                 .addSource(CausalBuffer.of("t1", Serdes.String(), Serdes.String()))
                 .addSource(CausalBuffer.of("t2", Serdes.String(), Serdes.String()))
                 .addSink("out-sink", "out", Serdes.String(), Serdes.String())
@@ -416,7 +416,7 @@ class CausalStreamsTopologyTest {
         ParsleyTopicAdmin mismatched = TestTopicAdmin.of(
                 Map.of("t1", T1_ID), Map.of("t1", 2, "out", 3));
         Topology topology = CausalStreams.builder(upperCaser())
-                .addBufferStore("parsley", CausalBufferLimit.ofSize(100))
+                .addBufferStore("parsley")
                 .addSource(CausalBuffer.of("t1", Serdes.String(), Serdes.String()))
                 .addSink("out-sink", "out", Serdes.String(), Serdes.String())
                 .withConfig(ParsleyConfig.TOPOLOGY_VALIDATION, "strict")
@@ -443,7 +443,7 @@ class CausalStreamsTopologyTest {
         ParsleyTopicAdmin mismatched = TestTopicAdmin.of(
                 Map.of("t1", T1_ID), Map.of("t1", 2, "out", 3));
         Topology topology = CausalStreams.builder(upperCaser())
-                .addBufferStore("parsley", CausalBufferLimit.ofSize(100))
+                .addBufferStore("parsley")
                 .addSource(CausalBuffer.of("t1", Serdes.String(), Serdes.String()))
                 .addSink("out-sink", "out", Serdes.String(), Serdes.String())
                 .topicAdmin(mismatched)
@@ -469,7 +469,7 @@ class CausalStreamsTopologyTest {
     void unresolvableSinkPartitionCountIsSkippedEvenUnderStrictValidation() {
         ParsleyTopicAdmin admin = FlakySinkAdmin.withUnresolvable(Map.of("t1", T1_ID), Set.of("out"));
         Topology topology = CausalStreams.builder(upperCaser())
-                .addBufferStore("parsley", CausalBufferLimit.ofSize(100))
+                .addBufferStore("parsley")
                 .addSource(CausalBuffer.of("t1", Serdes.String(), Serdes.String()))
                 .addSink("out-sink", "out", Serdes.String(), Serdes.String())
                 .withConfig(ParsleyConfig.TOPOLOGY_VALIDATION, "strict")
@@ -498,7 +498,7 @@ class CausalStreamsTopologyTest {
         ParsleyTopicAdmin compacted = TestTopicAdmin.of(
                 Map.of("t1", T1_ID), Map.of(), Map.of("out", "compact"));
         Topology topology = CausalStreams.builder(upperCaser())
-                .addBufferStore("parsley", CausalBufferLimit.ofSize(100))
+                .addBufferStore("parsley")
                 .addSource(CausalBuffer.of("t1", Serdes.String(), Serdes.String()))
                 .addSink("out-sink", "out", Serdes.String(), Serdes.String())
                 .withConfig(ParsleyConfig.TOPOLOGY_VALIDATION, "strict")
@@ -526,7 +526,7 @@ class CausalStreamsTopologyTest {
         ParsleyTopicAdmin compacted = TestTopicAdmin.of(
                 Map.of("t1", T1_ID), Map.of(), Map.of("out", "compact,delete"));
         Topology topology = CausalStreams.builder(upperCaser())
-                .addBufferStore("parsley", CausalBufferLimit.ofSize(100))
+                .addBufferStore("parsley")
                 .addSource(CausalBuffer.of("t1", Serdes.String(), Serdes.String()))
                 .addSink("out-sink", "out", Serdes.String(), Serdes.String())
                 .withConfig(ParsleyConfig.TOPOLOGY_VALIDATION, "strict")
@@ -551,7 +551,7 @@ class CausalStreamsTopologyTest {
         ParsleyTopicAdmin compacted = TestTopicAdmin.of(
                 Map.of("t1", T1_ID), Map.of(), Map.of("out", "compact"));
         Topology topology = CausalStreams.builder(upperCaser())
-                .addBufferStore("parsley", CausalBufferLimit.ofSize(100))
+                .addBufferStore("parsley")
                 .addSource(CausalBuffer.of("t1", Serdes.String(), Serdes.String()))
                 .addSink("out-sink", "out", Serdes.String(), Serdes.String())
                 .topicAdmin(compacted)
@@ -574,7 +574,7 @@ class CausalStreamsTopologyTest {
     @Test
     void deleteSinkCleanupPolicyPassesStrictValidation() {
         Topology topology = CausalStreams.builder(upperCaser())
-                .addBufferStore("parsley", CausalBufferLimit.ofSize(100))
+                .addBufferStore("parsley")
                 .addSource(CausalBuffer.of("t1", Serdes.String(), Serdes.String()))
                 .addSink("out-sink", "out", Serdes.String(), Serdes.String())
                 .withConfig(ParsleyConfig.TOPOLOGY_VALIDATION, "strict")
@@ -603,7 +603,7 @@ class CausalStreamsTopologyTest {
         ParsleyTopicAdmin admin = new FlakySinkAdmin(
                 Map.of("t1", T1_ID), Map.of("t1", 2, "out-a", 3), Map.of(), Set.of("out-b"));
         Topology topology = CausalStreams.builder(upperCaser())
-                .addBufferStore("parsley", CausalBufferLimit.ofSize(100))
+                .addBufferStore("parsley")
                 .addSource(CausalBuffer.of("t1", Serdes.String(), Serdes.String()))
                 .addSink("sink-a", "out-a", Serdes.String(), Serdes.String())
                 .addSink("sink-b", "out-b", Serdes.String(), Serdes.String())
@@ -631,7 +631,7 @@ class CausalStreamsTopologyTest {
         ParsleyTopicAdmin admin = new FlakySinkAdmin(
                 Map.of("t1", T1_ID), Map.of(), Map.of("out-a", "compact"), Set.of("out-b"));
         Topology topology = CausalStreams.builder(upperCaser())
-                .addBufferStore("parsley", CausalBufferLimit.ofSize(100))
+                .addBufferStore("parsley")
                 .addSource(CausalBuffer.of("t1", Serdes.String(), Serdes.String()))
                 .addSink("sink-a", "out-a", Serdes.String(), Serdes.String())
                 .addSink("sink-b", "out-b", Serdes.String(), Serdes.String())
@@ -656,7 +656,7 @@ class CausalStreamsTopologyTest {
     void validationOffNeverCallsTheSinkAdminAtAll() {
         CountingSinkAdmin admin = new CountingSinkAdmin(Map.of("t1", T1_ID));
         Topology topology = CausalStreams.builder(upperCaser())
-                .addBufferStore("parsley", CausalBufferLimit.ofSize(100))
+                .addBufferStore("parsley")
                 .addSource(CausalBuffer.of("t1", Serdes.String(), Serdes.String()))
                 .addSink("out-sink", "out", Serdes.String(), Serdes.String())
                 .withConfig(ParsleyConfig.TOPOLOGY_VALIDATION, "off")

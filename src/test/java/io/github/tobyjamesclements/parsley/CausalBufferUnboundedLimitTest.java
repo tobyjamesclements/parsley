@@ -33,9 +33,9 @@ class CausalBufferUnboundedLimitTest {
     void unboundedLimitNeverEvictsAndReleasesInCausalOrderWhenDependenciesSatisfied() {
         MockBufferStore<String, String> buffer = new MockBufferStore<>();
         ParsleyEngine<String, String> engine = new ParsleyEngine<>(
-                CausalBufferLimit.unbounded(), ParsleyClock.empty(),
+                ParsleyClock.empty(),
                 buffer, new MockCandidateIndex(), new MockForwardedIndex(), ParsleyMetrics.NOOP,
-                CausalAudit.NOOP, System::currentTimeMillis, false, /* failOnEvictionLimit */ true);
+                CausalAudit.NOOP, System::currentTimeMillis);
 
         List<ParsleyMessage<String, String>> out = new ArrayList<>();
         ParsleyClock needsT1 = ParsleyClock.empty().observe(T1_ID, 0, 4);

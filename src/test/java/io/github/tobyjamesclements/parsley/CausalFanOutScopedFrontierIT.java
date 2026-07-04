@@ -251,7 +251,7 @@ class CausalFanOutScopedFrontierIT {
         StreamsBuilder builder = new StreamsBuilder();
         builder.stream(List.of(shared, unique), Consumed.with(Serdes.String(), Serdes.String()))
                 .process(CausalProcessors.builder(upperCaser())
-                        .addBufferStore(namespace, CausalBufferLimit.ofDuration(Duration.ofSeconds(30)))
+                        .addBufferStore(namespace)
                         .addBuffers(List.of(shared, unique), Serdes.String(), Serdes.String())
                         .build())
                 .to(out, Produced.with(Serdes.String(), Serdes.String()));

@@ -34,8 +34,6 @@
  *   <li>{@link io.github.tobyjamesclements.parsley.CausalTopics} &mdash; resolves topic names to their stable Kafka UUIDs
  *       (through a caller-owned {@code Admin}), so {@link io.github.tobyjamesclements.parsley.CausalDependencies} can be built
  *       from topic names</li>
- *   <li>{@link io.github.tobyjamesclements.parsley.CausalBufferLimit} &mdash; how long to wait for a record's dependencies
- *       before forwarding it anyway: {@code ofDuration}, {@code ofSize}, or {@code first}</li>
  * </ul>
  */
 @NullMarked

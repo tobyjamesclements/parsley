@@ -1,35 +1,29 @@
 package io.github.tobyjamesclements.parsley;
 
 import org.apache.kafka.common.Uuid;
-import org.jspecify.annotations.Nullable;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import java.time.Duration;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
-import java.util.Optional;
 import java.util.Set;
 import java.util.function.LongSupplier;
 
 /**
  * The causal buffering engine.
  *
- * <p>The processor feeds incoming records to {@link #onRecord} and forwards the returned
- * records downstream, in order. Every record is delivered — there is no drop, no diversion. A
- * record is forwarded only after its declared dependencies have been satisfied by the frontier
- * (whether immediately, after a wait, or trivially — no dependencies claimed, or an undecodable
- * header, both treated as a vacuously satisfied set).
- *
- * <p>The engine also owns limit-driven eviction: when a {@link CausalBufferLimit} fires, the default
- * ({@code parsley.buffer.eviction.failure.policy = fail}) is to fail the task fast instead, leaving
- * the oldest qualifying record(s) buffered rather than forward them out of causal order — trading
- * availability for consistency. {@code continue} restores the original behaviour: it surrenders the
- * oldest buffered records needed to satisfy the limit and forwards them anyway (out of causal
- * order), logging the causal gap and counting a violation metric for each.
+ * <p>The processor feeds incoming records to {@link #onRecord} and forwards the returned records
+ * downstream, in order. Delivery is strictly fail-closed: a record is forwarded only after its
+ * declared dependencies have been satisfied by the completeness frontier. There is no eviction, no
+ * buffer limit, and no timeout — a record whose dependencies are not yet satisfied stays buffered
+ * (the buffer is a changelog-backed state store, so it spills to disk rather than growing in memory).
+ * The only record that ever leaves the buffer without satisfied dependencies is one whose
+ * dependencies are <em>proven impossible</em> — an undecodable payload or dependency header — which
+ * is dead-lettered (removed from the causal execution path), never forwarded downstream as if it were
+ * causally valid.
  *
  * <p><strong>The frontier is a contiguous watermark, not a running max.</strong> The engine does
  * not head-of-line block: a later-offset record on a partition may forward before an earlier one
@@ -39,8 +33,7 @@ import java.util.function.LongSupplier;
  * actually observed it. {@link ParsleyFrontier#deliver} marks every forward in a {@link
  * ParsleyForwardedIndex} and walks forward from the current frontier to find the longest run of
  * consecutive forwarded offsets now achievable, advancing the frontier by that run and pruning the
- * absorbed entries. Release, eviction, and poison-drop all call it the same way — none are
- * special-cased.
+ * absorbed entries. Every release calls it the same way — none are special-cased.
  *
  * <p><strong>A coordinate's first offset need not be 0.</strong> Kafka delivers a partition's
  * records strictly in increasing offset order, but retention, compaction, or a fresh consumer group
@@ -69,82 +62,49 @@ final class ParsleyEngine<K, V> {
 
     private static final Logger log = LoggerFactory.getLogger(ParsleyEngine.class);
 
-    private final CausalBufferLimit limit;
-    // Which coordinates this engine consumes; used for eviction-gap diagnostics and restore-time
-    // pruning. It is NOT a delivery filter — the gate waits for every input channel to confirm every
-    // dependency (see completeness()).
-    private final ParsleyClock.CoordinatePredicate inScope;
     private final ParsleyBufferStore<K, V> buffer;
     private final ParsleyCandidateIndex candidateIndex;
     private final ParsleyMetrics metrics;
     private final CausalAudit audit;
     private final LongSupplier clock;
-    private final boolean skipOnDecodeFailure;
-    private final boolean failOnEvictionLimit;
 
     // The single owner of all persisted causal metadata: the contiguous frontier clock, the channel
     // clocks, and the forwarded-offset index. completeness() and channel state live here, floored to
     // the topology epoch's lower bounds (frontier.epoch(), also read at the gate to strip a record's
     // out-of-domain dependencies; NONE when epoch bounding is disabled, so the floor is a no-op).
     private final ParsleyFrontier frontier;
-    private int sizeLimit;
-    // Set only for a duration-based limit; null for size/first limits (guarded at every read).
-    private @Nullable Duration evictionInterval;
 
     // --- Convenience constructors: build an in-memory ParsleyFrontier from an initial clock and a
     // forwarded index. Production and restart-style callers pass a pre-built ParsleyFrontier to the
     // full constructor below (so channel + frontier state can be shared/persisted). ---
 
-    ParsleyEngine(CausalBufferLimit limit,
-                 ParsleyClock initialFrontier,
+    ParsleyEngine(ParsleyClock initialFrontier,
                  ParsleyBufferStore<K, V> buffer,
                  ParsleyCandidateIndex candidateIndex,
                  ParsleyForwardedIndex forwardedIndex,
                  ParsleyMetrics metrics) {
-        // Mirrors ParsleyConfig's production defaults — fail fast on both an undecodable held record
-        // and a buffer-limit eviction.
-        this(limit, initialFrontier, buffer, candidateIndex, forwardedIndex, metrics,
-                CausalAudit.NOOP, System::currentTimeMillis, false, true);
+        this(initialFrontier, buffer, candidateIndex, forwardedIndex, metrics,
+                CausalAudit.NOOP, System::currentTimeMillis);
     }
 
-    ParsleyEngine(CausalBufferLimit limit,
-                 ParsleyClock initialFrontier,
+    ParsleyEngine(ParsleyClock initialFrontier,
                  ParsleyBufferStore<K, V> buffer,
                  ParsleyCandidateIndex candidateIndex,
                  ParsleyForwardedIndex forwardedIndex,
                  ParsleyMetrics metrics,
                  LongSupplier clock) {
-        this(limit, initialFrontier, buffer, candidateIndex, forwardedIndex, metrics,
-                CausalAudit.NOOP, clock, false, true);
+        this(initialFrontier, buffer, candidateIndex, forwardedIndex, metrics, CausalAudit.NOOP, clock);
     }
 
-    ParsleyEngine(CausalBufferLimit limit,
-                 ParsleyClock initialFrontier,
+    ParsleyEngine(ParsleyClock initialFrontier,
                  ParsleyBufferStore<K, V> buffer,
                  ParsleyCandidateIndex candidateIndex,
                  ParsleyForwardedIndex forwardedIndex,
                  ParsleyMetrics metrics,
                  CausalAudit audit,
-                 LongSupplier clock,
-                 boolean skipOnDecodeFailure,
-                 boolean failOnEvictionLimit) {
-        this(limit, new ParsleyFrontier(initialFrontier, forwardedIndex, false), (topicId, partition) -> true,
-                buffer, candidateIndex, metrics, audit, clock, skipOnDecodeFailure, failOnEvictionLimit);
-    }
-
-    ParsleyEngine(CausalBufferLimit limit,
-                 ParsleyClock initialFrontier,
-                 ParsleyClock.CoordinatePredicate inScope,
-                 ParsleyBufferStore<K, V> buffer,
-                 ParsleyCandidateIndex candidateIndex,
-                 ParsleyForwardedIndex forwardedIndex,
-                 ParsleyMetrics metrics,
-                 CausalAudit audit,
-                 LongSupplier clock,
-                 boolean skipOnDecodeFailure,
-                 boolean failOnEvictionLimit) {
-        this(limit, new ParsleyFrontier(initialFrontier, forwardedIndex, false), inScope,
-                buffer, candidateIndex, metrics, audit, clock, skipOnDecodeFailure, failOnEvictionLimit);
+                 LongSupplier clock) {
+        this(new ParsleyFrontier(initialFrontier, forwardedIndex, false),
+                buffer, candidateIndex, metrics, audit, clock);
     }
 
     /**
@@ -155,28 +115,18 @@ final class ParsleyEngine<K, V> {
      * a record's out-of-domain dependencies; {@link ParsleyEpoch#NONE} disables both the strip and the
      * frontier's own flooring.
      */
-    ParsleyEngine(CausalBufferLimit limit,
-                 ParsleyFrontier frontier,
-                 ParsleyClock.CoordinatePredicate inScope,
+    ParsleyEngine(ParsleyFrontier frontier,
                  ParsleyBufferStore<K, V> buffer,
                  ParsleyCandidateIndex candidateIndex,
                  ParsleyMetrics metrics,
                  CausalAudit audit,
-                 LongSupplier clock,
-                 boolean skipOnDecodeFailure,
-                 boolean failOnEvictionLimit) {
-        this.limit = limit;
+                 LongSupplier clock) {
         this.frontier = frontier;
-        this.inScope = inScope;
         this.buffer = buffer;
         this.candidateIndex = candidateIndex;
         this.metrics = metrics;
         this.audit = audit;
         this.clock = clock;
-        this.skipOnDecodeFailure = skipOnDecodeFailure;
-        this.failOnEvictionLimit = failOnEvictionLimit;
-        this.sizeLimit = ParsleyLimits.sizeLimitOf(limit).orElse(Integer.MAX_VALUE);
-        this.evictionInterval = ParsleyLimits.durationLimitOf(limit).orElse(null);
         // Populate the candidate index for any records already in the buffer (e.g., restored from
         // a state store after a restart). This is a one-time O(n) pass at construction. It decodes
         // only the dependency clock (never the user-serde key/value), so a record whose value can no
@@ -233,9 +183,6 @@ final class ParsleyEngine<K, V> {
             audit.recordHeld(message.topic(), message.partition(), message.offset(), depth, CausalDependencies.of(gap));
             metrics.recordBuffered();
             reportBufferState();
-            if (depth >= sizeLimit) {
-                out.addAll(evictOverflow());
-            }
         }
 
         // A channel-clock advance can satisfy the completeness gate for records already held that are
@@ -276,57 +223,6 @@ final class ParsleyEngine<K, V> {
     }
 
     /**
-     * Evicts only the oldest buffered records needed to bring the buffer back under the
-     * configured {@link ParsleySizeLimit}, leaving the rest held. Called inline from
-     * {@link #onRecord} once buffer depth reaches the limit, and once more by
-     * {@code ParsleyProcessor.init()} immediately after construction, to bring a buffer restored
-     * from a changelog back under the currently configured limit (relevant after a
-     * reconfiguration that lowers {@code ofSize(...)} before a restart).
-     *
-     * <p>Relies on {@link ParsleyBufferStore#entries()} being sorted oldest-first (see
-     * {@link #evictExpired()}), so only the leading {@code buffer.size() - sizeLimit + 1}
-     * entries need to be evicted to fit the record just admitted.
-     *
-     * @return the evicted records, to forward downstream out-of-order; empty under
-     *         {@code parsley.buffer.eviction.failure.policy = fail} (the candidates are left
-     *         buffered and a {@link ParsleyBufferEvictionLimitException} is thrown instead)
-     */
-    List<ParsleyMessage<K, V>> evictOverflow() {
-        int overflow = buffer.size() - sizeLimit + 1;
-        if (overflow <= 0) {
-            return List.of();
-        }
-        List<ParsleyBufferStore.IndexEntry> all = orderedIndex();
-        List<ParsleyBufferStore.IndexEntry> oldest = all.subList(0, Math.min(overflow, all.size()));
-        return evictOrFail(oldest);
-    }
-
-    /**
-     * Evicts only the buffered records whose age exceeds the configured
-     * {@link ParsleyDurationLimit}, leaving younger records held. Called by the duration
-     * punctuator; a no-op when no duration limit is configured.
-     *
-     * <p>Iterates the oldest-first metadata index, so the scan can stop at the first record that
-     * hasn't aged out yet — and never decodes a value to decide what to evict.
-     *
-     * @return the evicted records, to forward downstream out-of-order; empty under
-     *         {@code parsley.buffer.eviction.failure.policy = fail} (the candidates are left
-     *         buffered and a {@link ParsleyBufferEvictionLimitException} is thrown instead)
-     */
-    List<ParsleyMessage<K, V>> evictExpired() {
-        if (evictionInterval == null) {
-            return List.of();
-        }
-        long cutoff = clock.getAsLong() - evictionInterval.toMillis();
-        List<ParsleyBufferStore.IndexEntry> expired = new ArrayList<>();
-        for (ParsleyBufferStore.IndexEntry entry : orderedIndex()) {
-            if (entry.bufferedAt() > cutoff) break;
-            expired.add(entry);
-        }
-        return evictOrFail(expired);
-    }
-
-    /**
      * Releases every buffered record that passes the two-part causal gate against the current
      * frontier and channel-clock state. Used on two call paths:
      * <ol>
@@ -363,11 +259,8 @@ final class ParsleyEngine<K, V> {
             try {
                 entry = buffer.get(meta.sequence());
             } catch (ParsleyBufferDeserializationException e) {
-                if (tryDropPoison(e, meta.sequence())) {
-                    frontier.deliver(e.topicId(), e.partition(), e.offset());
-                    continue;
-                }
-                throw e;                                                   // fail fast
+                failPoison(e);                                             // fail closed
+                throw e;
             }
             if (entry == null) continue;                                   // removed by a cascade this pass
             ParsleyMessage<K, V> record = entry.record();
@@ -423,77 +316,6 @@ final class ParsleyEngine<K, V> {
     }
 
     /**
-     * The shared branch point for both eviction triggers: under
-     * {@code parsley.buffer.eviction.failure.policy = fail} (the default), fails the task fast on
-     * the oldest candidate instead of evicting any of them — none are touched, so all remain
-     * buffered for a future attempt. Under {@code continue}, delegates to {@link #evictSequences}
-     * to evict and forward every candidate as before. Identifying the oldest candidate for the
-     * exception never decodes the user-serde key/value — {@code toEvict} is index metadata only.
-     */
-    private List<ParsleyMessage<K, V>> evictOrFail(List<ParsleyBufferStore.IndexEntry> toEvict) {
-        if (toEvict.isEmpty()) {
-            return List.of();
-        }
-        if (failOnEvictionLimit) {
-            ParsleyBufferStore.IndexEntry oldest = toEvict.get(0);
-            ParsleyClock gap = oldest.dependencies().retaining(inScope).missing(frontier.snapshot());
-            CausalDependencies missing = CausalDependencies.of(gap);
-            log.error("Buffer limit reached (limit: {}); failing fast on the oldest held record "
-                    + "{}-{}@{} (parsley.buffer.eviction.failure.policy = fail). It remains buffered.",
-                    limit, oldest.topic(), oldest.partition(), oldest.offset());
-            audit.recordEvictionLimitExceeded(oldest.topic(), oldest.partition(), oldest.offset(), missing);
-            metrics.recordEvictionLimitExceeded();
-            throw new ParsleyBufferEvictionLimitException(oldest.topic(), oldest.topicId(),
-                    oldest.partition(), oldest.offset(), limit, missing);
-        }
-        return evictSequences(toEvict.stream().map(ParsleyBufferStore.IndexEntry::sequence).toList());
-    }
-
-    /**
-     * Force-forwards the given buffered records (by sequence) out of causal order, logging the gap
-     * and counting a violation for each. A record that cannot be deserialised is — in continue-mode —
-     * dropped (logged, counted) instead of forwarded; in fail-fast mode the decode failure propagates
-     * with the entry left in the buffer.
-     */
-    private List<ParsleyMessage<K, V>> evictSequences(List<Long> sequences) {
-        if (sequences.isEmpty()) {
-            return List.of();
-        }
-        log.warn("Evicting {} held record(s) (limit: {})", sequences.size(), limit);
-        List<ParsleyMessage<K, V>> toForward = new ArrayList<>();
-        int evicted = 0;
-        for (long sequence : sequences) {
-            ParsleyBufferStore.Entry<K, V> entry;
-            try {
-                entry = buffer.get(sequence);
-            } catch (ParsleyBufferDeserializationException e) {
-                if (tryDropPoison(e, sequence)) {
-                    // The dropped record's own coordinate may unblock something else waiting on it —
-                    // a poison-drop is an accounted-for loss, same as an eviction. Silent: the dropped
-                    // record itself is never added to toForward.
-                    frontier.deliver(e.topicId(), e.partition(), e.offset());
-                    propagate(toForward, e.topicId(), e.partition());
-                    continue;
-                }
-                throw e;                                   // fail fast
-            }
-            if (entry == null) continue;
-            reportEviction(entry.record(), entry.dependencies());
-            buffer.remove(sequence);
-            frontier.deliver(entry.record().topicId(), entry.record().partition(), entry.record().offset());
-            frontier.channelUpdate(entry.record().topicId(), entry.record().partition(), entry.record().dependencies());
-            toForward.add(entry.record());
-            propagate(toForward, entry.record().topicId(), entry.record().partition());
-            evicted++;
-        }
-        if (evicted > 0) {
-            metrics.recordEvicted(evicted);
-            reportBufferState();
-        }
-        return toForward;
-    }
-
-    /**
      * Returns the current causal frontier.
      *
      * @return the frontier
@@ -532,16 +354,6 @@ final class ParsleyEngine<K, V> {
     }
 
     /**
-     * Returns the interval at which the processor must call {@link #evictExpired}, if the
-     * configured {@link CausalBufferLimit} contains a {@link ParsleyDurationLimit ParsleyDurationLimit}.
-     *
-     * @return the eviction interval, or empty if no duration limit is configured
-     */
-    Optional<Duration> evictionInterval() {
-        return Optional.ofNullable(evictionInterval);
-    }
-
-    /**
      * Propagates a frontier advancement: releases every buffered record that became causally
      * satisfiable because {@code (topicId, partition)} just advanced, then cascades — each
      * released record advances its own source coordinate, which may satisfy further records.
@@ -557,9 +369,6 @@ final class ParsleyEngine<K, V> {
             Set<Long> seen = new HashSet<>();
             List<ParsleyBufferStore.Entry<K, V>> releasable = new ArrayList<>();
             List<ParsleyCandidateIndex.Candidate> stale = new ArrayList<>();
-            // Coordinates to rescan on the next pass: fed both by records released below and by
-            // poison-drops discovered during this pass (a drop's own coordinate may also unblock
-            // something else, same as a release).
             Map<Uuid, Set<Integer>> nextScan = new HashMap<>();
 
             for (Map.Entry<Uuid, Set<Integer>> coord : toScan.entrySet()) {
@@ -572,13 +381,8 @@ final class ParsleyEngine<K, V> {
                         try {
                             entry = buffer.get(candidate.recordId());
                         } catch (ParsleyBufferDeserializationException e) {
-                            if (tryDropPoison(e, candidate.recordId())) {
-                                // Silent: the dropped record itself is never released into `out`.
-                                frontier.deliver(e.topicId(), e.partition(), e.offset());
-                                nextScan.computeIfAbsent(e.topicId(), k -> new HashSet<>()).add(e.partition());
-                                continue;
-                            }
-                            throw e;                                               // fail fast
+                            failPoison(e);                                     // fail closed
+                            throw e;
                         }
                         if (entry == null) {
                             stale.add(candidate);
@@ -673,34 +477,18 @@ final class ParsleyEngine<K, V> {
     }
 
     /**
-     * Handles a held record that could not be deserialised on the forward path: always logs the
-     * (payload-free) diagnostic and counts the error. In continue-mode (deserialization handler =
-     * {@code LogAndContinue}) it drops the record — removes it, counts a violation — and returns
-     * {@code true} so the caller skips it; in fail-fast mode it returns {@code false} so the caller
-     * rethrows, leaving the entry in the buffer changelog for recovery.
+     * Records a held record that could not be deserialised on the forward path: logs the
+     * (payload-free) diagnostic and counts the error, then leaves the caller to rethrow. Delivery is
+     * fail-closed — the record is not dropped and not forwarded; it remains in the buffer changelog and
+     * the task fails, so it can be recovered once the schema is fixed or rolled back. (A future
+     * dead-letter path will divert a genuinely unrecoverable record out of the causal execution path
+     * rather than failing the task.)
      */
-    private boolean tryDropPoison(ParsleyBufferDeserializationException e, long sequence) {
+    private void failPoison(ParsleyBufferDeserializationException e) {
         metrics.recordDeserializationError();
-        audit.recordDeserializationFailure(e.topic(), e.partition(), e.offset(), e.details(), skipOnDecodeFailure);
-        if (skipOnDecodeFailure) {
-            log.error("Dropping an undecodable buffered record "
-                    + "(parsley.buffer.deserialization.failure.policy = continue). {}", e.details(), e);
-            buffer.remove(sequence);
-            metrics.recordViolation();
-            return true;
-        }
-        log.error("Buffered record could not be deserialised "
-                + "(parsley.buffer.deserialization.failure.policy = fail); failing fast. "
+        audit.recordDeserializationFailure(e.topic(), e.partition(), e.offset(), e.details(), false);
+        log.error("Buffered record could not be deserialised; failing fast (fail-closed). "
                 + "It remains in the buffer changelog for recovery. {}", e.details(), e);
-        return false;
-    }
-
-    private void reportEviction(ParsleyMessage<K, V> record, ParsleyClock required) {
-        ParsleyClock gap = required.retaining(inScope).missing(frontier.snapshot());
-        log.warn("Causal violation [EVICTED on {}-{} @{}] gap: {}",
-                record.topic(), record.partition(), record.offset(), gap);
-        audit.recordViolation(record.topic(), record.partition(), record.offset(), CausalDependencies.of(gap));
-        metrics.recordViolation();
     }
 
 }

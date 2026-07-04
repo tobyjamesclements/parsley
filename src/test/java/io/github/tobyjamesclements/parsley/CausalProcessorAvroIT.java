@@ -143,7 +143,7 @@ class CausalProcessorAvroIT {
         StreamsBuilder builder = new StreamsBuilder();
         builder.stream(List.of(PRICES, ORDERS), Consumed.with(Serdes.String(), avro))
                 .process(CausalProcessors.builder(passthrough())
-                        .addBufferStore("parsley", CausalBufferLimit.ofDuration(Duration.ofSeconds(60)))
+                        .addBufferStore("parsley")
                         .addBuffers(List.of(PRICES, ORDERS), Serdes.String(), avro)
                         .build())
                 .to(OUT, Produced.with(Serdes.String(), avro));

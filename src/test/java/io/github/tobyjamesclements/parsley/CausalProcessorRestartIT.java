@@ -119,7 +119,7 @@ class CausalProcessorRestartIT {
         StreamsBuilder builder = new StreamsBuilder();
         builder.stream(List.of(PREREQ, IN), Consumed.with(Serdes.String(), Serdes.String()))
                 .process(CausalProcessors.builder(upperCaser())
-                        .addBufferStore("parsley", CausalBufferLimit.ofDuration(Duration.ofSeconds(120)))
+                        .addBufferStore("parsley")
                         .addBuffers(List.of(PREREQ, IN), Serdes.String(), Serdes.String())
                         .build())
                 .to(OUT, Produced.with(Serdes.String(), Serdes.String()));

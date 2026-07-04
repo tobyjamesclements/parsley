@@ -87,7 +87,7 @@ class CausalReconvergenceTopologyTest {
         StreamsBuilder builder = new StreamsBuilder();
         builder.stream(List.of(T_FAST, T_SLOW), Consumed.with(Serdes.String(), Serdes.String()))
                 .process(CausalProcessors.builder(upperCaser())
-                        .addBufferStore("fanin", CausalBufferLimit.ofSize(100))
+                        .addBufferStore("fanin")
                         .addBuffers(List.of(T_FAST, T_SLOW), Serdes.String(), Serdes.String())
                         .topicAdmin(FAN_IN_ADMIN)
                         .build())
@@ -103,7 +103,7 @@ class CausalReconvergenceTopologyTest {
         StreamsBuilder builder = new StreamsBuilder();
         builder.stream(List.of(T1), Consumed.with(Serdes.String(), Serdes.String()))
                 .process(CausalProcessors.builder(filter())
-                        .addBufferStore("filter", CausalBufferLimit.ofSize(100))
+                        .addBufferStore("filter")
                         .addBuffer(CausalBuffer.of(T1, Serdes.String(), Serdes.String()))
                         .topicAdmin(SINGLE_ADMIN)
                         .build())
@@ -294,10 +294,9 @@ class CausalReconvergenceTopologyTest {
         MockBufferStore<String, String> buffer = new MockBufferStore<>();
 
         ParsleyEngine<String, String> engine = new ParsleyEngine<>(
-                CausalBufferLimit.ofSize(100),
                 new ParsleyFrontier(ParsleyClock.empty(), new MockForwardedIndex()),
-                scope, buffer, new MockCandidateIndex(), ParsleyMetrics.NOOP, CausalAudit.NOOP,
-                System::currentTimeMillis, false, false);
+                buffer, new MockCandidateIndex(), ParsleyMetrics.NOOP, CausalAudit.NOOP,
+                System::currentTimeMillis);
 
         // Before any watermark, completeness has no ANC coordinate.
         assertEquals(-1L, engine.completeness().offsetFor(ANC_ID, 0),

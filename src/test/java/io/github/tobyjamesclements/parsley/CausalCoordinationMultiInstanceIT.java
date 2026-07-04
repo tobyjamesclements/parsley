@@ -190,7 +190,7 @@ class CausalCoordinationMultiInstanceIT {
 
     private static Topology topology(CausalCoordination coordination) {
         return CausalStreams.builder(upperCaser())
-                .addBufferStore("parsley", CausalBufferLimit.ofDuration(Duration.ofSeconds(120)))
+                .addBufferStore("parsley")
                 .addSource(CausalBuffer.of(IN, Serdes.String(), Serdes.String()))
                 .addSink("out-sink", OUT, Serdes.String(), Serdes.String())
                 .withCoordination(coordination)

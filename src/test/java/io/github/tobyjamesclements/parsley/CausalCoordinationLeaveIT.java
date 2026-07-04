@@ -159,7 +159,7 @@ class CausalCoordinationLeaveIT {
         StreamsBuilder builder = new StreamsBuilder();
         builder.stream(IN, Consumed.with(Serdes.String(), Serdes.String()))
                 .process(CausalProcessors.builder(mapper(v -> v.toUpperCase(Locale.ROOT)))
-                        .addBufferStore("parsley-a", CausalBufferLimit.ofDuration(Duration.ofSeconds(120)))
+                        .addBufferStore("parsley-a")
                         .addBuffer(CausalBuffer.of(IN, Serdes.String(), Serdes.String()))
                         .withCoordination(coordination)
                         .build())
@@ -171,7 +171,7 @@ class CausalCoordinationLeaveIT {
         StreamsBuilder builder = new StreamsBuilder();
         builder.stream(MID, Consumed.with(Serdes.String(), Serdes.String()))
                 .process(CausalProcessors.builder(mapper(v -> "B:" + v))
-                        .addBufferStore("parsley-b", CausalBufferLimit.ofDuration(Duration.ofSeconds(120)))
+                        .addBufferStore("parsley-b")
                         .addBuffer(CausalBuffer.of(MID, Serdes.String(), Serdes.String()))
                         .withCoordination(coordination)
                         .build())

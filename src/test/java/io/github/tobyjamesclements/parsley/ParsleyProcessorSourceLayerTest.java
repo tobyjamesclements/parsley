@@ -93,7 +93,7 @@ class ParsleyProcessorSourceLayerTest {
             ParsleySerializer<String, String> serializer =
                     new ParsleySerializer<>(new ParsleyResolver<>(t -> Serdes.String(), t -> Serdes.String()));
             this.processor = new ParsleyProcessor<>(
-                    delegate, CausalBufferLimit.ofSize(100), serializer,
+                    delegate, serializer,
                     "frontier", "buffer", "candidate-index", "forwarded-index", Set.of("t1"), Set.of(),
                     configs -> ADMIN, ParsleyConfig.from(new Properties()), CausalAudit.NOOP, null,
                     ParsleyEpochSnapshotPublisher.NOOP, CausalCoordination.forRuntime(runtime));

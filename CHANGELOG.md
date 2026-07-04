@@ -7,6 +7,20 @@ All notable changes to this project are documented in this file. The format is b
 ## [Unreleased]
 
 ### Changed
+- **Breaking: fail-closed causal delivery; buffer limits, eviction, and failure policies removed.** Causal
+  delivery is now strictly fail-closed — there is no configuration that trades causal order for liveness.
+  `CausalBufferLimit` (and `ofSize`/`ofDuration`/`first`/`unbounded`) is removed along with all buffer
+  eviction: the causal buffer is unbounded and changelog-backed, so a record whose dependencies are not
+  yet satisfied waits (spilling to disk) rather than being force-forwarded out of causal order.
+  `addBufferStore(name, limit)` becomes `addBufferStore(name)`. The three `parsley.*.failure.policy`
+  settings (`parsley.buffer.eviction.failure.policy`, `parsley.buffer.deserialization.failure.policy`,
+  `parsley.clock.resolution.failure.policy`) and their `continue` mode are gone; the only remaining
+  Parsley setting is `parsley.topology.validation`. An undecodable buffered record, or an undecodable
+  dependencies header, now fails the task closed (the record is never dropped or forwarded on an unknown
+  premise); an explicit dead-letter path — removing such a record from the causal execution path rather
+  than delivering it as causally valid — will replace the fail-fast behaviour in a later change. The
+  `CausalAudit` eviction events (`recordViolation`, `recordEvictionLimitExceeded`) and the
+  eviction/violation metrics are removed.
 - **Breaking (topology epochs): block-until-drained membership; timeout eviction removed.** An epoch
   transition now blocks until every running member has published its snapshot, for an unbounded time,
   instead of evicting a silent member after a timeout. Evicting an absent member and committing a floor

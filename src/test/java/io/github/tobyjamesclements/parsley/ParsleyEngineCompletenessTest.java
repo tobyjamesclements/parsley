@@ -261,9 +261,9 @@ class ParsleyEngineCompletenessTest {
 
     private ParsleyEngine<String, String> engineOver(ParsleyFrontier frontier,
                                                      ParsleyClock.CoordinatePredicate scope) {
-        return new ParsleyEngine<>(CausalBufferLimit.ofSize(100), frontier, scope, buffer,
+        return new ParsleyEngine<>(frontier, buffer,
                 new MockCandidateIndex(), ParsleyMetrics.NOOP, CausalAudit.NOOP,
-                System::currentTimeMillis, false, false);
+                System::currentTimeMillis);
     }
 
     private ParsleyEngine<String, String> fanInEngine() {

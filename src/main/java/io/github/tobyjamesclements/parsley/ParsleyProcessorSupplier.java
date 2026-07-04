@@ -21,7 +21,6 @@ final class ParsleyProcessorSupplier<KIn, VIn, KOut, VOut>
         implements CausalProcessorSupplier<KIn, VIn, KOut, VOut> {
 
     private final ProcessorSupplier<KIn, VIn, KOut, VOut> userSupplier;
-    private final CausalBufferLimit limit;
     private final Function<String, Serde<KIn>> keySerdeByTopic;
     private final Function<String, Serde<VIn>> valueSerdeByTopic;
     private final String frontierStoreName;
@@ -37,7 +36,6 @@ final class ParsleyProcessorSupplier<KIn, VIn, KOut, VOut>
     private final @Nullable CausalCoordination coordination;
 
     ParsleyProcessorSupplier(ProcessorSupplier<KIn, VIn, KOut, VOut> userSupplier,
-                                      CausalBufferLimit limit,
                                       Function<String, Serde<KIn>> keySerdeByTopic,
                                       Function<String, Serde<VIn>> valueSerdeByTopic,
                                       String frontierStoreName,
@@ -52,7 +50,6 @@ final class ParsleyProcessorSupplier<KIn, VIn, KOut, VOut>
                                       @Nullable CausalQuiesce quiesce,
                                       @Nullable CausalCoordination coordination) {
         this.userSupplier = userSupplier;
-        this.limit = limit;
         this.keySerdeByTopic = keySerdeByTopic;
         this.valueSerdeByTopic = valueSerdeByTopic;
         this.frontierStoreName = frontierStoreName;
@@ -71,16 +68,11 @@ final class ParsleyProcessorSupplier<KIn, VIn, KOut, VOut>
     @Override
     public Processor<KIn, VIn, KOut, VOut> get() {
         return new ParsleyProcessor<>(
-                userSupplier.get(), limit,
+                userSupplier.get(),
                 new ParsleySerializer<>(new ParsleyResolver<>(keySerdeByTopic, valueSerdeByTopic)),
                 frontierStoreName, bufferStoreName, candidateIndexStoreName, forwardedIndexStoreName,
                 topics, sinkTopics, adminFactory, config, audit, quiesce,
                 ParsleyEpochSnapshotPublisher.NOOP, coordination);
-    }
-
-    /** The buffer eviction limit this supplier was built with. Package-private for tests. */
-    CausalBufferLimit limit() {
-        return limit;
     }
 
     /** The effective Parsley configuration this supplier was built with. Package-private for tests. */

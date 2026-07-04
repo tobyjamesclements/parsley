@@ -54,7 +54,7 @@ class CausalCoordinationTopologyTest {
         runtime.runOnce();
 
         Topology topology = CausalStreams.builder(upperCaser())
-                .addBufferStore("parsley", CausalBufferLimit.ofSize(100))
+                .addBufferStore("parsley")
                 .addSource(CausalBuffer.of("t1", Serdes.String(), Serdes.String()))
                 .addSink("out-sink", "out", Serdes.String(), Serdes.String())
                 .withCoordination(coordination)

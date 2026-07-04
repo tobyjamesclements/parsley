@@ -91,7 +91,7 @@ class CausalProcessorsAvroTopologyTest {
         StreamsBuilder builder = new StreamsBuilder();
         builder.stream(List.of(PRICES, ORDERS), Consumed.with(Serdes.String(), avro))
                 .process(CausalProcessors.builder(user)
-                        .addBufferStore("parsley", CausalBufferLimit.ofSize(100))
+                        .addBufferStore("parsley")
                         .addBuffers(List.of(PRICES, ORDERS), Serdes.String(), avro)
                         .topicAdmin(TestTopicAdmin.of(Map.of(PRICES, PRICES_ID, ORDERS, ORDERS_ID)))
                         .build());
@@ -167,31 +167,6 @@ class CausalProcessorsAvroTopologyTest {
         }
     }
 
-    /**
-     * The same scenario, but with {@code parsley.buffer.deserialization.failure.policy = continue}:
-     * Parsley <strong>skips</strong> the undecodable held record on drain instead of failing — the
-     * price is still delivered, the order is dropped from the buffer, and no exception propagates.
-     * Proves the processor reads the policy from {@link ParsleyConfig} and threads it into the engine.
-     */
-    @Test
-    void heldAvroRecordIsSkippedWhenPolicyIsContinue() {
-        SpecificAvroSerde<SpecificRecord> avro = specificAvroSerde();
-
-        try (TopologyTestDriver driver = new TopologyTestDriver(poisonTopology(avro, continuePolicy()), config())) {
-            KeyValueStore<String, byte[]> bufferStore = driver.getKeyValueStore("parsley-buffer");
-            bufferAnUndecodableOrder(driver, avro);
-            assertEquals(1, storeSize(bufferStore), "the order must be buffered before the price arrives");
-
-            // In continue-mode the drain skips the undecodable order rather than throwing.
-            org.junit.jupiter.api.Assertions.assertDoesNotThrow(() -> arrivePrice(driver, avro),
-                    "continue-mode must skip the undecodable record, not propagate the failure");
-
-            assertEquals(List.of(new Price("ACME", 42.5)), processed,
-                    "the price is delivered; the undecodable order is dropped, never delivered");
-            assertEquals(0, storeSize(bufferStore), "the skipped order must be removed from the buffer");
-        }
-    }
-
     // --- helpers -----------------------------------------------------------------------------
 
     /** Topology whose ORDERS buffer serde writes real Avro but throws on read (registry change). */
@@ -209,7 +184,7 @@ class CausalProcessorsAvroTopologyTest {
         };
         StreamsBuilder builder = new StreamsBuilder();
         builder.stream(List.of(PRICES, ORDERS), Consumed.with(Serdes.String(), avro))
-                .process(CausalProcessors.builder(capturing()).addBufferStore("parsley", CausalBufferLimit.ofSize(100))
+                .process(CausalProcessors.builder(capturing()).addBufferStore("parsley")
                         .addBuffer(CausalBuffer.of(PRICES, Serdes.String(), avro))
                         .addBuffer(CausalBuffer.of(ORDERS, Serdes.String(), undecodableOnRead))
                         .topicAdmin(TestTopicAdmin.of(Map.of(PRICES, PRICES_ID, ORDERS, ORDERS_ID)))
@@ -219,13 +194,7 @@ class CausalProcessorsAvroTopologyTest {
     }
 
     private static ParsleyConfig failPolicy() {
-        return ParsleyConfig.from(new Properties());  // default policy = fail
-    }
-
-    private static ParsleyConfig continuePolicy() {
-        Properties props = new Properties();
-        props.put(ParsleyConfig.DESERIALIZATION_FAILURE_POLICY, "continue");
-        return ParsleyConfig.from(props);
+        return ParsleyConfig.from(new Properties());  // fail-closed
     }
 
     /** Feeds an Order depending on prices-0@0 (not yet arrived) → held, serialised with real Avro. */

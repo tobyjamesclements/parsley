@@ -28,12 +28,11 @@ import java.util.function.Function;
 
 /**
  * Wraps a user {@link Processor} and gates delegation on the causal frontier: an incoming record is
- * held until the frontier dominates its causal dependencies, or until the configured
- * {@link CausalBufferLimit} forces delivery anyway. Every record reaches
- * {@code delegate.process(...)} exactly once. State reads/writes the delegate performs and every
- * record it forwards are causally ordered unless the record was force-delivered by an eviction
- * (logged and counted by the violation metric); forwards are stamped with the current frontier by a
- * {@link ParsleyProcessorContext}.
+ * held until the completeness frontier dominates its causal dependencies. Delivery is strictly
+ * fail-closed — there is no eviction, buffer limit, or timeout that forwards a record ahead of its
+ * dependencies. Every record that is delivered reaches {@code delegate.process(...)} exactly once,
+ * and the state reads/writes the delegate performs and every record it forwards are causally ordered;
+ * forwards are stamped with the current frontier by a {@link ParsleyProcessorContext}.
  *
  * <p>Held records are persisted to a changelog-backed buffer store and restored on {@code init}, so
  * they survive a restart (a buffered record's source offset is committed past it, so it would
@@ -54,7 +53,6 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
     private static final Duration EPOCH_POLL_INTERVAL = Duration.ofMillis(200);
 
     private final Processor<KIn, VIn, KOut, VOut> delegate;
-    private final CausalBufferLimit limit;
     private final ParsleySerializer<KIn, VIn> serializer;
     private final String frontierStoreName;
     private final String bufferStoreName;
@@ -116,10 +114,9 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
     // Read live by the stamping proxy; volatile as belt-and-suspenders (single task thread owns this).
     private volatile ParsleyClock stampFrontier = ParsleyClock.empty();
     private volatile @Nullable RecordMetadata deliveryMetadata;
-    private Cancellable restoredOverflowSchedule;
+    private Cancellable restoredDrainSchedule;
 
     ParsleyProcessor(Processor<KIn, VIn, KOut, VOut> delegate,
-                     CausalBufferLimit limit,
                      ParsleySerializer<KIn, VIn> serializer,
                      String frontierStoreName,
                      String bufferStoreName,
@@ -131,13 +128,12 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
                      ParsleyConfig config,
                      CausalAudit audit,
                      @Nullable CausalQuiesce quiesce) {
-        this(delegate, limit, serializer, frontierStoreName, bufferStoreName, candidateIndexStoreName,
+        this(delegate, serializer, frontierStoreName, bufferStoreName, candidateIndexStoreName,
                 forwardedIndexStoreName, topics, sinkTopics, adminFactory, config,
                 audit, quiesce, ParsleyEpochSnapshotPublisher.NOOP);
     }
 
     ParsleyProcessor(Processor<KIn, VIn, KOut, VOut> delegate,
-                     CausalBufferLimit limit,
                      ParsleySerializer<KIn, VIn> serializer,
                      String frontierStoreName,
                      String bufferStoreName,
@@ -150,13 +146,12 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
                      CausalAudit audit,
                      @Nullable CausalQuiesce quiesce,
                      ParsleyEpochSnapshotPublisher snapshotPublisher) {
-        this(delegate, limit, serializer, frontierStoreName, bufferStoreName, candidateIndexStoreName,
+        this(delegate, serializer, frontierStoreName, bufferStoreName, candidateIndexStoreName,
                 forwardedIndexStoreName, topics, sinkTopics, adminFactory, config,
                 audit, quiesce, snapshotPublisher, null);
     }
 
     ParsleyProcessor(Processor<KIn, VIn, KOut, VOut> delegate,
-                     CausalBufferLimit limit,
                      ParsleySerializer<KIn, VIn> serializer,
                      String frontierStoreName,
                      String bufferStoreName,
@@ -171,7 +166,6 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
                      ParsleyEpochSnapshotPublisher snapshotPublisher,
                      @Nullable CausalCoordination coordination) {
         this.delegate = delegate;
-        this.limit = limit;
         this.serializer = serializer;
         this.frontierStoreName = frontierStoreName;
         this.bufferStoreName = bufferStoreName;
@@ -245,14 +239,13 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
         }
         audit.processorInitialized(context.taskId().toString(), restored);
 
-        this.wiredMetrics = ParsleyMetrics.wire(context,
-                ParsleyLimits.sizeLimitOf(limit), ParsleyLimits.durationLimitOf(limit));
+        this.wiredMetrics = ParsleyMetrics.wire(context);
 
         // The coordinates this task consumes: a registered input topic, on the partition this task
         // owns. Streams co-partitions a sub-topology's sources, so the task owns partition
         // taskId().partition() of every input topic. Derived here, never persisted, so it is
-        // recomputed identically after a rebalance. Used for restore-time pruning and eviction-gap
-        // diagnostics — not as a delivery filter (the gate waits for every channel; see completeness()).
+        // recomputed identically after a rebalance. Used for restore-time pruning — not as a delivery
+        // filter (the gate waits for every channel; see completeness()).
         Set<Uuid> consumedTopicIds = Set.copyOf(topicUuids.values());
         int taskPartition = context.taskId().partition();
         ParsleyClock.CoordinatePredicate inScope = (topicId, partition) ->
@@ -269,9 +262,8 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
             frontier.channelUpdate(topicId, taskPartition, ParsleyClock.empty());
         }
 
-        this.engine = new ParsleyEngine<>(limit, frontier, inScope, buffer, candidateIndex,
-                wiredMetrics.metrics(), audit, context::currentSystemTimeMs,
-                config.skipOnDecodeFailure(), config.failOnEvictionLimit());
+        this.engine = new ParsleyEngine<>(frontier, buffer, candidateIndex,
+                wiredMetrics.metrics(), audit, context::currentSystemTimeMs);
         // Initialise stampFrontier from completeness() so the stamping proxy reflects the restored
         // channel-clock state (not just the in-scope frontier) from the first forward onward.
         this.stampFrontier = engine.completeness();
@@ -280,19 +272,16 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
                 context, () -> stampFrontier, () -> Optional.ofNullable(deliveryMetadata));
         delegate.init(stampingContext);
 
-        // Enforce the size limit once against a buffer restored from a changelog (e.g. after a
-        // restart following a reconfiguration that lowered the limit); onRecord()'s inline check
-        // only fires on the next admission, which may never come. Must run as a punctuation, not
-        // inline here: Streams hasn't finished wiring the task's RecordCollector until every
-        // processor in the topology returns from init(), so forward() during init() throws NPE.
-        restoredOverflowSchedule = context.schedule(Duration.ofMillis(1), PunctuationType.WALL_CLOCK_TIME,
+        // Drain any records that became satisfiable between the last committed frontier and the last
+        // committed buffer-removal (the at-least-once window) once, against the buffer restored from a
+        // changelog. Must run as a punctuation, not inline here: Streams hasn't finished wiring the
+        // task's RecordCollector until every processor in the topology returns from init(), so
+        // forward() during init() throws NPE.
+        restoredDrainSchedule = context.schedule(Duration.ofMillis(1), PunctuationType.WALL_CLOCK_TIME,
                 timestamp -> {
-                    restoredOverflowSchedule.cancel();
-                    deliver(evictRestoredOverflow());
+                    restoredDrainSchedule.cancel();
+                    deliver(engine.drainRestoredSatisfied());
                 });
-
-        engine.evictionInterval().ifPresent(interval ->
-                context.schedule(interval, PunctuationType.WALL_CLOCK_TIME, timestamp -> deliver(evict())));
 
         // Refreshes the oldest-record gauge independent of buffer traffic, so it stays current on a
         // buffer that sits idle between admits/releases/evictions (notably a size-only buffer, which
@@ -380,16 +369,6 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
 
     private List<ParsleyMessage<KIn, VIn>> gate(ParsleyMessage<KIn, VIn> record) {
         return engine.onRecord(record);
-    }
-
-    private List<ParsleyMessage<KIn, VIn>> evict() {
-        return engine.evictExpired();
-    }
-
-    private List<ParsleyMessage<KIn, VIn>> evictRestoredOverflow() {
-        List<ParsleyMessage<KIn, VIn>> out = new ArrayList<>(engine.drainRestoredSatisfied());
-        out.addAll(engine.evictOverflow());
-        return out;
     }
 
     private void deliver(List<ParsleyMessage<KIn, VIn>> admitted) {
@@ -801,29 +780,20 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
     }
 
     /**
-     * Applies {@code parsley.clock.resolution.failure.policy} when an inbound record's causal
-     * dependencies header could not be decoded: {@code fail} (default) fails the task fast, leaving
-     * the record to be reprocessed on restart; {@code continue} forwards it with empty (vacuously
-     * satisfied) dependencies, counted as a violation. The occurrence is metered and audited either
-     * way.
+     * Handles an inbound record whose causal-dependencies header could not be decoded: fails the task
+     * fast (fail-closed), leaving the record to be reprocessed on restart. Its real dependencies are
+     * unknown, so forwarding it would deliver on an unknown premise — never permitted. The occurrence
+     * is metered and audited. (A future dead-letter path will divert a record with a genuinely
+     * unrecoverable header out of the causal execution path rather than reprocessing it forever.)
      */
     private ParsleyMessage<KIn, VIn> onUnresolvableClock(ParsleyClockResolutionException e,
             Record<KIn, VIn> record, TopicPartition source, long offset, Uuid topicId) {
-        boolean fail = config.failOnUnresolvableClock();
         wiredMetrics.metrics().recordClockResolutionError();
-        audit.recordClockResolutionFailure(e.topic(), e.partition(), e.offset(), e.details(), fail);
-        if (fail) {
-            log.error("Unresolvable causal-dependencies header on {}-{} @{} "
-                    + "(parsley.clock.resolution.failure.policy = fail); failing fast. The record was "
-                    + "not forwarded and is reprocessed on restart. {}",
-                    e.topic(), e.partition(), e.offset(), e.details(), e);
-            throw e;
-        }
-        log.warn("Unresolvable causal-dependencies header on {}-{} @{} "
-                + "(parsley.clock.resolution.failure.policy = continue); forwarding with empty "
-                + "dependencies. {}", e.topic(), e.partition(), e.offset(), e.details(), e);
-        wiredMetrics.metrics().recordViolation();
-        return ParsleyMessage.from(record, source, offset, topicId, ParsleyClock.empty());
+        audit.recordClockResolutionFailure(e.topic(), e.partition(), e.offset(), e.details(), true);
+        log.error("Unresolvable causal-dependencies header on {}-{} @{}; failing fast (fail-closed). "
+                + "The record was not forwarded and is reprocessed on restart. {}",
+                e.topic(), e.partition(), e.offset(), e.details(), e);
+        throw e;
     }
 
     /**
