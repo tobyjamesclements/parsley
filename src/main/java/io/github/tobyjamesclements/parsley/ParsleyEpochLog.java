@@ -63,6 +63,14 @@ final class ParsleyEpochLog {
                     publications.put(e.memberId(), e.completeness());
                 }
             }
+            case EpochEvent.Leave e -> {
+                // Remove the member from the domain — a graceful leave or an eviction of a silent member.
+                // Dropping it from the open round's publications keeps the completeness check honest (a
+                // left member is no longer awaited). Idempotent: a Leave for a non-member is a no-op.
+                runningMembers.remove(e.memberId());
+                pendingJoiners.remove(e.memberId());
+                publications.remove(e.memberId());
+            }
             case EpochEvent.EpochCommitted e -> {
                 // Dedup by epochId: the first commit for an epoch is authoritative; a stale or duplicate
                 // one (owner-plus-takeover, or a re-append) is ignored. Without this guard a duplicate
@@ -103,6 +111,18 @@ final class ParsleyEpochLog {
     /** The members counted in the current cut (joined and committed in a prior epoch). */
     Set<String> runningMembers() {
         return Set.copyOf(runningMembers);
+    }
+
+    /** Whether {@code memberId} is currently a running member — the join block waits until this is true. */
+    boolean isRunningMember(String memberId) {
+        return runningMembers.contains(memberId);
+    }
+
+    /** The running members that have not yet published for the open round — eviction candidates once a round waits too long. */
+    Set<String> unpublishedRunningMembers() {
+        Set<String> outstanding = new HashSet<>(runningMembers);
+        outstanding.removeAll(publications.keySet());
+        return outstanding;
     }
 
     /**

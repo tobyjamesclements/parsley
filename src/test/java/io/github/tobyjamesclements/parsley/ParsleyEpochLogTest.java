@@ -168,6 +168,34 @@ class ParsleyEpochLogTest {
         assertEquals("A", log.roundOwner(), "the epoch-3 round keeps its owner");
     }
 
+    /**
+     * A {@link EpochEvent.Leave} removes a member from the domain, so an open round the member was holding
+     * up completes without it — the mechanism that stops a gone member freezing rounds forever.
+     */
+    @Test
+    void leaveRemovesAMemberSoAnOpenRoundCompletesWithoutIt() {
+        ParsleyEpochLog log = bootstrappedWithRunningMember("A");
+        log.apply(new EpochEvent.JoinRequested("B"));
+        commitRound(log, "B");                              // A+B running (epoch 2)
+
+        log.apply(new EpochEvent.SnapshotRequested("A"));
+        log.apply(new EpochEvent.FrontierPublished("A", ParsleyClock.empty().observe(T1_ID, 0, 5)));
+        assertFalse(log.isRoundComplete(), "B is a running member that has not published, so the round waits");
+
+        log.apply(new EpochEvent.Leave("B"));               // B decommissioned or evicted
+        assertFalse(log.isRunningMember("B"), "the departed member is removed from the running set");
+        assertTrue(log.isRoundComplete(), "the round completes once the only outstanding member has left");
+    }
+
+    /** A {@link EpochEvent.Leave} for a member that is not present is a no-op. */
+    @Test
+    void leaveForANonMemberIsANoOp() {
+        ParsleyEpochLog log = bootstrappedWithRunningMember("A");
+        log.apply(new EpochEvent.Leave("ghost"));
+        assertEquals(java.util.Set.of("A"), log.runningMembers(), "leaving a non-member changes nothing");
+        assertTrue(log.isRunningMember("A"), "the real member is untouched");
+    }
+
     // --- helpers --------------------------------------------------------------------------------
 
     /** A log where {@code member} has joined and been committed into epoch 1 (so it is running). */

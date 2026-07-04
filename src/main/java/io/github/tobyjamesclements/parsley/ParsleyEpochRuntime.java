@@ -161,23 +161,26 @@ final class ParsleyEpochRuntime implements AutoCloseable {
         }
         roundOpen = fold.isRoundOpen();
         bootstrapped = transport.caughtUp();
-        driveOwner();
+        driveCommit();
     }
 
     /**
-     * The owner's collect → commit: if an open round is owned by a member local to this instance and
-     * every running member has published, append the {@code EpochCommitted}. Guarded so each round's
-     * commit is appended once; the commit is read back through the log and folded like any other event.
-     * A round owned by a remote instance is left for that instance to commit.
+     * Collect → commit, leaderless: once an open round is complete (every running member has published),
+     * <em>any</em> node with a local member appends the {@code EpochCommitted}. The {@link
+     * ParsleyEpochLog#proposeCommit() merge-min} is a deterministic function of the published frontiers,
+     * so every node computes the identical commit, and dedup-by-{@code epochId} makes the concurrent
+     * appends idempotent — there is no single owner to fail (a gone owner cannot freeze the epoch). Guarded
+     * so this node appends each round's commit at most once; the commit is read back through the log and
+     * folded like any other event.
      */
-    private void driveOwner() {
+    private void driveCommit() {
         // Never commit before the whole startup backlog is folded: committedEpochId would be stale and
         // the round would be decided against a topology this runtime has not yet fully observed.
-        if (!bootstrapped || !fold.isRoundOpen()) {
+        if (!bootstrapped || !fold.isRoundOpen() || !fold.isRoundComplete()) {
             return;
         }
-        String owner = fold.roundOwner();
-        if (owner == null || !localMembers.contains(owner) || !fold.isRoundComplete()) {
+        // Only nodes with skin in the game (a local member) commit, to bound the duplicate appends.
+        if (localMembers.isEmpty()) {
             return;
         }
         long epochToCommit = fold.nextEpochId();

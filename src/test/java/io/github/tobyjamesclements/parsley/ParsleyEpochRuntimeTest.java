@@ -37,11 +37,13 @@ class ParsleyEpochRuntimeTest {
     }
 
     /**
-     * Two nodes sharing one log both become running members, then the round owner alone collects both
-     * published frontiers and commits their merge-min; the non-owner appends no commit.
+     * Two nodes sharing one log both become running members, then a complete round commits their
+     * frontiers' merge-min. With any-node commit both nodes may append the (identical) commit; dedup makes
+     * it one effective epoch, so the decision is read via {@code committedEpochId} + the floor, not the
+     * append count.
      */
     @Test
-    void ownerAloneCommitsMergeMinOfPublishedFrontiers() {
+    void aCompleteRoundCommitsTheMergeMinOfPublishedFrontiers() {
         InMemoryEpochTransport.SharedLog log = new InMemoryEpochTransport.SharedLog();
         ParsleyEpochRuntime a = runtimeOver(log);   // owns member A
         ParsleyEpochRuntime b = runtimeOver(log);   // owns member B
@@ -55,8 +57,7 @@ class ParsleyEpochRuntimeTest {
         settle(log, a, b);
         assertEquals(1L, a.committedEpochId(), "epoch 1 is committed, promoting both to running");
 
-        // Second round: A owns it (its request is first after the epoch-1 commit); both publish; A alone
-        // commits epoch 2 with the merge-min of the two frontiers.
+        // Second round: both publish and the round commits epoch 2 with the merge-min of the frontiers.
         ParsleyClock fA = ParsleyClock.empty().observe(T1, 0, 10).observe(T2, 0, 5);
         ParsleyClock fB = ParsleyClock.empty().observe(T1, 0, 7).observe(T2, 0, 9);
         a.requestSnapshot("A");
@@ -67,7 +68,8 @@ class ParsleyEpochRuntimeTest {
         ParsleyClock expected = ParsleyClock.empty().observe(T1, 0, 7).observe(T2, 0, 5);
         assertEquals(2L, a.committedEpochId(), "epoch 2 is committed");
         assertEquals(expected, a.committedLowerBounds(), "epoch 2 floor is the per-coordinate min of A and B");
-        assertEquals(2L, log.commitCount(), "exactly two commits (epoch 1 and epoch 2); the non-owner added none");
+        assertEquals(a.committedLowerBounds(), b.committedLowerBounds(),
+                "both nodes agree on the floor regardless of which node's commit won the dedup");
     }
 
     /**
@@ -94,7 +96,7 @@ class ParsleyEpochRuntimeTest {
         settle(log, a, b);
 
         assertEquals(2L, a.committedEpochId(), "the coalesced round yields exactly one new epoch");
-        assertEquals(2L, log.commitCount(), "only one commit for the coalesced round (plus epoch 1)");
+        assertEquals(2L, b.committedEpochId(), "both nodes agree the coalesced round yielded exactly one new epoch");
     }
 
     /**

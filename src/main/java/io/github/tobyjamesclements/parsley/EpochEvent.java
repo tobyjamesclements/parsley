@@ -29,12 +29,13 @@ import java.nio.charset.StandardCharsets;
  */
 sealed interface EpochEvent
         permits EpochEvent.JoinRequested, EpochEvent.SnapshotRequested,
-                EpochEvent.FrontierPublished, EpochEvent.EpochCommitted {
+                EpochEvent.FrontierPublished, EpochEvent.EpochCommitted, EpochEvent.Leave {
 
     byte TAG_JOIN = 1;
     byte TAG_SNAPSHOT = 2;
     byte TAG_FRONTIER = 3;
     byte TAG_COMMIT = 4;
+    byte TAG_LEAVE = 5;
 
     /** A node announces itself; it becomes a running member (counted in the cut) at the next commit. */
     record JoinRequested(String memberId) implements EpochEvent {}
@@ -47,6 +48,13 @@ sealed interface EpochEvent
 
     /** The round owner's decision: the new epoch id and its lower bounds. */
     record EpochCommitted(long epochId, ParsleyClock lowerBounds) implements EpochEvent {}
+
+    /**
+     * A member is removed from the domain — appended by the member itself (a graceful
+     * {@code CausalCoordination.leave()}) or by any node evicting a silent member after a round waits too
+     * long. Either way the fold drops it from membership, so a gone member cannot freeze rounds forever.
+     */
+    record Leave(String memberId) implements EpochEvent {}
 
     /** Serialises this event: {@code [tag:1]} then the tag-specific body. */
     default byte[] toBytes() {
@@ -71,6 +79,10 @@ sealed interface EpochEvent
                     dos.writeLong(e.epochId());
                     writeClock(dos, e.lowerBounds());
                 }
+                case Leave e -> {
+                    dos.writeByte(TAG_LEAVE);
+                    writeString(dos, e.memberId());
+                }
             }
             dos.flush();
             return baos.toByteArray();
@@ -92,6 +104,7 @@ sealed interface EpochEvent
                 case TAG_SNAPSHOT -> new SnapshotRequested(readString(dis));
                 case TAG_FRONTIER -> new FrontierPublished(readString(dis), readClock(dis));
                 case TAG_COMMIT -> new EpochCommitted(dis.readLong(), readClock(dis));
+                case TAG_LEAVE -> new Leave(readString(dis));
                 default -> throw new IllegalStateException("unrecognised EpochEvent tag: " + tag);
             };
         } catch (IOException ex) {

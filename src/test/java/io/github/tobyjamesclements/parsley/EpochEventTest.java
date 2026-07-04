@@ -6,7 +6,7 @@ import org.junit.jupiter.api.Test;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 
 /**
- * Round-trip tests for {@link EpochEvent}'s wire codec — each of the four coordination events survives
+ * Round-trip tests for {@link EpochEvent}'s wire codec — each coordination event survives
  * {@link EpochEvent#toBytes()} / {@link EpochEvent#fromBytes(byte[])}.
  */
 class EpochEventTest {
@@ -42,5 +42,12 @@ class EpochEventTest {
         EpochEvent event = new EpochEvent.EpochCommitted(
                 42L, ParsleyClock.empty().observe(T1_ID, 0, 100));
         assertEquals(event, EpochEvent.fromBytes(event.toBytes()), "EpochCommitted must round-trip");
+    }
+
+    /** A {@link EpochEvent.Leave} round-trips with its member id. */
+    @Test
+    void leaveRoundTrips() {
+        EpochEvent event = new EpochEvent.Leave("task-0_4");
+        assertEquals(event, EpochEvent.fromBytes(event.toBytes()), "Leave must round-trip");
     }
 }
