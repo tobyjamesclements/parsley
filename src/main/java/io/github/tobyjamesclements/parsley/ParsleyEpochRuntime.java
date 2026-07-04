@@ -37,16 +37,27 @@ final class ParsleyEpochRuntime implements AutoCloseable {
 
     private final ParsleyEpochTransport transport;
     private final ParsleyEpochLog fold = new ParsleyEpochLog();
+    // How long a round may wait for a member to publish before this node evicts it (appends Leave). Must
+    // exceed a rolling restart, so a briefly-absent member is not falsely evicted.
+    private final Duration evictionTimeout;
 
-    // Members whose tasks live on this instance: the runtime owns rounds these members open and drives
-    // their commit. Written from task threads (join), read by the runtime thread (driveOwner).
+    // Members whose tasks live on this instance: the runtime folds and commits on their behalf. Written
+    // from task threads (join), read by the runtime thread (driveCommit / eviction).
     private final Set<String> localMembers = ConcurrentHashMap.newKeySet();
+    // Local members whose departure this node itself initiated (a graceful leave) — so folding their Leave
+    // is not mistaken for an eviction of a still-alive member.
+    private final Set<String> selfInitiatedLeaves = ConcurrentHashMap.newKeySet();
+    // Local members another node has evicted (folded a Leave we did not initiate): the task must fail and
+    // re-join. Read by the task thread via isEvicted.
+    private final Set<String> evictedLocalMembers = ConcurrentHashMap.newKeySet();
     // Intents enqueued by task threads, appended to the log by the runtime thread only.
     private final Queue<EpochEvent> outbox = new ConcurrentLinkedQueue<>();
 
-    // Runtime-thread-only: the epoch we have already appended a commit for, so the owner appends each
+    // Runtime-thread-only: the epoch we have already appended a commit for, so this node appends each
     // round's EpochCommitted exactly once (the commit round-trips through the log and advances the fold).
     private long lastCommitAppendedFor;
+    // Runtime-thread-only: when this node first observed the current round open (nanoTime), 0 if none open.
+    private long roundOpenSinceNanos;
 
     // Mirrors of the folded decision, published for cross-thread readers (a source-layer task polls these
     // to drive the in-band wave; a joiner blocks on committedEpochId). Volatile: written by the runtime
@@ -57,12 +68,20 @@ final class ParsleyEpochRuntime implements AutoCloseable {
     // Whether the transport has folded the whole startup backlog. The owner must not commit before this,
     // or a just-started runtime would commit a stale epoch believing the topology empty.
     private volatile boolean bootstrapped;
+    // Snapshot of the running-member set, for the join block to read from any thread.
+    private volatile Set<String> runningMembersMirror = Set.of();
 
     private volatile boolean running;
     private @Nullable Thread thread;
 
+    /** A runtime with a default eviction timeout — for tests that never exercise eviction. */
     ParsleyEpochRuntime(ParsleyEpochTransport transport) {
+        this(transport, Duration.ofSeconds(30));
+    }
+
+    ParsleyEpochRuntime(ParsleyEpochTransport transport, Duration evictionTimeout) {
         this.transport = transport;
+        this.evictionTimeout = evictionTimeout;
     }
 
     /**
@@ -95,6 +114,28 @@ final class ParsleyEpochRuntime implements AutoCloseable {
     /** Publishes {@code memberId}'s current completeness frontier for the open round. */
     void publishFrontier(String memberId, ParsleyClock completeness) {
         outbox.add(new EpochEvent.FrontierPublished(memberId, completeness));
+    }
+
+    /**
+     * Gracefully removes every local member from the domain (a decommission). Marked self-initiated so
+     * folding the resulting {@link EpochEvent.Leave} is not mistaken for an eviction and does not trigger a
+     * re-join. A restart, by contrast, does not call this — the member stays in the domain and returns.
+     */
+    void leaveLocalMembers() {
+        for (String member : localMembers) {
+            selfInitiatedLeaves.add(member);
+            outbox.add(new EpochEvent.Leave(member));
+        }
+    }
+
+    /** Whether {@code memberId} is currently a running member (folded from the log) — the join block waits on this. */
+    boolean isRunningMember(String memberId) {
+        return runningMembersMirror.contains(memberId);
+    }
+
+    /** Whether {@code memberId} (a local member) has been evicted by another node — the task must fail and re-join. */
+    boolean isEvicted(String memberId) {
+        return evictedLocalMembers.contains(memberId);
     }
 
     /** The last committed epoch id ({@code 0} before any commit). */
@@ -157,11 +198,52 @@ final class ParsleyEpochRuntime implements AutoCloseable {
                 committedEpochId = commit.epochId();
                 committedLowerBounds = commit.lowerBounds();
                 log.debug("Epoch {} committed with lower bounds {}", commit.epochId(), commit.lowerBounds());
+            } else if (event instanceof EpochEvent.Leave leave
+                    && localMembers.contains(leave.memberId()) && !selfInitiatedLeaves.contains(leave.memberId())) {
+                // A local member was evicted by another node (we did not initiate its leave); surface it so
+                // the task can fail and re-join under the current floor.
+                evictedLocalMembers.add(leave.memberId());
+                log.warn("Local member {} was evicted from the epoch domain; the task will re-join", leave.memberId());
             }
         }
         roundOpen = fold.isRoundOpen();
+        runningMembersMirror = fold.runningMembers();
         bootstrapped = transport.caughtUp();
+        updateRoundTimer();
         driveCommit();
+        maybeEvictSilentMembers();
+    }
+
+    /** Tracks how long the current round has been open (for the eviction timeout); reset when none is open. */
+    private void updateRoundTimer() {
+        if (fold.isRoundOpen()) {
+            if (roundOpenSinceNanos == 0) {
+                roundOpenSinceNanos = System.nanoTime();
+            }
+        } else {
+            roundOpenSinceNanos = 0;
+        }
+    }
+
+    /**
+     * Once a round has been open past {@link #evictionTimeout}, evicts every <em>remote</em> running member
+     * that has not published, by appending a {@link EpochEvent.Leave} — so a gone member cannot hold the
+     * round open forever. A node never evicts its own local members (they should publish; if one is truly
+     * stuck, other nodes evict it as a remote member). The proposal uses a local clock; the log serialises
+     * the decision, and dedup makes a duplicate Leave a no-op.
+     */
+    private void maybeEvictSilentMembers() {
+        if (!bootstrapped || !fold.isRoundOpen() || localMembers.isEmpty() || roundOpenSinceNanos == 0) {
+            return;
+        }
+        if (System.nanoTime() - roundOpenSinceNanos < evictionTimeout.toNanos()) {
+            return;
+        }
+        for (String silent : fold.unpublishedRunningMembers()) {
+            if (!localMembers.contains(silent)) {
+                transport.append(new EpochEvent.Leave(silent));
+            }
+        }
     }
 
     /**

@@ -52,7 +52,11 @@ All notable changes to this project are documented in this file. The format is b
   before. A node **deployed into an already-running** topology blocks at startup until an epoch
   computed without it commits, then adopts that floor and replays its inputs from the start with
   pre-epoch history stripped, so it never drags the shared floor down; on a configurable timeout it
-  fails to retry rather than proceed on an unknown floor.
+  fails to retry rather than proceed on an unknown floor. A **gone** member (a decommissioned or
+  crashed app) cannot freeze the domain: a round that waits too long for it **evicts** it through the
+  log after a configurable timeout, and — since a complete round is committed by any node, not a
+  single owner — a gone owner cannot freeze it either. A clean decommission uses
+  `CausalCoordination.leave()`; a restart keeps the member in the domain and returns.
 - `CausalStreams` — the topology-owning high-level causal API (Layer 2), composing
   `CausalProcessors` internally rather than reimplementing the causal engine. Builds a `Topology`
   for a single causal stage — one or more `CausalBuffer` sources feeding a causal-decorated

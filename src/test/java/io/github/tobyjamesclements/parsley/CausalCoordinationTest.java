@@ -6,6 +6,7 @@ import java.time.Duration;
 import java.util.Set;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -110,6 +111,50 @@ class CausalCoordinationTest {
             assertTrue(failure.getMessage().contains("join did not commit"),
                     "the failure names the join timeout so the cause is clear");
             assertEquals(1L, runtime.committedEpochId(), "the settled epoch never advanced past the established one");
+        } finally {
+            runtime.close();
+        }
+    }
+
+    /**
+     * {@link CausalCoordination#leave()} gracefully removes the instance's local members from the domain,
+     * marked self-initiated so it is not mistaken for an eviction (no re-join).
+     */
+    @Test
+    void leaveGracefullyRemovesLocalMembersWithoutTriggeringReJoin() {
+        InMemoryEpochTransport.SharedLog log = new InMemoryEpochTransport.SharedLog();
+        ParsleyEpochRuntime runtime = new ParsleyEpochRuntime(new InMemoryEpochTransport(log));
+        CausalCoordination coordination = CausalCoordination.forRuntime(runtime, Set.of());
+        runtime.join("A");
+
+        coordination.leave();
+        settle(log, runtime);
+
+        assertTrue(log.events().stream().anyMatch(e -> e instanceof EpochEvent.Leave l && l.memberId().equals("A")),
+                "leave() appends a Leave removing the local member");
+        assertFalse(runtime.isRunningMember("A"), "the departed member is no longer running");
+        assertFalse(runtime.isEvicted("A"), "a self-initiated leave is not surfaced as an eviction");
+    }
+
+    /**
+     * A normal restart of an already-running member does not block: {@code awaitJoinCommit} sees it is
+     * still a running member on the log and returns at once, without opening a round or bumping the epoch.
+     */
+    @Test
+    void awaitJoinCommitDoesNotBlockForAnAlreadyRunningMember() {
+        InMemoryEpochTransport.SharedLog log = new InMemoryEpochTransport.SharedLog();
+        InMemoryEpochTransport seeder = new InMemoryEpochTransport(log);
+        seeder.append(new EpochEvent.JoinRequested("M"));
+        seeder.append(new EpochEvent.SnapshotRequested("M"));
+        seeder.append(new EpochEvent.EpochCommitted(1, ParsleyClock.empty()));
+
+        ParsleyEpochRuntime runtime = new ParsleyEpochRuntime(new InMemoryEpochTransport(log));
+        CausalCoordination coordination = CausalCoordination.forRuntime(runtime, Set.of());
+        runtime.start();
+        try {
+            coordination.awaitJoinCommit(runtime, "M");   // M is already running -> returns without blocking
+            assertEquals(1L, runtime.committedEpochId(),
+                    "a normal restart of a running member neither blocks nor bumps the epoch");
         } finally {
             runtime.close();
         }

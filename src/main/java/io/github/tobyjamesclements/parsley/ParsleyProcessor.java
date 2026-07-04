@@ -579,7 +579,17 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
      */
     private void pollEpochCoordination() {
         ParsleyEpochRuntime runtime = epochRuntime;
-        if (runtime == null || externalSourceTopicIds.isEmpty()) {
+        if (runtime == null) {
+            return;
+        }
+        if (runtime.isEvicted(memberId)) {
+            // Another node evicted this member (presumed gone). Fail the task so Streams restarts it and it
+            // re-joins under the current floor; a REPLACE_THREAD uncaught-exception handler makes this
+            // self-healing for a false eviction of a still-alive member.
+            throw new IllegalStateException("task " + memberId
+                    + " was evicted from the topology-epoch domain; failing so it re-joins under the current floor");
+        }
+        if (externalSourceTopicIds.isEmpty()) {
             return;
         }
         long committed = runtime.committedEpochId();

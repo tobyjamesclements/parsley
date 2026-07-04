@@ -151,6 +151,42 @@ class ParsleyEpochRuntimeTest {
         assertEquals(1L, runtime.committedEpochId(), "the owner commits the round once bootstrapped");
     }
 
+    /**
+     * A running member that never publishes is evicted once the round has waited past the eviction
+     * timeout, so the round completes and commits — a gone member cannot freeze the epoch forever.
+     */
+    @Test
+    void aSilentRunningMemberIsEvictedSoTheRoundCommits() {
+        InMemoryEpochTransport.SharedLog log = new InMemoryEpochTransport.SharedLog();
+        // Seed R as a running member (epoch 1); it then falls silent.
+        InMemoryEpochTransport seeder = new InMemoryEpochTransport(log);
+        seeder.append(new EpochEvent.JoinRequested("R"));
+        seeder.append(new EpochEvent.SnapshotRequested("R"));
+        seeder.append(new EpochEvent.EpochCommitted(1, ParsleyClock.empty()));
+
+        ParsleyEpochRuntime a = new ParsleyEpochRuntime(new InMemoryEpochTransport(log), java.time.Duration.ZERO);
+        a.join("A");
+        a.requestSnapshot("A");   // opens round 2; running = {R}; R never publishes
+        settle(log, a);
+
+        assertEquals(2L, a.committedEpochId(), "the silent member is evicted so the round commits epoch 2");
+        assertFalse(a.isRunningMember("R"), "the evicted member is no longer a running member");
+    }
+
+    /** A local member evicted by another node is surfaced via {@code isEvicted}, so the task can fail and re-join. */
+    @Test
+    void aLocalMemberEvictedByAnotherNodeIsSurfaced() {
+        InMemoryEpochTransport.SharedLog log = new InMemoryEpochTransport.SharedLog();
+        ParsleyEpochRuntime a = runtimeOver(log);
+        a.join("A");
+        settle(log, a);
+
+        new InMemoryEpochTransport(log).append(new EpochEvent.Leave("A"));   // another node evicts A
+        settle(log, a);
+
+        assertTrue(a.isEvicted("A"), "a local member evicted by another node is surfaced for re-join");
+    }
+
     private static ParsleyEpochRuntime runtimeOver(InMemoryEpochTransport.SharedLog log) {
         return new ParsleyEpochRuntime(new InMemoryEpochTransport(log));
     }
