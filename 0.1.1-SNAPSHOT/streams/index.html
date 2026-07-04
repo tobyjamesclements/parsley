@@ -498,6 +498,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#evolving-a-running-topology" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Evolving a running topology
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#restart-and-recovery" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -914,6 +925,34 @@
   
   
     <li class="md-nav__item">
+      <a href="../internals/topology-epochs/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Topology epochs
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
       <a href="../internals/wire-format/" class="md-nav__link">
         
   
@@ -1098,6 +1137,17 @@
     <span class="md-ellipsis">
       
         The high-level API: CausalStreams
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#evolving-a-running-topology" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Evolving a running topology
       
     </span>
   </a>
@@ -1293,6 +1343,65 @@ requires owning the sinks, which the decorator structurally cannot do on its own
 </ul>
 <p>Everything under <a href="#preconditions">Preconditions</a> still applies unchanged — <code>CausalStreams</code> manages
 more of the topology for you, but the causal guarantee itself has the same requirements either way.</p>
+<h2 id="evolving-a-running-topology">Evolving a running topology</h2>
+<p>A causal topology sometimes has to change while it runs: add a stage, replace a stage, or recompile
+one. A new stage subscribes to its inputs from the earliest offset and replays them from the start, and
+the causal frontier is a minimum across every node, so a node replaying from offset 0 drags that minimum
+down and un-strips history the other nodes had long since delivered. <code>CausalCoordination</code> lets a
+topology cross a well-defined <strong>epoch boundary</strong> so a new node adopts the current floor and replays with
+pre-epoch history stripped, rather than pulling the shared frontier back to the beginning of time.</p>
+<p>Create one handle over a shared single-partition epoch-events log topic, register it with every
+participating stage through <code>withCoordination</code> on either builder, and close it from your shutdown path.
+The shape mirrors <a href="#the-high-level-api-causalstreams"><code>CausalQuiesce</code></a>.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="n">CausalCoordination</span><span class="w"> </span><span class="n">coordination</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">CausalCoordination</span><span class="p">.</span><span class="na">create</span><span class="p">(</span><span class="s">&quot;parsley-epoch-events&quot;</span><span class="p">);</span>
+<a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a>
+<a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a><span class="n">Topology</span><span class="w"> </span><span class="n">topology</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">CausalStreams</span><span class="p">.</span><span class="na">builder</span><span class="p">(</span><span class="n">userSupplier</span><span class="p">)</span>
+<a id="__codelineno-3-4" name="__codelineno-3-4" href="#__codelineno-3-4"></a><span class="w">        </span><span class="p">.</span><span class="na">addBufferStore</span><span class="p">(</span><span class="s">&quot;parsley&quot;</span><span class="p">,</span><span class="w"> </span><span class="n">CausalBufferLimit</span><span class="p">.</span><span class="na">ofDuration</span><span class="p">(</span><span class="n">limit</span><span class="p">))</span>
+<a id="__codelineno-3-5" name="__codelineno-3-5" href="#__codelineno-3-5"></a><span class="w">        </span><span class="p">.</span><span class="na">addSource</span><span class="p">(</span><span class="n">CausalBuffer</span><span class="p">.</span><span class="na">of</span><span class="p">(</span><span class="s">&quot;prices&quot;</span><span class="p">,</span><span class="w"> </span><span class="n">Serdes</span><span class="p">.</span><span class="na">String</span><span class="p">(),</span><span class="w"> </span><span class="n">priceSerde</span><span class="p">))</span>
+<a id="__codelineno-3-6" name="__codelineno-3-6" href="#__codelineno-3-6"></a><span class="w">        </span><span class="p">.</span><span class="na">addSink</span><span class="p">(</span><span class="s">&quot;enriched-sink&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;enriched-output&quot;</span><span class="p">,</span><span class="w"> </span><span class="n">Serdes</span><span class="p">.</span><span class="na">String</span><span class="p">(),</span><span class="w"> </span><span class="n">enrichedSerde</span><span class="p">)</span>
+<a id="__codelineno-3-7" name="__codelineno-3-7" href="#__codelineno-3-7"></a><span class="w">        </span><span class="p">.</span><span class="na">withCoordination</span><span class="p">(</span><span class="n">coordination</span><span class="p">)</span>
+<a id="__codelineno-3-8" name="__codelineno-3-8" href="#__codelineno-3-8"></a><span class="w">        </span><span class="p">.</span><span class="na">build</span><span class="p">();</span>
+<a id="__codelineno-3-9" name="__codelineno-3-9" href="#__codelineno-3-9"></a>
+<a id="__codelineno-3-10" name="__codelineno-3-10" href="#__codelineno-3-10"></a><span class="n">KafkaStreams</span><span class="w"> </span><span class="n">streams</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">new</span><span class="w"> </span><span class="n">KafkaStreams</span><span class="p">(</span><span class="n">topology</span><span class="p">,</span><span class="w"> </span><span class="n">props</span><span class="p">);</span>
+<a id="__codelineno-3-11" name="__codelineno-3-11" href="#__codelineno-3-11"></a><span class="n">streams</span><span class="p">.</span><span class="na">start</span><span class="p">();</span>
+<a id="__codelineno-3-12" name="__codelineno-3-12" href="#__codelineno-3-12"></a><span class="c1">// ... to evolve the running topology through a boundary:</span>
+<a id="__codelineno-3-13" name="__codelineno-3-13" href="#__codelineno-3-13"></a><span class="n">coordination</span><span class="p">.</span><span class="na">requestEpochTransition</span><span class="p">();</span>
+<a id="__codelineno-3-14" name="__codelineno-3-14" href="#__codelineno-3-14"></a><span class="c1">// ... in shutdown, after streams.close():</span>
+<a id="__codelineno-3-15" name="__codelineno-3-15" href="#__codelineno-3-15"></a><span class="n">coordination</span><span class="p">.</span><span class="na">close</span><span class="p">();</span>
+</code></pre></div>
+<p>The topology's <strong>external source topics</strong> — the entry points produced by systems outside the topology,
+on which no epoch marker ever arrives — are derived from the log, not configured. Every stage declares
+its input channels and its sink topics when it joins, and a topic some member consumes but no member
+produces is an external source. On the high-level builder the sinks are taken from <code>addSink(...)</code>
+automatically; on the low-level <code>CausalProcessors</code> decorator, declare them with
+<code>CausalProcessors.Builder#sinkTopics</code>. There is nothing else to configure per application, and no source
+topic list to keep in sync by hand.</p>
+<p>The coordination is <strong>leaderless</strong>: there is no coordinator process to deploy. Every application instance
+folds the shared epoch-events log identically and agrees on each epoch's floor, which then propagates
+<strong>in-band</strong> through the topology so every stage adopts it. A few operational consequences follow.</p>
+<ul>
+<li><strong>Entirely optional.</strong> Without a <code>CausalCoordination</code> a topology runs in epoch 0, exactly as a
+  topology with no epoch machinery. Registering a handle is the only thing that turns it on.</li>
+<li><strong>A new node blocks until it is admitted.</strong> A stage deployed into an already-running topology waits at
+  startup — for an unbounded time, with no timeout — until an epoch computed without it commits, then
+  adopts that floor and replays its inputs with pre-epoch history stripped. It never proceeds on an unknown
+  floor: if the domain cannot yet commit (an existing member is absent) the join simply waits. Because a
+  Streams application runs one topology on every instance, adding a stage is a redeploy; this is what lets
+  that redeploy re-enter causal time cleanly.</li>
+<li><strong>A transition blocks until every member has published (no eviction).</strong> A member that is absent —
+  crashed, or briefly gone during a restart — is <em>waited for</em>, for an unbounded time, rather than evicted.
+  Evicting it and committing a floor without it could strand records it still holds below that floor and
+  release them before their causes, so the transition holds until the member returns and publishes. This
+  trades reconfiguration liveness for causal safety: a crashed member blocks the next <em>transition</em> (and
+  any new join) until it returns, though ongoing current-epoch processing is unaffected. A clean
+  decommission calls <code>coordination.leave()</code>; a plain restart calls neither <code>leave()</code> nor anything else, so
+  the member stays in the domain and returns. How an absent member is handled is a pluggable
+  <code>CausalMembershipStrategy</code>, defaulting to <code>blockUntilDrained()</code>.</li>
+</ul>
+<p><code>requestEpochTransition()</code> opens a boundary across the currently-running nodes from any instance;
+<code>create(epochEventsTopic, membershipStrategy)</code> sets the membership strategy. The full protocol — the
+floored clock, the leaderless log fold, the in-band markers, and the source-topic registry — is described
+in <a href="../internals/topology-epochs/">Topology epochs</a>.</p>
 <h2 id="restart-and-recovery">Restart and recovery</h2>
 <p>The causal buffer and the frontier are kept in durable state stores. On a restart or a rebalance the
 following happens.</p>

@@ -11,10 +11,10 @@
       
       
       
-        <link rel="prev" href="../wire-format/">
+        <link rel="prev" href="../causal-consistency/">
       
       
-        <link rel="next" href="../streams/">
+        <link rel="next" href="../wire-format/">
       
       
         
@@ -25,7 +25,7 @@
     
     
       
-        <title>The engine - Parsley</title>
+        <title>Topology epochs - Parsley</title>
       
     
     
@@ -76,7 +76,7 @@
     <div data-md-component="skip">
       
         
-        <a href="#the-engine" class="md-skip">
+        <a href="#topology-epochs" class="md-skip">
           Skip to content
         </a>
       
@@ -116,7 +116,7 @@
         <div class="md-header__topic" data-md-component="header-topic">
           <span class="md-ellipsis">
             
-              The engine
+              Topology epochs
             
           </span>
         </div>
@@ -800,10 +800,37 @@
                 
   
   
+    
   
   
-    <li class="md-nav__item">
-      <a href="../topology-epochs/" class="md-nav__link">
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Topology epochs
+  
+
+    
+  </span>
+  
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
         
   
   
@@ -819,6 +846,114 @@
   
 
       </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#the-floored-clock" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The floored clock
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#the-epoch-events-log" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The epoch-events log
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#the-overlapping-epoch-transition" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The overlapping-epoch transition
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#in-band-markers" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        In-band markers
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#the-source-topic-registry" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The source-topic registry
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#joining-a-running-topology" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Joining a running topology
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#membership-block-until-drained" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Membership: block until drained
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#deployment" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Deployment
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
     </li>
   
 
@@ -856,37 +991,10 @@
                 
   
   
-    
   
   
-  
-    <li class="md-nav__item md-nav__item--active">
-      
-      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
-      
-      
-        
-      
-      
-        <label class="md-nav__link md-nav__link--active" for="__toc">
-          
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    The engine
-  
-
-    
-  </span>
-  
-  
-
-          <span class="md-nav__icon md-icon"></span>
-        </label>
-      
-      <a href="./" class="md-nav__link md-nav__link--active">
+    <li class="md-nav__item">
+      <a href="../engine/" class="md-nav__link">
         
   
   
@@ -902,142 +1010,6 @@
   
 
       </a>
-      
-        
-
-<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
-  
-  
-  
-    
-  
-  
-    <label class="md-nav__title" for="__toc">
-      <span class="md-nav__icon md-icon"></span>
-      Table of contents
-    </label>
-    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
-      
-        <li class="md-nav__item">
-  <a href="#engine-algorithm-at-a-glance" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Engine algorithm, at a glance
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#key-state" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Key state
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#onrecord-algorithm" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        onRecord() algorithm
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#propagation-cascade-propagate" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Propagation cascade (propagate)
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#eviction" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Eviction
-      
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="Eviction">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#evictoverflow-size-limit" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        evictOverflow() — size limit
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#evictexpired-duration-limit" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        evictExpired() — duration limit
-      
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#frontier-persistence-ordering" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Frontier persistence ordering
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#buffer-store" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Buffer store
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#candidate-index" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Candidate index
-      
-    </span>
-  </a>
-  
-</li>
-      
-    </ul>
-  
-</nav>
-      
     </li>
   
 
@@ -1141,10 +1113,10 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
-  <a href="#engine-algorithm-at-a-glance" class="md-nav__link">
+  <a href="#the-floored-clock" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Engine algorithm, at a glance
+        The floored clock
       
     </span>
   </a>
@@ -1152,10 +1124,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#key-state" class="md-nav__link">
+  <a href="#the-epoch-events-log" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Key state
+        The epoch-events log
       
     </span>
   </a>
@@ -1163,10 +1135,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#onrecord-algorithm" class="md-nav__link">
+  <a href="#the-overlapping-epoch-transition" class="md-nav__link">
     <span class="md-ellipsis">
       
-        onRecord() algorithm
+        The overlapping-epoch transition
       
     </span>
   </a>
@@ -1174,10 +1146,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#propagation-cascade-propagate" class="md-nav__link">
+  <a href="#in-band-markers" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Propagation cascade (propagate)
+        In-band markers
       
     </span>
   </a>
@@ -1185,49 +1157,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#eviction" class="md-nav__link">
+  <a href="#the-source-topic-registry" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Eviction
-      
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="Eviction">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#evictoverflow-size-limit" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        evictOverflow() — size limit
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#evictexpired-duration-limit" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        evictExpired() — duration limit
-      
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#frontier-persistence-ordering" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Frontier persistence ordering
+        The source-topic registry
       
     </span>
   </a>
@@ -1235,10 +1168,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#buffer-store" class="md-nav__link">
+  <a href="#joining-a-running-topology" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Buffer store
+        Joining a running topology
       
     </span>
   </a>
@@ -1246,10 +1179,21 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#candidate-index" class="md-nav__link">
+  <a href="#membership-block-until-drained" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Candidate index
+        Membership: block until drained
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#deployment" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Deployment
       
     </span>
   </a>
@@ -1276,187 +1220,190 @@
   
 
 
-<h1 id="the-engine">The engine</h1>
-<p><code>ParsleyEngine&lt;K,V&gt;</code> is the core of the causal guarantee. It classifies incoming records, manages the causal frontier and the held-record buffer, cascades releases as the frontier advances, and enforces buffer limits.</p>
-<h2 id="engine-algorithm-at-a-glance">Engine algorithm, at a glance</h2>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>onRecord(record):
-<a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>    channelAdvanced = !channelClock(record.channel).dominates(record.dependencies)
-<a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a>    channelStore.update(record.channel, record.dependencies)  # receipt-time: record the branch&#39;s
-<a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a>                                                               # proven completeness before gating
-<a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a>    frontier.seedIfFirstSeen(record.coordinate)        # one-time per coordinate, folds in
-<a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a>                                                        # everything below the first-seen offset
-<a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a>    deps = record.dependencies.withoutSelfReference()  # strip the record&#39;s own offset only
-<a id="__codelineno-0-8" name="__codelineno-0-8" href="#__codelineno-0-8"></a>
-<a id="__codelineno-0-9" name="__codelineno-0-9" href="#__codelineno-0-9"></a>    if completeness().dominates(deps):                 # the gate: every input channel has confirmed
-<a id="__codelineno-0-10" name="__codelineno-0-10" href="#__codelineno-0-10"></a>                                                        #   every depended coordinate
-<a id="__codelineno-0-11" name="__codelineno-0-11" href="#__codelineno-0-11"></a>        frontier.deliver(record.coordinate)            # advance frontier, self-persist &quot;f&quot;
-<a id="__codelineno-0-12" name="__codelineno-0-12" href="#__codelineno-0-12"></a>        out.add(record)
-<a id="__codelineno-0-13" name="__codelineno-0-13" href="#__codelineno-0-13"></a>        propagate(record.coordinate)                   # cascade releases (see below)
-<a id="__codelineno-0-14" name="__codelineno-0-14" href="#__codelineno-0-14"></a>    else:
-<a id="__codelineno-0-15" name="__codelineno-0-15" href="#__codelineno-0-15"></a>        buffer.add(record)                             # hold until satisfied
-<a id="__codelineno-0-16" name="__codelineno-0-16" href="#__codelineno-0-16"></a>        candidateIndex.index(record, deps, completeness())
-<a id="__codelineno-0-17" name="__codelineno-0-17" href="#__codelineno-0-17"></a>        if buffer.size() &gt;= sizeLimit:
-<a id="__codelineno-0-18" name="__codelineno-0-18" href="#__codelineno-0-18"></a>            out.addAll(evictOverflow())                # bring buffer back under the limit
-<a id="__codelineno-0-19" name="__codelineno-0-19" href="#__codelineno-0-19"></a>
-<a id="__codelineno-0-20" name="__codelineno-0-20" href="#__codelineno-0-20"></a>    if channelAdvanced and channelStore.size() &gt; 1:    # a fan-in branch advanced: re-scan, since a
-<a id="__codelineno-0-21" name="__codelineno-0-21" href="#__codelineno-0-21"></a>        out.addAll(drainSatisfied())                   # channel advance can lift completeness for held records
-<a id="__codelineno-0-22" name="__codelineno-0-22" href="#__codelineno-0-22"></a>    return out
-<a id="__codelineno-0-23" name="__codelineno-0-23" href="#__codelineno-0-23"></a>
-<a id="__codelineno-0-24" name="__codelineno-0-24" href="#__codelineno-0-24"></a>onWatermark(channel, carriedFrontier):
-<a id="__codelineno-0-25" name="__codelineno-0-25" href="#__codelineno-0-25"></a>    channelStore.update(channel, carriedFrontier)      # advance the source channel&#39;s clock
-<a id="__codelineno-0-26" name="__codelineno-0-26" href="#__codelineno-0-26"></a>    return drainSatisfied()                             # release records the new completeness permits
-<a id="__codelineno-0-27" name="__codelineno-0-27" href="#__codelineno-0-27"></a>
-<a id="__codelineno-0-28" name="__codelineno-0-28" href="#__codelineno-0-28"></a>evictOverflow() / evictExpired():
-<a id="__codelineno-0-29" name="__codelineno-0-29" href="#__codelineno-0-29"></a>    candidates = oldest/expired buffered entries
-<a id="__codelineno-0-30" name="__codelineno-0-30" href="#__codelineno-0-30"></a>    evictOrFail(candidates):
-<a id="__codelineno-0-31" name="__codelineno-0-31" href="#__codelineno-0-31"></a>        if failOnEvictionLimit:
-<a id="__codelineno-0-32" name="__codelineno-0-32" href="#__codelineno-0-32"></a>            throw ParsleyBufferEvictionLimitException  # candidates remain buffered
-<a id="__codelineno-0-33" name="__codelineno-0-33" href="#__codelineno-0-33"></a>        else:
-<a id="__codelineno-0-34" name="__codelineno-0-34" href="#__codelineno-0-34"></a>            evictSequences(candidates)                 # force-forward out of causal order,
-<a id="__codelineno-0-35" name="__codelineno-0-35" href="#__codelineno-0-35"></a>                                                         # cascading via propagate per release
-</code></pre></div>
-<p><code>completeness()</code> is the per-coordinate minimum across every input channel (<code>ParsleyClock.intersectMin</code>):
-a record is deliverable only once every channel has confirmed every coordinate it depends on. See the
-<a href="../causal-consistency/">causal consistency model</a> for why the gate is strict and the topology contract
-it implies.</p>
-<p>Each piece is covered in its own section below: <a href="#onrecord-algorithm"><code>onRecord()</code> algorithm</a>
-for admission, <a href="#propagation-cascade-propagate">Propagation cascade</a> for the cascade, and
-<a href="#eviction">Eviction</a> for the fail/continue policy split.</p>
-<h2 id="key-state">Key state</h2>
+<h1 id="topology-epochs">Topology epochs</h1>
+<p>A causal topology sometimes has to change while it is running: add a stage, replace a stage, or
+recompile one whose logic has moved. In Kafka Streams a new stage subscribes to its inputs from the
+earliest offset and replays them from the start. Under the causal guarantee that replay is a problem.
+The new node re-observes the entire history of its input topics and stamps records with offsets from
+the beginning of time, and the shared completeness frontier is a minimum across every node, so a node
+replaying from offset 0 drags that minimum down and un-strips history that every other node had long
+since delivered.</p>
+<p>Topology epochs solve this without a coordinator process and without stopping the topology. An
+<strong>epoch</strong> defines a floor per <code>(topicId, partition)</code> coordinate. History below the floor is pre-epoch:
+it feeds state but does not participate in causal time. A node deployed into a running topology adopts
+the current floor, replays its inputs from the start with everything below the floor stripped, and so
+never pins the shared frontier down. The whole mechanism is opt-in through
+<a href="../../streams/#evolving-a-running-topology"><code>CausalCoordination</code></a>; without it a topology runs in
+<strong>epoch 0</strong>, whose floor is 0 everywhere, and behaves exactly as a topology with no epoch machinery at
+all.</p>
+<h2 id="the-floored-clock">The floored clock</h2>
+<p>Each epoch <code>k</code> defines a floor <code>n_k</code> per coordinate; epoch 0 is floor 0 everywhere. There is one rule
+applied every epoch: a dependency <strong>below the floor is ignored</strong> (it cannot have happened in this
+epoch's domain), and a dependency <strong>at or above the floor is gated normally</strong>. The epoch is encoded by
+offset position against the floor, so no per-record epoch header is needed.</p>
+<p>Underneath that rule is a single invariant: <strong>no causal clock carries an entry below the floor</strong>. This
+covers the decoded dependencies of an incoming record, the node's own frontier, each input channel's
+clock, the <code>completeness()</code> output, and the outbound stamp. Delivering a below-floor record still feeds
+the user's state — it is a real message the delegate should see — but it must not anchor the causal
+frontier below the floor. This generalises the per-channel origin that <code>ParsleyFrontier</code> already seeds
+at registration into a domain-wide, epoch-versioned origin.</p>
+<p>Under epoch 0 the invariant is a no-op (nothing is below a floor of 0), which is why an uncoordinated
+topology is bit-for-bit the same as before epochs existed.</p>
+<h2 id="the-epoch-events-log">The epoch-events log</h2>
+<p>Coordination is leaderless and event-sourced. Every participating application instance shares one
+single-partition <strong>epoch-events log</strong> topic for the domain and folds it through an identical
+deterministic function, <code>ParsleyEpochLog</code>. Because the fold is a pure function of the totally-ordered
+log, every node independently agrees on round ownership, membership, and each epoch's floor with no
+leader and no lock. The log carries only this handshake; the floor itself travels in the data plane
+(see <a href="#in-band-markers">In-band markers</a> below).</p>
+<p>The log has five event types, each carrying a member id (<code>application.id</code> plus the Streams task id, so
+instances of the same application share it for failover while distinct applications and sub-topologies
+stay distinct):</p>
 <table>
 <thead>
 <tr>
-<th>Field</th>
-<th>Type</th>
-<th>Purpose</th>
+<th>Event</th>
+<th>Meaning</th>
 </tr>
 </thead>
 <tbody>
 <tr>
-<td><code>frontier</code></td>
-<td><code>ParsleyFrontier</code></td>
-<td>All causal state: contiguous frontier clock, per-input-channel clocks, <code>completeness()</code>, forwarded-offset index, and baseline seeding — self-persisting as the single <code>"f"</code> value. Channel clocks are the dependencies advertised on each <code>(topicId, partition)</code> this node consumes, seeded at registration so silent channels are present in the completeness fold</td>
+<td><code>JoinRequested</code></td>
+<td>A node announces itself and declares its input and sink topics. It becomes a running member at the next commit.</td>
 </tr>
 <tr>
-<td><code>buffer</code></td>
-<td><code>ParsleyBufferStore&lt;K,V&gt;</code></td>
-<td>Durable set of held records</td>
+<td><code>SnapshotRequested</code></td>
+<td>A node proposes a snapshot round. The first one after the last commit opens the round; the rest coalesce into it.</td>
 </tr>
 <tr>
-<td><code>candidateIndex</code></td>
-<td><code>ParsleyCandidateIndex</code></td>
-<td>Secondary index: coordinate -&gt; candidate record IDs</td>
+<td><code>FrontierPublished</code></td>
+<td>A running member publishes its completeness frontier for the open round.</td>
 </tr>
 <tr>
-<td><code>sizeLimit</code></td>
-<td><code>int</code></td>
-<td>Buffer depth at which eviction triggers</td>
+<td><code>EpochCommitted</code></td>
+<td>The decided <code>(epochId, lowerBounds)</code> for the round. Idempotent, deduplicated by <code>epochId</code>.</td>
 </tr>
 <tr>
-<td><code>evictionInterval</code></td>
-<td><code>Duration</code></td>
-<td>Optional interval for time-based eviction</td>
+<td><code>Leave</code></td>
+<td>A member is removed from the domain by its own graceful decommission.</td>
 </tr>
 </tbody>
 </table>
-<p><code>ParsleyFrontier</code> owns the three Lamport operations: <code>isDeliverable(deps)</code> (the delivery
-predicate), <code>deliver(coordinate, callback)</code> (advance the frontier and notify), and
-<code>seedIfFirstSeen(coordinate)</code> (establish the baseline for a newly observed coordinate).</p>
-<p><code>channelStore</code> backs the delivery gate and the node's outbound stamp. <code>completeness()</code> is the
-per-coordinate minimum across every input channel (<code>ParsleyClock.intersectMin</code>): each channel
-contributes the dependencies it has advertised plus its own contiguous delivered position, and a
-coordinate any channel has not observed is absent from the result. The single gate is
-<code>completeness().dominates(deps.withoutSelfReference())</code> — a record is delivered only once every input
-channel has confirmed every coordinate it depends on. The same <code>completeness()</code> stamps forwarded
-records and protocol watermarks. See the <a href="../causal-consistency/">causal consistency model</a> for why the
-gate is strict and the topology contract it implies.</p>
-<h2 id="onrecord-algorithm"><code>onRecord()</code> algorithm</h2>
-<ol>
-<li>The dependency clock is decoded once at the boundary (<code>ParsleyMessage.from</code>): a missing header
-   (logged at <code>DEBUG</code>) becomes an empty, vacuously satisfied clock. An undecodable header is handled
-   by <code>ParsleyProcessor.onUnresolvableClock()</code> before the engine is called: under the default <code>fail</code>
-   policy the task is failed fast; under <code>continue</code> the clock is replaced with <code>ParsleyClock.empty()</code>
-   (logged at <code>WARN</code>) and the engine receives it as vacuously satisfied. Either way, the engine
-   always receives a typed <code>ParsleyClock</code>.</li>
-<li>Update the source channel's clock with the record's dependencies, at receipt time, before the gate. This is how a channel advertises its progress: a record's carried frontier is its branch's proven completeness the moment it arrives, regardless of whether this node has delivered the record yet. Recording it here lets <code>completeness()</code> advance as soon as a channel advertises a coordinate, and prevents a mutual deadlock between two sibling records that each depend on a shared ancestor. Whether this advanced the channel is remembered for step 6.</li>
-<li>Strip the self-cycle from the dependencies. A <code>(topicId, partition)</code> entry whose required offset equals the record's own source offset on that coordinate is removed (<code>ParsleyClock.without</code>), so a record never blocks on its own position. This is the <em>only</em> dependency preprocessing — there is no in-scope filtering.</li>
-<li>Apply the gate: <code>completeness().dominates(deps)</code>. <code>completeness()</code> is the per-coordinate minimum across every input channel, so a coordinate is satisfied only when every channel has confirmed it. If it passes: advance frontier, add the record to output, call <code>propagate()</code>.</li>
-<li>Otherwise: add record to buffer (assigned an insertion sequence and a <code>bufferedAt</code> timestamp), index its unsatisfied coordinates (those <code>completeness()</code> does not yet cover) in the candidate index. If buffer depth &gt;= <code>sizeLimit</code>, call <code>evictOverflow()</code>.</li>
-<li>If the receipt-time channel update in step 2 advanced this channel <em>and</em> the node has more than one input channel, run <code>drainSatisfied()</code> — a full-buffer re-scan — to release any held record the lifted completeness now permits. This release is not reachable through the candidate index that drives <code>propagate()</code> (which keys on frontier advances). A single-channel node's completeness is its own frontier, fully covered by <code>propagate</code>, so it skips this.</li>
-</ol>
-<p>A missing header, or an undecodable one under <code>continue</code> policy, becomes an empty dependency clock,
-which <code>completeness().dominates</code> satisfies trivially (step 4). It never reaches the buffer. The
-frontier still advances on these records, so buffered records waiting on that coordinate are not
-permanently stalled.</p>
-<h2 id="propagation-cascade-propagate">Propagation cascade (<code>propagate</code>)</h2>
-<p>When the frontier advances on coordinate <code>C</code>, <code>propagate</code> uses a worklist algorithm to cascade
-releases without scanning the full buffer. This is Lamport's transitivity rule in code: if A → B
-and A has been delivered, B can now be delivered; and if B → C, C follows in the same pass.</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>toScan = {C}
-<a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a>while toScan not empty:
-<a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a>  for each coordinate in toScan:
-<a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a>    candidates = candidateIndex.findCandidates(topicId, partition, newOffset)
-<a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a>    for each candidate:
-<a id="__codelineno-1-6" name="__codelineno-1-6" href="#__codelineno-1-6"></a>      entry = buffer.get(candidate.recordId)
-<a id="__codelineno-1-7" name="__codelineno-1-7" href="#__codelineno-1-7"></a>      if entry == null: prune stale index entry, skip
-<a id="__codelineno-1-8" name="__codelineno-1-8" href="#__codelineno-1-8"></a>      if frontier.isDeliverable(entry.dependencies.without(self)):
-<a id="__codelineno-1-9" name="__codelineno-1-9" href="#__codelineno-1-9"></a>        releasable.add(entry)
-<a id="__codelineno-1-10" name="__codelineno-1-10" href="#__codelineno-1-10"></a>  toScan = {}
-<a id="__codelineno-1-11" name="__codelineno-1-11" href="#__codelineno-1-11"></a>  for each releasable entry:
-<a id="__codelineno-1-12" name="__codelineno-1-12" href="#__codelineno-1-12"></a>    buffer.remove(sequence)
-<a id="__codelineno-1-13" name="__codelineno-1-13" href="#__codelineno-1-13"></a>    frontier.deliver(entry&#39;s source coordinate)
-<a id="__codelineno-1-14" name="__codelineno-1-14" href="#__codelineno-1-14"></a>    toScan.add(entry&#39;s source coordinate)
-<a id="__codelineno-1-15" name="__codelineno-1-15" href="#__codelineno-1-15"></a>    output.add(entry.record)
+<p>A round's lifecycle is defined by log position, not by an id in the events. The first
+<code>SnapshotRequested</code> after the last <code>EpochCommitted</code> opens a round and elects its author as owner. Every
+running member publishes its current completeness. Once all of them have published, the round is
+complete and the new floor is the per-coordinate <code>mergeMin</code> of the published frontiers — the minimum,
+over the members that observed each coordinate, of where they had reached. Applying the resulting
+<code>EpochCommitted</code> advances the settled epoch, promotes pending joiners to running members, and clears
+the round.</p>
+<p>Because the commit is a deterministic function of the folded state and is deduplicated by <code>epochId</code>,
+<strong>any node with a local member commits a complete round</strong>, not a single elected owner. Two nodes that
+both commit produce the identical <code>EpochCommitted</code>, and the second fold is a no-op. There is no owner
+whose failure stalls the round, so a departed owner cannot freeze the domain.</p>
+<h2 id="the-overlapping-epoch-transition">The overlapping-epoch transition</h2>
+<p>A floor cannot switch instantaneously, because at the moment of transition the topology still holds
+in-flight records written under the previous epoch. Parsley uses the classic two-clock solution: a
+message is gated against the floor of the epoch it was <strong>written</strong> in, so the transition is an interval,
+not an instant.</p>
+<p><code>ParsleyEpochState</code> sits above <code>ParsleyFrontier</code> and holds the settled floor plus, while a transition
+is open, the pending next floor and the set of channels on which its opening marker has been seen. The
+window opens on the first epoch marker and becomes engaged once that marker has arrived on every input
+channel (a Chandy-Lamport cut across the node's inputs). It closes once the node's completeness
+dominates the pending floor, at which point the pending floor is promoted to settled. The effective
+floor stays at the previous epoch's value for the whole window, so a record written under the old epoch
+is still gated correctly while the new floor is being adopted. This state lives in the frontier's
+persisted blob, so a restart in the middle of a transition resumes it.</p>
+<p>The transition is invisible in the data plane. A node's outgoing stamp is its delivered frontier, which
+equals its completeness, carried unfloored; only the epoch-events log ever sees the received frontiers
+and the decided floor.</p>
+<h2 id="in-band-markers">In-band markers</h2>
+<p>The floor reaches each coordinate in the data plane, not through the log. Two control records ride the
+topics alongside business records, each identified by a header: an <strong>epoch snapshot</strong> marker (the
+<code>SnapshotRequested</code> round's cut) and an <strong>epoch boundary</strong> marker (<code>_parsley_epoch_boundary</code>, carrying a
+committed floor). They propagate the same way protocol watermarks do — a node that receives one relays
+it to its children on the same key, so it stays on its partition lane end to end, and every partition is
+covered because every upstream task relays. A marker is never delivered to the user delegate.</p>
+<p>A node consuming a marker also advances: the relayed marker carries the node's own completeness, so one
+record both drives the transition and advances the downstream channel clock. This reuses the machinery
+that already propagates watermarks edge by edge through the DAG. Because the causal contract forbids a
+node from consuming both a topic and a topic derived from it, the topology is a DAG, and marker fan-in
+at a join reuses the same "seen on every channel" rule as the overlapping transition.</p>
+<h2 id="the-source-topic-registry">The source-topic registry</h2>
+<p>External producers — plain Kafka clients, or any system outside the topology — emit no epoch markers.
+A stage consuming such a topic will therefore never receive a marker on that channel in-band, so it must
+<strong>self-initiate</strong> the wave: publish its completeness when a round opens, inject the snapshot marker to
+its children, and adopt its own source coordinate's floor from the committed <code>EpochCommitted</code> rather than
+waiting for a marker that will never come.</p>
+<p>Which topics are external is derived from the log, not configured. Every <code>JoinRequested</code> declares the
+node's input channels and its sink topics, and the fold computes the domain's <strong>external source topics</strong>
+as the inputs that no member produces:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>external sources = (union of every member&#39;s inputs) − (union of every member&#39;s sinks)
 </code></pre></div>
-<p>Each iteration finds records whose dependencies are now met after the most recent frontier advances. Those releases can in turn advance the frontier on further coordinates, triggering additional releases. The loop terminates when no new records become satisfiable.</p>
-<p>Wait-index entries for records that have already been released or evicted are discovered and pruned lazily during this scan rather than eagerly on removal.</p>
-<h2 id="eviction">Eviction</h2>
-<p>Both eviction paths select a subset of <code>buffer.entries()</code> (oldest-first by insertion sequence,
-equivalently by <code>bufferedAt</code>) and hand it to a shared <code>evictEntries()</code> helper. For each selected entry:</p>
-<ol>
-<li>Log the eviction at <code>WARN</code> with the causal gap (<code>required.missing(frontier)</code>) and call
-   <code>metrics.recordViolation()</code>.</li>
-<li>Remove from buffer and candidate index.</li>
-<li>Advance the frontier at the entry's source coordinate and add the record to the forward list.
-   Eviction never drops or diverts a record. It delivers the record out of causal order instead.</li>
-</ol>
-<h3 id="evictoverflow-size-limit"><code>evictOverflow()</code> — size limit</h3>
-<p>Called inline from <code>onRecord()</code> once buffer depth reaches <code>sizeLimit</code>. It evicts only the oldest
-<code>buffer.size() - sizeLimit + 1</code> entries, which is just enough to bring the buffer back under the
-limit, and leaves younger records held. In the common case, where depth is checked after every single
-admission, this evicts exactly one record per overflow and slides the window forward.</p>
-<p>A second call site exists in <code>ParsleyProcessor.init()</code>, to enforce the limit once against a buffer
-restored from a changelog after a restart. This matters after a reconfiguration that lowers
-<code>ofSize(...)</code> before restarting, because the restored buffer can legitimately hold more entries than
-the new limit allows, and the inline check above only runs on the next admission, which may never
-come. This cannot happen synchronously inside <code>init()</code>. Kafka Streams does not finish wiring the
-task's <code>RecordCollector</code> until every processor in the topology returns from <code>init()</code>, so forwarding a
-<code>FORWARD_UNSAFE</code> eviction at that point throws an NPE. Instead, <code>init()</code> schedules a self-cancelling,
-one-shot <code>WALL_CLOCK_TIME</code> punctuation that calls <code>evictOverflow()</code> on its first firing and cancels
-itself immediately after. The formula does not depend on <em>when</em> it is called, so the same method
-serves both call sites without change. If a new record is admitted via the inline path before the
-punctuation fires, that path's own overflow check already restores the invariant, and the
-punctuation's subsequent call is a no-op.</p>
-<h3 id="evictexpired-duration-limit"><code>evictExpired()</code> — duration limit</h3>
-<p>Called by the processor's wall-clock punctuator at the configured interval. Walks <code>buffer.entries()</code>
-from the oldest, evicting every entry whose <code>bufferedAt</code> is older than <code>now - duration</code>, and stops
-at the first entry that hasn't aged out yet (everything after it is younger still). A no-op when no
-duration limit is configured.</p>
-<p>The causal gap logged for each eviction (<code>required.missing(frontier)</code>) encodes the shortfall,
-not the absolute required offset: each coordinate's value in the gap clock is <code>required - observed</code>
-at eviction time.</p>
-<h2 id="frontier-persistence-ordering">Frontier persistence ordering</h2>
-<p><code>ParsleyFrontier</code> self-persists its single <code>"f"</code> value inside <code>deliver()</code> (and <code>seedIfFirstSeen()</code>), before control returns to the engine and the record is added to the output list. This ordering guarantees that the changelog write for the frontier advance is durable before the record reaches the user processor. There is no separate callback: the frontier owns its persistence.</p>
-<h2 id="buffer-store">Buffer store</h2>
-<p><code>ParsleyBufferStore&lt;K,V&gt;</code> is an interface with two implementations:</p>
-<ul>
-<li><strong><code>RocksBufferStore</code></strong> (production): wraps a <code>KeyValueStore&lt;Long, byte[]&gt;</code> backed by RocksDB and changelog-replicated. On construction, it makes a single pass over all existing keys to seed the monotonic <code>nextSequence</code> counter and the <code>size</code> field. No separate rehydration step is needed: the store is the buffer.</li>
-<li><strong><code>MockBufferStore</code></strong> (tests): wraps a <code>TreeMap&lt;Long, ParsleyMessage&lt;K,V&gt;&gt;</code> with equivalent semantics.</li>
-</ul>
-<h2 id="candidate-index">Candidate index</h2>
-<p><code>ParsleyCandidateIndex</code> is backed by <code>RocksCandidateIndex</code>, which wraps a <code>KeyValueStore&lt;byte[], byte[]&gt;</code>. The 36-byte composite key (topicId + partition + requiredOffset + recordId) sorts lexicographically in RocksDB, enabling a bounded range scan to find all records waiting on a given coordinate up to the new frontier offset.</p>
-<p>The store value is always an empty byte array (<code>PRESENT</code> marker). The key encodes everything needed to find and validate a candidate.</p>
-<p>On engine construction, if the buffer is non-empty (restart recovery), the engine makes a single pass over all buffer entries to populate the candidate index. This rebuilds the secondary index from the authoritative buffer state.</p>
+<p>A topic that some member consumes but no member produces is an entry point from outside the topology.
+The derivation is over every declared member, running or still pending, so a node's source-layer
+identity is correct from the very first round; a <code>Leave</code> drops that member's declaration, so a topic only
+the departed member produced becomes external again. A node is source-layer when one of the topics it
+consumes appears in this derived set, which it re-evaluates on each poll because the registry grows as
+members join.</p>
+<p>This replaces an earlier design in which each application was configured by hand with its own external
+source topic names. A hand-written declaration could silently disagree with the real topology — a genuine
+intermediate topic marked external, or an external topic left undeclared — and either mistake breaks the
+wave for that coordinate. Deriving the registry from what every node actually consumes and produces
+removes that class of misconfiguration. On the high-level API sinks are declared automatically by
+<code>addSink(...)</code>; on the low-level decorator they are declared with <code>CausalProcessors.Builder.sinkTopics(...)</code>.</p>
+<h2 id="joining-a-running-topology">Joining a running topology</h2>
+<p>A node deployed into an already-running topology must not begin consuming until an epoch computed
+<strong>without it</strong> commits. Its sub-topology resets to earliest and would replay from offset 0, so if it
+participated in the current epoch it would drag the floor's minimum over running members toward 0 and
+un-strip history for the live nodes. The fold already encodes the escape: a joiner is a pending member
+that publishes nothing, so it does not constrain the cut.</p>
+<p>At <code>init()</code> a joining task joins, then blocks until it is a <strong>running member</strong> — which happens only when
+a commit promotes it. That one rule covers every case. A fresh joiner is not a running member, so it
+blocks until an epoch computed without it commits and admits it, then adopts that floor and settles its
+epoch state directly at it (a joiner has no in-flight prior-epoch records, so there is no overlap window —
+it strips everything below the floor from its first replayed record). A restart of an existing member is
+still a running member on the log — nothing removes it while it is absent — so it proceeds at once and
+resumes the floor from its persisted state, draining its restored buffer under that unchanged floor. A cold
+start is epoch 0 and proceeds at once. The block is unbounded — there is no join timeout: a joiner never
+proceeds on an unknown floor, so if the domain cannot yet commit (an existing member is absent) it simply
+waits until it can.</p>
+<h2 id="membership-block-until-drained">Membership: block until drained</h2>
+<p>A close is treated as a restart, not a departure: the member stays in the domain so it can return without
+epoch churn. A member is removed from the domain only by a genuine decommission — <code>CausalCoordination.leave()</code>
+— <strong>never by a timeout</strong>. <code>leave()</code> itself honours "only a drained node is excluded": it <strong>quiesce-drains</strong>
+first (blocks until every local member's causal buffer has emptied through the ordinary delivery path, so
+no held record is stranded), then appends the <code>Leave</code>, then requests a new epoch over the remaining members
+in which it is no longer a member — returning without waiting for that epoch to commit, so a decommission
+is never coupled to the other members' liveness. The caller must have stopped feeding the node new input
+before decommissioning; <code>leave()</code> drains the in-flight buffer, not records that arrive after.</p>
+<p>A member that is simply gone — crashed, or briefly absent during a restart — is <strong>waited for</strong>. A
+transition's floor is the <code>mergeMin</code> of every running member's published frontier, and the round cannot
+commit until every running member has published. There is no eviction timeout: a member may be excluded
+only once it is <em>drained</em>, and a crashed member is never known to be drained from outside, so the
+transition <strong>blocks</strong>, for an unbounded time, until the member returns and publishes. This is the
+causal-safety choice. Committing a floor without an absent member would strand any records it still holds
+below that floor, where their real dependencies are stripped and they would be released before their
+causes — the violation the whole design exists to prevent. A member that participates in the round
+protects its own un-drained work automatically, because its frontier pulls the <code>mergeMin</code> floor down below
+its buffered dependencies.</p>
+<p>The cost is that a crashed member blocks the next epoch <em>transition</em> — and therefore any new join — until
+it returns. Ongoing processing in the current epoch is unaffected; only topology evolution waits. How an
+absent member is handled is a pluggable <code>CausalMembershipStrategy</code>; the default, <code>blockUntilDrained()</code>,
+never excludes. Richer strategies — recovery, buffer hand-off, or an operator-driven forced exclusion that
+dead-letters the stranded buffer — can be added behind this seam, but are not built yet.</p>
+<p>Because a round needs every member's publication to commit, publication is driven off the folded log, not
+off a one-shot in-band marker: any member that observes a round it has not yet published to publishes its
+current completeness. A member that restarts mid-round re-derives from the log that it owes a publication
+and re-publishes, so a lost publication cannot deadlock the round.</p>
+<h2 id="deployment">Deployment</h2>
+<p>The coordination is entirely optional and requires no separate process. A domain needs one
+single-partition epoch-events log topic, shared by every participating application, and each application
+registers a <code>CausalCoordination</code> over that topic with its causal builders. Without a handle a topology
+runs in epoch 0. Because a Kafka Streams application must run one topology on every instance, a
+zero-downtime rolling topology change is not a Streams capability; a genuine new stage is a redeploy. The
+epochs machinery is what lets that redeploy re-enter causal time cleanly rather than replaying obsolete
+history into the shared frontier. See
+<a href="../../streams/#evolving-a-running-topology">Evolving a running topology</a> for the user-facing API.</p>
 
 
 
@@ -1492,7 +1439,7 @@ at eviction time.</p>
       <nav class="md-footer__inner md-grid" aria-label="Footer" >
         
           
-          <a href="../wire-format/" class="md-footer__link md-footer__link--prev" aria-label="Previous: Wire format">
+          <a href="../causal-consistency/" class="md-footer__link md-footer__link--prev" aria-label="Previous: Causal consistency model">
             <div class="md-footer__button md-icon">
               
               <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
@@ -1502,20 +1449,20 @@ at eviction time.</p>
                 Previous
               </span>
               <div class="md-ellipsis">
-                Wire format
+                Causal consistency model
               </div>
             </div>
           </a>
         
         
           
-          <a href="../streams/" class="md-footer__link md-footer__link--next" aria-label="Next: The processor">
+          <a href="../wire-format/" class="md-footer__link md-footer__link--next" aria-label="Next: Wire format">
             <div class="md-footer__title">
               <span class="md-footer__direction">
                 Next
               </span>
               <div class="md-ellipsis">
-                The processor
+                Wire format
               </div>
             </div>
             <div class="md-footer__button md-icon">

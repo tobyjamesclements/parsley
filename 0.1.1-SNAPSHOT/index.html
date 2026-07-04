@@ -888,6 +888,34 @@
   
   
     <li class="md-nav__item">
+      <a href="internals/topology-epochs/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Topology epochs
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
       <a href="internals/wire-format/" class="md-nav__link">
         
   
@@ -1153,6 +1181,10 @@ common vocabulary of value types.</p>
 <tr>
 <td><code>CausalQuiesce</code></td>
 <td>Coordinates graceful shutdown across every causal task in one application instance, registered with either entry point.</td>
+</tr>
+<tr>
+<td><code>CausalCoordination</code></td>
+<td>Coordinates evolving a running topology across an epoch boundary, so a new or replaced stage adopts the current floor instead of dragging pre-epoch history into causal time. Leaderless and optional, registered with either entry point.</td>
 </tr>
 <tr>
 <td><code>CausalDependencies.using</code> / <code>observe</code> / <code>stamp</code> / <code>merge</code></td>
