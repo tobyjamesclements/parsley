@@ -128,3 +128,21 @@ owns the sinks too, so it widens the same check to the sink topics, and applies 
 uniformly across every sink it declares so a shard cannot drift onto different partitions across
 topics by accident. See the [Streams integration](streams.md#startup-validation) preconditions for
 the full contract.
+
+## Topology epochs
+
+A causal topology sometimes has to change while it runs — a new stage, a replaced stage, a recompile.
+A new stage replays its inputs from the earliest offset, and the completeness frontier is a minimum
+across every node, so a node replaying from offset 0 would pull the shared frontier back to the start
+and un-strip history the other nodes had already delivered. An **epoch** prevents this. It defines a
+floor per coordinate; history below the floor is pre-epoch, so it feeds the delegate's state but does
+not participate in causal time. A node deployed into a running topology adopts the current floor and
+replays with everything below it stripped, so it never drags the frontier down.
+
+`CausalCoordination` turns this on. It is optional and leaderless: participating applications share one
+single-partition epoch-events log and each folds it identically to agree on every epoch's floor, which
+then propagates through the topology in-band. Which topics are external entry points is derived from
+what each node declares it consumes and produces, not configured by hand. Without a `CausalCoordination`
+a topology runs in epoch 0 and behaves exactly as one with no epoch machinery. See
+[Evolving a running topology](streams.md#evolving-a-running-topology) for the API and
+[Topology epochs](internals/topology-epochs.md) for the protocol.

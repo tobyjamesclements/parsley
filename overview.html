@@ -22,6 +22,11 @@ processor, and sinks itself, which unlocks guarantees the decorator alone cannot
 partitioner applied uniformly across every sink, co-partitioning validation that covers sinks as well
 as inputs, and coordinated graceful shutdown via {@link io.github.tobyjamesclements.parsley.CausalQuiesce}.</p>
 
+<p>A running topology can also evolve — add a stage, replace a stage, recompile — across a leaderless
+epoch boundary coordinated by {@link io.github.tobyjamesclements.parsley.CausalCoordination}, so a new
+node adopts the current causal floor instead of replaying pre-epoch history into the shared frontier.
+It is optional; without it a topology runs in epoch 0, unchanged.</p>
+
 <h2>Core concepts</h2>
 <dl>
   <dt><strong>Causal dependencies</strong></dt>
@@ -77,6 +82,7 @@ as inputs, and coordinated graceful shutdown via {@link io.github.tobyjamescleme
     <tr><td>{@link io.github.tobyjamesclements.parsley.CausalProcessorSupplier}</td><td>Wraps a user Kafka Streams {@code Processor} so that its state access and its {@code forward} calls run behind the causal guarantee. It is built through {@link io.github.tobyjamesclements.parsley.CausalProcessors}.</td></tr>
     <tr><td>{@link io.github.tobyjamesclements.parsley.CausalStreams}</td><td>The topology-owning builder: composes {@link io.github.tobyjamesclements.parsley.CausalProcessors} internally and owns the sources, processor, and sinks around it, so it can apply a uniform sink partitioner and validate co-partitioning across sinks as well as inputs.</td></tr>
     <tr><td>{@link io.github.tobyjamesclements.parsley.CausalQuiesce}</td><td>A shared handle for coordinating graceful shutdown across every causal task in one application instance. Register it via {@code withQuiesce} on either builder; call {@code requestQuiesce()} and poll {@code isSafeToClose()} before closing {@code KafkaStreams}.</td></tr>
+    <tr><td>{@link io.github.tobyjamesclements.parsley.CausalCoordination}</td><td>A shared, leaderless handle for evolving a running topology across an epoch boundary, so a new or replaced stage adopts the current causal floor rather than replaying pre-epoch history into the shared frontier. Register it via {@code withCoordination} on either builder; call {@code requestEpochTransition()} to evolve, and {@code close()} in shutdown. Optional — without it a topology runs in epoch 0.</td></tr>
     <tr><td>{@link io.github.tobyjamesclements.parsley.CausalDependencies}</td><td>Stamps and reads causal dependencies directly on plain {@code ProducerRecord} and {@code ConsumerRecord} objects, for talking to a Parsley topology from outside Kafka Streams.</td></tr>
     <tr><td>{@link io.github.tobyjamesclements.parsley.CausalAudit}</td><td>Optional callback interface supplied to the builder via {@link io.github.tobyjamesclements.parsley.CausalProcessors.Builder#withAudit withAudit}. Receives per-record buffering events — forwarded, held, released, evicted, and deserialization failures — carrying record identity and causal metadata only, never the record payload.</td></tr>
   </tbody>

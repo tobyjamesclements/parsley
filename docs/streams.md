@@ -175,6 +175,68 @@ requires owning the sinks, which the decorator structurally cannot do on its own
 Everything under [Preconditions](#preconditions) still applies unchanged — `CausalStreams` manages
 more of the topology for you, but the causal guarantee itself has the same requirements either way.
 
+## Evolving a running topology
+
+A causal topology sometimes has to change while it runs: add a stage, replace a stage, or recompile
+one. A new stage subscribes to its inputs from the earliest offset and replays them from the start, and
+the causal frontier is a minimum across every node, so a node replaying from offset 0 drags that minimum
+down and un-strips history the other nodes had long since delivered. `CausalCoordination` lets a
+topology cross a well-defined **epoch boundary** so a new node adopts the current floor and replays with
+pre-epoch history stripped, rather than pulling the shared frontier back to the beginning of time.
+
+Create one handle over a shared single-partition epoch-events log topic, register it with every
+participating stage through `withCoordination` on either builder, and close it from your shutdown path.
+The shape mirrors [`CausalQuiesce`](#the-high-level-api-causalstreams).
+
+```java
+CausalCoordination coordination = CausalCoordination.create("parsley-epoch-events");
+
+Topology topology = CausalStreams.builder(userSupplier)
+        .addBufferStore("parsley", CausalBufferLimit.ofDuration(limit))
+        .addSource(CausalBuffer.of("prices", Serdes.String(), priceSerde))
+        .addSink("enriched-sink", "enriched-output", Serdes.String(), enrichedSerde)
+        .withCoordination(coordination)
+        .build();
+
+KafkaStreams streams = new KafkaStreams(topology, props);
+streams.start();
+// ... to evolve the running topology through a boundary:
+coordination.requestEpochTransition();
+// ... in shutdown, after streams.close():
+coordination.close();
+```
+
+The topology's **external source topics** — the entry points produced by systems outside the topology,
+on which no epoch marker ever arrives — are derived from the log, not configured. Every stage declares
+its input channels and its sink topics when it joins, and a topic some member consumes but no member
+produces is an external source. On the high-level builder the sinks are taken from `addSink(...)`
+automatically; on the low-level `CausalProcessors` decorator, declare them with
+`CausalProcessors.Builder#sinkTopics`. There is nothing else to configure per application, and no source
+topic list to keep in sync by hand.
+
+The coordination is **leaderless**: there is no coordinator process to deploy. Every application instance
+folds the shared epoch-events log identically and agrees on each epoch's floor, which then propagates
+**in-band** through the topology so every stage adopts it. A few operational consequences follow.
+
+- **Entirely optional.** Without a `CausalCoordination` a topology runs in epoch 0, exactly as a
+  topology with no epoch machinery. Registering a handle is the only thing that turns it on.
+- **A new node blocks until it is admitted.** A stage deployed into an already-running topology waits at
+  startup until an epoch computed without it commits, then adopts that floor and replays its inputs with
+  pre-epoch history stripped. On the join timeout (default 60 seconds) it fails the task so Kafka Streams
+  restarts and retries, rather than proceeding on an unknown floor. Because a Streams application runs
+  one topology on every instance, adding a stage is a redeploy; this is what lets that redeploy re-enter
+  causal time cleanly.
+- **A gone member cannot freeze the domain.** A round that waits longer than the eviction timeout
+  (default 30 seconds, so set it above a rolling restart) for a silent member evicts it through the log,
+  and any node commits a complete round, so neither a crashed member nor a crashed round owner stalls an
+  epoch. A clean decommission calls `coordination.leave()`; a plain restart calls neither `leave()` nor
+  anything else, so the member stays in the domain and returns without epoch churn.
+
+`requestEpochTransition()` opens a boundary across the currently-running nodes from any instance;
+`create(epochEventsTopic, joinTimeout, evictionTimeout)` overrides the two timeouts. The full protocol —
+the floored clock, the leaderless log fold, the in-band markers, and the source-topic registry — is
+described in [Topology epochs](internals/topology-epochs.md).
+
 ## Restart and recovery
 
 The causal buffer and the frontier are kept in durable state stores. On a restart or a rebalance the

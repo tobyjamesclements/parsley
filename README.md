@@ -7,6 +7,10 @@ release the record once the frontier catches up.
 When co-partitioning and closed processor effects hold, if A causally precedes B, every Kafka
 Streams processor that subscribes to both topics processes A before B.
 
+A running topology can evolve — add a stage, replace a stage, recompile — across a leaderless epoch
+boundary, so a new node adopts the current causal floor instead of replaying pre-epoch history into the
+shared frontier. This is optional; without it a topology runs unchanged.
+
 ## Install
 
 Parsley is published to [Maven Central](https://central.sonatype.com/artifact/io.github.tobyjamesclements/parsley).
