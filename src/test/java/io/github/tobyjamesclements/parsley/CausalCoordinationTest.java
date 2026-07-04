@@ -2,7 +2,6 @@ package io.github.tobyjamesclements.parsley;
 
 import org.junit.jupiter.api.Test;
 
-import java.time.Duration;
 import java.util.Set;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -86,54 +85,41 @@ class CausalCoordinationTest {
     }
 
     /**
-     * A task joining an <em>established</em> epoch whose boundary never commits (its round can never
-     * complete — a running member never publishes) fails after the join timeout, so Kafka Streams
-     * restarts and retries the join rather than proceeding on an unknown floor.
+     * {@link CausalCoordination#leave()} drains before removing: it must not remove a local member while its
+     * buffer is not drained; once every member reports drained it appends the {@code Leave}, waits until the
+     * member has left the running set, and requests a new epoch over the remaining members (this node
+     * excluded). Driven with a live runtime thread, since leave() blocks across its phases; assertions read
+     * only thread-safe runtime state (the shared log is not safe to read concurrently).
      */
     @Test
-    void awaitJoinCommitTimesOutWhenTheEpochNeverCommits() {
-        InMemoryEpochTransport.SharedLog log = new InMemoryEpochTransport.SharedLog();
-        // Seed an established epoch 1 with a running member R, so the joiner's round cannot vacuously
-        // complete and R (not live here) never publishes for it.
-        InMemoryEpochTransport seeder = new InMemoryEpochTransport(log);
-        seeder.append(new EpochEvent.JoinRequested("R", Set.of(), Set.of()));
-        seeder.append(new EpochEvent.SnapshotRequested("R"));
-        seeder.append(new EpochEvent.EpochCommitted(1, ParsleyClock.empty()));
-
-        ParsleyEpochRuntime runtime = new ParsleyEpochRuntime(new InMemoryEpochTransport(log));
-        CausalCoordination coordination = CausalCoordination.forRuntime(runtime, Duration.ofMillis(300));
-        runtime.start();
-        try {
-            runtime.join("J", Set.of(), Set.of());   // a local member to attribute (own) the joiner's round to
-            IllegalStateException failure = assertThrows(IllegalStateException.class,
-                    () -> coordination.awaitJoinCommit(runtime, "J"),
-                    "a joiner whose epoch never commits must fail after the timeout");
-            assertTrue(failure.getMessage().contains("join did not commit"),
-                    "the failure names the join timeout so the cause is clear");
-            assertEquals(1L, runtime.committedEpochId(), "the settled epoch never advanced past the established one");
-        } finally {
-            runtime.close();
-        }
-    }
-
-    /**
-     * {@link CausalCoordination#leave()} gracefully removes the instance's local members from the domain,
-     * marked self-initiated so it is not mistaken for an eviction (no re-join).
-     */
-    @Test
-    void leaveGracefullyRemovesLocalMembersWithoutTriggeringReJoin() {
+    void leaveDrainsBeforeRemovingThenRequestsANewEpoch() throws Exception {
         InMemoryEpochTransport.SharedLog log = new InMemoryEpochTransport.SharedLog();
         ParsleyEpochRuntime runtime = new ParsleyEpochRuntime(new InMemoryEpochTransport(log));
         CausalCoordination coordination = CausalCoordination.forRuntime(runtime);
-        runtime.join("A", Set.of(), Set.of());
+        runtime.start();
+        try {
+            runtime.join("A", Set.of(), Set.of());
+            runtime.requestSnapshot("A");                 // cold start: commits epoch 1, promoting A to running
+            waitUntil(() -> runtime.isRunningMember("A"));
 
-        coordination.leave();
-        settle(log, runtime);
+            Thread leaver = new Thread(coordination::leave, "leave-test");
+            leaver.start();
 
-        assertTrue(log.events().stream().anyMatch(e -> e instanceof EpochEvent.Leave l && l.memberId().equals("A")),
-                "leave() appends a Leave removing the local member");
-        assertFalse(runtime.isRunningMember("A"), "the departed member is no longer running");
-        assertFalse(runtime.isEvicted("A"), "a self-initiated leave is not surfaced as an eviction");
+            // Phase 1 blocks while A's buffer is not reported drained: A stays a running member.
+            Thread.sleep(200);
+            assertTrue(leaver.isAlive(), "leave() blocks while A's buffer is not drained");
+            assertTrue(runtime.isRunningMember("A"), "leave() must not remove A before it is drained");
+
+            runtime.reportDrained("A", true);             // A drains -> leave() proceeds through its phases
+            leaver.join(5000);
+            assertFalse(leaver.isAlive(), "leave() returns once A is drained and removed");
+
+            assertFalse(runtime.isRunningMember("A"), "leave() removed A from the running set");
+            waitUntil(() -> runtime.committedEpochId() >= 2L);   // phase 3 committed a new epoch without A
+            assertEquals(2L, runtime.committedEpochId(), "leave() requested a new epoch (epoch 2) excluding A");
+        } finally {
+            runtime.close();
+        }
     }
 
     /**
@@ -157,6 +143,17 @@ class CausalCoordinationTest {
                     "a normal restart of a running member neither blocks nor bumps the epoch");
         } finally {
             runtime.close();
+        }
+    }
+
+    /** Polls {@code condition} (10ms) until true or 5s elapses; throws {@link AssertionError} on timeout. */
+    private static void waitUntil(java.util.function.BooleanSupplier condition) throws InterruptedException {
+        long deadline = System.currentTimeMillis() + 5000;
+        while (!condition.getAsBoolean()) {
+            if (System.currentTimeMillis() > deadline) {
+                throw new AssertionError("condition not met within 5s");
+            }
+            Thread.sleep(10);
         }
     }
 

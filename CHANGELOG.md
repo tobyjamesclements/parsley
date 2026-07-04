@@ -7,6 +7,27 @@ All notable changes to this project are documented in this file. The format is b
 ## [Unreleased]
 
 ### Changed
+- **Breaking (topology epochs): block-until-drained membership; timeout eviction removed.** An epoch
+  transition now blocks until every running member has published its snapshot, for an unbounded time,
+  instead of evicting a silent member after a timeout. Evicting an absent member and committing a floor
+  without it could strand records it still held below that floor and release them before their causes (a
+  causal-safety violation); block-until-drained never does. `CausalCoordination.create(...)` no longer
+  takes an `evictionTimeout` — it takes a `CausalMembershipStrategy` (default
+  `CausalMembershipStrategy.blockUntilDrained()`), a seam for future exclusion/recovery algorithms.
+  Publication of a member's frontier is now driven off the folded log rather than a one-shot in-band
+  marker, so a member that restarts mid-round re-publishes and cannot deadlock the round. There are **no
+  timeouts** in the coordinator: the `joinTimeout` is also gone — a joining task now blocks unbounded until
+  its epoch commits rather than failing after a deadline (`create(...)` no longer takes a `joinTimeout`,
+  and `DEFAULT_JOIN_TIMEOUT` is removed). Blocking never proceeds on an unknown floor, so it cannot violate
+  causal safety. Consequence: a crashed member blocks the next epoch transition — and any new join — until
+  it returns; ongoing current-epoch processing is unaffected. Supersedes the earlier timeout-eviction +
+  concurrent-redelivery behaviour.
+- **`CausalCoordination.leave()` now drains before departing.** A graceful decommission quiesce-drains the
+  node (blocks until its causal buffer empties through the ordinary delivery path), then appends the
+  `Leave`, then requests a new epoch over the remaining members in which it is no longer a member — so a
+  leave never strands un-drained buffered records ("only a drained node is excluded"). It returns without
+  waiting for that epoch to commit, so a decommission is not coupled to the other members' liveness.
+  Contract: stop feeding the node new input before decommissioning.
 - **Breaking (semantics): strict completeness gate across all input channels.** A record is now
   delivered only once *every* input channel of the processor has confirmed *every* coordinate the
   record depends on. The delivery gate is a single check, `completeness().dominates(deps)`, where

@@ -53,7 +53,7 @@ stay distinct):
 | `SnapshotRequested` | A node proposes a snapshot round. The first one after the last commit opens the round; the rest coalesce into it. |
 | `FrontierPublished` | A running member publishes its completeness frontier for the open round. |
 | `EpochCommitted` | The decided `(epochId, lowerBounds)` for the round. Idempotent, deduplicated by `epochId`. |
-| `Leave` | A member is removed from the domain, by its own graceful leave or by an eviction. |
+| `Leave` | A member is removed from the domain by its own graceful decommission. |
 
 A round's lifecycle is defined by log position, not by an id in the events. The first
 `SnapshotRequested` after the last `EpochCommitted` opens a round and elects its author as owner. Every
@@ -142,28 +142,48 @@ un-strip history for the live nodes. The fold already encodes the escape: a join
 that publishes nothing, so it does not constrain the cut.
 
 At `init()` a joining task joins, then blocks until it is a **running member** — which happens only when
-a commit promotes it. That one rule covers every case. A fresh joiner or an evicted-then-restarted member
-is not a running member, so it blocks until an epoch re-includes it, then adopts that floor and settles
-its epoch state directly at it (a joiner has no in-flight prior-epoch records, so there is no overlap
-window — it strips everything below the floor from its first replayed record). A normal restart is still
-a running member on the log, so it proceeds at once and resumes the floor from its persisted state. A cold
-start is epoch 0 and proceeds at once. If the commit does not arrive within the join timeout the task
-fails rather than proceed on an unknown floor, so Kafka Streams restarts and retries the join.
+a commit promotes it. That one rule covers every case. A fresh joiner is not a running member, so it
+blocks until an epoch computed without it commits and admits it, then adopts that floor and settles its
+epoch state directly at it (a joiner has no in-flight prior-epoch records, so there is no overlap window —
+it strips everything below the floor from its first replayed record). A restart of an existing member is
+still a running member on the log — nothing removes it while it is absent — so it proceeds at once and
+resumes the floor from its persisted state, draining its restored buffer under that unchanged floor. A cold
+start is epoch 0 and proceeds at once. The block is unbounded — there is no join timeout: a joiner never
+proceeds on an unknown floor, so if the domain cannot yet commit (an existing member is absent) it simply
+waits until it can.
 
-## Membership and eviction
+## Membership: block until drained
 
 A close is treated as a restart, not a departure: the member stays in the domain so it can return without
-epoch churn. Two things remove a member. A genuine decommission calls `CausalCoordination.leave()`, which
-appends a `Leave`. A member that is simply gone — crashed, or a redeploy that removed a stage — is removed
-by **eviction**: any node whose open round has waited longer than the eviction timeout for a silent member
-proposes a `Leave` for it through the log. A node never evicts its own local members. Combined with
-any-node commit, this means neither a gone member nor a gone round owner can freeze the domain's epochs.
+epoch churn. A member is removed from the domain only by a genuine decommission — `CausalCoordination.leave()`
+— **never by a timeout**. `leave()` itself honours "only a drained node is excluded": it **quiesce-drains**
+first (blocks until every local member's causal buffer has emptied through the ordinary delivery path, so
+no held record is stranded), then appends the `Leave`, then requests a new epoch over the remaining members
+in which it is no longer a member — returning without waiting for that epoch to commit, so a decommission
+is never coupled to the other members' liveness. The caller must have stopped feeding the node new input
+before decommissioning; `leave()` drains the in-flight buffer, not records that arrive after.
 
-Eviction of a member that was only temporarily silent is possible within the timeout window. A member
-that detects it has been evicted fails its task and re-joins under the current floor; on re-admission its
-buffered work re-drains with its pre-epoch dependencies stripped, delivered as concurrent. Severing an
-evicted member's in-flight causal ordering is the inherent cost of choosing to unfreeze the domain rather
-than wait forever for a member that may never return.
+A member that is simply gone — crashed, or briefly absent during a restart — is **waited for**. A
+transition's floor is the `mergeMin` of every running member's published frontier, and the round cannot
+commit until every running member has published. There is no eviction timeout: a member may be excluded
+only once it is *drained*, and a crashed member is never known to be drained from outside, so the
+transition **blocks**, for an unbounded time, until the member returns and publishes. This is the
+causal-safety choice. Committing a floor without an absent member would strand any records it still holds
+below that floor, where their real dependencies are stripped and they would be released before their
+causes — the violation the whole design exists to prevent. A member that participates in the round
+protects its own un-drained work automatically, because its frontier pulls the `mergeMin` floor down below
+its buffered dependencies.
+
+The cost is that a crashed member blocks the next epoch *transition* — and therefore any new join — until
+it returns. Ongoing processing in the current epoch is unaffected; only topology evolution waits. How an
+absent member is handled is a pluggable `CausalMembershipStrategy`; the default, `blockUntilDrained()`,
+never excludes. Richer strategies — recovery, buffer hand-off, or an operator-driven forced exclusion that
+dead-letters the stranded buffer — can be added behind this seam, but are not built yet.
+
+Because a round needs every member's publication to commit, publication is driven off the folded log, not
+off a one-shot in-band marker: any member that observes a round it has not yet published to publishes its
+current completeness. A member that restarts mid-round re-derives from the log that it owes a publication
+and re-publishes, so a lost publication cannot deadlock the round.
 
 ## Deployment
 

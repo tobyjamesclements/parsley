@@ -41,13 +41,18 @@ import java.util.Set;
 import java.util.UUID;
 
 import static org.awaitility.Awaitility.await;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * The headline mandatory guarantee: a member that is <strong>gone</strong> (hard-killed, no graceful
- * leave) must not freeze the DAG's epochs. Two apps form a DAG over a shared epoch-events log; after both
- * are running members, app B is hard-killed. The surviving app A, whose next round waits for B's frontier,
- * <strong>evicts</strong> B after the eviction timeout and a subsequent epoch still commits.
+ * The block-until-drained guarantee: a member that is <strong>gone</strong> (hard-killed, no graceful
+ * leave) <strong>blocks</strong> the DAG's next epoch transition rather than being evicted — because
+ * evicting a member that might hold un-drained buffered records would strand those records below a floor
+ * committed without it, a causal-safety violation. Two apps form a DAG over a shared epoch-events log;
+ * after both are running members, app B is hard-killed. The surviving app A opens a round that cannot
+ * commit while B is absent; once B <strong>restarts</strong> and publishes, the epoch commits — and no
+ * {@code Leave} for B is ever written (it was never evicted).
  */
 @Testcontainers(disabledWithoutDocker = true)
 class CausalCoordinationLeaveIT {
@@ -63,27 +68,29 @@ class CausalCoordinationLeaveIT {
 
     /**
      * App A (t1 -> mid) and app B (mid -> out) both become running members; app B is then hard-killed
-     * without leaving. A transition is driven on A; A's round waits for B's frontier, evicts B after the
-     * (short) eviction timeout, and commits. Asserts a {@code Leave} for B's member reaches the log and the
-     * committed epoch advances past where B was last present.
+     * without leaving. A transition is driven on A; A's round opens but cannot commit while B is absent
+     * (asserted: the epoch does not advance for a window). App B is then restarted over its own state; it
+     * rejoins as the same running member and publishes, and the epoch finally commits. Asserts the epoch
+     * advances only after the restart, and that <em>no</em> {@code Leave} for B was written — a gone member
+     * is waited for, never evicted.
      */
     @Test
-    void aHardKilledAppIsEvictedSoEpochsKeepProgressing() throws Exception {
+    void aHardKilledAppBlocksTheEpochUntilItRestartsAndPublishes() throws Exception {
         String bootstrap = kafka.getBootstrapServers();
         createTopics(bootstrap, IN, MID, OUT, EPOCH_EVENTS);
         String runId = UUID.randomUUID().toString().substring(0, 8);
         String appIdA = "leave-a-" + runId;
         String appIdB = "leave-b-" + runId;
 
-        // App A evicts a silent member after 3s (short, for the test); the default is 30s.
-        CausalCoordination coordinationA =
-                CausalCoordination.create(EPOCH_EVENTS, CausalCoordination.DEFAULT_JOIN_TIMEOUT, Duration.ofSeconds(3));
+        CausalCoordination coordinationA = CausalCoordination.create(EPOCH_EVENTS);
         CausalCoordination coordinationB = CausalCoordination.create(EPOCH_EVENTS);
         Path stateA = Files.createTempDirectory("parsley-leave-a");
         Path stateB = Files.createTempDirectory("parsley-leave-b");
 
         KafkaStreams appA = new KafkaStreams(stageA(coordinationA), streamsConfig(bootstrap, appIdA, stateA));
         KafkaStreams appB = new KafkaStreams(stageB(coordinationB), streamsConfig(bootstrap, appIdB, stateB));
+        KafkaStreams appBRestarted = null;
+        CausalCoordination coordinationBRestarted = null;
         try {
             appA.start();
             appB.start();
@@ -99,24 +106,47 @@ class CausalCoordinationLeaveIT {
             assertTrue(epochBeforeKill >= 1, "both apps must be running members before the kill");
 
             // HARD-KILL app B — close it and its runtime WITHOUT a graceful leave(). Its member stays a
-            // running member on the log, so A's next round would wait for it forever without eviction.
+            // running member on the log, so A's next round must wait for it (block-until-drained).
             appB.close(Duration.ofSeconds(30));
             coordinationB.close();
 
-            // Drive transitions on A; A's round waits for B's frontier, then evicts B and commits.
+            // Drive a transition on A: the round opens but cannot commit while B is absent. Assert the epoch
+            // does NOT advance over a window — the domain deliberately blocks rather than evicting B.
+            for (int i = 0; i < 10; i++) {
+                requestQuietly(coordinationA);
+                Thread.sleep(500);
+            }
+            assertEquals(epochBeforeKill, highestCommittedEpoch(bootstrap),
+                    "while the gone member is absent the epoch must not advance — it blocks, it does not evict");
+            assertFalse(leaveExistsFor(bootstrap, appIdB),
+                    "the gone member is never evicted, so no Leave for it is written");
+
+            // RESTART app B over its own state: it rejoins as the same running member and publishes, so the
+            // blocked round finally commits.
+            coordinationBRestarted = CausalCoordination.create(EPOCH_EVENTS);
+            appBRestarted = new KafkaStreams(stageB(coordinationBRestarted), streamsConfig(bootstrap, appIdB, stateB));
+            appBRestarted.start();
+            CausalCoordination coordB = coordinationBRestarted;
             await().atMost(Duration.ofSeconds(90)).until(() -> {
                 requestQuietly(coordinationA);
+                requestQuietly(coordB);
                 return highestCommittedEpoch(bootstrap) > epochBeforeKill;
             });
 
-            assertTrue(leaveExistsFor(bootstrap, appIdB),
-                    "the surviving app must evict the gone member (a Leave for app B on the log)");
             assertTrue(highestCommittedEpoch(bootstrap) > epochBeforeKill,
-                    "epochs keep progressing after the app was hard-killed — the domain did not freeze");
+                    "the epoch commits once the restarted member returns and publishes");
+            assertFalse(leaveExistsFor(bootstrap, appIdB),
+                    "the member was waited for and rejoined — never evicted, so still no Leave for it");
         } finally {
             appA.close(Duration.ofSeconds(30));
             appB.close(Duration.ofSeconds(5));
+            if (appBRestarted != null) {
+                appBRestarted.close(Duration.ofSeconds(30));
+            }
             coordinationA.close();
+            if (coordinationBRestarted != null) {
+                coordinationBRestarted.close();
+            }
         }
     }
 

@@ -221,21 +221,25 @@ folds the shared epoch-events log identically and agrees on each epoch's floor, 
 - **Entirely optional.** Without a `CausalCoordination` a topology runs in epoch 0, exactly as a
   topology with no epoch machinery. Registering a handle is the only thing that turns it on.
 - **A new node blocks until it is admitted.** A stage deployed into an already-running topology waits at
-  startup until an epoch computed without it commits, then adopts that floor and replays its inputs with
-  pre-epoch history stripped. On the join timeout (default 60 seconds) it fails the task so Kafka Streams
-  restarts and retries, rather than proceeding on an unknown floor. Because a Streams application runs
-  one topology on every instance, adding a stage is a redeploy; this is what lets that redeploy re-enter
-  causal time cleanly.
-- **A gone member cannot freeze the domain.** A round that waits longer than the eviction timeout
-  (default 30 seconds, so set it above a rolling restart) for a silent member evicts it through the log,
-  and any node commits a complete round, so neither a crashed member nor a crashed round owner stalls an
-  epoch. A clean decommission calls `coordination.leave()`; a plain restart calls neither `leave()` nor
-  anything else, so the member stays in the domain and returns without epoch churn.
+  startup — for an unbounded time, with no timeout — until an epoch computed without it commits, then
+  adopts that floor and replays its inputs with pre-epoch history stripped. It never proceeds on an unknown
+  floor: if the domain cannot yet commit (an existing member is absent) the join simply waits. Because a
+  Streams application runs one topology on every instance, adding a stage is a redeploy; this is what lets
+  that redeploy re-enter causal time cleanly.
+- **A transition blocks until every member has published (no eviction).** A member that is absent —
+  crashed, or briefly gone during a restart — is *waited for*, for an unbounded time, rather than evicted.
+  Evicting it and committing a floor without it could strand records it still holds below that floor and
+  release them before their causes, so the transition holds until the member returns and publishes. This
+  trades reconfiguration liveness for causal safety: a crashed member blocks the next *transition* (and
+  any new join) until it returns, though ongoing current-epoch processing is unaffected. A clean
+  decommission calls `coordination.leave()`; a plain restart calls neither `leave()` nor anything else, so
+  the member stays in the domain and returns. How an absent member is handled is a pluggable
+  `CausalMembershipStrategy`, defaulting to `blockUntilDrained()`.
 
 `requestEpochTransition()` opens a boundary across the currently-running nodes from any instance;
-`create(epochEventsTopic, joinTimeout, evictionTimeout)` overrides the two timeouts. The full protocol —
-the floored clock, the leaderless log fold, the in-band markers, and the source-topic registry — is
-described in [Topology epochs](internals/topology-epochs.md).
+`create(epochEventsTopic, membershipStrategy)` sets the membership strategy. The full protocol — the
+floored clock, the leaderless log fold, the in-band markers, and the source-topic registry — is described
+in [Topology epochs](internals/topology-epochs.md).
 
 ## Restart and recovery
 

@@ -44,30 +44,24 @@ import java.util.Objects;
  */
 public final class CausalCoordination {
 
-    /** The default bound on how long a joining task waits for its epoch to commit before failing to retry. */
-    public static final Duration DEFAULT_JOIN_TIMEOUT = Duration.ofSeconds(60);
-
-    /** The default bound a snapshot round waits for a member before evicting it (must exceed a rolling restart). */
-    public static final Duration DEFAULT_EVICTION_TIMEOUT = Duration.ofSeconds(30);
-
-    private static final Duration JOIN_POLL_INTERVAL = Duration.ofMillis(20);
+    private static final Duration COORDINATION_POLL_INTERVAL = Duration.ofMillis(20);
 
     private final String epochEventsTopic;
-    private final Duration joinTimeout;
     // Set only by forRuntime(...) — a pre-built runtime (e.g. over an in-memory transport) that bypasses
     // the lazy Kafka build, so tests exercise the wiring without a broker.
     private final @Nullable ParsleyEpochRuntime injectedRuntime;
 
-    private final Duration evictionTimeout;
+    // How a blocked epoch round treats members that have not published. Unused on the injected-runtime path
+    // (that runtime carries its own). Default: block-until-drained (never excludes).
+    private final CausalMembershipStrategy membershipStrategy;
 
     private final Object lock = new Object();
     private @Nullable ParsleyEpochRuntime lazyRuntime;
 
-    private CausalCoordination(String epochEventsTopic, Duration joinTimeout,
-                               Duration evictionTimeout, @Nullable ParsleyEpochRuntime injectedRuntime) {
+    private CausalCoordination(String epochEventsTopic, CausalMembershipStrategy membershipStrategy,
+                               @Nullable ParsleyEpochRuntime injectedRuntime) {
         this.epochEventsTopic = epochEventsTopic;
-        this.joinTimeout = joinTimeout;
-        this.evictionTimeout = evictionTimeout;
+        this.membershipStrategy = membershipStrategy;
         this.injectedRuntime = injectedRuntime;
     }
 
@@ -84,41 +78,31 @@ public final class CausalCoordination {
      * @return a new coordination handle
      */
     public static CausalCoordination create(String epochEventsTopic) {
-        return create(epochEventsTopic, DEFAULT_JOIN_TIMEOUT, DEFAULT_EVICTION_TIMEOUT);
+        return create(epochEventsTopic, CausalMembershipStrategy.blockUntilDrained());
     }
 
     /**
-     * As {@link #create(String)}, with explicit timeouts. {@code joinTimeout} bounds how long a task
-     * deployed into an already-running topology waits for its epoch to commit before failing (so Kafka
-     * Streams restarts and retries) rather than proceeding on an unknown floor. {@code evictionTimeout}
-     * bounds how long a snapshot round waits for a member to publish before this instance evicts it (so a
-     * gone member cannot freeze the domain); it must exceed a rolling restart.
+     * As {@link #create(String)}, with an explicit {@link CausalMembershipStrategy} governing how an epoch
+     * transition treats a member that has not published. The default
+     * {@link CausalMembershipStrategy#blockUntilDrained()} blocks the transition until every member
+     * publishes.
      *
-     * @param epochEventsTopic the single-partition epoch-events log topic name
-     * @param joinTimeout      the bound on the join wait
-     * @param evictionTimeout  the bound a round waits for a member before evicting it
+     * @param epochEventsTopic   the single-partition epoch-events log topic name
+     * @param membershipStrategy how a blocked round treats members that have not published
      * @return a new coordination handle
      */
-    public static CausalCoordination create(String epochEventsTopic,
-                                            Duration joinTimeout, Duration evictionTimeout) {
+    public static CausalCoordination create(String epochEventsTopic, CausalMembershipStrategy membershipStrategy) {
         Objects.requireNonNull(epochEventsTopic, "epochEventsTopic must not be null");
-        Objects.requireNonNull(joinTimeout, "joinTimeout must not be null");
-        Objects.requireNonNull(evictionTimeout, "evictionTimeout must not be null");
-        return new CausalCoordination(epochEventsTopic, joinTimeout, evictionTimeout, null);
+        Objects.requireNonNull(membershipStrategy, "membershipStrategy must not be null");
+        return new CausalCoordination(epochEventsTopic, membershipStrategy, null);
     }
 
     /**
      * A handle over a pre-built {@code runtime} (bypassing the lazy Kafka build) for tests that drive an
-     * {@link InMemoryEpochTransport}-backed runtime with no broker. The runtime carries its own eviction
-     * timeout; this handle's is unused on the injected path.
+     * {@link InMemoryEpochTransport}-backed runtime with no broker.
      */
     static CausalCoordination forRuntime(ParsleyEpochRuntime runtime) {
-        return new CausalCoordination("", DEFAULT_JOIN_TIMEOUT, DEFAULT_EVICTION_TIMEOUT, runtime);
-    }
-
-    /** As {@link #forRuntime(ParsleyEpochRuntime)} with an explicit join timeout (for timeout tests). */
-    static CausalCoordination forRuntime(ParsleyEpochRuntime runtime, Duration joinTimeout) {
-        return new CausalCoordination("", joinTimeout, DEFAULT_EVICTION_TIMEOUT, runtime);
+        return new CausalCoordination("", CausalMembershipStrategy.blockUntilDrained(), runtime);
     }
 
     /**
@@ -136,7 +120,7 @@ public final class CausalCoordination {
                 return existing;
             }
             ParsleyEpochRuntime built = new ParsleyEpochRuntime(
-                    new ParsleyKafkaEpochTransport(appConfigs, epochEventsTopic), evictionTimeout);
+                    new ParsleyKafkaEpochTransport(appConfigs, epochEventsTopic), membershipStrategy);
             built.start();
             lazyRuntime = built;
             return built;
@@ -150,48 +134,44 @@ public final class CausalCoordination {
      *
      * <p>Waits for the runtime to fold the log to the end ({@link ParsleyEpochRuntime#isBootstrapped()}, so
      * membership is accurate), then blocks until this member is a <strong>running member</strong> — opening
-     * a round to drive that commit. This one rule covers every case: a <em>fresh joiner</em> or an
-     * <em>evicted-then-restarted</em> member (not running ⇒ block until re-included); a <em>normal
-     * restart</em> (still a running member on the log ⇒ proceed at once); and a <em>cold start</em> (epoch
-     * 0, static ⇒ proceed at once). Throws (failing the task, so Streams restarts and retries) if the
-     * timeout elapses first — never proceeds on an unknown floor.
+     * a round to drive that commit. This one rule covers every case: a <em>fresh joiner</em> (not yet
+     * running ⇒ block until an epoch computed without it commits and admits it); a <em>restart</em> of an
+     * existing member (still running on the log — nothing removes it while it is absent ⇒ proceed at once
+     * and drain its restored buffer under the unchanged floor); and a <em>cold start</em> (epoch 0, static
+     * ⇒ proceed at once).
+     *
+     * <p>The block is <strong>unbounded</strong> — there is no join timeout. It never proceeds on an unknown
+     * floor: if the domain cannot yet commit (an existing member is absent), the join simply waits until it
+     * can, exactly as an epoch transition does. A blocked {@code init()} delivers nothing, so waiting is
+     * safe; a clean Kafka Streams shutdown interrupts the wait, which unwinds the block.
      */
     void awaitJoinCommit(ParsleyEpochRuntime runtime, String memberId) {
-        long deadlineNanos = System.nanoTime() + joinTimeout.toNanos();
-        awaitBootstrap(runtime, deadlineNanos);
+        awaitBootstrap(runtime);
 
         // Cold start (epoch 0 is static), or already a running member (a normal restart): no block.
         if (runtime.committedEpochId() == 0 || runtime.isRunningMember(memberId)) {
             return;
         }
-        // A fresh or evicted-and-rejoining member: open a round (the running members answer it) and block
-        // until a commit promotes this member to running.
+        // A fresh joiner: open a round (the running members answer it) and block until a commit promotes
+        // this member to running.
         runtime.requestSnapshot(memberId);
         while (!runtime.isRunningMember(memberId)) {
-            if (System.nanoTime() > deadlineNanos) {
-                throw new IllegalStateException("topology-epoch join did not commit within " + joinTimeout
-                        + "; failing the task so Kafka Streams restarts and retries the join");
-            }
             sleep();
         }
     }
 
-    private static void awaitBootstrap(ParsleyEpochRuntime runtime, long deadlineNanos) {
+    private static void awaitBootstrap(ParsleyEpochRuntime runtime) {
         while (!runtime.isBootstrapped()) {
-            if (System.nanoTime() > deadlineNanos) {
-                throw new IllegalStateException(
-                        "topology-epoch coordination did not fold the epoch-events log within the join timeout");
-            }
             sleep();
         }
     }
 
     private static void sleep() {
         try {
-            Thread.sleep(JOIN_POLL_INTERVAL.toMillis());
+            Thread.sleep(COORDINATION_POLL_INTERVAL.toMillis());
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
-            throw new IllegalStateException("interrupted while awaiting the topology-epoch join commit", e);
+            throw new IllegalStateException("interrupted while awaiting topology-epoch coordination", e);
         }
     }
 
@@ -217,16 +197,45 @@ public final class CausalCoordination {
     }
 
     /**
-     * Gracefully removes this instance's members from the epoch domain — for a genuine <strong>decommission
-     * </strong>, not a restart. After this, running rounds no longer wait for them. A restart should
-     * <em>not</em> call this: leaving it out lets the member stay in the domain and return (no epoch churn);
-     * a member that crashes without leaving is removed by timeout eviction instead. A no-op if no task has
-     * initialised coordination.
+     * Gracefully decommissions this instance's members from the epoch domain — a genuine removal, not a
+     * restart (a restart must <em>not</em> call this: leaving it out lets the member stay in the domain and
+     * return with no epoch churn). Blocking, in three phases, honouring "only a drained node is excluded":
+     * <ol>
+     *   <li><strong>Drain.</strong> Waits — unbounded, no timeout — until every local member's causal buffer
+     *       is empty, so removing them strands no held record. The task threads keep delivering meanwhile;
+     *       the buffer drains through the ordinary path as dependencies arrive.
+     *   <li><strong>Remove.</strong> Appends a {@code Leave} for each local member and waits until the fold
+     *       has dropped them from the running set, so the departure is durable on the log.
+     *   <li><strong>Re-settle.</strong> Requests a new epoch over the remaining members — the leaver
+     *       excluded, since its {@code Leave} precedes the request in log order — then returns without
+     *       waiting for that epoch to commit, so shutdown is never coupled to the remaining members'
+     *       liveness (the survivors commit it on their own).
+     * </ol>
+     * A no-op if no task has initialised coordination or no local member has joined. <strong>Contract:</strong>
+     * the caller must have stopped feeding this node new input before decommissioning — {@code leave()}
+     * drains the in-flight buffer, not records that arrive after it returns.
      */
     public void leave() {
         ParsleyEpochRuntime runtime = currentRuntime();
-        if (runtime != null) {
-            runtime.leaveLocalMembers();
+        if (runtime == null || runtime.anyLocalMember() == null) {
+            return;
+        }
+        // Phase 1 — drain: block until every local member's buffer is empty (unbounded; the StreamThreads
+        // keep delivering, so the buffer drains as dependencies arrive).
+        while (!runtime.allLocalMembersDrained()) {
+            sleep();
+        }
+        // Phase 2 — remove: append a Leave for each local member, then block until the fold has dropped them
+        // from the running set, so the departure is durable on the log before we proceed.
+        runtime.leaveLocalMembers();
+        while (runtime.hasRunningLocalMembers()) {
+            sleep();
+        }
+        // Phase 3 — re-settle: request a new epoch over the remaining members (this node already excluded)
+        // and return; the leaver is safe, so it does not wait for the commit.
+        String member = runtime.anyLocalMember();
+        if (member != null) {
+            runtime.requestSnapshot(member);
         }
     }
 

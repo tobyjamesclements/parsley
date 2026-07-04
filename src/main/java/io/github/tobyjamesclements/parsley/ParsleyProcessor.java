@@ -92,6 +92,11 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
     private @Nullable KIn lastSeenKey;
     private long lastSnapshotRoundEpoch;
     private long lastAdoptedEpoch;
+    // The snapshot round this task has already published its completeness for (log-driven, so every member
+    // publishes — not just source-layer). Reset in memory on restart, so a task that crashes mid-round
+    // re-publishes off the folded log alone; that keeps a blocked round from deadlocking when a member's
+    // side-channel publish was lost but its Streams offset commit survived. -1 = none yet.
+    private long lastPublishedRoundEpoch = -1;
     // This task's globally-unique member id on the shared epoch-events log: application.id + task id. The
     // task id alone collides across the many applications that make up a production causal DAG (each app's
     // "0_0" is a different node); the application.id prefix disambiguates them, while two instances of the
@@ -307,8 +312,10 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
         // phantom task permanently blocking CausalQuiesce#isSafeToClose.
         if (quiesce != null) {
             quiesce.register(context.taskId());
-            updateQuiesceState();
         }
+        // Report the restored buffer's drained state once up front, so a task that starts idle with an
+        // empty buffer is known-drained to quiesce and to leave() without waiting for the first delivery.
+        updateQuiesceState();
     }
 
     /**
@@ -414,17 +421,22 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
     }
 
     /**
-     * Reports this task's drained state to {@link #quiesce}, if registered: drained once quiesce has
-     * been requested and the buffer is empty. Called after every buffer-depth-changing event (every
-     * path that can hold, release, or evict a record funnels through {@link #deliver}), so the
-     * signal reflects the current buffer depth without polling. Never fabricates completeness — this
-     * only observes the buffer depth the ordinary delivery path already produced.
+     * Reports this task's current buffer-drained state, to {@link #quiesce} (if registered) and to the
+     * epoch runtime (if coordinated). Called after every buffer-depth-changing event (every path that can
+     * hold, release, or evict a record funnels through {@link #deliver}), so the signal reflects the
+     * current buffer depth without polling. Never fabricates completeness — it only observes the buffer
+     * depth the ordinary delivery path already produced. Quiesce additionally gates its drained flag on
+     * {@link CausalQuiesce#isQuiesceRequested()}; the runtime tracks the raw depth so
+     * {@link CausalCoordination#leave()} can wait for a drained buffer before removing the member.
      */
     private void updateQuiesceState() {
-        if (quiesce == null) {
-            return;
+        boolean empty = engine.bufferSize() == 0;
+        if (quiesce != null) {
+            quiesce.setDrained(context.taskId(), quiesce.isQuiesceRequested() && empty);
         }
-        quiesce.setDrained(context.taskId(), quiesce.isQuiesceRequested() && engine.bufferSize() == 0);
+        if (epochRuntime != null) {
+            epochRuntime.reportDrained(memberId, empty);
+        }
     }
 
     /**
@@ -580,12 +592,22 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
         if (runtime == null) {
             return;
         }
-        if (runtime.isEvicted(memberId)) {
-            // Another node evicted this member (presumed gone). Fail the task so Streams restarts it and it
-            // re-joins under the current floor; a REPLACE_THREAD uncaught-exception handler makes this
-            // self-healing for a false eviction of a still-alive member.
-            throw new IllegalStateException("task " + memberId
-                    + " was evicted from the topology-epoch domain; failing so it re-joins under the current floor");
+        // Keep the runtime's drained mirror current even while idle (no deliveries drive updateQuiesceState),
+        // so leave() observes a drained buffer promptly. Cheap and self-correcting on each poll tick.
+        runtime.reportDrained(memberId, engine.bufferSize() == 0);
+        // Every member — not just source-layer — publishes its completeness for an open round it still owes
+        // one for, driven off the folded log. This makes publication restart-safe: a member that restarts
+        // mid-round re-derives from the log that it owes a publication and re-publishes, without depending
+        // on having consumed a one-shot in-band snapshot marker exactly once (the case timeout eviction used
+        // to paper over). The per-round guard bounds it to one append per round per task lifetime; a restart
+        // resets the guard, so a lost publish is re-sent. Safe to publish current completeness pre-cut:
+        // completeness is monotonic and the committed floor is a conservative merge-min.
+        if (runtime.owesPublication(memberId)) {
+            long round = runtime.committedEpochId() + 1;
+            if (round != lastPublishedRoundEpoch) {
+                snapshotPublisher.publish(memberId, engine.completeness());
+                lastPublishedRoundEpoch = round;
+            }
         }
         // Whether this task is source-layer is derived per poll from the log's DAG-wide source-topic
         // registry: the external source topics (inputs no member produces) that this task actually consumes.

@@ -153,11 +153,12 @@ class ParsleyEpochRuntimeTest {
     }
 
     /**
-     * A running member that never publishes is evicted once the round has waited past the eviction
-     * timeout, so the round completes and commits — a gone member cannot freeze the epoch forever.
+     * Block-until-drained: a running member that never publishes keeps the round open — it is not evicted —
+     * so no new epoch commits until it returns and publishes. This is the causal-safety choice: a member's
+     * un-drained buffer can never be stranded below a floor committed without it.
      */
     @Test
-    void aSilentRunningMemberIsEvictedSoTheRoundCommits() {
+    void aSilentRunningMemberBlocksTheRoundUntilItPublishes() {
         InMemoryEpochTransport.SharedLog log = new InMemoryEpochTransport.SharedLog();
         // Seed R as a running member (epoch 1); it then falls silent.
         InMemoryEpochTransport seeder = new InMemoryEpochTransport(log);
@@ -165,52 +166,87 @@ class ParsleyEpochRuntimeTest {
         seeder.append(new EpochEvent.SnapshotRequested("R"));
         seeder.append(new EpochEvent.EpochCommitted(1, ParsleyClock.empty()));
 
-        ParsleyEpochRuntime a = new ParsleyEpochRuntime(new InMemoryEpochTransport(log), java.time.Duration.ZERO);
-        a.join("A", Set.of(), Set.of());
-        a.requestSnapshot("A");   // opens round 2; running = {R}; R never publishes
-        settle(log, a);
-
-        assertEquals(2L, a.committedEpochId(), "the silent member is evicted so the round commits epoch 2");
-        assertFalse(a.isRunningMember("R"), "the evicted member is no longer a running member");
-    }
-
-    /** A local member evicted by another node is surfaced via {@code isEvicted}, so the task can fail and re-join. */
-    @Test
-    void aLocalMemberEvictedByAnotherNodeIsSurfaced() {
-        InMemoryEpochTransport.SharedLog log = new InMemoryEpochTransport.SharedLog();
         ParsleyEpochRuntime a = runtimeOver(log);
         a.join("A", Set.of(), Set.of());
+        a.requestSnapshot("A");   // opens round 2; running = {R}; R has not published
         settle(log, a);
 
-        new InMemoryEpochTransport(log).append(new EpochEvent.Leave("A"));   // another node evicts A
+        assertEquals(1L, a.committedEpochId(),
+                "the silent member keeps round 2 open, so no new epoch commits (never evicted)");
+        assertTrue(a.isRunningMember("R"), "the silent member remains a running member — it is not evicted");
+        assertFalse(a.isRunningMember("A"), "A is still a pending joiner (round 2 has not committed)");
+
+        // R returns and publishes; the round now completes and commits epoch 2 over its frontier.
+        new InMemoryEpochTransport(log).append(
+                new EpochEvent.FrontierPublished("R", ParsleyClock.empty().observe(T1, 0, 4)));
         settle(log, a);
 
-        assertTrue(a.isEvicted("A"), "a local member evicted by another node is surfaced for re-join");
+        assertEquals(2L, a.committedEpochId(), "once the member publishes, the round commits epoch 2");
+        assertEquals(ParsleyClock.empty().observe(T1, 0, 4), a.committedLowerBounds(),
+                "the floor is the returned member's published frontier");
+        assertTrue(a.isRunningMember("A"), "the commit promotes the pending joiner A to running");
     }
 
     /**
-     * The eviction flag clears once the member is re-admitted (running again), so a task that blocked back
-     * in and re-adopted the floor does not keep failing in a loop — the fix for a crashed-then-evicted
-     * member restarting.
+     * {@code owesPublication} tracks whether a running member has published for the open round, and is
+     * re-derived purely from the folded log — so a member that restarts mid-round still sees it owes a
+     * publication and re-publishes, rather than deadlocking the round because a one-shot marker was already
+     * consumed. This is the mechanism that keeps block-until-drained live across restarts.
      */
     @Test
-    void anEvictionFlagClearsOnceTheMemberIsReAdmitted() {
+    void owesPublicationTracksTheOpenRoundAndSurvivesRestart() {
+        InMemoryEpochTransport.SharedLog log = new InMemoryEpochTransport.SharedLog();
+        ParsleyEpochRuntime a = runtimeOver(log);   // owns A
+        ParsleyEpochRuntime b = runtimeOver(log);   // owns B
+
+        a.join("A", Set.of(), Set.of());
+        b.join("B", Set.of(), Set.of());
+        settle(log, a, b);
+        a.requestSnapshot("A");
+        settle(log, a, b);   // epoch 1: A and B running
+
+        a.requestSnapshot("A");   // open round 2; neither has published
+        settle(log, a, b);
+        assertTrue(a.owesPublication("A"), "A owes a publication for the open round");
+        assertTrue(b.owesPublication("B"), "B owes a publication for the open round");
+
+        a.publishFrontier("A", ParsleyClock.empty().observe(T1, 0, 2));
+        settle(log, a, b);
+        assertFalse(a.owesPublication("A"), "A no longer owes a publication once it has published");
+        assertTrue(b.owesPublication("B"), "B still owes one, keeping the round open");
+        assertEquals(1L, a.committedEpochId(), "the round has not committed while B is outstanding");
+
+        // B "restarts": a fresh runtime folding the same log must still derive that B owes a publication.
+        ParsleyEpochRuntime bRestarted = runtimeOver(log);
+        settle(log, bRestarted);
+        assertTrue(bRestarted.owesPublication("B"),
+                "a restarted runtime re-derives from the log alone that B still owes a publication");
+    }
+
+    /**
+     * The drain mirror gates a graceful leave: {@code allLocalMembersDrained} is true only once every local
+     * member has reported an empty buffer, and {@code hasRunningLocalMembers} reflects the fold's running
+     * set — the two conditions {@link CausalCoordination#leave()} waits on across its drain and remove phases.
+     */
+    @Test
+    void theDrainMirrorAndRunningSetGateAGracefulLeave() {
         InMemoryEpochTransport.SharedLog log = new InMemoryEpochTransport.SharedLog();
         ParsleyEpochRuntime a = runtimeOver(log);
         a.join("A", Set.of(), Set.of());
+        a.join("B", Set.of(), Set.of());
+
+        assertFalse(a.allLocalMembersDrained(), "no local member has reported a drained buffer yet");
+        a.reportDrained("A", true);
+        assertFalse(a.allLocalMembersDrained(), "only A is drained; B is still outstanding");
+        a.reportDrained("B", true);
+        assertTrue(a.allLocalMembersDrained(), "every local member has reported an empty buffer");
+        a.reportDrained("B", false);
+        assertFalse(a.allLocalMembersDrained(), "B's buffer filled again — no longer all drained");
+
+        assertFalse(a.hasRunningLocalMembers(), "pending joiners are not yet running members");
         a.requestSnapshot("A");
         settle(log, a);
-        assertTrue(a.isRunningMember("A"), "A is a running member (epoch 1)");
-
-        new InMemoryEpochTransport(log).append(new EpochEvent.Leave("A"));   // A is evicted
-        settle(log, a);
-        assertTrue(a.isEvicted("A"), "while evicted and not running, A is flagged");
-
-        a.join("A", Set.of(), Set.of());                 // A restarts and re-joins
-        a.requestSnapshot("A");
-        settle(log, a);
-        assertTrue(a.isRunningMember("A"), "A is re-admitted as a running member");
-        assertFalse(a.isEvicted("A"), "the eviction flag clears on re-admission, so the task does not loop");
+        assertTrue(a.hasRunningLocalMembers(), "A and B are running members after the commit");
     }
 
     private static ParsleyEpochRuntime runtimeOver(InMemoryEpochTransport.SharedLog log) {

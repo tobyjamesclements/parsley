@@ -42,15 +42,22 @@ import java.util.Set;
 import java.util.UUID;
 
 import static org.awaitility.Awaitility.await;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * Regression proof for the crashed-then-evicted restart path: an app crashes while holding a buffered
- * record, is evicted by a surviving app as the domain moves on, then restarts. It must <strong>not</strong>
- * crash-loop (the bug); it must block until re-admitted, re-adopt the current floor, and drain its buffer.
+ * The causal-safety guarantee across a crash-and-restart, and the proof that block-until-drained never
+ * severs an un-drained buffer. App X holds a record on {@code in} that depends on {@code prereq@0} (never
+ * yet produced); X is hard-killed with the record still buffered. Because a crashed member is
+ * <strong>not</strong> evicted, the surviving app Y's transition <strong>blocks</strong> — the epoch does
+ * not advance and no {@code Leave} for X is written. X then restarts over its buffer changelog and, still a
+ * running member, resumes at once. The held record must remain buffered — <strong>not</strong> delivered
+ * before its cause (the old severing bug) — and drain to {@code out} only once {@code prereq@0} finally
+ * arrives.
  */
 @Testcontainers(disabledWithoutDocker = true)
-class CausalCoordinationEvictedRestartIT {
+class CausalCoordinationCrashRestartIT {
 
     @Container
     private final KafkaContainer kafka =
@@ -64,25 +71,25 @@ class CausalCoordinationEvictedRestartIT {
     private static final String EPOCH_EVENTS = "epoch-events";
 
     /**
-     * App X (prereq + in -> out) holds a record on {@code in} that depends on {@code prereq@0}; survivor Y
-     * keeps the domain moving. X is hard-killed with the record still buffered; Y evicts X and advances the
-     * epoch. X restarts: it blocks until re-admitted, then — once {@code prereq@0} is produced — drains the
-     * held record to {@code out}. Asserts X recovers (does not crash-loop) and delivers its buffered record.
+     * App X (prereq + in -> out) holds a record on {@code in} depending on {@code prereq@0}; survivor Y keeps
+     * the domain alive. X is hard-killed with the record buffered. A transition driven on Y opens a round
+     * that blocks on the absent X (asserted: the epoch does not advance and X is not evicted). X restarts
+     * over its buffer changelog and resumes as the same running member. The held record must NOT yet be at
+     * {@code out} (never severed/delivered concurrently); once {@code prereq@0} is produced, it drains in
+     * causal order.
      */
     @Test
-    void aCrashedThenEvictedAppRestartsWithoutLoopingAndDrainsItsBuffer() throws Exception {
+    void aCrashedMemberBlocksThenRestartsAndDrainsInCausalOrder() throws Exception {
         String bootstrap = kafka.getBootstrapServers();
         createTopics(bootstrap, PREREQ, IN, OUT, YIN, YOUT, EPOCH_EVENTS);
         String runId = UUID.randomUUID().toString().substring(0, 8);
-        String appIdX = "evicted-x-" + runId;   // stable across the restart
-        String appIdY = "evicted-y-" + runId;
+        String appIdX = "crash-x-" + runId;   // stable across the restart
+        String appIdY = "crash-y-" + runId;
 
-        // Y evicts a silent member after 3s (short, for the test).
-        CausalCoordination coordinationY =
-                CausalCoordination.create(EPOCH_EVENTS, CausalCoordination.DEFAULT_JOIN_TIMEOUT, Duration.ofSeconds(3));
+        CausalCoordination coordinationY = CausalCoordination.create(EPOCH_EVENTS);
         CausalCoordination coordinationX1 = CausalCoordination.create(EPOCH_EVENTS);
-        Path stateY = Files.createTempDirectory("parsley-evict-y");
-        Path stateX1 = Files.createTempDirectory("parsley-evict-x1");
+        Path stateY = Files.createTempDirectory("parsley-crash-y");
+        Path stateX1 = Files.createTempDirectory("parsley-crash-x1");
 
         KafkaStreams appY = new KafkaStreams(stageY(coordinationY), streamsConfig(bootstrap, appIdY, stateY));
         KafkaStreams appX = new KafkaStreams(stageX(coordinationX1), streamsConfig(bootstrap, appIdX, stateX1));
@@ -115,33 +122,39 @@ class CausalCoordinationEvictedRestartIT {
             appX.close(Duration.ofSeconds(30));
             coordinationX1.close();
 
-            // Y evicts the gone X and advances the epoch.
-            long epochBeforeEvict = highestCommittedEpoch(bootstrap);
-            await().atMost(Duration.ofSeconds(90)).pollInterval(Duration.ofSeconds(1)).until(() -> {
+            // Drive a transition on Y: the round opens but cannot commit while X is absent. The epoch must
+            // NOT advance (block-until-drained) and X must NOT be evicted.
+            long epochBeforeKill = highestCommittedEpoch(bootstrap);
+            for (int i = 0; i < 10; i++) {
                 requestQuietly(coordinationY);
-                return highestCommittedEpoch(bootstrap) > epochBeforeEvict;
-            });
-            assertTrue(leaveExistsFor(bootstrap, appIdX), "the survivor must evict the gone X");
+                Thread.sleep(500);
+            }
+            assertEquals(epochBeforeKill, highestCommittedEpoch(bootstrap),
+                    "the round blocks on the absent member — the epoch does not advance");
+            assertFalse(leaveExistsFor(bootstrap, appIdX), "the crashed member is never evicted, so no Leave for it");
 
-            // Restart X (same application id, so it restores its buffer changelog; fresh local state dir).
-            Path stateX2 = Files.createTempDirectory("parsley-evict-x2");
+            // Restart X (same application id, so it restores its buffer changelog; fresh local state dir). It is
+            // still a running member, so it resumes immediately.
+            Path stateX2 = Files.createTempDirectory("parsley-crash-x2");
             appXRestarted = new KafkaStreams(stageX(coordinationX2), streamsConfig(bootstrap, appIdX, stateX2));
             appXRestarted.start();
-
-            // It must NOT crash-loop: it blocks until re-admitted, then reaches RUNNING. Y publishes for its
-            // re-admission round, so keep nudging transitions.
             KafkaStreams restarted = appXRestarted;
             await().atMost(Duration.ofSeconds(90)).pollInterval(Duration.ofSeconds(1)).until(() -> {
                 requestQuietly(coordinationY);
                 return restarted.state() == KafkaStreams.State.RUNNING;
             });
 
-            // Satisfy the held record's dependency; the recovered X drains its buffer to out.
+            // SAFETY: prereq@0 is still unproduced, so the held record's dependency is unsatisfied. It must
+            // NOT have been delivered — the reversed severing bug would have released it out of causal order.
+            assertFalse(outAppearsWithin(bootstrap, "ORDER", Duration.ofSeconds(8)),
+                    "the held record is not delivered before its cause — block-until-drained never severs");
+
+            // Satisfy the held record's dependency; the recovered X drains it to out, in causal order.
             try (KafkaProducer<String, String> producer = new KafkaProducer<>(producerConfig(bootstrap))) {
                 producer.send(CausalDependencies.empty().stamp(new ProducerRecord<>(PREREQ, "pk", "prereq"))).get();
             }
-            assertTrue(awaitOutContains(bootstrap, "ORDER"),
-                    "the crashed-then-evicted app recovers (no crash loop) and drains its buffered record");
+            assertTrue(outAppearsWithin(bootstrap, "ORDER", Duration.ofSeconds(60)),
+                    "once its dependency arrives, the held record drains — delivered in causal order, not lost");
         } finally {
             appX.close(Duration.ofSeconds(5));
             if (appXRestarted != null) {
@@ -241,7 +254,8 @@ class CausalCoordinationEvictedRestartIT {
         return events;
     }
 
-    private static boolean awaitOutContains(String bootstrap, String value) {
+    /** Whether {@code value} appears on {@code out} within {@code window}. False if the window elapses first. */
+    private static boolean outAppearsWithin(String bootstrap, String value, Duration window) {
         Map<String, Object> config = Map.of(
                 ConsumerConfig.BOOTSTRAP_SERVERS_CONFIG, bootstrap,
                 ConsumerConfig.GROUP_ID_CONFIG, "out-reader-" + UUID.randomUUID(),
@@ -250,7 +264,7 @@ class CausalCoordinationEvictedRestartIT {
                 ConsumerConfig.VALUE_DESERIALIZER_CLASS_CONFIG, StringDeserializer.class.getName());
         try (KafkaConsumer<String, String> consumer = new KafkaConsumer<>(config)) {
             consumer.subscribe(List.of(OUT));
-            long deadline = System.currentTimeMillis() + 60_000;
+            long deadline = System.currentTimeMillis() + window.toMillis();
             while (System.currentTimeMillis() < deadline) {
                 for (ConsumerRecord<String, String> record : consumer.poll(Duration.ofMillis(300))) {
                     if (value.equals(record.value())) {

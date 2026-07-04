@@ -37,27 +37,24 @@ final class ParsleyEpochRuntime implements AutoCloseable {
 
     private final ParsleyEpochTransport transport;
     private final ParsleyEpochLog fold = new ParsleyEpochLog();
-    // How long a round may wait for a member to publish before this node evicts it (appends Leave). Must
-    // exceed a rolling restart, so a briefly-absent member is not falsely evicted.
-    private final Duration evictionTimeout;
+    // How a blocked round treats members that have not published. The default (blockUntilDrained) never
+    // excludes, so a transition waits for every member — only a drained member may ever be excluded, and a
+    // crashed member is never known to be drained.
+    private final CausalMembershipStrategy membershipStrategy;
 
     // Members whose tasks live on this instance: the runtime folds and commits on their behalf. Written
-    // from task threads (join), read by the runtime thread (driveCommit / eviction).
+    // from task threads (join), read by the runtime thread (driveCommit).
     private final Set<String> localMembers = ConcurrentHashMap.newKeySet();
-    // Local members whose departure this node itself initiated (a graceful leave) — so folding their Leave
-    // is not mistaken for an eviction of a still-alive member.
-    private final Set<String> selfInitiatedLeaves = ConcurrentHashMap.newKeySet();
-    // Local members another node has evicted (folded a Leave we did not initiate): the task must fail and
-    // re-join. Read by the task thread via isEvicted.
-    private final Set<String> evictedLocalMembers = ConcurrentHashMap.newKeySet();
+    // Local members whose causal buffer is currently empty (drained), reported by their task thread.
+    // leave() waits until every local member is drained before appending its Leave — "only a drained node
+    // is excluded". Written by task threads (reportDrained), read by the caller's leave() thread.
+    private final Set<String> drainedLocalMembers = ConcurrentHashMap.newKeySet();
     // Intents enqueued by task threads, appended to the log by the runtime thread only.
     private final Queue<EpochEvent> outbox = new ConcurrentLinkedQueue<>();
 
     // Runtime-thread-only: the epoch we have already appended a commit for, so this node appends each
     // round's EpochCommitted exactly once (the commit round-trips through the log and advances the fold).
     private long lastCommitAppendedFor;
-    // Runtime-thread-only: when this node first observed the current round open (nanoTime), 0 if none open.
-    private long roundOpenSinceNanos;
 
     // Mirrors of the folded decision, published for cross-thread readers (a source-layer task polls these
     // to drive the in-band wave; a joiner blocks on committedEpochId). Volatile: written by the runtime
@@ -70,20 +67,23 @@ final class ParsleyEpochRuntime implements AutoCloseable {
     private volatile boolean bootstrapped;
     // Snapshot of the running-member set, for the join block to read from any thread.
     private volatile Set<String> runningMembersMirror = Set.of();
+    // Snapshot of the running members that still owe a publication for the open round, so any task thread
+    // can tell whether it must (re)publish — the mechanism that makes publication restart-safe.
+    private volatile Set<String> unpublishedMembersMirror = Set.of();
     // Mirror of the fold's DAG-wide external source topics, refreshed each runOnce for cross-thread readers.
     private volatile Set<String> externalSourceTopicsMirror = Set.of();
 
     private volatile boolean running;
     private @Nullable Thread thread;
 
-    /** A runtime with a default eviction timeout — for tests that never exercise eviction. */
+    /** A runtime with the default {@link CausalMembershipStrategy#blockUntilDrained() block-until-drained} strategy. */
     ParsleyEpochRuntime(ParsleyEpochTransport transport) {
-        this(transport, Duration.ofSeconds(30));
+        this(transport, CausalMembershipStrategy.blockUntilDrained());
     }
 
-    ParsleyEpochRuntime(ParsleyEpochTransport transport, Duration evictionTimeout) {
+    ParsleyEpochRuntime(ParsleyEpochTransport transport, CausalMembershipStrategy membershipStrategy) {
         this.transport = transport;
-        this.evictionTimeout = evictionTimeout;
+        this.membershipStrategy = membershipStrategy;
     }
 
     /**
@@ -97,9 +97,38 @@ final class ParsleyEpochRuntime implements AutoCloseable {
         outbox.add(new EpochEvent.JoinRequested(memberId, Set.copyOf(inputTopics), Set.copyOf(sinkTopics)));
     }
 
-    /** Stops treating {@code memberId} as local (its task left this instance). No log event yet — leave/removal is a later workstream. */
+    /** Stops treating {@code memberId} as local (its task left this instance, e.g. a rebalance). Does not append a log event. */
     void unregisterMember(String memberId) {
         localMembers.remove(memberId);
+        drainedLocalMembers.remove(memberId);
+    }
+
+    /**
+     * A task reports whether its causal buffer is currently empty (drained). {@link #allLocalMembersDrained()}
+     * folds these across the instance's members so {@link CausalCoordination#leave()} can wait until every
+     * local member is drained before removing it — "only a drained node is excluded".
+     */
+    void reportDrained(String memberId, boolean empty) {
+        if (empty) {
+            drainedLocalMembers.add(memberId);
+        } else {
+            drainedLocalMembers.remove(memberId);
+        }
+    }
+
+    /** Whether every local member's causal buffer is currently empty — the gate {@code leave()} waits on. */
+    boolean allLocalMembersDrained() {
+        return !localMembers.isEmpty() && drainedLocalMembers.containsAll(localMembers);
+    }
+
+    /** Whether any local member is still a running member on the log — {@code leave()} waits for this to be false after appending Leave. */
+    boolean hasRunningLocalMembers() {
+        for (String member : localMembers) {
+            if (runningMembersMirror.contains(member)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     /** Any member local to this instance, or {@code null} if none has joined — used to attribute an operator-triggered snapshot to a local owner. */
@@ -127,7 +156,6 @@ final class ParsleyEpochRuntime implements AutoCloseable {
      */
     void leaveLocalMembers() {
         for (String member : localMembers) {
-            selfInitiatedLeaves.add(member);
             outbox.add(new EpochEvent.Leave(member));
         }
     }
@@ -143,12 +171,13 @@ final class ParsleyEpochRuntime implements AutoCloseable {
     }
 
     /**
-     * Whether {@code memberId} (a local member) has been evicted and is not currently a running member —
-     * the task must fail and re-join. Clears once the member is re-admitted (running again), so a task that
-     * blocked back in and re-adopted the floor does not keep failing in a loop.
+     * Whether {@code memberId} owes a publication for the currently-open round — a running member that has
+     * not yet published its frontier. A task polls this and (re)publishes its completeness when true, so a
+     * member that restarts mid-round re-publishes off the folded log alone, without depending on having
+     * consumed a one-shot in-band snapshot marker exactly once.
      */
-    boolean isEvicted(String memberId) {
-        return evictedLocalMembers.contains(memberId) && !isRunningMember(memberId);
+    boolean owesPublication(String memberId) {
+        return roundOpen && unpublishedMembersMirror.contains(memberId);
     }
 
     /** The last committed epoch id ({@code 0} before any commit). */
@@ -211,52 +240,36 @@ final class ParsleyEpochRuntime implements AutoCloseable {
                 committedEpochId = commit.epochId();
                 committedLowerBounds = commit.lowerBounds();
                 log.debug("Epoch {} committed with lower bounds {}", commit.epochId(), commit.lowerBounds());
-            } else if (event instanceof EpochEvent.Leave leave
-                    && localMembers.contains(leave.memberId()) && !selfInitiatedLeaves.contains(leave.memberId())) {
-                // A local member was evicted by another node (we did not initiate its leave); surface it so
-                // the task can fail and re-join under the current floor.
-                evictedLocalMembers.add(leave.memberId());
-                log.warn("Local member {} was evicted from the epoch domain; the task will re-join", leave.memberId());
             }
         }
         roundOpen = fold.isRoundOpen();
         runningMembersMirror = fold.runningMembers();
+        unpublishedMembersMirror = fold.unpublishedRunningMembers();
         externalSourceTopicsMirror = fold.externalSourceTopics();
         bootstrapped = transport.caughtUp();
-        updateRoundTimer();
         driveCommit();
-        maybeEvictSilentMembers();
-    }
-
-    /** Tracks how long the current round has been open (for the eviction timeout); reset when none is open. */
-    private void updateRoundTimer() {
-        if (fold.isRoundOpen()) {
-            if (roundOpenSinceNanos == 0) {
-                roundOpenSinceNanos = System.nanoTime();
-            }
-        } else {
-            roundOpenSinceNanos = 0;
-        }
+        applyMembershipStrategy();
     }
 
     /**
-     * Once a round has been open past {@link #evictionTimeout}, evicts every <em>remote</em> running member
-     * that has not published, by appending a {@link EpochEvent.Leave} — so a gone member cannot hold the
-     * round open forever. A node never evicts its own local members (they should publish; if one is truly
-     * stuck, other nodes evict it as a remote member). The proposal uses a local clock; the log serialises
-     * the decision, and dedup makes a duplicate Leave a no-op.
+     * Consults the {@link CausalMembershipStrategy} while a round is blocked and appends a {@link
+     * EpochEvent.Leave} for any member it says may be excluded. The default {@link
+     * CausalMembershipStrategy#blockUntilDrained()} returns none, so the round simply waits for every
+     * member to publish — only a drained member may ever be excluded, and a crashed member is never known
+     * to be drained. The log serialises the decision and dedup makes a duplicate Leave a no-op.
      */
-    private void maybeEvictSilentMembers() {
-        if (!bootstrapped || !fold.isRoundOpen() || localMembers.isEmpty() || roundOpenSinceNanos == 0) {
+    private void applyMembershipStrategy() {
+        if (!bootstrapped || !fold.isRoundOpen() || localMembers.isEmpty()) {
             return;
         }
-        if (System.nanoTime() - roundOpenSinceNanos < evictionTimeout.toNanos()) {
+        Set<String> outstanding = fold.unpublishedRunningMembers();
+        if (outstanding.isEmpty()) {
             return;
         }
-        for (String silent : fold.unpublishedRunningMembers()) {
-            if (!localMembers.contains(silent)) {
-                transport.append(new EpochEvent.Leave(silent));
-            }
+        Set<String> excludable = membershipStrategy.excludableMembers(
+                new BlockedRound(outstanding, fold.runningMembers()));
+        for (String member : excludable) {
+            transport.append(new EpochEvent.Leave(member));
         }
     }
 
