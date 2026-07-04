@@ -7,6 +7,7 @@ import org.apache.kafka.streams.state.StoreBuilder;
 import org.jspecify.annotations.Nullable;
 
 import java.util.HashSet;
+import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.function.Function;
@@ -27,8 +28,11 @@ final class ParsleyProcessorSupplier<KIn, VIn, KOut, VOut>
     private final String bufferStoreName;
     private final String candidateIndexStoreName;
     private final String forwardedIndexStoreName;
+    private final String orphanIndexStoreName;
     private final Set<String> topics;
     private final Set<String> sinkTopics;
+    private final List<String> sinkNodeNames;
+    private final @Nullable String deadLetterSinkName;
     private final Function<Map<String, Object>, ParsleyTopicAdmin> adminFactory;
     private final ParsleyConfig config;
     private final CausalAudit audit;
@@ -42,8 +46,11 @@ final class ParsleyProcessorSupplier<KIn, VIn, KOut, VOut>
                                       String bufferStoreName,
                                       String candidateIndexStoreName,
                                       String forwardedIndexStoreName,
+                                      String orphanIndexStoreName,
                                       Set<String> topics,
                                       Set<String> sinkTopics,
+                                      List<String> sinkNodeNames,
+                                      @Nullable String deadLetterSinkName,
                                       Function<Map<String, Object>, ParsleyTopicAdmin> adminFactory,
                                       ParsleyConfig config,
                                       CausalAudit audit,
@@ -56,8 +63,11 @@ final class ParsleyProcessorSupplier<KIn, VIn, KOut, VOut>
         this.bufferStoreName = bufferStoreName;
         this.candidateIndexStoreName = candidateIndexStoreName;
         this.forwardedIndexStoreName = forwardedIndexStoreName;
+        this.orphanIndexStoreName = orphanIndexStoreName;
         this.topics = topics;
         this.sinkTopics = sinkTopics;
+        this.sinkNodeNames = sinkNodeNames;
+        this.deadLetterSinkName = deadLetterSinkName;
         this.adminFactory = adminFactory;
         this.config = config;
         this.audit = audit;
@@ -71,8 +81,8 @@ final class ParsleyProcessorSupplier<KIn, VIn, KOut, VOut>
                 userSupplier.get(),
                 new ParsleySerializer<>(new ParsleyResolver<>(keySerdeByTopic, valueSerdeByTopic)),
                 frontierStoreName, bufferStoreName, candidateIndexStoreName, forwardedIndexStoreName,
-                topics, sinkTopics, adminFactory, config, audit, quiesce,
-                ParsleyEpochSnapshotPublisher.NOOP, coordination);
+                orphanIndexStoreName, topics, sinkTopics, sinkNodeNames, deadLetterSinkName,
+                adminFactory, config, audit, quiesce, ParsleyEpochSnapshotPublisher.NOOP, coordination);
     }
 
     /** The effective Parsley configuration this supplier was built with. Package-private for tests. */
@@ -91,6 +101,7 @@ final class ParsleyProcessorSupplier<KIn, VIn, KOut, VOut>
         stores.add(ParsleyStores.bufferStore(bufferStoreName));
         stores.add(ParsleyStores.candidateIndexStore(candidateIndexStoreName));
         stores.add(ParsleyStores.forwardedIndexStore(forwardedIndexStoreName));
+        stores.add(ParsleyStores.orphanIndexStore(orphanIndexStoreName));
         return stores;
     }
 }

@@ -16,6 +16,7 @@ import org.apache.kafka.streams.processor.api.RecordMetadata;
 import java.io.File;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.function.Supplier;
@@ -37,6 +38,15 @@ import java.util.function.Supplier;
  * mutates the incoming record's headers (a fresh header set is built and applied via
  * {@link Record#withHeaders}).
  *
+ * <p><strong>The one-arg {@link #forward(Record)} targets every name in {@code sinkNodeNames}
+ * explicitly — it never broadcasts.</strong> A stage's processor node may have more than one child
+ * (its business sink(s) and, if a dead-letter sink is configured, that sink too), and the dead-letter
+ * sink is registered with {@code Serdes.ByteArray()}; the zero-arg {@code ProcessorContext.forward}
+ * sends to <em>every</em> child of the current node unconditionally, so a business record broadcast
+ * that way would also reach the dead-letter sink and throw a runtime {@code ClassCastException} on its
+ * serializer. Addressing every forward by name is therefore a correctness requirement, not a style
+ * choice, the moment a stage has more than one child of any kind.
+ *
  * <p>Note: scheduled punctuators forward through this same proxy, so their forwards are stamped with
  * no special-casing. Punctuators must only <em>read</em> the frontier (never advance it), which
  * preserves the engine's persist-frontier-before-forward invariant on the punctuator path.
@@ -49,16 +59,24 @@ final class ParsleyProcessorContext<KOut, VOut> implements ProcessorContext<KOut
     private final ProcessorContext<KOut, VOut> delegate;
     private final Supplier<ParsleyClock> frontier;
     private final Supplier<Optional<RecordMetadata>> deliveredMetadata;
+    // Every business sink this stage declared, or empty to fall back to the plain broadcast forward()
+    // Kafka Streams itself provides. Non-empty only when a second, incompatibly-typed child (the
+    // dead-letter sink) has been added as a sibling of this processor's business sink(s) — see the class
+    // javadoc — so the overwhelming majority of callers (no dead-letter sink configured) keep today's
+    // exact broadcast behaviour with zero change.
+    private final List<String> sinkNodeNames;
     // Counts business forward() calls since the last resetForwardCount(); read by ParsleyProcessor
     // to detect non-emitting delegate invocations and emit a watermark in their place.
     private int forwardCount = 0;
 
     ParsleyProcessorContext(ProcessorContext<KOut, VOut> delegate,
                              Supplier<ParsleyClock> frontier,
-                             Supplier<Optional<RecordMetadata>> deliveredMetadata) {
+                             Supplier<Optional<RecordMetadata>> deliveredMetadata,
+                             List<String> sinkNodeNames) {
         this.delegate = delegate;
         this.frontier = frontier;
         this.deliveredMetadata = deliveredMetadata;
+        this.sinkNodeNames = sinkNodeNames;
     }
 
     /**
@@ -82,7 +100,14 @@ final class ParsleyProcessorContext<KOut, VOut> implements ProcessorContext<KOut
     @Override
     public <K extends KOut, V extends VOut> void forward(Record<K, V> record) {
         forwardCount++;
-        delegate.forward(stamp(record));
+        Record<K, V> stamped = stamp(record);
+        if (sinkNodeNames.isEmpty()) {
+            delegate.forward(stamped);
+            return;
+        }
+        for (String name : sinkNodeNames) {
+            delegate.forward(stamped, name);
+        }
     }
 
     @Override

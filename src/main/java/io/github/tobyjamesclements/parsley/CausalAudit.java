@@ -1,8 +1,9 @@
 package io.github.tobyjamesclements.parsley;
 
 /**
- * Receives Parsley's per-record causal-buffering events: forwarded, held, released, undecodable, and
- * unresolvable-clock (an undecodable dependencies header at ingest).
+ * Receives Parsley's per-record causal-buffering events: forwarded, held, released, undecodable,
+ * unresolvable-clock (an undecodable dependencies header at ingest), and dead-lettered (a record
+ * removed from the causal execution path because its dependencies are proven impossible to satisfy).
  * Register one with
  * {@link CausalProcessors.Builder#withAudit} to route these events wherever your audit/compliance
  * trail needs them (a SIEM, a durable audit store, structured logs) — Parsley itself never decides
@@ -64,33 +65,46 @@ public interface CausalAudit {
 
     /**
      * A held record could no longer be deserialised on the forward path (e.g. an incompatible
-     * Schema Registry change while buffered).
+     * Schema Registry change while buffered). This is the detection signal; if a dead-letter sink is
+     * configured the record is then dead-lettered ({@link #recordDeadLetter} fires too) rather than
+     * failing the task — without one, the task fails fast and the record remains in the buffer
+     * changelog for recovery.
      *
      * @param topic     the record's source topic
      * @param partition the record's source partition
      * @param offset    the record's source offset
      * @param reason    an operator-facing diagnostic (coordinate, dependencies, lengths, schema
      *                  id — never the payload bytes)
-     * @param dropped   always {@code false} — delivery is fail-closed: the record is not dropped, it
-     *                  remains in the buffer changelog for recovery and the task fails fast (a future
-     *                  dead-letter path will divert a genuinely unrecoverable record out of the causal
-     *                  path)
      */
-    void recordDeserializationFailure(String topic, int partition, long offset, String reason, boolean dropped);
+    void recordDeserializationFailure(String topic, int partition, long offset, String reason);
 
     /**
      * An inbound record's {@code parsley-causal-dependencies} header could not be decoded into a clock
-     * (a corrupt or truncated header, or one in an unsupported wire version).
+     * (a corrupt or truncated header, or one in an unsupported wire version). This is the detection
+     * signal; if a dead-letter sink is configured the record is then dead-lettered ({@link
+     * #recordDeadLetter} fires too) rather than failing the task — without one, the task fails fast.
      *
      * @param topic     the record's source topic
      * @param partition the record's source partition
      * @param offset    the record's source offset
      * @param reason    an operator-facing diagnostic (coordinate, encoded header length — never the
      *                  payload bytes)
-     * @param failed    always {@code true} — delivery is fail-closed: the task fails fast rather than
-     *                  forward a record whose dependencies header could not be decoded
      */
-    void recordClockResolutionFailure(String topic, int partition, long offset, String reason, boolean failed);
+    void recordClockResolutionFailure(String topic, int partition, long offset, String reason);
+
+    /**
+     * A record was removed from the causal execution path onto the dead-letter sink, because its
+     * dependencies are proven impossible to satisfy. Fires for every dead-lettered record, including an
+     * orphan-cascade victim that was never itself a {@link #recordDeserializationFailure}/{@link
+     * #recordClockResolutionFailure} occurrence — this is the one disposition signal common to all three
+     * causes.
+     *
+     * @param topic     the record's source topic
+     * @param partition the record's source partition
+     * @param offset    the record's source offset
+     * @param reason    the cause: {@code "POISON"}, {@code "UNRESOLVABLE_CLOCK"}, or {@code "ORPHAN_CASCADE"}
+     */
+    void recordDeadLetter(String topic, int partition, long offset, String reason);
 
     /**
      * The processor for {@code taskId} initialized.
@@ -113,8 +127,9 @@ public interface CausalAudit {
         @Override public void recordForwarded(String topic, int partition, long offset) {}
         @Override public void recordHeld(String topic, int partition, long offset, int bufferDepth, CausalDependencies gap) {}
         @Override public void recordReleased(String topic, int partition, long offset, int bufferDepthAfter) {}
-        @Override public void recordDeserializationFailure(String topic, int partition, long offset, String reason, boolean dropped) {}
-        @Override public void recordClockResolutionFailure(String topic, int partition, long offset, String reason, boolean failed) {}
+        @Override public void recordDeserializationFailure(String topic, int partition, long offset, String reason) {}
+        @Override public void recordClockResolutionFailure(String topic, int partition, long offset, String reason) {}
+        @Override public void recordDeadLetter(String topic, int partition, long offset, String reason) {}
         @Override public void processorInitialized(String taskId, boolean frontierRestored) {}
         @Override public void processorClosing(String taskId) {}
     };

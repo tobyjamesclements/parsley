@@ -36,8 +36,9 @@ class ParsleyAuditTest {
         audit.recordForwarded("t1", 0, 1L);
         audit.recordHeld("t1", 0, 1L, 1, CausalDependencies.empty());
         audit.recordReleased("t1", 0, 1L, 0);
-        audit.recordDeserializationFailure("t1", 0, 1L, "reason", true);
-        audit.recordClockResolutionFailure("t1", 0, 1L, "reason", true);
+        audit.recordDeserializationFailure("t1", 0, 1L, "reason");
+        audit.recordClockResolutionFailure("t1", 0, 1L, "reason");
+        audit.recordDeadLetter("t1", 0, 1L, "reason");
         audit.processorInitialized("task-0", false);
         audit.processorClosing("task-0");
         // No assertion needed beyond reaching this line without an exception.
@@ -56,8 +57,9 @@ class ParsleyAuditTest {
             @Override public void recordForwarded(String topic, int partition, long offset) { calls.add("recordForwarded"); }
             @Override public void recordHeld(String topic, int partition, long offset, int bufferDepth, CausalDependencies gap) { calls.add("recordHeld"); }
             @Override public void recordReleased(String topic, int partition, long offset, int bufferDepthAfter) { calls.add("recordReleased"); }
-            @Override public void recordDeserializationFailure(String topic, int partition, long offset, String reason, boolean dropped) { calls.add("recordDeserializationFailure"); }
-            @Override public void recordClockResolutionFailure(String topic, int partition, long offset, String reason, boolean failed) { calls.add("recordClockResolutionFailure"); }
+            @Override public void recordDeserializationFailure(String topic, int partition, long offset, String reason) { calls.add("recordDeserializationFailure"); }
+            @Override public void recordClockResolutionFailure(String topic, int partition, long offset, String reason) { calls.add("recordClockResolutionFailure"); }
+            @Override public void recordDeadLetter(String topic, int partition, long offset, String reason) { calls.add("recordDeadLetter"); }
             @Override public void processorInitialized(String taskId, boolean frontierRestored) { calls.add("processorInitialized"); }
             @Override public void processorClosing(String taskId) { calls.add("processorClosing"); }
         });
@@ -65,13 +67,14 @@ class ParsleyAuditTest {
         audit.recordForwarded("t1", 0, 1L);
         audit.recordHeld("t1", 0, 1L, 1, CausalDependencies.empty());
         audit.recordReleased("t1", 0, 1L, 0);
-        audit.recordDeserializationFailure("t1", 0, 1L, "reason", true);
-        audit.recordClockResolutionFailure("t1", 0, 1L, "reason", true);
+        audit.recordDeserializationFailure("t1", 0, 1L, "reason");
+        audit.recordClockResolutionFailure("t1", 0, 1L, "reason");
+        audit.recordDeadLetter("t1", 0, 1L, "reason");
         audit.processorInitialized("task-0", false);
         audit.processorClosing("task-0");
 
         assertEquals(List.of("recordForwarded", "recordHeld", "recordReleased",
-                "recordDeserializationFailure", "recordClockResolutionFailure",
+                "recordDeserializationFailure", "recordClockResolutionFailure", "recordDeadLetter",
                 "processorInitialized", "processorClosing"), calls,
                 "every call must reach the delegate exactly once, unmodified");
     }
@@ -80,8 +83,9 @@ class ParsleyAuditTest {
         @Override public void recordForwarded(String topic, int partition, long offset) { throw new RuntimeException("boom"); }
         @Override public void recordHeld(String topic, int partition, long offset, int bufferDepth, CausalDependencies gap) { throw new RuntimeException("boom"); }
         @Override public void recordReleased(String topic, int partition, long offset, int bufferDepthAfter) { throw new RuntimeException("boom"); }
-        @Override public void recordDeserializationFailure(String topic, int partition, long offset, String reason, boolean dropped) { throw new RuntimeException("boom"); }
-        @Override public void recordClockResolutionFailure(String topic, int partition, long offset, String reason, boolean failed) { throw new RuntimeException("boom"); }
+        @Override public void recordDeserializationFailure(String topic, int partition, long offset, String reason) { throw new RuntimeException("boom"); }
+        @Override public void recordClockResolutionFailure(String topic, int partition, long offset, String reason) { throw new RuntimeException("boom"); }
+        @Override public void recordDeadLetter(String topic, int partition, long offset, String reason) { throw new RuntimeException("boom"); }
         @Override public void processorInitialized(String taskId, boolean frontierRestored) { throw new RuntimeException("boom"); }
         @Override public void processorClosing(String taskId) { throw new RuntimeException("boom"); }
     }

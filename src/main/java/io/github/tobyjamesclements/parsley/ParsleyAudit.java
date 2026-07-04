@@ -41,15 +41,20 @@ final class ParsleyAudit implements CausalAudit {
     }
 
     @Override
-    public void recordDeserializationFailure(String topic, int partition, long offset, String reason, boolean dropped) {
+    public void recordDeserializationFailure(String topic, int partition, long offset, String reason) {
         safely("recordDeserializationFailure",
-                () -> delegate.recordDeserializationFailure(topic, partition, offset, reason, dropped));
+                () -> delegate.recordDeserializationFailure(topic, partition, offset, reason));
     }
 
     @Override
-    public void recordClockResolutionFailure(String topic, int partition, long offset, String reason, boolean failed) {
+    public void recordClockResolutionFailure(String topic, int partition, long offset, String reason) {
         safely("recordClockResolutionFailure",
-                () -> delegate.recordClockResolutionFailure(topic, partition, offset, reason, failed));
+                () -> delegate.recordClockResolutionFailure(topic, partition, offset, reason));
+    }
+
+    @Override
+    public void recordDeadLetter(String topic, int partition, long offset, String reason) {
+        safely("recordDeadLetter", () -> delegate.recordDeadLetter(topic, partition, offset, reason));
     }
 
     @Override

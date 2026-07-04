@@ -70,6 +70,7 @@ public class StateRestorationBenchmark {
     private KeyValueStore<Long, byte[]> bufferKV;
     private KeyValueStore<byte[], byte[]> waitKV;
     private KeyValueStore<byte[], byte[]> forwardedKV;
+    private KeyValueStore<byte[], byte[]> orphanKV;
     private ParsleySerializer<String, String> serializer;
 
     @Setup(Level.Trial)
@@ -96,6 +97,7 @@ public class StateRestorationBenchmark {
         bufferKV    = driver.getKeyValueStore("parsley-buffer");
         waitKV      = driver.getKeyValueStore("parsley-candidate-index");
         forwardedKV = driver.getKeyValueStore("parsley-forwarded-index");
+        orphanKV    = driver.getKeyValueStore("parsley-orphan-index");
         serializer = new ParsleySerializer<>(
                 new ParsleyResolver<>(t -> Serdes.String(), t -> Serdes.String()));
 
@@ -111,7 +113,7 @@ public class StateRestorationBenchmark {
         ParsleyEngine<String, String> engine = new ParsleyEngine<>(
                 ParsleyClock.empty(),
                 new RocksBufferStore<>(bufferKV, serializer), new RocksCandidateIndex(waitKV),
-                new RocksForwardedIndex(forwardedKV), ParsleyMetrics.NOOP);
+                new RocksForwardedIndex(forwardedKV), new RocksOrphanIndex(orphanKV), ParsleyMetrics.NOOP);
         for (int i = 0; i < bufferSize; i++) {
             ParsleyClock deps = ParsleyClock.empty().observe(Uuid.randomUuid(), 0, 0L);
             engine.onRecord(record("bench-" + i, 0, (long) i, deps));
@@ -146,8 +148,9 @@ public class StateRestorationBenchmark {
         RocksBufferStore<String, String> buf = new RocksBufferStore<>(bufferKV, serializer);
         RocksCandidateIndex idx = new RocksCandidateIndex(waitKV);
         RocksForwardedIndex fwd = new RocksForwardedIndex(forwardedKV);
+        RocksOrphanIndex orphan = new RocksOrphanIndex(orphanKV);
         return new ParsleyEngine<>(ParsleyClock.empty(),
-                buf, idx, fwd, ParsleyMetrics.NOOP);
+                buf, idx, fwd, orphan, ParsleyMetrics.NOOP);
     }
 
     private static ParsleyMessage<String, String> record(String srcTopic, int partition, long offset,

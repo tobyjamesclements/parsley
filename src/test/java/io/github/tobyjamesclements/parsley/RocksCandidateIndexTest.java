@@ -92,6 +92,28 @@ class RocksCandidateIndexTest {
         assertEquals(1L, candidates.get(0).recordId(), "the scan must return only the matching coordinate's candidate");
     }
 
+    /**
+     * {@code findCandidatesRequiringAtLeast} is the mirror-image query to {@code findCandidates}: it
+     * returns entries whose required offset is at or above a floor, used by the orphan cascade to find
+     * everything that can never be satisfied once a coordinate is proven never to advance past that
+     * floor again.
+     *
+     * Asserts a candidate below the floor is excluded and one at or above it is found ascending.
+     */
+    @Test
+    void findCandidatesRequiringAtLeastScansTheRealRangeAboveTheFloor() {
+        RocksCandidateIndex index = new RocksCandidateIndex(newRocksStore());
+        index.index(1L, ParsleyClock.empty().observe(TOPIC_ID, 0, 4), ParsleyClock.empty());
+        index.index(2L, ParsleyClock.empty().observe(TOPIC_ID, 0, 5), ParsleyClock.empty());
+        index.index(3L, ParsleyClock.empty().observe(TOPIC_ID, 0, 9), ParsleyClock.empty());
+
+        List<ParsleyCandidateIndex.Candidate> requiringAtLeast5 =
+                index.findCandidatesRequiringAtLeast(TOPIC_ID, 0, 5);
+
+        assertEquals(List.of(5L, 9L), requiringAtLeast5.stream().map(ParsleyCandidateIndex.Candidate::requiredOffset).toList(),
+                "candidates below the floor must be excluded; candidates at or above it returned ascending");
+    }
+
     private static org.apache.kafka.streams.state.KeyValueStore<byte[], byte[]> newRocksStore() {
         return new TestKeyValueStore<byte[], byte[]>(Arrays::compareUnsigned);
     }

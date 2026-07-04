@@ -98,12 +98,14 @@ public class BufferReleaseBenchmark {
     static ParsleyEngine<String, String> freshEngine(KeyValueStore<Long, byte[]> bufferKV,
                                                        KeyValueStore<byte[], byte[]> waitKV,
                                                        KeyValueStore<byte[], byte[]> forwardedKV,
+                                                       KeyValueStore<byte[], byte[]> orphanKV,
                                                        ParsleySerializer<String, String> serializer) {
         return new ParsleyEngine<>(
                 ParsleyClock.empty(),
                 new RocksBufferStore<>(bufferKV, serializer),
                 new RocksCandidateIndex(waitKV),
                 new RocksForwardedIndex(forwardedKV),
+                new RocksOrphanIndex(orphanKV),
                 ParsleyMetrics.NOOP);
     }
 
@@ -158,6 +160,7 @@ public class BufferReleaseBenchmark {
         KeyValueStore<Long, byte[]> bufferKV;
         KeyValueStore<byte[], byte[]> waitKV;
         KeyValueStore<byte[], byte[]> forwardedKV;
+        KeyValueStore<byte[], byte[]> orphanKV;
         ParsleySerializer<String, String> serializer;
         ParsleyEngine<String, String> engine;
         ParsleyMessage<String, String> trigger;
@@ -168,6 +171,7 @@ public class BufferReleaseBenchmark {
             bufferKV    = driver.getKeyValueStore("parsley-buffer");
             waitKV      = driver.getKeyValueStore("parsley-candidate-index");
             forwardedKV = driver.getKeyValueStore("parsley-forwarded-index");
+            orphanKV    = driver.getKeyValueStore("parsley-orphan-index");
             serializer  = buildSerializer();
         }
 
@@ -179,7 +183,8 @@ public class BufferReleaseBenchmark {
             clearBufferStore(bufferKV);
             clearWaitStore(waitKV);
             clearWaitStore(forwardedKV);
-            engine = freshEngine(bufferKV, waitKV, forwardedKV, serializer);
+            clearWaitStore(orphanKV);
+            engine = freshEngine(bufferKV, waitKV, forwardedKV, orphanKV, serializer);
 
             // Record 0 waits on the trigger coordinate; only it is released when the trigger fires.
             ParsleyClock triggerDeps = ParsleyClock.empty().observe(topicId("trigger"), 0, 0L);
@@ -208,6 +213,7 @@ public class BufferReleaseBenchmark {
         KeyValueStore<Long, byte[]> bufferKV;
         KeyValueStore<byte[], byte[]> waitKV;
         KeyValueStore<byte[], byte[]> forwardedKV;
+        KeyValueStore<byte[], byte[]> orphanKV;
         ParsleySerializer<String, String> serializer;
         ParsleyEngine<String, String> engine;
         ParsleyMessage<String, String> trigger;
@@ -218,6 +224,7 @@ public class BufferReleaseBenchmark {
             bufferKV    = driver.getKeyValueStore("parsley-buffer");
             waitKV      = driver.getKeyValueStore("parsley-candidate-index");
             forwardedKV = driver.getKeyValueStore("parsley-forwarded-index");
+            orphanKV    = driver.getKeyValueStore("parsley-orphan-index");
             serializer  = buildSerializer();
         }
 
@@ -229,7 +236,8 @@ public class BufferReleaseBenchmark {
             clearBufferStore(bufferKV);
             clearWaitStore(waitKV);
             clearWaitStore(forwardedKV);
-            engine = freshEngine(bufferKV, waitKV, forwardedKV, serializer);
+            clearWaitStore(orphanKV);
+            engine = freshEngine(bufferKV, waitKV, forwardedKV, orphanKV, serializer);
 
             ParsleyClock triggerDeps = ParsleyClock.empty().observe(topicId("trigger"), 0, 0L);
 
@@ -259,6 +267,7 @@ public class BufferReleaseBenchmark {
         KeyValueStore<Long, byte[]> bufferKV;
         KeyValueStore<byte[], byte[]> waitKV;
         KeyValueStore<byte[], byte[]> forwardedKV;
+        KeyValueStore<byte[], byte[]> orphanKV;
         ParsleySerializer<String, String> serializer;
         ParsleyEngine<String, String> engine;
         ParsleyMessage<String, String> trigger;
@@ -269,6 +278,7 @@ public class BufferReleaseBenchmark {
             bufferKV    = driver.getKeyValueStore("parsley-buffer");
             waitKV      = driver.getKeyValueStore("parsley-candidate-index");
             forwardedKV = driver.getKeyValueStore("parsley-forwarded-index");
+            orphanKV    = driver.getKeyValueStore("parsley-orphan-index");
             serializer  = buildSerializer();
         }
 
@@ -280,7 +290,8 @@ public class BufferReleaseBenchmark {
             clearBufferStore(bufferKV);
             clearWaitStore(waitKV);
             clearWaitStore(forwardedKV);
-            engine = freshEngine(bufferKV, waitKV, forwardedKV, serializer);
+            clearWaitStore(orphanKV);
+            engine = freshEngine(bufferKV, waitKV, forwardedKV, orphanKV, serializer);
 
             // Record 0 depends on the trigger; record i depends on record (i-1)'s source coordinate.
             // This forms an r-hop chain: advancing the trigger releases record 0, which in turn
@@ -313,7 +324,7 @@ public class BufferReleaseBenchmark {
      */
     @Benchmark
     public List<ParsleyMessage<String, String>> bufferSize(SizeSetup s) {
-        return s.engine.onRecord(s.trigger);
+        return s.engine.onRecord(s.trigger).delivered();
     }
 
     /**
@@ -322,7 +333,7 @@ public class BufferReleaseBenchmark {
      */
     @Benchmark
     public List<ParsleyMessage<String, String>> positionalOccupancy(OccupancySetup s) {
-        return s.engine.onRecord(s.trigger);
+        return s.engine.onRecord(s.trigger).delivered();
     }
 
     /**
@@ -331,6 +342,6 @@ public class BufferReleaseBenchmark {
      */
     @Benchmark
     public List<ParsleyMessage<String, String>> cascadeDepth(CascadeSetup s) {
-        return s.engine.onRecord(s.trigger);
+        return s.engine.onRecord(s.trigger).delivered();
     }
 }

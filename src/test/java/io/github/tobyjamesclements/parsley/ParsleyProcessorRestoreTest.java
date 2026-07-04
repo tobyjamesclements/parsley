@@ -60,6 +60,8 @@ class ParsleyProcessorRestoreTest {
                 new TestKeyValueStore<byte[], byte[]>(Arrays::compareUnsigned, "candidate-index");
         TestKeyValueStore<byte[], byte[]> forwardedIndexStore =
                 new TestKeyValueStore<byte[], byte[]>(Arrays::compareUnsigned, "forwarded-index");
+        TestKeyValueStore<byte[], byte[]> orphanIndexStore =
+                new TestKeyValueStore<byte[], byte[]>(Arrays::compareUnsigned, "orphan-index");
 
         RecordingCausalAudit audit = new RecordingCausalAudit();
         List<String> processed = new ArrayList<>();
@@ -71,7 +73,8 @@ class ParsleyProcessorRestoreTest {
                 new ParsleySerializer<>(new ParsleyResolver<>(t -> Serdes.String(), t -> Serdes.String()));
         ParsleyProcessor<String, String, String, String> processor = new ParsleyProcessor<>(
                 delegate, serializer,
-                "frontier", "buffer", "candidate-index", "forwarded-index", Set.of("t1"), Set.of(),
+                "frontier", "buffer", "candidate-index", "forwarded-index", "orphan-index",
+                Set.of("t1"), Set.of(), List.of(), null,
                 configs -> ADMIN, ParsleyConfig.from(new Properties()), audit, null);
 
         MockProcessorContext<String, String> context = new MockProcessorContext<>();
@@ -79,6 +82,7 @@ class ParsleyProcessorRestoreTest {
         context.addStateStore(bufferStore);
         context.addStateStore(candidateIndexStore);
         context.addStateStore(forwardedIndexStore);
+        context.addStateStore(orphanIndexStore);
 
         processor.init(context);
 

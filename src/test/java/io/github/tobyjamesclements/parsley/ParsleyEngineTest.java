@@ -182,11 +182,12 @@ class ParsleyEngineTest {
             @Override public void recordReleased(int c)        { releasedCounts.add(c); }
             @Override public void recordDeserializationError()  {}
             @Override public void recordClockResolutionError()  {}
+            @Override public void recordDeadLetter()            {}
             @Override public void reportState(int depth, OptionalLong oldest) { reportedDepths.add(depth); }
         };
         ParsleyEngine<String, String> engine = new ParsleyEngine<>(
                 ParsleyClock.empty(), buffer,
-                new MockCandidateIndex(), forwardedIndex, capturing);
+                new MockCandidateIndex(), forwardedIndex, new MockOrphanIndex(), capturing);
 
         engine.onRecord(incomingRecord(T2, 0, ParsleyClock.empty().observe(T1_ID, 0, 3)));
         assertEquals(List.of(1), bufferedCounts, "recordBuffered must fire when a record enters the buffer");
@@ -544,7 +545,7 @@ class ParsleyEngineTest {
         MockBufferStore<String, String> sharedBuffer = new MockBufferStore<>();
 
         ParsleyEngine<String, String> first = new ParsleyEngine<>(ParsleyClock.empty(), sharedBuffer, new MockCandidateIndex(),
-                sharedForwardedIndex, ParsleyMetrics.NOOP);
+                sharedForwardedIndex, new MockOrphanIndex(), ParsleyMetrics.NOOP);
 
         // T1@5 is held; T1@6, T1@7, T1@8 each forward immediately, piling up above the gap.
         first.onRecord(incomingRecord(T1, 5, ParsleyClock.empty().observe(T2_ID, 0, 0)));
@@ -560,10 +561,10 @@ class ParsleyEngineTest {
         // contents (standing in for "restored from its own changelog") — no separate "ceiling"
         // value is needed; the forwarded index alone remembers that 6, 7, and 8 already went out.
         ParsleyEngine<String, String> restarted = new ParsleyEngine<>(persistedFrontier, sharedBuffer, new MockCandidateIndex(),
-                sharedForwardedIndex, ParsleyMetrics.NOOP);
+                sharedForwardedIndex, new MockOrphanIndex(), ParsleyMetrics.NOOP);
 
         List<ParsleyMessage<String, String>> released =
-                restarted.onRecord(incomingRecord(T2, 0, ParsleyClock.empty()));
+                restarted.onRecord(incomingRecord(T2, 0, ParsleyClock.empty())).delivered();
 
         assertEquals(8L, restarted.frontier().offsetFor(T1_ID, 0),
                 "the restarted instance must still catch up through 6, 7, and 8 via the surviving forwarded index");
@@ -614,7 +615,7 @@ class ParsleyEngineTest {
     void baselineSeedNeverRefiresWhenTheRestoredFrontierAlreadyHasRealProgress() {
         ParsleyClock restoredFrontier = ParsleyClock.empty().observe(T1_ID, 0, 0);
         ParsleyEngine<String, String> engine = new ParsleyEngine<>(restoredFrontier, buffer, new MockCandidateIndex(),
-                forwardedIndex, ParsleyMetrics.NOOP);
+                forwardedIndex, new MockOrphanIndex(), ParsleyMetrics.NOOP);
 
         // The first record this (restarted) instance ever sees on T1/0 is offset 10 — far above
         // the restored frontier of 0. There is a real, unaccounted-for gap from 1 through 9.
@@ -796,19 +797,19 @@ class ParsleyEngineTest {
 
     private ParsleyEngine<String, String> engineWith() {
         return new ParsleyEngine<>(ParsleyClock.empty(), buffer,
-                new MockCandidateIndex(), forwardedIndex, ParsleyMetrics.NOOP, CausalAudit.NOOP,
-                System::currentTimeMillis);
+                new MockCandidateIndex(), forwardedIndex, new MockOrphanIndex(), ParsleyMetrics.NOOP,
+                CausalAudit.NOOP, System::currentTimeMillis);
     }
 
     private ParsleyEngine<String, String> engineConsuming(ParsleyClock.CoordinatePredicate inScope) {
         return new ParsleyEngine<>(ParsleyClock.empty(), buffer,
-                new MockCandidateIndex(), forwardedIndex, ParsleyMetrics.NOOP, CausalAudit.NOOP,
-                System::currentTimeMillis);
+                new MockCandidateIndex(), forwardedIndex, new MockOrphanIndex(), ParsleyMetrics.NOOP,
+                CausalAudit.NOOP, System::currentTimeMillis);
     }
 
     private ParsleyEngine<String, String> engineWithEpoch(ParsleyEpoch epoch) {
         return new ParsleyEngine<>(
-                new ParsleyFrontier(ParsleyClock.empty(), forwardedIndex, false, epoch),
+                new ParsleyFrontier(ParsleyClock.empty(), forwardedIndex, new MockOrphanIndex(), false, epoch),
                 buffer, new MockCandidateIndex(), ParsleyMetrics.NOOP,
                 CausalAudit.NOOP, System::currentTimeMillis);
     }
@@ -820,7 +821,7 @@ class ParsleyEngineTest {
      */
     private ParsleyEngine<String, String> engineWithEpochTrackingChannels(ParsleyEpoch epoch) {
         return new ParsleyEngine<>(
-                new ParsleyFrontier(ParsleyClock.empty(), forwardedIndex, true, epoch),
+                new ParsleyFrontier(ParsleyClock.empty(), forwardedIndex, new MockOrphanIndex(), true, epoch),
                 buffer, new MockCandidateIndex(), ParsleyMetrics.NOOP,
                 CausalAudit.NOOP, System::currentTimeMillis);
     }
@@ -831,24 +832,25 @@ class ParsleyEngineTest {
     // exercise, without needing to stage watermarks.
     private ParsleyEngine<String, String> engineWithEpochState(ParsleyEpochState epoch) {
         return new ParsleyEngine<>(
-                new ParsleyFrontier(ParsleyClock.empty(), forwardedIndex, false, epoch),
+                new ParsleyFrontier(ParsleyClock.empty(), forwardedIndex, new MockOrphanIndex(), false, epoch),
                 buffer, new MockCandidateIndex(), ParsleyMetrics.NOOP,
                 CausalAudit.NOOP, System::currentTimeMillis);
     }
 
     private ParsleyEngine<String, String> engineWithClock(java.util.function.LongSupplier clock) {
         return new ParsleyEngine<>(ParsleyClock.empty(), buffer,
-                new MockCandidateIndex(), forwardedIndex, ParsleyMetrics.NOOP, CausalAudit.NOOP, clock);
+                new MockCandidateIndex(), forwardedIndex, new MockOrphanIndex(), ParsleyMetrics.NOOP,
+                CausalAudit.NOOP, clock);
     }
 
     private ParsleyEngine<String, String> engineWithAudit(CausalAudit audit) {
         return new ParsleyEngine<>(ParsleyClock.empty(), buffer,
-                new MockCandidateIndex(), forwardedIndex, ParsleyMetrics.NOOP, audit,
+                new MockCandidateIndex(), forwardedIndex, new MockOrphanIndex(), ParsleyMetrics.NOOP, audit,
                 System::currentTimeMillis);
     }
 
     private void processRecord(ParsleyEngine<String, String> engine, ParsleyMessage<String, String> message) {
-        forwarded.addAll(engine.onRecord(message));
+        forwarded.addAll(engine.onRecord(message).delivered());
     }
 
     private static TopicPartition tp(ParsleyMessage<String, String> m) {

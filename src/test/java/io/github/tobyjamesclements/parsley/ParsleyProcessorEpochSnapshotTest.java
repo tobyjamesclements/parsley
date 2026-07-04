@@ -62,6 +62,8 @@ class ParsleyProcessorEpochSnapshotTest {
                 new TestKeyValueStore<byte[], byte[]>(Arrays::compareUnsigned, "candidate-index");
         TestKeyValueStore<byte[], byte[]> forwardedIndexStore =
                 new TestKeyValueStore<byte[], byte[]>(Arrays::compareUnsigned, "forwarded-index");
+        TestKeyValueStore<byte[], byte[]> orphanIndexStore =
+                new TestKeyValueStore<byte[], byte[]>(Arrays::compareUnsigned, "orphan-index");
 
         List<String> processed = new ArrayList<>();
         Processor<String, String, String, String> delegate = new Processor<>() {
@@ -73,7 +75,8 @@ class ParsleyProcessorEpochSnapshotTest {
         RecordingPublisher publisher = new RecordingPublisher();
         ParsleyProcessor<String, String, String, String> processor = new ParsleyProcessor<>(
                 delegate, serializer,
-                "frontier", "buffer", "candidate-index", "forwarded-index", Set.of("t1"), Set.of(),
+                "frontier", "buffer", "candidate-index", "forwarded-index", "orphan-index",
+                Set.of("t1"), Set.of(), List.of(), null,
                 configs -> ADMIN, ParsleyConfig.from(new Properties()), CausalAudit.NOOP, null, publisher);
 
         MockProcessorContext<String, String> context = new MockProcessorContext<>();
@@ -81,6 +84,7 @@ class ParsleyProcessorEpochSnapshotTest {
         context.addStateStore(bufferStore);
         context.addStateStore(candidateIndexStore);
         context.addStateStore(forwardedIndexStore);
+        context.addStateStore(orphanIndexStore);
         processor.init(context);
 
         // Deliver a business record so this node's completeness advances to T1@5.

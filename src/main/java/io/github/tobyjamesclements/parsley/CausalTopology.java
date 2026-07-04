@@ -1,6 +1,7 @@
 package io.github.tobyjamesclements.parsley;
 
 import org.apache.kafka.common.serialization.Serde;
+import org.apache.kafka.common.serialization.Serdes;
 import org.apache.kafka.streams.StreamsConfig;
 import org.apache.kafka.streams.Topology;
 import org.jspecify.annotations.Nullable;
@@ -19,6 +20,12 @@ import java.util.Set;
  * its {@code props}, which is when a stage's default-serde-deferred sources/sinks, and the runtime's
  * quiesce/coordination wiring, become known. Construct one with {@link CausalStreamsBuilder}; hand it to
  * {@code new CausalStreams(topology, props)}.
+ *
+ * <p><strong>Every stage gets its own dead-letter sink node, all writing to one shared topic.</strong>
+ * A single sink parented on every stage's processor node would union every stage into one Kafka Streams
+ * node group (sub-topology/task assignment is computed per node group), coupling stages that are
+ * otherwise independent sub-topologies chained only through real topics — so each stage's dead-letter
+ * sink is its own node, parented only on that stage, and only the destination topic name is shared.
  */
 public final class CausalTopology {
 
@@ -45,20 +52,26 @@ public final class CausalTopology {
         DefaultSerdes defaults = new DefaultSerdes(props);
         String applicationId = props.getProperty(StreamsConfig.APPLICATION_ID_CONFIG);
         String stagePrefix = (applicationId == null || applicationId.isEmpty()) ? "stage-" : applicationId + "-stage-";
+        // One dead-letter topic shared by every stage — each stage gets its own sink NODE (never one
+        // node with many parents; see the class javadoc) writing to this same topic name, so the DLQ is
+        // one operator-facing destination without coupling stages' Kafka Streams node groups together.
+        String deadLetterTopic = config.deadLetterTopic() != null ? config.deadLetterTopic()
+                : (applicationId == null || applicationId.isEmpty() ? "deadletter" : applicationId + "-deadletter");
 
         Topology topology = new Topology();
         int index = 0;
         for (StageSpec<?, ?, ?, ?> stage : stages) {
             index++;
             String name = stage.explicitName != null ? stage.explicitName : stagePrefix + index;
-            assembleStage(topology, stage, name, config, defaults, quiesce, coordination);
+            assembleStage(topology, stage, name, config, defaults, quiesce, coordination, deadLetterTopic);
         }
         return topology;
     }
 
     private <KIn, VIn, KOut, VOut> void assembleStage(
             Topology topology, StageSpec<KIn, VIn, KOut, VOut> stage, String name, ParsleyConfig config,
-            DefaultSerdes defaults, CausalQuiesce quiesce, @Nullable CausalCoordination coordination) {
+            DefaultSerdes defaults, CausalQuiesce quiesce, @Nullable CausalCoordination coordination,
+            String deadLetterTopic) {
         Map<String, CausalBuffer<KIn, VIn>> sources = new LinkedHashMap<>();
         stage.sources.forEach((topic, source) -> sources.put(topic, CausalBuffer.of(topic,
                 source.keySerde() != null ? source.keySerde() : defaults.key(),
@@ -66,6 +79,8 @@ public final class CausalTopology {
 
         Set<String> sinkTopics = new LinkedHashSet<>();
         stage.sinks.forEach(sink -> sinkTopics.add(sink.topic()));
+        List<String> sinkNodeNames = stage.sinks.stream().map(StageSpec.SinkSpec::name).toList();
+        String deadLetterSinkName = name + "-deadletter-sink";
 
         CausalProcessors.Builder<KIn, VIn, KOut, VOut> causalBuilder = CausalProcessors.builder(stage.userSupplier)
                 .addBufferStore(name)
@@ -73,6 +88,8 @@ public final class CausalTopology {
                 .config(config)
                 .withAudit(stage.audit)
                 .sinkTopics(sinkTopics)
+                .sinkNodeNames(sinkNodeNames)
+                .deadLetterSink(deadLetterSinkName)
                 .withQuiesce(quiesce);
         if (coordination != null) {
             causalBuilder.withCoordination(coordination);
@@ -101,6 +118,11 @@ public final class CausalTopology {
             topology.addSink(sink.name(), sink.topic(),
                     keySerde.serializer(), valueSerde.serializer(), stage.partitioner, processorName);
         }
+        // This stage's own dead-letter sink — parented only on this stage's processor node (never
+        // shared across stages as a multi-parent sink; see the class javadoc), raw bytes, no
+        // partitioner (a diagnostic topic, not part of the causal delivery path).
+        topology.addSink(deadLetterSinkName, deadLetterTopic,
+                Serdes.ByteArray().serializer(), Serdes.ByteArray().serializer(), processorName);
     }
 
     /** Classpath {@code parsley.properties} as a base layer, overlaid with the runtime's {@code props}. */

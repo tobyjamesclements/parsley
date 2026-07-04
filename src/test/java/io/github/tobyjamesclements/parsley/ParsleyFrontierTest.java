@@ -29,7 +29,7 @@ class ParsleyFrontierTest {
         TestKeyValueStore<String, byte[]> store =
                 new TestKeyValueStore<String, byte[]>(Comparator.naturalOrder(), "frontier");
 
-        ParsleyFrontier original = new ParsleyFrontier(store, new MockForwardedIndex());
+        ParsleyFrontier original = new ParsleyFrontier(store, new MockForwardedIndex(), new MockOrphanIndex());
         // Advance the contiguous frontier on T1 and record channel clocks for two inputs.
         original.deliver(T1_ID, 0, 0);
         original.deliver(T1_ID, 0, 1);
@@ -40,7 +40,7 @@ class ParsleyFrontierTest {
         ParsleyClock completenessBefore = original.completeness();
 
         // Reload: a fresh frontier over the same store restores from the "f" blob alone.
-        ParsleyFrontier restored = new ParsleyFrontier(store, new MockForwardedIndex());
+        ParsleyFrontier restored = new ParsleyFrontier(store, new MockForwardedIndex(), new MockOrphanIndex());
 
         assertEquals(frontierBefore, restored.snapshot(),
                 "the contiguous frontier clock must round-trip through the \"f\" blob");
@@ -62,7 +62,7 @@ class ParsleyFrontierTest {
             topicId.equals(T1_ID) ? 100L : ParsleyEpoch.NO_BOUND;
 
     private static ParsleyFrontier flooredFrontier(ParsleyEpoch epoch) {
-        return new ParsleyFrontier(ParsleyClock.empty(), new MockForwardedIndex(), true, epoch);
+        return new ParsleyFrontier(ParsleyClock.empty(), new MockForwardedIndex(), new MockOrphanIndex(), true, epoch);
     }
 
     /**
@@ -169,7 +169,7 @@ class ParsleyFrontierTest {
         TestKeyValueStore<String, byte[]> store =
                 new TestKeyValueStore<String, byte[]>(Comparator.naturalOrder(), "frontier");
         ParsleyEpochState epoch = new ParsleyEpochState(ParsleyClock.empty().observe(T1_ID, 0, 5), 1);
-        ParsleyFrontier original = new ParsleyFrontier(store, new MockForwardedIndex(), epoch);
+        ParsleyFrontier original = new ParsleyFrontier(store, new MockForwardedIndex(), new MockOrphanIndex(), epoch);
 
         // Adopt an epoch-2 boundary (marker on one channel); the window stays open (nothing dominates it).
         original.recordEpochMarker(2, ParsleyClock.empty().observe(T1_ID, 0, 20), T1_ID, 0);
@@ -177,7 +177,7 @@ class ParsleyFrontierTest {
 
         // Reload into a fresh epoch state over the same store.
         ParsleyEpochState reloadedEpoch = new ParsleyEpochState();
-        new ParsleyFrontier(store, new MockForwardedIndex(), reloadedEpoch);
+        new ParsleyFrontier(store, new MockForwardedIndex(), new MockOrphanIndex(), reloadedEpoch);
 
         assertEquals(1L, reloadedEpoch.settledEpochId(), "the settled epoch survives the blob round-trip");
         assertEquals(5L, reloadedEpoch.startsAt(T1_ID, 0), "the effective floor stays F_{e-1}=5 mid-window after restart");

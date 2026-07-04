@@ -54,6 +54,32 @@ record ParsleyHeader(String key, byte @Nullable [] value) {
      */
     static final String EPOCH_SNAPSHOT = "_parsley_epoch_snapshot";
 
+    /**
+     * Header carrying why a record was dead-lettered ({@code "POISON"}, {@code "UNRESOLVABLE_CLOCK"}, or
+     * {@code "ORPHAN_CASCADE"} — {@link ParsleyEngine.DeadLetter.Reason#name()}). A permanent, documented,
+     * user-visible wire header on the dead-letter topic — not stripped, unlike the {@code _parsley_}
+     * routing markers above.
+     */
+    static final String DEADLETTER_REASON = "parsley-deadletter-reason";
+
+    /** Header carrying a dead-lettered record's original source topic name, UTF-8 encoded. */
+    static final String DEADLETTER_SOURCE_TOPIC = "parsley-deadletter-source-topic";
+
+    /** Header carrying a dead-lettered record's original source topic UUID ({@link #uuidToBytes}). */
+    static final String DEADLETTER_SOURCE_TOPIC_ID = "parsley-deadletter-source-topic-id";
+
+    /** Header carrying a dead-lettered record's original source partition, 4-byte big-endian. */
+    static final String DEADLETTER_SOURCE_PARTITION = "parsley-deadletter-source-partition";
+
+    /** Header carrying a dead-lettered record's original source offset, 8-byte big-endian. */
+    static final String DEADLETTER_SOURCE_OFFSET = "parsley-deadletter-source-offset";
+
+    /**
+     * Header carrying the raw, undecodable {@code parsley-causal-dependencies} bytes verbatim, for
+     * operator forensics — present only on an {@code UNRESOLVABLE_CLOCK} dead-letter.
+     */
+    static final String DEADLETTER_ORIGINAL_DEPENDENCIES = "parsley-deadletter-original-dependencies";
+
     // Explicit canonical constructor: NullAway does not propagate the type-use @Nullable from an
     // array record component to the implicit constructor parameter, so annotate it here directly.
     ParsleyHeader(String key, byte @Nullable [] value) {

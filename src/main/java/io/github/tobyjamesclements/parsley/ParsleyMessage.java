@@ -105,7 +105,7 @@ record ParsleyMessage<K, V>(String topic, Uuid topicId, int partition, long offs
             return ParsleyClock.fromBytes(encoded);
         } catch (Exception e) {
             throw new ParsleyClockResolutionException(source.topic(), topicId, source.partition(), offset,
-                    "encoded causal-dependencies header length " + encoded.length, e);
+                    encoded, "encoded causal-dependencies header length " + encoded.length, e);
         }
     }
 }

@@ -41,6 +41,12 @@ interface ParsleyMetrics {
     void recordClockResolutionError();
 
     /**
+     * A record was removed from the causal execution path onto the dead-letter sink (poison,
+     * unresolvable-clock, or an orphan-cascade victim of either). This counts the occurrence.
+     */
+    void recordDeadLetter();
+
+    /**
      * Reports the buffer's current observable state. Called after every depth-changing event and,
      * independently, on a periodic refresh tick — so the oldest-record gauge stays current even on a
      * buffer that is idle (no admits or releases) between ticks.
@@ -56,6 +62,7 @@ interface ParsleyMetrics {
         @Override public void recordReleased(int c) {}
         @Override public void recordDeserializationError() {}
         @Override public void recordClockResolutionError() {}
+        @Override public void recordDeadLetter() {}
         @Override public void reportState(int depth, OptionalLong oldestBufferedAtMs) {}
     };
 
@@ -84,6 +91,7 @@ interface ParsleyMetrics {
         Sensor released  = sm.addRateTotalSensor("parsley", taskId, "records-released",  Sensor.RecordingLevel.INFO);
         Sensor deserErr  = sm.addRateTotalSensor("parsley", taskId, "deserialization-errors", Sensor.RecordingLevel.INFO);
         Sensor clockResErr = sm.addRateTotalSensor("parsley", taskId, "clock-resolution-errors", Sensor.RecordingLevel.INFO);
+        Sensor deadLettered = sm.addRateTotalSensor("parsley", taskId, "dead-lettered", Sensor.RecordingLevel.INFO);
 
         Sensor depth = gauge(sm, parsleyId, "buffer-depth",
                 "Current number of records held in the causal buffer");
@@ -91,13 +99,14 @@ interface ParsleyMetrics {
                 "Buffer-admission time (epoch millis) of the oldest held record, or 0 if the buffer is empty");
 
         List<Sensor> sensors = new ArrayList<>(List.of(buffered, released, deserErr,
-                clockResErr, depth, oldestBufferedAt));
+                clockResErr, deadLettered, depth, oldestBufferedAt));
 
         ParsleyMetrics metrics = new ParsleyMetrics() {
             @Override public void recordBuffered()             { buffered.record(); }
             @Override public void recordReleased(int c)        { released.record(c); }
             @Override public void recordDeserializationError() { deserErr.record(); }
             @Override public void recordClockResolutionError() { clockResErr.record(); }
+            @Override public void recordDeadLetter()           { deadLettered.record(); }
             @Override public void reportState(int d, OptionalLong oldest) {
                 depth.record(d);
                 oldestBufferedAt.record(oldest.isPresent() ? oldest.getAsLong() : 0L);

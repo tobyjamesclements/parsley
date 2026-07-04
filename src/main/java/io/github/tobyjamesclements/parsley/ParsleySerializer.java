@@ -41,6 +41,22 @@ final class ParsleySerializer<K, V> {
     }
 
     /**
+     * Serialises {@code key} with the key serde resolved for {@code topic} — used to re-serialise a
+     * dead-lettered record's already-decoded key for the dead-letter topic (which carries raw bytes,
+     * never typed objects).
+     */
+    byte @Nullable [] keyBytes(String topic, @Nullable K key) {
+        return resolver.keySerde(topic).serializer().serialize(topic, key);
+    }
+
+    /**
+     * As {@link #keyBytes(String, Object)}, for the value.
+     */
+    byte @Nullable [] valueBytes(String topic, @Nullable V value) {
+        return resolver.valueSerde(topic).serializer().serialize(topic, value);
+    }
+
+    /**
      * Serialises a held message to bytes.
      */
     byte[] serialize(ParsleyMessage<K, V> message) {
@@ -115,7 +131,8 @@ final class ParsleySerializer<K, V> {
                 // (schemaId reads either array's Confluent magic byte; both may be null tombstones)
                 String details = details(topic, topicId, partition, offset, timestamp,
                         dependencies, headers, keyBytes, valueBytes, schemaId);
-                throw new ParsleyBufferDeserializationException(topic, topicId, partition, offset, schemaId, details, e);
+                throw new ParsleyBufferDeserializationException(topic, topicId, partition, offset, timestamp,
+                        headers, keyBytes, valueBytes, schemaId, details, e);
             }
 
             return new ParsleyMessage<>(topic, topicId, partition, offset, timestamp,

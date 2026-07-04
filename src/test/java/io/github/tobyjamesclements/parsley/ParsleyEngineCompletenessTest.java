@@ -149,7 +149,7 @@ class ParsleyEngineCompletenessTest {
     void completenessRestoredIdenticallyAfterSimulatedRestart() {
         TestKeyValueStore<String, byte[]> sharedStore =
                 new TestKeyValueStore<String, byte[]>(java.util.Comparator.naturalOrder());
-        ParsleyFrontier firstFrontier = new ParsleyFrontier(sharedStore, new MockForwardedIndex());
+        ParsleyFrontier firstFrontier = new ParsleyFrontier(sharedStore, new MockForwardedIndex(), new MockOrphanIndex());
         ParsleyEngine<String, String> first = engineOver(firstFrontier, SCOPE);
 
         // Deliver one record from each branch.
@@ -159,8 +159,9 @@ class ParsleyEngineCompletenessTest {
         ParsleyClock completenessBeforeRestart = first.completeness();
 
         // Simulate restart: a fresh ParsleyFrontier over the same store reloads the "f" blob (frontier
-        // clock + channel clocks). A fresh forwarded index is fine — it only affects future deliveries.
-        ParsleyFrontier restartedFrontier = new ParsleyFrontier(sharedStore, new MockForwardedIndex());
+        // clock + channel clocks). A fresh forwarded/orphan index is fine — it only affects future
+        // deliveries.
+        ParsleyFrontier restartedFrontier = new ParsleyFrontier(sharedStore, new MockForwardedIndex(), new MockOrphanIndex());
 
         assertEquals(completenessBeforeRestart, restartedFrontier.completeness(),
                 "completeness must be identical after restart when the frontier store is restored");
@@ -200,11 +201,11 @@ class ParsleyEngineCompletenessTest {
         ParsleyEngine<String, String> engine = engineOver(frontier, SCOPE);
 
         // T1@0 depends on shared ancestor T3@5; the T2 channel has not confirmed T3 → held.
-        List<ParsleyMessage<String, String>> out1 = engine.onRecord(record(T1, 0, T1_ID, clock(T3_ID, 5)));
+        List<ParsleyMessage<String, String>> out1 = engine.onRecord(record(T1, 0, T1_ID, clock(T3_ID, 5))).delivered();
         assertEquals(List.of(), out1, "T1@0 must be held: the T2 channel has not confirmed T3@5");
 
         // T2@0 advertises T3@5 on the T2 channel → completeness[T3] reaches 5 → both deliver.
-        List<ParsleyMessage<String, String>> out2 = engine.onRecord(record(T2, 0, T2_ID, clock(T3_ID, 5)));
+        List<ParsleyMessage<String, String>> out2 = engine.onRecord(record(T2, 0, T2_ID, clock(T3_ID, 5))).delivered();
         assertEquals(2, out2.size(),
                 "T2@0 delivers and releases the held T1@0 once both channels confirm T3@5");
     }
@@ -226,10 +227,10 @@ class ParsleyEngineCompletenessTest {
         frontier.channelUpdate(T1_ID, 0, ParsleyClock.empty());
         ParsleyEngine<String, String> engine = engineOver(frontier, t1Only);
 
-        assertEquals(1, engine.onRecord(record(T1, 0, T1_ID, ParsleyClock.empty())).size(),
+        assertEquals(1, engine.onRecord(record(T1, 0, T1_ID, ParsleyClock.empty())).delivered().size(),
                 "T1@0 with no dependencies delivers immediately");
         // T1@1 depends on T1@0 — an earlier offset of its own topic (intra-topic).
-        assertEquals(1, engine.onRecord(record(T1, 1, T1_ID, clock(T1_ID, 0))).size(),
+        assertEquals(1, engine.onRecord(record(T1, 1, T1_ID, clock(T1_ID, 0))).delivered().size(),
                 "an intra-topic dependency (on the record's own topic) is satisfied immediately");
     }
 
@@ -247,16 +248,16 @@ class ParsleyEngineCompletenessTest {
         frontier.channelUpdate(T2_ID, 0, ParsleyClock.empty());
         ParsleyEngine<String, String> engine = engineOver(frontier, SCOPE);
 
-        assertEquals(List.of(), engine.onRecord(record(T1, 0, T1_ID, clock(T2_ID, 0))),
+        assertEquals(List.of(), engine.onRecord(record(T1, 0, T1_ID, clock(T2_ID, 0))).delivered(),
                 "an inter-topic dependency is held until the sibling channel confirms it");
-        assertEquals(2, engine.onRecord(record(T2, 0, T2_ID, ParsleyClock.empty())).size(),
+        assertEquals(2, engine.onRecord(record(T2, 0, T2_ID, ParsleyClock.empty())).delivered().size(),
                 "T2@0 delivers and releases the held T1@0 once the T2 channel confirms T2@0");
     }
 
     // --- helpers --------------------------------------------------------------------------------
 
     private static ParsleyFrontier newFrontier() {
-        return new ParsleyFrontier(ParsleyClock.empty(), new MockForwardedIndex());
+        return new ParsleyFrontier(ParsleyClock.empty(), new MockForwardedIndex(), new MockOrphanIndex());
     }
 
     private ParsleyEngine<String, String> engineOver(ParsleyFrontier frontier,

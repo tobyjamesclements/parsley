@@ -6,7 +6,58 @@ All notable changes to this project are documented in this file. The format is b
 
 ## [Unreleased]
 
+### Fixed
+- **`CausalStreams#close()` could hang forever if a task's buffer emptied before `requestQuiesce()` was
+  ever called.** `ParsleyProcessor#updateQuiesceState` only re-evaluates `isQuiesceRequested() && empty`
+  on a buffer-depth-changing event; a task already idle-and-drained at that point recorded
+  `drained=false` (quiesce hadn't been requested yet) and never got another chance to report otherwise,
+  since nothing further ever changed its buffer depth. Found via the dead-letter IT below, but not
+  specific to dead-lettering — any topology whose last held record drains through the ordinary path
+  before shutdown could hit it. The existing periodic metrics-refresh punctuator (every 5s) now also
+  re-pushes the drained state, closing the gap within one tick.
+
+### Added
+- **Dead-letter sink: the only liveness escape from causal delivery, fired solely on proven
+  impossibility.** `CausalTopology#assemble` gives every stage its own dead-letter sink node (never one
+  sink shared across stages — that would union their Kafka Streams node groups), all writing to one
+  topic name: `parsley.deadletter.topic` if set, else `{application.id}-deadletter`.
+  `CausalStreams#start()` provisions that topic (partitions from the new `parsley.deadletter.partitions`,
+  default 1) before starting the underlying `KafkaStreams`, tolerating a concurrent creation race.
+
+  A record is dead-lettered only when its dependencies are *proven* unsatisfiable, never on pressure or
+  time: a poison record (undecodable on the forward path), an unresolvable causal-dependencies header at
+  ingest, or a dependent of either. A dead-lettered coordinate's frontier can never legitimately advance
+  again, so it is recorded in a new durable, changelog-backed **orphan index** (`ParsleyOrphanIndex` /
+  `RocksOrphanIndex`, mirroring `ParsleyForwardedIndex`); `ParsleyEngine` then worklist-scans this node's
+  own buffer for anything depending on that coordinate at or beyond its floor and dead-letters those too,
+  recursively — Lamport transitivity in reverse. This is local to one node's own buffer: a *different*
+  node still buffering on the same doomed coordinate just sees a channel that stopped advancing,
+  indistinguishable from ordinary lag, until a forced epoch-floor advance (a later change) resolves it
+  DAG-wide. Without a dead-letter sink configured (the low-level `CausalProcessors` builder path, unless
+  `.deadLetterSink(...)`/`.sinkNodeNames(...)` are called explicitly), a proven-impossible record still
+  fails the task fast, exactly as before this change.
+
+  The dead-letter record carries raw bytes (a poison record's value can never be reconstructed as `V`) and
+  new headers: `parsley-deadletter-reason` (`POISON`/`UNRESOLVABLE_CLOCK`/`ORPHAN_CASCADE`),
+  `parsley-deadletter-source-topic`/`-source-topic-id`/`-source-partition`/`-source-offset`, and, for an
+  unresolvable clock, `parsley-deadletter-original-dependencies` (the undecodable bytes, verbatim, for
+  operator forensics). `CausalAudit` gains `recordDeadLetter(topic, partition, offset, reason)`, fired for
+  every dead-lettered record including a cascade victim that was never itself a deserialization/clock
+  failure. `ParsleyMetrics` gains a `dead-lettered` rate-total sensor.
+
 ### Changed
+- **Breaking: `CausalAudit.recordDeserializationFailure`/`recordClockResolutionFailure` drop their
+  trailing boolean.** `dropped`/`failed` were always hardcoded constants (`false`/`true` respectively)
+  carrying no information; the new `recordDeadLetter` (above) is the actual disposition signal now that a
+  proven-impossible record has a real second outcome besides failing the task.
+- **A processor node's plain, unaddressed forward is no longer always a Kafka Streams broadcast.**
+  Attaching a dead-letter sink — registered with `Serdes.ByteArray()` — as a second child of a stage's
+  processor node means the zero-arg `context.forward(record)` Kafka Streams itself provides would also
+  broadcast a business/control forward to it, throwing `ClassCastException` on the very next record.
+  `ParsleyProcessorContext`'s one-arg `forward` and `ParsleyProcessor`'s watermark/epoch-marker forwards
+  now address every declared business sink by name instead whenever a stage has one; with no dead-letter
+  sink configured (every low-level `CausalProcessors` caller that hasn't opted in), the plain Kafka
+  Streams broadcast is unchanged.
 - **Breaking: concise, topology-level public API — `CausalStreamsBuilder` / `CausalTopology` /
   `CausalStreams`.** The public surface collapses to three roles mirroring Kafka Streams'
   `StreamsBuilder`/`Topology`/`KafkaStreams`. `CausalStreamsBuilder` declares one or more causal stages

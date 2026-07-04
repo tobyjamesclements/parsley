@@ -86,6 +86,8 @@ class ParsleyProcessorSourceLayerTest {
                     new TestKeyValueStore<byte[], byte[]>(Arrays::compareUnsigned, "candidate-index");
             TestKeyValueStore<byte[], byte[]> forwardedIndexStore =
                     new TestKeyValueStore<byte[], byte[]>(Arrays::compareUnsigned, "forwarded-index");
+            TestKeyValueStore<byte[], byte[]> orphanIndexStore =
+                    new TestKeyValueStore<byte[], byte[]>(Arrays::compareUnsigned, "orphan-index");
             Processor<String, String, String, String> delegate = new Processor<>() {
                 @Override public void init(ProcessorContext<String, String> context) {}
                 @Override public void process(Record<String, String> record) {}
@@ -94,7 +96,8 @@ class ParsleyProcessorSourceLayerTest {
                     new ParsleySerializer<>(new ParsleyResolver<>(t -> Serdes.String(), t -> Serdes.String()));
             this.processor = new ParsleyProcessor<>(
                     delegate, serializer,
-                    "frontier", "buffer", "candidate-index", "forwarded-index", Set.of("t1"), Set.of(),
+                    "frontier", "buffer", "candidate-index", "forwarded-index", "orphan-index",
+                    Set.of("t1"), Set.of(), List.of(), null,
                     configs -> ADMIN, ParsleyConfig.from(new Properties()), CausalAudit.NOOP, null,
                     ParsleyEpochSnapshotPublisher.NOOP, CausalCoordination.forRuntime(runtime));
             this.context = new MockProcessorContext<>();
@@ -102,6 +105,7 @@ class ParsleyProcessorSourceLayerTest {
             context.addStateStore(bufferStore);
             context.addStateStore(candidateIndexStore);
             context.addStateStore(forwardedIndexStore);
+            context.addStateStore(orphanIndexStore);
             processor.init(context);
         }
 

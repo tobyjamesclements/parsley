@@ -294,7 +294,7 @@ class CausalReconvergenceTopologyTest {
         MockBufferStore<String, String> buffer = new MockBufferStore<>();
 
         ParsleyEngine<String, String> engine = new ParsleyEngine<>(
-                new ParsleyFrontier(ParsleyClock.empty(), new MockForwardedIndex()),
+                new ParsleyFrontier(ParsleyClock.empty(), new MockForwardedIndex(), new MockOrphanIndex()),
                 buffer, new MockCandidateIndex(), ParsleyMetrics.NOOP, CausalAudit.NOOP,
                 System::currentTimeMillis);
 
@@ -304,7 +304,7 @@ class CausalReconvergenceTopologyTest {
 
         // Receive a watermark on T1/0 carrying {ANC@5}.
         ParsleyClock watermarkFrontier = ParsleyClock.empty().observe(ANC_ID, 0, 5);
-        List<ParsleyMessage<String, String>> released = engine.onWatermark(T1_ID, 0, watermarkFrontier);
+        List<ParsleyMessage<String, String>> released = engine.onWatermark(T1_ID, 0, watermarkFrontier).delivered();
 
         // No records were buffered, so nothing is released.
         assertEquals(0, released.size(),

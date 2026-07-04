@@ -17,6 +17,8 @@ import org.jspecify.annotations.Nullable;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.nio.ByteBuffer;
+import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -58,10 +60,19 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
     private final String bufferStoreName;
     private final String candidateIndexStoreName;
     private final String forwardedIndexStoreName;
+    private final String orphanIndexStoreName;
     private final Set<String> topics;
     // The topics this stage produces. Feeds the partition-count parity check and, when coordination is
     // configured, this member's declaration on the epoch-events log for the DAG-wide source-topic registry.
     private final Set<String> sinkTopics;
+    // Every child node this processor forwards to (business sinks and, if configured, the dead-letter
+    // sink): a stage's processor node addresses every forward by name (never zero-arg broadcast), since
+    // a dead-letter sink registered with Serdes.ByteArray() would otherwise receive every business/control
+    // forward too and throw ClassCastException on the runtime cast. See ParsleyProcessorContext.forward.
+    private final List<String> sinkNodeNames;
+    // This stage's dead-letter sink node name, or null if none is configured — in which case a
+    // poison/unresolvable-clock record fails the task fast, exactly as before dead-lettering existed.
+    private final @Nullable String deadLetterSinkName;
     private final Function<Map<String, Object>, ParsleyTopicAdmin> adminFactory;
     private final ParsleyConfig config;
     private final CausalAudit audit;
@@ -106,6 +117,7 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
     private KeyValueStore<Long, byte[]> bufferStore;
     private KeyValueStore<byte[], byte[]> candidateIndexStore;
     private KeyValueStore<byte[], byte[]> forwardedIndexStore;
+    private KeyValueStore<byte[], byte[]> orphanIndexStore;
     private ParsleyEngine<KIn, VIn> engine;
     private ParsleyMetrics.Wired wiredMetrics;
     // The stamping proxy context handed to the delegate. Held here so deliver() can check the
@@ -122,15 +134,18 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
                      String bufferStoreName,
                      String candidateIndexStoreName,
                      String forwardedIndexStoreName,
+                     String orphanIndexStoreName,
                      Set<String> topics,
                      Set<String> sinkTopics,
+                     List<String> sinkNodeNames,
+                     @Nullable String deadLetterSinkName,
                      Function<Map<String, Object>, ParsleyTopicAdmin> adminFactory,
                      ParsleyConfig config,
                      CausalAudit audit,
                      @Nullable CausalQuiesce quiesce) {
         this(delegate, serializer, frontierStoreName, bufferStoreName, candidateIndexStoreName,
-                forwardedIndexStoreName, topics, sinkTopics, adminFactory, config,
-                audit, quiesce, ParsleyEpochSnapshotPublisher.NOOP);
+                forwardedIndexStoreName, orphanIndexStoreName, topics, sinkTopics, sinkNodeNames,
+                deadLetterSinkName, adminFactory, config, audit, quiesce, ParsleyEpochSnapshotPublisher.NOOP);
     }
 
     ParsleyProcessor(Processor<KIn, VIn, KOut, VOut> delegate,
@@ -139,16 +154,19 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
                      String bufferStoreName,
                      String candidateIndexStoreName,
                      String forwardedIndexStoreName,
+                     String orphanIndexStoreName,
                      Set<String> topics,
                      Set<String> sinkTopics,
+                     List<String> sinkNodeNames,
+                     @Nullable String deadLetterSinkName,
                      Function<Map<String, Object>, ParsleyTopicAdmin> adminFactory,
                      ParsleyConfig config,
                      CausalAudit audit,
                      @Nullable CausalQuiesce quiesce,
                      ParsleyEpochSnapshotPublisher snapshotPublisher) {
         this(delegate, serializer, frontierStoreName, bufferStoreName, candidateIndexStoreName,
-                forwardedIndexStoreName, topics, sinkTopics, adminFactory, config,
-                audit, quiesce, snapshotPublisher, null);
+                forwardedIndexStoreName, orphanIndexStoreName, topics, sinkTopics, sinkNodeNames,
+                deadLetterSinkName, adminFactory, config, audit, quiesce, snapshotPublisher, null);
     }
 
     ParsleyProcessor(Processor<KIn, VIn, KOut, VOut> delegate,
@@ -157,8 +175,11 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
                      String bufferStoreName,
                      String candidateIndexStoreName,
                      String forwardedIndexStoreName,
+                     String orphanIndexStoreName,
                      Set<String> topics,
                      Set<String> sinkTopics,
+                     List<String> sinkNodeNames,
+                     @Nullable String deadLetterSinkName,
                      Function<Map<String, Object>, ParsleyTopicAdmin> adminFactory,
                      ParsleyConfig config,
                      CausalAudit audit,
@@ -171,8 +192,11 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
         this.bufferStoreName = bufferStoreName;
         this.candidateIndexStoreName = candidateIndexStoreName;
         this.forwardedIndexStoreName = forwardedIndexStoreName;
+        this.orphanIndexStoreName = orphanIndexStoreName;
         this.topics = topics;
         this.sinkTopics = sinkTopics;
+        this.sinkNodeNames = sinkNodeNames;
+        this.deadLetterSinkName = deadLetterSinkName;
         this.adminFactory = adminFactory;
         this.config = config;
         this.audit = audit;
@@ -191,15 +215,17 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
         this.bufferStore = context.getStateStore(bufferStoreName);
         this.candidateIndexStore = context.getStateStore(candidateIndexStoreName);
         this.forwardedIndexStore = context.getStateStore(forwardedIndexStoreName);
+        this.orphanIndexStore = context.getStateStore(orphanIndexStoreName);
 
         boolean restored = frontierStore.get(ParsleyStores.FRONTIER_KEY) != null;
 
         ParsleyBufferStore<KIn, VIn> buffer = new RocksBufferStore<>(bufferStore, serializer);
         ParsleyCandidateIndex candidateIndex = new RocksCandidateIndex(candidateIndexStore);
         ParsleyForwardedIndex forwardedIndex = new RocksForwardedIndex(forwardedIndexStore);
+        ParsleyOrphanIndex orphanIndex = new RocksOrphanIndex(orphanIndexStore);
         // The single owner of the persisted causal metadata: loads the frontier clock and channel
         // clocks from key "f" of the frontier store and rewrites that value on change. The forwarded
-        // index keeps its own keyed store (growable, order-sensitive) and is injected here.
+        // and orphan indexes keep their own keyed stores and are injected here.
         // Resolve epoch coordination from the handle before building the epoch state: build/share the
         // per-instance runtime (from this task's appConfigs), install the runtime-backed snapshot
         // publisher, and join as a member, then block until this member is a running member. That block is
@@ -230,7 +256,7 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
         } else {
             epochState = new ParsleyEpochState();
         }
-        ParsleyFrontier frontier = new ParsleyFrontier(frontierStore, forwardedIndex, epochState);
+        ParsleyFrontier frontier = new ParsleyFrontier(frontierStore, forwardedIndex, orphanIndex, epochState);
 
         if (restored) {
             log.info("Processor initialized [task: {}] — frontier restored: {}", context.taskId(), frontier.snapshot());
@@ -263,13 +289,13 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
         }
 
         this.engine = new ParsleyEngine<>(frontier, buffer, candidateIndex,
-                wiredMetrics.metrics(), audit, context::currentSystemTimeMs);
+                wiredMetrics.metrics(), audit, context::currentSystemTimeMs, deadLetterSinkName != null);
         // Initialise stampFrontier from completeness() so the stamping proxy reflects the restored
         // channel-clock state (not just the in-scope frontier) from the first forward onward.
         this.stampFrontier = engine.completeness();
 
         this.stampingContext = new ParsleyProcessorContext<>(
-                context, () -> stampFrontier, () -> Optional.ofNullable(deliveryMetadata));
+                context, () -> stampFrontier, () -> Optional.ofNullable(deliveryMetadata), sinkNodeNames);
         delegate.init(stampingContext);
 
         // Drain any records that became satisfiable between the last committed frontier and the last
@@ -280,14 +306,24 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
         restoredDrainSchedule = context.schedule(Duration.ofMillis(1), PunctuationType.WALL_CLOCK_TIME,
                 timestamp -> {
                     restoredDrainSchedule.cancel();
-                    deliver(engine.drainRestoredSatisfied());
+                    ParsleyEngine.Outcome<KIn, VIn> outcome = engine.drainAfterRestore();
+                    deliver(outcome.delivered());
+                    deadLetter(outcome.deadLettered());
                 });
 
         // Refreshes the oldest-record gauge independent of buffer traffic, so it stays current on a
         // buffer that sits idle between admits/releases/evictions (notably a size-only buffer, which
-        // has no other periodic tick at all).
+        // has no other periodic tick at all). Also re-pushes this task's quiesce-drained state: without
+        // this, a task whose buffer emptied before requestQuiesce() was ever called would report
+        // drained=false forever — updateQuiesceState() only runs on a depth-changing event, and once the
+        // buffer is idle there is no such event left to re-evaluate isQuiesceRequested() && empty after
+        // the request actually arrives — hanging CausalStreams#close()'s wait indefinitely despite the
+        // buffer genuinely being empty. This tick closes that gap within one refresh interval.
         context.schedule(METRICS_REFRESH_INTERVAL, PunctuationType.WALL_CLOCK_TIME,
-                timestamp -> engine.reportBufferState());
+                timestamp -> {
+                    engine.reportBufferState();
+                    updateQuiesceState();
+                });
 
         // A source-layer task self-initiates the in-band wave off the coordination log, so it must react
         // even while idle (no inbound records to piggy-back on). Poll the runtime on a wall-clock tick as
@@ -337,16 +373,24 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
         // Remember the most-recent business key seen on this task's owned partition; a source-layer task
         // reuses it to route a self-injected marker back onto that partition lane.
         lastSeenKey = record.key();
+        Optional<ParsleyMessage<KIn, VIn>> ingested = ingest(record);
+        if (ingested.isEmpty()) {
+            // Already dead-lettered inside onUnresolvableClock (a dead-letter sink is configured) —
+            // nothing further to gate for this record.
+            pollEpochCoordination();
+            return;
+        }
         ParsleyClock completenessBefore = engine.completeness();
-        List<ParsleyMessage<KIn, VIn>> admitted = gate(ingest(record));
-        deliver(admitted);
+        ParsleyEngine.Outcome<KIn, VIn> outcome = engine.onRecord(ingested.get());
+        deliver(outcome.delivered());
+        deadLetter(outcome.deadLettered());
         // Advertise this node's progress so downstream channel clocks advance gap-free. A delivered
         // record advertises through its business output's completeness stamp — or, if the delegate
         // forwarded nothing, the watermark emitted in deliver(). A consumed record that was buffered
         // produces neither, so emit a heartbeat watermark — but only when its receipt-time
         // channel-clock update actually advanced completeness, so an unrelated held record does not
         // flood downstream with no-op watermarks.
-        if (admitted.isEmpty() && !engine.completeness().equals(completenessBefore)) {
+        if (outcome.delivered().isEmpty() && !engine.completeness().equals(completenessBefore)) {
             // Key the heartbeat with the buffered record's own key so it routes to that record's
             // partition, matching where its eventual business output will land.
             forwardWatermark(record.key());
@@ -365,10 +409,6 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
         }
         delegate.close();
         wiredMetrics.close(context.metrics());
-    }
-
-    private List<ParsleyMessage<KIn, VIn>> gate(ParsleyMessage<KIn, VIn> record) {
-        return engine.onRecord(record);
     }
 
     private void deliver(List<ParsleyMessage<KIn, VIn>> admitted) {
@@ -397,6 +437,74 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
         deliveryMetadata = null;
         stampFrontier = engine.completeness();
         updateQuiesceState();
+    }
+
+    /**
+     * Forwards every dead-lettered record to the dead-letter sink. Paired with {@link #deliver}:
+     * dead-lettering, like delivery, changes buffer depth, so {@link #updateQuiesceState} runs
+     * afterward here too. Auditing happens inside {@link ParsleyEngine} itself (the same place
+     * {@code recordForwarded}/{@code recordReleased} are audited from), so this method only meters and
+     * forwards.
+     */
+    private void deadLetter(List<ParsleyEngine.DeadLetter<KIn, VIn>> deadLettered) {
+        for (ParsleyEngine.DeadLetter<KIn, VIn> letter : deadLettered) {
+            wiredMetrics.metrics().recordDeadLetter();
+            forwardDeadLetter(letter, List.of());
+        }
+        if (!deadLettered.isEmpty()) {
+            updateQuiesceState();
+        }
+    }
+
+    /**
+     * Forwards {@code letter} to the dead-letter sink as raw bytes, bypassing the stamping proxy (like
+     * the watermark/marker forwards) since a dead-lettered record is leaving the causal path, not
+     * advancing it. A {@link ParsleyEngine.DeadLetter.Decoded} record's key/value are re-serialised with
+     * this stage's own serdes (they already decoded fine); a {@link ParsleyEngine.DeadLetter.Undecodable}
+     * record's raw bytes — recovered before the failed decode attempt — are carried through as-is, since
+     * its {@code V} could never be reconstructed. {@code extraHeaders} carries forensics specific to one
+     * dead-letter reason (e.g. the original undecodable dependencies header for an unresolvable clock).
+     */
+    @SuppressWarnings({"NullAway", "unchecked"}) // raw bytes forwarded through KOut/VOut at runtime; see class javadoc
+    private void forwardDeadLetter(ParsleyEngine.DeadLetter<KIn, VIn> letter, List<ParsleyHeader> extraHeaders) {
+        if (deadLetterSinkName == null) {
+            // Dead-lettering is off (no sink configured) — the engine and onUnresolvableClock never
+            // produce a DeadLetter in that case, so this is unreachable in practice; guards misuse.
+            throw new IllegalStateException("dead-lettered a record with no dead-letter sink configured");
+        }
+        byte @Nullable [] keyBytes;
+        byte @Nullable [] valueBytes;
+        long timestamp;
+        Headers headers = ParsleyHeader.mutableHeaders();
+        switch (letter) {
+            case ParsleyEngine.DeadLetter.Decoded<KIn, VIn> decoded -> {
+                ParsleyMessage<KIn, VIn> message = decoded.record();
+                keyBytes = serializer.keyBytes(message.topic(), message.key());
+                valueBytes = serializer.valueBytes(message.topic(), message.value());
+                timestamp = message.timestamp();
+                for (ParsleyHeader h : message.headers()) {
+                    headers.add(h.key(), h.value());
+                }
+            }
+            case ParsleyEngine.DeadLetter.Undecodable<KIn, VIn> undecodable -> {
+                keyBytes = undecodable.rawKey();
+                valueBytes = undecodable.rawValue();
+                timestamp = undecodable.timestamp();
+                for (ParsleyHeader h : undecodable.headers()) {
+                    headers.add(h.key(), h.value());
+                }
+            }
+        }
+        headers.add(ParsleyHeader.DEADLETTER_REASON, letter.reason().name().getBytes(StandardCharsets.UTF_8));
+        headers.add(ParsleyHeader.DEADLETTER_SOURCE_TOPIC, letter.topic().getBytes(StandardCharsets.UTF_8));
+        headers.add(ParsleyHeader.DEADLETTER_SOURCE_TOPIC_ID, ParsleyHeader.uuidToBytes(letter.topicId()));
+        headers.add(ParsleyHeader.DEADLETTER_SOURCE_PARTITION, ByteBuffer.allocate(4).putInt(letter.partition()).array());
+        headers.add(ParsleyHeader.DEADLETTER_SOURCE_OFFSET, ByteBuffer.allocate(8).putLong(letter.offset()).array());
+        for (ParsleyHeader h : extraHeaders) {
+            headers.add(h.key(), h.value());
+        }
+        context.forward(new Record<>((KOut) (Object) keyBytes, (VOut) (Object) valueBytes, timestamp, headers),
+                deadLetterSinkName);
     }
 
     /**
@@ -522,8 +630,9 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
         // (draining anything it releases) before driving the transition, so one record does both.
         advanceChannelClockFromMarker(record);
 
-        List<ParsleyMessage<KIn, VIn>> released = engine.onEpochBoundary(boundary, topicId, partition);
-        deliver(released);
+        ParsleyEngine.Outcome<KIn, VIn> outcome = engine.onEpochBoundary(boundary, topicId, partition);
+        deliver(outcome.delivered());
+        deadLetter(outcome.deadLettered());
 
         // Relay the boundary downstream on the marker's key so it stays on the same partition lane and
         // every downstream task transitions its owned partitions. The relay carries this node's own
@@ -549,7 +658,9 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
             if (ParsleyHeader.CAUSAL_DEPENDENCIES.equals(h.key()) && h.value() != null) {
                 try {
                     ParsleyClock frontier = ParsleyClock.fromBytes(h.value());
-                    deliver(engine.onWatermark(topicId, partition, frontier));
+                    ParsleyEngine.Outcome<KIn, VIn> outcome = engine.onWatermark(topicId, partition, frontier);
+                    deliver(outcome.delivered());
+                    deadLetter(outcome.deadLettered());
                 } catch (Exception e) {
                     log.warn("Failed to decode marker completeness on {}-{}; ignoring", topic, partition, e);
                 }
@@ -642,10 +753,14 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
     private void adoptAndInjectBoundary(EpochBoundary boundary, Set<Uuid> externalSourceTopicIds) {
         int partition = context.taskId().partition();
         List<ParsleyMessage<KIn, VIn>> released = new ArrayList<>();
+        List<ParsleyEngine.DeadLetter<KIn, VIn>> deadLettered = new ArrayList<>();
         for (Uuid topicId : externalSourceTopicIds) {
-            released.addAll(engine.onEpochBoundary(boundary, topicId, partition));
+            ParsleyEngine.Outcome<KIn, VIn> outcome = engine.onEpochBoundary(boundary, topicId, partition);
+            released.addAll(outcome.delivered());
+            deadLettered.addAll(outcome.deadLettered());
         }
         deliver(released);
+        deadLetter(deadLettered);
         if (lastSeenKey != null) {
             forwardEpochBoundary(lastSeenKey, boundary.toBytes());
         }
@@ -689,8 +804,9 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
         }
 
         // Update the channel clock and drain any newly releasable records.
-        List<ParsleyMessage<KIn, VIn>> released = engine.onWatermark(topicId, partition, frontierClock);
-        deliver(released);
+        ParsleyEngine.Outcome<KIn, VIn> outcome = engine.onWatermark(topicId, partition, frontierClock);
+        deliver(outcome.delivered());
+        deadLetter(outcome.deadLettered());
 
         // Always re-emit a watermark downstream so the completeness boundary propagates through
         // non-subscribing layers even when no business records were released. Reuse the incoming
@@ -701,12 +817,14 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
 
     /**
      * Forwards a protocol watermark carrying this node's current {@link ParsleyEngine#completeness()
-     * completeness frontier} to all downstream children, keyed with {@code triggerKey} — the key of
-     * the input record that triggered this emission. Reusing that key routes the watermark, through
-     * whatever partitioner the business records use, to the same partition those records land on, so a
-     * downstream task's channel clock for that partition advances even across a sink boundary. With a
-     * null key (the previous behaviour) a sink partitioner sends the watermark to an arbitrary
-     * partition, so a downstream task can starve waiting on a channel that never advances.
+     * completeness frontier} to every business sink ({@link #sinkNodeNames} — never a zero-arg
+     * broadcast, so a configured dead-letter sink never receives one; see {@link ParsleyProcessorContext}),
+     * keyed with {@code triggerKey} — the key of the input record that triggered this emission. Reusing
+     * that key routes the watermark, through whatever partitioner the business records use, to the same
+     * partition those records land on, so a downstream task's channel clock for that partition advances
+     * even across a sink boundary. With a null key (the previous behaviour) a sink partitioner sends the
+     * watermark to an arbitrary partition, so a downstream task can starve waiting on a channel that
+     * never advances.
      *
      * <p>The watermark carries a null value and is distinguished from a business tombstone by the
      * {@link ParsleyHeader#WATERMARK} header; downstream Parsley consumers skip it by that header, not
@@ -729,39 +847,64 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
         // Use 0L as the watermark timestamp: a watermark's timestamp carries no business meaning —
         // only its headers matter for causal gating — so 0L is safe in all execution contexts
         // (MockProcessorContext may not have time initialised).
-        context.forward(new Record<>((KOut) (Object) triggerKey, null, 0L, wm));
+        forwardToSinks(new Record<>((KOut) (Object) triggerKey, null, 0L, wm));
     }
 
     /**
-     * Relays an epoch-snapshot marker to all downstream children, keyed with {@code triggerKey} so it
+     * Relays an epoch-snapshot marker to every business sink, keyed with {@code triggerKey} so it
      * stays on the same partition lane (see {@link #forwardWatermark} for the key-routing rationale, the
-     * {@code KIn}-to-{@code KOut} cast, and the null-value / null-key handling — identical here). The
-     * marker also carries this node's current completeness in the {@link ParsleyHeader#CAUSAL_DEPENDENCIES}
-     * header, so one record both propagates the cut and advances the downstream channel clock.
+     * {@code KIn}-to-{@code KOut} cast, the targeted-forwarding rationale, and the null-value / null-key
+     * handling — identical here). The marker also carries this node's current completeness in the
+     * {@link ParsleyHeader#CAUSAL_DEPENDENCIES} header, so one record both propagates the cut and
+     * advances the downstream channel clock.
      */
     @SuppressWarnings({"NullAway", "unchecked"}) // null value by design; KIn==KOut under the co-partitioning contract
     private void forwardEpochSnapshot(@Nullable KIn triggerKey) {
         Headers marker = ParsleyHeader.mutableHeaders();
         marker.add(ParsleyHeader.EPOCH_SNAPSHOT, new byte[0]);
         marker.add(ParsleyHeader.CAUSAL_DEPENDENCIES, engine.completeness().toBytes());
-        context.forward(new Record<>((KOut) (Object) triggerKey, null, 0L, marker));
+        forwardToSinks(new Record<>((KOut) (Object) triggerKey, null, 0L, marker));
     }
 
     /**
      * Relays an epoch-boundary marker (carrying the unchanged {@code boundaryBytes}: the same epochId +
-     * lowerBounds everywhere) to all downstream children, keyed with {@code triggerKey} so it stays on
+     * lowerBounds everywhere) to every business sink, keyed with {@code triggerKey} so it stays on
      * the same partition lane. Also carries this node's completeness so the downstream channel clock
-     * advances from the same record. See {@link #forwardWatermark} for the routing/cast rationale.
+     * advances from the same record. See {@link #forwardWatermark} for the routing/cast/targeted-forward
+     * rationale.
      */
     @SuppressWarnings({"NullAway", "unchecked"}) // null value by design; KIn==KOut under the co-partitioning contract
     private void forwardEpochBoundary(@Nullable KIn triggerKey, byte[] boundaryBytes) {
         Headers marker = ParsleyHeader.mutableHeaders();
         marker.add(ParsleyHeader.EPOCH_BOUNDARY, boundaryBytes);
         marker.add(ParsleyHeader.CAUSAL_DEPENDENCIES, engine.completeness().toBytes());
-        context.forward(new Record<>((KOut) (Object) triggerKey, null, 0L, marker));
+        forwardToSinks(new Record<>((KOut) (Object) triggerKey, null, 0L, marker));
     }
 
-    private ParsleyMessage<KIn, VIn> ingest(Record<KIn, VIn> record) {
+    /**
+     * Forwards a control-plane record (watermark or epoch marker) to every business sink by name, or
+     * broadcasts (Kafka Streams' own zero-arg {@code forward}) when {@link #sinkNodeNames} is empty —
+     * the common case, with no dead-letter sink configured. Named forwarding is required the moment a
+     * dead-letter sink is a sibling child of this processor's business sink(s): see
+     * {@link ParsleyProcessorContext}.
+     */
+    private void forwardToSinks(Record<KOut, VOut> record) {
+        if (sinkNodeNames.isEmpty()) {
+            context.forward(record);
+            return;
+        }
+        for (String name : sinkNodeNames) {
+            context.forward(record, name);
+        }
+    }
+
+    /**
+     * Decodes {@code record} into a {@link ParsleyMessage}, ready for {@link ParsleyEngine#onRecord}.
+     * Empty means the record was already dead-lettered (its causal-dependencies header was undecodable
+     * and a dead-letter sink is configured, see {@link #onUnresolvableClock}) — there is nothing further
+     * to gate.
+     */
+    private Optional<ParsleyMessage<KIn, VIn>> ingest(Record<KIn, VIn> record) {
         Optional<RecordMetadata> meta = context.recordMetadata();
         String topic = meta.map(RecordMetadata::topic).orElse("");
         TopicPartition source = new TopicPartition(topic, meta.map(RecordMetadata::partition).orElse(0));
@@ -773,27 +916,41 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
         }
         long offset = meta.map(RecordMetadata::offset).orElse(0L);
         try {
-            return ParsleyMessage.from(record, source, offset, topicId);
+            return Optional.of(ParsleyMessage.from(record, source, offset, topicId));
         } catch (ParsleyClockResolutionException e) {
             return onUnresolvableClock(e, record, source, offset, topicId);
         }
     }
 
     /**
-     * Handles an inbound record whose causal-dependencies header could not be decoded: fails the task
-     * fast (fail-closed), leaving the record to be reprocessed on restart. Its real dependencies are
-     * unknown, so forwarding it would deliver on an unknown premise — never permitted. The occurrence
-     * is metered and audited. (A future dead-letter path will divert a record with a genuinely
-     * unrecoverable header out of the causal execution path rather than reprocessing it forever.)
+     * Handles an inbound record whose causal-dependencies header could not be decoded. Its real
+     * dependencies are unknown, so forwarding it on the ordinary path would deliver on an unknown
+     * premise — never permitted. With a dead-letter sink configured, the record — its key/value already
+     * decoded fine by Kafka Streams, only this header failed — is dead-lettered (carrying the original
+     * undecodable header bytes for forensics) and this returns empty. Without one, the task fails fast,
+     * exactly as before dead-lettering existed: the record was never buffered and its source offset is
+     * not committed past it, so it is reprocessed on restart.
      */
-    private ParsleyMessage<KIn, VIn> onUnresolvableClock(ParsleyClockResolutionException e,
+    private Optional<ParsleyMessage<KIn, VIn>> onUnresolvableClock(ParsleyClockResolutionException e,
             Record<KIn, VIn> record, TopicPartition source, long offset, Uuid topicId) {
         wiredMetrics.metrics().recordClockResolutionError();
-        audit.recordClockResolutionFailure(e.topic(), e.partition(), e.offset(), e.details(), true);
-        log.error("Unresolvable causal-dependencies header on {}-{} @{}; failing fast (fail-closed). "
-                + "The record was not forwarded and is reprocessed on restart. {}",
+        audit.recordClockResolutionFailure(e.topic(), e.partition(), e.offset(), e.details());
+        if (deadLetterSinkName == null) {
+            log.error("Unresolvable causal-dependencies header on {}-{} @{}; failing fast (fail-closed). "
+                    + "The record was not forwarded and is reprocessed on restart. {}",
+                    e.topic(), e.partition(), e.offset(), e.details(), e);
+            throw e;
+        }
+        log.warn("Unresolvable causal-dependencies header on {}-{} @{}; dead-lettering. {}",
                 e.topic(), e.partition(), e.offset(), e.details(), e);
-        throw e;
+        ParsleyMessage<KIn, VIn> message = ParsleyMessage.from(record, source, offset, topicId, ParsleyClock.empty());
+        ParsleyEngine.DeadLetter<KIn, VIn> letter =
+                new ParsleyEngine.DeadLetter.Decoded<>(message, ParsleyEngine.DeadLetter.Reason.UNRESOLVABLE_CLOCK);
+        wiredMetrics.metrics().recordDeadLetter();
+        audit.recordDeadLetter(e.topic(), e.partition(), e.offset(), ParsleyEngine.DeadLetter.Reason.UNRESOLVABLE_CLOCK.name());
+        forwardDeadLetter(letter, List.of(new ParsleyHeader(ParsleyHeader.DEADLETTER_ORIGINAL_DEPENDENCIES,
+                e.encodedDependencies())));
+        return Optional.empty();
     }
 
     /**

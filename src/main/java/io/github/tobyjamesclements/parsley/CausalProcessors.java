@@ -6,6 +6,7 @@ import org.jspecify.annotations.Nullable;
 
 import java.util.Collection;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.Properties;
 import java.util.Set;
@@ -86,6 +87,8 @@ final class CausalProcessors {
         private @Nullable ParsleyConfig configOverride = null;
         private CausalAudit audit = CausalAudit.NOOP;
         private Set<String> sinkTopics = Set.of();
+        private List<String> sinkNodeNames = List.of();
+        private @Nullable String deadLetterSinkName = null;
         private @Nullable CausalQuiesce quiesce = null;
         private @Nullable CausalCoordination coordination = null;
 
@@ -286,6 +289,42 @@ final class CausalProcessors {
         }
 
         /**
+         * Declares every child node this processor forwards to under the delegate's plain,
+         * unaddressed {@code context.forward(record)} — this processor's business sink(s). Optional:
+         * without it (the default, {@code List.of()}), a plain forward broadcasts to every actual child
+         * of the processor node, exactly as Kafka Streams itself does — correct as long as every child
+         * shares a compatible type. Required the moment {@link #deadLetterSink} is also configured: the
+         * dead-letter sink is registered with {@code Serdes.ByteArray()}, an incompatible sibling child,
+         * so a plain forward must address only the real business sinks by name or it would also
+         * broadcast to the dead-letter sink and throw a runtime {@code ClassCastException}.
+         * {@link CausalTopology} always supplies this alongside {@link #deadLetterSink} for exactly that
+         * reason; a low-level caller wiring its own dead-letter sink by hand must do the same.
+         *
+         * @param names this processor's business sink node names
+         * @return this builder
+         */
+        Builder<KIn, VIn, KOut, VOut> sinkNodeNames(List<String> names) {
+            this.sinkNodeNames = List.copyOf(names);
+            return this;
+        }
+
+        /**
+         * Names the dead-letter sink node a proven-impossible record (poison, or an unresolvable
+         * causal-dependencies header, or a dependent of either) is diverted to instead of failing the
+         * task. Optional: without one (the default, {@code null}), delivery is fail-closed exactly as
+         * before dead-lettering existed — a proven-impossible record fails the task fast rather than
+         * being diverted anywhere. {@link CausalTopology} always configures one; a low-level caller opts
+         * in explicitly here (and must also call {@link #sinkNodeNames} to name its real business sinks).
+         *
+         * @param name the dead-letter sink's topology node name
+         * @return this builder
+         */
+        Builder<KIn, VIn, KOut, VOut> deadLetterSink(String name) {
+            this.deadLetterSinkName = name;
+            return this;
+        }
+
+        /**
          * Builds the {@link CausalProcessorSupplier}.
          *
          * @return a decorated supplier ready for {@code stream(...).process(...)}
@@ -308,8 +347,8 @@ final class CausalProcessors {
             return new ParsleyProcessorSupplier<>(
                     userSupplier, keySerdeByTopic, valueSerdeByTopic,
                     store + "-frontier", store + "-buffer", store + "-candidate-index", store + "-forwarded-index",
-                    resolved.keySet(), sinkTopics, adminFactory, effectiveConfig,
-                    ParsleyAudit.wrap(audit), quiesce, coordination);
+                    store + "-orphan-index", resolved.keySet(), sinkTopics, sinkNodeNames, deadLetterSinkName,
+                    adminFactory, effectiveConfig, ParsleyAudit.wrap(audit), quiesce, coordination);
         }
 
         /** Classpath {@code parsley.properties} as a base layer, overlaid with builder-supplied keys. */

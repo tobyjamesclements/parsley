@@ -34,20 +34,20 @@ class CausalBufferUnboundedLimitTest {
         MockBufferStore<String, String> buffer = new MockBufferStore<>();
         ParsleyEngine<String, String> engine = new ParsleyEngine<>(
                 ParsleyClock.empty(),
-                buffer, new MockCandidateIndex(), new MockForwardedIndex(), ParsleyMetrics.NOOP,
+                buffer, new MockCandidateIndex(), new MockForwardedIndex(), new MockOrphanIndex(), ParsleyMetrics.NOOP,
                 CausalAudit.NOOP, System::currentTimeMillis);
 
         List<ParsleyMessage<String, String>> out = new ArrayList<>();
         ParsleyClock needsT1 = ParsleyClock.empty().observe(T1_ID, 0, 4);
         for (long offset = 0; offset < 5; offset++) {
-            out.addAll(engine.onRecord(message(T2, offset, T2_ID, needsT1)));
+            out.addAll(engine.onRecord(message(T2, offset, T2_ID, needsT1)).delivered());
         }
 
         assertEquals(5, buffer.size(), "all five records must be held — no eviction must have occurred");
         assertEquals(List.of(), out, "no record must be forwarded before the dependency is satisfied");
 
         for (long offset = 0; offset < 5; offset++) {
-            out.addAll(engine.onRecord(message(T1, offset, T1_ID, ParsleyClock.empty())));
+            out.addAll(engine.onRecord(message(T1, offset, T1_ID, ParsleyClock.empty())).delivered());
         }
 
         assertEquals(0, buffer.size(), "buffer must be empty after the dependency is satisfied");

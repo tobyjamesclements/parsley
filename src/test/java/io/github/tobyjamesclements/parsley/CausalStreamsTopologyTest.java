@@ -2,6 +2,7 @@ package io.github.tobyjamesclements.parsley;
 
 import org.apache.kafka.common.Uuid;
 import org.apache.kafka.common.header.Headers;
+import org.apache.kafka.common.serialization.ByteArrayDeserializer;
 import org.apache.kafka.common.serialization.Serdes;
 import org.apache.kafka.common.serialization.StringDeserializer;
 import org.apache.kafka.common.serialization.StringSerializer;
@@ -22,6 +23,7 @@ import org.junit.jupiter.api.Test;
 import java.io.File;
 import java.io.IOException;
 import java.nio.file.Files;
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
@@ -397,6 +399,49 @@ class CausalStreamsTopologyTest {
     }
 
     /**
+     * A task's buffer can empty through the ordinary delivery path <em>before</em>
+     * {@code requestQuiesce()} is ever called — {@code updateQuiesceState()} only re-evaluates
+     * {@code isQuiesceRequested() && empty} on a buffer-depth-changing event, so without a periodic
+     * re-check, a task that was already drained at that point would be recorded {@code drained=false}
+     * (quiesce wasn't requested yet) and never get another chance to report otherwise once it is, hanging
+     * {@code CausalStreams#close()}'s wait forever despite the buffer genuinely being empty. The periodic
+     * metrics-refresh punctuator (every 5s) closes this gap by re-pushing the drained state on every tick,
+     * not just on buffer changes.
+     *
+     * Asserts {@code isSafeToClose()} is false immediately after requesting quiesce (no re-check has run
+     * yet) and becomes true once the punctuator ticks, with no further record ever delivered.
+     */
+    @Test
+    void quiesceRecoversViaThePeriodicTickWhenTheBufferDrainedBeforeQuiesceWasRequested() {
+        CausalQuiesce quiesce = CausalQuiesce.create();
+        CausalStreamsBuilder builder = new CausalStreamsBuilder();
+        builder.stream("t1", Serdes.String(), Serdes.String())
+                .process(upperCaser())
+                .to("out-sink", "out", Serdes.String(), Serdes.String());
+        Topology topology = assemble(builder, ADMIN, config(), quiesce);
+
+        try (TopologyTestDriver driver = new TopologyTestDriver(topology, config())) {
+            TestInputTopic<String, String> t1 =
+                    driver.createInputTopic("t1", new StringSerializer(), new StringSerializer());
+
+            // Delivered immediately (no dependencies) — the buffer is already empty long before quiesce
+            // is ever requested, with nothing further ever delivered to trigger a fresh depth-changing
+            // event afterward.
+            t1.pipeInput(new TestRecord<>("k", "already-drained", depsHeader(CausalDependencies.empty())));
+            assertEquals(List.of("already-drained"), processed);
+
+            quiesce.requestQuiesce();
+            assertEquals(false, quiesce.isSafeToClose(),
+                    "no depth-changing event has re-evaluated isQuiesceRequested() since the request yet");
+
+            driver.advanceWallClockTime(Duration.ofSeconds(6)); // fires the 5s metrics-refresh punctuator
+
+            assertTrue(quiesce.isSafeToClose(),
+                    "the periodic tick must re-push the drained state so close() does not hang forever");
+        }
+    }
+
+    /**
      * Under {@code parsley.topology.validation=strict}, a sink topic with a partition count that
      * mismatches the stage's source fails startup fast — {@link CausalTopology#assemble} folds sink
      * partition counts into the same co-partitioning check the decorator runs on its inputs.
@@ -645,6 +690,91 @@ class CausalStreamsTopologyTest {
                     .pipeInput(new TestRecord<>("k", "live", depsHeader(CausalDependencies.empty())));
             assertEquals(0, admin.sinkPartitionCountCalls, "off must skip the sink partition-count admin call entirely");
             assertEquals(0, admin.sinkCleanupPolicyCalls, "off must skip the sink cleanup-policy admin call entirely");
+        }
+    }
+
+    /**
+     * Each stage's dead-letter sink is its own topology node, parented only on that stage's processor —
+     * never one sink node shared across stages. Sharing one node would union every stage's Kafka Streams
+     * node group (sub-topology/task assignment is computed per node group), improperly coupling stages
+     * that are otherwise fully independent sub-topologies chained only through real topics.
+     *
+     * <p>Confirms the fix for a design risk found during planning: {@code Topology.addSink} does accept
+     * multiple parent names, so one shared dead-letter sink across every stage would compile and run, but
+     * would silently merge node groups. Per-stage sinks avoid that risk entirely.
+     *
+     * Asserts a two-stage topology — each stage with a different (unrelated) source partition count and
+     * its own dead-letter sink — still describes as two separate sub-topologies.
+     */
+    @Test
+    void eachStageKeepsItsOwnSubtopologyDespiteBothHavingADeadLetterSink() {
+        ParsleyTopicAdmin admin = TestTopicAdmin.of(
+                Map.of("t1", T1_ID, "t2", T2_ID), Map.of("t1", 4, "t2", 12));
+        CausalStreamsBuilder builder = new CausalStreamsBuilder();
+        builder.stream("t1", Serdes.String(), Serdes.String())
+                .process(upperCaser())
+                .to("out-sink-1", "out1", Serdes.String(), Serdes.String());
+        builder.stream("t2", Serdes.String(), Serdes.String())
+                .process(upperCaser())
+                .to("out-sink-2", "out2", Serdes.String(), Serdes.String());
+        Topology topology = assemble(builder, admin);
+
+        assertEquals(2, topology.describe().subtopologies().size(),
+                "two independent stages, each with its own dead-letter sink, must remain two separate "
+                        + "sub-topologies — a single dead-letter sink shared across both would union them");
+    }
+
+    /**
+     * Finding B (discovered during planning): before targeted forwarding was added, Parsley's business
+     * and watermark forwards both used Kafka Streams' zero-arg broadcast, which sends to every child of
+     * the processor node. The moment the dead-letter sink became a second child of every stage (this
+     * phase's whole point), a plain business or watermark forward would have also broadcast to it and
+     * thrown {@code ClassCastException} on its {@code Serdes.ByteArray()} serializer — not a corner
+     * case, the very next record. This is the regression test that would have caught it.
+     *
+     * Asserts a normal business record reaches only its real sink, a stand-in watermark (for a
+     * non-emitting record) also reaches only the real sink, and the dead-letter topic receives neither.
+     */
+    @Test
+    void deadLetterSinkNeverReceivesTheOrdinaryBusinessOrWatermarkBroadcast() {
+        ProcessorSupplier<String, String, String, String> maybeEmit = () -> new Processor<>() {
+            private ProcessorContext<String, String> ctx;
+
+            @Override
+            public void init(ProcessorContext<String, String> context) {
+                this.ctx = context;
+            }
+
+            @Override
+            public void process(Record<String, String> record) {
+                if (record.value().equals("emit")) {
+                    ctx.forward(record.withValue(record.value().toUpperCase(Locale.ROOT)));
+                }
+                // "drop": forward nothing — Parsley emits a stand-in watermark for this input.
+            }
+        };
+
+        CausalStreamsBuilder builder = new CausalStreamsBuilder();
+        builder.stream("t1", Serdes.String(), Serdes.String())
+                .process(maybeEmit)
+                .to("out-sink", "out", Serdes.String(), Serdes.String());
+        Topology topology = assemble(builder, ADMIN);
+
+        try (TopologyTestDriver driver = new TopologyTestDriver(topology, config())) {
+            TestInputTopic<String, String> t1 =
+                    driver.createInputTopic("t1", new StringSerializer(), new StringSerializer());
+            TestOutputTopic<String, String> out =
+                    driver.createOutputTopic("out", new StringDeserializer(), new StringDeserializer());
+            TestOutputTopic<byte[], byte[]> deadLetter = driver.createOutputTopic(
+                    "causal-streams-test-deadletter", new ByteArrayDeserializer(), new ByteArrayDeserializer());
+
+            t1.pipeInput(new TestRecord<>("k", "emit", depsHeader(CausalDependencies.empty())));
+            t1.pipeInput(new TestRecord<>("k", "drop", depsHeader(CausalDependencies.empty())));
+
+            assertEquals("EMIT", out.readRecord().value(), "the business record must reach its real sink");
+            assertTrue(isWatermark(out.readRecord()), "the non-emitting record's stand-in watermark must reach the real sink");
+            assertTrue(deadLetter.isEmpty(),
+                    "neither the business forward nor the watermark broadcast may ever reach the dead-letter sink");
         }
     }
 
