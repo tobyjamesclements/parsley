@@ -17,6 +17,12 @@ All notable changes to this project are documented in this file. The format is b
   re-pushes the drained state, closing the gap within one tick.
 
 ### Added
+- **`mvn test` (and therefore CI) now fails on a unit-test coverage regression.** Jacoco's `check` goal
+  gates the overall bundle at 80% instruction / 75% branch coverage — a few points below the current
+  86.0%/80.9% baseline, so routine refactors have headroom but a real drop fails the build. Scoped to the
+  bundle total rather than per-class: several classes are exercised only by the Testcontainers ITs this
+  report excludes (matching the existing mutation-testing exclusion), so a per-class minimum would fail
+  the build on files with no real gap.
 - **Dead-letter sink: the only liveness escape from causal delivery, fired solely on proven
   impossibility.** `CausalTopology#assemble` gives every stage its own dead-letter sink node (never one
   sink shared across stages — that would union their Kafka Streams node groups), all writing to one

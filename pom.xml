@@ -451,7 +451,14 @@
             </plugin>
             <!-- Unit test coverage. Scoped to surefire's *Test classes (not the Testcontainers ITs),
                  matching the existing mutation-testing exclusion of io.github.tobyjamesclements.parsley.*IT below. Report lands
-                 at target/site/jacoco/ as part of plain 'mvn test'. -->
+                 at target/site/jacoco/ as part of plain 'mvn test'.
+
+                 'check' gates on the BUNDLE total only, not per-class: several classes (ParsleyTopicAdmin,
+                 ParsleyKafkaEpochTransport, CausalStream, ...) are broker-dependent and legitimately
+                 exercised only by the ITs this report excludes, so a per-class minimum would fail the
+                 build on files with no real gap. Thresholds sit a few points below the baseline this
+                 report measured (86.0% instructions / 80.9% branches) so routine refactors don't trip it,
+                 but a real coverage regression fails 'mvn test' (and therefore CI) directly. -->
             <plugin>
                 <groupId>org.jacoco</groupId>
                 <artifactId>jacoco-maven-plugin</artifactId>
@@ -472,6 +479,32 @@
                         <goals>
                             <goal>report</goal>
                         </goals>
+                    </execution>
+                    <execution>
+                        <id>check</id>
+                        <phase>test</phase>
+                        <goals>
+                            <goal>check</goal>
+                        </goals>
+                        <configuration>
+                            <rules>
+                                <rule>
+                                    <element>BUNDLE</element>
+                                    <limits>
+                                        <limit>
+                                            <counter>INSTRUCTION</counter>
+                                            <value>COVEREDRATIO</value>
+                                            <minimum>0.80</minimum>
+                                        </limit>
+                                        <limit>
+                                            <counter>BRANCH</counter>
+                                            <value>COVEREDRATIO</value>
+                                            <minimum>0.75</minimum>
+                                        </limit>
+                                    </limits>
+                                </rule>
+                            </rules>
+                        </configuration>
                     </execution>
                 </executions>
             </plugin>
