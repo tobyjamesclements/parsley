@@ -78,13 +78,11 @@ class CausalProcessorRestartIT {
         Path stateDir1 = Files.createTempDirectory("parsley-restart-1");
         Path stateDir2 = Files.createTempDirectory("parsley-restart-2");
 
-        CausalDependencies orderDeps;
-        try (Admin admin = Admin.create(Map.of("bootstrap.servers", bootstrap))) {
-            CausalTopics topics = CausalTopics.of(admin);
-            // Dependencies a producer would attach after consuming PREREQ@0.
-            ConsumerRecord<String, String> prereqConsumed = new ConsumerRecord<>(PREREQ, 0, 0L, "pk", "prereq");
-            orderDeps = CausalDependencies.using(topics).observe(prereqConsumed);
-        }
+        Properties resolverProps = new Properties();
+        resolverProps.put("bootstrap.servers", bootstrap);
+        // Dependencies a producer would attach after consuming PREREQ@0.
+        ConsumerRecord<String, String> prereqConsumed = new ConsumerRecord<>(PREREQ, 0, 0L, "pk", "prereq");
+        CausalDependencies orderDeps = CausalDependencies.using(resolverProps).observe(prereqConsumed);
 
         // Phase 1: buffer the dependent record, confirm it is held, then shut the instance down cleanly.
         try (KafkaStreams streams = new KafkaStreams(newTopology(), streamsConfig(bootstrap, appId, stateDir1))) {

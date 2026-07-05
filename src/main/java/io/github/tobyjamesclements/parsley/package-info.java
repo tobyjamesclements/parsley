@@ -21,11 +21,13 @@
  * To talk to a Parsley topology from plain Kafka clients, stamp and propagate causal dependencies
  * directly with {@link io.github.tobyjamesclements.parsley.CausalDependencies}:
  * <ul>
+ *   <li>{@link io.github.tobyjamesclements.parsley.CausalDependencies#using(java.util.Properties) using}
+ *       &mdash; bind a resolver (topic name &rarr; stable Kafka UUID, resolved internally through the
+ *       given Kafka client configuration) and start accumulating a consumer-side frontier</li>
+ *   <li>{@link io.github.tobyjamesclements.parsley.CausalDependencies#observe(org.apache.kafka.clients.consumer.ConsumerRecord)
+ *       observe} &mdash; fold a consumed record's dependencies and own position into the accumulator</li>
  *   <li>{@link io.github.tobyjamesclements.parsley.CausalDependencies#stamp(org.apache.kafka.clients.producer.ProducerRecord)
- *       stamp} &mdash; attach dependencies to an outbound {@code ProducerRecord}</li>
- *   <li>{@link io.github.tobyjamesclements.parsley.CausalDependencies#from(io.github.tobyjamesclements.parsley.CausalTopics, org.apache.kafka.clients.consumer.ConsumerRecord)
- *       from} &mdash; derive the dependencies of a record produced after consuming another (its
- *       carried dependencies plus its own position)</li>
+ *       stamp} &mdash; attach the accumulated dependencies to an outbound {@code ProducerRecord}</li>
  *   <li>{@link io.github.tobyjamesclements.parsley.CausalDependencies#merge(io.github.tobyjamesclements.parsley.CausalDependencies) merge} &mdash;
  *       combine dependency sets for a fan-in</li>
  * </ul>
@@ -35,10 +37,8 @@
  *   <li>{@link io.github.tobyjamesclements.parsley.CausalDependencies} &mdash; the causal requirements stamped on a record
  *       (what the consumer must have observed before the record may be delivered). Its serialised size
  *       grows with the number of relevant topic-partitions and counts against Kafka's
- *       {@code message.max.bytes}</li>
- *   <li>{@link io.github.tobyjamesclements.parsley.CausalTopics} &mdash; resolves topic names to their stable Kafka UUIDs
- *       (through a caller-owned {@code Admin}), so {@link io.github.tobyjamesclements.parsley.CausalDependencies} can be built
- *       from topic names</li>
+ *       {@code message.max.bytes}. Topic-UUID resolution is an internal detail of {@code using}/
+ *       {@code builder} &mdash; there is no separate public resolver type to construct or manage</li>
  * </ul>
  */
 @NullMarked

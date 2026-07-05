@@ -30,9 +30,9 @@ everything already forwarded above it.
 The node's internal frontier is an implementation detail, and there is no public type for it: it is
 contiguous (the highest offset delivered without a gap), which is specific to how the engine releases
 held records. A node consuming with a plain Kafka client maintains its own frontier instead, as an
-accumulating `CausalDependencies` value. Bind a resolver once with `CausalDependencies.using(topics)`,
+accumulating `CausalDependencies` value. Bind a resolver once with `CausalDependencies.using(props)`,
 fold in each record you consume with `observe(record)`, and stamp the result onto each record you
-produce. A one-to-one relay is `using(topics).observe(record)`; a fan-in chains an `observe` per
+produce. A one-to-one relay is `using(props).observe(record)`; a fan-in chains an `observe` per
 input; a stateful node keeps one instance and observes into it across records. To read back the
 dependencies a record already carries, without folding in a new position, use
 `CausalDependencies.fromRecord(record)`.

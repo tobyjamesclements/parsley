@@ -45,15 +45,16 @@ setup.
 
 At the edges of a topology, where plain Kafka producers feed records in, a node has no Parsley engine
 maintaining a frontier for it, so it maintains one itself. A `CausalDependencies` value is that
-frontier: the running set of positions the node has observed. Bind a `CausalTopics` resolver once with
-`using`, fold in each record you consume with `observe`, and attach the result to each record you
-produce with `stamp`. The `CausalTopics` is backed by an `Admin` you own; Parsley never closes it.
+frontier: the running set of positions the node has observed. Bind one with `using`, giving it the
+Kafka client configuration to resolve topic UUIDs through, fold in each record you consume with
+`observe`, and attach the result to each record you produce with `stamp`. Topic UUID resolution is
+entirely internal: each distinct topic name is resolved (and cached) the first time it is needed,
+through a Kafka admin client Parsley opens and closes on its own — nothing to construct or close
+yourself.
 
 ```java
-CausalTopics topics = CausalTopics.of(admin);
-
 // the trigger's own dependencies plus its own position
-CausalDependencies deps = CausalDependencies.using(topics).observe(trigger);
+CausalDependencies deps = CausalDependencies.using(props).observe(trigger);
 producer.send(deps.stamp(new ProducerRecord<>("orders", key, value)));
 ```
 
@@ -63,7 +64,7 @@ before it delivers anything stamped here. The resolver bound by `using` carries 
 `observe`, so a fan-in — where an output is caused by several inputs — chains an `observe` per input.
 
 ```java
-CausalDependencies deps = CausalDependencies.using(topics)
+CausalDependencies deps = CausalDependencies.using(props)
         .observe(priceUpdate)
         .observe(inventoryChange);
 producer.send(deps.stamp(record));
@@ -76,10 +77,13 @@ To declare a dependency on a specific upstream position that you did not consume
 explicitly.
 
 ```java
-CausalDependencies deps = CausalDependencies.builder(topics)
+CausalDependencies deps = CausalDependencies.builder(props)
         .require("prices", /* partition */ 0, /* offset */ 42)
         .build();
 ```
+
+Tests without a live broker can bind a resolver over a fixed topic-name-to-UUID map instead, with the
+`using(Map<String, Uuid>)` / `builder(Map<String, Uuid>)` overloads.
 
 The serialised dependencies header grows with the number of topic-partitions it names. See the
 [header size note](configuration.md#header-size) in Configuration.

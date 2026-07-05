@@ -1,36 +1,25 @@
 package io.github.tobyjamesclements.parsley;
 
-import org.apache.kafka.clients.admin.Admin;
 import org.apache.kafka.common.Uuid;
 
 import java.util.Map;
 import java.util.Objects;
+import java.util.Properties;
 
 /**
- * Resolves a topic name to its stable Kafka UUID — the identity {@link CausalDependencies} key their
+ * Resolves a topic name to its stable Kafka UUID — the identity {@link CausalDependencies} keys their
  * coordinates by, so that a topic deleted and recreated under the same name is treated as a different
  * topic. A {@code ConsumerRecord} carries only the topic <em>name</em>; building a UUID-keyed
  * dependency from it (via {@link CausalDependencies#using} or {@link CausalDependencies#builder}) needs
- * this mapping.
- *
- * <h2>Usage</h2>
- * Back the resolver with a Kafka {@link Admin} the caller already owns; Parsley resolves UUIDs through
- * it and caches them, and <strong>never closes it</strong> — the caller keeps ownership:
- * <pre>{@code
- * try (Admin admin = Admin.create(adminConfig)) {
- *     CausalTopics topics = CausalTopics.of(admin);
- *     CausalDependencies deps = CausalDependencies.using(topics).observe(consumedRecord);
- *     producer.send(deps.stamp(new ProducerRecord<>("orders", key, value)));
- * }
- * }</pre>
- * Tests without a live broker can supply a fixed name&rarr;UUID map with {@link #of(Map)}.
+ * this mapping. Internal to {@link CausalDependencies}, which is the public entry point — callers never
+ * construct or hold a {@code CausalTopics} directly.
  *
  * <h2>Thread safety</h2>
- * An {@link Admin}-backed resolver is safe to share across threads; resolved UUIDs are cached so a
- * topic is described at most once.
+ * A resolver is safe to share across threads; resolved UUIDs are cached so a topic is described at
+ * most once.
  */
 @FunctionalInterface
-public interface CausalTopics {
+interface CausalTopics {
 
     /**
      * Resolves {@code topic} to its stable Kafka UUID.
@@ -42,15 +31,17 @@ public interface CausalTopics {
     Uuid topicId(String topic);
 
     /**
-     * Returns a resolver backed by a caller-owned {@link Admin}. Parsley describes each topic on first
-     * use and caches the UUID; it <strong>never closes</strong> {@code admin}.
+     * Returns a resolver backed by {@code props}. Nothing is resolved eagerly: each distinct topic name
+     * is described (and its UUID cached) the first time {@link #topicId} is called for it, through a
+     * fresh, short-lived Kafka admin client opened and closed for that one lookup — so the resolver
+     * holds no live connection between calls and needs no explicit lifecycle of its own.
      *
-     * @param admin the Kafka admin client to resolve UUIDs through; must not be {@code null}
-     * @return an {@code Admin}-backed resolver
+     * @param props the Kafka client configuration to resolve through; must not be {@code null}
+     * @return a {@code props}-backed resolver
      */
-    static CausalTopics of(Admin admin) {
-        Objects.requireNonNull(admin, "admin must not be null");
-        return new ParsleyCausalTopics(ParsleyTopicAdmin.ofAdmin(admin));
+    static CausalTopics of(Properties props) {
+        Objects.requireNonNull(props, "props must not be null");
+        return new ParsleyTopics(props);
     }
 
     /**

@@ -177,9 +177,9 @@ class CausalCoordinationMultiInstanceIT {
     }
 
     private static org.apache.kafka.common.Uuid topicId(String bootstrap) {
-        try (Admin admin = Admin.create(Map.of("bootstrap.servers", bootstrap))) {
-            return CausalTopics.of(admin).topicId(IN);
-        }
+        Properties resolverProps = new Properties();
+        resolverProps.put("bootstrap.servers", bootstrap);
+        return CausalTopics.of(resolverProps).topicId(IN);
     }
 
     private static CausalTopology topology() {

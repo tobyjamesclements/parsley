@@ -52,8 +52,7 @@ common vocabulary of value types.
 | `CausalStreams` | Owns the topology itself — sources, processor, and sinks — around the same causal guarantee, composing `CausalProcessorSupplier` internally. The high-level entry point, for guarantees that require owning the sinks (a uniform sink partitioner, co-partitioning validation across sinks, coordinated graceful shutdown). |
 | `CausalQuiesce` | Coordinates graceful shutdown across every causal task in one application instance, registered with either entry point. |
 | `CausalCoordination` | Coordinates evolving a running topology across an epoch boundary, so a new or replaced stage adopts the current floor instead of dragging pre-epoch history into causal time. Leaderless and optional, registered with either entry point. |
-| `CausalDependencies.using` / `observe` / `stamp` / `merge` | Maintain a consumer-side frontier and stamp causal context onto records produced to plain Kafka clients at the topology edge. |
-| `CausalTopics` | Resolves topic names to their stable Kafka UUIDs for building dependencies. |
+| `CausalDependencies.using` / `observe` / `stamp` / `merge` | Maintain a consumer-side frontier and stamp causal context onto records produced to plain Kafka clients at the topology edge. Topic names are resolved to their stable Kafka UUIDs internally. |
 
 ## Where to go next
 

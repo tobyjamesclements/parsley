@@ -102,12 +102,10 @@ class CausalCoordinationLeaveDrainIT {
             requestUntilCommitted(coordinationX, coordinationY, bootstrap, 1L);
 
             // Buffer a record in X: an `in` record depending on prereq@0 (never yet produced) is held.
-            CausalDependencies orderDeps;
-            try (Admin admin = Admin.create(Map.of("bootstrap.servers", bootstrap))) {
-                CausalTopics topics = CausalTopics.of(admin);
-                orderDeps = CausalDependencies.using(topics)
-                        .observe(new ConsumerRecord<>(PREREQ, 0, 0L, "pk", "prereq"));
-            }
+            Properties resolverProps = new Properties();
+            resolverProps.put("bootstrap.servers", bootstrap);
+            CausalDependencies orderDeps = CausalDependencies.using(resolverProps)
+                    .observe(new ConsumerRecord<>(PREREQ, 0, 0L, "pk", "prereq"));
             try (KafkaProducer<String, String> producer = new KafkaProducer<>(producerConfig(bootstrap))) {
                 producer.send(orderDeps.stamp(new ProducerRecord<>(IN, "k", "order"))).get();
                 // A follow-up `in` record with no dependencies, which X forwards immediately once consumed.

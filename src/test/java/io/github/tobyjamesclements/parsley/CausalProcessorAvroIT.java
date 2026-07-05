@@ -109,21 +109,20 @@ class CausalProcessorAvroIT {
                 topology(registryUrl), streamsConfig(bootstrap, registryUrl))) {
             streams.start();
 
-            try (Admin admin = Admin.create(Map.of("bootstrap.servers", bootstrap))) {
-                CausalTopics topics = CausalTopics.of(admin);
-                // The Order's dependencies, as derived after consuming prices@0.
-                ConsumerRecord<String, SpecificRecord> priceConsumed =
-                        new ConsumerRecord<>(PRICES, 0, 0L, "ACME", price);
-                CausalDependencies orderDeps = CausalDependencies.using(topics).observe(priceConsumed);
+            Properties resolverProps = new Properties();
+            resolverProps.put("bootstrap.servers", bootstrap);
+            // The Order's dependencies, as derived after consuming prices@0.
+            ConsumerRecord<String, SpecificRecord> priceConsumed =
+                    new ConsumerRecord<>(PRICES, 0, 0L, "ACME", price);
+            CausalDependencies orderDeps = CausalDependencies.using(resolverProps).observe(priceConsumed);
 
-                try (KafkaProducer<String, SpecificRecord> producer =
-                             new KafkaProducer<>(producerConfig(bootstrap, registryUrl))) {
-                    // Produce the dependent Order FIRST — it must be buffered (Avro bytes in the store).
-                    producer.send(orderDeps.stamp(new ProducerRecord<>(ORDERS, "o-buf", order))).get();
-                    // Then the Price it depends on, which unblocks it.
-                    producer.send(CausalDependencies.empty()
-                            .stamp(new ProducerRecord<>(PRICES, "ACME", price))).get();
-                }
+            try (KafkaProducer<String, SpecificRecord> producer =
+                         new KafkaProducer<>(producerConfig(bootstrap, registryUrl))) {
+                // Produce the dependent Order FIRST — it must be buffered (Avro bytes in the store).
+                producer.send(orderDeps.stamp(new ProducerRecord<>(ORDERS, "o-buf", order))).get();
+                // Then the Price it depends on, which unblocks it.
+                producer.send(CausalDependencies.empty()
+                        .stamp(new ProducerRecord<>(PRICES, "ACME", price))).get();
             }
 
             try (var consumer = new org.apache.kafka.clients.consumer.KafkaConsumer<String, SpecificRecord>(

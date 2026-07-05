@@ -10,9 +10,8 @@ been observed.</p>
 <p>The entire public surface lives in a single package, {@link io.github.tobyjamesclements.parsley}.
 It consists of interfaces and value types. Every implementation is package-private and obtained
 through a static factory: {@link io.github.tobyjamesclements.parsley.CausalProcessors},
-{@link io.github.tobyjamesclements.parsley.CausalStreams},
-{@link io.github.tobyjamesclements.parsley.CausalDependencies}, and
-{@link io.github.tobyjamesclements.parsley.CausalTopics}.</p>
+{@link io.github.tobyjamesclements.parsley.CausalStreams}, and
+{@link io.github.tobyjamesclements.parsley.CausalDependencies}.</p>
 
 <p>There are two entry points into the causal guarantee. {@link io.github.tobyjamesclements.parsley.CausalProcessors}
 is the low-level decorator: it wraps one user {@code Processor} and you wire it into a topology you

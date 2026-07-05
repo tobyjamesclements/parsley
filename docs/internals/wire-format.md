@@ -124,10 +124,10 @@ The real UUID Kafka assigned to the topic is what's used. A topic deleted and re
 same name gets a new UUID, so records stamped against the old incarnation correctly fail to satisfy
 dependencies on the new one.
 
-When building `CausalDependencies` explicitly at the edge, topic names are resolved to UUIDs through
-a `CausalTopics` (backed by a caller-owned `Admin`), which caches each lookup. The UUID names a
-coordinate in the dependency clock.
+When building `CausalDependencies` explicitly at the edge, topic names are resolved to UUIDs
+internally through `CausalDependencies.using(props)` / `.builder(props)`, which cache each lookup.
+The UUID names a coordinate in the dependency clock.
 
 Tests without a live broker (`TopologyTestDriver`, unit tests) may use any stable `Uuid`, e.g.
-`Uuid.randomUuid()` via `CausalTopics.of(Map.of(...))`, as long as the same value is used
+`Uuid.randomUuid()` via `CausalDependencies.using(Map.of(...))`, as long as the same value is used
 consistently wherever that topic's identity is referenced.

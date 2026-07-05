@@ -110,37 +110,37 @@ class CausalFanOutScopedFrontierIT {
             producer.send(new ProducerRecord<>(SRC2, "k", "s2-1")).get();
         }
 
-        try (Admin admin = Admin.create(Map.of("bootstrap.servers", bootstrap))) {
-            CausalTopics topics = CausalTopics.of(admin);
+        Properties resolverProps = new Properties();
+        resolverProps.put("bootstrap.servers", bootstrap);
+        CausalTopics topics = CausalTopics.of(resolverProps);
 
-            List<ConsumerRecord<String, String>> consumed = new ArrayList<>();
-            try (KafkaConsumer<String, String> consumer = new KafkaConsumer<>(consumerConfig(bootstrap))) {
-                consumer.subscribe(List.of(SRC1, SRC2));
-                await().atMost(Duration.ofSeconds(60)).until(() -> {
-                    consumer.poll(Duration.ofMillis(500)).forEach(consumed::add);
-                    return consumed.size() >= 5;
-                });
-            }
-
-            // Fold every consumed record into one running frontier — the consumer-side max frontier.
-            CausalDependencies frontier = CausalDependencies.using(topics);
-            for (ConsumerRecord<String, String> record : consumed) {
-                frontier = frontier.observe(record);
-            }
-
-            CausalDependencies expected = CausalDependencies.builder(topics)
-                    .require(SRC1, 0, 2)
-                    .require(SRC2, 0, 1)
-                    .build();
-            assertEquals(expected, frontier,
-                    "the maintained frontier must be the per-coordinate max of every consumed position");
-
-            // The frontier the client maintains is exactly what rides outbound records it produces.
-            ProducerRecord<String, String> outbound =
-                    frontier.stamp(new ProducerRecord<>(A_ONLY, "k", "v"));
-            assertEquals(Optional.of(expected), CausalDependencies.fromHeaders(outbound.headers()),
-                    "the maintained max frontier must be what gets stamped onto outbound records");
+        List<ConsumerRecord<String, String>> consumed = new ArrayList<>();
+        try (KafkaConsumer<String, String> consumer = new KafkaConsumer<>(consumerConfig(bootstrap))) {
+            consumer.subscribe(List.of(SRC1, SRC2));
+            await().atMost(Duration.ofSeconds(60)).until(() -> {
+                consumer.poll(Duration.ofMillis(500)).forEach(consumed::add);
+                return consumed.size() >= 5;
+            });
         }
+
+        // Fold every consumed record into one running frontier — the consumer-side max frontier.
+        CausalDependencies frontier = CausalDependencies.using(topics);
+        for (ConsumerRecord<String, String> record : consumed) {
+            frontier = frontier.observe(record);
+        }
+
+        CausalDependencies expected = CausalDependencies.builder(topics)
+                .require(SRC1, 0, 2)
+                .require(SRC2, 0, 1)
+                .build();
+        assertEquals(expected, frontier,
+                "the maintained frontier must be the per-coordinate max of every consumed position");
+
+        // The frontier the client maintains is exactly what rides outbound records it produces.
+        ProducerRecord<String, String> outbound =
+                frontier.stamp(new ProducerRecord<>(A_ONLY, "k", "v"));
+        assertEquals(Optional.of(expected), CausalDependencies.fromHeaders(outbound.headers()),
+                "the maintained max frontier must be what gets stamped onto outbound records");
     }
 
     /**
@@ -186,58 +186,58 @@ class CausalFanOutScopedFrontierIT {
             streamsA.start();
             streamsB.start();
 
-            try (Admin admin = Admin.create(Map.of("bootstrap.servers", bootstrap))) {
-                CausalTopics topics = CausalTopics.of(admin);
+            Properties resolverProps = new Properties();
+            resolverProps.put("bootstrap.servers", bootstrap);
+            CausalTopics topics = CausalTopics.of(resolverProps);
 
-                // What an upstream client carrying its max frontier (see the other test) would stamp.
-                // Neither processor consumes SRC1/SRC2, so these coordinates are out of every scope.
-                CausalDependencies upstream = CausalDependencies.builder(topics)
-                        .require(SRC1, 0, 2)
-                        .require(SRC2, 0, 1)
-                        .build();
-                CausalDependencies afterShared0 = upstream.merge(
-                        CausalDependencies.builder(topics).require(SHARED, 0, 0).build());
-                CausalDependencies afterShared1 = upstream.merge(
-                        CausalDependencies.builder(topics).require(SHARED, 0, 1).build());
+            // What an upstream client carrying its max frontier (see the other test) would stamp.
+            // Neither processor consumes SRC1/SRC2, so these coordinates are out of every scope.
+            CausalDependencies upstream = CausalDependencies.builder(topics)
+                    .require(SRC1, 0, 2)
+                    .require(SRC2, 0, 1)
+                    .build();
+            CausalDependencies afterShared0 = upstream.merge(
+                    CausalDependencies.builder(topics).require(SHARED, 0, 0).build());
+            CausalDependencies afterShared1 = upstream.merge(
+                    CausalDependencies.builder(topics).require(SHARED, 0, 1).build());
 
-                try (KafkaProducer<String, String> producer = new KafkaProducer<>(producerConfig(bootstrap))) {
-                    // Unique-topic records depend on SHARED@1, so they are buffered until it arrives.
-                    producer.send(afterShared1.stamp(new ProducerRecord<>(A_ONLY, "ak", "a0"))).get();
-                    producer.send(afterShared1.stamp(new ProducerRecord<>(B_ONLY, "bk", "b0"))).get();
-                    // SHARED@0 then SHARED@1, in that order, advancing both scoped frontiers contiguously.
-                    producer.send(upstream.stamp(new ProducerRecord<>(SHARED, "sk", "s0"))).get();
-                    producer.send(afterShared0.stamp(new ProducerRecord<>(SHARED, "sk", "s1"))).get();
-                }
+            try (KafkaProducer<String, String> producer = new KafkaProducer<>(producerConfig(bootstrap))) {
+                // Unique-topic records depend on SHARED@1, so they are buffered until it arrives.
+                producer.send(afterShared1.stamp(new ProducerRecord<>(A_ONLY, "ak", "a0"))).get();
+                producer.send(afterShared1.stamp(new ProducerRecord<>(B_ONLY, "bk", "b0"))).get();
+                // SHARED@0 then SHARED@1, in that order, advancing both scoped frontiers contiguously.
+                producer.send(upstream.stamp(new ProducerRecord<>(SHARED, "sk", "s0"))).get();
+                producer.send(afterShared0.stamp(new ProducerRecord<>(SHARED, "sk", "s1"))).get();
+            }
 
-                // SRC1/SRC2 survive completeness because every channel of both processors witnesses
-                // them (the upstream client stamps them onto every record on every topic). Each
-                // processor's own unique topic (A_ONLY / B_ONLY) does not: it is witnessed by only one
-                // of that processor's two channels, so it is dropped by the per-channel minimum — for
-                // both processors alike, which is why all three expected values below coincide.
-                CausalDependencies expected = CausalDependencies.builder(topics)
-                        .require(SHARED, 0, 1)
-                        .require(SRC1, 0, 2)
-                        .require(SRC2, 0, 1)
-                        .build();
+            // SRC1/SRC2 survive completeness because every channel of both processors witnesses
+            // them (the upstream client stamps them onto every record on every topic). Each
+            // processor's own unique topic (A_ONLY / B_ONLY) does not: it is witnessed by only one
+            // of that processor's two channels, so it is dropped by the per-channel minimum — for
+            // both processors alike, which is why all three expected values below coincide.
+            CausalDependencies expected = CausalDependencies.builder(topics)
+                    .require(SHARED, 0, 1)
+                    .require(SRC1, 0, 2)
+                    .require(SRC2, 0, 1)
+                    .build();
 
-                try (KafkaConsumer<String, byte[]> aConsumer = new KafkaConsumer<>(stampConsumerConfig(bootstrap));
-                     KafkaConsumer<String, byte[]> bConsumer = new KafkaConsumer<>(stampConsumerConfig(bootstrap))) {
-                    aConsumer.subscribe(List.of(A_OUT));
-                    bConsumer.subscribe(List.of(B_OUT));
-                    Map<String, CausalDependencies> aStamps = pollStamps(aConsumer, 3);
-                    Map<String, CausalDependencies> bStamps = pollStamps(bConsumer, 3);
+            try (KafkaConsumer<String, byte[]> aConsumer = new KafkaConsumer<>(stampConsumerConfig(bootstrap));
+                 KafkaConsumer<String, byte[]> bConsumer = new KafkaConsumer<>(stampConsumerConfig(bootstrap))) {
+                aConsumer.subscribe(List.of(A_OUT));
+                bConsumer.subscribe(List.of(B_OUT));
+                Map<String, CausalDependencies> aStamps = pollStamps(aConsumer, 3);
+                Map<String, CausalDependencies> bStamps = pollStamps(bConsumer, 3);
 
-                    assertEquals(expected, aStamps.get("S1"),
-                            "SHARED@1 + SRC ancestry witnessed by both of processor A's channels");
-                    assertEquals(expected, bStamps.get("S1"),
-                            "SHARED@1 + SRC ancestry witnessed by both of processor B's channels");
-                    assertEquals(expected, aStamps.get("A0"),
-                            "processor A's stamp carries SHARED+SRC completeness; A_ONLY is dropped "
-                                    + "because only the A_ONLY channel witnesses it, not SHARED");
-                    assertEquals(expected, bStamps.get("B0"),
-                            "processor B's stamp carries SHARED+SRC completeness; B_ONLY is dropped "
-                                    + "because only the B_ONLY channel witnesses it, not SHARED");
-                }
+                assertEquals(expected, aStamps.get("S1"),
+                        "SHARED@1 + SRC ancestry witnessed by both of processor A's channels");
+                assertEquals(expected, bStamps.get("S1"),
+                        "SHARED@1 + SRC ancestry witnessed by both of processor B's channels");
+                assertEquals(expected, aStamps.get("A0"),
+                        "processor A's stamp carries SHARED+SRC completeness; A_ONLY is dropped "
+                                + "because only the A_ONLY channel witnesses it, not SHARED");
+                assertEquals(expected, bStamps.get("B0"),
+                        "processor B's stamp carries SHARED+SRC completeness; B_ONLY is dropped "
+                                + "because only the B_ONLY channel witnesses it, not SHARED");
             }
         }
     }

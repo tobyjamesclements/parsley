@@ -2,24 +2,27 @@ package io.github.tobyjamesclements.parsley;
 
 import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.apache.kafka.clients.producer.ProducerRecord;
+import org.apache.kafka.common.Uuid;
 import org.apache.kafka.common.header.Header;
 import org.apache.kafka.common.header.Headers;
 import org.jspecify.annotations.Nullable;
 
+import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.Properties;
 
 /**
  * A producer-stamped set of causal requirements: the positions a consumer must have observed before
  * a record stamped with these dependencies may be delivered.
  *
  * <p>The usual flow at a topology edge is to hold a running {@code CausalDependencies} as your own
- * causal frontier: start from {@link #using(CausalTopics)} to bind a resolver, fold in each record
+ * causal frontier: start from {@link #using(Properties)} to bind a resolver, fold in each record
  * you consume with {@link #observe(ConsumerRecord)} — which accumulates the upstream's dependencies
  * <em>and</em> the consumed record's own position — then attach the result to each outbound record
- * with {@link #stamp(ProducerRecord)}. A one-to-one relay is {@code using(topics).observe(record)};
+ * with {@link #stamp(ProducerRecord)}. A one-to-one relay is {@code using(props).observe(record)};
  * a fan-in chains an {@code observe} per input. To assert a dependency you did not consume, build one
- * with {@link #builder(CausalTopics)}. Serialise with {@link #toBytes()} / {@link #fromBytes(byte[])}.</p>
+ * with {@link #builder(Properties)}. Serialise with {@link #toBytes()} / {@link #fromBytes(byte[])}.</p>
  *
  * The {@link #toBytes() serialised} form is {@code 5 + 28 × coordinates} bytes. An instance spanning
  * many partitions can breach Kafka's record-size limit ({@code message.max.bytes}, ~1&nbsp;MB by
@@ -47,8 +50,8 @@ public final class CausalDependencies {
 
     /**
      * Returns an empty instance with no positions recorded and no resolver bound. To accumulate
-     * dependencies from consumed records, prefer {@link #using(CausalTopics)}, which binds a resolver
-     * so {@link #observe(ConsumerRecord)} needs no per-call {@code topics} argument.
+     * dependencies from consumed records, prefer {@link #using(Properties)}, which binds a resolver
+     * so {@link #observe(ConsumerRecord)} needs no per-call resolver argument.
      *
      * @return an empty {@code CausalDependencies}
      */
@@ -57,27 +60,69 @@ public final class CausalDependencies {
     }
 
     /**
-     * Returns an empty instance bound to {@code topics}, ready to accumulate consumed records with
-     * {@link #observe(ConsumerRecord)}. This is the start of the consumer-side frontier chain: bind
-     * the resolver once here, then {@code observe(record)} each record you consume without repeating
-     * {@code topics}. The bound resolver flows through {@link #observe(ConsumerRecord)} and
-     * {@link #merge(CausalDependencies)}, but is never serialised and never affects equality.
+     * Returns an empty instance bound to a resolver backed by {@code props}, ready to accumulate
+     * consumed records with {@link #observe(ConsumerRecord)}. This is the start of the consumer-side
+     * frontier chain: bind the resolver once here, then {@code observe(record)} each record you
+     * consume without repeating {@code props}. The bound resolver flows through
+     * {@link #observe(ConsumerRecord)} and {@link #merge(CausalDependencies)}, but is never
+     * serialised and never affects equality.
      *
-     * @param topics the resolver mapping topic names to their Kafka UUIDs; must not be {@code null}
-     * @return an empty {@code CausalDependencies} bound to {@code topics}
+     * @param props the Kafka client configuration to resolve topic UUIDs through; must not be
+     *              {@code null}
+     * @return an empty {@code CausalDependencies} bound to a resolver over {@code props}
      */
-    public static CausalDependencies using(CausalTopics topics) {
+    public static CausalDependencies using(Properties props) {
+        Objects.requireNonNull(props, "props must not be null");
+        return using(CausalTopics.of(props));
+    }
+
+    /**
+     * Returns an empty instance bound to a resolver over a fixed name&rarr;UUID map — the broker-free
+     * path for tests or callers that already hold the UUIDs. See {@link #using(Properties)}.
+     *
+     * @param topicIds the topic names mapped to their Kafka UUIDs; must not be {@code null}
+     * @return an empty {@code CausalDependencies} bound to a resolver over {@code topicIds}
+     */
+    public static CausalDependencies using(Map<String, Uuid> topicIds) {
+        Objects.requireNonNull(topicIds, "topicIds must not be null");
+        return using(CausalTopics.of(topicIds));
+    }
+
+    /** Package-private: the shared implementation the public overloads above delegate to, and the
+     * entry point same-package tests use directly with a reusable {@link CausalTopics} constant. */
+    static CausalDependencies using(CausalTopics topics) {
         Objects.requireNonNull(topics, "topics must not be null");
         return new CausalDependencies(ParsleyClock.empty(), topics);
     }
 
     /**
-     * Returns a new builder that resolves topic names to their stable UUIDs through {@code topics}.
+     * Returns a new builder that resolves topic names to their stable UUIDs through {@code props}.
      *
-     * @param topics the resolver mapping topic names to their Kafka UUIDs; must not be {@code null}
+     * @param props the Kafka client configuration to resolve topic UUIDs through; must not be
+     *              {@code null}
      * @return a new {@code Builder}
      */
-    public static Builder builder(CausalTopics topics) {
+    public static Builder builder(Properties props) {
+        Objects.requireNonNull(props, "props must not be null");
+        return new Builder(CausalTopics.of(props));
+    }
+
+    /**
+     * Returns a new builder that resolves topic names to their stable UUIDs through a fixed
+     * name&rarr;UUID map — the broker-free path for tests or callers that already hold the UUIDs. See
+     * {@link #builder(Properties)}.
+     *
+     * @param topicIds the topic names mapped to their Kafka UUIDs; must not be {@code null}
+     * @return a new {@code Builder}
+     */
+    public static Builder builder(Map<String, Uuid> topicIds) {
+        Objects.requireNonNull(topicIds, "topicIds must not be null");
+        return new Builder(CausalTopics.of(topicIds));
+    }
+
+    /** Package-private: the entry point same-package tests use directly with a reusable
+     * {@link CausalTopics} constant. */
+    static Builder builder(CausalTopics topics) {
         return new Builder(topics);
     }
 
@@ -94,9 +139,8 @@ public final class CausalDependencies {
 
         /**
          * Requires that {@code (topic, partition)} has been observed at offset {@code offset} or
-         * later. The topic name is resolved to its stable UUID through the builder's
-         * {@link CausalTopics}. If a requirement already exists for that coordinate, the higher offset
-         * wins.
+         * later. The topic name is resolved to its stable UUID through the builder's bound resolver.
+         * If a requirement already exists for that coordinate, the higher offset wins.
          *
          * @param topic     the topic name to require; must not be {@code null}
          * @param partition the partition index
@@ -139,10 +183,10 @@ public final class CausalDependencies {
      *
      * <p>This is the consumer-side frontier accumulator. A node consuming with a plain Kafka client
      * has no Parsley engine maintaining a frontier for it, so it maintains one here: bind a resolver
-     * once with {@link #using(CausalTopics)}, {@code observe(record)} every record you consume, and
+     * once with {@link #using(Properties)}, {@code observe(record)} every record you consume, and
      * {@link #stamp(ProducerRecord) stamp} the result onto every record you produce, so downstream
      * consumers wait until they have observed everything this node did. A one-to-one relay is
-     * {@code CausalDependencies.using(topics).observe(record)}; a fan-in (an output caused by several
+     * {@code CausalDependencies.using(props).observe(record)}; a fan-in (an output caused by several
      * inputs) chains an {@code observe} per input; a stateful node whose output reflects everything it
      * has consumed keeps a single instance and {@code observe}s into it across records. Repeated
      * positions on a coordinate take the maximum offset, so re-observing is safe.
@@ -157,8 +201,8 @@ public final class CausalDependencies {
      * watermark itself must not be surfaced to application code as a business record; gate that with
      * {@link #isWatermark(ConsumerRecord)}.
      *
-     * <p>Requires a resolver to be bound — created via {@link #using(CausalTopics)} or
-     * {@link #builder(CausalTopics)}, or carried through a prior {@code observe} / {@code merge}.
+     * <p>Requires a resolver to be bound — created via {@link #using(Properties)} or
+     * {@link #builder(Properties)}, or carried through a prior {@code observe} / {@code merge}.
      *
      * @param record the consumed record to fold in; must not be {@code null}
      * @return a new {@code CausalDependencies} extended with {@code record}'s past and (for a business
@@ -171,8 +215,8 @@ public final class CausalDependencies {
     public CausalDependencies observe(ConsumerRecord<?, ?> record) {
         if (topics == null) {
             throw new IllegalStateException(
-                    "no CausalTopics bound; start the accumulator with CausalDependencies.using(topics) "
-                            + "(or CausalDependencies.builder(topics)) before calling observe(record)");
+                    "no resolver bound; start the accumulator with CausalDependencies.using(props) "
+                            + "(or CausalDependencies.builder(props)) before calling observe(record)");
         }
         Objects.requireNonNull(record, "record must not be null");
         ParsleyClock carried = fromHeaders(record.headers()).map(deps -> deps.clock).orElse(ParsleyClock.empty());

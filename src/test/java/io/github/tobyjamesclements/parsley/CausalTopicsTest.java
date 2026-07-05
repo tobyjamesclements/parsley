@@ -1,12 +1,12 @@
 package io.github.tobyjamesclements.parsley;
 
-import org.apache.kafka.clients.admin.Admin;
 import org.apache.kafka.common.Uuid;
 import org.apache.kafka.common.errors.UnknownTopicOrPartitionException;
 import org.junit.jupiter.api.Test;
 
 import java.util.List;
 import java.util.Map;
+import java.util.Properties;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.atomic.AtomicInteger;
 
@@ -16,8 +16,8 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
  * Tests {@link CausalTopics} resolution and caching against hand-rolled {@link ParsleyTopicAdmin}
- * doubles (the project uses no mocking framework). The live {@code Admin}-backed adapter is covered
- * end-to-end by the integration tests.
+ * doubles (the project uses no mocking framework). The live {@code Properties}-backed path is covered
+ * end-to-end by the integration tests, since it resolves through a real Kafka admin client.
  */
 class CausalTopicsTest {
 
@@ -63,7 +63,7 @@ class CausalTopicsTest {
      */
     @Test
     void resolvesTopicIdThroughTheAdmin() {
-        CausalTopics topics = new ParsleyCausalTopics(admin(t -> Map.of("t1", T1_ID)));
+        CausalTopics topics = new ParsleyTopics(admin(t -> Map.of("t1", T1_ID)));
         assertEquals(T1_ID, topics.topicId("t1"), "the resolver must return the admin's UUID for the topic");
     }
 
@@ -76,7 +76,7 @@ class CausalTopicsTest {
     @Test
     void cachesResolvedTopicIds() {
         AtomicInteger queries = new AtomicInteger();
-        CausalTopics topics = new ParsleyCausalTopics(admin(t -> {
+        CausalTopics topics = new ParsleyTopics(admin(t -> {
             queries.incrementAndGet();
             return Map.of("t1", T1_ID);
         }));
@@ -95,7 +95,7 @@ class CausalTopicsTest {
      */
     @Test
     void unknownTopicFromTheBrokerBecomesIllegalArgument() {
-        CausalTopics topics = new ParsleyCausalTopics(admin(t -> {
+        CausalTopics topics = new ParsleyTopics(admin(t -> {
             throw new ExecutionException(new UnknownTopicOrPartitionException("nope"));
         }));
 
@@ -112,7 +112,7 @@ class CausalTopicsTest {
      */
     @Test
     void brokerFailureBecomesIllegalState() {
-        CausalTopics topics = new ParsleyCausalTopics(admin(t -> {
+        CausalTopics topics = new ParsleyTopics(admin(t -> {
             throw new ExecutionException(new RuntimeException("broker down"));
         }));
 
@@ -128,7 +128,7 @@ class CausalTopicsTest {
      */
     @Test
     void interruptedResolutionBecomesIllegalStateAndPreservesTheInterruptFlag() {
-        CausalTopics topics = new ParsleyCausalTopics(admin(t -> {
+        CausalTopics topics = new ParsleyTopics(admin(t -> {
             throw new InterruptedException();
         }));
 
@@ -145,7 +145,7 @@ class CausalTopicsTest {
      */
     @Test
     void anEmptyResolutionResultBecomesIllegalArgument() {
-        CausalTopics topics = new ParsleyCausalTopics(admin(t -> Map.of()));
+        CausalTopics topics = new ParsleyTopics(admin(t -> Map.of()));
         assertThrows(IllegalArgumentException.class, () -> topics.topicId("t1"),
                 "a topic missing from the admin's result must be an IllegalArgumentException");
     }
@@ -171,8 +171,8 @@ class CausalTopicsTest {
      */
     @Test
     void nullArgumentsAreRejected() {
-        assertThrows(NullPointerException.class, () -> CausalTopics.of((Admin) null),
-                "of(Admin) must reject a null admin");
+        assertThrows(NullPointerException.class, () -> CausalTopics.of((Properties) null),
+                "of(Properties) must reject null props");
         assertThrows(NullPointerException.class, () -> CausalTopics.of((Map<String, Uuid>) null),
                 "of(Map) must reject a null map");
         assertThrows(NullPointerException.class, () -> CausalTopics.of(Map.of("t1", T1_ID)).topicId(null),

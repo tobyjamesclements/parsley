@@ -46,6 +46,17 @@ All notable changes to this project are documented in this file. The format is b
   failure. `ParsleyMetrics` gains a `dead-lettered` rate-total sensor.
 
 ### Changed
+- **Breaking: `CausalTopics` is no longer public; `CausalDependencies.using`/`builder` gain
+  `Properties`/`Map<String, Uuid>` overloads directly.** `CausalTopics.of(Admin)` dated to an earlier
+  design where Parsley avoided owning any Kafka client lifecycle at all — the caller constructed and
+  closed its own `Admin` and handed it in. That no longer matches the rest of the public API (`CausalStreams`
+  already owns its `KafkaStreams` instance, provisions topics, and owns quiesce/coordination internally),
+  so the resolver type is now an internal implementation detail of `CausalDependencies` rather than a
+  separate public type: `CausalDependencies.using(props)` / `.builder(props)` resolve topic UUIDs
+  internally, and `.using(Map<String, Uuid>)` / `.builder(Map<String, Uuid>)` remain the broker-free path
+  for tests. A `Properties`-backed resolver holds no live connection between calls — each distinct topic
+  name is resolved (and cached) through a fresh, short-lived Kafka admin client opened and closed for that
+  one lookup — so there is nothing for a caller to construct or close.
 - **Breaking: `CausalAudit.recordDeserializationFailure`/`recordClockResolutionFailure` drop their
   trailing boolean.** `dropped`/`failed` were always hardcoded constants (`false`/`true` respectively)
   carrying no information; the new `recordDeadLetter` (above) is the actual disposition signal now that a
