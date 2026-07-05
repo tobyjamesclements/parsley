@@ -56,27 +56,14 @@ public final class CausalStreams implements AutoCloseable {
 
     /**
      * Assembles {@code topology} into a real Kafka Streams topology and wraps a {@code KafkaStreams}
-     * instance over it, using {@link CausalMembershipStrategy#blockUntilDrained()} if topology-epoch
-     * coordination is configured.
+     * instance over it, blocking a topology-epoch transition (if configured) until every member has
+     * published — see {@link CausalMembershipStrategy#blockUntilDrained()}.
      *
      * @param topology the causal topology to run
      * @param props    standard Kafka Streams configuration plus Parsley's {@code parsley.*} keys
      */
     public CausalStreams(CausalTopology topology, Properties props) {
-        this(topology, props, CausalMembershipStrategy.blockUntilDrained());
-    }
-
-    /**
-     * As {@link #CausalStreams(CausalTopology, Properties)}, with an explicit
-     * {@link CausalMembershipStrategy} governing how a blocked epoch transition treats a member that has
-     * not published.
-     *
-     * @param topology           the causal topology to run
-     * @param props              standard Kafka Streams configuration plus Parsley's {@code parsley.*} keys
-     * @param membershipStrategy how a blocked epoch round treats members that have not published
-     */
-    public CausalStreams(CausalTopology topology, Properties props, CausalMembershipStrategy membershipStrategy) {
-        this(topology, props, membershipStrategy, ParsleyTopicAdmin::ofConfigs);
+        this(topology, props, CausalMembershipStrategy.blockUntilDrained(), ParsleyTopicAdmin::ofConfigs);
     }
 
     /**

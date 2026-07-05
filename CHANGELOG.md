@@ -124,6 +124,11 @@ All notable changes to this project are documented in this file. The format is b
   causal safety. Consequence: a crashed member blocks the next epoch transition — and any new join — until
   it returns; ongoing current-epoch processing is unaffected. Supersedes the earlier timeout-eviction +
   concurrent-redelivery behaviour.
+- **Breaking: `CausalMembershipStrategy`/`BlockedRound` are no longer public.** The seam for a future
+  exclusion/recovery algorithm still exists internally, but with a single implementation
+  (`blockUntilDrained()`) and no external caller ever supplying one, keeping it public only advertised an
+  extension point nothing used. `CausalStreams`'s public constructor is now just `(topology, props)`; the
+  3-arg overload taking an explicit `CausalMembershipStrategy` is removed.
 - **`CausalCoordination.leave()` now drains before departing.** A graceful decommission quiesce-drains the
   node (blocks until its causal buffer empties through the ordinary delivery path), then appends the
   `Leave`, then requests a new epoch over the remaining members in which it is no longer a member — so a

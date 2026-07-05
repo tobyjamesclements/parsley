@@ -21,7 +21,7 @@ import java.util.Set;
  * unbounded time, until every member returns and publishes. Richer algorithms (recovery, buffer handoff,
  * an operator-driven forced exclusion with dead-lettering) plug in here.
  */
-public interface CausalMembershipStrategy {
+interface CausalMembershipStrategy {
 
     /**
      * Given a round blocked on members that have not yet published, returns the members that may be

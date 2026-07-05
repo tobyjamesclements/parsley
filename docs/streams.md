@@ -233,13 +233,12 @@ folds the shared epoch-events log identically and agrees on each epoch's floor, 
   trades reconfiguration liveness for causal safety: a crashed member blocks the next *transition* (and
   any new join) until it returns, though ongoing current-epoch processing is unaffected. A clean
   decommission calls `coordination.leave()`; a plain restart calls neither `leave()` nor anything else, so
-  the member stays in the domain and returns. How an absent member is handled is a pluggable
-  `CausalMembershipStrategy`, defaulting to `blockUntilDrained()`.
+  the member stays in the domain and returns. How an absent member is handled is an internal seam with one
+  built-in strategy today: block until drained, never evict.
 
-`requestEpochTransition()` opens a boundary across the currently-running nodes from any instance;
-`create(epochEventsTopic, membershipStrategy)` sets the membership strategy. The full protocol — the
-floored clock, the leaderless log fold, the in-band markers, and the source-topic registry — is described
-in [Topology epochs](internals/topology-epochs.md).
+`requestEpochTransition()` opens a boundary across the currently-running nodes from any instance. The full
+protocol — the floored clock, the leaderless log fold, the in-band markers, and the source-topic registry —
+is described in [Topology epochs](internals/topology-epochs.md).
 
 ## Restart and recovery
 

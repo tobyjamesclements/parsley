@@ -9,9 +9,9 @@ import java.util.Set;
  * @param unpublishedMembers the running members that have not yet published their frontier for this round
  * @param runningMembers      the full running membership the round is collecting from
  */
-public record BlockedRound(Set<String> unpublishedMembers, Set<String> runningMembers) {
+record BlockedRound(Set<String> unpublishedMembers, Set<String> runningMembers) {
 
-    public BlockedRound {
+    BlockedRound {
         unpublishedMembers = Set.copyOf(unpublishedMembers);
         runningMembers = Set.copyOf(runningMembers);
     }
