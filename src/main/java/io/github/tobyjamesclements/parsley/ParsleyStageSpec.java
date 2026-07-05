@@ -21,7 +21,7 @@ import java.util.Map;
  * @param <KOut> the forwarded key type
  * @param <VOut> the forwarded value type
  */
-final class StageSpec<KIn, VIn, KOut, VOut> {
+final class ParsleyStageSpec<KIn, VIn, KOut, VOut> {
 
     final @Nullable String explicitName;
     final ProcessorSupplier<KIn, VIn, KOut, VOut> userSupplier;
@@ -30,7 +30,7 @@ final class StageSpec<KIn, VIn, KOut, VOut> {
     @Nullable StreamPartitioner<? super KOut, ? super VOut> partitioner;
     CausalAudit audit = CausalAudit.NOOP;
 
-    StageSpec(@Nullable String explicitName, Map<String, SourceSpec<KIn, VIn>> sources,
+    ParsleyStageSpec(@Nullable String explicitName, Map<String, SourceSpec<KIn, VIn>> sources,
               ProcessorSupplier<KIn, VIn, KOut, VOut> userSupplier) {
         this.explicitName = explicitName;
         this.sources = new LinkedHashMap<>(sources);

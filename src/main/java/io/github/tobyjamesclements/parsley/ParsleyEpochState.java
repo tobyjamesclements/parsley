@@ -25,7 +25,7 @@ import java.util.Set;
  * and release them out of causal order within e-1. So the transition is an <em>interval</em>, not an
  * instant, and both floors are held across it:
  * <ul>
- *   <li>On receiving an {@code EpochBoundary(e, F_e)} marker ({@link #onBoundary}) epoch e becomes
+ *   <li>On receiving an {@code ParsleyEpochBoundary(e, F_e)} marker ({@link #onBoundary}) epoch e becomes
  *       <em>pending</em>; the settled (effective) floor stays {@code F_{e-1}} — the lower held floor.
  *   <li>The window is fully engaged once the marker has arrived on <em>every</em> input channel
  *       (Chandy-Lamport-exact; Kafka per-partition order means a marker on a channel implies all e-1

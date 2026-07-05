@@ -13,13 +13,13 @@ import java.util.Set;
 import java.util.function.Function;
 
 /**
- * The {@link CausalProcessorSupplier} returned by {@link CausalProcessors}: it wraps the user's
+ * The {@link ProcessorSupplier} returned by {@link ParsleyProcessors}: it wraps the user's
  * supplier in a {@link ParsleyProcessor} and {@linkplain #stores() unions} the user's
  * declared state stores with Parsley's internal frontier and buffer stores, so the DSL wires all of
  * them to the same processor node. The user never names Parsley's internal stores.
  */
 final class ParsleyProcessorSupplier<KIn, VIn, KOut, VOut>
-        implements CausalProcessorSupplier<KIn, VIn, KOut, VOut> {
+        implements ProcessorSupplier<KIn, VIn, KOut, VOut> {
 
     private final ProcessorSupplier<KIn, VIn, KOut, VOut> userSupplier;
     private final Function<String, Serde<KIn>> keySerdeByTopic;
@@ -36,8 +36,8 @@ final class ParsleyProcessorSupplier<KIn, VIn, KOut, VOut>
     private final Function<Map<String, Object>, ParsleyTopicAdmin> adminFactory;
     private final ParsleyConfig config;
     private final CausalAudit audit;
-    private final @Nullable CausalQuiesce quiesce;
-    private final @Nullable CausalCoordination coordination;
+    private final @Nullable ParsleyQuiesce quiesce;
+    private final @Nullable ParsleyCoordination coordination;
 
     ParsleyProcessorSupplier(ProcessorSupplier<KIn, VIn, KOut, VOut> userSupplier,
                                       Function<String, Serde<KIn>> keySerdeByTopic,
@@ -54,8 +54,8 @@ final class ParsleyProcessorSupplier<KIn, VIn, KOut, VOut>
                                       Function<Map<String, Object>, ParsleyTopicAdmin> adminFactory,
                                       ParsleyConfig config,
                                       CausalAudit audit,
-                                      @Nullable CausalQuiesce quiesce,
-                                      @Nullable CausalCoordination coordination) {
+                                      @Nullable ParsleyQuiesce quiesce,
+                                      @Nullable ParsleyCoordination coordination) {
         this.userSupplier = userSupplier;
         this.keySerdeByTopic = keySerdeByTopic;
         this.valueSerdeByTopic = valueSerdeByTopic;

@@ -39,14 +39,14 @@ import java.util.Map;
  * {@code Consumed}/{@code Produced}: neither exposes its serdes for reading back, and Parsley's causal
  * buffer needs the real {@link Serde} to round-trip a held record across a restart.
  *
- * <p>See {@link CausalProcessorSupplier} for the causal guarantee and its preconditions — they apply
+ * <p>See {@link ParsleyProcessorSupplier} for the causal guarantee and its preconditions — they apply
  * unchanged here. Every source and sink a stage declares shares one {@code StreamPartitioner}
  * ({@link CausalProcessedStream#withPartitioner}, default Kafka's own key-hash partitioner), so a shard
  * never drifts onto different partitions across topics.
  */
 public final class CausalStreamsBuilder {
 
-    private final List<StageSpec<?, ?, ?, ?>> stages = new ArrayList<>();
+    private final List<ParsleyStageSpec<?, ?, ?, ?>> stages = new ArrayList<>();
     private @Nullable ParsleyTopicAdmin topicAdminOverride = null;
 
     /**
@@ -103,9 +103,9 @@ public final class CausalStreamsBuilder {
      */
     public <K, V> CausalStream<K, V> stream(
             Collection<String> topics, @Nullable Serde<K> keySerde, @Nullable Serde<V> valueSerde) {
-        Map<String, StageSpec.SourceSpec<K, V>> sources = new LinkedHashMap<>();
+        Map<String, ParsleyStageSpec.SourceSpec<K, V>> sources = new LinkedHashMap<>();
         for (String topic : topics) {
-            sources.put(topic, new StageSpec.SourceSpec<>(keySerde, valueSerde));
+            sources.put(topic, new ParsleyStageSpec.SourceSpec<>(keySerde, valueSerde));
         }
         return new CausalStream<>(this, sources);
     }
@@ -123,7 +123,7 @@ public final class CausalStreamsBuilder {
         return this;
     }
 
-    <KIn, VIn, KOut, VOut> CausalProcessedStream<KOut, VOut> addStage(StageSpec<KIn, VIn, KOut, VOut> stage) {
+    <KIn, VIn, KOut, VOut> CausalProcessedStream<KOut, VOut> addStage(ParsleyStageSpec<KIn, VIn, KOut, VOut> stage) {
         stages.add(stage);
         return new CausalProcessedStream<>(stage);
     }
@@ -136,7 +136,7 @@ public final class CausalStreamsBuilder {
      * @throws IllegalStateException if a declared stage has no source or no sink
      */
     public CausalTopology build() {
-        for (StageSpec<?, ?, ?, ?> stage : stages) {
+        for (ParsleyStageSpec<?, ?, ?, ?> stage : stages) {
             if (stage.sources.isEmpty()) {
                 throw new IllegalStateException(
                         "at least one source is required; call stream(...) for every input topic");

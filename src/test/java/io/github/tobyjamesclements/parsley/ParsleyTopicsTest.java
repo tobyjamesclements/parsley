@@ -15,11 +15,11 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * Tests {@link CausalTopics} resolution and caching against hand-rolled {@link ParsleyTopicAdmin}
+ * Tests {@link ParsleyTopics} resolution and caching against hand-rolled {@link ParsleyTopicAdmin}
  * doubles (the project uses no mocking framework). The live {@code Properties}-backed path is covered
  * end-to-end by the integration tests, since it resolves through a real Kafka admin client.
  */
-class CausalTopicsTest {
+class ParsleyTopicsTest {
 
     private static final Uuid T1_ID = Uuid.randomUuid();
 
@@ -63,7 +63,7 @@ class CausalTopicsTest {
      */
     @Test
     void resolvesTopicIdThroughTheAdmin() {
-        CausalTopics topics = new ParsleyTopics(admin(t -> Map.of("t1", T1_ID)));
+        ParsleyTopics topics = new KafkaTopics(admin(t -> Map.of("t1", T1_ID)));
         assertEquals(T1_ID, topics.topicId("t1"), "the resolver must return the admin's UUID for the topic");
     }
 
@@ -76,7 +76,7 @@ class CausalTopicsTest {
     @Test
     void cachesResolvedTopicIds() {
         AtomicInteger queries = new AtomicInteger();
-        CausalTopics topics = new ParsleyTopics(admin(t -> {
+        ParsleyTopics topics = new KafkaTopics(admin(t -> {
             queries.incrementAndGet();
             return Map.of("t1", T1_ID);
         }));
@@ -95,7 +95,7 @@ class CausalTopicsTest {
      */
     @Test
     void unknownTopicFromTheBrokerBecomesIllegalArgument() {
-        CausalTopics topics = new ParsleyTopics(admin(t -> {
+        ParsleyTopics topics = new KafkaTopics(admin(t -> {
             throw new ExecutionException(new UnknownTopicOrPartitionException("nope"));
         }));
 
@@ -112,7 +112,7 @@ class CausalTopicsTest {
      */
     @Test
     void brokerFailureBecomesIllegalState() {
-        CausalTopics topics = new ParsleyTopics(admin(t -> {
+        ParsleyTopics topics = new KafkaTopics(admin(t -> {
             throw new ExecutionException(new RuntimeException("broker down"));
         }));
 
@@ -128,7 +128,7 @@ class CausalTopicsTest {
      */
     @Test
     void interruptedResolutionBecomesIllegalStateAndPreservesTheInterruptFlag() {
-        CausalTopics topics = new ParsleyTopics(admin(t -> {
+        ParsleyTopics topics = new KafkaTopics(admin(t -> {
             throw new InterruptedException();
         }));
 
@@ -145,7 +145,7 @@ class CausalTopicsTest {
      */
     @Test
     void anEmptyResolutionResultBecomesIllegalArgument() {
-        CausalTopics topics = new ParsleyTopics(admin(t -> Map.of()));
+        ParsleyTopics topics = new KafkaTopics(admin(t -> Map.of()));
         assertThrows(IllegalArgumentException.class, () -> topics.topicId("t1"),
                 "a topic missing from the admin's result must be an IllegalArgumentException");
     }
@@ -158,7 +158,7 @@ class CausalTopicsTest {
      */
     @Test
     void mapBackedResolverResolvesKnownTopicsAndRejectsUnknownOnes() {
-        CausalTopics topics = CausalTopics.of(Map.of("t1", T1_ID));
+        ParsleyTopics topics = ParsleyTopics.of(Map.of("t1", T1_ID));
         assertEquals(T1_ID, topics.topicId("t1"), "a known topic must resolve from the map");
         assertThrows(IllegalArgumentException.class, () -> topics.topicId("t2"),
                 "an unknown topic must be rejected");
@@ -171,11 +171,11 @@ class CausalTopicsTest {
      */
     @Test
     void nullArgumentsAreRejected() {
-        assertThrows(NullPointerException.class, () -> CausalTopics.of((Properties) null),
+        assertThrows(NullPointerException.class, () -> ParsleyTopics.of((Properties) null),
                 "of(Properties) must reject null props");
-        assertThrows(NullPointerException.class, () -> CausalTopics.of((Map<String, Uuid>) null),
+        assertThrows(NullPointerException.class, () -> ParsleyTopics.of((Map<String, Uuid>) null),
                 "of(Map) must reject a null map");
-        assertThrows(NullPointerException.class, () -> CausalTopics.of(Map.of("t1", T1_ID)).topicId(null),
+        assertThrows(NullPointerException.class, () -> ParsleyTopics.of(Map.of("t1", T1_ID)).topicId(null),
                 "topicId must reject a null topic");
     }
 }

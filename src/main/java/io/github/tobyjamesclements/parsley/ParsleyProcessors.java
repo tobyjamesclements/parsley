@@ -13,34 +13,34 @@ import java.util.Set;
 import java.util.function.Function;
 
 /**
- * Factory for {@link CausalProcessorSupplier} — the decorating causal processor you drop into a Kafka
+ * Factory for {@link ParsleyProcessorSupplier} — the decorating causal processor you drop into a Kafka
  * Streams topology with {@code stream(...).process(...)}.
  *
  * <p>Obtain a {@link Builder} with {@link #builder(ProcessorSupplier)}, declare the buffer store with
- * {@link Builder#addBufferStore(String)}, register a {@link CausalBuffer} for every input topic, then
+ * {@link Builder#addBufferStore(String)}, register a {@link ParsleyBuffer} for every input topic, then
  * call {@link Builder#build()}:
  *
  * <pre>{@code
  * builder.stream(List.of("prices", "orders"), Consumed.with(Serdes.String(), orderSerde))
- *        .process(CausalProcessors.builder(userSupplier)
+ *        .process(ParsleyProcessors.builder(userSupplier)
  *                .addBufferStore("parsley")
- *                .addBuffer(CausalBuffer.of("prices", Serdes.String(), orderSerde))
- *                .addBuffer(CausalBuffer.of("orders", Serdes.String(), orderSerde))
+ *                .addBuffer(ParsleyBuffer.of("prices", Serdes.String(), orderSerde))
+ *                .addBuffer(ParsleyBuffer.of("orders", Serdes.String(), orderSerde))
  *                .build())
  *        .to("output-topic");
  * }</pre>
  *
  * <p>Each input topic's stable UUID is resolved from the broker automatically at startup, so a
- * {@link CausalBuffer} only carries the per-topic serdes the buffer round-trips held records with.
+ * {@link ParsleyBuffer} only carries the per-topic serdes the buffer round-trips held records with.
  *
- * <p>See {@link CausalProcessorSupplier} for the causal guarantee and its preconditions.
+ * <p>See {@link ParsleyProcessorSupplier} for the causal guarantee and its preconditions.
  */
-final class CausalProcessors {
+final class ParsleyProcessors {
 
-    private CausalProcessors() {}
+    private ParsleyProcessors() {}
 
     /**
-     * Starts building a {@link CausalProcessorSupplier} that wraps {@code userSupplier} behind the
+     * Starts building a {@link ParsleyProcessorSupplier} that wraps {@code userSupplier} behind the
      * causal guarantee. Declare the buffer store with {@link Builder#addBufferStore(String)} before
      * {@link Builder#build()}.
      *
@@ -50,16 +50,16 @@ final class CausalProcessors {
      * @param <VIn>        the input value type
      * @param <KOut>       the forwarded key type
      * @param <VOut>       the forwarded value type
-     * @return a {@link Builder} for a {@code CausalProcessorSupplier}
+     * @return a {@link Builder} for a {@code ParsleyProcessorSupplier}
      * @throws IllegalArgumentException if {@code userSupplier} is already a
-     *         {@link CausalProcessorSupplier} — decorating an already-decorated supplier would
+     *         {@link ParsleyProcessorSupplier} — decorating an already-decorated supplier would
      *         buffer and stamp every record twice, nested, silently corrupting the frontier
      */
     static <KIn, VIn, KOut, VOut> Builder<KIn, VIn, KOut, VOut> builder(
             ProcessorSupplier<KIn, VIn, KOut, VOut> userSupplier) {
-        if (userSupplier instanceof CausalProcessorSupplier) {
+        if (userSupplier instanceof ParsleyProcessorSupplier) {
             throw new IllegalArgumentException(
-                    "userSupplier is already a CausalProcessorSupplier; decorating it again would "
+                    "userSupplier is already a ParsleyProcessorSupplier; decorating it again would "
                             + "buffer and stamp every record twice, nested, silently corrupting the "
                             + "frontier — pass the original, undecorated supplier instead");
         }
@@ -67,8 +67,8 @@ final class CausalProcessors {
     }
 
     /**
-     * Builder for a {@link CausalProcessorSupplier}. A buffer store
-     * (via {@link #addBufferStore(String)}) and at least one {@link CausalBuffer}
+     * Builder for a {@link ParsleyProcessorSupplier}. A buffer store
+     * (via {@link #addBufferStore(String)}) and at least one {@link ParsleyBuffer}
      * (via {@link #addBuffer}/{@link #addBuffers}) are required; Parsley's own configuration is
      * optional.
      *
@@ -81,7 +81,7 @@ final class CausalProcessors {
 
         private final ProcessorSupplier<KIn, VIn, KOut, VOut> userSupplier;
         private @Nullable String storeName = null;
-        private final Map<String, CausalBuffer<KIn, VIn>> buffers = new LinkedHashMap<>();
+        private final Map<String, ParsleyBuffer<KIn, VIn>> buffers = new LinkedHashMap<>();
         private final Properties config = new Properties();
         private Function<Map<String, Object>, ParsleyTopicAdmin> adminFactory = ParsleyTopicAdmin::ofConfigs;
         private @Nullable ParsleyConfig configOverride = null;
@@ -89,8 +89,8 @@ final class CausalProcessors {
         private Set<String> sinkTopics = Set.of();
         private List<String> sinkNodeNames = List.of();
         private @Nullable String deadLetterSinkName = null;
-        private @Nullable CausalQuiesce quiesce = null;
-        private @Nullable CausalCoordination coordination = null;
+        private @Nullable ParsleyQuiesce quiesce = null;
+        private @Nullable ParsleyCoordination coordination = null;
 
         private Builder(ProcessorSupplier<KIn, VIn, KOut, VOut> userSupplier) {
             this.userSupplier = userSupplier;
@@ -124,7 +124,7 @@ final class CausalProcessors {
          * @param buffer the source topic and its serdes; must not be {@code null}
          * @return this builder
          */
-        Builder<KIn, VIn, KOut, VOut> addBuffer(CausalBuffer<KIn, VIn> buffer) {
+        Builder<KIn, VIn, KOut, VOut> addBuffer(ParsleyBuffer<KIn, VIn> buffer) {
             buffers.put(buffer.topic(), buffer);
             return this;
         }
@@ -135,8 +135,8 @@ final class CausalProcessors {
          * @param buffers the source buffers; must not be {@code null}
          * @return this builder
          */
-        Builder<KIn, VIn, KOut, VOut> addBuffers(Collection<CausalBuffer<KIn, VIn>> buffers) {
-            for (CausalBuffer<KIn, VIn> buffer : buffers) {
+        Builder<KIn, VIn, KOut, VOut> addBuffers(Collection<ParsleyBuffer<KIn, VIn>> buffers) {
+            for (ParsleyBuffer<KIn, VIn> buffer : buffers) {
                 addBuffer(buffer);
             }
             return this;
@@ -154,7 +154,7 @@ final class CausalProcessors {
         Builder<KIn, VIn, KOut, VOut> addBuffers(
                 Collection<String> topics, Serde<KIn> key, Serde<VIn> value) {
             for (String topic : topics) {
-                addBuffer(CausalBuffer.of(topic, key, value));
+                addBuffer(ParsleyBuffer.of(topic, key, value));
             }
             return this;
         }
@@ -216,27 +216,27 @@ final class CausalProcessors {
         }
 
         /**
-         * Registers this processor's tasks with a {@link CausalQuiesce} for coordinated graceful
+         * Registers this processor's tasks with a {@link ParsleyQuiesce} for coordinated graceful
          * shutdown. Optional — without one, tasks process and close exactly as they do today, with no
          * quiesce tracking.
          *
          * @param quiesce the quiesce coordinator every task instance registers with
          * @return this builder
          */
-        Builder<KIn, VIn, KOut, VOut> withQuiesce(CausalQuiesce quiesce) {
+        Builder<KIn, VIn, KOut, VOut> withQuiesce(ParsleyQuiesce quiesce) {
             this.quiesce = quiesce;
             return this;
         }
 
         /**
-         * Registers this stage's tasks with a {@link CausalCoordination} to participate in topology-epoch
+         * Registers this stage's tasks with a {@link ParsleyCoordination} to participate in topology-epoch
          * coordination. Optional — without one, the stage runs in epoch 0 (no epoch-events log, no
          * coordination thread), exactly as today.
          *
          * @param coordination the coordination handle shared across every participating stage
          * @return this builder
          */
-        Builder<KIn, VIn, KOut, VOut> withCoordination(CausalCoordination coordination) {
+        Builder<KIn, VIn, KOut, VOut> withCoordination(ParsleyCoordination coordination) {
             this.coordination = coordination;
             return this;
         }
@@ -325,22 +325,22 @@ final class CausalProcessors {
         }
 
         /**
-         * Builds the {@link CausalProcessorSupplier}.
+         * Builds the {@link ParsleyProcessorSupplier}.
          *
          * @return a decorated supplier ready for {@code stream(...).process(...)}
-         * @throws IllegalStateException if no buffer store or no {@link CausalBuffer} was declared
+         * @throws IllegalStateException if no buffer store or no {@link ParsleyBuffer} was declared
          */
-        CausalProcessorSupplier<KIn, VIn, KOut, VOut> build() {
+        ParsleyProcessorSupplier<KIn, VIn, KOut, VOut> build() {
             if (storeName == null) {
                 throw new IllegalStateException(
                         "a buffer store is required; call addBufferStore(name)");
             }
             if (buffers.isEmpty()) {
                 throw new IllegalStateException(
-                        "at least one CausalBuffer is required; call addBuffer(...) for every input topic");
+                        "at least one ParsleyBuffer is required; call addBuffer(...) for every input topic");
             }
             String store = storeName;
-            Map<String, CausalBuffer<KIn, VIn>> resolved = Map.copyOf(buffers);
+            Map<String, ParsleyBuffer<KIn, VIn>> resolved = Map.copyOf(buffers);
             Function<String, Serde<KIn>> keySerdeByTopic = topic -> serdeFor(resolved, topic).keySerde();
             Function<String, Serde<VIn>> valueSerdeByTopic = topic -> serdeFor(resolved, topic).valueSerde();
             ParsleyConfig effectiveConfig = configOverride != null ? configOverride : effectiveConfig();
@@ -358,11 +358,11 @@ final class CausalProcessors {
             return ParsleyConfig.from(props);
         }
 
-        private static <KIn, VIn> CausalBuffer<KIn, VIn> serdeFor(
-                Map<String, CausalBuffer<KIn, VIn>> buffers, String topic) {
-            CausalBuffer<KIn, VIn> buffer = buffers.get(topic);
+        private static <KIn, VIn> ParsleyBuffer<KIn, VIn> serdeFor(
+                Map<String, ParsleyBuffer<KIn, VIn>> buffers, String topic) {
+            ParsleyBuffer<KIn, VIn> buffer = buffers.get(topic);
             if (buffer == null) {
-                throw new IllegalStateException("no CausalBuffer registered for topic '" + topic + "'");
+                throw new IllegalStateException("no ParsleyBuffer registered for topic '" + topic + "'");
             }
             return buffer;
         }

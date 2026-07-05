@@ -28,11 +28,11 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
  * End-to-end proof that an already-running causal topology evolves through an epoch transition driven by
- * {@link CausalCoordination} (the mechanism {@link CausalStreams#requestEpochTransition()} delegates to)
+ * {@link ParsleyCoordination} (the mechanism {@link CausalStreams#requestEpochTransition()} delegates to)
  * — over a real {@link TopologyTestDriver} stage (real serdes, real forward path), with the coordination
  * runtime driven synchronously over the in-memory transport.
  */
-class CausalCoordinationTopologyTest {
+class ParsleyCoordinationTopologyTest {
 
     private static final Uuid T1_ID = Uuid.randomUuid();
     private static final ParsleyTopicAdmin ADMIN = TestTopicAdmin.of(Map.of("t1", T1_ID));
@@ -48,7 +48,7 @@ class CausalCoordinationTopologyTest {
     void runningTopologyEvolvesThroughAnEpochTransition() {
         InMemoryEpochTransport.SharedLog eventLog = new InMemoryEpochTransport.SharedLog();
         ParsleyEpochRuntime runtime = new ParsleyEpochRuntime(new InMemoryEpochTransport(eventLog));
-        CausalCoordination coordination = CausalCoordination.forRuntime(runtime);
+        ParsleyCoordination coordination = ParsleyCoordination.forRuntime(runtime);
         // Bootstrap the runtime (empty log) before the driver's init() runs — a coordinated task's init
         // blocks until the runtime has folded the backlog. This is a cold start (epoch 0), so no join
         // round is opened and init proceeds once bootstrapped.
@@ -59,7 +59,7 @@ class CausalCoordinationTopologyTest {
                 .process(upperCaser())
                 .to("out-sink", "out", Serdes.String(), Serdes.String());
         Topology topology = builder.topicAdmin(ADMIN).build()
-                .assemble(config(), CausalQuiesce.create(), coordination);
+                .assemble(config(), ParsleyQuiesce.create(), coordination);
 
         try (TopologyTestDriver driver = new TopologyTestDriver(topology, config())) {
             TestInputTopic<String, String> t1 =
@@ -85,8 +85,8 @@ class CausalCoordinationTopologyTest {
             settle(eventLog, runtime);
             t1.pipeInput(new TestRecord<>("k", "more", emptyDeps()));    // poll adopts+injects epoch 2
 
-            EpochBoundary epochTwo = out.readRecordsToList().stream()
-                    .map(CausalCoordinationTopologyTest::boundaryOf)
+            ParsleyEpochBoundary epochTwo = out.readRecordsToList().stream()
+                    .map(ParsleyCoordinationTopologyTest::boundaryOf)
                     .flatMap(Optional::stream)
                     .filter(b -> b.epochId() == 2)
                     .findFirst()
@@ -98,10 +98,10 @@ class CausalCoordinationTopologyTest {
         }
     }
 
-    private static Optional<EpochBoundary> boundaryOf(TestRecord<String, String> record) {
+    private static Optional<ParsleyEpochBoundary> boundaryOf(TestRecord<String, String> record) {
         for (Header h : record.headers()) {
             if (ParsleyHeader.EPOCH_BOUNDARY.equals(h.key()) && h.value() != null) {
-                return Optional.of(EpochBoundary.fromBytes(h.value()));
+                return Optional.of(ParsleyEpochBoundary.fromBytes(h.value()));
             }
         }
         return Optional.empty();

@@ -48,7 +48,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
  * needed on egress. A raw {@link KafkaConsumer} reads the output topic and checks the header.
  */
 @Testcontainers(disabledWithoutDocker = true)
-class CausalProcessorsSinkPropagationIT {
+class ParsleyProcessorsSinkPropagationIT {
 
     @Container
     private final KafkaContainer kafka =
@@ -73,7 +73,7 @@ class CausalProcessorsSinkPropagationIT {
     void stampedClockSurvivesTheSinkToTheOutputTopic() throws Exception {
         String bootstrap = kafka.getBootstrapServers();
         Map<String, Uuid> topicIds = createTopics(bootstrap, IN, OUT);
-        CausalTopics topics = CausalTopics.of(topicIds);
+        ParsleyTopics topics = ParsleyTopics.of(topicIds);
 
         ProcessorSupplier<String, String, String, String> user = () -> new Processor<>() {
             private ProcessorContext<String, String> ctx;
@@ -91,8 +91,8 @@ class CausalProcessorsSinkPropagationIT {
 
         StreamsBuilder builder = new StreamsBuilder();
         builder.stream(IN, Consumed.with(Serdes.String(), Serdes.String()))
-                .process(CausalProcessors.builder(user).addBufferStore("parsley")
-                        .addBuffer(CausalBuffer.of(IN, Serdes.String(), Serdes.String()))
+                .process(ParsleyProcessors.builder(user).addBufferStore("parsley")
+                        .addBuffer(ParsleyBuffer.of(IN, Serdes.String(), Serdes.String()))
                         .build())
                 .to(OUT, Produced.with(Serdes.String(), Serdes.String()));
 

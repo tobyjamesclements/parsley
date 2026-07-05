@@ -13,7 +13,7 @@ package io.github.tobyjamesclements.parsley;
  * The default {@link #NOOP} disables publication (no coordinator deployed), so a node runs in epoch 0
  * unchanged: a snapshot marker only ever arrives when a coordinator is broadcasting one. When
  * coordination is configured this is backed by {@link ParsleyEpochRuntime#publishFrontier}, appending a
- * {@link EpochEvent.FrontierPublished} to the epoch-events log.
+ * {@link ParsleyEpochEvent.FrontierPublished} to the epoch-events log.
  *
  * <p><strong>Known limitation under {@code exactly_once} (to harden with the runtime lifecycle):</strong>
  * the published {@code completeness} is read from the in-memory frontier, which under EOS may momentarily

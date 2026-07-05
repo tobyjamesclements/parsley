@@ -12,11 +12,11 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 
 /**
- * Tests for {@link ParsleyKafkaEpochTransport}'s client-config derivation — the part that can be verified
+ * Tests for {@link KafkaEpochTransport}'s client-config derivation — the part that can be verified
  * without a broker. The full broker round-trip (append + full-log replay) is exercised by the WS4d Docker
  * integration test.
  */
-class ParsleyKafkaEpochTransportTest {
+class KafkaEpochTransportTest {
 
     /**
      * The producer config carries the app's broker settings through, forces byte-array serializers and
@@ -29,7 +29,7 @@ class ParsleyKafkaEpochTransportTest {
                 "security.protocol", "SSL",
                 "application.id", "my-streams-app");   // a Streams-only key, tolerated as unused
 
-        Map<String, Object> config = ParsleyKafkaEpochTransport.producerConfig(appConfigs);
+        Map<String, Object> config = KafkaEpochTransport.producerConfig(appConfigs);
 
         assertEquals("broker:9092", config.get("bootstrap.servers"), "bootstrap is inherited from appConfigs");
         assertEquals("SSL", config.get("security.protocol"), "broker security settings are inherited");
@@ -52,7 +52,7 @@ class ParsleyKafkaEpochTransportTest {
                 "bootstrap.servers", "broker:9092",
                 "group.id", "some-streams-group");   // must be dropped: we assign, not subscribe
 
-        Map<String, Object> config = ParsleyKafkaEpochTransport.consumerConfig(appConfigs);
+        Map<String, Object> config = KafkaEpochTransport.consumerConfig(appConfigs);
 
         assertEquals("broker:9092", config.get("bootstrap.servers"), "bootstrap is inherited from appConfigs");
         assertEquals(ByteArrayDeserializer.class.getName(),

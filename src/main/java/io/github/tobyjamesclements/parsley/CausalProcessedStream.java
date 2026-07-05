@@ -13,9 +13,9 @@ import org.jspecify.annotations.Nullable;
  */
 public final class CausalProcessedStream<K, V> {
 
-    private final StageSpec<?, ?, K, V> stage;
+    private final ParsleyStageSpec<?, ?, K, V> stage;
 
-    CausalProcessedStream(StageSpec<?, ?, K, V> stage) {
+    CausalProcessedStream(ParsleyStageSpec<?, ?, K, V> stage) {
         this.stage = stage;
     }
 
@@ -67,7 +67,7 @@ public final class CausalProcessedStream<K, V> {
      */
     public CausalProcessedStream<K, V> to(
             String name, String topic, @Nullable Serde<K> keySerde, @Nullable Serde<V> valueSerde) {
-        stage.sinks.add(new StageSpec.SinkSpec<>(name, topic, keySerde, valueSerde));
+        stage.sinks.add(new ParsleyStageSpec.SinkSpec<>(name, topic, keySerde, valueSerde));
         return this;
     }
 

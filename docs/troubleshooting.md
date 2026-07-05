@@ -3,7 +3,7 @@
 ## A held record can no longer be deserialised (poison record)
 
 Parsley persists records whose causal dependencies are not yet satisfied to a changelog-backed buffer
-store, serialised with the `CausalBuffer` serdes. When such a record is later forwarded, whether on
+store, serialised with the `ParsleyBuffer` serdes. When such a record is later forwarded, whether on
 drain or on limit-driven eviction, Parsley deserialises it with that serde. If the serde now fails,
 most often because of a Schema Registry change while the record was buffered, the record is a poison
 record.

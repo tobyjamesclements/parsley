@@ -8,13 +8,13 @@ import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
  * Coordinates graceful shutdown across every causal task in one {@link CausalStreams} runtime
- * instance. {@code CausalStreams} owns one {@code CausalQuiesce} internally: every participating
+ * instance. {@code CausalStreams} owns one {@code ParsleyQuiesce} internally: every participating
  * task registers with it at {@code init()}, and {@code CausalStreams#close()} calls
  * {@link #requestQuiesce()} then polls {@link #isSafeToClose()} before stopping the underlying
  * {@code KafkaStreams} — so a clean shutdown never strands a causally-held record. There is no
  * public handle; this is purely {@code CausalStreams}' internal shutdown mechanism.
  *
- * <p>A task registered with a {@code CausalQuiesce} keeps processing normally after
+ * <p>A task registered with a {@code ParsleyQuiesce} keeps processing normally after
  * {@link #requestQuiesce()} — nothing about how it delivers or forwards records changes. It only
  * reports itself drained once its causal buffer has emptied through the ordinary delivery path (a
  * held record's dependencies becoming satisfied by a later message, exactly as it would without
@@ -29,21 +29,21 @@ import java.util.concurrent.atomic.AtomicBoolean;
  * <p><strong>Thread-safety:</strong> safe to share across every task/partition's own Kafka Streams
  * thread, and to poll from an unrelated shutdown thread.
  */
-final class CausalQuiesce {
+final class ParsleyQuiesce {
 
     private final AtomicBoolean requested = new AtomicBoolean(false);
     private final Set<TaskId> registered = ConcurrentHashMap.newKeySet();
     private final Set<TaskId> drained = ConcurrentHashMap.newKeySet();
 
-    private CausalQuiesce() {}
+    private ParsleyQuiesce() {}
 
     /**
-     * Creates a new, not-yet-requested {@code CausalQuiesce} with no registered tasks.
+     * Creates a new, not-yet-requested {@code ParsleyQuiesce} with no registered tasks.
      *
-     * @return a new {@code CausalQuiesce}
+     * @return a new {@code ParsleyQuiesce}
      */
-    static CausalQuiesce create() {
-        return new CausalQuiesce();
+    static ParsleyQuiesce create() {
+        return new ParsleyQuiesce();
     }
 
     /**

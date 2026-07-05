@@ -14,7 +14,7 @@ import java.util.Set;
  * coordination handshake for the leaderless epoch protocol. All coordination is event-sourced here; the
  * log's total order plus the deterministic fold in {@link ParsleyEpochLog} let every node agree on round
  * ownership, membership, and the committed lower bounds without a leader. This log carries only the
- * handshake; the runtime floor itself still travels in-band via {@link EpochBoundary} markers.
+ * handshake; the runtime floor itself still travels in-band via {@link ParsleyEpochBoundary} markers.
  *
  * <p>The four events:
  * <ul>
@@ -29,9 +29,9 @@ import java.util.Set;
  *       dedup by {@code epochId}.
  * </ul>
  */
-sealed interface EpochEvent
-        permits EpochEvent.JoinRequested, EpochEvent.SnapshotRequested,
-                EpochEvent.FrontierPublished, EpochEvent.EpochCommitted, EpochEvent.Leave {
+sealed interface ParsleyEpochEvent
+        permits ParsleyEpochEvent.JoinRequested, ParsleyEpochEvent.SnapshotRequested,
+                ParsleyEpochEvent.FrontierPublished, ParsleyEpochEvent.EpochCommitted, ParsleyEpochEvent.Leave {
 
     byte TAG_JOIN = 1;
     byte TAG_SNAPSHOT = 2;
@@ -47,23 +47,23 @@ sealed interface EpochEvent
      * by hand which of its inputs are external.
      */
     record JoinRequested(String memberId, Set<String> inputTopics, Set<String> sinkTopics)
-            implements EpochEvent {}
+            implements ParsleyEpochEvent {}
 
     /** A node proposes a snapshot round; the first after the last commit opens it and owns it. */
-    record SnapshotRequested(String memberId) implements EpochEvent {}
+    record SnapshotRequested(String memberId) implements ParsleyEpochEvent {}
 
     /** A running member's completeness frontier for the currently open round. */
-    record FrontierPublished(String memberId, ParsleyClock completeness) implements EpochEvent {}
+    record FrontierPublished(String memberId, ParsleyClock completeness) implements ParsleyEpochEvent {}
 
     /** The round owner's decision: the new epoch id and its lower bounds. */
-    record EpochCommitted(long epochId, ParsleyClock lowerBounds) implements EpochEvent {}
+    record EpochCommitted(long epochId, ParsleyClock lowerBounds) implements ParsleyEpochEvent {}
 
     /**
      * A member is removed from the domain — appended by the member itself (a graceful
-     * {@code CausalCoordination.leave()}) or by any node evicting a silent member after a round waits too
+     * {@code ParsleyCoordination.leave()}) or by any node evicting a silent member after a round waits too
      * long. Either way the fold drops it from membership, so a gone member cannot freeze rounds forever.
      */
-    record Leave(String memberId) implements EpochEvent {}
+    record Leave(String memberId) implements ParsleyEpochEvent {}
 
     /** Serialises this event: {@code [tag:1]} then the tag-specific body. */
     default byte[] toBytes() {
@@ -98,7 +98,7 @@ sealed interface EpochEvent
             dos.flush();
             return baos.toByteArray();
         } catch (IOException ex) {
-            throw new IllegalStateException("EpochEvent serialisation failed", ex);
+            throw new IllegalStateException("ParsleyEpochEvent serialisation failed", ex);
         }
     }
 
@@ -107,7 +107,7 @@ sealed interface EpochEvent
      *
      * @throws IllegalStateException if {@code bytes} is not valid, including an unrecognised tag
      */
-    static EpochEvent fromBytes(byte[] bytes) {
+    static ParsleyEpochEvent fromBytes(byte[] bytes) {
         try (DataInputStream dis = new DataInputStream(new ByteArrayInputStream(bytes))) {
             byte tag = dis.readByte();
             return switch (tag) {
@@ -116,10 +116,10 @@ sealed interface EpochEvent
                 case TAG_FRONTIER -> new FrontierPublished(readString(dis), readClock(dis));
                 case TAG_COMMIT -> new EpochCommitted(dis.readLong(), readClock(dis));
                 case TAG_LEAVE -> new Leave(readString(dis));
-                default -> throw new IllegalStateException("unrecognised EpochEvent tag: " + tag);
+                default -> throw new IllegalStateException("unrecognised ParsleyEpochEvent tag: " + tag);
             };
         } catch (IOException ex) {
-            throw new IllegalStateException("EpochEvent deserialisation failed", ex);
+            throw new IllegalStateException("ParsleyEpochEvent deserialisation failed", ex);
         }
     }
 

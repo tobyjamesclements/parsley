@@ -45,7 +45,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * (its source topic), then deserialised back to an equal {@code Order} when it drains — never under
  * the changelog/store name.
  */
-class CausalProcessorsAvroTopologyTest {
+class ParsleyProcessorsAvroTopologyTest {
 
     // The scope is the part after mock:// — MockSchemaRegistry keys its in-JVM client by it.
     private static final String SCOPE = "parsley-avro-topology";
@@ -55,7 +55,7 @@ class CausalProcessorsAvroTopologyTest {
     private static final String ORDERS = "orders";
     private static final Uuid PRICES_ID = Uuid.randomUuid();
     private static final Uuid ORDERS_ID = Uuid.randomUuid();
-    private static final CausalTopics TOPICS = CausalTopics.of(Map.of(PRICES, PRICES_ID, ORDERS, ORDERS_ID));
+    private static final ParsleyTopics TOPICS = ParsleyTopics.of(Map.of(PRICES, PRICES_ID, ORDERS, ORDERS_ID));
 
     private final List<SpecificRecord> processed = new ArrayList<>();
 
@@ -90,7 +90,7 @@ class CausalProcessorsAvroTopologyTest {
         ProcessorSupplier<String, SpecificRecord, String, SpecificRecord> user = capturing();
         StreamsBuilder builder = new StreamsBuilder();
         builder.stream(List.of(PRICES, ORDERS), Consumed.with(Serdes.String(), avro))
-                .process(CausalProcessors.builder(user)
+                .process(ParsleyProcessors.builder(user)
                         .addBufferStore("parsley")
                         .addBuffers(List.of(PRICES, ORDERS), Serdes.String(), avro)
                         .topicAdmin(TestTopicAdmin.of(Map.of(PRICES, PRICES_ID, ORDERS, ORDERS_ID)))
@@ -184,9 +184,9 @@ class CausalProcessorsAvroTopologyTest {
         };
         StreamsBuilder builder = new StreamsBuilder();
         builder.stream(List.of(PRICES, ORDERS), Consumed.with(Serdes.String(), avro))
-                .process(CausalProcessors.builder(capturing()).addBufferStore("parsley")
-                        .addBuffer(CausalBuffer.of(PRICES, Serdes.String(), avro))
-                        .addBuffer(CausalBuffer.of(ORDERS, Serdes.String(), undecodableOnRead))
+                .process(ParsleyProcessors.builder(capturing()).addBufferStore("parsley")
+                        .addBuffer(ParsleyBuffer.of(PRICES, Serdes.String(), avro))
+                        .addBuffer(ParsleyBuffer.of(ORDERS, Serdes.String(), undecodableOnRead))
                         .topicAdmin(TestTopicAdmin.of(Map.of(PRICES, PRICES_ID, ORDERS, ORDERS_ID)))
                         .config(config)
                         .build());

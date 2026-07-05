@@ -112,7 +112,7 @@ class CausalFanOutScopedFrontierIT {
 
         Properties resolverProps = new Properties();
         resolverProps.put("bootstrap.servers", bootstrap);
-        CausalTopics topics = CausalTopics.of(resolverProps);
+        ParsleyTopics topics = ParsleyTopics.of(resolverProps);
 
         List<ConsumerRecord<String, String>> consumed = new ArrayList<>();
         try (KafkaConsumer<String, String> consumer = new KafkaConsumer<>(consumerConfig(bootstrap))) {
@@ -188,7 +188,7 @@ class CausalFanOutScopedFrontierIT {
 
             Properties resolverProps = new Properties();
             resolverProps.put("bootstrap.servers", bootstrap);
-            CausalTopics topics = CausalTopics.of(resolverProps);
+            ParsleyTopics topics = ParsleyTopics.of(resolverProps);
 
             // What an upstream client carrying its max frontier (see the other test) would stamp.
             // Neither processor consumes SRC1/SRC2, so these coordinates are out of every scope.
@@ -250,7 +250,7 @@ class CausalFanOutScopedFrontierIT {
     private static Topology scopedTopology(String shared, String unique, String out, String namespace) {
         StreamsBuilder builder = new StreamsBuilder();
         builder.stream(List.of(shared, unique), Consumed.with(Serdes.String(), Serdes.String()))
-                .process(CausalProcessors.builder(upperCaser())
+                .process(ParsleyProcessors.builder(upperCaser())
                         .addBufferStore(namespace)
                         .addBuffers(List.of(shared, unique), Serdes.String(), Serdes.String())
                         .build())

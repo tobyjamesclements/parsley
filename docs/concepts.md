@@ -120,7 +120,7 @@ coarser function of the key with a custom `StreamPartitioner`, provided the part
 rather than the value, since a protocol watermark carries no value to read.
 
 Parsley does not enforce co-partitioning end to end, and most of it cannot be checked, so a
-misconfigured topology evaluates against an incomplete partition set. A bare `CausalProcessors`
+misconfigured topology evaluates against an incomplete partition set. A bare `ParsleyProcessors`
 decorator can check one necessary part at startup, that its causal input topics share a partition
 count, controlled by `parsley.topology.validation` (`warn` by default, `strict` to fail fast, `off`
 to disable). `CausalStreams` (see [Streams integration](streams.md#the-high-level-api-causalstreams))
@@ -139,10 +139,10 @@ floor per coordinate; history below the floor is pre-epoch, so it feeds the dele
 not participate in causal time. A node deployed into a running topology adopts the current floor and
 replays with everything below it stripped, so it never drags the frontier down.
 
-`CausalCoordination` turns this on. It is optional and leaderless: participating applications share one
+`ParsleyCoordination` turns this on. It is optional and leaderless: participating applications share one
 single-partition epoch-events log and each folds it identically to agree on every epoch's floor, which
 then propagates through the topology in-band. Which topics are external entry points is derived from
-what each node declares it consumes and produces, not configured by hand. Without a `CausalCoordination`
+what each node declares it consumes and produces, not configured by hand. Without a `ParsleyCoordination`
 a topology runs in epoch 0 and behaves exactly as one with no epoch machinery. See
 [Evolving a running topology](streams.md#evolving-a-running-topology) for the API and
 [Topology epochs](internals/topology-epochs.md) for the protocol.

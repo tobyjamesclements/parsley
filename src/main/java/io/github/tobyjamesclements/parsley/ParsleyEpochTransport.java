@@ -14,7 +14,7 @@ import java.util.List;
  *
  * <p>Keeping the read a caller-driven {@link #poll} (rather than an internal thread or callback) lets the
  * runtime own the single background thread and lets a test double stay a trivially synchronous in-memory
- * list. The concrete broker implementation is {@link ParsleyKafkaEpochTransport}; tests use a hand-rolled
+ * list. The concrete broker implementation is {@link KafkaEpochTransport}; tests use a hand-rolled
  * in-memory double.
  *
  * <p>Not required to be thread-safe: a single runtime thread appends and polls one transport.
@@ -27,7 +27,7 @@ interface ParsleyEpochTransport extends AutoCloseable {
      * on any record key. Appends are idempotent at the protocol level (dedup by {@code epochId} for
      * commits; a re-observed join/request/publication folds to the same state).
      */
-    void append(EpochEvent event);
+    void append(ParsleyEpochEvent event);
 
     /**
      * Returns events appended since the previous {@code poll}, in log order, waiting up to {@code
@@ -37,7 +37,7 @@ interface ParsleyEpochTransport extends AutoCloseable {
      * the entire history (the log is low-volume, transition-only, and never offset-committed, so every
      * node deterministically folds from the beginning).
      */
-    List<EpochEvent> poll(Duration timeout);
+    List<ParsleyEpochEvent> poll(Duration timeout);
 
     /**
      * Whether this reader has folded the log up to the end offset that existed when it started — i.e. it

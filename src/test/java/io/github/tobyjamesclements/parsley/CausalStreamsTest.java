@@ -60,7 +60,7 @@ class CausalStreamsTest {
     }
 
     private static CausalStreams streamsWith(Properties props, ParsleyTopicAdmin admin) {
-        return new CausalStreams(topology(), props, CausalMembershipStrategy.blockUntilDrained(), configs -> admin);
+        return new CausalStreams(topology(), props, ParsleyMembershipStrategy.blockUntilDrained(), configs -> admin);
     }
 
     /**

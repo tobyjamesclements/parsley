@@ -48,7 +48,7 @@ class CausalStreamsTopologyTest {
     private static final Uuid T2_ID = Uuid.randomUuid();
 
     private static final ParsleyTopicAdmin ADMIN = TestTopicAdmin.of(Map.of("t1", T1_ID, "t2", T2_ID));
-    private static final CausalTopics TOPICS = CausalTopics.of(Map.of("t1", T1_ID, "t2", T2_ID));
+    private static final ParsleyTopics TOPICS = ParsleyTopics.of(Map.of("t1", T1_ID, "t2", T2_ID));
 
     private final List<String> processed = new ArrayList<>();
 
@@ -72,15 +72,15 @@ class CausalStreamsTopologyTest {
 
     /** Assembles {@code builder} against {@code admin} and default (warn) topology validation. */
     private static Topology assemble(CausalStreamsBuilder builder, ParsleyTopicAdmin admin) {
-        return assemble(builder, admin, config(), CausalQuiesce.create());
+        return assemble(builder, admin, config(), ParsleyQuiesce.create());
     }
 
     private static Topology assemble(CausalStreamsBuilder builder, ParsleyTopicAdmin admin, Properties props) {
-        return assemble(builder, admin, props, CausalQuiesce.create());
+        return assemble(builder, admin, props, ParsleyQuiesce.create());
     }
 
     private static Topology assemble(
-            CausalStreamsBuilder builder, ParsleyTopicAdmin admin, Properties props, CausalQuiesce quiesce) {
+            CausalStreamsBuilder builder, ParsleyTopicAdmin admin, Properties props, ParsleyQuiesce quiesce) {
         return builder.topicAdmin(admin).build().assemble(props, quiesce, null);
     }
 
@@ -211,8 +211,8 @@ class CausalStreamsTopologyTest {
 
     /**
      * Assembling a stage whose {@code userSupplier} is already a package-private
-     * {@code CausalProcessorSupplier} rejects it — the double-wrap guard lives in
-     * {@code CausalProcessors#builder}, which {@link CausalTopology#assemble} composes internally, so
+     * {@code ParsleyProcessorSupplier} rejects it — the double-wrap guard lives in
+     * {@code ParsleyProcessors#builder}, which {@link CausalTopology#assemble} composes internally, so
      * this proves the protection is inherited rather than needing a second, separate check in the
      * public builder.
      *
@@ -220,10 +220,10 @@ class CausalStreamsTopologyTest {
      */
     @Test
     void assembleRejectsAnAlreadyDecoratedSupplier() {
-        CausalProcessorSupplier<String, String, String, String> alreadyDecorated =
-                CausalProcessors.builder(upperCaser())
+        ParsleyProcessorSupplier<String, String, String, String> alreadyDecorated =
+                ParsleyProcessors.builder(upperCaser())
                         .addBufferStore("parsley")
-                        .addBuffer(CausalBuffer.of("t1", Serdes.String(), Serdes.String()))
+                        .addBuffer(ParsleyBuffer.of("t1", Serdes.String(), Serdes.String()))
                         .build();
 
         CausalStreamsBuilder builder = new CausalStreamsBuilder();
@@ -233,9 +233,9 @@ class CausalStreamsTopologyTest {
         CausalTopology topology = builder.topicAdmin(ADMIN).build();
 
         IllegalArgumentException e = assertThrows(IllegalArgumentException.class,
-                () -> topology.assemble(config(), CausalQuiesce.create(), null),
+                () -> topology.assemble(config(), ParsleyQuiesce.create(), null),
                 "assemble() must reject an already-decorated supplier");
-        assertTrue(e.getMessage().contains("CausalProcessorSupplier"),
+        assertTrue(e.getMessage().contains("ParsleyProcessorSupplier"),
                 "the message must name the double-decoration: " + e.getMessage());
     }
 
@@ -357,7 +357,7 @@ class CausalStreamsTopologyTest {
     }
 
     /**
-     * A stage assembled with a {@link CausalQuiesce} keeps that quiesce's readiness signal in sync
+     * A stage assembled with a {@link ParsleyQuiesce} keeps that quiesce's readiness signal in sync
      * with its actual buffer depth: a held record (unsatisfied dependency) must keep
      * {@code isSafeToClose} false even after quiesce is requested, and delivering that record via the
      * ordinary satisfying-message path (never a synthetic watermark) must flip it back to true.
@@ -366,7 +366,7 @@ class CausalStreamsTopologyTest {
      */
     @Test
     void quiesceTracksTheBufferThroughTheOrdinaryDeliveryPath() {
-        CausalQuiesce quiesce = CausalQuiesce.create();
+        ParsleyQuiesce quiesce = ParsleyQuiesce.create();
         CausalStreamsBuilder builder = new CausalStreamsBuilder();
         builder.stream(List.of("t1", "t2"), Serdes.String(), Serdes.String())
                 .process(upperCaser())
@@ -413,7 +413,7 @@ class CausalStreamsTopologyTest {
      */
     @Test
     void quiesceRecoversViaThePeriodicTickWhenTheBufferDrainedBeforeQuiesceWasRequested() {
-        CausalQuiesce quiesce = CausalQuiesce.create();
+        ParsleyQuiesce quiesce = ParsleyQuiesce.create();
         CausalStreamsBuilder builder = new CausalStreamsBuilder();
         builder.stream("t1", Serdes.String(), Serdes.String())
                 .process(upperCaser())

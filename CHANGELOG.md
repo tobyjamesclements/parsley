@@ -39,7 +39,7 @@ All notable changes to this project are documented in this file. The format is b
   recursively — Lamport transitivity in reverse. This is local to one node's own buffer: a *different*
   node still buffering on the same doomed coordinate just sees a channel that stopped advancing,
   indistinguishable from ordinary lag, until a forced epoch-floor advance (a later change) resolves it
-  DAG-wide. Without a dead-letter sink configured (the low-level `CausalProcessors` builder path, unless
+  DAG-wide. Without a dead-letter sink configured (the low-level `ParsleyProcessors` builder path, unless
   `.deadLetterSink(...)`/`.sinkNodeNames(...)` are called explicitly), a proven-impossible record still
   fails the task fast, exactly as before this change.
 
@@ -52,7 +52,7 @@ All notable changes to this project are documented in this file. The format is b
   failure. `ParsleyMetrics` gains a `dead-lettered` rate-total sensor.
 
 ### Changed
-- **Breaking: `CausalTopics` is no longer public; `CausalDependencies.using`/`builder` gain
+- **Breaking: `CausalTopics` (since renamed `ParsleyTopics`) is no longer public; `CausalDependencies.using`/`builder` gain
   `Properties`/`Map<String, Uuid>` overloads directly.** `CausalTopics.of(Admin)` dated to an earlier
   design where Parsley avoided owning any Kafka client lifecycle at all — the caller constructed and
   closed its own `Admin` and handed it in. That no longer matches the rest of the public API (`CausalStreams`
@@ -73,7 +73,7 @@ All notable changes to this project are documented in this file. The format is b
   broadcast a business/control forward to it, throwing `ClassCastException` on the very next record.
   `ParsleyProcessorContext`'s one-arg `forward` and `ParsleyProcessor`'s watermark/epoch-marker forwards
   now address every declared business sink by name instead whenever a stage has one; with no dead-letter
-  sink configured (every low-level `CausalProcessors` caller that hasn't opted in), the plain Kafka
+  sink configured (every low-level `ParsleyProcessors` caller that hasn't opted in), the plain Kafka
   Streams broadcast is unchanged.
 - **Breaking: concise, topology-level public API — `CausalStreamsBuilder` / `CausalTopology` /
   `CausalStreams`.** The public surface collapses to three roles mirroring Kafka Streams'
@@ -87,7 +87,7 @@ All notable changes to this project are documented in this file. The format is b
   sources/sinks take plain `Serde`s rather than `Consumed`/`Produced` — neither exposes its serdes for
   reading back, and Parsley's causal buffer needs the real `Serde` to round-trip a held record.
 
-  `CausalQuiesce` and `CausalCoordination` are no longer public, user-constructed handles — `CausalStreams`
+  `ParsleyQuiesce` and `ParsleyCoordination` are no longer public, user-constructed handles — `CausalStreams`
   owns one of each internally. Graceful causal drain is now unconditional and automatic: `close()` always
   waits for every task's buffer to drain, then (if `parsley.coordination.epoch-events-topic` is configured)
   permanently decommissions this instance's members before stopping the underlying `KafkaStreams` — so
@@ -96,8 +96,8 @@ All notable changes to this project are documented in this file. The format is b
   an epoch boundary with `CausalStreams#requestEpochTransition()`. `application.id` supplies the epoch
   member identity, as before.
 
-  `CausalProcessors`, `CausalProcessorSupplier`, and `CausalBuffer` are demoted to package-private — they
-  survive as `CausalStreamsBuilder`'s internal engine wiring. All prior `CausalStreams`/`CausalProcessors`
+  `ParsleyProcessors`, `ParsleyProcessorSupplier`, and `ParsleyBuffer` are demoted to package-private — they
+  survive as `CausalStreamsBuilder`'s internal engine wiring. All prior `CausalStreams`/`ParsleyProcessors`
   capability carries over: multiple input topics with per-topic serdes, multiple named sinks, a uniform
   key-only sink partitioner, `CausalAudit`, and the startup co-partition + sink `cleanup.policy` validation
   (`parsley.topology.validation`).
@@ -119,9 +119,9 @@ All notable changes to this project are documented in this file. The format is b
   transition now blocks until every running member has published its snapshot, for an unbounded time,
   instead of evicting a silent member after a timeout. Evicting an absent member and committing a floor
   without it could strand records it still held below that floor and release them before their causes (a
-  causal-safety violation); block-until-drained never does. `CausalCoordination.create(...)` no longer
-  takes an `evictionTimeout` — it takes a `CausalMembershipStrategy` (default
-  `CausalMembershipStrategy.blockUntilDrained()`), a seam for future exclusion/recovery algorithms.
+  causal-safety violation); block-until-drained never does. `ParsleyCoordination.create(...)` no longer
+  takes an `evictionTimeout` — it takes a `ParsleyMembershipStrategy` (default
+  `ParsleyMembershipStrategy.blockUntilDrained()`), a seam for future exclusion/recovery algorithms.
   Publication of a member's frontier is now driven off the folded log rather than a one-shot in-band
   marker, so a member that restarts mid-round re-publishes and cannot deadlock the round. There are **no
   timeouts** in the coordinator: the `joinTimeout` is also gone — a joining task now blocks unbounded until
@@ -130,12 +130,12 @@ All notable changes to this project are documented in this file. The format is b
   causal safety. Consequence: a crashed member blocks the next epoch transition — and any new join — until
   it returns; ongoing current-epoch processing is unaffected. Supersedes the earlier timeout-eviction +
   concurrent-redelivery behaviour.
-- **Breaking: `CausalMembershipStrategy`/`BlockedRound` are no longer public.** The seam for a future
+- **Breaking: `ParsleyMembershipStrategy`/`ParsleyBlockedRound` are no longer public.** The seam for a future
   exclusion/recovery algorithm still exists internally, but with a single implementation
   (`blockUntilDrained()`) and no external caller ever supplying one, keeping it public only advertised an
   extension point nothing used. `CausalStreams`'s public constructor is now just `(topology, props)`; the
-  3-arg overload taking an explicit `CausalMembershipStrategy` is removed.
-- **`CausalCoordination.leave()` now drains before departing.** A graceful decommission quiesce-drains the
+  3-arg overload taking an explicit `ParsleyMembershipStrategy` is removed.
+- **`ParsleyCoordination.leave()` now drains before departing.** A graceful decommission quiesce-drains the
   node (blocks until its causal buffer empties through the ordinary delivery path), then appends the
   `Leave`, then requests a new epoch over the remaining members in which it is no longer a member — so a
   leave never strands un-drained buffered records ("only a drained node is excluded"). It returns without
@@ -172,17 +172,17 @@ All notable changes to this project are documented in this file. The format is b
   The previous framing ("causal consistency for Kafka") overstated the scope of the guarantee.
 
 ### Added
-- `CausalCoordination` — the public handle that turns on **topology-epoch coordination**, so a causal
+- `ParsleyCoordination` — the public handle that turns on **topology-epoch coordination**, so a causal
   topology can evolve (add/replace a stage, recompile) across a well-defined epoch boundary without a
   new node dragging obsolete pre-epoch history into causal time. Create one over a shared
   single-partition epoch-events log topic and register it with every participating stage via
-  `CausalStreams.Builder#withCoordination` / `CausalProcessors.Builder#withCoordination` (mirroring
+  `CausalStreams.Builder#withCoordination` / `ParsleyProcessors.Builder#withCoordination` (mirroring
   `withQuiesce`); call `requestEpochTransition()` to evolve the running topology through a boundary,
   and `close()` in shutdown. The coordination is **leaderless**: every instance folds the totally
   ordered epoch-events log identically (a per-round elected owner computes each epoch's floor as the
   min over running members' completeness), and the floor propagates **in-band** via markers that
   relay edge-by-edge through the DAG, so each node adopts it through the overlapping-epoch transition.
-  Entirely **optional** — without a `CausalCoordination` a topology runs in epoch 0, exactly as
+  Entirely **optional** — without a `ParsleyCoordination` a topology runs in epoch 0, exactly as
   before. A node **deployed into an already-running** topology blocks at startup until an epoch
   computed without it commits, then adopts that floor and replays its inputs from the start with
   pre-epoch history stripped, so it never drags the shared floor down; on a configurable timeout it
@@ -190,17 +190,17 @@ All notable changes to this project are documented in this file. The format is b
   crashed app) cannot freeze the domain: a round that waits too long for it **evicts** it through the
   log after a configurable timeout, and — since a complete round is committed by any node, not a
   single owner — a gone owner cannot freeze it either. A clean decommission uses
-  `CausalCoordination.leave()`; a restart keeps the member in the domain and returns. The topology's
+  `ParsleyCoordination.leave()`; a restart keeps the member in the domain and returns. The topology's
   **external source topics** (entry points produced outside the topology, on which no in-band marker
   arrives) are **derived from the log**, not configured: every stage declares its input channels and
   sink topics on join, and a topic some member consumes but no member produces is an external source.
   Declare sink topics via `CausalStreams.addSink(...)` (automatic) or the new
-  `CausalProcessors.Builder#sinkTopics(...)` on the low-level path.
+  `ParsleyProcessors.Builder#sinkTopics(...)` on the low-level path.
 - `CausalStreams` — the topology-owning high-level causal API (Layer 2), composing
-  `CausalProcessors` internally rather than reimplementing the causal engine. Builds a `Topology`
-  for a single causal stage — one or more `CausalBuffer` sources feeding a causal-decorated
+  `ParsleyProcessors` internally rather than reimplementing the causal engine. Builds a `Topology`
+  for a single causal stage — one or more `ParsleyBuffer` sources feeding a causal-decorated
   processor, forwarding to one or more named sinks — so it drops straight into
-  `new KafkaStreams(topology, props)`. Use it instead of the low-level `CausalProcessors` decorator
+  `new KafkaStreams(topology, props)`. Use it instead of the low-level `ParsleyProcessors` decorator
   whenever a topology needs sink-side guarantees the decorator alone cannot provide: a uniform sink
   partitioner, co-partitioning validation across sinks (not just inputs), and a `cleanup.policy`
   check (below). Path integrity — no non-Parsley processor spliced between causal nodes — holds by
@@ -213,8 +213,8 @@ All notable changes to this project are documented in this file. The format is b
     watermark (emitted when the delegate forwards nothing for a given input) reach every sink
     connected to the processor node — Kafka Streams' own broadcast behaviour for an unqualified
     `context.forward`, now exercised through a real multi-sink topology.
-  - `CausalProcessors.builder(...)` rejects a `userSupplier` that is already a
-    `CausalProcessorSupplier` with an `IllegalArgumentException`, instead of silently building a
+  - `ParsleyProcessors.builder(...)` rejects a `userSupplier` that is already a
+    `ParsleyProcessorSupplier` with an `IllegalArgumentException`, instead of silently building a
     nested double-decoration that would buffer and stamp every record twice and corrupt the
     frontier. The guard lives at this single entry point, so `CausalStreams` (which calls it
     internally) is protected with no separate check.
@@ -225,13 +225,13 @@ All notable changes to this project are documented in this file. The format is b
   (checked for `compact`, since a protocol watermark is a null-value record wire-indistinguishable
   from a compaction tombstone and can be compacted away before a slow consumer reads it). `warn`
   (default) logs a mismatch and continues, `strict` fails the task fast, `off`
-  disables the checks entirely (no admin round-trip). A bare `CausalProcessors` decorator only ever
+  disables the checks entirely (no admin round-trip). A bare `ParsleyProcessors` decorator only ever
   sees its own input topics, so the sink-side checks apply only through `CausalStreams`. Each sink
   is resolved independently, so one sink that cannot be described (e.g. not yet created) never
   masks a genuine misconfiguration on a different sink in the same stage, even under `strict`.
   `ParsleyTopicAdmin` gained a `cleanupPolicies` method to support this.
-- `CausalQuiesce` — a shared handle for coordinating graceful shutdown across every causal task in
-  one application instance. Register it with `CausalProcessors.Builder#withQuiesce` /
+- `ParsleyQuiesce` — a shared handle for coordinating graceful shutdown across every causal task in
+  one application instance. Register it with `ParsleyProcessors.Builder#withQuiesce` /
   `CausalStreams.Builder#withQuiesce`; call `requestQuiesce()` from your own shutdown path and poll
   `isSafeToClose()` before calling `KafkaStreams#close`. A registered task keeps processing exactly
   as it does today — it only reports itself drained once its buffer empties through the ordinary

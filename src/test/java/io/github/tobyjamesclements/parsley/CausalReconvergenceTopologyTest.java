@@ -74,7 +74,7 @@ class CausalReconvergenceTopologyTest {
             TestTopicAdmin.of(Map.of(T1, T1_ID));
 
     // Topic resolver includes ANC so CausalDependencies.builder can produce deps carrying ANC_ID.
-    private static final CausalTopics TOPICS = CausalTopics.of(
+    private static final ParsleyTopics TOPICS = ParsleyTopics.of(
             Map.of(T_FAST, FAST_ID, T_SLOW, SLOW_ID, T_ANC, ANC_ID, T1, T1_ID));
 
     // --- topology builders -------------------------------------------------------------------
@@ -86,7 +86,7 @@ class CausalReconvergenceTopologyTest {
     private static Topology fanInTopology() {
         StreamsBuilder builder = new StreamsBuilder();
         builder.stream(List.of(T_FAST, T_SLOW), Consumed.with(Serdes.String(), Serdes.String()))
-                .process(CausalProcessors.builder(upperCaser())
+                .process(ParsleyProcessors.builder(upperCaser())
                         .addBufferStore("fanin")
                         .addBuffers(List.of(T_FAST, T_SLOW), Serdes.String(), Serdes.String())
                         .topicAdmin(FAN_IN_ADMIN)
@@ -102,9 +102,9 @@ class CausalReconvergenceTopologyTest {
     private static Topology filterTopology() {
         StreamsBuilder builder = new StreamsBuilder();
         builder.stream(List.of(T1), Consumed.with(Serdes.String(), Serdes.String()))
-                .process(CausalProcessors.builder(filter())
+                .process(ParsleyProcessors.builder(filter())
                         .addBufferStore("filter")
-                        .addBuffer(CausalBuffer.of(T1, Serdes.String(), Serdes.String()))
+                        .addBuffer(ParsleyBuffer.of(T1, Serdes.String(), Serdes.String()))
                         .topicAdmin(SINGLE_ADMIN)
                         .build())
                 .to("out", Produced.with(Serdes.String(), Serdes.String()));

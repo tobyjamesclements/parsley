@@ -1,10 +1,10 @@
 # Streams integration
 
-The Kafka Streams entry point is `CausalProcessorSupplier`, built via `CausalProcessors.builder(...)`. It composes three package-private classes: `ParsleyProcessorSupplier`, `ParsleyProcessor`, and `ParsleyProcessorContext`.
+The Kafka Streams entry point is `ParsleyProcessorSupplier`, built via `ParsleyProcessors.builder(...)`. It composes three package-private classes: `ParsleyProcessorSupplier`, `ParsleyProcessor`, and `ParsleyProcessorContext`.
 
 ## `ParsleyProcessorSupplier`
 
-Implements `CausalProcessorSupplier<KIn,VIn,KOut,VOut>`.
+Implements `ParsleyProcessorSupplier<KIn,VIn,KOut,VOut>`.
 
 **`get()`** returns a new `ParsleyProcessor` instance per call (one per task).
 
@@ -21,7 +21,7 @@ All four are created with `Stores.persistentKeyValueStore(...)`, so they are cha
 
 ## `ParsleyProcessor` init sequence
 
-0. Resolve each registered `CausalBuffer` topic's stable UUID from the broker via a `ParsleyTopicAdmin` built from `context.appConfigs()` (the topology decorator has no broker config until init), populating the `topicUuids` map. Closed immediately after.
+0. Resolve each registered `ParsleyBuffer` topic's stable UUID from the broker via a `ParsleyTopicAdmin` built from `context.appConfigs()` (the topology decorator has no broker config until init), populating the `topicUuids` map. Closed immediately after.
 1. Retrieve the state stores from the processor context by name.
 2. Construct a `ParsleyFrontier` over the `{ns}-frontier` store: it loads the frontier clock and channel clocks from the single `"f"` value (empty if absent) and self-persists that value on every change. Prune it to the current in-scope coordinates, then seed a channel entry for every consumed input topic-partition so a silent channel holds its own coordinate in the completeness fold.
 3. Construct `ParsleyEngine` with:
@@ -45,7 +45,7 @@ process(Record<KIn,VIn>)
 
   ingest(record)
     reads source metadata from context.recordMetadata()
-    resolves topicId from topicUuids map (broker-resolved at init for each registered CausalBuffer; throws IllegalStateException if absent)
+    resolves topicId from topicUuids map (broker-resolved at init for each registered ParsleyBuffer; throws IllegalStateException if absent)
     returns ParsleyMessage.from(record, source, offset, topicId)
 
   gate(parsleyRecord)
@@ -91,4 +91,4 @@ All other `ProcessorContext` methods delegate verbatim.
 
 ## State store namespace
 
-The namespace is the `name` passed to `CausalProcessors.builder(...).addBufferStore(name, limit)`. Use a unique namespace per `CausalProcessorSupplier` instance within a topology that contains more than one. The store names are embedded in the changelog topic names, so they must be stable across deployments.
+The namespace is the `name` passed to `ParsleyProcessors.builder(...).addBufferStore(name, limit)`. Use a unique namespace per `ParsleyProcessorSupplier` instance within a topology that contains more than one. The store names are embedded in the changelog topic names, so they must be stable across deployments.

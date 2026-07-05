@@ -31,7 +31,7 @@ CausalBufferLimit.ofDuration(Duration.ofSeconds(30))
 
 The duration limit fires on a scheduled basis. The processor calls `evictExpired()` at the configured
 interval, which acts only on the records that have individually aged past `duration` and leaves
-younger records held. Parsley wires this schedule automatically when you use `CausalProcessors`.
+younger records held. Parsley wires this schedule automatically when you use `ParsleyProcessors`.
 
 ### First-of (composite)
 
@@ -169,7 +169,7 @@ lossy of causal order.
 `parsley.topology.validation = warn` logs a prominent warning at startup when the causal input topics
 do not share a partition count, which makes co-partitioning impossible, and lets the task start. This
 is visible without breaking a deployment that already ran with the mismatch. Set it to `strict` to
-fail the task fast instead, or `off` to skip the checks. A bare `CausalProcessors` decorator only
+fail the task fast instead, or `off` to skip the checks. A bare `ParsleyProcessors` decorator only
 ever sees its own registered input topics, so that partition-count parity check is all it can run. A
 `CausalStreams` stage owns its sinks too, so the same key widens to fold sink partition counts into
 the parity check and to check each sink's `cleanup.policy` for `compact` (a protocol watermark is a

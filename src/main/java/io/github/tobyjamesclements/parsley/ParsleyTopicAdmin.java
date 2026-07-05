@@ -117,7 +117,7 @@ interface ParsleyTopicAdmin extends AutoCloseable {
     /**
      * Returns a {@link ParsleyTopicAdmin} backed by a caller-owned {@link Admin}. Unlike
      * {@link #ofConfigs}, the returned instance does <strong>not</strong> close {@code admin} on
-     * {@link #close()} — the caller keeps ownership of its lifecycle. Used by {@link CausalTopics} to
+     * {@link #close()} — the caller keeps ownership of its lifecycle. Used by {@link ParsleyTopics} to
      * resolve UUIDs through an {@code Admin} the application already manages.
      *
      * @param admin the Kafka admin client to resolve through; must not be {@code null}

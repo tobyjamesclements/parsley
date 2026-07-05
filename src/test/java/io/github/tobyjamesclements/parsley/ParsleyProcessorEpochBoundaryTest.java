@@ -75,10 +75,10 @@ class ParsleyProcessorEpochBoundaryTest {
         context.addStateStore(orphanIndexStore);
         processor.init(context);
 
-        // Inject an epoch-boundary marker on t1: a control record carrying the serialised EpochBoundary,
+        // Inject an epoch-boundary marker on t1: a control record carrying the serialised ParsleyEpochBoundary,
         // a null value, and no business payload.
         context.setRecordMetadata("t1", 0, 0);
-        EpochBoundary boundary = new EpochBoundary(1, ParsleyClock.empty().observe(T1_ID, 0, 10));
+        ParsleyEpochBoundary boundary = new ParsleyEpochBoundary(1, ParsleyClock.empty().observe(T1_ID, 0, 10));
         Headers headers = ParsleyHeader.mutableHeaders();
         headers.add(ParsleyHeader.EPOCH_BOUNDARY, boundary.toBytes());
         processor.process(new Record<>("k", null, 0L, headers));

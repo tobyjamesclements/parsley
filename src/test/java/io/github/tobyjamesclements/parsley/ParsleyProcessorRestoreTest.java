@@ -25,7 +25,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * Tests {@link ParsleyProcessor#init} directly via a {@link MockProcessorContext} backed by
  * {@link TestKeyValueStore}, in particular the branch that restores a previously persisted
  * frontier from the frontier state store (the restart path). This is exercised here as a unit
- * test against the processor itself, distinct from {@link CausalProcessorsTopologyTest}'s
+ * test against the processor itself, distinct from {@link ParsleyProcessorsTopologyTest}'s
  * full-topology {@code TopologyTestDriver} tests — a {@code TopologyTestDriver} does not restore
  * persistent state across separate driver instances, so the restored-frontier branch can only be
  * driven by handing {@code init()} a frontier store that already holds a value.

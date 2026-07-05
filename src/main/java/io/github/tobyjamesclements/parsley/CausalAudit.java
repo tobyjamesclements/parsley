@@ -5,7 +5,7 @@ package io.github.tobyjamesclements.parsley;
  * unresolvable-clock (an undecodable dependencies header at ingest), and dead-lettered (a record
  * removed from the causal execution path because its dependencies are proven impossible to satisfy).
  * Register one with
- * {@link CausalProcessors.Builder#withAudit} to route these events wherever your audit/compliance
+ * {@link ParsleyProcessors.Builder#withAudit} to route these events wherever your audit/compliance
  * trail needs them (a SIEM, a durable audit store, structured logs) — Parsley itself never decides
  * where they go.
  *

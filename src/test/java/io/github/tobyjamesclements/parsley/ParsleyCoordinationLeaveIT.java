@@ -55,7 +55,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * {@code Leave} for B is ever written (it was never evicted).
  */
 @Testcontainers(disabledWithoutDocker = true)
-class CausalCoordinationLeaveIT {
+class ParsleyCoordinationLeaveIT {
 
     @Container
     private final KafkaContainer kafka =
@@ -82,15 +82,15 @@ class CausalCoordinationLeaveIT {
         String appIdA = "leave-a-" + runId;
         String appIdB = "leave-b-" + runId;
 
-        CausalCoordination coordinationA = CausalCoordination.create(EPOCH_EVENTS);
-        CausalCoordination coordinationB = CausalCoordination.create(EPOCH_EVENTS);
+        ParsleyCoordination coordinationA = ParsleyCoordination.create(EPOCH_EVENTS);
+        ParsleyCoordination coordinationB = ParsleyCoordination.create(EPOCH_EVENTS);
         Path stateA = Files.createTempDirectory("parsley-leave-a");
         Path stateB = Files.createTempDirectory("parsley-leave-b");
 
         KafkaStreams appA = new KafkaStreams(stageA(coordinationA), streamsConfig(bootstrap, appIdA, stateA));
         KafkaStreams appB = new KafkaStreams(stageB(coordinationB), streamsConfig(bootstrap, appIdB, stateB));
         KafkaStreams appBRestarted = null;
-        CausalCoordination coordinationBRestarted = null;
+        ParsleyCoordination coordinationBRestarted = null;
         try {
             appA.start();
             appB.start();
@@ -123,10 +123,10 @@ class CausalCoordinationLeaveIT {
 
             // RESTART app B over its own state: it rejoins as the same running member and publishes, so the
             // blocked round finally commits.
-            coordinationBRestarted = CausalCoordination.create(EPOCH_EVENTS);
+            coordinationBRestarted = ParsleyCoordination.create(EPOCH_EVENTS);
             appBRestarted = new KafkaStreams(stageB(coordinationBRestarted), streamsConfig(bootstrap, appIdB, stateB));
             appBRestarted.start();
-            CausalCoordination coordB = coordinationBRestarted;
+            ParsleyCoordination coordB = coordinationBRestarted;
             await().atMost(Duration.ofSeconds(90)).until(() -> {
                 requestQuietly(coordinationA);
                 requestQuietly(coordB);
@@ -152,27 +152,27 @@ class CausalCoordinationLeaveIT {
 
     private static boolean leaveExistsFor(String bootstrap, String appIdPrefix) {
         return readEpochEvents(bootstrap).stream()
-                .anyMatch(e -> e instanceof EpochEvent.Leave leave && leave.memberId().startsWith(appIdPrefix));
+                .anyMatch(e -> e instanceof ParsleyEpochEvent.Leave leave && leave.memberId().startsWith(appIdPrefix));
     }
 
-    private static Topology stageA(CausalCoordination coordination) {
+    private static Topology stageA(ParsleyCoordination coordination) {
         StreamsBuilder builder = new StreamsBuilder();
         builder.stream(IN, Consumed.with(Serdes.String(), Serdes.String()))
-                .process(CausalProcessors.builder(mapper(v -> v.toUpperCase(Locale.ROOT)))
+                .process(ParsleyProcessors.builder(mapper(v -> v.toUpperCase(Locale.ROOT)))
                         .addBufferStore("parsley-a")
-                        .addBuffer(CausalBuffer.of(IN, Serdes.String(), Serdes.String()))
+                        .addBuffer(ParsleyBuffer.of(IN, Serdes.String(), Serdes.String()))
                         .withCoordination(coordination)
                         .build())
                 .to(MID, Produced.with(Serdes.String(), Serdes.String()));
         return builder.build();
     }
 
-    private static Topology stageB(CausalCoordination coordination) {
+    private static Topology stageB(ParsleyCoordination coordination) {
         StreamsBuilder builder = new StreamsBuilder();
         builder.stream(MID, Consumed.with(Serdes.String(), Serdes.String()))
-                .process(CausalProcessors.builder(mapper(v -> "B:" + v))
+                .process(ParsleyProcessors.builder(mapper(v -> "B:" + v))
                         .addBufferStore("parsley-b")
-                        .addBuffer(CausalBuffer.of(MID, Serdes.String(), Serdes.String()))
+                        .addBuffer(ParsleyBuffer.of(MID, Serdes.String(), Serdes.String()))
                         .withCoordination(coordination)
                         .build())
                 .to(OUT, Produced.with(Serdes.String(), Serdes.String()));
@@ -189,7 +189,7 @@ class CausalCoordinationLeaveIT {
         };
     }
 
-    private static void requestUntilCommitted(CausalCoordination a, CausalCoordination b, String bootstrap, long target) {
+    private static void requestUntilCommitted(ParsleyCoordination a, ParsleyCoordination b, String bootstrap, long target) {
         await().atMost(Duration.ofSeconds(90)).until(() -> {
             if (highestCommittedEpoch(bootstrap) >= target) {
                 return true;
@@ -200,7 +200,7 @@ class CausalCoordinationLeaveIT {
         });
     }
 
-    private static void requestQuietly(CausalCoordination coordination) {
+    private static void requestQuietly(ParsleyCoordination coordination) {
         try {
             coordination.requestEpochTransition();
         } catch (IllegalStateException notReadyYet) {
@@ -210,16 +210,16 @@ class CausalCoordinationLeaveIT {
 
     private static long highestCommittedEpoch(String bootstrap) {
         long highest = 0;
-        for (EpochEvent event : readEpochEvents(bootstrap)) {
-            if (event instanceof EpochEvent.EpochCommitted commit) {
+        for (ParsleyEpochEvent event : readEpochEvents(bootstrap)) {
+            if (event instanceof ParsleyEpochEvent.EpochCommitted commit) {
                 highest = Math.max(highest, commit.epochId());
             }
         }
         return highest;
     }
 
-    private static List<EpochEvent> readEpochEvents(String bootstrap) {
-        List<EpochEvent> events = new ArrayList<>();
+    private static List<ParsleyEpochEvent> readEpochEvents(String bootstrap) {
+        List<ParsleyEpochEvent> events = new ArrayList<>();
         Map<String, Object> config = Map.of(
                 ConsumerConfig.BOOTSTRAP_SERVERS_CONFIG, bootstrap,
                 ConsumerConfig.GROUP_ID_CONFIG, "epoch-reader-" + UUID.randomUUID(),
@@ -231,7 +231,7 @@ class CausalCoordinationLeaveIT {
             long deadline = System.currentTimeMillis() + 2000;
             while (System.currentTimeMillis() < deadline) {
                 for (ConsumerRecord<byte[], byte[]> record : consumer.poll(Duration.ofMillis(200))) {
-                    events.add(EpochEvent.fromBytes(record.value()));
+                    events.add(ParsleyEpochEvent.fromBytes(record.value()));
                 }
             }
         }

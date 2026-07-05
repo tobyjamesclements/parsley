@@ -19,8 +19,8 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  */
 class CausalDependenciesTest {
 
-    private static final CausalTopics TOPICS =
-            CausalTopics.of(Map.of("t1", Uuid.randomUuid(), "t2", Uuid.randomUuid()));
+    private static final ParsleyTopics TOPICS =
+            ParsleyTopics.of(Map.of("t1", Uuid.randomUuid(), "t2", Uuid.randomUuid()));
 
     /**
      * When two entries for the same (topic, partition) are added via the builder, the builder

@@ -37,7 +37,7 @@ default repository, which is already in every Maven setup, covers real releases.
 ## Ordering records causally
 
 Parsley delivers records in causal order inside a Kafka Streams topology. Wrap your own processor
-with `CausalProcessors`, and it holds any record whose dependencies have not yet been observed,
+with `ParsleyProcessors`, and it holds any record whose dependencies have not yet been observed,
 releasing the record once the frontier catches up. See [Streams integration](streams.md) for the full
 setup.
 

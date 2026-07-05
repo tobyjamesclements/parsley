@@ -46,7 +46,7 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * A graceful {@link CausalCoordination#leave() leave()} drains before it departs. App X (prereq + in ->
+ * A graceful {@link ParsleyCoordination#leave() leave()} drains before it departs. App X (prereq + in ->
  * out) holds a record on {@code in} that depends on {@code prereq@0}; it then calls {@code leave()}. The
  * call must <strong>block</strong> — appending no {@code Leave} — while the record is still buffered, so a
  * decommission never strands un-drained work. Once {@code prereq@0} is produced the held record drains to
@@ -54,7 +54,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * is delivered, not lost.
  */
 @Testcontainers(disabledWithoutDocker = true)
-class CausalCoordinationLeaveDrainIT {
+class ParsleyCoordinationLeaveDrainIT {
 
     @Container
     private final KafkaContainer kafka =
@@ -81,8 +81,8 @@ class CausalCoordinationLeaveDrainIT {
         String appIdX = "leave-drain-x-" + runId;
         String appIdY = "leave-drain-y-" + runId;
 
-        CausalCoordination coordinationX = CausalCoordination.create(EPOCH_EVENTS);
-        CausalCoordination coordinationY = CausalCoordination.create(EPOCH_EVENTS);
+        ParsleyCoordination coordinationX = ParsleyCoordination.create(EPOCH_EVENTS);
+        ParsleyCoordination coordinationY = ParsleyCoordination.create(EPOCH_EVENTS);
         Path stateX = Files.createTempDirectory("parsley-leave-drain-x");
         Path stateY = Files.createTempDirectory("parsley-leave-drain-y");
 
@@ -152,10 +152,10 @@ class CausalCoordinationLeaveDrainIT {
         }
     }
 
-    private static Topology stageX(CausalCoordination coordination) {
+    private static Topology stageX(ParsleyCoordination coordination) {
         StreamsBuilder builder = new StreamsBuilder();
         builder.stream(List.of(PREREQ, IN), Consumed.with(Serdes.String(), Serdes.String()))
-                .process(CausalProcessors.builder(upperCaser())
+                .process(ParsleyProcessors.builder(upperCaser())
                         .addBufferStore("parsley-x")
                         .addBuffers(List.of(PREREQ, IN), Serdes.String(), Serdes.String())
                         .withCoordination(coordination)
@@ -164,12 +164,12 @@ class CausalCoordinationLeaveDrainIT {
         return builder.build();
     }
 
-    private static Topology stageY(CausalCoordination coordination) {
+    private static Topology stageY(ParsleyCoordination coordination) {
         StreamsBuilder builder = new StreamsBuilder();
         builder.stream(YIN, Consumed.with(Serdes.String(), Serdes.String()))
-                .process(CausalProcessors.builder(upperCaser())
+                .process(ParsleyProcessors.builder(upperCaser())
                         .addBufferStore("parsley-y")
-                        .addBuffer(CausalBuffer.of(YIN, Serdes.String(), Serdes.String()))
+                        .addBuffer(ParsleyBuffer.of(YIN, Serdes.String(), Serdes.String()))
                         .withCoordination(coordination)
                         .build())
                 .to(YOUT, Produced.with(Serdes.String(), Serdes.String()));
@@ -186,7 +186,7 @@ class CausalCoordinationLeaveDrainIT {
         };
     }
 
-    private static void requestUntilCommitted(CausalCoordination a, CausalCoordination b, String bootstrap, long target) {
+    private static void requestUntilCommitted(ParsleyCoordination a, ParsleyCoordination b, String bootstrap, long target) {
         await().atMost(Duration.ofSeconds(90)).pollInterval(Duration.ofSeconds(1)).until(() -> {
             if (highestCommittedEpoch(bootstrap) >= target) {
                 return true;
@@ -197,7 +197,7 @@ class CausalCoordinationLeaveDrainIT {
         });
     }
 
-    private static void requestQuietly(CausalCoordination coordination) {
+    private static void requestQuietly(ParsleyCoordination coordination) {
         try {
             coordination.requestEpochTransition();
         } catch (IllegalStateException notReadyYet) {
@@ -207,21 +207,21 @@ class CausalCoordinationLeaveDrainIT {
 
     private static boolean leaveExistsFor(String bootstrap, String appIdPrefix) {
         return readEpochEvents(bootstrap).stream()
-                .anyMatch(e -> e instanceof EpochEvent.Leave leave && leave.memberId().startsWith(appIdPrefix));
+                .anyMatch(e -> e instanceof ParsleyEpochEvent.Leave leave && leave.memberId().startsWith(appIdPrefix));
     }
 
     private static long highestCommittedEpoch(String bootstrap) {
         long highest = 0;
-        for (EpochEvent event : readEpochEvents(bootstrap)) {
-            if (event instanceof EpochEvent.EpochCommitted commit) {
+        for (ParsleyEpochEvent event : readEpochEvents(bootstrap)) {
+            if (event instanceof ParsleyEpochEvent.EpochCommitted commit) {
                 highest = Math.max(highest, commit.epochId());
             }
         }
         return highest;
     }
 
-    private static List<EpochEvent> readEpochEvents(String bootstrap) {
-        List<EpochEvent> events = new ArrayList<>();
+    private static List<ParsleyEpochEvent> readEpochEvents(String bootstrap) {
+        List<ParsleyEpochEvent> events = new ArrayList<>();
         Map<String, Object> config = Map.of(
                 ConsumerConfig.BOOTSTRAP_SERVERS_CONFIG, bootstrap,
                 ConsumerConfig.GROUP_ID_CONFIG, "epoch-reader-" + UUID.randomUUID(),
@@ -233,7 +233,7 @@ class CausalCoordinationLeaveDrainIT {
             long deadline = System.currentTimeMillis() + 2000;
             while (System.currentTimeMillis() < deadline) {
                 for (ConsumerRecord<byte[], byte[]> record : consumer.poll(Duration.ofMillis(200))) {
-                    events.add(EpochEvent.fromBytes(record.value()));
+                    events.add(ParsleyEpochEvent.fromBytes(record.value()));
                 }
             }
         }

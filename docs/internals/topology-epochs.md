@@ -13,7 +13,7 @@ Topology epochs solve this without a coordinator process and without stopping th
 it feeds state but does not participate in causal time. A node deployed into a running topology adopts
 the current floor, replays its inputs from the start with everything below the floor stripped, and so
 never pins the shared frontier down. The whole mechanism is opt-in through
-[`CausalCoordination`](../streams.md#evolving-a-running-topology); without it a topology runs in
+[`ParsleyCoordination`](../streams.md#evolving-a-running-topology); without it a topology runs in
 **epoch 0**, whose floor is 0 everywhere, and behaves exactly as a topology with no epoch machinery at
 all.
 
@@ -131,7 +131,7 @@ source topic names. A hand-written declaration could silently disagree with the 
 intermediate topic marked external, or an external topic left undeclared — and either mistake breaks the
 wave for that coordinate. Deriving the registry from what every node actually consumes and produces
 removes that class of misconfiguration. On the high-level API sinks are declared automatically by
-`addSink(...)`; on the low-level decorator they are declared with `CausalProcessors.Builder.sinkTopics(...)`.
+`addSink(...)`; on the low-level decorator they are declared with `ParsleyProcessors.Builder.sinkTopics(...)`.
 
 ## Joining a running topology
 
@@ -155,7 +155,7 @@ waits until it can.
 ## Membership: block until drained
 
 A close is treated as a restart, not a departure: the member stays in the domain so it can return without
-epoch churn. A member is removed from the domain only by a genuine decommission — `CausalCoordination.leave()`
+epoch churn. A member is removed from the domain only by a genuine decommission — `ParsleyCoordination.leave()`
 — **never by a timeout**. `leave()` itself honours "only a drained node is excluded": it **quiesce-drains**
 first (blocks until every local member's causal buffer has emptied through the ordinary delivery path, so
 no held record is stranded), then appends the `Leave`, then requests a new epoch over the remaining members
@@ -176,9 +176,9 @@ its buffered dependencies.
 
 The cost is that a crashed member blocks the next epoch *transition* — and therefore any new join — until
 it returns. Ongoing processing in the current epoch is unaffected; only topology evolution waits. How an
-absent member is handled is a pluggable `CausalMembershipStrategy`; the default, `blockUntilDrained()`,
+absent member is handled is `ParsleyMembershipStrategy`; the only strategy today, `blockUntilDrained()`,
 never excludes. Richer strategies — recovery, buffer hand-off, or an operator-driven forced exclusion that
-dead-letters the stranded buffer — can be added behind this seam, but are not built yet.
+dead-letters the stranded buffer — could reintroduce a pluggable seam here, but nothing needs one yet.
 
 Because a round needs every member's publication to commit, publication is driven off the folded log, not
 off a one-shot in-band marker: any member that observes a round it has not yet published to publishes its
@@ -189,7 +189,7 @@ and re-publishes, so a lost publication cannot deadlock the round.
 
 The coordination is entirely optional and requires no separate process. A domain needs one
 single-partition epoch-events log topic, shared by every participating application, and each application
-registers a `CausalCoordination` over that topic with its causal builders. Without a handle a topology
+registers a `ParsleyCoordination` over that topic with its causal builders. Without a handle a topology
 runs in epoch 0. Because a Kafka Streams application must run one topology on every instance, a
 zero-downtime rolling topology change is not a Streams capability; a genuine new stage is a redeploy. The
 epochs machinery is what lets that redeploy re-enter causal time cleanly rather than replaying obsolete

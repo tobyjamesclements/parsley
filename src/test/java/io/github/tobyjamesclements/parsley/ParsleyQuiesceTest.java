@@ -7,10 +7,10 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * Exercises {@link CausalQuiesce}'s registration/readiness bookkeeping directly, independent of any
+ * Exercises {@link ParsleyQuiesce}'s registration/readiness bookkeeping directly, independent of any
  * Kafka Streams topology.
  */
-class CausalQuiesceTest {
+class ParsleyQuiesceTest {
 
     private static final TaskId TASK_0 = new TaskId(0, 0);
     private static final TaskId TASK_1 = new TaskId(0, 1);
@@ -23,7 +23,7 @@ class CausalQuiesceTest {
      */
     @Test
     void isSafeToCloseIsFalseWithNoRegisteredTasks() {
-        CausalQuiesce quiesce = CausalQuiesce.create();
+        ParsleyQuiesce quiesce = ParsleyQuiesce.create();
         assertFalse(quiesce.isSafeToClose(), "no task has registered yet");
 
         quiesce.requestQuiesce();
@@ -39,7 +39,7 @@ class CausalQuiesceTest {
      */
     @Test
     void isSafeToCloseRequiresQuiesceToBeRequested() {
-        CausalQuiesce quiesce = CausalQuiesce.create();
+        ParsleyQuiesce quiesce = ParsleyQuiesce.create();
         quiesce.register(TASK_0);
         quiesce.setDrained(TASK_0, true);
 
@@ -58,7 +58,7 @@ class CausalQuiesceTest {
      */
     @Test
     void isSafeToCloseWaitsForEveryRegisteredTask() {
-        CausalQuiesce quiesce = CausalQuiesce.create();
+        ParsleyQuiesce quiesce = ParsleyQuiesce.create();
         quiesce.register(TASK_0);
         quiesce.register(TASK_1);
         quiesce.requestQuiesce();
@@ -78,7 +78,7 @@ class CausalQuiesceTest {
      */
     @Test
     void isSafeToCloseFlipsBackWhenATaskUnDrains() {
-        CausalQuiesce quiesce = CausalQuiesce.create();
+        ParsleyQuiesce quiesce = ParsleyQuiesce.create();
         quiesce.register(TASK_0);
         quiesce.requestQuiesce();
         quiesce.setDrained(TASK_0, true);
@@ -98,7 +98,7 @@ class CausalQuiesceTest {
      */
     @Test
     void unregisteringATaskRemovesItFromConsideration() {
-        CausalQuiesce quiesce = CausalQuiesce.create();
+        ParsleyQuiesce quiesce = ParsleyQuiesce.create();
         quiesce.register(TASK_0);
         quiesce.register(TASK_1);
         quiesce.requestQuiesce();

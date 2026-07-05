@@ -44,8 +44,8 @@ class ParsleyProcessorSourceLayerTest {
 
         // Seed an open round owned by a non-local member, so the runtime folds it open without committing.
         InMemoryEpochTransport seeder = new InMemoryEpochTransport(log);
-        seeder.append(new EpochEvent.JoinRequested("X", Set.of(), Set.of()));
-        seeder.append(new EpochEvent.SnapshotRequested("X"));
+        seeder.append(new ParsleyEpochEvent.JoinRequested("X", Set.of(), Set.of()));
+        seeder.append(new ParsleyEpochEvent.SnapshotRequested("X"));
         runtime.runOnce();
 
         Fixture f = new Fixture(runtime);
@@ -57,7 +57,7 @@ class ParsleyProcessorSourceLayerTest {
         // The poll at the end of process() sees the open round -> publish + inject snapshot.
         runtime.runOnce();   // flush the publication the processor enqueued
 
-        assertTrue(log.events().stream().anyMatch(e -> e instanceof EpochEvent.FrontierPublished),
+        assertTrue(log.events().stream().anyMatch(e -> e instanceof ParsleyEpochEvent.FrontierPublished),
                 "the source-layer task must publish its completeness for the open round");
         List<? extends MockProcessorContext.CapturedForward<? extends String, ? extends String>> snapshots =
                 f.forwardedWith(ParsleyHeader.EPOCH_SNAPSHOT);
@@ -67,9 +67,9 @@ class ParsleyProcessorSourceLayerTest {
     }
 
     // The running-node boundary adopt-and-inject path (pollEpochCoordination on a node that was present
-    // through the transition) is covered end-to-end by CausalCoordinationTopologyTest, which asserts an
+    // through the transition) is covered end-to-end by ParsleyCoordinationTopologyTest, which asserts an
     // epoch-boundary marker with a real floor reaches the sink. A FRESH node at committed>0 is instead a
-    // joiner (it blocks and direct-settles); that path is exercised in CausalCoordinationTest and, fully,
+    // joiner (it blocks and direct-settles); that path is exercised in ParsleyCoordinationTest and, fully,
     // by the WS4d Docker integration test.
 
     /** A wired source-layer processor over topic t1 (declared external) plus its MockProcessorContext. */
@@ -99,7 +99,7 @@ class ParsleyProcessorSourceLayerTest {
                     "frontier", "buffer", "candidate-index", "forwarded-index", "orphan-index",
                     Set.of("t1"), Set.of(), List.of(), null,
                     configs -> ADMIN, ParsleyConfig.from(new Properties()), CausalAudit.NOOP, null,
-                    ParsleyEpochSnapshotPublisher.NOOP, CausalCoordination.forRuntime(runtime));
+                    ParsleyEpochSnapshotPublisher.NOOP, ParsleyCoordination.forRuntime(runtime));
             this.context = new MockProcessorContext<>();
             context.addStateStore(frontierStore);
             context.addStateStore(bufferStore);

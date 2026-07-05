@@ -25,14 +25,14 @@ class ParsleyEpochLogTest {
     @Test
     void firstJoinIntoEmptyTopologyCommitsEpochOneWithNoFloor() {
         ParsleyEpochLog log = new ParsleyEpochLog();
-        log.apply(new EpochEvent.JoinRequested("A", Set.of(), Set.of()));
-        log.apply(new EpochEvent.SnapshotRequested("A"));
+        log.apply(new ParsleyEpochEvent.JoinRequested("A", Set.of(), Set.of()));
+        log.apply(new ParsleyEpochEvent.SnapshotRequested("A"));
 
         assertTrue(log.isRoundOpen(), "the snapshot request opens a round");
         assertEquals("A", log.roundOwner(), "the first requester owns the round");
         assertTrue(log.isRoundComplete(), "with no running members the round is vacuously complete");
 
-        EpochEvent.EpochCommitted commit = log.proposeCommit();
+        ParsleyEpochEvent.EpochCommitted commit = log.proposeCommit();
         assertEquals(1L, commit.epochId(), "the first commit is epoch 1");
         assertTrue(commit.lowerBounds().isEmpty(), "epoch 1 has an empty floor (nothing to bound)");
 
@@ -46,10 +46,10 @@ class ParsleyEpochLogTest {
     @Test
     void concurrentSnapshotRequestsCoalesceIntoOneRoundOwnedByTheFirst() {
         ParsleyEpochLog log = bootstrappedWithRunningMember("A");
-        log.apply(new EpochEvent.JoinRequested("B", Set.of(), Set.of()));
+        log.apply(new ParsleyEpochEvent.JoinRequested("B", Set.of(), Set.of()));
 
-        log.apply(new EpochEvent.SnapshotRequested("B"));
-        log.apply(new EpochEvent.SnapshotRequested("A"));   // coalesces — a round is already open
+        log.apply(new ParsleyEpochEvent.SnapshotRequested("B"));
+        log.apply(new ParsleyEpochEvent.SnapshotRequested("A"));   // coalesces — a round is already open
 
         assertTrue(log.isRoundOpen(), "a round is open");
         assertEquals("B", log.roundOwner(), "the first requester (B) owns; the second coalesces");
@@ -59,15 +59,15 @@ class ParsleyEpochLogTest {
     @Test
     void roundIsNotCompleteUntilEveryRunningMemberPublishes() {
         ParsleyEpochLog log = bootstrappedWithRunningMember("A");
-        log.apply(new EpochEvent.JoinRequested("B", Set.of(), Set.of()));
+        log.apply(new ParsleyEpochEvent.JoinRequested("B", Set.of(), Set.of()));
         commitRound(log, "B");                              // A publishes, epoch 2, A+B running
         // Now A and B both running. Open a new round.
-        log.apply(new EpochEvent.SnapshotRequested("A"));
+        log.apply(new ParsleyEpochEvent.SnapshotRequested("A"));
 
         assertFalse(log.isRoundComplete(), "no member has published yet");
-        log.apply(new EpochEvent.FrontierPublished("A", ParsleyClock.empty().observe(T1_ID, 0, 5)));
+        log.apply(new ParsleyEpochEvent.FrontierPublished("A", ParsleyClock.empty().observe(T1_ID, 0, 5)));
         assertFalse(log.isRoundComplete(), "only A has published; B is still outstanding");
-        log.apply(new EpochEvent.FrontierPublished("B", ParsleyClock.empty().observe(T1_ID, 0, 9)));
+        log.apply(new ParsleyEpochEvent.FrontierPublished("B", ParsleyClock.empty().observe(T1_ID, 0, 9)));
         assertTrue(log.isRoundComplete(), "both running members have published");
     }
 
@@ -78,17 +78,17 @@ class ParsleyEpochLogTest {
     @Test
     void lowerBoundsAreTheMergeMinOfPublishedFrontiers() {
         ParsleyEpochLog log = bootstrappedWithRunningMember("A");
-        log.apply(new EpochEvent.JoinRequested("B", Set.of(), Set.of()));
+        log.apply(new ParsleyEpochEvent.JoinRequested("B", Set.of(), Set.of()));
         commitRound(log, "B");                              // A+B running (epoch 2)
 
-        log.apply(new EpochEvent.SnapshotRequested("A"));
+        log.apply(new ParsleyEpochEvent.SnapshotRequested("A"));
         // A observes T1@10 and T2@4; B observes T1@6 only.
-        log.apply(new EpochEvent.FrontierPublished("A",
+        log.apply(new ParsleyEpochEvent.FrontierPublished("A",
                 ParsleyClock.empty().observe(T1_ID, 0, 10).observe(T2_ID, 0, 4)));
-        log.apply(new EpochEvent.FrontierPublished("B",
+        log.apply(new ParsleyEpochEvent.FrontierPublished("B",
                 ParsleyClock.empty().observe(T1_ID, 0, 6)));
 
-        EpochEvent.EpochCommitted commit = log.proposeCommit();
+        ParsleyEpochEvent.EpochCommitted commit = log.proposeCommit();
         assertEquals(3L, commit.epochId(), "the epoch id is strictly increasing");
         assertEquals(6L, commit.lowerBounds().offsetFor(T1_ID, 0),
                 "T1 is bounded at min(10, 6) = 6 — both members observed it");
@@ -100,9 +100,9 @@ class ParsleyEpochLogTest {
     @Test
     void commitAdvancesEpochPromotesJoinersAndClearsTheRound() {
         ParsleyEpochLog log = bootstrappedWithRunningMember("A");   // epoch 1, A running
-        log.apply(new EpochEvent.JoinRequested("B", Set.of(), Set.of()));               // B pending
-        log.apply(new EpochEvent.SnapshotRequested("A"));
-        log.apply(new EpochEvent.FrontierPublished("A", ParsleyClock.empty().observe(T1_ID, 0, 5)));
+        log.apply(new ParsleyEpochEvent.JoinRequested("B", Set.of(), Set.of()));               // B pending
+        log.apply(new ParsleyEpochEvent.SnapshotRequested("A"));
+        log.apply(new ParsleyEpochEvent.FrontierPublished("A", ParsleyClock.empty().observe(T1_ID, 0, 5)));
 
         log.apply(log.proposeCommit());
 
@@ -117,15 +117,15 @@ class ParsleyEpochLogTest {
     void strayFrontierPublicationsAreIgnored() {
         ParsleyEpochLog log = bootstrappedWithRunningMember("A");   // A running, no round open
         // No round open: this publication must not count.
-        log.apply(new EpochEvent.FrontierPublished("A", ParsleyClock.empty().observe(T1_ID, 0, 5)));
+        log.apply(new ParsleyEpochEvent.FrontierPublished("A", ParsleyClock.empty().observe(T1_ID, 0, 5)));
 
-        log.apply(new EpochEvent.JoinRequested("B", Set.of(), Set.of()));
-        log.apply(new EpochEvent.SnapshotRequested("A"));
+        log.apply(new ParsleyEpochEvent.JoinRequested("B", Set.of(), Set.of()));
+        log.apply(new ParsleyEpochEvent.SnapshotRequested("A"));
         // B is a pending joiner, not running: its publication must not count toward completeness.
-        log.apply(new EpochEvent.FrontierPublished("B", ParsleyClock.empty().observe(T1_ID, 0, 9)));
+        log.apply(new ParsleyEpochEvent.FrontierPublished("B", ParsleyClock.empty().observe(T1_ID, 0, 9)));
         assertFalse(log.isRoundComplete(), "only A (running) is awaited; A has not published in this round");
 
-        log.apply(new EpochEvent.FrontierPublished("A", ParsleyClock.empty().observe(T1_ID, 0, 5)));
+        log.apply(new ParsleyEpochEvent.FrontierPublished("A", ParsleyClock.empty().observe(T1_ID, 0, 5)));
         assertTrue(log.isRoundComplete(), "the round completes once the running member A publishes");
     }
 
@@ -133,16 +133,16 @@ class ParsleyEpochLogTest {
     @Test
     void proposeCommitRejectsAnIncompleteRound() {
         ParsleyEpochLog log = bootstrappedWithRunningMember("A");
-        log.apply(new EpochEvent.JoinRequested("B", Set.of(), Set.of()));
+        log.apply(new ParsleyEpochEvent.JoinRequested("B", Set.of(), Set.of()));
         commitRound(log, "B");                              // A+B running
-        log.apply(new EpochEvent.SnapshotRequested("A"));   // round open, nobody published
+        log.apply(new ParsleyEpochEvent.SnapshotRequested("A"));   // round open, nobody published
 
         assertThrows(IllegalStateException.class, log::proposeCommit,
                 "committing before every running member has published must be rejected");
     }
 
     /**
-     * A stale or duplicate {@link EpochEvent.EpochCommitted} is ignored: the first commit for an epoch is
+     * A stale or duplicate {@link ParsleyEpochEvent.EpochCommitted} is ignored: the first commit for an epoch is
      * authoritative, so a second commit for the same epoch (from an owner-plus-takeover, or a re-append)
      * folds to a no-op and does not clobber a round that has since opened for the next epoch. This is the
      * dedup-by-epochId property the leaderless protocol relies on for safe failover.
@@ -151,14 +151,14 @@ class ParsleyEpochLogTest {
     void duplicateOrStaleCommitIsIgnored() {
         ParsleyEpochLog log = bootstrappedWithRunningMember("A");   // epoch 1, A running
         // Open and commit epoch 2 normally.
-        log.apply(new EpochEvent.SnapshotRequested("A"));
-        log.apply(new EpochEvent.FrontierPublished("A", ParsleyClock.empty().observe(T1_ID, 0, 5)));
-        EpochEvent.EpochCommitted epochTwo = log.proposeCommit();
+        log.apply(new ParsleyEpochEvent.SnapshotRequested("A"));
+        log.apply(new ParsleyEpochEvent.FrontierPublished("A", ParsleyClock.empty().observe(T1_ID, 0, 5)));
+        ParsleyEpochEvent.EpochCommitted epochTwo = log.proposeCommit();
         log.apply(epochTwo);
         assertEquals(2L, log.committedEpochId(), "epoch 2 is committed");
 
         // A new round for epoch 3 opens.
-        log.apply(new EpochEvent.SnapshotRequested("A"));
+        log.apply(new ParsleyEpochEvent.SnapshotRequested("A"));
         assertTrue(log.isRoundOpen(), "a round for epoch 3 is open");
 
         // A duplicate of the epoch-2 commit now lands (e.g. a takeover re-append). It must be ignored,
@@ -170,29 +170,29 @@ class ParsleyEpochLogTest {
     }
 
     /**
-     * A {@link EpochEvent.Leave} removes a member from the domain, so an open round the member was holding
+     * A {@link ParsleyEpochEvent.Leave} removes a member from the domain, so an open round the member was holding
      * up completes without it — the mechanism that stops a gone member freezing rounds forever.
      */
     @Test
     void leaveRemovesAMemberSoAnOpenRoundCompletesWithoutIt() {
         ParsleyEpochLog log = bootstrappedWithRunningMember("A");
-        log.apply(new EpochEvent.JoinRequested("B", Set.of(), Set.of()));
+        log.apply(new ParsleyEpochEvent.JoinRequested("B", Set.of(), Set.of()));
         commitRound(log, "B");                              // A+B running (epoch 2)
 
-        log.apply(new EpochEvent.SnapshotRequested("A"));
-        log.apply(new EpochEvent.FrontierPublished("A", ParsleyClock.empty().observe(T1_ID, 0, 5)));
+        log.apply(new ParsleyEpochEvent.SnapshotRequested("A"));
+        log.apply(new ParsleyEpochEvent.FrontierPublished("A", ParsleyClock.empty().observe(T1_ID, 0, 5)));
         assertFalse(log.isRoundComplete(), "B is a running member that has not published, so the round waits");
 
-        log.apply(new EpochEvent.Leave("B"));               // B decommissioned or evicted
+        log.apply(new ParsleyEpochEvent.Leave("B"));               // B decommissioned or evicted
         assertFalse(log.isRunningMember("B"), "the departed member is removed from the running set");
         assertTrue(log.isRoundComplete(), "the round completes once the only outstanding member has left");
     }
 
-    /** A {@link EpochEvent.Leave} for a member that is not present is a no-op. */
+    /** A {@link ParsleyEpochEvent.Leave} for a member that is not present is a no-op. */
     @Test
     void leaveForANonMemberIsANoOp() {
         ParsleyEpochLog log = bootstrappedWithRunningMember("A");
-        log.apply(new EpochEvent.Leave("ghost"));
+        log.apply(new ParsleyEpochEvent.Leave("ghost"));
         assertEquals(java.util.Set.of("A"), log.runningMembers(), "leaving a non-member changes nothing");
         assertTrue(log.isRunningMember("A"), "the real member is untouched");
     }
@@ -205,8 +205,8 @@ class ParsleyEpochLogTest {
     @Test
     void externalSourceTopicsAreInputsThatNoMemberProduces() {
         ParsleyEpochLog log = new ParsleyEpochLog();
-        log.apply(new EpochEvent.JoinRequested("m1", Set.of("IN"), Set.of("mid")));
-        log.apply(new EpochEvent.JoinRequested("m2", Set.of("mid"), Set.of("out")));
+        log.apply(new ParsleyEpochEvent.JoinRequested("m1", Set.of("IN"), Set.of("mid")));
+        log.apply(new ParsleyEpochEvent.JoinRequested("m2", Set.of("mid"), Set.of("out")));
 
         assertEquals(Set.of("IN"), log.externalSourceTopics(),
                 "IN is consumed but produced by no member; mid is produced by m1, so it is internal");
@@ -219,29 +219,29 @@ class ParsleyEpochLogTest {
     @Test
     void externalSourceTopicsCountPendingDeclarationsAndSurviveACommit() {
         ParsleyEpochLog log = new ParsleyEpochLog();
-        log.apply(new EpochEvent.JoinRequested("m1", Set.of("IN"), Set.of("mid")));   // pending
-        log.apply(new EpochEvent.JoinRequested("m2", Set.of("mid"), Set.of("out")));  // pending
+        log.apply(new ParsleyEpochEvent.JoinRequested("m1", Set.of("IN"), Set.of("mid")));   // pending
+        log.apply(new ParsleyEpochEvent.JoinRequested("m2", Set.of("mid"), Set.of("out")));  // pending
         assertEquals(Set.of("IN"), log.externalSourceTopics(),
                 "a pending member's declaration counts toward the registry");
 
-        log.apply(new EpochEvent.SnapshotRequested("m1"));
+        log.apply(new ParsleyEpochEvent.SnapshotRequested("m1"));
         log.apply(log.proposeCommit());                                               // promote m1, m2 to running
         assertEquals(Set.of("IN"), log.externalSourceTopics(),
                 "declarations persist across a commit; the registry is unchanged");
     }
 
     /**
-     * A {@link EpochEvent.Leave} drops the member's declaration from the registry, so a topic only that
+     * A {@link ParsleyEpochEvent.Leave} drops the member's declaration from the registry, so a topic only that
      * member produced becomes external again (nothing produces it anymore).
      */
     @Test
     void leaveDropsAMembersDeclarationFromTheRegistry() {
         ParsleyEpochLog log = new ParsleyEpochLog();
-        log.apply(new EpochEvent.JoinRequested("m1", Set.of("IN"), Set.of("mid")));
-        log.apply(new EpochEvent.JoinRequested("m2", Set.of("mid"), Set.of("out")));
+        log.apply(new ParsleyEpochEvent.JoinRequested("m1", Set.of("IN"), Set.of("mid")));
+        log.apply(new ParsleyEpochEvent.JoinRequested("m2", Set.of("mid"), Set.of("out")));
         assertEquals(Set.of("IN"), log.externalSourceTopics(), "mid is internal while m1 produces it");
 
-        log.apply(new EpochEvent.Leave("m1"));   // the producer of mid leaves
+        log.apply(new ParsleyEpochEvent.Leave("m1"));   // the producer of mid leaves
         assertEquals(Set.of("mid"), log.externalSourceTopics(),
                 "with m1 gone, nobody produces mid, so m2's input mid is now an external source");
     }
@@ -251,8 +251,8 @@ class ParsleyEpochLogTest {
     /** A log where {@code member} has joined and been committed into epoch 1 (so it is running). */
     private static ParsleyEpochLog bootstrappedWithRunningMember(String member) {
         ParsleyEpochLog log = new ParsleyEpochLog();
-        log.apply(new EpochEvent.JoinRequested(member, Set.of(), Set.of()));
-        log.apply(new EpochEvent.SnapshotRequested(member));
+        log.apply(new ParsleyEpochEvent.JoinRequested(member, Set.of(), Set.of()));
+        log.apply(new ParsleyEpochEvent.SnapshotRequested(member));
         log.apply(log.proposeCommit());                     // vacuously complete (no prior running members)
         return log;
     }
@@ -260,9 +260,9 @@ class ParsleyEpochLogTest {
     /** Opens a round owned by {@code owner}, has every currently-running member publish an empty frontier,
      * and commits it — advancing the epoch. */
     private static void commitRound(ParsleyEpochLog log, String owner) {
-        log.apply(new EpochEvent.SnapshotRequested(owner));
+        log.apply(new ParsleyEpochEvent.SnapshotRequested(owner));
         for (String member : log.runningMembers()) {
-            log.apply(new EpochEvent.FrontierPublished(member, ParsleyClock.empty()));
+            log.apply(new ParsleyEpochEvent.FrontierPublished(member, ParsleyClock.empty()));
         }
         log.apply(log.proposeCommit());
     }

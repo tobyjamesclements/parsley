@@ -51,7 +51,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * with its own task id, so no member-id collision with the running stage).
  */
 @Testcontainers(disabledWithoutDocker = true)
-class CausalCoordinationJoinerIT {
+class ParsleyCoordinationJoinerIT {
 
     @Container
     private final KafkaContainer kafka =
@@ -77,7 +77,7 @@ class CausalCoordinationJoinerIT {
 
         // Phase 1: run stage A alone and establish an epoch (non-empty floor from delivered t1 records).
         long epochAfterPhase1;
-        CausalCoordination coordination1 = CausalCoordination.create(EPOCH_EVENTS);
+        ParsleyCoordination coordination1 = ParsleyCoordination.create(EPOCH_EVENTS);
         Path stateDir1 = Files.createTempDirectory("parsley-joiner-1");
         try (KafkaStreams streams = new KafkaStreams(stageAOnly(coordination1), streamsConfig(bootstrap, appId, stateDir1))) {
             streams.start();
@@ -96,7 +96,7 @@ class CausalCoordinationJoinerIT {
         assertTrue(epochAfterPhase1 >= 2, "phase 1 must establish an epoch B can join into");
 
         // Phase 2: redeploy with stage B added. A restores (running member); B is a fresh joiner.
-        CausalCoordination coordination2 = CausalCoordination.create(EPOCH_EVENTS);
+        ParsleyCoordination coordination2 = ParsleyCoordination.create(EPOCH_EVENTS);
         Path stateDir2 = Files.createTempDirectory("parsley-joiner-2");
         try (KafkaStreams streams = new KafkaStreams(stageAPlusB(coordination2), streamsConfig(bootstrap, appId, stateDir2))) {
             streams.start();
@@ -114,31 +114,31 @@ class CausalCoordinationJoinerIT {
     }
 
     /** Stage A only: t1 -> upper-case -> mid. */
-    private static Topology stageAOnly(CausalCoordination coordination) {
+    private static Topology stageAOnly(ParsleyCoordination coordination) {
         StreamsBuilder builder = new StreamsBuilder();
         addStageA(builder, coordination);
         return builder.build();
     }
 
     /** Stage A plus the newly-added stage B: mid -> prefix -> out. */
-    private static Topology stageAPlusB(CausalCoordination coordination) {
+    private static Topology stageAPlusB(ParsleyCoordination coordination) {
         StreamsBuilder builder = new StreamsBuilder();
         addStageA(builder, coordination);
         builder.stream(MID, Consumed.with(Serdes.String(), Serdes.String()))
-                .process(CausalProcessors.builder(prefixer())
+                .process(ParsleyProcessors.builder(prefixer())
                         .addBufferStore("parsley-b")
-                        .addBuffer(CausalBuffer.of(MID, Serdes.String(), Serdes.String()))
+                        .addBuffer(ParsleyBuffer.of(MID, Serdes.String(), Serdes.String()))
                         .withCoordination(coordination)
                         .build())
                 .to(OUT, Produced.with(Serdes.String(), Serdes.String()));
         return builder.build();
     }
 
-    private static void addStageA(StreamsBuilder builder, CausalCoordination coordination) {
+    private static void addStageA(StreamsBuilder builder, ParsleyCoordination coordination) {
         builder.stream(IN, Consumed.with(Serdes.String(), Serdes.String()))
-                .process(CausalProcessors.builder(upperCaser())
+                .process(ParsleyProcessors.builder(upperCaser())
                         .addBufferStore("parsley-a")
-                        .addBuffer(CausalBuffer.of(IN, Serdes.String(), Serdes.String()))
+                        .addBuffer(ParsleyBuffer.of(IN, Serdes.String(), Serdes.String()))
                         .withCoordination(coordination)
                         .build())
                 .to(MID, Produced.with(Serdes.String(), Serdes.String()));
@@ -164,7 +164,7 @@ class CausalCoordinationJoinerIT {
         };
     }
 
-    private static void requestUntilCommitted(CausalCoordination coordination, String bootstrap, long targetEpoch) {
+    private static void requestUntilCommitted(ParsleyCoordination coordination, String bootstrap, long targetEpoch) {
         await().atMost(Duration.ofSeconds(60)).until(() -> {
             if (highestCommittedEpoch(bootstrap) >= targetEpoch) {
                 return true;
@@ -180,16 +180,16 @@ class CausalCoordinationJoinerIT {
 
     private static long highestCommittedEpoch(String bootstrap) {
         long highest = 0;
-        for (EpochEvent event : readEpochEvents(bootstrap)) {
-            if (event instanceof EpochEvent.EpochCommitted commit) {
+        for (ParsleyEpochEvent event : readEpochEvents(bootstrap)) {
+            if (event instanceof ParsleyEpochEvent.EpochCommitted commit) {
                 highest = Math.max(highest, commit.epochId());
             }
         }
         return highest;
     }
 
-    private static List<EpochEvent> readEpochEvents(String bootstrap) {
-        List<EpochEvent> events = new ArrayList<>();
+    private static List<ParsleyEpochEvent> readEpochEvents(String bootstrap) {
+        List<ParsleyEpochEvent> events = new ArrayList<>();
         Map<String, Object> config = Map.of(
                 ConsumerConfig.BOOTSTRAP_SERVERS_CONFIG, bootstrap,
                 ConsumerConfig.GROUP_ID_CONFIG, "epoch-reader-" + UUID.randomUUID(),
@@ -201,7 +201,7 @@ class CausalCoordinationJoinerIT {
             long deadline = System.currentTimeMillis() + 2000;
             while (System.currentTimeMillis() < deadline) {
                 for (ConsumerRecord<byte[], byte[]> record : consumer.poll(Duration.ofMillis(200))) {
-                    events.add(EpochEvent.fromBytes(record.value()));
+                    events.add(ParsleyEpochEvent.fromBytes(record.value()));
                 }
             }
         }

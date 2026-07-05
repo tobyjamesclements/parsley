@@ -19,15 +19,15 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 /**
  * Tests the topology-edge operations on {@link CausalDependencies}: stamping a {@link ProducerRecord},
  * merging dependency sets for a fan-in, and deriving a record's outbound dependencies from a consumed
- * {@link ConsumerRecord} via a {@link CausalTopics} resolver — the edge-of-topology operations for
+ * {@link ConsumerRecord} via a {@link ParsleyTopics} resolver — the edge-of-topology operations for
  * talking to a Parsley topology from plain Kafka clients.
  */
 class CausalDependenciesEdgeOpsTest {
 
     private static final Uuid ORDERS_ID = Uuid.randomUuid();
     private static final Uuid PRICES_ID = Uuid.randomUuid();
-    private static final CausalTopics TOPICS =
-            CausalTopics.of(Map.of("orders", ORDERS_ID, "prices", PRICES_ID));
+    private static final ParsleyTopics TOPICS =
+            ParsleyTopics.of(Map.of("orders", ORDERS_ID, "prices", PRICES_ID));
 
     /**
      * {@code stamp} writes the dependencies into the record's header in a form {@code fromRecord} can
@@ -199,7 +199,7 @@ class CausalDependenciesEdgeOpsTest {
     void observeOnAnUnboundInstanceThrows() {
         ConsumerRecord<String, String> consumed = new ConsumerRecord<>("orders", 0, 0L, "k", "v");
         assertThrows(IllegalStateException.class, () -> CausalDependencies.empty().observe(consumed),
-                "observe must throw when no CausalTopics resolver is bound");
+                "observe must throw when no ParsleyTopics resolver is bound");
     }
 
     /**

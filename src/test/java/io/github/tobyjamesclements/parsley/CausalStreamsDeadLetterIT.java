@@ -90,16 +90,16 @@ class CausalStreamsDeadLetterIT {
                 .to("out-sink", OUT, Serdes.String(), Serdes.String());
         CausalTopology topology = builder.build();
 
-        // Resolve topic UUIDs eagerly while the admin is open — CausalTopics.of(Admin) resolves lazily
+        // Resolve topic UUIDs eagerly while the admin is open — ParsleyTopics.of(Admin) resolves lazily
         // on first use, which would otherwise reach for a closed AdminClient once this try-with-resources
         // block exits.
-        CausalTopics topics;
+        ParsleyTopics topics;
         try (Admin admin = Admin.create(Map.of("bootstrap.servers", bootstrap))) {
             Map<String, Uuid> ids = new java.util.HashMap<>();
             for (String topic : List.of(PREREQ, IN, DEPENDENT, OUT)) {
                 ids.put(topic, admin.describeTopics(List.of(topic)).topicNameValues().get(topic).get().topicId());
             }
-            topics = CausalTopics.of(ids);
+            topics = ParsleyTopics.of(ids);
         }
 
         CausalStreams causalStreams = new CausalStreams(topology, streamsConfig(bootstrap, appId));

@@ -17,7 +17,7 @@ import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-class CausalProcessorsTest {
+class ParsleyProcessorsTest {
 
     private static final ProcessorSupplier<String, String, String, String> USER =
             () -> new Processor<>() {
@@ -28,45 +28,45 @@ class CausalProcessorsTest {
     private static final String TOPOLOGY_VALIDATION = "parsley.topology.validation";
 
     /**
-     * {@code CausalProcessors.Builder.build()} requires a buffer store to be declared via
+     * {@code ParsleyProcessors.Builder.build()} requires a buffer store to be declared via
      * {@code addBufferStore(name)} before the processor supplier can be constructed.
      *
      * Asserts that {@code IllegalStateException} is thrown when no buffer store was declared.
      */
     @Test
     void buildFailsWithoutBufferStore() {
-        CausalProcessors.Builder<String, String, String, String> b = CausalProcessors.builder(USER)
-                .addBuffer(CausalBuffer.of("t1", Serdes.String(), Serdes.String()));
+        ParsleyProcessors.Builder<String, String, String, String> b = ParsleyProcessors.builder(USER)
+                .addBuffer(ParsleyBuffer.of("t1", Serdes.String(), Serdes.String()));
         assertThrows(IllegalStateException.class, b::build,
                 "build() must throw when addBufferStore(name) was not called");
     }
 
     /**
-     * {@code CausalProcessors.Builder.build()} requires at least one {@link CausalBuffer} to be
+     * {@code ParsleyProcessors.Builder.build()} requires at least one {@link ParsleyBuffer} to be
      * registered before the processor supplier can be constructed.
      *
      * Asserts that {@code IllegalStateException} is thrown when no buffer has been added.
      */
     @Test
     void buildRequiresABuffer() {
-        CausalProcessors.Builder<String, String, String, String> b =
+        ParsleyProcessors.Builder<String, String, String, String> b =
                 builderWith();
         assertThrows(IllegalStateException.class, b::build,
-                "build() must throw when no CausalBuffer has been registered");
+                "build() must throw when no ParsleyBuffer has been registered");
     }
 
     /**
      * A fully configured builder with a buffer store and a registered buffer produces a non-null
-     * {@code CausalProcessorSupplier} whose {@code get()} method returns a non-null
+     * {@code ParsleyProcessorSupplier} whose {@code get()} method returns a non-null
      * processor instance.
      *
      * Asserts that both the supplier and the processor it creates are non-null.
      */
     @Test
     void buildsAValidSupplier() {
-        CausalProcessorSupplier<String, String, String, String> supplier =
+        ParsleyProcessorSupplier<String, String, String, String> supplier =
                 builderWith()
-                        .addBuffer(CausalBuffer.of("t1", Serdes.String(), Serdes.String()))
+                        .addBuffer(ParsleyBuffer.of("t1", Serdes.String(), Serdes.String()))
                         .build();
         assertNotNull(supplier, "build() must return a non-null supplier");
         assertNotNull(supplier.get(), "supplier.get() must return a non-null processor");
@@ -81,9 +81,9 @@ class CausalProcessorsTest {
     @Test
     void addBufferStoreSetsNamespace() {
         ParsleyProcessorSupplier<String, String, String, String> supplier =
-                (ParsleyProcessorSupplier<String, String, String, String>) CausalProcessors.builder(USER)
+                (ParsleyProcessorSupplier<String, String, String, String>) ParsleyProcessors.builder(USER)
                         .addBufferStore("t1")
-                        .addBuffer(CausalBuffer.of("t1", Serdes.String(), Serdes.String()))
+                        .addBuffer(ParsleyBuffer.of("t1", Serdes.String(), Serdes.String()))
                         .build();
 
         Set<String> storeNames = supplier.stores().stream()
@@ -108,7 +108,7 @@ class CausalProcessorsTest {
     void withConfigKeyValueOverridesDefault() {
         ParsleyProcessorSupplier<String, String, String, String> supplier =
                 (ParsleyProcessorSupplier<String, String, String, String>) builderWith()
-                        .addBuffer(CausalBuffer.of("t1", Serdes.String(), Serdes.String()))
+                        .addBuffer(ParsleyBuffer.of("t1", Serdes.String(), Serdes.String()))
                         .withConfig(TOPOLOGY_VALIDATION, "strict")
                         .build();
         assertEquals(ParsleyConfig.ValidationMode.STRICT, supplier.config().topologyValidation(),
@@ -125,7 +125,7 @@ class CausalProcessorsTest {
     void defaultConfigUsesWarnValidation() {
         ParsleyProcessorSupplier<String, String, String, String> supplier =
                 (ParsleyProcessorSupplier<String, String, String, String>) builderWith()
-                        .addBuffer(CausalBuffer.of("t1", Serdes.String(), Serdes.String()))
+                        .addBuffer(ParsleyBuffer.of("t1", Serdes.String(), Serdes.String()))
                         .build();
         assertEquals(ParsleyConfig.ValidationMode.WARN, supplier.config().topologyValidation(),
                 "the default topology-validation mode is 'warn'");
@@ -141,7 +141,7 @@ class CausalProcessorsTest {
     void withConfigsMapAndPropertiesApplied() {
         ParsleyProcessorSupplier<String, String, String, String> fromMap =
                 (ParsleyProcessorSupplier<String, String, String, String>) builderWith()
-                        .addBuffer(CausalBuffer.of("t1", Serdes.String(), Serdes.String()))
+                        .addBuffer(ParsleyBuffer.of("t1", Serdes.String(), Serdes.String()))
                         .withConfigs(Map.of(TOPOLOGY_VALIDATION, "strict"))
                         .build();
         assertEquals(ParsleyConfig.ValidationMode.STRICT, fromMap.config().topologyValidation(),
@@ -151,7 +151,7 @@ class CausalProcessorsTest {
         props.setProperty(TOPOLOGY_VALIDATION, "strict");
         ParsleyProcessorSupplier<String, String, String, String> fromProps =
                 (ParsleyProcessorSupplier<String, String, String, String>) builderWith()
-                        .addBuffer(CausalBuffer.of("t2", Serdes.String(), Serdes.String()))
+                        .addBuffer(ParsleyBuffer.of("t2", Serdes.String(), Serdes.String()))
                         .withConfig(props)
                         .build();
         assertEquals(ParsleyConfig.ValidationMode.STRICT, fromProps.config().topologyValidation(),
@@ -159,29 +159,29 @@ class CausalProcessorsTest {
     }
 
     /**
-     * {@code CausalProcessors.builder(...)} rejects a {@code userSupplier} that is already a
-     * {@link CausalProcessorSupplier} — decorating an already-decorated supplier would buffer and
+     * {@code ParsleyProcessors.builder(...)} rejects a {@code userSupplier} that is already a
+     * {@link ParsleyProcessorSupplier} — decorating an already-decorated supplier would buffer and
      * stamp every record twice, nested, silently corrupting the frontier.
      *
      * Asserts an {@link IllegalArgumentException} naming the double-decoration.
      */
     @Test
     void builderRejectsAnAlreadyDecoratedSupplier() {
-        CausalProcessorSupplier<String, String, String, String> alreadyDecorated =
+        ParsleyProcessorSupplier<String, String, String, String> alreadyDecorated =
                 builderWith()
-                        .addBuffer(CausalBuffer.of("t1", Serdes.String(), Serdes.String()))
+                        .addBuffer(ParsleyBuffer.of("t1", Serdes.String(), Serdes.String()))
                         .build();
 
         IllegalArgumentException e = assertThrows(IllegalArgumentException.class,
-                () -> CausalProcessors.builder(alreadyDecorated),
+                () -> ParsleyProcessors.builder(alreadyDecorated),
                 "builder(...) must reject an already-decorated supplier");
-        assertTrue(e.getMessage().contains("CausalProcessorSupplier"),
+        assertTrue(e.getMessage().contains("ParsleyProcessorSupplier"),
                 "the message must name the double-decoration: " + e.getMessage());
     }
 
     // --- helpers --------------------------------------------------------------------------------
 
-    private static CausalProcessors.Builder<String, String, String, String> builderWith() {
-        return CausalProcessors.builder(USER).addBufferStore("parsley");
+    private static ParsleyProcessors.Builder<String, String, String, String> builderWith() {
+        return ParsleyProcessors.builder(USER).addBufferStore("parsley");
     }
 }

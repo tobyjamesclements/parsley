@@ -134,7 +134,7 @@ class ParsleyEpochRuntimeTest {
         GatedTransport transport = new GatedTransport();
         ParsleyEpochRuntime runtime = new ParsleyEpochRuntime(transport);
         runtime.join("A", Set.of(), Set.of());                                          // A is local to this runtime
-        transport.seed(new EpochEvent.SnapshotRequested("A"));      // opens a round A owns
+        transport.seed(new ParsleyEpochEvent.SnapshotRequested("A"));      // opens a round A owns
 
         // Not caught up yet: the round is folded open but the owner must not commit.
         for (int i = 0; i < 5; i++) {
@@ -162,9 +162,9 @@ class ParsleyEpochRuntimeTest {
         InMemoryEpochTransport.SharedLog log = new InMemoryEpochTransport.SharedLog();
         // Seed R as a running member (epoch 1); it then falls silent.
         InMemoryEpochTransport seeder = new InMemoryEpochTransport(log);
-        seeder.append(new EpochEvent.JoinRequested("R", Set.of(), Set.of()));
-        seeder.append(new EpochEvent.SnapshotRequested("R"));
-        seeder.append(new EpochEvent.EpochCommitted(1, ParsleyClock.empty()));
+        seeder.append(new ParsleyEpochEvent.JoinRequested("R", Set.of(), Set.of()));
+        seeder.append(new ParsleyEpochEvent.SnapshotRequested("R"));
+        seeder.append(new ParsleyEpochEvent.EpochCommitted(1, ParsleyClock.empty()));
 
         ParsleyEpochRuntime a = runtimeOver(log);
         a.join("A", Set.of(), Set.of());
@@ -178,7 +178,7 @@ class ParsleyEpochRuntimeTest {
 
         // R returns and publishes; the round now completes and commits epoch 2 over its frontier.
         new InMemoryEpochTransport(log).append(
-                new EpochEvent.FrontierPublished("R", ParsleyClock.empty().observe(T1, 0, 4)));
+                new ParsleyEpochEvent.FrontierPublished("R", ParsleyClock.empty().observe(T1, 0, 4)));
         settle(log, a);
 
         assertEquals(2L, a.committedEpochId(), "once the member publishes, the round commits epoch 2");
@@ -226,7 +226,7 @@ class ParsleyEpochRuntimeTest {
     /**
      * The drain mirror gates a graceful leave: {@code allLocalMembersDrained} is true only once every local
      * member has reported an empty buffer, and {@code hasRunningLocalMembers} reflects the fold's running
-     * set — the two conditions {@link CausalCoordination#leave()} waits on across its drain and remove phases.
+     * set — the two conditions {@link ParsleyCoordination#leave()} waits on across its drain and remove phases.
      */
     @Test
     void theDrainMirrorAndRunningSetGateAGracefulLeave() {
@@ -255,12 +255,12 @@ class ParsleyEpochRuntimeTest {
 
     /** A transport whose {@link #caughtUp()} is controllable, to exercise the bootstrap gate. */
     private static final class GatedTransport implements ParsleyEpochTransport {
-        private final java.util.List<EpochEvent> events = new java.util.ArrayList<>();
+        private final java.util.List<ParsleyEpochEvent> events = new java.util.ArrayList<>();
         private int cursor;
         private boolean caughtUp;
 
         /** Appends an event as if produced by another node (bypassing the runtime's outbox). */
-        void seed(EpochEvent event) {
+        void seed(ParsleyEpochEvent event) {
             events.add(event);
         }
 
@@ -269,13 +269,13 @@ class ParsleyEpochRuntimeTest {
         }
 
         @Override
-        public void append(EpochEvent event) {
+        public void append(ParsleyEpochEvent event) {
             events.add(event);
         }
 
         @Override
-        public java.util.List<EpochEvent> poll(java.time.Duration timeout) {
-            java.util.List<EpochEvent> fresh = new java.util.ArrayList<>(events.subList(cursor, events.size()));
+        public java.util.List<ParsleyEpochEvent> poll(java.time.Duration timeout) {
+            java.util.List<ParsleyEpochEvent> fresh = new java.util.ArrayList<>(events.subList(cursor, events.size()));
             cursor = events.size();
             return fresh;
         }

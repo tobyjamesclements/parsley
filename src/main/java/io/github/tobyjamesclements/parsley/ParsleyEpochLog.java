@@ -15,21 +15,21 @@ import java.util.Set;
  *
  * <p>Round lifecycle (a "round" is defined by log position, not by any id in the events):
  * <ul>
- *   <li>The first {@link EpochEvent.SnapshotRequested} after the last {@link EpochEvent.EpochCommitted}
+ *   <li>The first {@link ParsleyEpochEvent.SnapshotRequested} after the last {@link ParsleyEpochEvent.EpochCommitted}
  *       <strong>opens</strong> the round and elects its author as {@linkplain #roundOwner() owner};
  *       later requests (and joins) while the round is open <strong>coalesce</strong> into it.
- *   <li>Running members publish ({@link EpochEvent.FrontierPublished}); the round is
+ *   <li>Running members publish ({@link ParsleyEpochEvent.FrontierPublished}); the round is
  *       {@linkplain #isRoundComplete() complete} once every running member has published.
  *   <li>The owner then commits {@link #proposeCommit()} = {@code (nextEpochId, mergeMin(published))};
- *       applying the resulting {@link EpochEvent.EpochCommitted} advances the settled epoch, promotes
+ *       applying the resulting {@link ParsleyEpochEvent.EpochCommitted} advances the settled epoch, promotes
  *       pending joiners to running, and clears the round.
  * </ul>
  *
- * <p>Membership: a {@link EpochEvent.JoinRequested} member is <em>pending</em> until the next commit,
+ * <p>Membership: a {@link ParsleyEpochEvent.JoinRequested} member is <em>pending</em> until the next commit,
  * then <em>running</em>. Running members are the ones whose publication a round waits for and whose
  * frontiers are folded into {@code lowerBounds}; a joiner (blocked, not yet consuming) publishes nothing
- * and does not constrain the cut. A {@link EpochEvent.Leave} removes a member (a graceful leave or an
- * eviction). Each {@link EpochEvent.JoinRequested} also declares the member's input/sink topics, from
+ * and does not constrain the cut. A {@link ParsleyEpochEvent.Leave} removes a member (a graceful leave or an
+ * eviction). Each {@link ParsleyEpochEvent.JoinRequested} also declares the member's input/sink topics, from
  * which {@link #externalSourceTopics()} derives the DAG-wide source-topic registry.
  *
  * <p>Not thread-safe: a single consumer thread applies the log in order.
@@ -49,9 +49,9 @@ final class ParsleyEpochLog {
     record MemberTopology(Set<String> inputTopics, Set<String> sinkTopics) {}
 
     /** Applies one event in log order, updating the folded state. */
-    void apply(EpochEvent event) {
+    void apply(ParsleyEpochEvent event) {
         switch (event) {
-            case EpochEvent.JoinRequested e -> {
+            case ParsleyEpochEvent.JoinRequested e -> {
                 // A member already running does not re-join; otherwise it is pending until the next commit.
                 if (!runningMembers.contains(e.memberId())) {
                     pendingJoiners.add(e.memberId());
@@ -60,21 +60,21 @@ final class ParsleyEpochLog {
                 // soon as declared — pending or running — see externalSourceTopics()).
                 declarations.put(e.memberId(), new MemberTopology(e.inputTopics(), e.sinkTopics()));
             }
-            case EpochEvent.SnapshotRequested e -> {
+            case ParsleyEpochEvent.SnapshotRequested e -> {
                 // First request after the last commit opens the round and elects the owner; the rest
                 // coalesce (a round is already open).
                 if (roundOwner == null) {
                     roundOwner = e.memberId();
                 }
             }
-            case EpochEvent.FrontierPublished e -> {
+            case ParsleyEpochEvent.FrontierPublished e -> {
                 // A publication counts only for the open round and only from a running member; a stray
                 // publication (no round, or from a not-yet-running joiner) is ignored. Last write wins.
                 if (roundOwner != null && runningMembers.contains(e.memberId())) {
                     publications.put(e.memberId(), e.completeness());
                 }
             }
-            case EpochEvent.Leave e -> {
+            case ParsleyEpochEvent.Leave e -> {
                 // Remove the member from the domain — a graceful leave or an eviction of a silent member.
                 // Dropping it from the open round's publications keeps the completeness check honest (a
                 // left member is no longer awaited). Idempotent: a Leave for a non-member is a no-op.
@@ -83,7 +83,7 @@ final class ParsleyEpochLog {
                 publications.remove(e.memberId());
                 declarations.remove(e.memberId());
             }
-            case EpochEvent.EpochCommitted e -> {
+            case ParsleyEpochEvent.EpochCommitted e -> {
                 // Dedup by epochId: the first commit for an epoch is authoritative; a stale or duplicate
                 // one (owner-plus-takeover, or a re-append) is ignored. Without this guard a duplicate
                 // EpochCommitted(E+1) landing after round N+1 has opened would wrongly clear that round.
@@ -173,7 +173,7 @@ final class ParsleyEpochLog {
      *
      * @throws IllegalStateException if the round is not complete
      */
-    EpochEvent.EpochCommitted proposeCommit() {
+    ParsleyEpochEvent.EpochCommitted proposeCommit() {
         if (!isRoundComplete()) {
             throw new IllegalStateException("cannot commit: round not open or not all running members published");
         }
@@ -181,7 +181,7 @@ final class ParsleyEpochLog {
         for (ParsleyClock published : publications.values()) {
             lowerBounds = (lowerBounds == null) ? published : lowerBounds.mergeMin(published);
         }
-        return new EpochEvent.EpochCommitted(nextEpochId(),
+        return new ParsleyEpochEvent.EpochCommitted(nextEpochId(),
                 lowerBounds == null ? ParsleyClock.empty() : lowerBounds);
     }
 }

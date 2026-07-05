@@ -43,7 +43,7 @@ import java.util.concurrent.ExecutionException;
  *
  * <p>Confined to the single {@link ParsleyEpochRuntime} thread that drives it; not thread-safe.
  */
-final class ParsleyKafkaEpochTransport implements ParsleyEpochTransport {
+final class KafkaEpochTransport implements ParsleyEpochTransport {
 
     private final String topic;
     private final TopicPartition partition;
@@ -54,14 +54,14 @@ final class ParsleyKafkaEpochTransport implements ParsleyEpochTransport {
     private long bootstrapEndOffset = -1;
 
     /** Builds the raw clients from {@code appConfigs} and assigns the consumer to the log's one partition. */
-    ParsleyKafkaEpochTransport(Map<String, Object> appConfigs, String topic) {
+    KafkaEpochTransport(Map<String, Object> appConfigs, String topic) {
         this(topic,
                 new KafkaProducer<>(producerConfig(appConfigs)),
                 new KafkaConsumer<>(consumerConfig(appConfigs)));
     }
 
     /** Injection point for a fake producer/consumer in tests; the public constructor builds real clients. */
-    ParsleyKafkaEpochTransport(String topic,
+    KafkaEpochTransport(String topic,
                                Producer<byte[], byte[]> producer,
                                Consumer<byte[], byte[]> consumer) {
         this.topic = topic;
@@ -75,7 +75,7 @@ final class ParsleyKafkaEpochTransport implements ParsleyEpochTransport {
     }
 
     @Override
-    public void append(EpochEvent event) {
+    public void append(ParsleyEpochEvent event) {
         // Null key: the log is single-partition, so ordering is by offset, not key. Block for the ack so
         // a subsequent poll on this node can observe the appended event's effect deterministically.
         try {
@@ -89,11 +89,11 @@ final class ParsleyKafkaEpochTransport implements ParsleyEpochTransport {
     }
 
     @Override
-    public List<EpochEvent> poll(Duration timeout) {
+    public List<ParsleyEpochEvent> poll(Duration timeout) {
         ConsumerRecords<byte[], byte[]> records = consumer.poll(timeout);
-        List<EpochEvent> events = new ArrayList<>(records.count());
+        List<ParsleyEpochEvent> events = new ArrayList<>(records.count());
         for (ConsumerRecord<byte[], byte[]> record : records.records(partition)) {
-            events.add(EpochEvent.fromBytes(record.value()));
+            events.add(ParsleyEpochEvent.fromBytes(record.value()));
         }
         return events;
     }

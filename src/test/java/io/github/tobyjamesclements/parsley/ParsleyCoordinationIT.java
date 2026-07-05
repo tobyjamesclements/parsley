@@ -45,12 +45,12 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
  * End-to-end proof, against a real broker, that a running coordinated topology evolves through an epoch
- * transition driven by the public {@link CausalCoordination} API — exercising the real
- * {@link ParsleyKafkaEpochTransport} (idempotent append, full-log fold, {@code caughtUp} against actual
+ * transition driven by the public {@link ParsleyCoordination} API — exercising the real
+ * {@link KafkaEpochTransport} (idempotent append, full-log fold, {@code caughtUp} against actual
  * end offsets) and the runtime thread that unit tests over the in-memory double cannot.
  */
 @Testcontainers(disabledWithoutDocker = true)
-class CausalCoordinationIT {
+class ParsleyCoordinationIT {
 
     @Container
     private final KafkaContainer kafka =
@@ -87,12 +87,12 @@ class CausalCoordinationIT {
 
             // The node joins on init; wait until it is on the log, then promote it to running (epoch 1),
             // then evolve to epoch 2 — now running and with delivered records, so the floor is non-empty.
-            awaitEvent(bootstrap, e -> e instanceof EpochEvent.JoinRequested);
+            awaitEvent(bootstrap, e -> e instanceof ParsleyEpochEvent.JoinRequested);
             requestUntilCommitted(causalStreams, bootstrap, 1L);
             requestUntilCommitted(causalStreams, bootstrap, 2L);
 
-            EpochEvent.EpochCommitted epochTwo = awaitEvent(bootstrap,
-                    e -> e instanceof EpochEvent.EpochCommitted c && c.epochId() == 2L);
+            ParsleyEpochEvent.EpochCommitted epochTwo = awaitEvent(bootstrap,
+                    e -> e instanceof ParsleyEpochEvent.EpochCommitted c && c.epochId() == 2L);
             assertFalse(epochTwo.lowerBounds().isEmpty(),
                     "epoch 2's committed floor is a real cut from the running node's completeness, not empty");
 
@@ -109,7 +109,7 @@ class CausalCoordinationIT {
     private static void requestUntilCommitted(CausalStreams causalStreams, String bootstrap, long targetEpoch) {
         await().atMost(Duration.ofSeconds(60)).until(() -> {
             if (readEpochEvents(bootstrap).stream()
-                    .anyMatch(e -> e instanceof EpochEvent.EpochCommitted c && c.epochId() >= targetEpoch)) {
+                    .anyMatch(e -> e instanceof ParsleyEpochEvent.EpochCommitted c && c.epochId() >= targetEpoch)) {
                 return true;
             }
             try {
@@ -122,10 +122,10 @@ class CausalCoordinationIT {
     }
 
     @SuppressWarnings("unchecked")
-    private static <T extends EpochEvent> T awaitEvent(String bootstrap, java.util.function.Predicate<EpochEvent> match) {
-        List<EpochEvent> found = new ArrayList<>();
+    private static <T extends ParsleyEpochEvent> T awaitEvent(String bootstrap, java.util.function.Predicate<ParsleyEpochEvent> match) {
+        List<ParsleyEpochEvent> found = new ArrayList<>();
         await().atMost(Duration.ofSeconds(60)).until(() -> {
-            for (EpochEvent event : readEpochEvents(bootstrap)) {
+            for (ParsleyEpochEvent event : readEpochEvents(bootstrap)) {
                 if (match.test(event)) {
                     found.add(event);
                     return true;
@@ -137,8 +137,8 @@ class CausalCoordinationIT {
     }
 
     /** Reads the whole epoch-events log from the beginning and decodes every record. */
-    private static List<EpochEvent> readEpochEvents(String bootstrap) {
-        List<EpochEvent> events = new ArrayList<>();
+    private static List<ParsleyEpochEvent> readEpochEvents(String bootstrap) {
+        List<ParsleyEpochEvent> events = new ArrayList<>();
         Map<String, Object> config = Map.of(
                 ConsumerConfig.BOOTSTRAP_SERVERS_CONFIG, bootstrap,
                 ConsumerConfig.GROUP_ID_CONFIG, "epoch-reader-" + UUID.randomUUID(),
@@ -150,7 +150,7 @@ class CausalCoordinationIT {
             long deadline = System.currentTimeMillis() + 2000;
             while (System.currentTimeMillis() < deadline) {
                 for (ConsumerRecord<byte[], byte[]> record : consumer.poll(Duration.ofMillis(200))) {
-                    events.add(EpochEvent.fromBytes(record.value()));
+                    events.add(ParsleyEpochEvent.fromBytes(record.value()));
                 }
             }
         }

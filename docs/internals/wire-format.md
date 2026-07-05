@@ -84,7 +84,7 @@ The `{ns}-candidate-index` store maps coordinate+offset+recordId to an empty pre
 
 ## State store names and serdes
 
-The namespace is the `name` passed to `CausalProcessors.builder(...).addBufferStore(name, limit)`.
+The namespace is the `name` passed to `ParsleyProcessors.builder(...).addBufferStore(name, limit)`.
 
 | Store | Key serde | Value serde | Purpose |
 |---|---|---|---|
@@ -117,7 +117,7 @@ and order-sensitive, so folding it into `"f"` would increase Rocks I/O.
 
 Topic UUIDs are not derived or guessed. They are resolved from the broker through `AdminClient`. The
 processor resolves them at `init()` from the task's `appConfigs()` for every topic registered as a
-`CausalBuffer` on `CausalProcessors.builder(...)`. If a registered topic does not exist on the
+`ParsleyBuffer` on `ParsleyProcessors.builder(...)`. If a registered topic does not exist on the
 broker, resolution fails fast with `IllegalStateException` rather than falling back to a guess.
 
 The real UUID Kafka assigned to the topic is what's used. A topic deleted and recreated with the

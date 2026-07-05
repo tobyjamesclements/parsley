@@ -40,7 +40,7 @@ record ParsleyHeader(String key, byte @Nullable [] value) {
      * Co-ordinator to every input channel; on consuming it a processor adopts the new epoch's lower
      * bounds into its {@link ParsleyEpochState} (an overlapping-epoch transition). Like a watermark it
      * carries no business payload and is never delivered to the user delegate or buffered; the value
-     * holds the serialised {@link EpochBoundary}. The {@code _parsley_} prefix strips it from user view.
+     * holds the serialised {@link ParsleyEpochBoundary}. The {@code _parsley_} prefix strips it from user view.
      */
     static final String EPOCH_BOUNDARY = "_parsley_epoch_boundary";
 

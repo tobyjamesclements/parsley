@@ -14,7 +14,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
  * how long they wait. Records are held until their causal dependencies are satisfied and then
  * released in causal order.
  */
-class CausalBufferUnboundedLimitTest {
+class ParsleyBufferUnboundedLimitTest {
 
     private static final TopicPartition T1 = new TopicPartition("t1", 0);
     private static final TopicPartition T2 = new TopicPartition("t2", 0);

@@ -48,11 +48,11 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  *
  * <p>Note on scope: a genuine <em>topology change</em> (adding a stage) is a redeploy, since Kafka Streams
  * requires every instance of an application to run the same topology — so a zero-downtime rolling topology
- * swap is not a Streams capability, and the joiner is covered by {@code CausalCoordinationJoinerIT}. This
+ * swap is not a Streams capability, and the joiner is covered by {@code ParsleyCoordinationJoinerIT}. This
  * test instead exercises multi-instance agreement, which the single-instance ITs cannot.
  */
 @Testcontainers(disabledWithoutDocker = true)
-class CausalCoordinationMultiInstanceIT {
+class ParsleyCoordinationMultiInstanceIT {
 
     @Container
     private final KafkaContainer kafka =
@@ -96,18 +96,18 @@ class CausalCoordinationMultiInstanceIT {
             requestUntilCommitted(instance1, instance2, bootstrap, 1L);
             requestUntilCommitted(instance1, instance2, bootstrap, 2L);
 
-            List<EpochEvent> log = awaitLogWithCommit(bootstrap, 2L);
+            List<ParsleyEpochEvent> log = awaitLogWithCommit(bootstrap, 2L);
             long distinctPublishers = log.stream()
-                    .filter(e -> e instanceof EpochEvent.FrontierPublished)
-                    .map(e -> ((EpochEvent.FrontierPublished) e).memberId())
+                    .filter(e -> e instanceof ParsleyEpochEvent.FrontierPublished)
+                    .map(e -> ((ParsleyEpochEvent.FrontierPublished) e).memberId())
                     .collect(Collectors.toSet())
                     .size();
             assertTrue(distinctPublishers >= 2,
                     "both instances' tasks must publish their frontiers for the round (saw " + distinctPublishers + ")");
 
-            EpochEvent.EpochCommitted epochTwo = log.stream()
-                    .filter(e -> e instanceof EpochEvent.EpochCommitted c && c.epochId() == 2L)
-                    .map(e -> (EpochEvent.EpochCommitted) e)
+            ParsleyEpochEvent.EpochCommitted epochTwo = log.stream()
+                    .filter(e -> e instanceof ParsleyEpochEvent.EpochCommitted c && c.epochId() == 2L)
+                    .map(e -> (ParsleyEpochEvent.EpochCommitted) e)
                     .reduce((first, second) -> second)
                     .orElseThrow(() -> new AssertionError("no epoch-2 commit on the log"));
             assertTrue(epochTwo.lowerBounds().offsetFor(topicId(bootstrap), 0) >= 0
@@ -136,28 +136,28 @@ class CausalCoordinationMultiInstanceIT {
         }
     }
 
-    private static List<EpochEvent> awaitLogWithCommit(String bootstrap, long epoch) {
-        List<EpochEvent> log = new ArrayList<>();
+    private static List<ParsleyEpochEvent> awaitLogWithCommit(String bootstrap, long epoch) {
+        List<ParsleyEpochEvent> log = new ArrayList<>();
         await().atMost(Duration.ofSeconds(30)).until(() -> {
             log.clear();
             log.addAll(readEpochEvents(bootstrap));
-            return log.stream().anyMatch(e -> e instanceof EpochEvent.EpochCommitted c && c.epochId() == epoch);
+            return log.stream().anyMatch(e -> e instanceof ParsleyEpochEvent.EpochCommitted c && c.epochId() == epoch);
         });
         return log;
     }
 
     private static long highestCommittedEpoch(String bootstrap) {
         long highest = 0;
-        for (EpochEvent event : readEpochEvents(bootstrap)) {
-            if (event instanceof EpochEvent.EpochCommitted commit) {
+        for (ParsleyEpochEvent event : readEpochEvents(bootstrap)) {
+            if (event instanceof ParsleyEpochEvent.EpochCommitted commit) {
                 highest = Math.max(highest, commit.epochId());
             }
         }
         return highest;
     }
 
-    private static List<EpochEvent> readEpochEvents(String bootstrap) {
-        List<EpochEvent> events = new ArrayList<>();
+    private static List<ParsleyEpochEvent> readEpochEvents(String bootstrap) {
+        List<ParsleyEpochEvent> events = new ArrayList<>();
         Map<String, Object> config = Map.of(
                 ConsumerConfig.BOOTSTRAP_SERVERS_CONFIG, bootstrap,
                 ConsumerConfig.GROUP_ID_CONFIG, "epoch-reader-" + UUID.randomUUID(),
@@ -169,7 +169,7 @@ class CausalCoordinationMultiInstanceIT {
             long deadline = System.currentTimeMillis() + 2000;
             while (System.currentTimeMillis() < deadline) {
                 for (ConsumerRecord<byte[], byte[]> record : consumer.poll(Duration.ofMillis(200))) {
-                    events.add(EpochEvent.fromBytes(record.value()));
+                    events.add(ParsleyEpochEvent.fromBytes(record.value()));
                 }
             }
         }
@@ -179,7 +179,7 @@ class CausalCoordinationMultiInstanceIT {
     private static org.apache.kafka.common.Uuid topicId(String bootstrap) {
         Properties resolverProps = new Properties();
         resolverProps.put("bootstrap.servers", bootstrap);
-        return CausalTopics.of(resolverProps).topicId(IN);
+        return ParsleyTopics.of(resolverProps).topicId(IN);
     }
 
     private static CausalTopology topology() {

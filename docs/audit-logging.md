@@ -13,8 +13,8 @@ discarded.
 Implement `CausalAudit` and pass it to the builder.
 
 ```java
-CausalProcessorSupplier<String, Order, String, Enriched> causal =
-        CausalProcessors.builder(user)
+ParsleyProcessorSupplier<String, Order, String, Enriched> causal =
+        ParsleyProcessors.builder(user)
                 .addBufferStore("parsley", CausalBufferLimit.ofDuration(limit))
                 .addBuffers(List.of("prices", "orders"), Serdes.String(), orderSerde)
                 .withAudit(mySiemAudit)

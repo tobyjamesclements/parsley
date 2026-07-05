@@ -1,17 +1,17 @@
 # Streams integration
 
-`CausalProcessors` wraps a standard Kafka Streams `Processor` so that its state-store reads, its
+`ParsleyProcessors` wraps a standard Kafka Streams `Processor` so that its state-store reads, its
 writes, and its `forward` calls all execute behind the causal guarantee. The wrapping is transparent,
 and nothing extra is required on egress, because Streams sinks carry the stamped header out to the
 topic.
 
-`CausalStreams` builds on top of `CausalProcessors` and owns the surrounding topology — see
+`CausalStreams` builds on top of `ParsleyProcessors` and owns the surrounding topology — see
 [The high-level API: CausalStreams](#the-high-level-api-causalstreams) below for when to reach for it
 instead.
 
 ## Building a causal processor
 
-Write an ordinary `Processor<K, V, KOut, VOut>` and wrap its supplier with `CausalProcessors.builder`.
+Write an ordinary `Processor<K, V, KOut, VOut>` and wrap its supplier with `ParsleyProcessors.builder`.
 
 ```java
 ProcessorSupplier<String, Order, String, Enriched> user = new ProcessorSupplier<>() {
@@ -19,8 +19,8 @@ ProcessorSupplier<String, Order, String, Enriched> user = new ProcessorSupplier<
     public Set<StoreBuilder<?>> stores() { return Set.of(pricesStateBuilder); }  // your own stores
 };
 
-CausalProcessorSupplier<String, Order, String, Enriched> causal =
-        CausalProcessors.builder(user)
+ParsleyProcessorSupplier<String, Order, String, Enriched> causal =
+        ParsleyProcessors.builder(user)
                 .addBufferStore("parsley", CausalBufferLimit.ofDuration(limit))
                 .addBuffers(List.of("prices", "orders"), Serdes.String(), orderSerde)
                 .build();
@@ -34,10 +34,10 @@ builder.stream(List.of("prices", "orders"), Consumed.with(Serdes.String(), order
 namespace described below, and `limit` is the eviction trigger. This mirrors how Kafka Streams names
 and sizes a store in one place.
 
-Each input topic is registered as a `CausalBuffer` carrying the serdes that the buffer uses to round-
+Each input topic is registered as a `ParsleyBuffer` carrying the serdes that the buffer uses to round-
 trip held records. The topic's stable UUID is resolved from the broker automatically at startup. When
 a topic needs its own serdes, for example a topic carrying a different Avro type, register it with
-`.addBuffer(CausalBuffer.of(topic, keySerde, valueSerde))` once per topic instead of using the shared
+`.addBuffer(ParsleyBuffer.of(topic, keySerde, valueSerde))` once per topic instead of using the shared
 `addBuffers(topics, key, value)` convenience.
 
 Parsley's own configuration is supplied on the builder the same way Kafka Streams configuration is,
@@ -102,7 +102,7 @@ the same partition its business records do. This is why the key must not change 
 
 `parsley.topology.validation` controls how a causal processor reacts at startup to a detectable
 topology misconfiguration. The default `warn` logs a mismatch and continues, `strict` fails the task
-fast, and `off` disables the checks. A bare `CausalProcessors` decorator only ever sees its own
+fast, and `off` disables the checks. A bare `ParsleyProcessors` decorator only ever sees its own
 registered input topics, so it can check one precondition: that they share a partition count. A
 `CausalStreams` stage owns its sinks too, so it widens the same check to also cover sink partition
 counts and each sink's `cleanup.policy` — see
@@ -121,17 +121,17 @@ event, as a per-record callback instead of a log line.
 ## The high-level API: CausalStreams
 
 `CausalStreams` is the topology-owning entry point: it builds the `Topology` itself — sources,
-processor, and sinks — around the same `CausalProcessors` decorator, rather than handing you a
-`CausalProcessorSupplier` to drop into a `StreamsBuilder` you wire yourself. It composes the
+processor, and sinks — around the same `ParsleyProcessors` decorator, rather than handing you a
+`ParsleyProcessorSupplier` to drop into a `StreamsBuilder` you wire yourself. It composes the
 decorator; it does not reimplement the causal engine.
 
 ```java
-CausalQuiesce quiesce = CausalQuiesce.create();
+ParsleyQuiesce quiesce = ParsleyQuiesce.create();
 
 Topology topology = CausalStreams.builder(userSupplier)
         .addBufferStore("parsley", CausalBufferLimit.ofDuration(limit))
-        .addSource(CausalBuffer.of("prices", Serdes.String(), priceSerde))
-        .addSource(CausalBuffer.of("orders", Serdes.String(), orderSerde))
+        .addSource(ParsleyBuffer.of("prices", Serdes.String(), priceSerde))
+        .addSource(ParsleyBuffer.of("orders", Serdes.String(), orderSerde))
         .addSink("enriched-sink", "enriched-output", Serdes.String(), enrichedSerde)
         .withQuiesce(quiesce)
         .build();
@@ -160,15 +160,15 @@ requires owning the sinks, which the decorator structurally cannot do on its own
   causal-decorated processor → sinks. There is no method on the builder that inserts a plain,
   non-Parsley node in between, so a hop that would silently drop the causal-dependencies header, or
   swallow a non-emitting invocation without a watermark, cannot be constructed through this API.
-- **Coordinated graceful shutdown.** Register a `CausalQuiesce` with `Builder#withQuiesce`, call
+- **Coordinated graceful shutdown.** Register a `ParsleyQuiesce` with `Builder#withQuiesce`, call
   `requestQuiesce()` from your own shutdown path, then poll `isSafeToClose()` before calling
   `KafkaStreams#close`. A registered task keeps processing exactly as it does without quiesce — it
   only reports itself drained once its buffer empties through the ordinary delivery path, never by
   fabricating completeness. This is a stall-avoidance optimization, not a correctness requirement:
   every held record is already changelog-backed and survives an ungraceful stop regardless of
   whether quiesce was ever requested.
-- **A double-wrap guard.** Passing an already-decorated `CausalProcessorSupplier` back into
-  `CausalProcessors.builder(...)` (which `CausalStreams` calls internally) throws immediately,
+- **A double-wrap guard.** Passing an already-decorated `ParsleyProcessorSupplier` back into
+  `ParsleyProcessors.builder(...)` (which `CausalStreams` calls internally) throws immediately,
   rather than silently building a nested double-decoration that would buffer and stamp every record
   twice.
 
@@ -180,20 +180,20 @@ more of the topology for you, but the causal guarantee itself has the same requi
 A causal topology sometimes has to change while it runs: add a stage, replace a stage, or recompile
 one. A new stage subscribes to its inputs from the earliest offset and replays them from the start, and
 the causal frontier is a minimum across every node, so a node replaying from offset 0 drags that minimum
-down and un-strips history the other nodes had long since delivered. `CausalCoordination` lets a
+down and un-strips history the other nodes had long since delivered. `ParsleyCoordination` lets a
 topology cross a well-defined **epoch boundary** so a new node adopts the current floor and replays with
 pre-epoch history stripped, rather than pulling the shared frontier back to the beginning of time.
 
 Create one handle over a shared single-partition epoch-events log topic, register it with every
 participating stage through `withCoordination` on either builder, and close it from your shutdown path.
-The shape mirrors [`CausalQuiesce`](#the-high-level-api-causalstreams).
+The shape mirrors [`ParsleyQuiesce`](#the-high-level-api-causalstreams).
 
 ```java
-CausalCoordination coordination = CausalCoordination.create("parsley-epoch-events");
+ParsleyCoordination coordination = ParsleyCoordination.create("parsley-epoch-events");
 
 Topology topology = CausalStreams.builder(userSupplier)
         .addBufferStore("parsley", CausalBufferLimit.ofDuration(limit))
-        .addSource(CausalBuffer.of("prices", Serdes.String(), priceSerde))
+        .addSource(ParsleyBuffer.of("prices", Serdes.String(), priceSerde))
         .addSink("enriched-sink", "enriched-output", Serdes.String(), enrichedSerde)
         .withCoordination(coordination)
         .build();
@@ -210,15 +210,15 @@ The topology's **external source topics** — the entry points produced by syste
 on which no epoch marker ever arrives — are derived from the log, not configured. Every stage declares
 its input channels and its sink topics when it joins, and a topic some member consumes but no member
 produces is an external source. On the high-level builder the sinks are taken from `addSink(...)`
-automatically; on the low-level `CausalProcessors` decorator, declare them with
-`CausalProcessors.Builder#sinkTopics`. There is nothing else to configure per application, and no source
+automatically; on the low-level `ParsleyProcessors` decorator, declare them with
+`ParsleyProcessors.Builder#sinkTopics`. There is nothing else to configure per application, and no source
 topic list to keep in sync by hand.
 
 The coordination is **leaderless**: there is no coordinator process to deploy. Every application instance
 folds the shared epoch-events log identically and agrees on each epoch's floor, which then propagates
 **in-band** through the topology so every stage adopts it. A few operational consequences follow.
 
-- **Entirely optional.** Without a `CausalCoordination` a topology runs in epoch 0, exactly as a
+- **Entirely optional.** Without a `ParsleyCoordination` a topology runs in epoch 0, exactly as a
   topology with no epoch machinery. Registering a handle is the only thing that turns it on.
 - **A new node blocks until it is admitted.** A stage deployed into an already-running topology waits at
   startup — for an unbounded time, with no timeout — until an epoch computed without it commits, then

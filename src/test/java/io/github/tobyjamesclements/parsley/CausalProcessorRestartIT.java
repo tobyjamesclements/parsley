@@ -116,7 +116,7 @@ class CausalProcessorRestartIT {
     private static Topology newTopology() {
         StreamsBuilder builder = new StreamsBuilder();
         builder.stream(List.of(PREREQ, IN), Consumed.with(Serdes.String(), Serdes.String()))
-                .process(CausalProcessors.builder(upperCaser())
+                .process(ParsleyProcessors.builder(upperCaser())
                         .addBufferStore("parsley")
                         .addBuffers(List.of(PREREQ, IN), Serdes.String(), Serdes.String())
                         .build())

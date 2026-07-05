@@ -745,7 +745,7 @@ class ParsleyEngineTest {
         ParsleyEngine<String, String> engine = engineWithEpochState(epoch);
 
         // Receive the epoch-2 boundary (floor T2@20). The window opens but cannot close (nothing delivered).
-        engine.onEpochBoundary(new EpochBoundary(2, ParsleyClock.empty().observe(T2_ID, 0, 20)), T1_ID, 0);
+        engine.onEpochBoundary(new ParsleyEpochBoundary(2, ParsleyClock.empty().observe(T2_ID, 0, 20)), T1_ID, 0);
         assertTrue(epoch.isTransitioning(), "the epoch-2 transition is in progress");
 
         // In-flight epoch-1 record depending on T2@10, which is in-domain under the old floor (5), not the new (20).
@@ -772,7 +772,7 @@ class ParsleyEngineTest {
     void windowClosesWhenCompletenessDominatesTheBoundaryThenTheNewFloorApplies() {
         ParsleyEpochState epoch = new ParsleyEpochState(ParsleyClock.empty().observe(T2_ID, 0, 5), 1);
         ParsleyEngine<String, String> engine = engineWithEpochState(epoch);
-        engine.onEpochBoundary(new EpochBoundary(2, ParsleyClock.empty().observe(T2_ID, 0, 20)), T2_ID, 0);
+        engine.onEpochBoundary(new ParsleyEpochBoundary(2, ParsleyClock.empty().observe(T2_ID, 0, 20)), T2_ID, 0);
 
         // Deliver T2 contiguously up to the new floor 20 (all in-domain under the old floor 5).
         for (long offset = 6; offset <= 20; offset++) {

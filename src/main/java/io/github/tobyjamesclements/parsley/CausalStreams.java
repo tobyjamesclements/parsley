@@ -50,42 +50,42 @@ public final class CausalStreams implements AutoCloseable {
 
     private final Properties props;
     private final KafkaStreams kafkaStreams;
-    private final CausalQuiesce quiesce;
-    private final @Nullable CausalCoordination coordination;
+    private final ParsleyQuiesce quiesce;
+    private final @Nullable ParsleyCoordination coordination;
     private final Function<Map<String, Object>, ParsleyTopicAdmin> topicAdminFactory;
 
     /**
      * Assembles {@code topology} into a real Kafka Streams topology and wraps a {@code KafkaStreams}
      * instance over it, blocking a topology-epoch transition (if configured) until every member has
-     * published — see {@link CausalMembershipStrategy#blockUntilDrained()}.
+     * published — see {@link ParsleyMembershipStrategy#blockUntilDrained()}.
      *
      * @param topology the causal topology to run
      * @param props    standard Kafka Streams configuration plus Parsley's {@code parsley.*} keys
      */
     public CausalStreams(CausalTopology topology, Properties props) {
-        this(topology, props, CausalMembershipStrategy.blockUntilDrained(), ParsleyTopicAdmin::ofConfigs);
+        this(topology, props, ParsleyMembershipStrategy.blockUntilDrained(), ParsleyTopicAdmin::ofConfigs);
     }
 
     /**
      * As above, with the {@link ParsleyTopicAdmin} factory {@link #provisionDeadLetterTopic()} uses
      * overridden — a test seam, for substituting a stub admin without a real broker.
      */
-    CausalStreams(CausalTopology topology, Properties props, CausalMembershipStrategy membershipStrategy,
+    CausalStreams(CausalTopology topology, Properties props, ParsleyMembershipStrategy membershipStrategy,
                   Function<Map<String, Object>, ParsleyTopicAdmin> topicAdminFactory) {
         this.props = props;
         this.topicAdminFactory = topicAdminFactory;
-        this.quiesce = CausalQuiesce.create();
+        this.quiesce = ParsleyQuiesce.create();
         this.coordination = coordinationFrom(props, membershipStrategy);
         Topology assembled = topology.assemble(props, quiesce, coordination);
         this.kafkaStreams = new KafkaStreams(assembled, props);
     }
 
-    private static @Nullable CausalCoordination coordinationFrom(
-            Properties props, CausalMembershipStrategy membershipStrategy) {
+    private static @Nullable ParsleyCoordination coordinationFrom(
+            Properties props, ParsleyMembershipStrategy membershipStrategy) {
         Properties merged = ParsleyConfig.loadProperties();
         merged.putAll(props);
         String epochEventsTopic = ParsleyConfig.from(merged).coordinationEpochEventsTopic();
-        return epochEventsTopic == null ? null : CausalCoordination.create(epochEventsTopic, membershipStrategy);
+        return epochEventsTopic == null ? null : ParsleyCoordination.create(epochEventsTopic, membershipStrategy);
     }
 
     /**

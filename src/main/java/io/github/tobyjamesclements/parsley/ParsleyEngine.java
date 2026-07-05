@@ -380,7 +380,7 @@ final class ParsleyEngine<K, V> {
      * @param channelPartition the partition of that channel
      * @return the records released by a resulting window close, and any dead-lettered in the process
      */
-    Outcome<K, V> onEpochBoundary(EpochBoundary boundary, Uuid channelTopicId, int channelPartition) {
+    Outcome<K, V> onEpochBoundary(ParsleyEpochBoundary boundary, Uuid channelTopicId, int channelPartition) {
         frontier.recordEpochMarker(boundary.epochId(), boundary.lowerBounds(), channelTopicId, channelPartition);
         List<ParsleyMessage<K, V>> out = new ArrayList<>();
         List<DeadLetter<K, V>> deadLetters = new ArrayList<>();

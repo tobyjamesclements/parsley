@@ -57,7 +57,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * arrives.
  */
 @Testcontainers(disabledWithoutDocker = true)
-class CausalCoordinationCrashRestartIT {
+class ParsleyCoordinationCrashRestartIT {
 
     @Container
     private final KafkaContainer kafka =
@@ -86,14 +86,14 @@ class CausalCoordinationCrashRestartIT {
         String appIdX = "crash-x-" + runId;   // stable across the restart
         String appIdY = "crash-y-" + runId;
 
-        CausalCoordination coordinationY = CausalCoordination.create(EPOCH_EVENTS);
-        CausalCoordination coordinationX1 = CausalCoordination.create(EPOCH_EVENTS);
+        ParsleyCoordination coordinationY = ParsleyCoordination.create(EPOCH_EVENTS);
+        ParsleyCoordination coordinationX1 = ParsleyCoordination.create(EPOCH_EVENTS);
         Path stateY = Files.createTempDirectory("parsley-crash-y");
         Path stateX1 = Files.createTempDirectory("parsley-crash-x1");
 
         KafkaStreams appY = new KafkaStreams(stageY(coordinationY), streamsConfig(bootstrap, appIdY, stateY));
         KafkaStreams appX = new KafkaStreams(stageX(coordinationX1), streamsConfig(bootstrap, appIdX, stateX1));
-        CausalCoordination coordinationX2 = CausalCoordination.create(EPOCH_EVENTS);
+        ParsleyCoordination coordinationX2 = ParsleyCoordination.create(EPOCH_EVENTS);
         KafkaStreams appXRestarted = null;
         try {
             appY.start();
@@ -164,10 +164,10 @@ class CausalCoordinationCrashRestartIT {
         }
     }
 
-    private static Topology stageX(CausalCoordination coordination) {
+    private static Topology stageX(ParsleyCoordination coordination) {
         StreamsBuilder builder = new StreamsBuilder();
         builder.stream(List.of(PREREQ, IN), Consumed.with(Serdes.String(), Serdes.String()))
-                .process(CausalProcessors.builder(upperCaser())
+                .process(ParsleyProcessors.builder(upperCaser())
                         .addBufferStore("parsley-x")
                         .addBuffers(List.of(PREREQ, IN), Serdes.String(), Serdes.String())
                         .withCoordination(coordination)
@@ -176,12 +176,12 @@ class CausalCoordinationCrashRestartIT {
         return builder.build();
     }
 
-    private static Topology stageY(CausalCoordination coordination) {
+    private static Topology stageY(ParsleyCoordination coordination) {
         StreamsBuilder builder = new StreamsBuilder();
         builder.stream(YIN, Consumed.with(Serdes.String(), Serdes.String()))
-                .process(CausalProcessors.builder(upperCaser())
+                .process(ParsleyProcessors.builder(upperCaser())
                         .addBufferStore("parsley-y")
-                        .addBuffer(CausalBuffer.of(YIN, Serdes.String(), Serdes.String()))
+                        .addBuffer(ParsleyBuffer.of(YIN, Serdes.String(), Serdes.String()))
                         .withCoordination(coordination)
                         .build())
                 .to(YOUT, Produced.with(Serdes.String(), Serdes.String()));
@@ -198,7 +198,7 @@ class CausalCoordinationCrashRestartIT {
         };
     }
 
-    private static void requestUntilCommitted(CausalCoordination a, CausalCoordination b, String bootstrap, long target) {
+    private static void requestUntilCommitted(ParsleyCoordination a, ParsleyCoordination b, String bootstrap, long target) {
         await().atMost(Duration.ofSeconds(90)).pollInterval(Duration.ofSeconds(1)).until(() -> {
             if (highestCommittedEpoch(bootstrap) >= target) {
                 return true;
@@ -209,7 +209,7 @@ class CausalCoordinationCrashRestartIT {
         });
     }
 
-    private static void requestQuietly(CausalCoordination coordination) {
+    private static void requestQuietly(ParsleyCoordination coordination) {
         try {
             coordination.requestEpochTransition();
         } catch (IllegalStateException notReadyYet) {
@@ -219,21 +219,21 @@ class CausalCoordinationCrashRestartIT {
 
     private static boolean leaveExistsFor(String bootstrap, String appIdPrefix) {
         return readEpochEvents(bootstrap).stream()
-                .anyMatch(e -> e instanceof EpochEvent.Leave leave && leave.memberId().startsWith(appIdPrefix));
+                .anyMatch(e -> e instanceof ParsleyEpochEvent.Leave leave && leave.memberId().startsWith(appIdPrefix));
     }
 
     private static long highestCommittedEpoch(String bootstrap) {
         long highest = 0;
-        for (EpochEvent event : readEpochEvents(bootstrap)) {
-            if (event instanceof EpochEvent.EpochCommitted commit) {
+        for (ParsleyEpochEvent event : readEpochEvents(bootstrap)) {
+            if (event instanceof ParsleyEpochEvent.EpochCommitted commit) {
                 highest = Math.max(highest, commit.epochId());
             }
         }
         return highest;
     }
 
-    private static List<EpochEvent> readEpochEvents(String bootstrap) {
-        List<EpochEvent> events = new ArrayList<>();
+    private static List<ParsleyEpochEvent> readEpochEvents(String bootstrap) {
+        List<ParsleyEpochEvent> events = new ArrayList<>();
         Map<String, Object> config = Map.of(
                 ConsumerConfig.BOOTSTRAP_SERVERS_CONFIG, bootstrap,
                 ConsumerConfig.GROUP_ID_CONFIG, "epoch-reader-" + UUID.randomUUID(),
@@ -245,7 +245,7 @@ class CausalCoordinationCrashRestartIT {
             long deadline = System.currentTimeMillis() + 2000;
             while (System.currentTimeMillis() < deadline) {
                 for (ConsumerRecord<byte[], byte[]> record : consumer.poll(Duration.ofMillis(200))) {
-                    events.add(EpochEvent.fromBytes(record.value()));
+                    events.add(ParsleyEpochEvent.fromBytes(record.value()));
                 }
             }
         }

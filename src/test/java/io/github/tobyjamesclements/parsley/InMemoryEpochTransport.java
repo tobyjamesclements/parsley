@@ -17,16 +17,16 @@ final class InMemoryEpochTransport implements ParsleyEpochTransport {
 
     /** The shared backing log; one instance is shared across every transport standing in for a node. */
     static final class SharedLog {
-        private final List<EpochEvent> events = new ArrayList<>();
+        private final List<ParsleyEpochEvent> events = new ArrayList<>();
 
         /** Every event appended so far, in log order. */
-        List<EpochEvent> events() {
+        List<ParsleyEpochEvent> events() {
             return List.copyOf(events);
         }
 
-        /** The number of committed epochs (distinct {@link EpochEvent.EpochCommitted} records) on the log. */
+        /** The number of committed epochs (distinct {@link ParsleyEpochEvent.EpochCommitted} records) on the log. */
         long commitCount() {
-            return events.stream().filter(e -> e instanceof EpochEvent.EpochCommitted).count();
+            return events.stream().filter(e -> e instanceof ParsleyEpochEvent.EpochCommitted).count();
         }
     }
 
@@ -41,13 +41,13 @@ final class InMemoryEpochTransport implements ParsleyEpochTransport {
     }
 
     @Override
-    public void append(EpochEvent event) {
+    public void append(ParsleyEpochEvent event) {
         log.events.add(event);
     }
 
     @Override
-    public List<EpochEvent> poll(Duration timeout) {
-        List<EpochEvent> fresh = new ArrayList<>(log.events.subList(cursor, log.events.size()));
+    public List<ParsleyEpochEvent> poll(Duration timeout) {
+        List<ParsleyEpochEvent> fresh = new ArrayList<>(log.events.subList(cursor, log.events.size()));
         cursor = log.events.size();
         return fresh;
     }

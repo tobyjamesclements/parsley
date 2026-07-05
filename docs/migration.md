@@ -10,7 +10,7 @@ migration setting to choose and nothing to tighten later.
 
 ### Phase 1: introduce Parsley processors and tolerate unstamped producers
 
-Turn on `CausalProcessors` against the full topic set immediately. Records from producers that do not
+Turn on `ParsleyProcessors` against the full topic set immediately. Records from producers that do not
 yet stamp the `parsley-causal-dependencies` header pass straight through, unbuffered, because their
 empty dependency set is vacuously satisfied. Records that already arrive stamped are held until their
 dependencies are satisfied. The two kinds of producer coexist on the same topics without any

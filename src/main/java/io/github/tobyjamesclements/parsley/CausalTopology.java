@@ -29,10 +29,10 @@ import java.util.Set;
  */
 public final class CausalTopology {
 
-    private final List<StageSpec<?, ?, ?, ?>> stages;
+    private final List<ParsleyStageSpec<?, ?, ?, ?>> stages;
     private final @Nullable ParsleyTopicAdmin topicAdminOverride;
 
-    CausalTopology(List<StageSpec<?, ?, ?, ?>> stages, @Nullable ParsleyTopicAdmin topicAdminOverride) {
+    CausalTopology(List<ParsleyStageSpec<?, ?, ?, ?>> stages, @Nullable ParsleyTopicAdmin topicAdminOverride) {
         this.stages = stages;
         this.topicAdminOverride = topicAdminOverride;
     }
@@ -47,7 +47,7 @@ public final class CausalTopology {
      * @param coordination the shared topology-epoch coordination handle, or {@code null} to run in epoch 0
      * @return the assembled {@code Topology}
      */
-    Topology assemble(Properties props, CausalQuiesce quiesce, @Nullable CausalCoordination coordination) {
+    Topology assemble(Properties props, ParsleyQuiesce quiesce, @Nullable ParsleyCoordination coordination) {
         ParsleyConfig config = resolveConfig(props);
         DefaultSerdes defaults = new DefaultSerdes(props);
         String applicationId = props.getProperty(StreamsConfig.APPLICATION_ID_CONFIG);
@@ -60,7 +60,7 @@ public final class CausalTopology {
 
         Topology topology = new Topology();
         int index = 0;
-        for (StageSpec<?, ?, ?, ?> stage : stages) {
+        for (ParsleyStageSpec<?, ?, ?, ?> stage : stages) {
             index++;
             String name = stage.explicitName != null ? stage.explicitName : stagePrefix + index;
             assembleStage(topology, stage, name, config, defaults, quiesce, coordination, deadLetterTopic);
@@ -69,20 +69,20 @@ public final class CausalTopology {
     }
 
     private <KIn, VIn, KOut, VOut> void assembleStage(
-            Topology topology, StageSpec<KIn, VIn, KOut, VOut> stage, String name, ParsleyConfig config,
-            DefaultSerdes defaults, CausalQuiesce quiesce, @Nullable CausalCoordination coordination,
+            Topology topology, ParsleyStageSpec<KIn, VIn, KOut, VOut> stage, String name, ParsleyConfig config,
+            DefaultSerdes defaults, ParsleyQuiesce quiesce, @Nullable ParsleyCoordination coordination,
             String deadLetterTopic) {
-        Map<String, CausalBuffer<KIn, VIn>> sources = new LinkedHashMap<>();
-        stage.sources.forEach((topic, source) -> sources.put(topic, CausalBuffer.of(topic,
+        Map<String, ParsleyBuffer<KIn, VIn>> sources = new LinkedHashMap<>();
+        stage.sources.forEach((topic, source) -> sources.put(topic, ParsleyBuffer.of(topic,
                 source.keySerde() != null ? source.keySerde() : defaults.key(),
                 source.valueSerde() != null ? source.valueSerde() : defaults.value())));
 
         Set<String> sinkTopics = new LinkedHashSet<>();
         stage.sinks.forEach(sink -> sinkTopics.add(sink.topic()));
-        List<String> sinkNodeNames = stage.sinks.stream().map(StageSpec.SinkSpec::name).toList();
+        List<String> sinkNodeNames = stage.sinks.stream().map(ParsleyStageSpec.SinkSpec::name).toList();
         String deadLetterSinkName = name + "-deadletter-sink";
 
-        CausalProcessors.Builder<KIn, VIn, KOut, VOut> causalBuilder = CausalProcessors.builder(stage.userSupplier)
+        ParsleyProcessors.Builder<KIn, VIn, KOut, VOut> causalBuilder = ParsleyProcessors.builder(stage.userSupplier)
                 .addBufferStore(name)
                 .addBuffers(sources.values())
                 .config(config)
@@ -97,19 +97,19 @@ public final class CausalTopology {
         if (topicAdminOverride != null) {
             causalBuilder.topicAdmin(topicAdminOverride);
         }
-        CausalProcessorSupplier<KIn, VIn, KOut, VOut> supplier = causalBuilder.build();
+        ParsleyProcessorSupplier<KIn, VIn, KOut, VOut> supplier = causalBuilder.build();
 
         String processorName = name + "-processor";
         String[] sourceNames = new String[sources.size()];
         int i = 0;
-        for (CausalBuffer<KIn, VIn> buffer : sources.values()) {
+        for (ParsleyBuffer<KIn, VIn> buffer : sources.values()) {
             String sourceName = name + "-source-" + buffer.topic();
             topology.addSource(sourceName,
                     buffer.keySerde().deserializer(), buffer.valueSerde().deserializer(), buffer.topic());
             sourceNames[i++] = sourceName;
         }
         topology.addProcessor(processorName, supplier, sourceNames);
-        for (StageSpec.SinkSpec<KOut, VOut> sink : stage.sinks) {
+        for (ParsleyStageSpec.SinkSpec<KOut, VOut> sink : stage.sinks) {
             Serde<KOut> keySerde = sink.keySerde() != null ? sink.keySerde() : defaults.key();
             Serde<VOut> valueSerde = sink.valueSerde() != null ? sink.valueSerde() : defaults.value();
             // partitioner may be null here — Topology.addSink's partitioner-accepting overload treats

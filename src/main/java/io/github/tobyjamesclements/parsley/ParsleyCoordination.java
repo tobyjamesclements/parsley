@@ -8,7 +8,7 @@ import java.util.Objects;
 
 /**
  * Turns on topology-epoch coordination for a {@link CausalStreams} runtime. {@code CausalStreams} builds
- * one {@code CausalCoordination} internally — from {@code parsley.coordination.epoch-events-topic} in the
+ * one {@code ParsleyCoordination} internally — from {@code parsley.coordination.epoch-events-topic} in the
  * {@code props} passed to its constructor — and wires it into every stage; there is no public handle. To
  * evolve a running topology through an epoch boundary, call {@code CausalStreams#requestEpochTransition()};
  * {@code CausalStreams#close()} runs the graceful decommission ({@link #leave()}) before stopping.
@@ -26,7 +26,7 @@ import java.util.Objects;
  * <p><strong>Thread-safety:</strong> safe to share across every task's Kafka Streams thread and to call
  * {@link #requestEpochTransition()} / {@link #close()} from an unrelated thread.
  */
-final class CausalCoordination {
+final class ParsleyCoordination {
 
     private static final Duration COORDINATION_POLL_INTERVAL = Duration.ofMillis(20);
 
@@ -37,12 +37,12 @@ final class CausalCoordination {
 
     // How a blocked epoch round treats members that have not published. Unused on the injected-runtime path
     // (that runtime carries its own). Default: block-until-drained (never excludes).
-    private final CausalMembershipStrategy membershipStrategy;
+    private final ParsleyMembershipStrategy membershipStrategy;
 
     private final Object lock = new Object();
     private @Nullable ParsleyEpochRuntime lazyRuntime;
 
-    private CausalCoordination(String epochEventsTopic, CausalMembershipStrategy membershipStrategy,
+    private ParsleyCoordination(String epochEventsTopic, ParsleyMembershipStrategy membershipStrategy,
                                @Nullable ParsleyEpochRuntime injectedRuntime) {
         this.epochEventsTopic = epochEventsTopic;
         this.membershipStrategy = membershipStrategy;
@@ -56,37 +56,37 @@ final class CausalCoordination {
      * declares its input channels and sink topics on join, and a topic some member consumes but no member
      * produces is an external source (so a stage consuming one self-initiates the wave and adopts that
      * coordinate's floor from the log). Declare sink topics via {@code CausalStreams.addSink(...)} — which
-     * does so automatically — or {@code CausalProcessors.Builder.sinkTopics(...)} on the low-level path.
+     * does so automatically — or {@code ParsleyProcessors.Builder.sinkTopics(...)} on the low-level path.
      *
      * @param epochEventsTopic the single-partition epoch-events log topic name
      * @return a new coordination handle
      */
-    static CausalCoordination create(String epochEventsTopic) {
-        return create(epochEventsTopic, CausalMembershipStrategy.blockUntilDrained());
+    static ParsleyCoordination create(String epochEventsTopic) {
+        return create(epochEventsTopic, ParsleyMembershipStrategy.blockUntilDrained());
     }
 
     /**
-     * As {@link #create(String)}, with an explicit {@link CausalMembershipStrategy} governing how an epoch
+     * As {@link #create(String)}, with an explicit {@link ParsleyMembershipStrategy} governing how an epoch
      * transition treats a member that has not published. The default
-     * {@link CausalMembershipStrategy#blockUntilDrained()} blocks the transition until every member
+     * {@link ParsleyMembershipStrategy#blockUntilDrained()} blocks the transition until every member
      * publishes.
      *
      * @param epochEventsTopic   the single-partition epoch-events log topic name
      * @param membershipStrategy how a blocked round treats members that have not published
      * @return a new coordination handle
      */
-    static CausalCoordination create(String epochEventsTopic, CausalMembershipStrategy membershipStrategy) {
+    static ParsleyCoordination create(String epochEventsTopic, ParsleyMembershipStrategy membershipStrategy) {
         Objects.requireNonNull(epochEventsTopic, "epochEventsTopic must not be null");
         Objects.requireNonNull(membershipStrategy, "membershipStrategy must not be null");
-        return new CausalCoordination(epochEventsTopic, membershipStrategy, null);
+        return new ParsleyCoordination(epochEventsTopic, membershipStrategy, null);
     }
 
     /**
      * A handle over a pre-built {@code runtime} (bypassing the lazy Kafka build) for tests that drive an
      * {@link InMemoryEpochTransport}-backed runtime with no broker.
      */
-    static CausalCoordination forRuntime(ParsleyEpochRuntime runtime) {
-        return new CausalCoordination("", CausalMembershipStrategy.blockUntilDrained(), runtime);
+    static ParsleyCoordination forRuntime(ParsleyEpochRuntime runtime) {
+        return new ParsleyCoordination("", ParsleyMembershipStrategy.blockUntilDrained(), runtime);
     }
 
     /**
@@ -104,7 +104,7 @@ final class CausalCoordination {
                 return existing;
             }
             ParsleyEpochRuntime built = new ParsleyEpochRuntime(
-                    new ParsleyKafkaEpochTransport(appConfigs, epochEventsTopic), membershipStrategy);
+                    new KafkaEpochTransport(appConfigs, epochEventsTopic), membershipStrategy);
             built.start();
             lazyRuntime = built;
             return built;

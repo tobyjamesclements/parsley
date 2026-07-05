@@ -57,7 +57,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
  * once the Price arrives, deserialised back to an equal {@code Order}.
  *
  * <p>This is the processor-based replacement for the deleted standalone-consumer Avro IT; the
- * per-source-topic subject resolution is also covered by {@code CausalProcessorsAvroTopologyTest}
+ * per-source-topic subject resolution is also covered by {@code ParsleyProcessorsAvroTopologyTest}
  * against an in-process mock registry.
  */
 @Testcontainers(disabledWithoutDocker = true)
@@ -141,7 +141,7 @@ class CausalProcessorAvroIT {
         Serde<SpecificRecord> avro = avroValueSerde(registryUrl);
         StreamsBuilder builder = new StreamsBuilder();
         builder.stream(List.of(PRICES, ORDERS), Consumed.with(Serdes.String(), avro))
-                .process(CausalProcessors.builder(passthrough())
+                .process(ParsleyProcessors.builder(passthrough())
                         .addBufferStore("parsley")
                         .addBuffers(List.of(PRICES, ORDERS), Serdes.String(), avro)
                         .build())

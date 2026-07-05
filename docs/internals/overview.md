@@ -6,7 +6,7 @@ internal implementation.
 
 | API | Backed by |
 |---|---|
-| `CausalProcessorSupplier` | `ParsleyProcessorSupplier` + `ParsleyProcessor` |
+| `ParsleyProcessorSupplier` | `ParsleyProcessor` |
 | `CausalDependencies` edge ops (`using` / `observe` / `stamp` / `merge`) | `ParsleyClock` (no wrapper objects); `using`/`builder` resolve topic UUIDs internally, caching each name against a short-lived Kafka admin client opened on first use |
 
 All share a common set of value types and a single causal engine.
@@ -18,14 +18,14 @@ All share a common set of value types and a single causal engine.
 | Class | Role |
 |---|---|
 | `CausalDependencies` | Public facade over a `ParsleyClock`: the causal requirements stamped onto each record, plus the `using`/`observe`/`stamp`/`merge` edge operations and `isWatermark` for skipping protocol watermarks on the consumer side |
-| `CausalBuffer` | Registers one causal source on the processor builder: topic name + the serdes the buffer round-trips held records with (the topic's UUID is resolved from the broker) |
+| `ParsleyBuffer` | Registers one causal source on the processor builder: topic name + the serdes the buffer round-trips held records with (the topic's UUID is resolved from the broker) |
 | `CausalBufferLimit` | When to evict held records: `ofDuration`, `ofSize`, `first` |
 
 ### Package-private implementation
 
 | Class | Role |
 |---|---|
-| `CausalTopics` / `ParsleyTopics` | Resolves topic names to their stable Kafka UUIDs (through a short-lived Kafka admin client, cached), backing `CausalDependencies`'s `using`/`builder` |
+| `ParsleyTopics` / `KafkaTopics` | Resolves topic names to their stable Kafka UUIDs (through a short-lived Kafka admin client, cached), backing `CausalDependencies`'s `using`/`builder` |
 | `ParsleyEngine` | Causal buffer engine: classify, buffer, cascade, evict |
 | `ParsleyClock` | The one vector clock: node frontier *and* dependency representation, keyed on `(Uuid, int)` primitives |
 | `ParsleyMessage` | Typed engine envelope: source coordinate + dependency clock as fields, user headers separate |

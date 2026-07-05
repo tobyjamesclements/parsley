@@ -76,14 +76,14 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
     private final Function<Map<String, Object>, ParsleyTopicAdmin> adminFactory;
     private final ParsleyConfig config;
     private final CausalAudit audit;
-    private final @Nullable CausalQuiesce quiesce;
+    private final @Nullable ParsleyQuiesce quiesce;
     // The publisher for the snapshot frontier. Non-final: when coordination is configured, init() installs
     // the runtime-backed publisher (append to the epoch-events log) over whatever was passed.
     private ParsleyEpochSnapshotPublisher snapshotPublisher;
     // The per-instance epoch coordination handle, or null when no topology coordination is configured
     // (epoch 0). Resolved to the shared runtime at init(); the source-topic registry is derived from the
     // log, not carried here.
-    private final @Nullable CausalCoordination coordination;
+    private final @Nullable ParsleyCoordination coordination;
     // The shared epoch runtime resolved from the coordination handle at init(), or null in epoch 0. A
     // source-layer task polls it to initiate the in-band snapshot/boundary waves.
     private @Nullable ParsleyEpochRuntime epochRuntime;
@@ -142,7 +142,7 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
                      Function<Map<String, Object>, ParsleyTopicAdmin> adminFactory,
                      ParsleyConfig config,
                      CausalAudit audit,
-                     @Nullable CausalQuiesce quiesce) {
+                     @Nullable ParsleyQuiesce quiesce) {
         this(delegate, serializer, frontierStoreName, bufferStoreName, candidateIndexStoreName,
                 forwardedIndexStoreName, orphanIndexStoreName, topics, sinkTopics, sinkNodeNames,
                 deadLetterSinkName, adminFactory, config, audit, quiesce, ParsleyEpochSnapshotPublisher.NOOP);
@@ -162,7 +162,7 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
                      Function<Map<String, Object>, ParsleyTopicAdmin> adminFactory,
                      ParsleyConfig config,
                      CausalAudit audit,
-                     @Nullable CausalQuiesce quiesce,
+                     @Nullable ParsleyQuiesce quiesce,
                      ParsleyEpochSnapshotPublisher snapshotPublisher) {
         this(delegate, serializer, frontierStoreName, bufferStoreName, candidateIndexStoreName,
                 forwardedIndexStoreName, orphanIndexStoreName, topics, sinkTopics, sinkNodeNames,
@@ -183,9 +183,9 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
                      Function<Map<String, Object>, ParsleyTopicAdmin> adminFactory,
                      ParsleyConfig config,
                      CausalAudit audit,
-                     @Nullable CausalQuiesce quiesce,
+                     @Nullable ParsleyQuiesce quiesce,
                      ParsleyEpochSnapshotPublisher snapshotPublisher,
-                     @Nullable CausalCoordination coordination) {
+                     @Nullable ParsleyCoordination coordination) {
         this.delegate = delegate;
         this.serializer = serializer;
         this.frontierStoreName = frontierStoreName;
@@ -334,7 +334,7 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
         }
 
         // Registered last, once init() has otherwise succeeded, so a failed init never leaves a
-        // phantom task permanently blocking CausalQuiesce#isSafeToClose.
+        // phantom task permanently blocking ParsleyQuiesce#isSafeToClose.
         if (quiesce != null) {
             quiesce.register(context.taskId());
         }
@@ -513,8 +513,8 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
      * hold, release, or evict a record funnels through {@link #deliver}), so the signal reflects the
      * current buffer depth without polling. Never fabricates completeness — it only observes the buffer
      * depth the ordinary delivery path already produced. Quiesce additionally gates its drained flag on
-     * {@link CausalQuiesce#isQuiesceRequested()}; the runtime tracks the raw depth so
-     * {@link CausalCoordination#leave()} can wait for a drained buffer before removing the member.
+     * {@link ParsleyQuiesce#isQuiesceRequested()}; the runtime tracks the raw depth so
+     * {@link ParsleyCoordination#leave()} can wait for a drained buffer before removing the member.
      */
     private void updateQuiesceState() {
         boolean empty = engine.bufferSize() == 0;
@@ -609,13 +609,13 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
             return;
         }
 
-        EpochBoundary boundary = null;
+        ParsleyEpochBoundary boundary = null;
         byte[] boundaryBytes = null;
         for (Header h : record.headers()) {
             if (ParsleyHeader.EPOCH_BOUNDARY.equals(h.key()) && h.value() != null) {
                 try {
                     boundaryBytes = h.value();
-                    boundary = EpochBoundary.fromBytes(boundaryBytes);
+                    boundary = ParsleyEpochBoundary.fromBytes(boundaryBytes);
                 } catch (Exception e) {
                     log.warn("Failed to decode epoch boundary on {}-{}; ignoring", topic, partition, e);
                 }
@@ -708,7 +708,7 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
         }
         long committed = runtime.committedEpochId();
         if (committed > lastAdoptedEpoch) {
-            adoptAndInjectBoundary(new EpochBoundary(committed, runtime.committedLowerBounds()), externalSourceTopicIds);
+            adoptAndInjectBoundary(new ParsleyEpochBoundary(committed, runtime.committedLowerBounds()), externalSourceTopicIds);
             lastAdoptedEpoch = committed;
         }
         if (runtime.isRoundOpen()) {
@@ -750,7 +750,7 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
      * floor arrives from the log, since no in-band marker will ever reach it (break #1) — then relays the
      * boundary downstream on the last-seen key so the next layer transitions in-band.
      */
-    private void adoptAndInjectBoundary(EpochBoundary boundary, Set<Uuid> externalSourceTopicIds) {
+    private void adoptAndInjectBoundary(ParsleyEpochBoundary boundary, Set<Uuid> externalSourceTopicIds) {
         int partition = context.taskId().partition();
         List<ParsleyMessage<KIn, VIn>> released = new ArrayList<>();
         List<ParsleyEngine.DeadLetter<KIn, VIn>> deadLettered = new ArrayList<>();
@@ -911,8 +911,8 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
         Uuid topicId = topicUuids.get(topic);
         if (topicId == null) {
             throw new IllegalStateException(
-                    "no CausalBuffer registered for topic '" + topic
-                            + "'; call addBuffer(...) on the CausalProcessors builder for every input topic");
+                    "no ParsleyBuffer registered for topic '" + topic
+                            + "'; call addBuffer(...) on the ParsleyProcessors builder for every input topic");
         }
         long offset = meta.map(RecordMetadata::offset).orElse(0L);
         try {

@@ -18,9 +18,9 @@ import java.util.Objects;
 public final class CausalStream<K, V> {
 
     private final CausalStreamsBuilder owner;
-    private final Map<String, StageSpec.SourceSpec<K, V>> sources;
+    private final Map<String, ParsleyStageSpec.SourceSpec<K, V>> sources;
 
-    CausalStream(CausalStreamsBuilder owner, Map<String, StageSpec.SourceSpec<K, V>> sources) {
+    CausalStream(CausalStreamsBuilder owner, Map<String, ParsleyStageSpec.SourceSpec<K, V>> sources) {
         this.owner = owner;
         this.sources = sources;
     }
@@ -40,7 +40,7 @@ public final class CausalStream<K, V> {
             throw new IllegalArgumentException(
                     "cannot merge a CausalStream built from a different CausalStreamsBuilder");
         }
-        Map<String, StageSpec.SourceSpec<K, V>> merged = new LinkedHashMap<>(sources);
+        Map<String, ParsleyStageSpec.SourceSpec<K, V>> merged = new LinkedHashMap<>(sources);
         merged.putAll(other.sources);
         return new CausalStream<>(owner, merged);
     }
@@ -58,7 +58,7 @@ public final class CausalStream<K, V> {
      * @return a {@link CausalProcessedStream} to declare this stage's sink(s) on
      */
     public <KOut, VOut> CausalProcessedStream<KOut, VOut> process(ProcessorSupplier<K, V, KOut, VOut> supplier) {
-        return owner.addStage(new StageSpec<>(null, sources, supplier));
+        return owner.addStage(new ParsleyStageSpec<>(null, sources, supplier));
     }
 
     /**
@@ -75,6 +75,6 @@ public final class CausalStream<K, V> {
     public <KOut, VOut> CausalProcessedStream<KOut, VOut> process(
             String name, ProcessorSupplier<K, V, KOut, VOut> supplier) {
         Objects.requireNonNull(name, "name must not be null");
-        return owner.addStage(new StageSpec<>(name, sources, supplier));
+        return owner.addStage(new ParsleyStageSpec<>(name, sources, supplier));
     }
 }

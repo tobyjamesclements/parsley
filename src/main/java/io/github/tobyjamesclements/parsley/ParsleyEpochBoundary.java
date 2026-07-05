@@ -15,7 +15,7 @@ import java.io.IOException;
  * @param epochId     the new epoch's id, strictly increasing across boundaries
  * @param lowerBounds the new floor {@code F_e}: the lowest in-domain offset per {@code (topicId, partition)}
  */
-record EpochBoundary(long epochId, ParsleyClock lowerBounds) {
+record ParsleyEpochBoundary(long epochId, ParsleyClock lowerBounds) {
 
     /** Leading byte of the wire format. */
     static final byte WIRE_VERSION = 1;
@@ -32,7 +32,7 @@ record EpochBoundary(long epochId, ParsleyClock lowerBounds) {
             dos.flush();
             return baos.toByteArray();
         } catch (IOException e) {
-            throw new IllegalStateException("EpochBoundary serialisation failed", e);
+            throw new IllegalStateException("ParsleyEpochBoundary serialisation failed", e);
         }
     }
 
@@ -41,18 +41,18 @@ record EpochBoundary(long epochId, ParsleyClock lowerBounds) {
      *
      * @throws IllegalStateException if {@code bytes} is not valid, including an unrecognised version
      */
-    static EpochBoundary fromBytes(byte[] bytes) {
+    static ParsleyEpochBoundary fromBytes(byte[] bytes) {
         try (DataInputStream dis = new DataInputStream(new ByteArrayInputStream(bytes))) {
             byte version = dis.readByte();
             if (version != WIRE_VERSION) {
                 throw new IllegalStateException(
-                        "unsupported EpochBoundary wire version: " + version + " (expected " + WIRE_VERSION + ")");
+                        "unsupported ParsleyEpochBoundary wire version: " + version + " (expected " + WIRE_VERSION + ")");
             }
             long epochId = dis.readLong();
             ParsleyClock lowerBounds = ParsleyClock.fromBytes(dis.readNBytes(dis.readInt()));
-            return new EpochBoundary(epochId, lowerBounds);
+            return new ParsleyEpochBoundary(epochId, lowerBounds);
         } catch (IOException e) {
-            throw new IllegalStateException("EpochBoundary deserialisation failed", e);
+            throw new IllegalStateException("ParsleyEpochBoundary deserialisation failed", e);
         }
     }
 }

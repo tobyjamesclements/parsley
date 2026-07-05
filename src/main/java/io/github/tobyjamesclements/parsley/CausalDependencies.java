@@ -37,13 +37,13 @@ public final class CausalDependencies {
      * convenience state only: it is never serialised, and never participates in {@link #equals} /
      * {@link #hashCode} — two instances with the same positions are equal whatever they are bound to.
      */
-    private final @Nullable CausalTopics topics;
+    private final @Nullable ParsleyTopics topics;
 
     private CausalDependencies(ParsleyClock clock) {
         this(clock, null);
     }
 
-    private CausalDependencies(ParsleyClock clock, @Nullable CausalTopics topics) {
+    private CausalDependencies(ParsleyClock clock, @Nullable ParsleyTopics topics) {
         this.clock = clock;
         this.topics = topics;
     }
@@ -73,7 +73,7 @@ public final class CausalDependencies {
      */
     public static CausalDependencies using(Properties props) {
         Objects.requireNonNull(props, "props must not be null");
-        return using(CausalTopics.of(props));
+        return using(ParsleyTopics.of(props));
     }
 
     /**
@@ -85,12 +85,12 @@ public final class CausalDependencies {
      */
     public static CausalDependencies using(Map<String, Uuid> topicIds) {
         Objects.requireNonNull(topicIds, "topicIds must not be null");
-        return using(CausalTopics.of(topicIds));
+        return using(ParsleyTopics.of(topicIds));
     }
 
     /** Package-private: the shared implementation the public overloads above delegate to, and the
-     * entry point same-package tests use directly with a reusable {@link CausalTopics} constant. */
-    static CausalDependencies using(CausalTopics topics) {
+     * entry point same-package tests use directly with a reusable {@link ParsleyTopics} constant. */
+    static CausalDependencies using(ParsleyTopics topics) {
         Objects.requireNonNull(topics, "topics must not be null");
         return new CausalDependencies(ParsleyClock.empty(), topics);
     }
@@ -104,7 +104,7 @@ public final class CausalDependencies {
      */
     public static Builder builder(Properties props) {
         Objects.requireNonNull(props, "props must not be null");
-        return new Builder(CausalTopics.of(props));
+        return new Builder(ParsleyTopics.of(props));
     }
 
     /**
@@ -117,12 +117,12 @@ public final class CausalDependencies {
      */
     public static Builder builder(Map<String, Uuid> topicIds) {
         Objects.requireNonNull(topicIds, "topicIds must not be null");
-        return new Builder(CausalTopics.of(topicIds));
+        return new Builder(ParsleyTopics.of(topicIds));
     }
 
     /** Package-private: the entry point same-package tests use directly with a reusable
-     * {@link CausalTopics} constant. */
-    static Builder builder(CausalTopics topics) {
+     * {@link ParsleyTopics} constant. */
+    static Builder builder(ParsleyTopics topics) {
         return new Builder(topics);
     }
 
@@ -130,10 +130,10 @@ public final class CausalDependencies {
      * Builder for {@link CausalDependencies}.
      */
     public static final class Builder {
-        private final CausalTopics topics;
+        private final ParsleyTopics topics;
         private ParsleyClock clock = ParsleyClock.empty();
 
-        private Builder(CausalTopics topics) {
+        private Builder(ParsleyTopics topics) {
             this.topics = Objects.requireNonNull(topics, "topics must not be null");
         }
 

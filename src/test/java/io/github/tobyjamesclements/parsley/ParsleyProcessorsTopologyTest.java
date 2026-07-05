@@ -48,10 +48,10 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * Exercises {@link CausalProcessors} — the decorating causal processor — through a real Kafka Streams
+ * Exercises {@link ParsleyProcessors} — the decorating causal processor — through a real Kafka Streams
  * topology using the {@link TopologyTestDriver} (no broker required).
  */
-class CausalProcessorsTopologyTest {
+class ParsleyProcessorsTopologyTest {
 
     // Topic name → topic-id constant mapping used across tests.
     // t1 = default single-input topic; t2/t3 = two-source tests; t4 = materialized derived topic;
@@ -69,7 +69,7 @@ class CausalProcessorsTopologyTest {
             "t1", T1_ID, "t2", T2_ID, "t3", T3_ID, "t4", T4_ID, "t5", T5_ID));
 
     // Resolver mapping the same test topic names to their UUIDs, for building CausalDependencies.
-    private static final CausalTopics TOPICS = CausalTopics.of(Map.of(
+    private static final ParsleyTopics TOPICS = ParsleyTopics.of(Map.of(
             "t1", T1_ID, "t2", T2_ID, "t3", T3_ID, "t4", T4_ID, "t5", T5_ID, "ghost", GHOST_ID));
 
     private final List<String> processed = new ArrayList<>();
@@ -147,8 +147,8 @@ class CausalProcessorsTopologyTest {
     @Test
     void admittedRecordRunsDelegateAndStampsTheMergedClock() {
         Topology topology = topology(
-                CausalProcessors.builder(upperCaser()).addBufferStore("parsley")
-                        .addBuffer(CausalBuffer.of("t1", Serdes.String(), Serdes.String())).topicAdmin(ADMIN).build(),
+                ParsleyProcessors.builder(upperCaser()).addBufferStore("parsley")
+                        .addBuffer(ParsleyBuffer.of("t1", Serdes.String(), Serdes.String())).topicAdmin(ADMIN).build(),
                 List.of("t1"));
 
         try (TopologyTestDriver driver = new TopologyTestDriver(topology, config(null))) {
@@ -181,8 +181,8 @@ class CausalProcessorsTopologyTest {
     @Test
     void recordWithNoDependencyHeaderIsForwardedImmediatelyAndBumpsTheFrontier() {
         Topology topology = topology(
-                CausalProcessors.builder(upperCaser()).addBufferStore("parsley")
-                        .addBuffer(CausalBuffer.of("t1", Serdes.String(), Serdes.String())).topicAdmin(ADMIN).build(),
+                ParsleyProcessors.builder(upperCaser()).addBufferStore("parsley")
+                        .addBuffer(ParsleyBuffer.of("t1", Serdes.String(), Serdes.String())).topicAdmin(ADMIN).build(),
                 List.of("t1"));
 
         try (TopologyTestDriver driver = new TopologyTestDriver(topology, config(null))) {
@@ -205,7 +205,7 @@ class CausalProcessorsTopologyTest {
 
     /**
      * A record whose dependencies were derived at the edge with
-     * {@link CausalDependencies#from(CausalTopics, org.apache.kafka.clients.consumer.ConsumerRecord)}
+     * {@link CausalDependencies#from(ParsleyTopics, org.apache.kafka.clients.consumer.ConsumerRecord)}
      * is gated on the triggering record's own position: it is held until the processor observes that
      * position, then delivered. This proves the edge API's own-coordinate semantic against the real
      * gate — a record produced after consuming {@code t2@0} must not be delivered before {@code t2@0}.
@@ -221,9 +221,9 @@ class CausalProcessorsTopologyTest {
         CausalDependencies stampedFromTrigger = CausalDependencies.using(TOPICS).observe(trigger);
 
         Topology topology = topology(
-                CausalProcessors.builder(upperCaser()).addBufferStore("parsley")
-                        .addBuffer(CausalBuffer.of("t1", Serdes.String(), Serdes.String()))
-                        .addBuffer(CausalBuffer.of("t2", Serdes.String(), Serdes.String()))
+                ParsleyProcessors.builder(upperCaser()).addBufferStore("parsley")
+                        .addBuffer(ParsleyBuffer.of("t1", Serdes.String(), Serdes.String()))
+                        .addBuffer(ParsleyBuffer.of("t2", Serdes.String(), Serdes.String()))
                         .topicAdmin(ADMIN).build(),
                 List.of("t1", "t2"));
 
@@ -257,7 +257,7 @@ class CausalProcessorsTopologyTest {
     @Test
     void heldRecordIsBufferedThenDrainedThroughDelegate() {
         Topology topology = topology(
-                CausalProcessors.builder(upperCaser()).addBufferStore("parsley")
+                ParsleyProcessors.builder(upperCaser()).addBufferStore("parsley")
                         .addBuffers(List.of("t2", "t3"), Serdes.String(), Serdes.String()).topicAdmin(ADMIN).build(),
                 List.of("t2", "t3"));
 
@@ -289,7 +289,7 @@ class CausalProcessorsTopologyTest {
     }
 
     /**
-     * {@code addBuffers(Collection<CausalBuffer>)} registers every buffer in the collection, exactly
+     * {@code addBuffers(Collection<ParsleyBuffer>)} registers every buffer in the collection, exactly
      * like calling {@code addBuffer} once per element — the convenience overload for buffers with
      * distinct (non-shared) serdes.
      *
@@ -299,10 +299,10 @@ class CausalProcessorsTopologyTest {
     @Test
     void addBuffersCollectionOverloadRegistersEveryBuffer() {
         Topology topology = topology(
-                CausalProcessors.builder(upperCaser()).addBufferStore("parsley")
+                ParsleyProcessors.builder(upperCaser()).addBufferStore("parsley")
                         .addBuffers(List.of(
-                                CausalBuffer.of("t2", Serdes.String(), Serdes.String()),
-                                CausalBuffer.of("t3", Serdes.String(), Serdes.String())))
+                                ParsleyBuffer.of("t2", Serdes.String(), Serdes.String()),
+                                ParsleyBuffer.of("t3", Serdes.String(), Serdes.String())))
                         .topicAdmin(ADMIN).build(),
                 List.of("t2", "t3"));
 
@@ -336,8 +336,8 @@ class CausalProcessorsTopologyTest {
             @Override public void close() { delegateCloseCalls.add("closed"); }
         };
         Topology topology = topology(
-                CausalProcessors.builder(recordingDelegate).addBufferStore("parsley")
-                        .addBuffer(CausalBuffer.of("t1", Serdes.String(), Serdes.String())).topicAdmin(ADMIN).build(),
+                ParsleyProcessors.builder(recordingDelegate).addBufferStore("parsley")
+                        .addBuffer(ParsleyBuffer.of("t1", Serdes.String(), Serdes.String())).topicAdmin(ADMIN).build(),
                 List.of("t1"));
 
         TopologyTestDriver driver = new TopologyTestDriver(topology, config(null));
@@ -371,9 +371,9 @@ class CausalProcessorsTopologyTest {
             }
         };
         Topology topology = topology(
-                CausalProcessors.builder(recordingDelegate).addBufferStore("parsley")
-                        .addBuffer(CausalBuffer.of("t1", Serdes.String(), Serdes.String()))
-                        .addBuffer(CausalBuffer.of("t2", Serdes.String(), Serdes.String()))
+                ParsleyProcessors.builder(recordingDelegate).addBufferStore("parsley")
+                        .addBuffer(ParsleyBuffer.of("t1", Serdes.String(), Serdes.String()))
+                        .addBuffer(ParsleyBuffer.of("t2", Serdes.String(), Serdes.String()))
                         .topicAdmin(ADMIN).build(),
                 List.of("t1", "t2"));
 
@@ -424,8 +424,8 @@ class CausalProcessorsTopologyTest {
             }
         };
         Topology topology = topology(
-                CausalProcessors.builder(user).addBufferStore("parsley")
-                        .addBuffer(CausalBuffer.of("t1", Serdes.String(), Serdes.String())).topicAdmin(ADMIN).build(),
+                ParsleyProcessors.builder(user).addBufferStore("parsley")
+                        .addBuffer(ParsleyBuffer.of("t1", Serdes.String(), Serdes.String())).topicAdmin(ADMIN).build(),
                 List.of("t1"));
 
         try (TopologyTestDriver driver = new TopologyTestDriver(topology, config(null))) {
@@ -471,8 +471,8 @@ class CausalProcessorsTopologyTest {
             }
         };
         Topology topology = topology(
-                CausalProcessors.builder(user).addBufferStore("parsley")
-                        .addBuffer(CausalBuffer.of("t1", Serdes.String(), Serdes.String())).topicAdmin(ADMIN).build(),
+                ParsleyProcessors.builder(user).addBufferStore("parsley")
+                        .addBuffer(ParsleyBuffer.of("t1", Serdes.String(), Serdes.String())).topicAdmin(ADMIN).build(),
                 List.of("t1"));
 
         try (TopologyTestDriver driver = new TopologyTestDriver(topology, config(null))) {
@@ -531,8 +531,8 @@ class CausalProcessorsTopologyTest {
             }
         };
         Topology topology = topology(
-                CausalProcessors.builder(user).addBufferStore("parsley")
-                        .addBuffer(CausalBuffer.of("t1", Serdes.String(), Serdes.String())).topicAdmin(ADMIN).build(),
+                ParsleyProcessors.builder(user).addBufferStore("parsley")
+                        .addBuffer(ParsleyBuffer.of("t1", Serdes.String(), Serdes.String())).topicAdmin(ADMIN).build(),
                 List.of("t1"));
 
         try (TopologyTestDriver driver = new TopologyTestDriver(topology, config(null))) {
@@ -563,9 +563,9 @@ class CausalProcessorsTopologyTest {
     void bufferSerdesAreResolvedAndInvokedWithTheSourceTopic() {
         SpyStringSerde valueSpy = new SpyStringSerde();
         Topology topology = topology(
-                CausalProcessors.builder(upperCaser()).addBufferStore("parsley")
-                        .addBuffer(CausalBuffer.of("t2", Serdes.String(), valueSpy))
-                        .addBuffer(CausalBuffer.of("t3", Serdes.String(), valueSpy))
+                ParsleyProcessors.builder(upperCaser()).addBufferStore("parsley")
+                        .addBuffer(ParsleyBuffer.of("t2", Serdes.String(), valueSpy))
+                        .addBuffer(ParsleyBuffer.of("t3", Serdes.String(), valueSpy))
                         .topicAdmin(ADMIN).build(),
                 List.of("t2", "t3"));
 
@@ -585,7 +585,7 @@ class CausalProcessorsTopologyTest {
     }
 
     /**
-     * Two {@link CausalProcessors} instances in the same topology, each with a distinct
+     * Two {@link ParsleyProcessors} instances in the same topology, each with a distinct
      * {@code storeName}, coexist without state-store conflicts and maintain independent
      * frontiers.
      *
@@ -599,12 +599,12 @@ class CausalProcessorsTopologyTest {
     void twoDecoratorsWithDistinctStoreNamesCoexistAndKeepIsolatedFrontiers() {
         StreamsBuilder builder = new StreamsBuilder();
         builder.stream("t3", Consumed.with(Serdes.String(), Serdes.String()))
-                .process(CausalProcessors.builder(upperCaser()).addBufferStore("t3")
-                        .addBuffer(CausalBuffer.of("t3", Serdes.String(), Serdes.String())).topicAdmin(ADMIN).build())
+                .process(ParsleyProcessors.builder(upperCaser()).addBufferStore("t3")
+                        .addBuffer(ParsleyBuffer.of("t3", Serdes.String(), Serdes.String())).topicAdmin(ADMIN).build())
                 .to("t3-out", Produced.with(Serdes.String(), Serdes.String()));
         builder.stream("t2", Consumed.with(Serdes.String(), Serdes.String()))
-                .process(CausalProcessors.builder(upperCaser()).addBufferStore("t2")
-                        .addBuffer(CausalBuffer.of("t2", Serdes.String(), Serdes.String())).topicAdmin(ADMIN).build())
+                .process(ParsleyProcessors.builder(upperCaser()).addBufferStore("t2")
+                        .addBuffer(ParsleyBuffer.of("t2", Serdes.String(), Serdes.String())).topicAdmin(ADMIN).build())
                 .to("t2-out", Produced.with(Serdes.String(), Serdes.String()));
 
         try (TopologyTestDriver driver = new TopologyTestDriver(builder.build(), config(null))) {
@@ -648,7 +648,7 @@ class CausalProcessorsTopologyTest {
     @Test
     void automaticStampFrontierIsBoundedByInputTopicCountNotRecordCount() {
         Topology topology = topology(
-                CausalProcessors.builder(upperCaser()).addBufferStore("parsley")
+                ParsleyProcessors.builder(upperCaser()).addBufferStore("parsley")
                         .addBuffers(List.of("t1", "t2", "t3"), Serdes.String(), Serdes.String()).topicAdmin(ADMIN)
                         .build(),
                 List.of("t1", "t2", "t3"));
@@ -695,8 +695,8 @@ class CausalProcessorsTopologyTest {
         CausalDependencies big = bigBuilder.build();
 
         Topology topology = topology(
-                CausalProcessors.builder(upperCaser()).addBufferStore("parsley")
-                        .addBuffer(CausalBuffer.of("t1", Serdes.String(), Serdes.String()))
+                ParsleyProcessors.builder(upperCaser()).addBufferStore("parsley")
+                        .addBuffer(ParsleyBuffer.of("t1", Serdes.String(), Serdes.String()))
                         .withConfig("parsley.buffer.eviction.failure.policy", "continue")
                         .topicAdmin(ADMIN).build(),
                 List.of("t1"));
@@ -748,8 +748,8 @@ class CausalProcessorsTopologyTest {
         // Default eviction policy is fail; a one-record buffer would fail the task on the first held
         // record. Only "t1" is a registered buffer.
         Topology topology = topology(
-                CausalProcessors.builder(upperCaser()).addBufferStore("parsley")
-                        .addBuffer(CausalBuffer.of("t1", Serdes.String(), Serdes.String()))
+                ParsleyProcessors.builder(upperCaser()).addBufferStore("parsley")
+                        .addBuffer(ParsleyBuffer.of("t1", Serdes.String(), Serdes.String()))
                         .topicAdmin(ADMIN).build(),
                 List.of("t1"));
 
@@ -786,7 +786,7 @@ class CausalProcessorsTopologyTest {
     @Test
     void streamsMetricsSensorsArePopulatedAfterBufferingAndRelease() {
         Topology topology = topology(
-                CausalProcessors.builder(upperCaser()).addBufferStore("parsley")
+                ParsleyProcessors.builder(upperCaser()).addBufferStore("parsley")
                         .addBuffers(List.of("t2", "t3"), Serdes.String(), Serdes.String()).topicAdmin(ADMIN).build(),
                 List.of("t2", "t3"));
 
@@ -823,8 +823,8 @@ class CausalProcessorsTopologyTest {
     @Test
     void stripSelfReferentialDependencyAndForwardImmediately() {
         Topology topology = topology(
-                CausalProcessors.builder(upperCaser()).addBufferStore("parsley")
-                        .addBuffer(CausalBuffer.of("t1", Serdes.String(), Serdes.String())).topicAdmin(ADMIN).build(),
+                ParsleyProcessors.builder(upperCaser()).addBufferStore("parsley")
+                        .addBuffer(ParsleyBuffer.of("t1", Serdes.String(), Serdes.String())).topicAdmin(ADMIN).build(),
                 List.of("t1"));
 
         try (TopologyTestDriver driver = new TopologyTestDriver(topology, config(null))) {
@@ -871,10 +871,10 @@ class CausalProcessorsTopologyTest {
         // forwards. proc2 receives the stamped record; because the topology is fused,
         // context.recordMetadata() still returns the original "t1" metadata → self-reference dep.
         builder.stream("t1", consumed)
-                .process(CausalProcessors.builder(upperCaser()).addBufferStore("node1")
-                        .addBuffer(CausalBuffer.of("t1", Serdes.String(), Serdes.String())).topicAdmin(ADMIN).build())
-                .process(CausalProcessors.builder(upperCaser()).addBufferStore("node2")
-                        .addBuffer(CausalBuffer.of("t1", Serdes.String(), Serdes.String())).topicAdmin(ADMIN).build())
+                .process(ParsleyProcessors.builder(upperCaser()).addBufferStore("node1")
+                        .addBuffer(ParsleyBuffer.of("t1", Serdes.String(), Serdes.String())).topicAdmin(ADMIN).build())
+                .process(ParsleyProcessors.builder(upperCaser()).addBufferStore("node2")
+                        .addBuffer(ParsleyBuffer.of("t1", Serdes.String(), Serdes.String())).topicAdmin(ADMIN).build())
                 .to("out", produced);
 
         try (TopologyTestDriver driver = new TopologyTestDriver(builder.build(), config(null))) {
@@ -893,7 +893,7 @@ class CausalProcessorsTopologyTest {
     }
 
     /**
-     * Verifies that two {@link CausalProcessors} instances chained via a materialized Kafka
+     * Verifies that two {@link ParsleyProcessors} instances chained via a materialized Kafka
      * topic each enforce causal ordering independently, with full drainage at both layers.
      *
      * <h2>Topology</h2>
@@ -912,7 +912,7 @@ class CausalProcessorsTopologyTest {
      * the causal ordering across two layers is preserved.
      *
      * <h2>Why distinct {@code storeName} values are required</h2>
-     * Each {@link CausalProcessorSupplier} registers three KeyValueStores. Without distinct names
+     * Each {@link ParsleyProcessorSupplier} registers three KeyValueStores. Without distinct names
      * Kafka Streams rejects the topology with a duplicate-store error.
      *
      * <h2>How proc2 bootstraps without circular dependency</h2>
@@ -931,13 +931,13 @@ class CausalProcessorsTopologyTest {
 
         // proc1: holds t3-records (dep on t2) until t2 arrives. Output materializes to "t4".
         t2Src.merge(t3Src)
-                .process(CausalProcessors.builder(upperCaser()).addBufferStore("node1")
+                .process(ParsleyProcessors.builder(upperCaser()).addBufferStore("node1")
                         .addBuffers(List.of("t2", "t3"), Serdes.String(), Serdes.String()).topicAdmin(ADMIN).build())
                 .to("t4", produced);
 
         // proc2: receives "t4" (proc1's derived output) AND direct t2/t3 feeds to bootstrap its frontier.
         t4Src.merge(t2Src).merge(t3Src)
-                .process(CausalProcessors.builder(upperCaser()).addBufferStore("node2")
+                .process(ParsleyProcessors.builder(upperCaser()).addBufferStore("node2")
                         .addBuffers(List.of("t4", "t2", "t3"), Serdes.String(), Serdes.String()).topicAdmin(ADMIN)
                         .build())
                 .to("out", produced);
@@ -1029,12 +1029,12 @@ class CausalProcessorsTopologyTest {
 
         // proc1: holds t3-records (dep on t2) until t2 arrives. No .to() — output stays in-process.
         var viaProc1 = t2Src.merge(t3Src)
-                .process(CausalProcessors.builder(upperCaser()).addBufferStore("node1")
+                .process(ParsleyProcessors.builder(upperCaser()).addBufferStore("node1")
                         .addBuffers(List.of("t2", "t3"), Serdes.String(), Serdes.String()).topicAdmin(ADMIN).build());
 
         // proc2: receives proc1's output directly (FUSED) AND direct t2/t3 feeds to bootstrap its frontier.
         viaProc1.merge(t2Src).merge(t3Src)
-                .process(CausalProcessors.builder(upperCaser()).addBufferStore("node2")
+                .process(ParsleyProcessors.builder(upperCaser()).addBufferStore("node2")
                         .addBuffers(List.of("t2", "t3"), Serdes.String(), Serdes.String()).topicAdmin(ADMIN)
                         .build())
                 .to("out", produced);
@@ -1115,10 +1115,10 @@ class CausalProcessorsTopologyTest {
 
         // proc1 fused directly into proc2 (no .to("intermediate")); t5 also merges into proc2.
         builder.stream("t1", consumed)
-                .process(CausalProcessors.builder(upperCaser()).addBufferStore("node1")
-                        .addBuffer(CausalBuffer.of("t1", Serdes.String(), Serdes.String())).topicAdmin(ADMIN).build())
+                .process(ParsleyProcessors.builder(upperCaser()).addBufferStore("node1")
+                        .addBuffer(ParsleyBuffer.of("t1", Serdes.String(), Serdes.String())).topicAdmin(ADMIN).build())
                 .merge(t5Src)
-                .process(CausalProcessors.builder(upperCaser()).addBufferStore("node2")
+                .process(ParsleyProcessors.builder(upperCaser()).addBufferStore("node2")
                         .addBuffers(List.of("t1", "t5"), Serdes.String(), Serdes.String()).topicAdmin(ADMIN).build())
                 .to("out", produced);
 
@@ -1165,10 +1165,10 @@ class CausalProcessorsTopologyTest {
         var t5Src = builder.stream("t5", consumed);
 
         builder.stream("t1", consumed)
-                .process(CausalProcessors.builder(upperCaser()).addBufferStore("node1")
-                        .addBuffer(CausalBuffer.of("t1", Serdes.String(), Serdes.String())).topicAdmin(ADMIN).build())
+                .process(ParsleyProcessors.builder(upperCaser()).addBufferStore("node1")
+                        .addBuffer(ParsleyBuffer.of("t1", Serdes.String(), Serdes.String())).topicAdmin(ADMIN).build())
                 .merge(t5Src)
-                .process(CausalProcessors.builder(upperCaser()).addBufferStore("node2")
+                .process(ParsleyProcessors.builder(upperCaser()).addBufferStore("node2")
                         .addBuffers(List.of("t1", "t5"), Serdes.String(), Serdes.String()).topicAdmin(ADMIN).build())
                 .to("out", produced);
 
@@ -1195,7 +1195,7 @@ class CausalProcessorsTopologyTest {
     }
 
     /**
-     * A {@link CausalAudit} registered via {@link CausalProcessors.Builder#withAudit} receives the
+     * A {@link CausalAudit} registered via {@link ParsleyProcessors.Builder#withAudit} receives the
      * processor lifecycle events — {@code processorInitialized} on startup and {@code
      * processorClosing} when the driver shuts the topology down — in addition to the per-record
      * events already covered by {@link ParsleyEngineTest}.
@@ -1207,8 +1207,8 @@ class CausalProcessorsTopologyTest {
     void withAuditReceivesProcessorLifecycleEvents() {
         RecordingCausalAudit audit = new RecordingCausalAudit();
         Topology topology = topology(
-                CausalProcessors.builder(upperCaser()).addBufferStore("parsley")
-                        .addBuffer(CausalBuffer.of("t1", Serdes.String(), Serdes.String()))
+                ParsleyProcessors.builder(upperCaser()).addBufferStore("parsley")
+                        .addBuffer(ParsleyBuffer.of("t1", Serdes.String(), Serdes.String()))
                         .topicAdmin(ADMIN).withAudit(audit).build(),
                 List.of("t1"));
 
@@ -1227,7 +1227,7 @@ class CausalProcessorsTopologyTest {
     }
 
     /**
-     * A record arrives on a topic for which no {@link CausalBuffer} was registered (e.g. an input
+     * A record arrives on a topic for which no {@link ParsleyBuffer} was registered (e.g. an input
      * topic added to the stream but never wired up via {@code addBuffer}). The processor's intake
      * guard rejects it rather than silently treating it as dependency-free.
      *
@@ -1237,8 +1237,8 @@ class CausalProcessorsTopologyTest {
     @Test
     void ingestThrowsForATopicWithNoRegisteredBuffer() throws IOException {
         Topology topology = topology(
-                CausalProcessors.builder(upperCaser()).addBufferStore("parsley")
-                        .addBuffer(CausalBuffer.of("t1", Serdes.String(), Serdes.String()))
+                ParsleyProcessors.builder(upperCaser()).addBufferStore("parsley")
+                        .addBuffer(ParsleyBuffer.of("t1", Serdes.String(), Serdes.String()))
                         .topicAdmin(ADMIN).build(),
                 List.of("t1", "ghost"));
 
@@ -1251,7 +1251,7 @@ class CausalProcessorsTopologyTest {
                     "a record on an unregistered topic must not be silently admitted");
             assertEquals(IllegalStateException.class, thrown.getCause().getClass(),
                     "the wrapped cause must be the intake guard's exception");
-            assertTrue(thrown.getCause().getMessage().contains("no CausalBuffer registered for topic 'ghost'"),
+            assertTrue(thrown.getCause().getMessage().contains("no ParsleyBuffer registered for topic 'ghost'"),
                     "the cause must name the unregistered topic: " + thrown.getCause().getMessage());
         }
     }
@@ -1274,8 +1274,8 @@ class CausalProcessorsTopologyTest {
             @Override public void close() {}
         };
         Topology topology = topology(
-                CausalProcessors.builder(upperCaser()).addBufferStore("parsley")
-                        .addBuffer(CausalBuffer.of("t1", Serdes.String(), Serdes.String()))
+                ParsleyProcessors.builder(upperCaser()).addBufferStore("parsley")
+                        .addBuffer(ParsleyBuffer.of("t1", Serdes.String(), Serdes.String()))
                         .topicAdmin(incomplete).build(),
                 List.of("t1"));
 
@@ -1309,8 +1309,8 @@ class CausalProcessorsTopologyTest {
             @Override public void close() {}
         };
         Topology topology = topology(
-                CausalProcessors.builder(upperCaser()).addBufferStore("parsley")
-                        .addBuffer(CausalBuffer.of("t1", Serdes.String(), Serdes.String()))
+                ParsleyProcessors.builder(upperCaser()).addBufferStore("parsley")
+                        .addBuffer(ParsleyBuffer.of("t1", Serdes.String(), Serdes.String()))
                         .topicAdmin(throwing).build(),
                 List.of("t1"));
 
@@ -1338,8 +1338,8 @@ class CausalProcessorsTopologyTest {
     @Test
     void watermarkReusesTriggeringRecordKeySoItCoRoutesWithThatKeysRecords() {
         Topology topology = topology(
-                CausalProcessors.builder(dropper()).addBufferStore("parsley")
-                        .addBuffer(CausalBuffer.of("t1", Serdes.String(), Serdes.String())).topicAdmin(ADMIN).build(),
+                ParsleyProcessors.builder(dropper()).addBufferStore("parsley")
+                        .addBuffer(ParsleyBuffer.of("t1", Serdes.String(), Serdes.String())).topicAdmin(ADMIN).build(),
                 List.of("t1"));
 
         try (TopologyTestDriver driver = new TopologyTestDriver(topology, config(null))) {
@@ -1373,9 +1373,9 @@ class CausalProcessorsTopologyTest {
         ParsleyTopicAdmin mismatched = TestTopicAdmin.of(
                 Map.of("t2", T2_ID, "t3", T3_ID), Map.of("t2", 2, "t3", 3));
         Topology topology = topology(
-                CausalProcessors.builder(upperCaser()).addBufferStore("parsley")
-                        .addBuffer(CausalBuffer.of("t2", Serdes.String(), Serdes.String()))
-                        .addBuffer(CausalBuffer.of("t3", Serdes.String(), Serdes.String()))
+                ParsleyProcessors.builder(upperCaser()).addBufferStore("parsley")
+                        .addBuffer(ParsleyBuffer.of("t2", Serdes.String(), Serdes.String()))
+                        .addBuffer(ParsleyBuffer.of("t3", Serdes.String(), Serdes.String()))
                         .topicAdmin(mismatched).build(),
                 List.of("t2", "t3"));
 
@@ -1401,9 +1401,9 @@ class CausalProcessorsTopologyTest {
         ParsleyTopicAdmin mismatched = TestTopicAdmin.of(
                 Map.of("t2", T2_ID, "t3", T3_ID), Map.of("t2", 2, "t3", 3));
         Topology topology = topology(
-                CausalProcessors.builder(upperCaser()).addBufferStore("parsley")
-                        .addBuffer(CausalBuffer.of("t2", Serdes.String(), Serdes.String()))
-                        .addBuffer(CausalBuffer.of("t3", Serdes.String(), Serdes.String()))
+                ParsleyProcessors.builder(upperCaser()).addBufferStore("parsley")
+                        .addBuffer(ParsleyBuffer.of("t2", Serdes.String(), Serdes.String()))
+                        .addBuffer(ParsleyBuffer.of("t3", Serdes.String(), Serdes.String()))
                         .withConfig(ParsleyConfig.TOPOLOGY_VALIDATION, "strict")
                         .topicAdmin(mismatched).build(),
                 List.of("t2", "t3"));
@@ -1431,9 +1431,9 @@ class CausalProcessorsTopologyTest {
         ParsleyTopicAdmin equal = TestTopicAdmin.of(
                 Map.of("t2", T2_ID, "t3", T3_ID), Map.of("t2", 4, "t3", 4));
         Topology topology = topology(
-                CausalProcessors.builder(upperCaser()).addBufferStore("parsley")
-                        .addBuffer(CausalBuffer.of("t2", Serdes.String(), Serdes.String()))
-                        .addBuffer(CausalBuffer.of("t3", Serdes.String(), Serdes.String()))
+                ParsleyProcessors.builder(upperCaser()).addBufferStore("parsley")
+                        .addBuffer(ParsleyBuffer.of("t2", Serdes.String(), Serdes.String()))
+                        .addBuffer(ParsleyBuffer.of("t3", Serdes.String(), Serdes.String()))
                         .withConfig(ParsleyConfig.TOPOLOGY_VALIDATION, "strict")
                         .topicAdmin(equal).build(),
                 List.of("t2", "t3"));
