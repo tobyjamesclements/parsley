@@ -1233,7 +1233,7 @@ since delivered.</p>
 it feeds state but does not participate in causal time. A node deployed into a running topology adopts
 the current floor, replays its inputs from the start with everything below the floor stripped, and so
 never pins the shared frontier down. The whole mechanism is opt-in through
-<a href="../../streams/#evolving-a-running-topology"><code>CausalCoordination</code></a>; without it a topology runs in
+<a href="../../streams/#evolving-a-running-topology"><code>ParsleyCoordination</code></a>; without it a topology runs in
 <strong>epoch 0</strong>, whose floor is 0 everywhere, and behaves exactly as a topology with no epoch machinery at
 all.</p>
 <h2 id="the-floored-clock">The floored clock</h2>
@@ -1350,7 +1350,7 @@ source topic names. A hand-written declaration could silently disagree with the 
 intermediate topic marked external, or an external topic left undeclared — and either mistake breaks the
 wave for that coordinate. Deriving the registry from what every node actually consumes and produces
 removes that class of misconfiguration. On the high-level API sinks are declared automatically by
-<code>addSink(...)</code>; on the low-level decorator they are declared with <code>CausalProcessors.Builder.sinkTopics(...)</code>.</p>
+<code>addSink(...)</code>; on the low-level decorator they are declared with <code>ParsleyProcessors.Builder.sinkTopics(...)</code>.</p>
 <h2 id="joining-a-running-topology">Joining a running topology</h2>
 <p>A node deployed into an already-running topology must not begin consuming until an epoch computed
 <strong>without it</strong> commits. Its sub-topology resets to earliest and would replay from offset 0, so if it
@@ -1369,7 +1369,7 @@ proceeds on an unknown floor, so if the domain cannot yet commit (an existing me
 waits until it can.</p>
 <h2 id="membership-block-until-drained">Membership: block until drained</h2>
 <p>A close is treated as a restart, not a departure: the member stays in the domain so it can return without
-epoch churn. A member is removed from the domain only by a genuine decommission — <code>CausalCoordination.leave()</code>
+epoch churn. A member is removed from the domain only by a genuine decommission — <code>ParsleyCoordination.leave()</code>
 — <strong>never by a timeout</strong>. <code>leave()</code> itself honours "only a drained node is excluded": it <strong>quiesce-drains</strong>
 first (blocks until every local member's causal buffer has emptied through the ordinary delivery path, so
 no held record is stranded), then appends the <code>Leave</code>, then requests a new epoch over the remaining members
@@ -1388,9 +1388,9 @@ protects its own un-drained work automatically, because its frontier pulls the <
 its buffered dependencies.</p>
 <p>The cost is that a crashed member blocks the next epoch <em>transition</em> — and therefore any new join — until
 it returns. Ongoing processing in the current epoch is unaffected; only topology evolution waits. How an
-absent member is handled is a pluggable <code>CausalMembershipStrategy</code>; the default, <code>blockUntilDrained()</code>,
+absent member is handled is <code>ParsleyMembershipStrategy</code>; the only strategy today, <code>blockUntilDrained()</code>,
 never excludes. Richer strategies — recovery, buffer hand-off, or an operator-driven forced exclusion that
-dead-letters the stranded buffer — can be added behind this seam, but are not built yet.</p>
+dead-letters the stranded buffer — could reintroduce a pluggable seam here, but nothing needs one yet.</p>
 <p>Because a round needs every member's publication to commit, publication is driven off the folded log, not
 off a one-shot in-band marker: any member that observes a round it has not yet published to publishes its
 current completeness. A member that restarts mid-round re-derives from the log that it owes a publication
@@ -1398,7 +1398,7 @@ and re-publishes, so a lost publication cannot deadlock the round.</p>
 <h2 id="deployment">Deployment</h2>
 <p>The coordination is entirely optional and requires no separate process. A domain needs one
 single-partition epoch-events log topic, shared by every participating application, and each application
-registers a <code>CausalCoordination</code> over that topic with its causal builders. Without a handle a topology
+registers a <code>ParsleyCoordination</code> over that topic with its causal builders. Without a handle a topology
 runs in epoch 0. Because a Kafka Streams application must run one topology on every instance, a
 zero-downtime rolling topology change is not a Streams capability; a genuine new stage is a redeploy. The
 epochs machinery is what lets that redeploy re-enter causal time cleanly rather than replaying obsolete

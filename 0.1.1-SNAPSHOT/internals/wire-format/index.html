@@ -1272,7 +1272,7 @@ path.</p>
 <a id="__codelineno-3-5" name="__codelineno-3-5" href="#__codelineno-3-5"></a>[recordId       :8]   buffer insertion sequence
 </code></pre></div>
 <h2 id="state-store-names-and-serdes">State store names and serdes</h2>
-<p>The namespace is the <code>name</code> passed to <code>CausalProcessors.builder(...).addBufferStore(name, limit)</code>.</p>
+<p>The namespace is the <code>name</code> passed to <code>ParsleyProcessors.builder(...).addBufferStore(name, limit)</code>.</p>
 <table>
 <thead>
 <tr>
@@ -1326,16 +1326,16 @@ and order-sensitive, so folding it into <code>"f"</code> would increase Rocks I/
 <h2 id="topic-uuids">Topic UUIDs</h2>
 <p>Topic UUIDs are not derived or guessed. They are resolved from the broker through <code>AdminClient</code>. The
 processor resolves them at <code>init()</code> from the task's <code>appConfigs()</code> for every topic registered as a
-<code>CausalBuffer</code> on <code>CausalProcessors.builder(...)</code>. If a registered topic does not exist on the
+<code>ParsleyBuffer</code> on <code>ParsleyProcessors.builder(...)</code>. If a registered topic does not exist on the
 broker, resolution fails fast with <code>IllegalStateException</code> rather than falling back to a guess.</p>
 <p>The real UUID Kafka assigned to the topic is what's used. A topic deleted and recreated with the
 same name gets a new UUID, so records stamped against the old incarnation correctly fail to satisfy
 dependencies on the new one.</p>
-<p>When building <code>CausalDependencies</code> explicitly at the edge, topic names are resolved to UUIDs through
-a <code>CausalTopics</code> (backed by a caller-owned <code>Admin</code>), which caches each lookup. The UUID names a
-coordinate in the dependency clock.</p>
+<p>When building <code>CausalDependencies</code> explicitly at the edge, topic names are resolved to UUIDs
+internally through <code>CausalDependencies.using(props)</code> / <code>.builder(props)</code>, which cache each lookup.
+The UUID names a coordinate in the dependency clock.</p>
 <p>Tests without a live broker (<code>TopologyTestDriver</code>, unit tests) may use any stable <code>Uuid</code>, e.g.
-<code>Uuid.randomUuid()</code> via <code>CausalTopics.of(Map.of(...))</code>, as long as the same value is used
+<code>Uuid.randomUuid()</code> via <code>CausalDependencies.using(Map.of(...))</code>, as long as the same value is used
 consistently wherever that topic's identity is referenced.</p>
 
 

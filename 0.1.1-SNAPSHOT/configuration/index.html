@@ -1252,7 +1252,7 @@ limit either way, because a record admitted in that window trips the inline chec
 </code></pre></div>
 <p>The duration limit fires on a scheduled basis. The processor calls <code>evictExpired()</code> at the configured
 interval, which acts only on the records that have individually aged past <code>duration</code> and leaves
-younger records held. Parsley wires this schedule automatically when you use <code>CausalProcessors</code>.</p>
+younger records held. Parsley wires this schedule automatically when you use <code>ParsleyProcessors</code>.</p>
 <h3 id="first-of-composite">First-of (composite)</h3>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="n">CausalBufferLimit</span><span class="p">.</span><span class="na">first</span><span class="p">(</span>
 <a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="w">    </span><span class="n">CausalBufferLimit</span><span class="p">.</span><span class="na">ofSize</span><span class="p">(</span><span class="mi">1000</span><span class="p">),</span>
@@ -1392,7 +1392,7 @@ lossy of causal order.</p>
 <p><code>parsley.topology.validation = warn</code> logs a prominent warning at startup when the causal input topics
 do not share a partition count, which makes co-partitioning impossible, and lets the task start. This
 is visible without breaking a deployment that already ran with the mismatch. Set it to <code>strict</code> to
-fail the task fast instead, or <code>off</code> to skip the checks. A bare <code>CausalProcessors</code> decorator only
+fail the task fast instead, or <code>off</code> to skip the checks. A bare <code>ParsleyProcessors</code> decorator only
 ever sees its own registered input topics, so that partition-count parity check is all it can run. A
 <code>CausalStreams</code> stage owns its sinks too, so the same key widens to fold sink partition counts into
 the parity check and to check each sink's <code>cleanup.policy</code> for <code>compact</code> (a protocol watermark is a

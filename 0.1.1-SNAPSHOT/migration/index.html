@@ -1172,7 +1172,7 @@ Because such a record is never buffered, the eviction policy never applies to it
 migration setting to choose and nothing to tighten later.</p>
 <h2 id="recommended-migration-strategy">Recommended migration strategy</h2>
 <h3 id="phase-1-introduce-parsley-processors-and-tolerate-unstamped-producers">Phase 1: introduce Parsley processors and tolerate unstamped producers</h3>
-<p>Turn on <code>CausalProcessors</code> against the full topic set immediately. Records from producers that do not
+<p>Turn on <code>ParsleyProcessors</code> against the full topic set immediately. Records from producers that do not
 yet stamp the <code>parsley-causal-dependencies</code> header pass straight through, unbuffered, because their
 empty dependency set is vacuously satisfied. Records that already arrive stamped are held until their
 dependencies are satisfied. The two kinds of producer coexist on the same topics without any

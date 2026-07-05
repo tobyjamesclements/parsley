@@ -1171,28 +1171,24 @@ common vocabulary of value types.</p>
 </thead>
 <tbody>
 <tr>
-<td><code>CausalProcessorSupplier</code></td>
+<td><code>ParsleyProcessorSupplier</code></td>
 <td>Wraps a Kafka Streams <code>Processor</code> behind the causal guarantee. The low-level entry point: you build and own the surrounding topology.</td>
 </tr>
 <tr>
 <td><code>CausalStreams</code></td>
-<td>Owns the topology itself — sources, processor, and sinks — around the same causal guarantee, composing <code>CausalProcessorSupplier</code> internally. The high-level entry point, for guarantees that require owning the sinks (a uniform sink partitioner, co-partitioning validation across sinks, coordinated graceful shutdown).</td>
+<td>Owns the topology itself — sources, processor, and sinks — around the same causal guarantee, composing <code>ParsleyProcessorSupplier</code> internally. The high-level entry point, for guarantees that require owning the sinks (a uniform sink partitioner, co-partitioning validation across sinks, coordinated graceful shutdown).</td>
 </tr>
 <tr>
-<td><code>CausalQuiesce</code></td>
+<td><code>ParsleyQuiesce</code></td>
 <td>Coordinates graceful shutdown across every causal task in one application instance, registered with either entry point.</td>
 </tr>
 <tr>
-<td><code>CausalCoordination</code></td>
+<td><code>ParsleyCoordination</code></td>
 <td>Coordinates evolving a running topology across an epoch boundary, so a new or replaced stage adopts the current floor instead of dragging pre-epoch history into causal time. Leaderless and optional, registered with either entry point.</td>
 </tr>
 <tr>
 <td><code>CausalDependencies.using</code> / <code>observe</code> / <code>stamp</code> / <code>merge</code></td>
-<td>Maintain a consumer-side frontier and stamp causal context onto records produced to plain Kafka clients at the topology edge.</td>
-</tr>
-<tr>
-<td><code>CausalTopics</code></td>
-<td>Resolves topic names to their stable Kafka UUIDs for building dependencies.</td>
+<td>Maintain a consumer-side frontier and stamp causal context onto records produced to plain Kafka clients at the topology edge. Topic names are resolved to their stable Kafka UUIDs internally.</td>
 </tr>
 </tbody>
 </table>

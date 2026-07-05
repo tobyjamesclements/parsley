@@ -1243,9 +1243,9 @@ everything already forwarded above it.</p>
 <p>The node's internal frontier is an implementation detail, and there is no public type for it: it is
 contiguous (the highest offset delivered without a gap), which is specific to how the engine releases
 held records. A node consuming with a plain Kafka client maintains its own frontier instead, as an
-accumulating <code>CausalDependencies</code> value. Bind a resolver once with <code>CausalDependencies.using(topics)</code>,
+accumulating <code>CausalDependencies</code> value. Bind a resolver once with <code>CausalDependencies.using(props)</code>,
 fold in each record you consume with <code>observe(record)</code>, and stamp the result onto each record you
-produce. A one-to-one relay is <code>using(topics).observe(record)</code>; a fan-in chains an <code>observe</code> per
+produce. A one-to-one relay is <code>using(props).observe(record)</code>; a fan-in chains an <code>observe</code> per
 input; a stateful node keeps one instance and observes into it across records. To read back the
 dependencies a record already carries, without folding in a new position, use
 <code>CausalDependencies.fromRecord(record)</code>.</p>
@@ -1336,7 +1336,7 @@ that keeps causally related events together on one partition. An advanced user c
 coarser function of the key with a custom <code>StreamPartitioner</code>, provided the partitioner reads the key
 rather than the value, since a protocol watermark carries no value to read.</p>
 <p>Parsley does not enforce co-partitioning end to end, and most of it cannot be checked, so a
-misconfigured topology evaluates against an incomplete partition set. A bare <code>CausalProcessors</code>
+misconfigured topology evaluates against an incomplete partition set. A bare <code>ParsleyProcessors</code>
 decorator can check one necessary part at startup, that its causal input topics share a partition
 count, controlled by <code>parsley.topology.validation</code> (<code>warn</code> by default, <code>strict</code> to fail fast, <code>off</code>
 to disable). <code>CausalStreams</code> (see <a href="../streams/#the-high-level-api-causalstreams">Streams integration</a>)
@@ -1352,10 +1352,10 @@ and un-strip history the other nodes had already delivered. An <strong>epoch</st
 floor per coordinate; history below the floor is pre-epoch, so it feeds the delegate's state but does
 not participate in causal time. A node deployed into a running topology adopts the current floor and
 replays with everything below it stripped, so it never drags the frontier down.</p>
-<p><code>CausalCoordination</code> turns this on. It is optional and leaderless: participating applications share one
+<p><code>ParsleyCoordination</code> turns this on. It is optional and leaderless: participating applications share one
 single-partition epoch-events log and each folds it identically to agree on every epoch's floor, which
 then propagates through the topology in-band. Which topics are external entry points is derived from
-what each node declares it consumes and produces, not configured by hand. Without a <code>CausalCoordination</code>
+what each node declares it consumes and produces, not configured by hand. Without a <code>ParsleyCoordination</code>
 a topology runs in epoch 0 and behaves exactly as one with no epoch machinery. See
 <a href="../streams/#evolving-a-running-topology">Evolving a running topology</a> for the API and
 <a href="../internals/topology-epochs/">Topology epochs</a> for the protocol.</p>

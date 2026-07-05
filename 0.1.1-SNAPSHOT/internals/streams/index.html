@@ -1155,9 +1155,9 @@
 
 
 <h1 id="streams-integration">Streams integration</h1>
-<p>The Kafka Streams entry point is <code>CausalProcessorSupplier</code>, built via <code>CausalProcessors.builder(...)</code>. It composes three package-private classes: <code>ParsleyProcessorSupplier</code>, <code>ParsleyProcessor</code>, and <code>ParsleyProcessorContext</code>.</p>
+<p>The Kafka Streams entry point is <code>ParsleyProcessorSupplier</code>, built via <code>ParsleyProcessors.builder(...)</code>. It composes three package-private classes: <code>ParsleyProcessorSupplier</code>, <code>ParsleyProcessor</code>, and <code>ParsleyProcessorContext</code>.</p>
 <h2 id="parsleyprocessorsupplier"><code>ParsleyProcessorSupplier</code></h2>
-<p>Implements <code>CausalProcessorSupplier&lt;KIn,VIn,KOut,VOut&gt;</code>.</p>
+<p>Implements <code>ParsleyProcessorSupplier&lt;KIn,VIn,KOut,VOut&gt;</code>.</p>
 <p><strong><code>get()</code></strong> returns a new <code>ParsleyProcessor</code> instance per call (one per task).</p>
 <p><strong><code>stores()</code></strong> returns the union of the user's declared stores and the four Parsley stores:</p>
 <table>
@@ -1194,7 +1194,7 @@
 <p>All four are created with <code>Stores.persistentKeyValueStore(...)</code>, so they are changelog-backed and durable across restarts. The <code>{ns}-frontier</code> store's single <code>"f"</code> value holds both the contiguous frontier clock and the per-input-channel clocks (see <a href="../wire-format/#the-ns-frontier-f-value">Wire format</a>).</p>
 <h2 id="parsleyprocessor-init-sequence"><code>ParsleyProcessor</code> init sequence</h2>
 <ol>
-<li>Resolve each registered <code>CausalBuffer</code> topic's stable UUID from the broker via a <code>ParsleyTopicAdmin</code> built from <code>context.appConfigs()</code> (the topology decorator has no broker config until init), populating the <code>topicUuids</code> map. Closed immediately after.</li>
+<li>Resolve each registered <code>ParsleyBuffer</code> topic's stable UUID from the broker via a <code>ParsleyTopicAdmin</code> built from <code>context.appConfigs()</code> (the topology decorator has no broker config until init), populating the <code>topicUuids</code> map. Closed immediately after.</li>
 <li>Retrieve the state stores from the processor context by name.</li>
 <li>Construct a <code>ParsleyFrontier</code> over the <code>{ns}-frontier</code> store: it loads the frontier clock and channel clocks from the single <code>"f"</code> value (empty if absent) and self-persists that value on every change. Prune it to the current in-scope coordinates, then seed a channel entry for every consumed input topic-partition so a silent channel holds its own coordinate in the completeness fold.</li>
 <li>Construct <code>ParsleyEngine</code> with:<ul>
@@ -1218,7 +1218,7 @@
 <a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a>
 <a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a>  ingest(record)
 <a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a>    reads source metadata from context.recordMetadata()
-<a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a>    resolves topicId from topicUuids map (broker-resolved at init for each registered CausalBuffer; throws IllegalStateException if absent)
+<a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a>    resolves topicId from topicUuids map (broker-resolved at init for each registered ParsleyBuffer; throws IllegalStateException if absent)
 <a id="__codelineno-0-8" name="__codelineno-0-8" href="#__codelineno-0-8"></a>    returns ParsleyMessage.from(record, source, offset, topicId)
 <a id="__codelineno-0-9" name="__codelineno-0-9" href="#__codelineno-0-9"></a>
 <a id="__codelineno-0-10" name="__codelineno-0-10" href="#__codelineno-0-10"></a>  gate(parsleyRecord)
@@ -1255,7 +1255,7 @@
 <p><strong><code>recordMetadata()</code>:</strong> Returns the source coordinate metadata of the record currently being delivered (set by <code>deliver()</code> above) when inside a delivery call. Returns the delegate's <code>recordMetadata()</code> otherwise. This gives the user processor access to the causal position of the triggering record.</p>
 <p>All other <code>ProcessorContext</code> methods delegate verbatim.</p>
 <h2 id="state-store-namespace">State store namespace</h2>
-<p>The namespace is the <code>name</code> passed to <code>CausalProcessors.builder(...).addBufferStore(name, limit)</code>. Use a unique namespace per <code>CausalProcessorSupplier</code> instance within a topology that contains more than one. The store names are embedded in the changelog topic names, so they must be stable across deployments.</p>
+<p>The namespace is the <code>name</code> passed to <code>ParsleyProcessors.builder(...).addBufferStore(name, limit)</code>. Use a unique namespace per <code>ParsleyProcessorSupplier</code> instance within a topology that contains more than one. The store names are embedded in the changelog topic names, so they must be stable across deployments.</p>
 
 
 
