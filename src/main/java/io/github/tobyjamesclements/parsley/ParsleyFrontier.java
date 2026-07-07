@@ -9,8 +9,10 @@ import java.io.ByteArrayOutputStream;
 import java.io.DataInputStream;
 import java.io.DataOutputStream;
 import java.io.IOException;
+import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
@@ -176,7 +178,15 @@ final class ParsleyFrontier {
 
     /**
      * Records that the record at {@code (topicId, partition, offset)} was delivered: marks the offset
-     * forwarded, walks the longest contiguous run now achievable, advances the frontier, and persists.
+     * forwarded, walks the longest contiguous run now achievable, advances the frontier, persists, and
+     * only then prunes the forwarded-index entries the walk absorbed.
+     *
+     * <p>The persist-before-prune order matters: the frontier blob and the forwarded index are separate
+     * changelog-backed stores with no cross-store atomicity, so a crash between them must always tear
+     * toward "the frontier already reflects the absorbed run, but a since-redundant forwarded-index
+     * entry below it still lingers" — harmless (see {@code BACKLOG.md}'s "replayed already-delivered
+     * offsets" note) — never the reverse, where an entry is pruned but the frontier advance that
+     * accounted for it was lost, which would permanently strand every offset above it.
      *
      * <p>A <em>below-floor</em> delivery ({@code offset < startsAt}) is a no-op on the causal frontier:
      * the record still feeds state and is forwarded by the engine, but an out-of-domain offset must not
@@ -187,8 +197,20 @@ final class ParsleyFrontier {
         if (offset < epoch.startsAt(topicId, partition)) {
             return;
         }
-        frontier = frontier.observe(topicId, partition, mergeForward(topicId, partition, offset));
+        forwardedIndex.mark(topicId, partition, offset);
+        long watermark = frontier.offsetFor(topicId, partition);
+        long extended = watermark;
+        List<Long> absorbed = new ArrayList<>();
+        for (long candidate : forwardedIndex.forwardedAfter(topicId, partition, watermark)) {
+            if (candidate != extended + 1) break;
+            absorbed.add(candidate);
+            extended = candidate;
+        }
+        frontier = frontier.observe(topicId, partition, extended);
         persist();
+        for (long candidate : absorbed) {
+            forwardedIndex.unmark(topicId, partition, candidate);
+        }
     }
 
     /**
@@ -320,23 +342,6 @@ final class ParsleyFrontier {
         frontier = frontier.retaining(inScope);
         channels.keySet().removeIf(key -> !inScope.test(key.topicId(), key.partition()));
         persist();
-    }
-
-    /**
-     * Marks {@code offset} forwarded and returns the longest contiguous run now achievable on
-     * {@code (topicId, partition)} — {@code offset} itself if nothing above it is pending, or further
-     * if this offset closed a gap. Prunes absorbed entries from the forwarded index.
-     */
-    private long mergeForward(Uuid topicId, int partition, long offset) {
-        forwardedIndex.mark(topicId, partition, offset);
-        long watermark = frontier.offsetFor(topicId, partition);
-        long extended = watermark;
-        for (long candidate : forwardedIndex.forwardedAfter(topicId, partition, watermark)) {
-            if (candidate != extended + 1) break;
-            forwardedIndex.unmark(topicId, partition, candidate);
-            extended = candidate;
-        }
-        return extended;
     }
 
     private void persist() {

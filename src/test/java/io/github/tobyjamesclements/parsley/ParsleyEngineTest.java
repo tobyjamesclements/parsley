@@ -573,6 +573,61 @@ class ParsleyEngineTest {
     }
 
     /**
+     * Regression test for the BACKLOG.md cross-store tear: the buffer store and the frontier/
+     * forwarded-index store are separate changelog topics with no cross-store atomicity, so {@code
+     * propagate}/{@code drainSatisfied} persist the frontier's delivery before removing the record
+     * from the buffer. A crash between the two writes — simulated here by a buffer store that
+     * swallows one specific {@code remove()} call, standing in for "that changelog write never
+     * landed" — must always leave the buffer holding a record the frontier has already recorded
+     * delivered. That is a harmless at-least-once duplicate on the next drain, never the reverse (a
+     * permanently stranded frontier no future dependency on that coordinate could ever cross).
+     *
+     * <p>Asserts the "crashed" instance's frontier already reflects T2@0 as delivered even though it
+     * is still sitting in the buffer, and that a "restarted" instance redelivers it (a duplicate)
+     * rather than wedging forever.
+     */
+    @Test
+    void aCrashBetweenFrontierPersistAndBufferRemovalRedeliversAsAHarmlessDuplicateNeverAWedge() {
+        SwallowingRemoveBufferStore<String, String> crashyBuffer = new SwallowingRemoveBufferStore<>(0L);
+
+        ParsleyEngine<String, String> beforeCrash = new ParsleyEngine<>(ParsleyClock.empty(), crashyBuffer,
+                new MockCandidateIndex(), new MockForwardedIndex(), new MockOrphanIndex(), ParsleyMetrics.NOOP);
+
+        // T2@0 depends on T1@5 and is held (sequence 0 in the buffer).
+        beforeCrash.onRecord(incomingRecord(T2, 0, ParsleyClock.empty().observe(T1_ID, 0, 5)));
+        assertEquals(1, crashyBuffer.size(), "T2@0 must be held");
+
+        // T1@5 satisfies it: propagate() releases T2@0, persisting the frontier advance before its
+        // (swallowed) buffer removal — simulating a crash landing in that exact window.
+        List<ParsleyMessage<String, String>> releasedBeforeCrash =
+                beforeCrash.onRecord(incomingRecord(T1, 5, ParsleyClock.empty())).delivered();
+
+        assertEquals(List.of(5L, 0L), releasedBeforeCrash.stream().map(ParsleyMessage::offset).toList(),
+                "both T1@5 and T2@0 are delivered in-process before the simulated crash");
+        assertEquals(0L, beforeCrash.frontier().offsetFor(T2_ID, 0),
+                "the frontier already recorded T2@0 as delivered — persisted before the swallowed removal");
+        assertEquals(1, crashyBuffer.size(),
+                "T2@0's buffer removal never landed (the simulated crash), so it is still sitting in "
+                        + "the buffer");
+
+        // "Restart": a fresh engine over the persisted (torn) frontier and a normal buffer store
+        // standing in for the buffer changelog restoring the same still-held record.
+        ParsleyClock persistedFrontier = beforeCrash.frontier();
+        MockBufferStore<String, String> restoredBuffer = new MockBufferStore<>();
+        restoredBuffer.add(incomingRecord(T2, 0, ParsleyClock.empty().observe(T1_ID, 0, 5)), 0L);
+
+        ParsleyEngine<String, String> restarted = new ParsleyEngine<>(persistedFrontier, restoredBuffer,
+                new MockCandidateIndex(), new MockForwardedIndex(), new MockOrphanIndex(), ParsleyMetrics.NOOP);
+
+        List<ParsleyMessage<String, String>> releasedAfterRestart = restarted.drainAfterRestore().delivered();
+
+        assertEquals(List.of(0L), releasedAfterRestart.stream().map(ParsleyMessage::offset).toList(),
+                "the restarted instance redelivers T2@0 — a harmless at-least-once duplicate — rather "
+                        + "than wedging forever");
+        assertEquals(0, restoredBuffer.size(), "T2@0 must finally leave the buffer after the redelivery");
+    }
+
+    /**
      * Establishing the baseline for a coordinate this engine has never observed before can itself
      * release an already-buffered record — before the very record that triggered the baseline seed
      * is even dispositioned by its own dominates check.
@@ -889,6 +944,25 @@ class ParsleyEngineTest {
         @Override public List<Entry<K, V>> entries() { return delegate.entries(); }
         @Override public List<IndexEntry> indexEntries() { indexEntriesCalls++; return delegate.indexEntries(); }
         @Override public void remove(long sequence) { delegate.remove(sequence); }
+        @Override public int size() { return delegate.size(); }
+        @Override public OptionalLong oldestBufferedAt() { return delegate.oldestBufferedAt(); }
+    }
+
+    /**
+     * Wraps a {@link MockBufferStore}, swallowing {@code remove()} for one specific sequence — standing
+     * in for a crash that lands after the frontier's changelog write commits but before the buffer's
+     * removal does, so the record is still sitting in the buffer once "restarted" against the
+     * already-persisted (post-crash) frontier.
+     */
+    private static final class SwallowingRemoveBufferStore<K, V> implements ParsleyBufferStore<K, V> {
+        private final MockBufferStore<K, V> delegate = new MockBufferStore<>();
+        private final long swallowedSequence;
+        SwallowingRemoveBufferStore(long swallowedSequence) { this.swallowedSequence = swallowedSequence; }
+        @Override public long add(ParsleyMessage<K, V> record, long bufferedAt) { return delegate.add(record, bufferedAt); }
+        @Override public Entry<K, V> get(long sequence) { return delegate.get(sequence); }
+        @Override public List<Entry<K, V>> entries() { return delegate.entries(); }
+        @Override public List<IndexEntry> indexEntries() { return delegate.indexEntries(); }
+        @Override public void remove(long sequence) { if (sequence != swallowedSequence) delegate.remove(sequence); }
         @Override public int size() { return delegate.size(); }
         @Override public OptionalLong oldestBufferedAt() { return delegate.oldestBufferedAt(); }
     }

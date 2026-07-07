@@ -7,6 +7,21 @@ All notable changes to this project are documented in this file. The format is b
 ## [Unreleased]
 
 ### Fixed
+- **A torn changelog flush under at-least-once could permanently strand a coordinate's frontier.** The
+  buffer store, frontier store, and forwarded-index store are three separate changelog topics with no
+  cross-store atomicity, so a crash mid-release could tear two different writes apart, in two distinct
+  places: (1) `drainSatisfied`/`propagate` removed a record from the buffer before persisting the
+  frontier's delivery of it, so a crash in between left the record gone from the buffer (unrecoverable
+  on restart) but the frontier still showing it undelivered, permanently freezing that coordinate; (2)
+  `ParsleyFrontier.deliver`'s `mergeForward` pruned absorbed forwarded-index entries before the frontier
+  advance that accounted for them was persisted, so a crash in that narrower window durably lost the
+  forwarded-index entries backing an advance nothing else remembered — the same permanent-wedge shape,
+  entirely internal to `deliver()`, affecting even records delivered immediately (never buffered). Both
+  release paths now persist the frontier/forwarded-index advance *before* removing the buffer entry, and
+  `deliver()` persists the new frontier value *before* pruning the entries it absorbed — so a crash
+  anywhere in either window now always tears toward an already-accepted benign outcome (an
+  at-least-once duplicate redelivery, or a harmless stale forwarded-index entry below the frontier)
+  instead of an unrecoverable wedge.
 - **`ParsleyEpochRuntime.unregisterMember` was never called, so a rebalanced-away member could hang or be
   wrongly evicted by a later `leave()`.** `ParsleyProcessor#close` — called by Kafka Streams whenever a
   task stops running on this instance, including a rebalance that migrates it elsewhere, not just a

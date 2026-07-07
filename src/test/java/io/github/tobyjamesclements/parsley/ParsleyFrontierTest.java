@@ -3,7 +3,9 @@ package io.github.tobyjamesclements.parsley;
 import org.apache.kafka.common.Uuid;
 import org.junit.jupiter.api.Test;
 
+import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -206,5 +208,101 @@ class ParsleyFrontierTest {
                 "a contiguous delivery advances the frontier normally under NONE");
         assertFalse(frontier.completeness().isEmpty(),
                 "completeness reflects the delivered position with no flooring applied");
+    }
+
+    // --- Cross-store tear regression (BACKLOG.md: torn changelog flush under at-least-once) --------
+    //
+    // The forwarded index and the frontier's "f" blob are two separate changelog-backed stores with
+    // no cross-store atomicity. deliver() must persist the new frontier value before pruning the
+    // forwarded-index entries it absorbed, so a crash between the two writes always tears toward "a
+    // redundant forwarded-index entry lingers below an already-advanced frontier" (harmless — see the
+    // BACKLOG.md LOW item on replayed already-delivered offsets) rather than "the frontier advance is
+    // lost after the forwarded-index entry backing it is already gone" (a permanent wedge).
+
+    /**
+     * Proves the ordering directly: a {@link ParsleyForwardedIndex} that, at the exact moment {@code
+     * unmark()} is called, opens a second {@link ParsleyFrontier} over the same store must already see
+     * the new frontier value — i.e. {@code persist()} has already committed by the time any absorbed
+     * entry is pruned.
+     */
+    @Test
+    void deliverPersistsTheNewFrontierValueBeforePruningTheEntriesItAbsorbed() {
+        TestKeyValueStore<String, byte[]> store =
+                new TestKeyValueStore<String, byte[]>(Comparator.naturalOrder(), "frontier");
+        List<Long> persistedOffsetAtUnmarkTime = new ArrayList<>();
+        MockForwardedIndex delegate = new MockForwardedIndex();
+        ParsleyForwardedIndex recordingIndex = new ParsleyForwardedIndex() {
+            @Override
+            public void mark(Uuid topicId, int partition, long offset) {
+                delegate.mark(topicId, partition, offset);
+            }
+
+            @Override
+            public List<Long> forwardedAfter(Uuid topicId, int partition, long frontierOffset) {
+                return delegate.forwardedAfter(topicId, partition, frontierOffset);
+            }
+
+            @Override
+            public void unmark(Uuid topicId, int partition, long offset) {
+                // A fresh frontier over the same store sees only what has actually been written —
+                // not this call's own in-progress in-memory state.
+                ParsleyFrontier persistedView = new ParsleyFrontier(store, new MockForwardedIndex(), new MockOrphanIndex());
+                persistedOffsetAtUnmarkTime.add(persistedView.snapshot().offsetFor(T1_ID, 0));
+                delegate.unmark(topicId, partition, offset);
+            }
+        };
+
+        ParsleyFrontier frontier = new ParsleyFrontier(store, recordingIndex, new MockOrphanIndex());
+        frontier.deliver(T1_ID, 0, 0);
+
+        assertEquals(List.of(0L), persistedOffsetAtUnmarkTime,
+                "by the time the absorbed entry is pruned, the frontier store must already durably "
+                        + "reflect the new value — persist() must run before unmark()");
+    }
+
+    /**
+     * Regression test for the wedge this ordering prevents. A crash landing between {@code persist()}
+     * and {@code unmark()} is simulated by a forwarded index that swallows one specific {@code
+     * unmark()} call, standing in for "that changelog write never landed". The surviving state must be
+     * only a harmless stale forwarded-index entry sitting below the (already-advanced) frontier — never
+     * a stall, and never a reversal that would leave the frontier unable to cross this offset again.
+     */
+    @Test
+    void aCrashBetweenPersistAndUnmarkLeavesOnlyAHarmlessStaleEntryNeverAWedge() {
+        MockForwardedIndex delegate = new MockForwardedIndex();
+        ParsleyForwardedIndex crashyIndex = new ParsleyForwardedIndex() {
+            @Override
+            public void mark(Uuid topicId, int partition, long offset) {
+                delegate.mark(topicId, partition, offset);
+            }
+
+            @Override
+            public List<Long> forwardedAfter(Uuid topicId, int partition, long frontierOffset) {
+                return delegate.forwardedAfter(topicId, partition, frontierOffset);
+            }
+
+            @Override
+            public void unmark(Uuid topicId, int partition, long offset) {
+                if (offset == 0) return; // the changelog write for this one unmark never lands
+                delegate.unmark(topicId, partition, offset);
+            }
+        };
+        ParsleyFrontier frontier = new ParsleyFrontier(ParsleyClock.empty(), crashyIndex, new MockOrphanIndex());
+
+        frontier.deliver(T1_ID, 0, 0);
+
+        assertEquals(0L, frontier.snapshot().offsetFor(T1_ID, 0),
+                "the frontier already advanced to 0 — persist() ran before the (lost) unmark");
+        assertEquals(List.of(0L), delegate.forwardedAfter(T1_ID, 0, -1),
+                "the now-redundant entry for the already-absorbed offset lingers, harmlessly, in the "
+                        + "forwarded index");
+
+        // A later delivery must proceed normally despite the leaked entry sitting below the frontier —
+        // this is the crux of the regression: the tear must never strand the coordinate.
+        frontier.deliver(T1_ID, 0, 1);
+
+        assertEquals(1L, frontier.snapshot().offsetFor(T1_ID, 0),
+                "a subsequent delivery must advance normally, unaffected by the leaked stale entry "
+                        + "below the frontier");
     }
 }

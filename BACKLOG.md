@@ -6,32 +6,6 @@ Findings from an automated correctness review of the causal engine
 Fable 5. Ranked most-severe first. GitHub Issues are disabled on this repo, so these are tracked here
 instead.
 
-## [MEDIUM] Torn changelog flush under at-least-once can permanently strand a coordinate's frontier
-
-**Where:** `ParsleyEngine.java:451-453` (`drainSatisfied`: `buffer.remove` then `frontier.deliver`) and
-`ParsleyEngine.java:599-602` (`propagate`, same shape); frontier persistence in
-`ParsleyFrontier.java:342-346`
-
-The buffer store, frontier store, and forwarded-index store are three separate changelog topics with
-no cross-store atomicity. Under at-least-once (which `docs/streams.md:91-94` explicitly documents as
-safe), a crash between the buffer-removal changelog commit and the frontier/forwarded-index changelog
-commit for the same release leaves:
-
-- the record gone from the buffer (so `drainAfterRestore` can't re-deliver it — its source offset
-  commit already advanced past the point where it was originally buffered), but
-- the frontier still showing it undelivered, with no forwarded-index mark.
-
-`mergeForward` (`ParsleyFrontier.java:330-340`) can then never cross that offset again, so every future
-dependency on that coordinate at or past it holds forever. The `drainAfterRestore` Javadoc
-(`ParsleyEngine.java:399-403`) documents only the benign opposite tear (frontier ahead of buffer →
-duplicate delivery); this direction is a permanent wedge, not a duplicate.
-
-**Impact:** the "safe under at-least-once" guarantee documented for the delivery semantics does not
-actually hold for this specific tear. EOS avoids it.
-
-**Coverage:** No test covers a cross-store tear between the buffer changelog and the
-frontier/forwarded-index changelog. Code/documentation gap.
-
 ## [MEDIUM-LOW] onRecord's proven-impossible early return skips the completeness re-drain it just enabled
 
 **Where:** `ParsleyEngine.java:323-327` (early return on proven-impossible), which sits before the
@@ -91,9 +65,9 @@ liveness stall.
 
 ## [LOW] Replayed already-delivered offsets leak permanent forwarded-index entries
 
-**Where:** `ParsleyFrontier.java:330-340` (`mergeForward`)
+**Where:** `ParsleyFrontier.java:196-214` (`deliver`)
 
-`mergeForward` unconditionally `mark()`s the offset, but the absorb walk only scans
+`deliver` unconditionally `mark()`s the offset, but the absorb walk only scans
 `forwardedAfter(frontier)`. On an at-least-once replay of an already-delivered record (crash after the
 frontier flush but before the offset commit), `deliver(C,k)` with `frontier(C) >= k` marks `k` below
 the current watermark, and nothing ever unmarks it.

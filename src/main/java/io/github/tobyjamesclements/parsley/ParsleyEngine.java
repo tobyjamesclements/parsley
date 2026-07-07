@@ -58,6 +58,13 @@ import java.util.function.LongSupplier;
  * single {@code "f"} value on every advance — inside {@link ParsleyFrontier#deliver} and
  * {@link ParsleyFrontier#seedIfFirstSeen}, before control returns to the engine and the record is
  * added to the out-bound list — so the frontier is persisted before the record leaves the engine.
+ * For the same reason, every release path calls {@link ParsleyFrontier#deliver} (and {@link
+ * ParsleyFrontier#channelUpdate}) <em>before</em> removing the record from {@link #buffer}: the
+ * buffer and the frontier/forwarded-index are separate changelog topics with no cross-store
+ * atomicity, so a crash between the two writes must always tear toward "buffer still holds a record
+ * the frontier already delivered" (harmless — {@link #drainAfterRestore} redelivers it as an
+ * at-least-once duplicate) and never the reverse, which would strand that coordinate's frontier
+ * permanently.
  *
  * <p><strong>Drain algorithm:</strong> the engine uses a {@link ParsleyCandidateIndex} to avoid a full
  * buffer scan on every frontier advance. When a coordinate advances, only records indexed on
@@ -448,10 +455,15 @@ final class ParsleyEngine<K, V> {
             }
             if (entry == null) continue;                                   // removed by a cascade this pass
             ParsleyMessage<K, V> record = entry.record();
-            buffer.remove(meta.sequence());
-            audit.recordForwarded(record.topic(), record.partition(), record.offset());
+            // Persist the frontier/forwarded-index advance before removing from the buffer: if a crash
+            // tears these two changelog writes apart, the buffer still holds a record the frontier has
+            // already recorded as delivered, which drainAfterRestore redelivers as a harmless
+            // at-least-once duplicate — never the reverse (buffer gone, frontier never advanced), which
+            // would permanently strand this coordinate's frontier.
             frontier.deliver(record.topicId(), record.partition(), record.offset());
             frontier.channelUpdate(record.topicId(), record.partition(), record.dependencies());
+            buffer.remove(meta.sequence());
+            audit.recordForwarded(record.topic(), record.partition(), record.offset());
             out.add(record);
             propagate(out, deadLetters, record.topicId(), record.partition());
         }
@@ -611,11 +623,15 @@ final class ParsleyEngine<K, V> {
                         }
                         if (!isDeliverable(entry.record())) continue;
 
+                        // See drainSatisfied: persist the frontier/forwarded-index advance before
+                        // removing from the buffer, so a torn crash always strands the buffer with an
+                        // already-delivered record (a benign duplicate on restart) rather than the
+                        // reverse (a permanently stranded frontier).
+                        frontier.deliver(entry.record().topicId(), entry.record().partition(), entry.record().offset());
+                        frontier.channelUpdate(entry.record().topicId(), entry.record().partition(), entry.record().dependencies());
                         buffer.remove(entry.sequence());
                         audit.recordReleased(entry.record().topic(), entry.record().partition(),
                                 entry.record().offset(), buffer.size());
-                        frontier.deliver(entry.record().topicId(), entry.record().partition(), entry.record().offset());
-                        frontier.channelUpdate(entry.record().topicId(), entry.record().partition(), entry.record().dependencies());
                         nextScan.computeIfAbsent(entry.record().topicId(), k -> new HashSet<>())
                                 .add(entry.record().partition());
                         out.add(entry.record());
