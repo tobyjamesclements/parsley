@@ -7,6 +7,17 @@ All notable changes to this project are documented in this file. The format is b
 ## [Unreleased]
 
 ### Fixed
+- **`ParsleyEngine.propagate()` could both forward and dead-letter the same record in one cascade
+  pass.** It used to collect deliverable candidates into a batch and release them only after scanning
+  every candidate at that level, so a poison candidate found later in the same scan could dead-letter
+  (via its orphan cascade) an entry already collected as deliverable but not yet removed from the
+  buffer — the release loop then forwarded it anyway, violating `Outcome`'s "never both" contract and
+  permanently corrupting the frontier/orphan-index state for its dependents. Each candidate is now
+  committed to its final disposition the moment it is decided, never staged for a later batch step.
+  `propagate()` also now checks `isProvenImpossible` (as `onRecord`/`drainSatisfied` already did), so a
+  candidate whose direct dependency was orphaned by an unrelated cascade is dead-lettered instead of
+  forwarded just because the completeness frontier — driven by cross-channel header advertisement, not
+  genuine local delivery — happens to dominate it.
 - **`CausalStreams#close()` could hang forever if a task's buffer emptied before `requestQuiesce()` was
   ever called.** `ParsleyProcessor#updateQuiesceState` only re-evaluates `isQuiesceRequested() && empty`
   on a buffer-depth-changing event; a task already idle-and-drained at that point recorded

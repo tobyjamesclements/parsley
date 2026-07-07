@@ -146,6 +146,187 @@ class ParsleyEngineDeadLetterTest {
         assertEquals(0, buffer.size(), "the buffer must end empty — the interrupted cascade is now complete");
     }
 
+    /**
+     * Regression test for the BACKLOG.md #1 double-dispatch bug: {@code propagate()} used to collect
+     * deliverable candidates into a batch and release them only after scanning every candidate at that
+     * level, so a poison candidate found <em>later</em> in the same scan could dead-letter (via its
+     * orphan cascade) an entry already collected as deliverable but not yet removed from the buffer —
+     * the release loop then forwarded it anyway.
+     *
+     * <p>Three fan-in channels C, D, E (a cross-channel completeness gate, {@code trackChannels =
+     * true}, is required to reach this bug — see the class comment on the constructor used below).
+     * R (D@3) depends on {@code {C@5, E@7}}; P (C@5, poison) depends on {@code {E@7}} — both indexed
+     * on the same coordinate (E@7), R first (lower buffer sequence). Once cross-channel headers make
+     * completeness(C) reach 5 and E@7 itself delivers, {@code propagate(E, 7)} finds R then P in one
+     * scan: R passes the deliverability check, P throws on fetch (poisoned) and cascades an orphan of
+     * C@5 — which used to catch R still sitting in the buffer.
+     *
+     * <p>Asserts R (D@3) is delivered exactly once and never also appears as dead-lettered — the
+     * {@link ParsleyEngine.Outcome} disjointness contract.
+     */
+    @Test
+    void propagateDoesNotBothForwardAndDeadLetterTheSameRecord() {
+        TopicPartition tc = new TopicPartition("tc", 0);
+        TopicPartition td = new TopicPartition("td", 0);
+        TopicPartition te = new TopicPartition("te", 0);
+        Uuid tcId = Uuid.randomUuid();
+        Uuid tdId = Uuid.randomUuid();
+        Uuid teId = Uuid.randomUuid();
+
+        PoisonableBufferStore<String, String> buffer = new PoisonableBufferStore<>();
+        ParsleyFrontier frontier = new ParsleyFrontier(ParsleyClock.empty(), new MockForwardedIndex(), new MockOrphanIndex());
+        // Pre-register every input channel (as the processor does at registration), so a channel that
+        // has not yet advertised anything still holds the completeness min rather than being absent.
+        frontier.channelUpdate(tcId, 0, ParsleyClock.empty());
+        frontier.channelUpdate(tdId, 0, ParsleyClock.empty());
+        frontier.channelUpdate(teId, 0, ParsleyClock.empty());
+        ParsleyEngine<String, String> engine = new ParsleyEngine<>(frontier, buffer, new MockCandidateIndex(),
+                ParsleyMetrics.NOOP, CausalAudit.NOOP, System::currentTimeMillis, true);
+
+        // Advance C's own frontier to 4 (no deps) so completeness(C) has somewhere to rise from.
+        for (long offset = 0; offset < 5; offset++) {
+            engine.onRecord(message(tc, offset, tcId, ParsleyClock.empty()));
+        }
+        // Advance D's own frontier to 1 (no deps).
+        engine.onRecord(message(td, 0, tdId, ParsleyClock.empty()));
+        engine.onRecord(message(td, 1, tdId, ParsleyClock.empty()));
+
+        // R = D@3, deps {C@5, E@7} — held; advertises C@5 and E@7 on channel D.
+        ParsleyClock rDeps = ParsleyClock.empty().observe(tcId, 0, 5).observe(teId, 0, 7);
+        engine.onRecord(message(td, 3, tdId, rDeps));
+
+        // P = C@5, deps {E@7} — held; advertises E@7 on channel C. Poisoned so its later fetch throws.
+        ParsleyClock pDeps = ParsleyClock.empty().observe(teId, 0, 7);
+        engine.onRecord(message(tc, 5, tcId, pDeps));
+        buffer.poison(1L); // R took sequence 0 (the C@0-4 and D@0-1 records never buffer); P is seq 1
+
+        // C@6, deps {C@5} — held (an intra-topic backward reference); its receipt-time channelUpdate
+        // makes channel C advertise C@5, which is what lets completeness(C) reach 5 below.
+        ParsleyClock c6Deps = ParsleyClock.empty().observe(tcId, 0, 5);
+        engine.onRecord(message(tc, 6, tcId, c6Deps));
+
+        assertEquals(3, buffer.size(), "R, P, and C@6 must all be held before E@7 arrives");
+
+        // E@7, deps {C@5} — its own receipt-time channelUpdate is what makes channel E advertise C@5
+        // too (channels C and D already do, via C@6 and R respectively), so completeness(C) reaches 5
+        // and E@7 itself delivers in the very same step, triggering propagate(E, 7), which finds R
+        // (seq 0) then P (seq 2) in the same scan.
+        ParsleyClock e7Deps = ParsleyClock.empty().observe(tcId, 0, 5);
+        ParsleyEngine.Outcome<String, String> outcome = engine.onRecord(message(te, 7, teId, e7Deps));
+
+        assertEquals(5L, engine.completeness().offsetFor(tcId, 0),
+                "completeness(C) must have reached 5 for R to have been judged deliverable at all");
+        List<String> delivered = outcome.delivered().stream()
+                .map(m -> m.topic() + "@" + m.offset()).toList();
+        List<String> deadLettered = outcome.deadLettered().stream()
+                .map(d -> d.topic() + "@" + d.offset()).toList();
+
+        assertTrue(delivered.contains("td@3"), "R (D@3) must be delivered — it was causally valid the "
+                + "moment completeness(C) reached 5, before C's local poison was ever discovered");
+        assertTrue(deadLettered.stream().noneMatch(delivered::contains),
+                "no record may appear in both delivered() and deadLettered() — Outcome's disjointness "
+                        + "contract");
+        assertEquals(1, delivered.stream().filter("td@3"::equals).count(),
+                "R (D@3) must be delivered exactly once, not double-counted");
+    }
+
+    /**
+     * Regression test for the related gap named in the same BACKLOG.md item: {@code propagate()} used
+     * to never check {@code isProvenImpossible}, unlike {@code onRecord} and {@code drainSatisfied}, so
+     * a candidate that is simultaneously "deliverable" (per the completeness frontier) and "proven
+     * impossible" (per the orphan index) would be forwarded if {@code propagate()}'s own candidate-index
+     * scan reached it — because completeness is driven by cross-channel header advertisement, not
+     * genuine local delivery, a coordinate can look satisfied even though the buffered record that would
+     * have supplied it is independently proven poison and orphaned.
+     *
+     * <p>Three channels G, W, V. W (the poison record) and V (the record under test) are both held on
+     * {@code G@2} (so a single {@code propagate(G, 2)} scan finds both, W first by buffer sequence). W
+     * depends on {@code {G@2, W@0}} — the second an exact self-reference, which advertises {@code W@0}
+     * on channel W without gating W's own deliverability (self-cycles are stripped from the gate but
+     * not from the raw channel advertisement). Another held record on G (never released in this test)
+     * advertises {@code W@0} on channel G. Combined with V's own admission advertising {@code W@0} on
+     * channel V, all three channels confirm {@code W@0} by the time V is buffered — so {@code W@0} is
+     * already satisfied and never indexed against V at all; only {@code G@2} is.
+     *
+     * <p>When {@code G@2} finally delivers, {@code propagate(G, 2)} finds W first: it is poisoned,
+     * dead-lettered, and orphans coordinate W at floor 0. It then finds V: {@code isDeliverable(V)}
+     * holds (completeness dominates both {@code G@2} and {@code W@0}, the latter via cross-channel
+     * headers, independent of W ever truly delivering) — without the fix this would forward V; with the
+     * fix, {@code isProvenImpossible(V)} catches it first, since V's own {@code W@0} dependency is now
+     * at/above W's orphan floor.
+     *
+     * <p>Asserts V is dead-lettered ({@link ParsleyEngine.DeadLetter.Reason#ORPHAN_CASCADE}) and never
+     * delivered.
+     */
+    @Test
+    void propagateDeadLettersACandidateWhoseDirectDependencyWasOrphanedByAnUnrelatedCascade() {
+        TopicPartition tg = new TopicPartition("tg", 0);
+        TopicPartition tw = new TopicPartition("tw", 0);
+        TopicPartition tv = new TopicPartition("tv", 0);
+        Uuid tgId = Uuid.randomUuid();
+        Uuid twId = Uuid.randomUuid();
+        Uuid tvId = Uuid.randomUuid();
+
+        PoisonableBufferStore<String, String> buffer = new PoisonableBufferStore<>();
+        ParsleyFrontier frontier = new ParsleyFrontier(ParsleyClock.empty(), new MockForwardedIndex(), new MockOrphanIndex());
+        frontier.channelUpdate(tgId, 0, ParsleyClock.empty());
+        frontier.channelUpdate(twId, 0, ParsleyClock.empty());
+        frontier.channelUpdate(tvId, 0, ParsleyClock.empty());
+        ParsleyEngine<String, String> engine = new ParsleyEngine<>(frontier, buffer, new MockCandidateIndex(),
+                ParsleyMetrics.NOOP, CausalAudit.NOOP, System::currentTimeMillis, true);
+
+        // Advance G's own frontier to 1 (no deps), so G@2 below is a clean, contiguous next advance.
+        engine.onRecord(message(tg, 0, tgId, ParsleyClock.empty()));
+        engine.onRecord(message(tg, 1, tgId, ParsleyClock.empty()));
+
+        // A held filler on G (never released in this test) advertises W@0 on channel G, without
+        // disturbing G's contiguous frontier (it sits at an offset past where G actually advances).
+        engine.onRecord(message(tg, 5, tgId, ParsleyClock.empty().observe(twId, 0, 0)));
+
+        // W = W@0, deps {G@2, W@0} — the W@0 is an exact self-reference (stripped from W's own
+        // deliverability gate, so W is held on G@2 alone) but still advertises W@0 on channel W via the
+        // raw, unstripped receipt-time channelUpdate.
+        ParsleyClock wDeps = ParsleyClock.empty().observe(tgId, 0, 2).observe(twId, 0, 0);
+        engine.onRecord(message(tw, 0, twId, wDeps));
+        buffer.poison(1L); // seq 0 is the G@5 filler, W@0 is seq 1
+
+        // V (the record under test): v@2 depends on {G@2, W@0} — buffered while G@2 is not yet
+        // observed. By now channels G (via the filler) and W (via W@0's self-reference) already
+        // advertise W@0, and V's own admission advertises it on channel V too, so completeness(W)
+        // already dominates 0 by the time this record is indexed — W@0 is satisfied and never indexed
+        // against V; only G@2 is.
+        ParsleyClock vDeps = ParsleyClock.empty().observe(tgId, 0, 2).observe(twId, 0, 0);
+        engine.onRecord(message(tv, 2, tvId, vDeps));
+
+        // The G@5 filler's only purpose was to advertise W@0 on channel G; the moment V's own admission
+        // makes completeness(W) reach 0 (the last of the three channels to confirm it), the filler's
+        // own pending dependency on W@0 is satisfied too, and the resulting cross-channel drain
+        // (triggered by V's channel-clock advance) releases it in this same call — it does not
+        // interfere with G's contiguous frontier (delivered out of order, at offset 5 with a gap before
+        // it) or with what follows.
+        assertEquals(2, buffer.size(), "W@0 and V (v@2) must still be held before G@2 arrives");
+        assertEquals(0L, engine.completeness().offsetFor(twId, 0),
+                "completeness(W) must already dominate W@0 via cross-channel advertisement, before W@0 "
+                        + "is ever proven poison below");
+
+        // G@2, deps {} — delivers immediately, advancing G's frontier to 2 and triggering
+        // propagate(G, 2), which finds W@0 first (poisoned, orphaning W at floor 0) and then V (v@2) —
+        // deliverable per completeness, but its direct dependency on W@0 is now provably impossible.
+        ParsleyEngine.Outcome<String, String> outcome = engine.onRecord(message(tg, 2, tgId, ParsleyClock.empty()));
+
+        List<String> delivered = outcome.delivered().stream()
+                .map(m -> m.topic() + "@" + m.offset()).toList();
+        assertTrue(delivered.stream().noneMatch("tv@2"::equals),
+                "V (v@2) must never be delivered — its direct dependency W@0 is proven impossible");
+        ParsleyEngine.DeadLetter<String, String> vLetter = outcome.deadLettered().stream()
+                .filter(d -> d.topic().equals("tv") && d.offset() == 2)
+                .findFirst()
+                .orElse(null);
+        assertTrue(vLetter != null, "V (v@2) must be dead-lettered");
+        assertEquals(ParsleyEngine.DeadLetter.Reason.ORPHAN_CASCADE, vLetter.reason(),
+                "V is a cascade victim of W's poisoning, not itself poison");
+    }
+
     private static ParsleyMessage<String, String> message(TopicPartition tp, long offset,
                                                            Uuid topicId, ParsleyClock dependencies) {
         return new ParsleyMessage<>(tp.topic(), topicId, tp.partition(), offset, 0L,

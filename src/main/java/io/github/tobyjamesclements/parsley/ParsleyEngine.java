@@ -552,6 +552,18 @@ final class ParsleyEngine<K, V> {
      * delivered; and if B → C, C follows in the same pass. A candidate whose value cannot be
      * decoded on this forward attempt is dead-lettered (when enabled) rather than failing the task,
      * which starts its own orphan cascade via {@link #deadLetterRoot}.
+     *
+     * <p>Each candidate is committed to its final disposition — delivered or dead-lettered — the
+     * moment that disposition is decided, never staged for a later batch step. A candidate is only
+     * ever evaluated once per level (the {@code seen} guard), but a <em>different</em> candidate
+     * later in the same scan can still dead-letter it first via an orphan cascade
+     * ({@link #deadLetterRoot} → {@link #orphan} → {@link #fetchForDeadLetter}); committing
+     * immediately, rather than collecting a batch of "releasable" entries to remove afterwards,
+     * ensures that once a candidate is delivered it is already gone from the buffer, so a
+     * same-pass cascade reaching it afterwards finds nothing there (the existing, harmless "stale"
+     * handling) instead of a still-present entry it can dead-letter out from under the delivery
+     * that already happened. This is what keeps {@link Outcome#delivered()} and
+     * {@link Outcome#deadLettered()} disjoint.
      */
     private void propagate(List<ParsleyMessage<K, V>> out, List<DeadLetter<K, V>> deadLetters,
                            Uuid topicId, int partition) {
@@ -561,7 +573,6 @@ final class ParsleyEngine<K, V> {
 
         while (!toScan.isEmpty()) {
             Set<Long> seen = new HashSet<>();
-            List<ParsleyBufferStore.Entry<K, V>> releasable = new ArrayList<>();
             List<ParsleyCandidateIndex.Candidate> stale = new ArrayList<>();
             Map<Uuid, Set<Integer>> nextScan = new HashMap<>();
 
@@ -585,27 +596,36 @@ final class ParsleyEngine<K, V> {
                         }
                         if (entry == null) {
                             stale.add(candidate);
-                        } else if (isDeliverable(entry.record())) {
-                            releasable.add(entry);
+                            continue;
                         }
+                        // Proven-impossible takes precedence over deliverable, exactly as it does in
+                        // onRecord and drainSatisfied: a candidate's own dependency can be orphaned by
+                        // an unrelated cascade without ever being indexed against that coordinate here
+                        // (it looked satisfied, via cross-channel header advertisement, at buffer
+                        // time), so orphan()'s cascade for that coordinate never reaches it directly.
+                        if (isProvenImpossible(entry.record())) {
+                            buffer.remove(entry.sequence());
+                            deadLetterRoot(deadLetters,
+                                    new DeadLetter.Decoded<>(entry.record(), DeadLetter.Reason.ORPHAN_CASCADE));
+                            continue;
+                        }
+                        if (!isDeliverable(entry.record())) continue;
+
+                        buffer.remove(entry.sequence());
+                        audit.recordReleased(entry.record().topic(), entry.record().partition(),
+                                entry.record().offset(), buffer.size());
+                        frontier.deliver(entry.record().topicId(), entry.record().partition(), entry.record().offset());
+                        frontier.channelUpdate(entry.record().topicId(), entry.record().partition(), entry.record().dependencies());
+                        nextScan.computeIfAbsent(entry.record().topicId(), k -> new HashSet<>())
+                                .add(entry.record().partition());
+                        out.add(entry.record());
+                        totalReleased++;
                     }
                 }
             }
 
             stale.forEach(candidateIndex::prune);
             toScan = nextScan;
-
-            for (ParsleyBufferStore.Entry<K, V> entry : releasable) {
-                buffer.remove(entry.sequence());
-                audit.recordReleased(entry.record().topic(), entry.record().partition(),
-                        entry.record().offset(), buffer.size());
-                frontier.deliver(entry.record().topicId(), entry.record().partition(), entry.record().offset());
-                frontier.channelUpdate(entry.record().topicId(), entry.record().partition(), entry.record().dependencies());
-                toScan.computeIfAbsent(entry.record().topicId(), k -> new HashSet<>())
-                        .add(entry.record().partition());
-                out.add(entry.record());
-            }
-            totalReleased += releasable.size();
         }
 
         if (totalReleased > 0) {

@@ -6,49 +6,6 @@ Findings from an automated correctness review of the causal engine
 Fable 5. Ranked most-severe first. GitHub Issues are disabled on this repo, so these are tracked here
 instead.
 
-## [HIGH] propagate() can both forward and dead-letter the same record in one cascade pass
-
-**Where:** `ParsleyEngine.java:556-616` (`propagate()`), `ParsleyEngine.java:637-661` (`orphan()`),
-`ParsleyEngine.java:674-687` (`fetchForDeadLetter`)
-
-`propagate()` scans candidates and collects deliverable entries into a `releasable` list in a first
-phase, then removes/forwards them in a second phase. If a *later* candidate in the same scan is poison
-and triggers the orphan cascade (`deadLetterRoot` → `orphan()`), that cascade calls
-`fetchForDeadLetter`, which finds an already-collected `releasable` entry **still present in the
-buffer** (it's only removed in the later release loop) and dead-letters it there. The release loop then
-still forwards it anyway: `buffer.remove` is a silent no-op on an already-removed sequence, but
-`frontier.deliver(...)` and `out.add(entry.record())` run unconditionally on the stale collected entry.
-
-**Concrete repro sequence** (dead-lettering enabled; fan-in channels C, D, E):
-1. Deliver C@0-4 and D@0-1 (no deps). Frontier: C=4, D=1.
-2. R = D@3, deps {C@5, E@7} → held (seq 0), indexed on (C,5) and (E,7).
-3. P = C@5, deps {E@7} → held (seq 1), indexed on (E,7). The buffer value for seq 1 later becomes
-   undecodable (poison).
-4. C@6, deps {C@5} → held; its receipt-time `channelUpdate` makes channel C advertise C@5.
-5. E@7 arrives, deps {C@5}: channel E now advertises C@5, and channel D already advertises C@5 via R's
-   deps. completeness(C)=5, so E@7 is deliverable → `frontier.deliver(E,7)` → `propagate(E)`.
-6. `findCandidates(E,7)` returns R (seq 0) then P (seq 1). R passes `isDeliverable` → added to
-   `releasable`. P then throws on `buffer.get` → dead-lettered POISON → `orphan(C, 0, floor 5)` →
-   `findCandidatesRequiringAtLeast(C,5)` finds R → R is still in the buffer → removed and dead-lettered
-   ORPHAN_CASCADE, and D@3 is recorded as forever-unreachable via `markOrphaned`.
-7. Release loop then forwards R anyway (`out.add`) and marks D@3 forwarded via
-   `frontier.deliver(D,0,3)`.
-
-**Impact:** R appears in both `Outcome.delivered` and `Outcome.deadLettered`, violating the `Outcome`
-record's own "disjoint, never both" contract (`ParsleyEngine.java:215-224`). The orphan index
-permanently claims D can never reach offset 3 while the forwarded index says D@3 was delivered — every
-future record depending on D@3+ is wrongly dead-lettered at ingest via `isProvenImpossible`.
-
-**Related gap, same root cause:** `propagate()` never calls `isProvenImpossible` at all (unlike
-`onRecord` L323 and `drainSatisfied` L423), so a buffered record that is simultaneously "deliverable"
-and "proven impossible" gets a path-dependent disposition depending on whether `drainSatisfied` or a
-`propagate` cascade reaches it first.
-
-**Coverage:** `ParsleyEngineDeadLetterTest.poisonCascadesToEveryBufferedDependentInOnePass` exercises
-the cascade, but with the poison record as the *first* candidate scanned and with
-`trackChannels=false`, so the collect-then-cascade interleaving above is unreachable in that test. This
-is a code gap, not just a coverage gap.
-
 ## [HIGH] awaitJoinCommit can deadlock an instance when a joiner shares a StreamThread with a running member
 
 **Where:** `ParsleyCoordination.java:132-145` (`awaitJoinCommit`), invoked from `ParsleyProcessor.init`
