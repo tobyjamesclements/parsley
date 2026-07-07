@@ -7,6 +7,16 @@ All notable changes to this project are documented in this file. The format is b
 ## [Unreleased]
 
 ### Fixed
+- **`onRecord` could skip the drain a proven-impossible record's own channel advance had just enabled.**
+  A record's admission always updates its channel's clock first, before its own disposition (deliver,
+  buffer, or dead-letter) is decided — this is what lets two sibling records depending on a shared
+  ancestor unblock each other without deadlocking. But when the record turned out to be proven
+  impossible (dead-lettered rather than forwarded), `onRecord` returned immediately after recording the
+  dead letter, skipping the channel-advance drain and epoch-transition check at the end of the method —
+  so another buffered record the channel advance had just made deliverable stayed held with no further
+  trigger to re-check it, potentially forever (a fan-in node with no subsequent watermark on that
+  channel). `onRecord` no longer returns early from the proven-impossible branch; every disposition now
+  falls through to the same tail drain.
 - **A torn changelog flush under at-least-once could permanently strand a coordinate's frontier.** The
   buffer store, frontier store, and forwarded-index store are three separate changelog topics with no
   cross-store atomicity, so a crash mid-release could tear two different writes apart, in two distinct

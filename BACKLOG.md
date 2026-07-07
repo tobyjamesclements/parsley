@@ -6,29 +6,6 @@ Findings from an automated correctness review of the causal engine
 Fable 5. Ranked most-severe first. GitHub Issues are disabled on this repo, so these are tracked here
 instead.
 
-## [MEDIUM-LOW] onRecord's proven-impossible early return skips the completeness re-drain it just enabled
-
-**Where:** `ParsleyEngine.java:323-327` (early return on proven-impossible), which sits before the
-`channelAdvanced` drain (`ParsleyEngine.java:359-361`) and the epoch-advance drain
-(`ParsleyEngine.java:364-366`)
-
-A record's admission always updates its channel's clock first (`channelUpdate` at
-`ParsleyEngine.java:312-314`), which can advance completeness. If that same record then turns out to
-be proven-impossible, `onRecord` returns early (line 327) before checking whether the channel advance
-it just performed made *other* buffered records deliverable.
-
-**Concrete repro sequence:** Fan-in node, channels C and D. R is held with deps {C@5}. A record X
-arrives on D whose header advertises C@5 (so completeness now satisfies R), but X itself depends on an
-orphaned coordinate → `isProvenImpossible` → early return. R stays buffered even though it's now
-deliverable. If X was the last inbound record and no watermark arrives on this node afterward
-(watermarks are emitted per upstream record, not on a timer), R is held indefinitely; an in-flight
-epoch transition window that this advance would have closed also stays pending.
-
-**Impact:** liveness only (not a causal-safety violation), but the stall is permanent in an otherwise-
-quiescent stream.
-
-**Coverage:** Not covered by any existing test.
-
 ## [LOW-MEDIUM] New sink joins and idle upstream lanes cause epoch floor stalls via marker-reachability gaps
 
 **Where:** `ParsleyEpochLog.java:54-61` and `:135-144` (`externalSourceTopics()` flips a topic to

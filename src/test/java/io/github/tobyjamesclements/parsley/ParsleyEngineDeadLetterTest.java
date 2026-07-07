@@ -327,6 +327,65 @@ class ParsleyEngineDeadLetterTest {
                 "V is a cascade victim of W's poisoning, not itself poison");
     }
 
+    /**
+     * Regression test for the BACKLOG.md liveness gap: {@code onRecord}'s receipt-time channel-clock
+     * update (before the gate) runs for <em>every</em> record, including one that turns out
+     * proven-impossible — so a record's own dead-lettering must not skip the channel-advance drain its
+     * arrival may have unlocked for other, unrelated buffered records, or they would be stuck with no
+     * further trigger to re-check them.
+     *
+     * <p>Two fan-in channels T1, T2 ({@code trackChannels = true}, required to reach this bug — a
+     * single-channel processor's completeness is its own frontier, fully covered by {@code propagate}).
+     * R (T1@10) depends on {@code T1@5}: delivered locally on channel T1, but channel T2 has not yet
+     * advertised it, so completeness(T1) is entirely absent and R is held. X (T2@1) then arrives
+     * advertising {@code T1@5} in its own header — the last channel needed to confirm it — but X itself
+     * depends on {@code T3@0}, a coordinate already orphaned, so it is dead-lettered instead of
+     * forwarded.
+     *
+     * <p>Asserts R is still released in the very same {@code onRecord(X)} call, and X is dead-lettered —
+     * the channel advance recorded before X's disposition was decided must not be lost just because X
+     * itself never delivers.
+     */
+    @Test
+    void aProvenImpossibleRecordsChannelAdvanceStillReleasesOtherHeldRecords() {
+        MockOrphanIndex orphanIndex = new MockOrphanIndex();
+        orphanIndex.markOrphaned(T3_ID, 0, 0); // T3 offset 0 and above is already proven impossible
+
+        MockBufferStore<String, String> buffer = new MockBufferStore<>();
+        ParsleyFrontier frontier = new ParsleyFrontier(ParsleyClock.empty(), new MockForwardedIndex(), orphanIndex);
+        // Pre-register both input channels, as the processor does at registration.
+        frontier.channelUpdate(T1_ID, 0, ParsleyClock.empty());
+        frontier.channelUpdate(T2_ID, 0, ParsleyClock.empty());
+        ParsleyEngine<String, String> engine = new ParsleyEngine<>(frontier, buffer, new MockCandidateIndex(),
+                ParsleyMetrics.NOOP, CausalAudit.NOOP, System::currentTimeMillis, true);
+
+        // T1@5, deps {} — delivers immediately, advancing T1's own frontier to 5. Channel T1's
+        // advertised clock stays empty (this record's own deps are empty).
+        engine.onRecord(message(T1, 5, T1_ID, ParsleyClock.empty()));
+
+        // R = T1@10, deps {T1@5} — held: completeness(T1) requires every channel to confirm T1@5, and
+        // channel T2 has said nothing about T1 at all yet, so T1 is entirely absent from completeness.
+        ParsleyEngine.Outcome<String, String> beforeX =
+                engine.onRecord(message(T1, 10, T1_ID, ParsleyClock.empty().observe(T1_ID, 0, 5)));
+        assertTrue(beforeX.delivered().isEmpty(), "R (T1@10) must be held: channel T2 has not yet confirmed T1@5");
+        assertEquals(1, buffer.size(), "R must be sitting in the buffer before X arrives");
+
+        // X = T2@1, deps {T1@5, T3@0} — its receipt-time channelUpdate advertises T1@5 on channel T2
+        // (the confirmation R was waiting on), but X itself depends on the already-orphaned T3@0.
+        ParsleyClock xDeps = ParsleyClock.empty().observe(T1_ID, 0, 5).observe(T3_ID, 0, 0);
+        ParsleyEngine.Outcome<String, String> outcome = engine.onRecord(message(T2, 1, T2_ID, xDeps));
+
+        List<String> delivered = outcome.delivered().stream().map(m -> m.topic() + "@" + m.offset()).toList();
+        assertTrue(delivered.contains("t1@10"),
+                "R (T1@10) must still be released — X's channel advance must not be skipped just "
+                        + "because X itself was dead-lettered");
+        assertEquals(1, outcome.deadLettered().size(), "X (T2@1) itself must be dead-lettered");
+        assertEquals("t2", outcome.deadLettered().get(0).topic());
+        assertEquals(1L, outcome.deadLettered().get(0).offset());
+        assertEquals(ParsleyEngine.DeadLetter.Reason.ORPHAN_CASCADE, outcome.deadLettered().get(0).reason(),
+                "X depends on an already-orphaned coordinate, not itself poison");
+    }
+
     private static ParsleyMessage<String, String> message(TopicPartition tp, long offset,
                                                            Uuid topicId, ParsleyClock dependencies) {
         return new ParsleyMessage<>(tp.topic(), topicId, tp.partition(), offset, 0L,

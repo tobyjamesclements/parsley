@@ -326,36 +326,39 @@ final class ParsleyEngine<K, V> {
 
         // A record whose dependencies already require a coordinate this node has proven can never
         // advance again is provably undeliverable — dead-letter it immediately rather than buffer it
-        // forever against a gate that can now never be satisfied.
+        // forever against a gate that can now never be satisfied. This does not return early: the
+        // channel-clock advance recorded above (line 321) happened regardless of this record's own
+        // disposition, and may have satisfied the completeness gate for other buffered records — the
+        // tail of this method must still run to release them (and to close a now-ready epoch
+        // transition), or they would stay held indefinitely with no other trigger to re-check them.
         if (isProvenImpossible(message)) {
             log.warn("Dead-lettering {}-{} @{} (depends on a coordinate proven never to advance again)",
                     message.topic(), message.partition(), message.offset());
             deadLetterRoot(deadLetters, new DeadLetter.Decoded<>(message, DeadLetter.Reason.ORPHAN_CASCADE));
-            return new Outcome<>(out, deadLetters);
-        }
-
-        ParsleyClock deps = withoutSelfReference(message.dependencies(),
-                message.topicId(), message.partition(), message.offset());
-
-        if (isDeliverable(message)) {
-            log.debug("Forwarding {}-{} @{} (satisfied immediately)",
-                    message.topic(), message.partition(), message.offset());
-            audit.recordForwarded(message.topic(), message.partition(), message.offset());
-            frontier.deliver(message.topicId(), message.partition(), message.offset());
-            frontier.channelUpdate(message.topicId(), message.partition(), message.dependencies());
-            out.add(message);
-            propagate(out, deadLetters, message.topicId(), message.partition());
         } else {
-            long seq = buffer.add(message, clock.getAsLong());
-            candidateIndex.index(seq, deps, completeness());
-            int depth = buffer.size();
-            ParsleyClock comp = completeness();
-            ParsleyClock gap = deps.missing(comp);
-            log.debug("Holding {}-{} @{} (buffer depth: {}, deps: {}, completeness: {})",
-                    message.topicId(), message.partition(), message.offset(), depth, deps, comp);
-            audit.recordHeld(message.topic(), message.partition(), message.offset(), depth, CausalDependencies.of(gap));
-            metrics.recordBuffered();
-            reportBufferState();
+            ParsleyClock deps = withoutSelfReference(message.dependencies(),
+                    message.topicId(), message.partition(), message.offset());
+
+            if (isDeliverable(message)) {
+                log.debug("Forwarding {}-{} @{} (satisfied immediately)",
+                        message.topic(), message.partition(), message.offset());
+                audit.recordForwarded(message.topic(), message.partition(), message.offset());
+                frontier.deliver(message.topicId(), message.partition(), message.offset());
+                frontier.channelUpdate(message.topicId(), message.partition(), message.dependencies());
+                out.add(message);
+                propagate(out, deadLetters, message.topicId(), message.partition());
+            } else {
+                long seq = buffer.add(message, clock.getAsLong());
+                candidateIndex.index(seq, deps, completeness());
+                int depth = buffer.size();
+                ParsleyClock comp = completeness();
+                ParsleyClock gap = deps.missing(comp);
+                log.debug("Holding {}-{} @{} (buffer depth: {}, deps: {}, completeness: {})",
+                        message.topicId(), message.partition(), message.offset(), depth, deps, comp);
+                audit.recordHeld(message.topic(), message.partition(), message.offset(), depth, CausalDependencies.of(gap));
+                metrics.recordBuffered();
+                reportBufferState();
+            }
         }
 
         // A channel-clock advance can satisfy the completeness gate for records already held that are
