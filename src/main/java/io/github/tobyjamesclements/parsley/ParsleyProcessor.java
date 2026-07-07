@@ -22,6 +22,7 @@ import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -101,6 +102,13 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
     private @Nullable KIn lastSeenKey;
     private long lastSnapshotRoundEpoch;
     private long lastAdoptedEpoch;
+    // The DAG-wide external-source topic IDs this task injected the boundary onto at its last adopted
+    // epoch. Deliberately kept alongside (not replaced by) the live registry each poll: a topic that
+    // stops being external mid-round (a new member just declared it as a sink) still needs this one
+    // transition epoch's boundary self-adopted by its outgoing self-adopter, since the newly-declared
+    // producer cannot possibly have relayed an in-band marker for the very epoch that admitted it. See
+    // pollEpochCoordination().
+    private Set<Uuid> lastAdoptedExternalSourceTopicIds = Set.of();
     // The snapshot round this task has already published its completeness for (log-driven, so every member
     // publishes — not just source-layer). Reset in memory on restart, so a task that crashes mid-round
     // re-publishes off the folded log alone; that keeps a blocked round from deadlocking when a member's
@@ -249,10 +257,18 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
         // epoch records, so every below-floor replay record is pre-epoch history to strip — no overlap
         // window. Otherwise it starts fresh at epoch 0; a restored task's state (settled floor plus any
         // in-progress transition) is loaded from the frontier "f" blob by the ParsleyFrontier constructor.
+        //
+        // lastAdoptedEpoch is deliberately left at its default (0) even here: settling epochState
+        // directly is purely local (this task has no in-flight prior-epoch records to gate), but
+        // pollEpochCoordination()'s first poll must still get a genuine chance to relay the admitting
+        // epoch's boundary downstream on this task's own external-source inputs (if any) — a downstream
+        // task reachable only through this one's output, never touching that source topic directly,
+        // has no other way to learn the floor advanced. Re-injecting it locally on this task's own
+        // already-settled epochState is a no-op (ParsleyEpochState#onBoundary short-circuits at
+        // epochId <= settledEpochId), so retrying costs nothing.
         ParsleyEpochState epochState;
         if (epochRuntime != null && !restored && epochRuntime.committedEpochId() > 0) {
             epochState = new ParsleyEpochState(epochRuntime.committedLowerBounds(), epochRuntime.committedEpochId());
-            this.lastAdoptedEpoch = epochRuntime.committedEpochId();
         } else {
             epochState = new ParsleyEpochState();
         }
@@ -693,6 +709,25 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
      * A no-op for a non-source-layer task (driven purely by received in-band markers) and for epoch 0
      * (no runtime). Called both from {@link #process} and a wall-clock punctuator so an idle source-layer
      * task still reacts.
+     *
+     * <p><strong>Handoff grace period.</strong> {@code externalSourceTopics()} is a live, memoryless view
+     * of the log's current declarations: the instant some member declares a topic as a sink, that topic
+     * stops being external DAG-wide, even before the declaring member is running and able to relay
+     * anything in-band — it structurally cannot relay the very epoch whose round admits it, since it was
+     * not a participant in the wave that computed that epoch's cut. Without a grace period, the outgoing
+     * self-adopter (this task, if it was the one consuming that topic) would stop adopting for it in the
+     * same poll the topic leaves the live registry, and nobody would ever inject that one epoch's boundary
+     * onto it — a permanent gap for any downstream task that only learns of that coordinate's floor
+     * through this one's relay. So boundary adoption targets {@code live ∪ lastAdopted} (the registry as
+     * of this task's previous adoption), giving a departing topic exactly one more adoption cycle from its
+     * outgoing self-adopter before {@link #lastAdoptedExternalSourceTopicIds} catches up to the live set.
+     *
+     * <p><strong>Relay-skip retry.</strong> {@link #adoptAndInjectBoundary}/{@link #injectSnapshot} skip
+     * their downstream relay when {@link #lastSeenKey} is {@code null} (nothing to route a marker on yet —
+     * harmless, since nothing downstream depends on a partition lane that has produced nothing). The
+     * per-epoch/per-round guards below only advance once the relay has actually gone out (or there was
+     * nothing to relay), so a task that has not forwarded anything yet keeps retrying on every poll until
+     * it finally has a key to route on, rather than silently forfeiting its one chance forever.
      */
     private void pollEpochCoordination() {
         ParsleyEpochRuntime runtime = epochRuntime;
@@ -718,21 +753,31 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
         }
         // Whether this task is source-layer is derived per poll from the log's DAG-wide source-topic
         // registry: the external source topics (inputs no member produces) that this task actually consumes.
-        // Derived, not configured, and re-read each poll because the registry grows as members join.
-        Set<Uuid> externalSourceTopicIds = resolveExternalSourceTopicIds(runtime);
-        if (externalSourceTopicIds.isEmpty()) {
-            return;
-        }
+        // Derived, not configured, and re-read each poll because the registry changes as members join —
+        // including, mid-round, dropping a topic a new member just declared as a sink (see above).
+        Set<Uuid> liveExternalSourceTopicIds = resolveExternalSourceTopicIds(runtime);
         long committed = runtime.committedEpochId();
         if (committed > lastAdoptedEpoch) {
-            adoptAndInjectBoundary(new ParsleyEpochBoundary(committed, runtime.committedLowerBounds()), externalSourceTopicIds);
-            lastAdoptedEpoch = committed;
+            Set<Uuid> adoptionTargets = new HashSet<>(liveExternalSourceTopicIds);
+            adoptionTargets.addAll(lastAdoptedExternalSourceTopicIds);
+            if (!adoptionTargets.isEmpty()) {
+                adoptAndInjectBoundary(new ParsleyEpochBoundary(committed, runtime.committedLowerBounds()), adoptionTargets);
+            }
+            if (adoptionTargets.isEmpty() || lastSeenKey != null) {
+                lastAdoptedEpoch = committed;
+                lastAdoptedExternalSourceTopicIds = liveExternalSourceTopicIds;
+            }
+        }
+        if (liveExternalSourceTopicIds.isEmpty()) {
+            return;
         }
         if (runtime.isRoundOpen()) {
             long round = committed + 1;   // the epoch a commit of the currently open round would carry
             if (round != lastSnapshotRoundEpoch) {
                 injectSnapshot();
-                lastSnapshotRoundEpoch = round;
+                if (lastSeenKey != null) {
+                    lastSnapshotRoundEpoch = round;
+                }
             }
         }
     }

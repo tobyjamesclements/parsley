@@ -72,6 +72,87 @@ class ParsleyProcessorSourceLayerTest {
     // joiner (it blocks and direct-settles); that path is exercised in ParsleyCoordinationTest and, fully,
     // by the WS4d Docker integration test.
 
+    /**
+     * Regression test for the BACKLOG.md marker-reachability gap: {@code externalSourceTopics()} is a
+     * live, memoryless view of the log's current declarations, so the instant a new member declares an
+     * until-now-external topic as a sink, that topic drops out of the DAG-wide registry immediately —
+     * one full round before the declaring member is even running, let alone able to relay anything
+     * in-band (it structurally cannot relay the very epoch whose round admits it). Without a grace
+     * period, the outgoing self-adopter stops adopting for that topic in the very same poll it leaves
+     * the live registry, and nobody ever injects that one epoch's boundary onto it.
+     *
+     * <p>B is the sole running member, self-adopting t1 (external, no producer) across epoch 1. Member P
+     * then joins declaring t1 as its sink; the instant P's join folds, t1 already leaves the live
+     * registry, well before P is promoted to running by epoch 2's commit. B's next poll must still
+     * inject epoch 2's boundary onto t1 — the live registry alone says otherwise, so this must be driven
+     * by B's own record of what it adopted last time.
+     *
+     * <p>Asserts B injects exactly two boundary markers (epoch 1, then epoch 2) despite t1 having already
+     * left the live external-source registry by the time epoch 2 commits.
+     */
+    @Test
+    void outgoingSelfAdopterStillInjectsTheHandoffEpochsBoundaryAfterATopicLeavesTheLiveRegistry() {
+        InMemoryEpochTransport.SharedLog log = new InMemoryEpochTransport.SharedLog();
+        ParsleyEpochRuntime runtime = new ParsleyEpochRuntime(new InMemoryEpochTransport(log));
+        InMemoryEpochTransport seeder = new InMemoryEpochTransport(log);
+        runtime.runOnce();   // marks the runtime bootstrapped before init() blocks on it
+
+        Fixture b = new Fixture(runtime);   // B's init() joins declaring t1 as input, no sink
+        runtime.runOnce();
+        String bMemberId = log.events().stream()
+                .filter(ParsleyEpochEvent.JoinRequested.class::isInstance)
+                .map(e -> ((ParsleyEpochEvent.JoinRequested) e).memberId())
+                .findFirst().orElseThrow();
+
+        // Epoch 1: B is the only running member; t1 is external (nobody produces it) throughout.
+        seeder.append(new ParsleyEpochEvent.SnapshotRequested(bMemberId));
+        runtime.runOnce();
+        b.processRecord("k0", 0L);           // B publishes for the open round (owesPublication)
+        runtime.runOnce();
+        seeder.append(new ParsleyEpochEvent.EpochCommitted(1, ParsleyClock.empty()));
+        runtime.runOnce();                   // B promoted to running; epoch 1 settled
+        b.processRecord("k1", 1L);           // B's poll adopts epoch 1 -> injects boundary onto t1
+        runtime.runOnce();
+
+        List<? extends MockProcessorContext.CapturedForward<? extends String, ? extends String>> afterEpoch1 =
+                b.forwardedWith(ParsleyHeader.EPOCH_BOUNDARY);
+        assertEquals(1, afterEpoch1.size(), "B must inject epoch 1's boundary while t1 is still external");
+        assertEquals(1L, decodeBoundary(afterEpoch1.get(0)).epochId(), "the first injected boundary is epoch 1");
+
+        // P joins declaring t1 as its sink. The instant this folds, t1 leaves the LIVE external registry —
+        // before P is anywhere near running.
+        seeder.append(new ParsleyEpochEvent.JoinRequested("P", Set.of(), Set.of("t1")));
+        runtime.runOnce();
+        seeder.append(new ParsleyEpochEvent.SnapshotRequested("P"));
+        runtime.runOnce();
+        b.processRecord("k2", 2L);           // B publishes for the round that will admit P
+        runtime.runOnce();
+        seeder.append(new ParsleyEpochEvent.EpochCommitted(2, ParsleyClock.empty().observe(T1_ID, 0, 2)));
+        runtime.runOnce();                   // P promoted to running; t1 is now genuinely produced
+
+        // B's next poll must still inject epoch 2's boundary onto t1: the live registry already excludes
+        // t1 (P is running), but t1 must get this one handoff epoch from its outgoing self-adopter.
+        b.processRecord("k3", 3L);
+        runtime.runOnce();
+
+        List<? extends MockProcessorContext.CapturedForward<? extends String, ? extends String>> afterEpoch2 =
+                b.forwardedWith(ParsleyHeader.EPOCH_BOUNDARY);
+        assertEquals(2, afterEpoch2.size(),
+                "B must still inject epoch 2's boundary onto t1 even though t1 already left the live "
+                        + "external-source registry by the time epoch 2 committed");
+        assertEquals(2L, decodeBoundary(afterEpoch2.get(1)).epochId(), "the second injected boundary is epoch 2");
+    }
+
+    private static ParsleyEpochBoundary decodeBoundary(
+            MockProcessorContext.CapturedForward<? extends String, ? extends String> forward) {
+        for (Header h : forward.record().headers()) {
+            if (ParsleyHeader.EPOCH_BOUNDARY.equals(h.key())) {
+                return ParsleyEpochBoundary.fromBytes(h.value());
+            }
+        }
+        throw new IllegalArgumentException("not a boundary marker");
+    }
+
     /** A wired source-layer processor over topic t1 (declared external) plus its MockProcessorContext. */
     private static final class Fixture {
         private final ParsleyProcessor<String, String, String, String> processor;

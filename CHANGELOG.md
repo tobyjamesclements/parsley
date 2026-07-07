@@ -7,6 +7,25 @@ All notable changes to this project are documented in this file. The format is b
 ## [Unreleased]
 
 ### Fixed
+- **A new sink join could permanently strand a topic's epoch-boundary marker for one transition.**
+  `externalSourceTopics()` is a live, memoryless view of the coordination log's current declarations, so
+  the instant a new member declares an until-now-external topic as its sink, that topic drops out of the
+  DAG-wide external-source registry immediately — one full round before the declaring member is even
+  running, let alone able to relay anything in-band (it structurally cannot relay the very epoch whose
+  round admits it). The outgoing self-adopter used to stop adopting for that topic in the same poll it
+  left the live registry, so nobody ever injected that one epoch's boundary onto it — a conservative-safe
+  but real, sometimes-permanent floor stall for anything downstream. `ParsleyProcessor` now injects a
+  newly-committed epoch's boundary onto the union of the live registry and the registry as of its own
+  last adoption, giving a departing topic one more adoption cycle from its outgoing self-adopter. Also
+  fixed two related gaps in the same mechanism: a fresh joiner's `lastAdoptedEpoch` was pre-seeded to the
+  epoch that admitted it, silently skipping that joiner's own chance to relay the admitting epoch
+  downstream on its own external-source inputs; and the per-epoch/per-round adoption guards used to
+  advance even when the relay itself was skipped for lack of a routing key, permanently forfeiting a
+  task's one chance instead of retrying once it had actually forwarded something.
+
+  Still open: marker relay routes on a business key (`record.key()`/the last-seen key), not an explicit
+  per-partition broadcast, so a topic with a genuinely idle partition can still starve that partition's
+  marker — a separate, deeper design question tracked in BACKLOG.md.
 - **`onRecord` could skip the drain a proven-impossible record's own channel advance had just enabled.**
   A record's admission always updates its channel's clock first, before its own disposition (deliver,
   buffer, or dead-letter) is decided — this is what lets two sibling records depending on a shared
