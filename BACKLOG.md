@@ -40,19 +40,3 @@ a client-side caching fix.
 liveness stall for a topic with a genuinely idle partition.
 
 **Coverage:** Not covered by any existing test.
-
-## [LOW] Replayed already-delivered offsets leak permanent forwarded-index entries
-
-**Where:** `ParsleyFrontier.java:196-214` (`deliver`)
-
-`deliver` unconditionally `mark()`s the offset, but the absorb walk only scans
-`forwardedAfter(frontier)`. On an at-least-once replay of an already-delivered record (crash after the
-frontier flush but before the offset commit), `deliver(C,k)` with `frontier(C) >= k` marks `k` below
-the current watermark, and nothing ever unmarks it.
-
-**Impact:** harmless to gating — queries into the forwarded index start at `frontier + 1` — but each
-such entry lives in the changelog-backed store forever, i.e. unbounded, purely cosmetic growth.
-
-**Suggested fix:** a one-line guard, e.g. `if (offset <= watermark) return watermark;` before marking.
-
-**Coverage:** No test covers redelivery of an already-frontier-absorbed offset.

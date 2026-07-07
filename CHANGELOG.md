@@ -7,6 +7,13 @@ All notable changes to this project are documented in this file. The format is b
 ## [Unreleased]
 
 ### Fixed
+- **A replayed already-delivered offset leaked a permanent, purely cosmetic entry in the forwarded
+  index.** `ParsleyFrontier#deliver` unconditionally marked the delivered offset before walking the
+  contiguous absorb run, but that walk only ever scans strictly above the current watermark — so an
+  at-least-once replay of an already-delivered offset (`deliver(C, k)` with `frontier(C) >= k`, e.g. a
+  duplicate redelivery) marked an entry below the watermark that could never be found and unmarked
+  again, growing the changelog-backed forwarded-index store unbounded. `deliver` now returns immediately
+  for an at-or-below-watermark offset, before ever marking it.
 - **A new sink join could permanently strand a topic's epoch-boundary marker for one transition.**
   `externalSourceTopics()` is a live, memoryless view of the coordination log's current declarations, so
   the instant a new member declares an until-now-external topic as its sink, that topic drops out of the

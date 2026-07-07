@@ -184,21 +184,31 @@ final class ParsleyFrontier {
      * <p>The persist-before-prune order matters: the frontier blob and the forwarded index are separate
      * changelog-backed stores with no cross-store atomicity, so a crash between them must always tear
      * toward "the frontier already reflects the absorbed run, but a since-redundant forwarded-index
-     * entry below it still lingers" — harmless (see {@code BACKLOG.md}'s "replayed already-delivered
-     * offsets" note) — never the reverse, where an entry is pruned but the frontier advance that
-     * accounted for it was lost, which would permanently strand every offset above it.
+     * entry below it still lingers" — harmless, purely cosmetic (the same degraded outcome the watermark
+     * guard below prevents on the ordinary replay path) — never the reverse, where an entry is pruned but
+     * the frontier advance that accounted for it was lost, which would permanently strand every offset
+     * above it.
      *
      * <p>A <em>below-floor</em> delivery ({@code offset < startsAt}) is a no-op on the causal frontier:
      * the record still feeds state and is forwarded by the engine, but an out-of-domain offset must not
      * advance the causal frontier (it stays at the epoch origin until an in-domain offset is delivered)
      * nor enter the forwarded index. Under {@link ParsleyEpoch#NONE} every offset is in-domain.
+     *
+     * <p>A delivery at or below the current watermark ({@code offset <= frontier}) is an at-least-once
+     * replay of an already-delivered offset — a no-op here too, and deliberately never marked: the absorb
+     * walk below only ever scans strictly above the watermark, so a mark at or below it could never be
+     * found and unmarked again, leaking a permanent, purely cosmetic entry in the changelog-backed
+     * forwarded index (this used to happen on every such replay).
      */
     void deliver(Uuid topicId, int partition, long offset) {
         if (offset < epoch.startsAt(topicId, partition)) {
             return;
         }
-        forwardedIndex.mark(topicId, partition, offset);
         long watermark = frontier.offsetFor(topicId, partition);
+        if (offset <= watermark) {
+            return;
+        }
+        forwardedIndex.mark(topicId, partition, offset);
         long extended = watermark;
         List<Long> absorbed = new ArrayList<>();
         for (long candidate : forwardedIndex.forwardedAfter(topicId, partition, watermark)) {

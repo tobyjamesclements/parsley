@@ -305,4 +305,35 @@ class ParsleyFrontierTest {
                 "a subsequent delivery must advance normally, unaffected by the leaked stale entry "
                         + "below the frontier");
     }
+
+    /**
+     * Regression test for BACKLOG.md's LOW item: an at-least-once replay of an already-delivered offset
+     * ({@code deliver(C, k)} with {@code frontier(C) >= k}) must never mark it in the forwarded index.
+     * The absorb walk only ever scans strictly above the watermark, so a mark at or below it could never
+     * be found and unmarked again — it would otherwise leak in the changelog-backed store forever, purely
+     * cosmetic growth with no effect on gating.
+     *
+     * Asserts a replay at or below the current watermark leaves the frontier unchanged and marks nothing
+     * in the forwarded index.
+     */
+    @Test
+    void replayingAnAlreadyDeliveredOffsetLeavesNoForwardedIndexEntry() {
+        MockForwardedIndex forwardedIndex = new MockForwardedIndex();
+        ParsleyFrontier frontier = new ParsleyFrontier(ParsleyClock.empty(), forwardedIndex, new MockOrphanIndex());
+
+        frontier.deliver(T1_ID, 0, 0);
+        frontier.deliver(T1_ID, 0, 1);
+        assertEquals(1L, frontier.snapshot().offsetFor(T1_ID, 0), "frontier advances normally through 0, 1");
+
+        // Replay: offset 0 (below the watermark) and offset 1 (exactly at it) redelivered.
+        frontier.deliver(T1_ID, 0, 0);
+        frontier.deliver(T1_ID, 0, 1);
+
+        assertEquals(1L, frontier.snapshot().offsetFor(T1_ID, 0),
+                "a replay of an already-delivered offset must not move the frontier");
+        assertTrue(forwardedIndex.forwardedAfter(T1_ID, 0, -1).isEmpty(),
+                "a replayed already-delivered offset must never be marked in the forwarded index — the "
+                        + "absorb walk only scans strictly above the watermark, so it could never be "
+                        + "found and unmarked again");
+    }
 }
