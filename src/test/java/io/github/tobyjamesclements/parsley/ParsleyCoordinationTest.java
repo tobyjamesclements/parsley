@@ -194,6 +194,51 @@ class ParsleyCoordinationTest {
         }
     }
 
+    /**
+     * Regression test for the BACKLOG.md gap: a member whose task migrated off this instance (a rebalance)
+     * must not stall or corrupt a later {@code leave()} here. {@code ParsleyProcessor#close} calls {@code
+     * unregisterMember} on every close — including a migration, not just a genuine decommission — so B's
+     * departure (modelled directly here, since {@code ParsleyProcessor} is not in play) drops it from this
+     * instance's local set before {@code leave()} runs. Without that call, {@code leave()}'s drain phase
+     * would wait forever on B's never-refreshed non-drained report, and — if it proceeded regardless — its
+     * remove phase would wrongly append a {@code Leave} for a member still actively running (on another
+     * instance), stripping its floor from future rounds.
+     */
+    @Test
+    void leaveIgnoresAMemberThatMigratedOffThisInstance() throws Exception {
+        InMemoryEpochTransport.SharedLog log = new InMemoryEpochTransport.SharedLog();
+        ParsleyEpochRuntime runtime = new ParsleyEpochRuntime(new InMemoryEpochTransport(log));
+        ParsleyCoordination coordination = ParsleyCoordination.forRuntime(runtime);
+        runtime.start();
+        try {
+            runtime.join("A", Set.of(), Set.of());
+            runtime.join("B", Set.of(), Set.of());
+            runtime.requestSnapshot("A");   // cold start: commits epoch 1, promoting A and B to running
+            waitUntil(() -> runtime.isRunningMember("A") && runtime.isRunningMember("B"));
+
+            // B's task migrates off this instance: ParsleyProcessor#close calls this unconditionally, before
+            // ever reporting B drained (its buffer state on this instance is now stale forever).
+            runtime.unregisterMember("B");
+
+            Thread leaver = new Thread(coordination::leave, "leave-test");
+            leaver.start();
+
+            // Phase 1 blocks on A alone — B is no longer local, so it is not part of the drain gate.
+            Thread.sleep(200);
+            assertTrue(leaver.isAlive(), "leave() still blocks while A's buffer is not drained");
+
+            runtime.reportDrained("A", true);   // A drains -> leave() proceeds; B was never waited on
+            leaver.join(5000);
+            assertFalse(leaver.isAlive(), "leave() returns once A alone is drained and removed");
+
+            assertFalse(runtime.isRunningMember("A"), "leave() removed A from the running set");
+            assertTrue(runtime.isRunningMember("B"),
+                    "B was never appended a Leave — it migrated away, it was not evicted from the domain");
+        } finally {
+            runtime.close();
+        }
+    }
+
     /** Polls {@code condition} (10ms) until true or 5s elapses; throws {@link AssertionError} on timeout. */
     private static void waitUntil(java.util.function.BooleanSupplier condition) throws InterruptedException {
         long deadline = System.currentTimeMillis() + 5000;

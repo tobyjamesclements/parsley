@@ -414,6 +414,16 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
         if (quiesce != null) {
             quiesce.unregister(context.taskId());
         }
+        // Unconditional, not just for a genuine decommission: Kafka Streams calls close() whenever this
+        // task stops running here, including a rebalance that migrates it to another instance. Without
+        // this, this instance's runtime would keep treating the departed member as local forever — stuck
+        // in allLocalMembersDrained()'s (never-refreshed) last report and in leaveLocalMembers()'s scope —
+        // so a later leave() here could hang waiting on it or wrongly evict it while it runs on. The
+        // member itself is unaffected: if the task is only migrating, the new instance's init() re-joins
+        // it; unregistering here is purely local bookkeeping, not a log event.
+        if (epochRuntime != null) {
+            epochRuntime.unregisterMember(memberId);
+        }
         delegate.close();
         wiredMetrics.close(context.metrics());
     }

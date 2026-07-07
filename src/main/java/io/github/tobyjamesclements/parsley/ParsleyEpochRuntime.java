@@ -5,7 +5,6 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.time.Duration;
-import java.util.HashMap;
 import java.util.Map;
 import java.util.Queue;
 import java.util.Set;
@@ -62,10 +61,10 @@ final class ParsleyEpochRuntime implements AutoCloseable {
     // Runtime-thread-only: the epoch we have already appended a commit for, so this node appends each
     // round's EpochCommitted exactly once (the commit round-trips through the log and advances the fold).
     private long lastCommitAppendedFor;
-    // Runtime-thread-only: the round (nextEpochId at append time) each local member was last auto-published
-    // for, so autoPublishStalledLocalMembers appends at most one FrontierPublished per member per round
-    // while its own publication has not yet round-tripped back through the fold.
-    private final Map<String, Long> lastAutoPublishedRound = new HashMap<>();
+    // Read/written by the runtime thread alone in autoPublishStalledLocalMembers, but removed from by
+    // unregisterMember, which task threads call (via ParsleyProcessor#close). Concurrent, like every other
+    // member-keyed collection here, for that cross-thread write.
+    private final Map<String, Long> lastAutoPublishedRound = new ConcurrentHashMap<>();
 
     // Mirrors of the folded decision, published for cross-thread readers (a source-layer task polls these
     // to drive the in-band wave; a joiner blocks on committedEpochId). Volatile: written by the runtime

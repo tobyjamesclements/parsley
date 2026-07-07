@@ -6,27 +6,6 @@ Findings from an automated correctness review of the causal engine
 Fable 5. Ranked most-severe first. GitHub Issues are disabled on this repo, so these are tracked here
 instead.
 
-## [MEDIUM-HIGH] ParsleyEpochRuntime.unregisterMember is never called: leave() can evict active members or hang close()
-
-**Where:** `ParsleyEpochRuntime.java:101-104` (`unregisterMember`, defined but never called anywhere in
-`src` — verified by grep), `ParsleyProcessor.close()` (`ParsleyProcessor.java:403-412`, unregisters
-from quiesce but not from the epoch runtime), `ParsleyCoordination.leave()`
-(`ParsleyCoordination.java:202-224`)
-
-**Concrete repro sequence:** Task `app/0_1` is rebalanced from instance A to instance B. A's
-`localMembers` still contains `app/0_1` forever, since nothing ever calls `unregisterMember`. Later,
-`CausalStreams#close()` on instance A runs `leave()`:
-1. Phase 1 waits on `allLocalMembersDrained()`, which still includes the departed member whose
-   `reportDrained` is no longer refreshed on A — if its last report was non-empty, A's `close()` hangs
-   unboundedly.
-2. If it proceeds anyway, phase 2 appends `Leave(app/0_1)` for a member that is actively consuming with
-   a possibly un-drained buffer on B — precisely the "excluding an un-drained member" hazard that
-   `ParsleyMembershipStrategy`'s class Javadoc names as the safety invariant it exists to prevent.
-3. The evicted member also stops being awaited by subsequent rounds, so floors advance without its
-   publications.
-
-**Coverage:** No test covers rebalance/task-migration interaction with `leave()`. Code gap.
-
 ## [MEDIUM] Torn changelog flush under at-least-once can permanently strand a coordinate's frontier
 
 **Where:** `ParsleyEngine.java:451-453` (`drainSatisfied`: `buffer.remove` then `frontier.deliver`) and

@@ -7,6 +7,17 @@ All notable changes to this project are documented in this file. The format is b
 ## [Unreleased]
 
 ### Fixed
+- **`ParsleyEpochRuntime.unregisterMember` was never called, so a rebalanced-away member could hang or be
+  wrongly evicted by a later `leave()`.** `ParsleyProcessor#close` — called by Kafka Streams whenever a
+  task stops running on this instance, including a rebalance that migrates it elsewhere, not just a
+  genuine shutdown — never told the shared runtime the member had gone. The departed member stayed in
+  `localMembers` forever: its stale (possibly non-drained) `reportDrained` state never updated again, so a
+  later graceful `leave()` on this instance could hang unboundedly in its drain phase, or — if driven past
+  that — append a `Leave` in its remove phase for a member actually running elsewhere, precisely the
+  "excluding an un-drained member" hazard `ParsleyMembershipStrategy`'s safety invariant exists to
+  prevent. `close()` now calls `unregisterMember` unconditionally, dropping the member from local
+  bookkeeping the moment its task leaves this instance; a re-join on this or another instance re-adds it
+  with no log event required.
 - **`awaitJoinCommit` could deadlock an instance when a joiner shared a `StreamThread` with a running
   member.** Kafka Streams runs every task on a `StreamThread` — including `init()` and punctuators — on
   that one thread, so a joiner blocked in `awaitJoinCommit` inside `init()` also blocked any running

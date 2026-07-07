@@ -281,6 +281,42 @@ class ParsleyEpochRuntimeTest {
         assertTrue(a.hasRunningLocalMembers(), "A and B are running members after the commit");
     }
 
+    /**
+     * Regression test for the BACKLOG.md gap: {@code unregisterMember} must drop a departed member from
+     * every local-bookkeeping set — {@code allLocalMembersDrained}'s drain gate and {@code
+     * hasRunningLocalMembers}'s scope — so a rebalance that migrates a task off this instance (which calls
+     * this from {@code ParsleyProcessor#close}) does not leave the departed member stuck forever in this
+     * instance's view. Without the call, B's last-reported (non-drained) state would never update again
+     * here, and B would still count toward this instance's local membership even though it now runs
+     * elsewhere.
+     */
+    @Test
+    void unregisterMemberDropsTheMemberFromLocalBookkeeping() {
+        InMemoryEpochTransport.SharedLog log = new InMemoryEpochTransport.SharedLog();
+        ParsleyEpochRuntime a = runtimeOver(log);
+        a.join("A", Set.of(), Set.of());
+        a.join("B", Set.of(), Set.of());
+        a.reportDrained("A", true);
+        // B never reports drained — mirrors a task whose StreamThread migrated away mid-flight, so no
+        // further reportDrained ever arrives for it on this instance.
+        assertFalse(a.allLocalMembersDrained(), "B has not reported drained, so the instance is not fully drained");
+
+        a.unregisterMember("B");   // B's task left this instance (e.g. a rebalance), as ParsleyProcessor#close does
+
+        assertTrue(a.allLocalMembersDrained(),
+                "once the departed member is unregistered, the drain gate no longer waits on it");
+        a.requestSnapshot("A");
+        settle(log, a);
+        assertTrue(a.hasRunningLocalMembers(), "A is still local and running");
+
+        // A leave() driven now must not touch B: leaveLocalMembers() only iterates the (now A-only) local set.
+        a.leaveLocalMembers();
+        settle(log, a);
+        assertFalse(a.isRunningMember("A"), "leaveLocalMembers() removed A, the sole remaining local member");
+        assertTrue(a.isRunningMember("B"),
+                "B was never appended a Leave — it was unregistered locally, not evicted from the domain");
+    }
+
     private static ParsleyEpochRuntime runtimeOver(InMemoryEpochTransport.SharedLog log) {
         return new ParsleyEpochRuntime(new InMemoryEpochTransport(log));
     }
