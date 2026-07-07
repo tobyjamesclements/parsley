@@ -1,5 +1,6 @@
 package io.github.tobyjamesclements.parsley;
 
+import org.apache.kafka.common.Uuid;
 import org.junit.jupiter.api.Test;
 
 import java.util.Set;
@@ -15,6 +16,8 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * seam, with the runtime driven synchronously — no broker.
  */
 class ParsleyCoordinationTest {
+
+    private static final Uuid T1 = Uuid.randomUuid();
 
     /**
      * {@link ParsleyCoordination#requestEpochTransition()} attributes the snapshot to a local member and
@@ -141,6 +144,51 @@ class ParsleyCoordinationTest {
             coordination.awaitJoinCommit(runtime, "M");   // M is already running -> returns without blocking
             assertEquals(1L, runtime.committedEpochId(),
                     "a normal restart of a running member neither blocks nor bumps the epoch");
+        } finally {
+            runtime.close();
+        }
+    }
+
+    /**
+     * Regression test for the BACKLOG.md deadlock: a joiner blocked in {@code awaitJoinCommit} on its own
+     * thread (standing in for a task thread stuck inside {@code init()}) must not wait forever on a running
+     * member that shares its {@code StreamThread} and so can never run {@code pollEpochCoordination()}. R
+     * never calls {@code publishFrontier} directly — its only publication channel is the completeness
+     * snapshot registered via {@link ParsleyEpochRuntime#registerLocalCompleteness}, exactly modelling a
+     * task thread that never gets to run. Without the runtime auto-publishing on R's behalf, the joiner
+     * thread below hangs forever; with it, the round completes and the joiner unblocks.
+     */
+    @Test
+    void awaitJoinCommitUnblocksWhenARunningMembersOnlyPublicationIsItsRegisteredCompletenessSnapshot()
+            throws Exception {
+        InMemoryEpochTransport.SharedLog log = new InMemoryEpochTransport.SharedLog();
+        InMemoryEpochTransport seeder = new InMemoryEpochTransport(log);
+        seeder.append(new ParsleyEpochEvent.JoinRequested("R", Set.of(), Set.of()));
+        seeder.append(new ParsleyEpochEvent.SnapshotRequested("R"));
+        seeder.append(new ParsleyEpochEvent.EpochCommitted(1, ParsleyClock.empty()));   // R is running at epoch 1
+
+        ParsleyEpochRuntime runtime = new ParsleyEpochRuntime(new InMemoryEpochTransport(log));
+        ParsleyCoordination coordination = ParsleyCoordination.forRuntime(runtime);
+        runtime.join("R", Set.of(), Set.of());   // R's task lives on this instance, as its init() declared
+        ParsleyClock rCompleteness = ParsleyClock.empty().observe(T1, 0, 9);
+        runtime.registerLocalCompleteness("R", () -> rCompleteness);   // R's only publish channel
+        runtime.start();
+        try {
+            // Mirrors ParsleyProcessor#init's exact call order on the task thread: join() (declares the
+            // member, so the eventual commit can promote it) then the blocking awaitJoinCommit.
+            Thread joiner = new Thread(() -> {
+                runtime.join("J", Set.of(), Set.of());
+                coordination.awaitJoinCommit(runtime, "J");
+            }, "joiner-test");
+            joiner.start();
+            joiner.join(5000);
+
+            assertFalse(joiner.isAlive(),
+                    "the joiner must unblock once R's registered completeness is auto-published and round 2 commits");
+            assertTrue(runtime.isRunningMember("J"), "the commit promoted the joiner to running");
+            assertEquals(2L, runtime.committedEpochId(), "round 2 committed using R's auto-published completeness");
+            assertEquals(rCompleteness, runtime.committedLowerBounds(),
+                    "the floor is R's registered completeness — its only publication came via auto-publish");
         } finally {
             runtime.close();
         }

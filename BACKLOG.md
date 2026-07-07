@@ -6,32 +6,6 @@ Findings from an automated correctness review of the causal engine
 Fable 5. Ranked most-severe first. GitHub Issues are disabled on this repo, so these are tracked here
 instead.
 
-## [HIGH] awaitJoinCommit can deadlock an instance when a joiner shares a StreamThread with a running member
-
-**Where:** `ParsleyCoordination.java:132-145` (`awaitJoinCommit`), invoked from `ParsleyProcessor.init`
-(`ParsleyProcessor.java:237-245`)
-
-The join block spins on the task thread inside `init()`. Round completion requires every running
-member to publish, and publication only happens from task threads (`pollEpochCoordination`,
-`ParsleyProcessor.java:695-701`, and `handleEpochSnapshot`) — the epoch-runtime poll thread never
-publishes. Kafka Streams runs all of a `StreamThread`'s tasks, including their `init()` calls and
-punctuators, on that one thread; while one task's `init()` blocks, no sibling task on that thread can
-process or punctuate.
-
-**Concrete repro sequence:** A topology with committed epoch ≥ 1 is redeployed with a new stage — the
-epoch system's headline use case. Single instance, `num.stream.threads=1` (the default). The new
-stage's task joins as a fresh member → `requestSnapshot` → blocks in `awaitJoinCommit`. The existing
-stage's task — a running member whose publication the round needs — lives on the same `StreamThread`
-and can never run `pollEpochCoordination` to publish. The round never completes; the joiner blocks
-forever; the whole instance is wedged. Init order doesn't matter: even a running member that
-initialised first cannot publish once the joiner's `init()` blocks the thread.
-
-**Coverage:** `ParsleyCoordinationTest.awaitJoinCommitDoesNotBlockAtEpochZero` /
-`...ForAnAlreadyRunningMember` only test the non-blocking branches;
-`ParsleyCoordinationTopologyTest.runningTopologyEvolvesThroughAnEpochTransition` drives the runtime
-synchronously. Nothing exercises a blocking join co-hosted with a running member on the same thread.
-Code gap.
-
 ## [MEDIUM-HIGH] ParsleyEpochRuntime.unregisterMember is never called: leave() can evict active members or hang close()
 
 **Where:** `ParsleyEpochRuntime.java:101-104` (`unregisterMember`, defined but never called anywhere in

@@ -7,6 +7,17 @@ All notable changes to this project are documented in this file. The format is b
 ## [Unreleased]
 
 ### Fixed
+- **`awaitJoinCommit` could deadlock an instance when a joiner shared a `StreamThread` with a running
+  member.** Kafka Streams runs every task on a `StreamThread` — including `init()` and punctuators — on
+  that one thread, so a joiner blocked in `awaitJoinCommit` inside `init()` also blocked any running
+  member sharing the thread from ever running `pollEpochCoordination()`, the only place its
+  `publishFrontier` was invoked. The round the joiner opened could then never complete, wedging the
+  instance forever. `ParsleyEpochRuntime` now lets its own background thread — distinct from every
+  `StreamThread` — publish a stalled local member's completeness on its behalf, from a live snapshot
+  (`ParsleyProcessor#stampFrontier`) registered once the member's engine exists
+  (`registerLocalCompleteness`). Always-safe, no timeout: completeness is monotonic and the committed
+  floor is already a conservative merge-min, so publishing a possibly-stale snapshot only ever makes the
+  floor more conservative, never unsafe.
 - **`ParsleyEngine.propagate()` could both forward and dead-letter the same record in one cascade
   pass.** It used to collect deliverable candidates into a batch and release them only after scanning
   every candidate at that level, so a poison candidate found later in the same scan could dead-letter

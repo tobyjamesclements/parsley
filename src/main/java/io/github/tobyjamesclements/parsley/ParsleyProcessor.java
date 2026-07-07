@@ -293,6 +293,13 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
         // Initialise stampFrontier from completeness() so the stamping proxy reflects the restored
         // channel-clock state (not just the in-scope frontier) from the first forward onward.
         this.stampFrontier = engine.completeness();
+        // Registers the now-meaningful stampFrontier snapshot so the shared runtime can publish this
+        // member's completeness on its behalf from its own background thread if this task's thread is ever
+        // wedged (e.g. sharing a StreamThread with a joiner blocked in awaitJoinCommit) and so can never run
+        // pollEpochCoordination() itself. See ParsleyEpochRuntime#registerLocalCompleteness.
+        if (epochRuntime != null) {
+            epochRuntime.registerLocalCompleteness(memberId, () -> stampFrontier);
+        }
 
         this.stampingContext = new ParsleyProcessorContext<>(
                 context, () -> stampFrontier, () -> Optional.ofNullable(deliveryMetadata), sinkNodeNames);

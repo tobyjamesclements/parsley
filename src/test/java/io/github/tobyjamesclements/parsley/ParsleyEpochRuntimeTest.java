@@ -224,6 +224,38 @@ class ParsleyEpochRuntimeTest {
     }
 
     /**
+     * Regression test for the BACKLOG.md deadlock: {@code awaitJoinCommit} blocks a joiner's task thread
+     * inside {@code init()}, and Kafka Streams runs every task on a {@code StreamThread} sequentially, so a
+     * running member sharing that thread can never run {@code pollEpochCoordination()} to publish its
+     * frontier — the round the joiner opened would never complete. Here A never calls {@code
+     * publishFrontier} directly (modelling exactly that stuck task thread); its only channel to publish is
+     * the completeness snapshot registered via {@link ParsleyEpochRuntime#registerLocalCompleteness}. The
+     * round must still complete from {@code runOnce()} alone.
+     */
+    @Test
+    void aStalledLocalMemberIsAutoPublishedFromItsRegisteredCompletenessSnapshot() {
+        InMemoryEpochTransport.SharedLog log = new InMemoryEpochTransport.SharedLog();
+        ParsleyEpochRuntime a = runtimeOver(log);
+        ParsleyEpochRuntime b = runtimeOver(log);
+
+        a.join("A", Set.of(), Set.of());
+        b.join("B", Set.of(), Set.of());
+        settle(log, a, b);
+        a.requestSnapshot("A");
+        settle(log, a, b);   // epoch 1: A and B running
+
+        ParsleyClock aCompleteness = ParsleyClock.empty().observe(T1, 0, 3).observe(T2, 0, 6);
+        a.registerLocalCompleteness("A", () -> aCompleteness);   // A's only publication channel — never publishFrontier directly
+        b.requestSnapshot("B");   // open round 2; A never calls publishFrontier
+        b.publishFrontier("B", ParsleyClock.empty().observe(T1, 0, 9).observe(T2, 0, 1));
+        settle(log, a, b);
+
+        assertEquals(2L, a.committedEpochId(), "round 2 committed using A's auto-published completeness alone");
+        assertEquals(ParsleyClock.empty().observe(T1, 0, 3).observe(T2, 0, 1), a.committedLowerBounds(),
+                "the floor merge-mins A's auto-published snapshot with B's directly published frontier");
+    }
+
+    /**
      * The drain mirror gates a graceful leave: {@code allLocalMembersDrained} is true only once every local
      * member has reported an empty buffer, and {@code hasRunningLocalMembers} reflects the fold's running
      * set — the two conditions {@link ParsleyCoordination#leave()} waits on across its drain and remove phases.

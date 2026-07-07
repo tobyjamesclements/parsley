@@ -5,10 +5,13 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.time.Duration;
+import java.util.HashMap;
+import java.util.Map;
 import java.util.Queue;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentLinkedQueue;
+import java.util.function.Supplier;
 
 /**
  * The per-instance handle that drives the leaderless epoch protocol over a {@link ParsleyEpochTransport}.
@@ -49,12 +52,20 @@ final class ParsleyEpochRuntime implements AutoCloseable {
     // leave() waits until every local member is drained before appending its Leave — "only a drained node
     // is excluded". Written by task threads (reportDrained), read by the caller's leave() thread.
     private final Set<String> drainedLocalMembers = ConcurrentHashMap.newKeySet();
+    // A local member's live completeness snapshot, registered once its task's engine exists (see
+    // registerLocalCompleteness). Lets the runtime thread publish on a member's behalf when its own task
+    // thread cannot run pollEpochCoordination() — see autoPublishStalledLocalMembers.
+    private final Map<String, Supplier<ParsleyClock>> localCompletenessSuppliers = new ConcurrentHashMap<>();
     // Intents enqueued by task threads, appended to the log by the runtime thread only.
     private final Queue<ParsleyEpochEvent> outbox = new ConcurrentLinkedQueue<>();
 
     // Runtime-thread-only: the epoch we have already appended a commit for, so this node appends each
     // round's EpochCommitted exactly once (the commit round-trips through the log and advances the fold).
     private long lastCommitAppendedFor;
+    // Runtime-thread-only: the round (nextEpochId at append time) each local member was last auto-published
+    // for, so autoPublishStalledLocalMembers appends at most one FrontierPublished per member per round
+    // while its own publication has not yet round-tripped back through the fold.
+    private final Map<String, Long> lastAutoPublishedRound = new HashMap<>();
 
     // Mirrors of the folded decision, published for cross-thread readers (a source-layer task polls these
     // to drive the in-band wave; a joiner blocks on committedEpochId). Volatile: written by the runtime
@@ -101,6 +112,20 @@ final class ParsleyEpochRuntime implements AutoCloseable {
     void unregisterMember(String memberId) {
         localMembers.remove(memberId);
         drainedLocalMembers.remove(memberId);
+        localCompletenessSuppliers.remove(memberId);
+        lastAutoPublishedRound.remove(memberId);
+    }
+
+    /**
+     * Registers {@code completenessSupplier} as {@code memberId}'s live completeness snapshot, so
+     * {@link #autoPublishStalledLocalMembers()} can publish on its behalf from the runtime thread alone —
+     * without needing {@code memberId}'s own task thread to run {@code pollEpochCoordination()}. Deliberately
+     * separate from {@link #join}: a task calls this only once its engine exists and the snapshot is
+     * meaningful (see {@code ParsleyProcessor#init}), not at join time, when a fresh joiner's snapshot would
+     * still be the empty placeholder and a restarting member's would not yet reflect its restored state.
+     */
+    void registerLocalCompleteness(String memberId, Supplier<ParsleyClock> completenessSupplier) {
+        localCompletenessSuppliers.put(memberId, completenessSupplier);
     }
 
     /**
@@ -249,6 +274,45 @@ final class ParsleyEpochRuntime implements AutoCloseable {
         bootstrapped = transport.caughtUp();
         driveCommit();
         applyMembershipStrategy();
+        autoPublishStalledLocalMembers();
+    }
+
+    /**
+     * Publishes a stalled local member's registered completeness snapshot on its behalf — the fix for the
+     * deadlock where a member's own task thread can never run {@code pollEpochCoordination()} because it
+     * shares a Kafka Streams {@code StreamThread} with another task blocked in {@code awaitJoinCommit}'s
+     * unbounded join wait (see BACKLOG.md). This method runs on the runtime's own background thread, which
+     * is distinct from every {@code StreamThread} and so keeps making progress even while one is wedged.
+     *
+     * <p>Safe unconditionally, with no liveness heuristic: completeness only ever advances, and the
+     * committed floor is already a conservative merge-min, so publishing a possibly-stale snapshot instead
+     * of the freshest one can only make the resulting floor more conservative, never unsafe. Harmless and
+     * redundant with a healthy member's own publish from {@code pollEpochCoordination()} — {@link
+     * ParsleyEpochLog#apply} dedups a {@code FrontierPublished} by last-write-wins, and this runtime's own
+     * publish is guarded to at most one append per member per round while it round-trips back through the
+     * fold, mirroring {@link #driveCommit()}'s {@code lastCommitAppendedFor} guard.
+     */
+    private void autoPublishStalledLocalMembers() {
+        if (!bootstrapped || !fold.isRoundOpen()) {
+            return;
+        }
+        long round = fold.nextEpochId();
+        Set<String> outstanding = fold.unpublishedRunningMembers();
+        for (String member : localMembers) {
+            if (!outstanding.contains(member)) {
+                continue;
+            }
+            Long lastRound = lastAutoPublishedRound.get(member);
+            if (lastRound != null && lastRound == round) {
+                continue;
+            }
+            Supplier<ParsleyClock> supplier = localCompletenessSuppliers.get(member);
+            if (supplier == null) {
+                continue;
+            }
+            transport.append(new ParsleyEpochEvent.FrontierPublished(member, supplier.get()));
+            lastAutoPublishedRound.put(member, round);
+        }
     }
 
     /**
