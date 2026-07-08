@@ -3,40 +3,149 @@
 Findings from an automated correctness review of the causal engine
 (`ParsleyClock`/`ParsleyFrontier`/`ParsleyEngine`) and the topology-epoch coordination protocol
 (`ParsleyEpochLog`/`ParsleyEpochState`/`ParsleyCoordination`/`ParsleyEpochRuntime`), reviewed with
-Fable 5. Ranked most-severe first. GitHub Issues are disabled on this repo, so these are tracked here
-instead.
+Fable 5, plus findings from the follow-up verification review of the four fix commits
+`e0109eb..5dc1d04`. Ranked most-severe first. GitHub Issues are disabled on this repo, so these are
+tracked here instead.
 
-## [LOW-MEDIUM] Marker relay rides a business key, so an idle upstream partition lane can starve a channel's epoch marker
+## [MEDIUM] An unresolvable-clock record dead-lettered at ingest never orphans its coordinate, deterministically stranding dependents
+
+**Where:** `ParsleyProcessor#onUnresolvableClock` (called from `ingest`), versus the invariant stated
+in `ParsleyEngine`'s class Javadoc ("a dead-lettered coordinate must be recorded
+(`ParsleyOrphanIndex`) and its dependents proactively cascaded, rather than left to buffer forever
+against a gate that can now never be satisfied")
+
+An `UNRESOLVABLE_CLOCK` record is dead-lettered entirely inside the processor — `engine.onRecord` is
+never called for it — so unlike the `POISON` and `ORPHAN_CASCADE` paths (which go through
+`deadLetterRoot` → `orphan` → `markOrphaned`), nothing records that its coordinate can never advance
+past that offset. The offset is never delivered, so the contiguous frontier for that coordinate
+freezes below it forever, and any buffered record depending on that exact offset or later is held
+indefinitely, never proven impossible and never cascaded. This needs no crash to trigger: an
+intra-topic dependency is enough (the producer of `U@k+1` stamps a dependency on `U@k`; `U@k`'s
+dependencies header is undecodable at ingest; `U@k+1` then buffers forever). The header bytes are
+identical for every consumer, so no other branch can deliver the record either — the wedge is
+deterministic and DAG-wide for that coordinate.
+
+The seed path (`seedIfFirstSeen`) rescues only the special case where the unresolvable record is the
+*first* offset ever observed for its coordinate (the next good record's seed folds the gap in);
+any later unresolvable record wedges.
+
+The CHANGELOG's dead-letter feature entry claims a "dependent of either" (poison or
+unresolvable-clock) is dead-lettered — currently true only for poison.
+
+**Fix shape:** route the ingest-time dead-letter through the engine (or have the processor call the
+orphan cascade directly) so the coordinate is `markOrphaned` at the record's offset and buffered
+dependents cascade, exactly as the buffered-poison path already does.
+
+**Coverage:** not covered by any existing test.
+
+## [MEDIUM] Dead-letter paths still have the torn-changelog-write shape the delivery paths were fixed for
+
+**Where:** `ParsleyEngine#fetchForDeadLetter` (buffer removal at the `buffer.remove(entry.sequence())`
+call), the poison branches of `propagate`/`drainSatisfied` (`buffer.remove` before `deadLetterRoot`),
+and `orphan`'s worklist ordering (a victim is removed from the buffer in one iteration; its own
+coordinate's `markOrphaned` happens only in a later iteration)
+
+The `e0109eb` fix reordered the *delivery* paths so the frontier/forwarded-index advance is persisted
+before the buffer removal, making a torn crash always land on the benign side. The dead-letter paths
+were not touched and still tear the dangerous way: the buffer entry is removed (buffer changelog)
+*before* the victim's coordinate is recorded in the orphan index (orphan changelog) and before the
+dead-letter record itself is emitted to the DLQ topic. A crash between those writes leaves the record
+gone from the buffer with no orphan floor recorded — its buffered dependents are then held forever,
+never proven impossible (the same permanent-wedge shape, on the dead-letter side) — and can lose the
+record entirely without it ever landing on the dead-letter topic.
+
+**Fix shape:** mirror the delivery-path fix — `markOrphaned` (durable) before `buffer.remove`, so the
+tear direction becomes "orphan floor recorded, victim still buffered", which the restore-time
+`drainSatisfied` pass resolves as a harmless duplicate dead-letter.
+
+**Coverage:** not covered by any existing test.
+
+## [LOW-MEDIUM] Marker relay is key-routed and key-gated, so epoch markers can be withheld in more cases than the idle-partition one
 
 **Where:** `forwardEpochBoundary`/`forwardEpochSnapshot` (via `injectSnapshot`/`adoptAndInjectBoundary`
 and `handleEpochBoundary`/`handleEpochSnapshot`'s downstream relay), all of which route the outbound
 marker on `lastSeenKey`/`record.key()` — a single business key, not an explicit per-partition broadcast
 
-**Narrowed from the original finding.** The originally-reported repro (a new member's `JoinRequested`
-flipping a topic's `externalSourceTopics()` membership one full round before the declaring producer
-could relay anything, plus a fresh joiner's `lastAdoptedEpoch` being pre-seeded to the epoch that
-admitted it) is fixed: `ParsleyProcessor` now tracks `lastAdoptedExternalSourceTopicIds` and injects a
-newly-adopted epoch's boundary onto `live ∪ lastAdopted`, giving a topic that stops being external
-mid-round exactly one more adoption cycle from its outgoing self-adopter before the cache catches up
-to the live registry; the fresh-joiner pre-seed is gone (harmless locally — the joiner's own
-`ParsleyEpochState` already settles directly at the admitting floor — but was silently dropping that
-joiner's own downstream relay); and the `lastAdoptedEpoch`/`lastSnapshotRoundEpoch` guards no longer
-advance past an epoch/round whose relay was skipped for lack of a `lastSeenKey`, so a task that has not
-forwarded anything yet keeps retrying instead of forfeiting its one chance forever. Regression test:
-`ParsleyProcessorSourceLayerTest#outgoingSelfAdopterStillInjectsTheHandoffEpochsBoundaryAfterATopicLeavesTheLiveRegistry`.
+**Narrowed from the original finding, then re-broadened by the verification review.** The
+originally-reported registry-timing repro is fixed (`lastAdoptedExternalSourceTopicIds` grace cache,
+fresh-joiner pre-seed removal, relay-skip retry guards; regression test:
+`ParsleyProcessorSourceLayerTest#outgoingSelfAdopterStillInjectsTheHandoffEpochsBoundaryAfterATopicLeavesTheLiveRegistry`).
+The verification review confirmed the grace-cache timing argument, including the coalescing case
+(two commits between polls): `ParsleyEpochState#onBoundary`'s supersede semantics (a higher-epoch
+marker replaces a pending lower one) plus monotone floors make a skipped intermediate epoch safe at
+every hop, and the cache stays in the adoption targets until the first *successful* adoption cycle.
 
-**What's still open.** All of the above relay mechanisms route the outbound marker to wherever
-`record.key()`/`lastSeenKey` happens to hash on this task's *own* output partitions — there is no
-explicit "broadcast to every partition this task owns" step. A downstream task consuming multiple
-partitions of the same topic, one of which is genuinely idle (no key ever routes there because nothing
-causally requires it), never receives that partition's marker; its pending transition window
-(`tryAdvanceEpoch` requires a marker on *every* channel) never closes for that epoch until a later
-epoch's traffic happens to touch that partition. This is a different, deeper question than the
-registry-timing gap above — whether epoch markers should be explicitly broadcast per owned output
-partition rather than piggybacked on business-record key routing — and needs its own design pass, not
-a client-side caching fix.
+**What's still open — broader than "an idle partition among several".** The underlying problem is
+that a marker relay needs a business key to route on, and local settling does not wait for it:
 
-**Impact:** conservative-safe (never causally unsafe) but a real, sometimes-permanent-per-epoch
-liveness stall for a topic with a genuinely idle partition.
+- *A promoted transition does not imply its markers were relayed.* That implication holds only for
+  markers received in-band (`handleEpochBoundary` relays unconditionally on receipt, and the relay is
+  producer-flushed before the marker's source offset commits, so a crash replays and re-relays). A
+  source-layer task's own channels get their markers **self-injected** by `adoptAndInjectBoundary`,
+  which records them on every channel (and can promote, via `onEpochBoundary` → `tryAdvanceEpoch`, in
+  the same poll) while its single downstream relay is skipped whenever `lastSeenKey` is null. Concrete
+  repro: a source-layer task restarts (`lastSeenKey` is in-memory and wiped) with its restored
+  completeness already dominating a floor committed while it was down; the first 200ms punctuator poll
+  self-adopts, records markers on all channels, and promotes — settled, with zero downstream relays.
+  Downstream transitions on *every* lane (single-partition case included) then stall until this task's
+  first post-restart business record finally triggers the retried relay. Conservative-safe, but the
+  stall length is the input topic's idle time, unbounded.
+- *The handoff grace cache is in-memory only.* `lastAdoptedEpoch`/`lastAdoptedExternalSourceTopicIds`
+  reset on restart, so a crash inside the handoff window loses the departing topic's grace cycle; if
+  the departed topic was the task's only external input, the post-restart poll sees empty adoption
+  targets and silently advances `lastAdoptedEpoch` with no relay ever sent for the handoff epoch.
+  Redundantly covered by the new producer's own admitting-epoch relay (the pre-seed-removal fix), but
+  that path is itself key-gated and currently untested.
+- A note on the reverted "settle re-broadcast" fix: the revert's *reasoning* ("promote implies every
+  marker was already relayed at receipt") is falsified by the self-adoption scenario above, but the
+  reverted fix would not have closed it either — a key-routed re-broadcast still has no key at settle
+  time. The real fix is the same one this item has always pointed at: explicit broadcast to every
+  owned output partition (or a persisted relay obligation with key-independent routing), not another
+  client-side cache.
 
-**Coverage:** Not covered by any existing test.
+**Impact:** conservative-safe (never causally unsafe) but a real, sometimes-long floor-advance stall
+for downstream tasks; permanent per-epoch for a genuinely idle lane.
+
+**Coverage:** the grace cache is pinned by the regression test above. The fresh-joiner pre-seed
+removal and the relay-skip retry guards are **not pinned by any test** (verified by mutation: re-adding
+the pre-seed and reverting both guards passes the full suite). The settle-without-relay scenarios are
+not covered by any test.
+
+## [LOW] In-process write ordering cannot fully guarantee tear direction across separate changelog topics
+
+**Where:** the ordering fixes in `ParsleyEngine#propagate`/`drainSatisfied` (frontier before buffer
+removal) and `ParsleyFrontier#deliver` (persist before prune), and their Javadoc claims that a crash
+"always tears toward" the benign side
+
+The reordering eliminates the deterministic mid-interval tear (before the fix, a crash between the two
+calls could only land the dangerous way; now the benign write is enqueued first). But the two writes
+go to *different changelog topics*, and producer acks carry no cross-topic ordering: a crash during
+the commit-time flush can ack the later-enqueued topic's batch and lose the earlier one's. That torn
+state only materialises when local RocksDB state is also lost (task migration / wipe, forcing a pure
+changelog restore) — under a plain restart the local store retains both writes in program order — so
+the fix narrows the window from "every crash in the window" to "crash during commit flush ∧ unlucky
+cross-topic ack interleave ∧ state restored purely from changelogs". Genuinely rare, but the "always"
+in the code comments overclaims; the residual is only truly closed by EOS (transactional changelog
+writes) or by co-locating the two facts in one store/topic-partition.
+
+**Also a coverage note:** the engine-side ordering (deliver-before-remove) is not pinned by any test —
+`ParsleyEngineTest#aCrashBetweenFrontierPersistAndBufferRemoval…` and
+`ParsleyFrontierTest#aCrashBetweenPersistAndUnmark…` both pass with the ordering reverted (verified
+mechanically); only `ParsleyFrontierTest#deliverPersistsTheNewFrontierValueBeforePruning…` genuinely
+fails without its fix. An ordering probe on the engine path (e.g. a buffer store whose `remove`
+asserts the frontier already reflects the delivery) would pin it.
+
+**Impact:** documentation accuracy plus a rare residual wedge window; LOW.
+
+## [LOW] Minor observations
+
+- **Stale below-watermark forwarded-index entries are never pruned.** The `5dc1d04` guard stops new
+  at-or-below-watermark marks, but entries already leaked below the watermark (e.g. by the
+  acknowledged benign tear direction in `deliver`: frontier persisted, unmark lost) linger forever —
+  the absorb walk only scans strictly above the watermark. A cheap sweep (delete entries ≤ watermark
+  on restore or on epoch promotion) would clean both classes. Purely cosmetic store growth.
+- **`injectSnapshot` republishes to the coordination log on every poll tick while `lastSeenKey` is
+  null and a round is open** (the retry guard intentionally doesn't advance `lastSnapshotRoundEpoch`,
+  but `snapshotPublisher.publish` runs unconditionally inside `injectSnapshot`). Bounded by the round's
+  duration and idempotent to fold, but appends one log event per 200ms tick per key-less source-layer
+  task for the life of the round.
