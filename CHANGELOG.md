@@ -7,6 +7,17 @@ All notable changes to this project are documented in this file. The format is b
 ## [Unreleased]
 
 ### Fixed
+- **`ParsleyEpochRuntime`'s committed epoch id and lower bounds were two independent volatile fields, so
+  a caller reading both back-to-back could observe a torn pairing.** `pollEpochCoordination` reads the id
+  and then the bounds as two separate volatile reads while `runOnce` writes id-then-bounds; a commit
+  landing in between yields a boundary stamped with a fresher id than the bounds it carries. The relayed
+  boundary is then never re-adopted (the per-epoch guard only advances), so every consumer downstream is
+  merely conservative until the next commit — not unsafe, but avoidable entirely.
+
+  The two fields are now one `CommittedEpoch(epochId, lowerBounds)` record behind a single volatile
+  reference, read together via the new `committedEpoch()` accessor wherever both are needed as a pair
+  (`ParsleyProcessor`'s epoch-state initialisation and `pollEpochCoordination`'s boundary relay). The
+  existing `committedEpochId()`/`committedLowerBounds()` accessors remain for callers that only need one.
 - **Two classes of stale index entry were never pruned: below-watermark forwarded-index entries, and
   candidate-index entries `orphan()` discovers pointing at an already-removed record.** Neither is a
   correctness bug — both are purely cosmetic, unbounded store growth — but both are permanent once hit,

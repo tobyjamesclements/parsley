@@ -66,11 +66,18 @@ final class ParsleyEpochRuntime implements AutoCloseable {
     // member-keyed collection here, for that cross-thread write.
     private final Map<String, Long> lastAutoPublishedRound = new ConcurrentHashMap<>();
 
-    // Mirrors of the folded decision, published for cross-thread readers (a source-layer task polls these
-    // to drive the in-band wave; a joiner blocks on committedEpochId). Volatile: written by the runtime
-    // thread, read by any thread.
-    private volatile long committedEpochId;
-    private volatile ParsleyClock committedLowerBounds = ParsleyClock.empty();
+    /**
+     * The last committed epoch id paired with its lower bounds, read together so a caller needing both
+     * (e.g. stamping a relayed boundary marker) never sees id-from-commit-N paired with
+     * bounds-from-commit-{@code N-1} (or vice versa) because a second commit landed between two
+     * independent reads. See {@link #committedEpoch()}.
+     */
+    record CommittedEpoch(long epochId, ParsleyClock lowerBounds) {}
+
+    // Published together for cross-thread readers (a source-layer task polls these to drive the in-band
+    // wave; a joiner blocks on the id). One volatile record, not two separate volatile fields — see
+    // CommittedEpoch's Javadoc for why. Written by the runtime thread, read by any thread.
+    private volatile CommittedEpoch committedEpoch = new CommittedEpoch(0, ParsleyClock.empty());
     private volatile boolean roundOpen;
     // Whether the transport has folded the whole startup backlog. The owner must not commit before this,
     // or a just-started runtime would commit a stale epoch believing the topology empty.
@@ -215,12 +222,23 @@ final class ParsleyEpochRuntime implements AutoCloseable {
 
     /** The last committed epoch id ({@code 0} before any commit). */
     long committedEpochId() {
-        return committedEpochId;
+        return committedEpoch.epochId();
     }
 
     /** The lower bounds of the last committed epoch (empty before any commit). */
     ParsleyClock committedLowerBounds() {
-        return committedLowerBounds;
+        return committedEpoch.lowerBounds();
+    }
+
+    /**
+     * The last committed epoch id and its lower bounds, read together from one volatile snapshot — for a
+     * caller that needs the id and the bounds to describe the <em>same</em> commit (e.g. stamping a
+     * relayed boundary marker). {@link #committedEpochId()} and {@link #committedLowerBounds()} each read
+     * a consistent value on their own, but calling both back-to-back risks a commit landing in between —
+     * this returns one atomic pairing instead.
+     */
+    CommittedEpoch committedEpoch() {
+        return committedEpoch;
     }
 
     /** Whether a snapshot round is currently open (a source-layer task publishes + injects on this). */
@@ -269,9 +287,8 @@ final class ParsleyEpochRuntime implements AutoCloseable {
         }
         for (ParsleyEpochEvent event : transport.poll(POLL_TIMEOUT)) {
             fold.apply(event);
-            if (event instanceof ParsleyEpochEvent.EpochCommitted commit && commit.epochId() > committedEpochId) {
-                committedEpochId = commit.epochId();
-                committedLowerBounds = commit.lowerBounds();
+            if (event instanceof ParsleyEpochEvent.EpochCommitted commit && commit.epochId() > committedEpoch.epochId()) {
+                committedEpoch = new CommittedEpoch(commit.epochId(), commit.lowerBounds());
                 log.debug("Epoch {} committed with lower bounds {}", commit.epochId(), commit.lowerBounds());
             }
         }

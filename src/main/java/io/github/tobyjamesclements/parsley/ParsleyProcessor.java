@@ -260,8 +260,14 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
         // already-settled epochState is a no-op (ParsleyEpochState#onBoundary short-circuits at
         // epochId <= settledEpochId), so retrying costs nothing.
         ParsleyEpochState epochState;
-        if (epochRuntime != null && !restored && epochRuntime.committedEpochId() > 0) {
-            epochState = new ParsleyEpochState(epochRuntime.committedLowerBounds(), epochRuntime.committedEpochId());
+        if (epochRuntime != null && !restored) {
+            // Read the id and its lower bounds together (ParsleyEpochRuntime#committedEpoch), not via two
+            // independent volatile reads: a commit landing in between the two would otherwise pair a
+            // fresher id with a stale bounds snapshot.
+            ParsleyEpochRuntime.CommittedEpoch committed = epochRuntime.committedEpoch();
+            epochState = committed.epochId() > 0
+                    ? new ParsleyEpochState(committed.lowerBounds(), committed.epochId())
+                    : new ParsleyEpochState();
         } else {
             epochState = new ParsleyEpochState();
         }
@@ -753,12 +759,18 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
         // Derived, not configured, and re-read each poll because the registry changes as members join —
         // including, mid-round, dropping a topic a new member just declared as a sink (see above).
         Set<Uuid> liveExternalSourceTopicIds = resolveExternalSourceTopicIds(runtime.externalSourceTopics());
-        long committed = runtime.committedEpochId();
+        // Read the id and its lower bounds together (see ParsleyEpochRuntime.CommittedEpoch's Javadoc): a
+        // commit landing between two independent reads would otherwise stamp the relayed boundary with a
+        // fresher id than the bounds it carries — a boundary that is then never re-adopted (the per-epoch
+        // guard below only ever advances), leaving every downstream consumer merely conservative until the
+        // next commit rather than outright wrong, but avoidable entirely by reading one snapshot.
+        ParsleyEpochRuntime.CommittedEpoch committedEpoch = runtime.committedEpoch();
+        long committed = committedEpoch.epochId();
         if (committed > lastAdoptedEpoch) {
             Set<Uuid> adoptionTargets = new HashSet<>(liveExternalSourceTopicIds);
             adoptionTargets.addAll(resolveExternalSourceTopicIds(runtime.externalSourceTopicsAsOfPreviousCommit()));
             if (!adoptionTargets.isEmpty()) {
-                adoptAndInjectBoundary(new ParsleyEpochBoundary(committed, runtime.committedLowerBounds()), adoptionTargets);
+                adoptAndInjectBoundary(new ParsleyEpochBoundary(committed, committedEpoch.lowerBounds()), adoptionTargets);
             }
             lastAdoptedEpoch = committed;
         }

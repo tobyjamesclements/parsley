@@ -74,6 +74,54 @@ class ParsleyEpochRuntimeTest {
     }
 
     /**
+     * Regression test for BACKLOG.md's LOW item: {@code committedEpochId()} and {@code
+     * committedLowerBounds()} are independent volatile reads, so a caller pairing them across two
+     * separate calls risks a commit landing in between, stamping id-from-commit-N with
+     * bounds-from-commit-{@code N-1}. {@link ParsleyEpochRuntime#committedEpoch()} returns both from one
+     * volatile snapshot instead.
+     *
+     * <p>Drives the same two-commit sequence as {@link #aCompleteRoundCommitsTheMergeMinOfPublishedFrontiers}
+     * (epoch 1 with an empty floor, then epoch 2 with a distinct floor) and asserts {@code
+     * committedEpoch()} always reports the id paired with <em>that same commit's</em> bounds — in
+     * particular, after the second commit, the pairing must reflect epoch 2's floor, never epoch 1's
+     * stale empty one.
+     *
+     * Asserts the {@code (epochId, lowerBounds)} pairing is internally consistent at both commits.
+     */
+    @Test
+    void committedEpochReturnsTheIdAndBoundsFromTheSameCommitTogether() {
+        InMemoryEpochTransport.SharedLog log = new InMemoryEpochTransport.SharedLog();
+        ParsleyEpochRuntime a = runtimeOver(log);
+        ParsleyEpochRuntime b = runtimeOver(log);
+
+        a.join("A", Set.of(), Set.of());
+        b.join("B", Set.of(), Set.of());
+        settle(log, a, b);
+        a.requestSnapshot("A");
+        settle(log, a, b);
+
+        assertEquals(1L, a.committedEpoch().epochId(), "epoch 1's pairing must report id 1");
+        assertTrue(a.committedEpoch().lowerBounds().isEmpty(), "epoch 1's pairing must report its own empty floor");
+
+        ParsleyClock fA = ParsleyClock.empty().observe(T1, 0, 10).observe(T2, 0, 5);
+        ParsleyClock fB = ParsleyClock.empty().observe(T1, 0, 7).observe(T2, 0, 9);
+        a.requestSnapshot("A");
+        a.publishFrontier("A", fA);
+        b.publishFrontier("B", fB);
+        settle(log, a, b);
+
+        ParsleyClock epoch2Floor = ParsleyClock.empty().observe(T1, 0, 7).observe(T2, 0, 5);
+        ParsleyEpochRuntime.CommittedEpoch committed = a.committedEpoch();
+        assertEquals(2L, committed.epochId(), "epoch 2's pairing must report id 2");
+        assertEquals(epoch2Floor, committed.lowerBounds(),
+                "epoch 2's pairing must report epoch 2's own floor, never epoch 1's stale empty one");
+        assertEquals(a.committedEpochId(), committed.epochId(),
+                "the paired accessor and the standalone id accessor must agree");
+        assertEquals(a.committedLowerBounds(), committed.lowerBounds(),
+                "the paired accessor and the standalone bounds accessor must agree");
+    }
+
+    /**
      * When two nodes request a snapshot concurrently, the requests coalesce into one round with one owner,
      * yielding exactly one commit — never two competing cuts.
      */
