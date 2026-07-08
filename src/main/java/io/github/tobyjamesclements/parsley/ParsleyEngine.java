@@ -82,7 +82,10 @@ import java.util.function.LongSupplier;
  * dead-lettered too, and its own coordinate orphaned in turn. This does not reach a <em>different</em>
  * node still buffering on the same doomed coordinate — that node sees only a channel that stopped
  * advancing, indistinguishable from ordinary lag, until a DAG-wide mechanism (forced epoch-floor
- * advance) resolves it.
+ * advance) resolves it. Every dead-letter path runs this cascade — the three that fail inside the
+ * engine ({@link #onRecord}, {@link #propagate}, {@link #drainSatisfied}) via {@link #deadLetterRoot},
+ * and the one that fails before a record ever becomes engine state — an ingest-time undecodable
+ * causal-dependencies header — via {@link #deadLetterAtIngest}.
  *
  * @param <K> the record key type
  * @param <V> the record value type
@@ -743,6 +746,28 @@ final class ParsleyEngine<K, V> {
         // The dead-lettered record's own offset is the first offset its coordinate's frontier can
         // never legitimately reach (see #orphan) — not offset + 1.
         orphan(deadLetters, letter.topicId(), letter.partition(), letter.offset());
+    }
+
+    /**
+     * The ingest-time counterpart to {@link #deadLetterRoot}, for a record dead-lettered before it ever
+     * became engine state — an {@code UNRESOLVABLE_CLOCK} record, whose causal-dependencies header could
+     * not even be decoded, so {@link #onRecord} is never called for it and it has no candidate-index or
+     * frontier footprint of its own to unwind. The caller ({@link ParsleyProcessor#onUnresolvableClock})
+     * has already recorded and forwarded the root record itself; this only runs the {@link #orphan}
+     * cascade — marking {@code (topicId, partition)} permanently unable to advance past {@code offset}
+     * and dead-lettering any already-buffered dependent — so the coordinate's contiguous frontier is not
+     * left frozen forever with nothing durably recording why.
+     *
+     * @param topicId   the topic UUID of the record's own coordinate
+     * @param partition the partition of the record's own coordinate
+     * @param offset    the record's own offset — the first point its coordinate can never reach
+     * @return an outcome whose {@code delivered} is always empty (orphaning never releases anything) and
+     *         whose {@code deadLettered} holds every buffered dependent the cascade caught, if any
+     */
+    Outcome<K, V> deadLetterAtIngest(Uuid topicId, int partition, long offset) {
+        List<DeadLetter<K, V>> deadLetters = new ArrayList<>();
+        orphan(deadLetters, topicId, partition, offset);
+        return new Outcome<>(List.of(), deadLetters);
     }
 
     private void recordDeadLetter(List<DeadLetter<K, V>> deadLetters, DeadLetter<K, V> letter) {

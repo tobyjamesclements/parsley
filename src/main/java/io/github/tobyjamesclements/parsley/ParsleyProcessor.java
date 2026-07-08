@@ -989,9 +989,11 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
      * dependencies are unknown, so forwarding it on the ordinary path would deliver on an unknown
      * premise — never permitted. With a dead-letter sink configured, the record — its key/value already
      * decoded fine by Kafka Streams, only this header failed — is dead-lettered (carrying the original
-     * undecodable header bytes for forensics) and this returns empty. Without one, the task fails fast,
-     * exactly as before dead-lettering existed: the record was never buffered and its source offset is
-     * not committed past it, so it is reprocessed on restart.
+     * undecodable header bytes for forensics), its own coordinate is durably orphaned at this offset via
+     * {@link ParsleyEngine#deadLetterAtIngest} (cascading to any buffered dependent, exactly as the
+     * engine's other dead-letter paths do), and this returns empty. Without a dead-letter sink, the task
+     * fails fast, exactly as before dead-lettering existed: the record was never buffered and its source
+     * offset is not committed past it, so it is reprocessed on restart.
      */
     private Optional<ParsleyMessage<KIn, VIn>> onUnresolvableClock(ParsleyClockResolutionException e,
             Record<KIn, VIn> record, TopicPartition source, long offset, Uuid topicId) {
@@ -1012,6 +1014,15 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
         audit.recordDeadLetter(e.topic(), e.partition(), e.offset(), ParsleyEngine.DeadLetter.Reason.UNRESOLVABLE_CLOCK.name());
         forwardDeadLetter(letter, List.of(new ParsleyHeader(ParsleyHeader.DEADLETTER_ORIGINAL_DEPENDENCIES,
                 e.encodedDependencies())));
+        // Never went through onRecord (its dependencies header was undecodable), so it has no
+        // candidate-index/frontier footprint of its own — the engine's ordinary dead-letter paths never
+        // ran for it. Without this, its coordinate's contiguous frontier freezes at offset - 1 forever
+        // with nothing durably recording why, and any buffered record depending on this exact offset (or
+        // later) is held indefinitely. Route it through the engine so the coordinate is orphaned at this
+        // offset and any already-buffered dependent is cascaded, exactly as the buffered-poison path is.
+        ParsleyEngine.Outcome<KIn, VIn> outcome = engine.deadLetterAtIngest(topicId, source.partition(), offset);
+        deliver(outcome.delivered());
+        deadLetter(outcome.deadLettered());
         return Optional.empty();
     }
 

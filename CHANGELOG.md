@@ -7,6 +7,19 @@ All notable changes to this project are documented in this file. The format is b
 ## [Unreleased]
 
 ### Fixed
+- **An `UNRESOLVABLE_CLOCK` record dead-lettered at ingest never orphaned its coordinate, deterministically
+  stranding dependents.** `ParsleyProcessor#onUnresolvableClock` dead-lettered a record whose
+  causal-dependencies header could not be decoded entirely inside the processor — `engine.onRecord` was
+  never called for it — so unlike the `POISON`/`ORPHAN_CASCADE` paths (which go through `deadLetterRoot`
+  → `orphan` → `markOrphaned`), nothing durably recorded that the coordinate could never advance past
+  that offset: the offset was never delivered, the contiguous frontier froze below it forever, and any
+  buffered record depending on that exact offset or later was held indefinitely, never proven impossible
+  and never cascaded. No crash needed — an intra-topic dependency was enough (a producer stamps `U@k+1`
+  with a dependency on `U@k`; `U@k`'s header is undecodable; `U@k+1` buffers forever). `ParsleyEngine`
+  gains `deadLetterAtIngest(topicId, partition, offset)`, the ingest-time counterpart to `deadLetterRoot`
+  for a record dead-lettered before it ever became engine state: it runs the same `orphan` cascade —
+  marking the coordinate permanently unable to advance past that offset and dead-lettering any
+  already-buffered dependent — without re-recording the root record itself (the processor already does).
 - **A replayed already-delivered offset leaked a permanent, purely cosmetic entry in the forwarded
   index.** `ParsleyFrontier#deliver` unconditionally marked the delivered offset before walking the
   contiguous absorb run, but that walk only ever scans strictly above the current watermark — so an

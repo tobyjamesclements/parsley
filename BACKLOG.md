@@ -7,37 +7,6 @@ Fable 5, plus findings from the follow-up verification review of the four fix co
 `e0109eb..5dc1d04`. Ranked most-severe first. GitHub Issues are disabled on this repo, so these are
 tracked here instead.
 
-## [MEDIUM] An unresolvable-clock record dead-lettered at ingest never orphans its coordinate, deterministically stranding dependents
-
-**Where:** `ParsleyProcessor#onUnresolvableClock` (called from `ingest`), versus the invariant stated
-in `ParsleyEngine`'s class Javadoc ("a dead-lettered coordinate must be recorded
-(`ParsleyOrphanIndex`) and its dependents proactively cascaded, rather than left to buffer forever
-against a gate that can now never be satisfied")
-
-An `UNRESOLVABLE_CLOCK` record is dead-lettered entirely inside the processor — `engine.onRecord` is
-never called for it — so unlike the `POISON` and `ORPHAN_CASCADE` paths (which go through
-`deadLetterRoot` → `orphan` → `markOrphaned`), nothing records that its coordinate can never advance
-past that offset. The offset is never delivered, so the contiguous frontier for that coordinate
-freezes below it forever, and any buffered record depending on that exact offset or later is held
-indefinitely, never proven impossible and never cascaded. This needs no crash to trigger: an
-intra-topic dependency is enough (the producer of `U@k+1` stamps a dependency on `U@k`; `U@k`'s
-dependencies header is undecodable at ingest; `U@k+1` then buffers forever). The header bytes are
-identical for every consumer, so no other branch can deliver the record either — the wedge is
-deterministic and DAG-wide for that coordinate.
-
-The seed path (`seedIfFirstSeen`) rescues only the special case where the unresolvable record is the
-*first* offset ever observed for its coordinate (the next good record's seed folds the gap in);
-any later unresolvable record wedges.
-
-The CHANGELOG's dead-letter feature entry claims a "dependent of either" (poison or
-unresolvable-clock) is dead-lettered — currently true only for poison.
-
-**Fix shape:** route the ingest-time dead-letter through the engine (or have the processor call the
-orphan cascade directly) so the coordinate is `markOrphaned` at the record's offset and buffered
-dependents cascade, exactly as the buffered-poison path already does.
-
-**Coverage:** not covered by any existing test.
-
 ## [MEDIUM] Dead-letter paths still have the torn-changelog-write shape the delivery paths were fixed for
 
 **Where:** `ParsleyEngine#fetchForDeadLetter` (buffer removal at the `buffer.remove(entry.sequence())`

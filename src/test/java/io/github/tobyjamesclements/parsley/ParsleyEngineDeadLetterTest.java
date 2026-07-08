@@ -13,7 +13,9 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 /**
  * Tests {@link ParsleyEngine}'s dead-letter cascade: a poison record (undecodable on the forward path)
  * is diverted rather than failing the task when a dead-letter sink is configured, and any buffered
- * dependent whose own dependencies now require an unreachable coordinate is dead-lettered too.
+ * dependent whose own dependencies now require an unreachable coordinate is dead-lettered too. Also
+ * covers {@link ParsleyEngine#deadLetterAtIngest}, the counterpart for a record dead-lettered before it
+ * ever became engine state at all (an undecodable causal-dependencies header).
  */
 class ParsleyEngineDeadLetterTest {
 
@@ -107,6 +109,59 @@ class ParsleyEngineDeadLetterTest {
         assertTrue(outcome.deadLettered().get(2) instanceof ParsleyEngine.DeadLetter.Decoded,
                 "C decoded fine — only its premise is gone");
         assertEquals(0, buffer.size(), "the buffer must end empty — nothing left waiting on a dead coordinate");
+    }
+
+    /**
+     * The ingest-time counterpart to {@link #poisonCascadesToEveryBufferedDependentInOnePass}: an
+     * {@code UNRESOLVABLE_CLOCK} record — its causal-dependencies header undecodable at ingest — never
+     * goes through {@link ParsleyEngine#onRecord} at all (see {@code ParsleyProcessor#onUnresolvableClock}),
+     * so {@link ParsleyEngine#deadLetterAtIngest} is the only place its coordinate is ever durably
+     * orphaned. Regression test for the BACKLOG.md finding: without this call, the coordinate's frontier
+     * freezes forever with nothing recording why, and any buffered dependent is held indefinitely.
+     *
+     * <p>B (t2@0) is buffered depending on t1@5 — the coordinate about to be dead-lettered at ingest,
+     * which (unlike the poison case above) never itself occupies a buffer slot. A second record
+     * depending on a <em>later</em> offset of the same coordinate ({@code t1@7}, not merely the literal
+     * next offset) arriving afterwards is then shown to be caught too, proving the fix is not limited to
+     * the narrow case where the dead-lettered record happened to be the very first offset ever observed
+     * for its coordinate (the {@code seedIfFirstSeen} accident the finding calls out, which only rescues
+     * the immediate next record).
+     *
+     * <p>Asserts the ingest-time outcome delivers nothing and dead-letters B ({@code ORPHAN_CASCADE}),
+     * emptying the buffer, and that the later record is dead-lettered immediately on admission too.
+     */
+    @Test
+    void deadLetterAtIngestOrphansItsCoordinateAndCascadesToBufferedDependents() {
+        PoisonableBufferStore<String, String> buffer = new PoisonableBufferStore<>();
+        ParsleyEngine<String, String> engine = new ParsleyEngine<>(ParsleyClock.empty(), buffer,
+                new MockCandidateIndex(), new MockForwardedIndex(), new MockOrphanIndex(), ParsleyMetrics.NOOP,
+                CausalAudit.NOOP, System::currentTimeMillis, true);
+
+        // B (t2@0) depends on t1@5 — the coordinate about to be dead-lettered at ingest, before it is
+        // ever buffered itself.
+        ParsleyClock needsT1at5 = ParsleyClock.empty().observe(T1_ID, 0, 5);
+        engine.onRecord(message(T2, 0, T2_ID, needsT1at5));
+        assertEquals(1, buffer.size(), "B must be held before t1@5 is ever dead-lettered");
+
+        // Simulates ParsleyProcessor#onUnresolvableClock: t1@5's causal-dependencies header was
+        // undecodable at ingest, so it never went through onRecord and has no buffer/candidate-index
+        // footprint of its own at all.
+        ParsleyEngine.Outcome<String, String> outcome = engine.deadLetterAtIngest(T1_ID, 0, 5);
+
+        assertTrue(outcome.delivered().isEmpty(), "orphaning never releases anything itself");
+        assertEquals(1, outcome.deadLettered().size(), "B must be dead-lettered as a cascade victim");
+        assertEquals("t2", outcome.deadLettered().get(0).topic());
+        assertEquals(ParsleyEngine.DeadLetter.Reason.ORPHAN_CASCADE, outcome.deadLettered().get(0).reason());
+        assertEquals(0, buffer.size(), "B must not be left buffered forever");
+
+        // C (t3@0) depends on t1@7 — a later offset of the same now-orphaned coordinate, not merely the
+        // literal next one — arriving afterwards must be caught immediately too.
+        ParsleyClock needsT1at7 = ParsleyClock.empty().observe(T1_ID, 0, 7);
+        ParsleyEngine.Outcome<String, String> later = engine.onRecord(message(T3, 0, T3_ID, needsT1at7));
+        assertTrue(later.delivered().isEmpty(), "C must never be delivered on a provably impossible premise");
+        assertEquals(1, later.deadLettered().size(), "C must be dead-lettered immediately, on admission");
+        assertEquals("t3", later.deadLettered().get(0).topic());
+        assertEquals(ParsleyEngine.DeadLetter.Reason.ORPHAN_CASCADE, later.deadLettered().get(0).reason());
     }
 
     /**

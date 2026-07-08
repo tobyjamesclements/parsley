@@ -778,6 +778,72 @@ class CausalStreamsTopologyTest {
         }
     }
 
+    /**
+     * Regression test for BACKLOG.md's ingest-time dead-letter finding: an {@code UNRESOLVABLE_CLOCK}
+     * record — its causal-dependencies header undecodable — is dead-lettered entirely inside
+     * {@link ParsleyProcessor#onUnresolvableClock}, before {@code engine.onRecord} is ever called for
+     * it. Unlike the buffered {@code POISON}/{@code ORPHAN_CASCADE} paths, nothing used to durably
+     * record that its coordinate could never advance past that offset, so a dependent buffered on that
+     * exact offset would be held forever, never proven impossible.
+     *
+     * <p>Single-source stage on "t1". t1@0's causal-dependencies header is corrupted (an unsupported
+     * wire-version byte), so decoding throws {@link ParsleyClockResolutionException} at ingest. t1@1
+     * then depends on t1@0's own coordinate — an intra-topic dependency, the finding's minimal repro:
+     * t1's frontier can never legitimately reach offset 0 (it was never delivered), so before the fix
+     * t1@1 would buffer forever with no trigger to ever re-check it.
+     *
+     * Asserts both land on the dead-letter topic (t1@0 as {@code UNRESOLVABLE_CLOCK}, t1@1 as {@code
+     * ORPHAN_CASCADE}), the delegate is never invoked for either (only a heartbeat watermark — never
+     * business data — may still reach "out", since each record's own receipt-time channel-clock update
+     * runs regardless of its eventual dead-letter disposition), and nothing is left buffered.
+     */
+    @Test
+    void unresolvableClockAtIngestOrphansItsCoordinateAndDeadLettersAnIntraTopicDependent() {
+        CausalStreamsBuilder builder = new CausalStreamsBuilder();
+        builder.stream("t1", Serdes.String(), Serdes.String())
+                .process(upperCaser())
+                .to("out-sink", "out", Serdes.String(), Serdes.String());
+        Topology topology = assemble(builder, ADMIN);
+
+        try (TopologyTestDriver driver = new TopologyTestDriver(topology, config())) {
+            TestInputTopic<String, String> t1 =
+                    driver.createInputTopic("t1", new StringSerializer(), new StringSerializer());
+            TestOutputTopic<String, String> out =
+                    driver.createOutputTopic("out", new StringDeserializer(), new StringDeserializer());
+            TestOutputTopic<byte[], byte[]> deadLetter = driver.createOutputTopic(
+                    "causal-streams-test-deadletter", new ByteArrayDeserializer(), new ByteArrayDeserializer());
+
+            Headers corrupted = ParsleyHeader.mutableHeaders();
+            corrupted.add(ParsleyHeader.CAUSAL_DEPENDENCIES, new byte[] {(byte) 0xFF});
+            t1.pipeInput(new TestRecord<>("k0", "zero", corrupted));
+
+            CausalDependencies needsT1At0 = CausalDependencies.builder(TOPICS).require("t1", 0, 0).build();
+            t1.pipeInput(new TestRecord<>("k1", "one", depsHeader(needsT1At0)));
+
+            assertTrue(processed.isEmpty(), "the delegate must never run for either dead-lettered record");
+            while (!out.isEmpty()) {
+                assertTrue(isWatermark(out.readRecord()),
+                        "only a heartbeat watermark may reach the business sink — never business data");
+            }
+
+            TestRecord<byte[], byte[]> first = deadLetter.readRecord();
+            assertEquals("UNRESOLVABLE_CLOCK", headerValue(first, ParsleyHeader.DEADLETTER_REASON),
+                    "t1@0's undecodable dependencies header must dead-letter it as UNRESOLVABLE_CLOCK");
+            TestRecord<byte[], byte[]> second = deadLetter.readRecord();
+            assertEquals("ORPHAN_CASCADE", headerValue(second, ParsleyHeader.DEADLETTER_REASON),
+                    "t1@1 must be dead-lettered as a cascade victim, not left buffered forever");
+            assertTrue(deadLetter.isEmpty(),
+                    "exactly two dead letters — t1@1 must not still be sitting in the buffer");
+        }
+    }
+
+    /** The value of header {@code key} on {@code record}, or {@code null} if absent. */
+    private static @org.jspecify.annotations.Nullable String headerValue(
+            TestRecord<byte[], byte[]> record, String key) {
+        org.apache.kafka.common.header.Header header = record.headers().lastHeader(key);
+        return header == null ? null : new String(header.value(), java.nio.charset.StandardCharsets.UTF_8);
+    }
+
     /** A fresh, unique state directory — required when a test expects driver construction itself to
      * fail, since a failed construction cannot be closed to release its RocksDB locks. */
     private static File tempStateDir() throws IOException {
