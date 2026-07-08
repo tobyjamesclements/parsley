@@ -7,6 +7,22 @@ All notable changes to this project are documented in this file. The format is b
 ## [Unreleased]
 
 ### Fixed
+- **`tryAdvanceEpoch` gated on the DAG-wide committed floor, so an epoch transition could never settle
+  at a non-terminal node.** The committed floor `F_e` is the `mergeMin` of every member's published
+  completeness, so it names coordinates for every topic in the DAG — including topics downstream of (or
+  parallel to) a given node. A node's own `completeness()` can never contain a coordinate it has no
+  input channel for, so comparing it against the unfiltered floor made the dominance check permanently
+  false everywhere except the terminal stage: the epoch feature's per-coordinate floor advance,
+  below-floor dependency stripping, and orphan pruning on promotion were silently inert at every other
+  node, and a fresh joiner (which settles directly at the full committed floor) could reach a floor an
+  established member never could.
+
+  `ParsleyFrontier.tryAdvanceEpoch` now filters the pending floor to this node's own channel
+  coordinates (`ParsleyClock.retaining`, the same scoping `pruneToScope` already applies) before the
+  dominance check — a coordinate this node can never observe no longer blocks the transition. A
+  coordinate that *is* in scope but not yet advertised is deliberately left in the filtered floor, so
+  `dominates` still holds the window for it (conservative: an absent coordinate is never dominated) —
+  the transition never closes early against a channel that genuinely hasn't caught up.
 - **`ParsleyOrphanIndex.markOrphaned` kept the highest floor ever recorded for a coordinate, but the
   lowest dead-lettered offset is the true, permanent floor — a coordinate's contiguous frontier freezes
   at the earliest offset ever proven unreachable, regardless of what is proven unreachable afterward.**

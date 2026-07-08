@@ -304,10 +304,28 @@ final class ParsleyFrontier {
     /**
      * Closes an in-progress epoch transition if it is ready — the boundary marker has been received on
      * <em>every</em> input channel and the delivered frontier ({@link #completeness()}) dominates the
-     * pending floor {@code F_e} — promoting {@code F_e} to the settled floor and persisting. Returns
-     * {@code true} if it advanced (the caller should then re-drain, since a raised floor can strip a
-     * held replay record's below-floor dependencies). A no-op with no live {@link ParsleyEpochState} or
-     * no ready transition. Called after every engine operation that can advance completeness.
+     * pending floor {@code F_e}, restricted to the coordinates this node can ever observe — promoting
+     * {@code F_e} to the settled floor and persisting. Returns {@code true} if it advanced (the caller
+     * should then re-drain, since a raised floor can strip a held replay record's below-floor
+     * dependencies). A no-op with no live {@link ParsleyEpochState} or no ready transition. Called after
+     * every engine operation that can advance completeness.
+     *
+     * <p>{@code F_e} is the DAG-wide committed floor — the {@code mergeMin} of every member's published
+     * completeness — so it can carry coordinates for topics downstream of (or parallel to) this node
+     * that this node never channels at all (its own {@code completeness()} can never contain them: a
+     * dependency clock only ever spans a node's own input channels). Comparing the unfiltered floor
+     * against this node's completeness would therefore never dominate at any non-terminal stage. When
+     * channel tracking is on (the production case; see {@link #trackChannels}), the floor is filtered
+     * here to {@link #channels}' own coordinates — the same scoping {@link #pruneToScope} already
+     * applies to the frontier — before the dominance check. A coordinate that <em>is</em> in scope but
+     * not yet advertised by that channel is deliberately left in the filtered floor rather than dropped:
+     * {@link ParsleyClock#dominates} then reads it as unsatisfied (an absent coordinate is never
+     * dominated), so the window correctly keeps holding until that channel catches up — conservative,
+     * not permissive, exactly mirroring "hold over guess" for causal safety. With channel tracking off
+     * (the single-layer, frontier-only test mode, where {@link #channels} is permanently empty and
+     * {@link #completeness()} falls back to the raw frontier) there is no channel concept to scope by,
+     * so the floor is left unfiltered — scoping to an always-empty key set would strip every coordinate
+     * and vacuously close every window.
      */
     boolean tryAdvanceEpoch() {
         if (!(epoch instanceof ParsleyEpochState state)) {
@@ -322,7 +340,10 @@ final class ParsleyFrontier {
                 return false;
             }
         }
-        if (!completeness().dominates(pendingFloor)) {
+        ParsleyClock scopedFloor = trackChannels
+                ? pendingFloor.retaining((topicId, partition) -> channels.containsKey(new CoordKey(topicId, partition)))
+                : pendingFloor;
+        if (!completeness().dominates(scopedFloor)) {
             return false;
         }
         state.promote();

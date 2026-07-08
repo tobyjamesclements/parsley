@@ -21,6 +21,9 @@ class ParsleyEngineTest {
     private static final TopicPartition T2 = new TopicPartition("t2", 0);
     private static final Uuid T1_ID = Uuid.randomUuid();
     private static final Uuid T2_ID = Uuid.randomUuid();
+    // T3 is never channelled by this node — a stand-in for a downstream/sibling node's own input
+    // coordinate, folded into a DAG-wide committed epoch floor via mergeMin over every member.
+    private static final Uuid T3_ID = Uuid.randomUuid();
 
     // A consumed scope owning partition 0 of t1 and t2 — what a Streams task sees for these sources.
     private static final ParsleyClock.CoordinatePredicate SCOPE = (topicId, partition) ->
@@ -844,6 +847,40 @@ class ParsleyEngineTest {
         assertEquals(0, engine.bufferSize(), "nothing is held");
     }
 
+    /**
+     * The DAG-wide committed floor {@code F_e} can name a coordinate this node never channels at all —
+     * e.g. a downstream/sibling node's own input topic, folded in via {@code mergeMin} over every
+     * member's published completeness. This node channels only T1; the epoch-2 floor names both T1@5
+     * (in scope) and T3@3 (never channelled here). The window must still close once T1 alone reaches 5:
+     * comparing completeness() against the *unfiltered* floor could never dominate T3, since this node's
+     * completeness can never contain a coordinate it has no channel for.
+     *
+     * Asserts the transition settles at epoch 2 once the in-scope coordinate is satisfied, regardless of
+     * the out-of-scope one this node can never observe.
+     */
+    @Test
+    void windowClosesOnInScopeCoordinatesEvenWhenTheFloorNamesACoordinateThisNodeNeverChannels() {
+        ParsleyEpochState epoch = new ParsleyEpochState(ParsleyClock.empty(), 1);
+        ParsleyEngine<String, String> engine = engineWithEpochStateTrackingChannels(epoch);
+
+        // Establish T1 as this node's only channel.
+        processRecord(engine, incomingRecord(T1, 0, ParsleyClock.empty()));
+
+        // Epoch-2 boundary floor names T1@5 (this node's own coordinate) and T3@3 (a downstream-only
+        // coordinate this node never channels).
+        ParsleyClock floor = ParsleyClock.empty().observe(T1_ID, 0, 5).observe(T3_ID, 0, 3);
+        engine.onEpochBoundary(new ParsleyEpochBoundary(2, floor), T1_ID, 0);
+        assertTrue(epoch.isTransitioning(), "the epoch-2 transition is in progress");
+
+        for (long offset = 1; offset <= 5; offset++) {
+            processRecord(engine, incomingRecord(T1, offset, ParsleyClock.empty()));
+        }
+
+        assertEquals(2L, epoch.settledEpochId(),
+                "the window must close once every in-scope coordinate is satisfied, even though T3 — "
+                        + "never channelled by this node — can never appear in completeness()");
+    }
+
     // --- helpers --------------------------------------------------------------------------------
 
     // These helpers build an engine over an untracked in-memory frontier — completeness() is the node's
@@ -888,6 +925,18 @@ class ParsleyEngineTest {
     private ParsleyEngine<String, String> engineWithEpochState(ParsleyEpochState epoch) {
         return new ParsleyEngine<>(
                 new ParsleyFrontier(ParsleyClock.empty(), forwardedIndex, new MockOrphanIndex(), false, epoch),
+                buffer, new MockCandidateIndex(), ParsleyMetrics.NOOP,
+                CausalAudit.NOOP, System::currentTimeMillis);
+    }
+
+    /**
+     * As {@link #engineWithEpochState}, but with channel tracking on so {@link
+     * ParsleyEngine#completeness()} is the cross-channel min scoped to this node's own channels — needed
+     * to exercise a pending floor naming a coordinate this node never channels at all.
+     */
+    private ParsleyEngine<String, String> engineWithEpochStateTrackingChannels(ParsleyEpochState epoch) {
+        return new ParsleyEngine<>(
+                new ParsleyFrontier(ParsleyClock.empty(), forwardedIndex, new MockOrphanIndex(), true, epoch),
                 buffer, new MockCandidateIndex(), ParsleyMetrics.NOOP,
                 CausalAudit.NOOP, System::currentTimeMillis);
     }
