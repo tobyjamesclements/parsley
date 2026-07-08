@@ -508,6 +508,102 @@ class ParsleyEngineDeadLetterTest {
                 "X depends on an already-orphaned coordinate, not itself poison");
     }
 
+    /**
+     * Regression test for BACKLOG.md's orphan-floor-monotonicity finding (the "raise" direction): once a
+     * coordinate's floor is established, dead-lettering a <em>later</em> offset of the same coordinate
+     * must not weaken it — the coordinate's contiguous frontier is frozen at the earliest offset ever
+     * proven unreachable, regardless of what is proven unreachable afterward.
+     *
+     * <p>T1@5 is dead-lettered at ingest, establishing floor(T1) = 5. T1@6 (the exact producer pattern of
+     * a record depending on T1@5) is then dead-lettered at ingest too — under the inverted-monotonicity
+     * bug this used to overwrite the floor to 6. A record depending on {@code T1@5} arriving afterwards
+     * must still be caught: under the bug, {@code isProvenImpossible} would see {@code 5 >= 6} as false
+     * and buffer it — and since T1's frontier can never reach 5, it would then be held forever, never
+     * released, proven impossible, or cascaded.
+     *
+     * <p>Asserts the orphan floor stays at 5 after the second dead-letter, and a dependent on
+     * {@code T1@5} is dead-lettered immediately on admission rather than buffered.
+     */
+    @Test
+    void orphaningALaterOffsetOfAnAlreadyOrphanedCoordinateDoesNotWeakenItsFloor() {
+        MockBufferStore<String, String> buffer = new MockBufferStore<>();
+        MockOrphanIndex orphanIndex = new MockOrphanIndex();
+        ParsleyEngine<String, String> engine = new ParsleyEngine<>(ParsleyClock.empty(), buffer,
+                new MockCandidateIndex(), new MockForwardedIndex(), orphanIndex, ParsleyMetrics.NOOP,
+                CausalAudit.NOOP, System::currentTimeMillis, true);
+
+        engine.deadLetterAtIngest(T1_ID, 0, 5);
+        assertEquals(5L, orphanIndex.orphanFloor(T1_ID, 0), "the floor must be established at 5");
+
+        engine.deadLetterAtIngest(T1_ID, 0, 6);
+        assertEquals(5L, orphanIndex.orphanFloor(T1_ID, 0),
+                "a later dead-letter at a higher offset must not weaken the floor");
+
+        // X (t2@0) depends on t1@5 — must be caught as proven impossible, not buffered forever.
+        ParsleyClock needsT1at5 = ParsleyClock.empty().observe(T1_ID, 0, 5);
+        ParsleyEngine.Outcome<String, String> outcome = engine.onRecord(message(T2, 0, T2_ID, needsT1at5));
+
+        assertTrue(outcome.delivered().isEmpty(), "X must never be delivered on a provably impossible premise");
+        assertEquals(1, outcome.deadLettered().size(), "X must be dead-lettered immediately, on admission");
+        assertEquals(ParsleyEngine.DeadLetter.Reason.ORPHAN_CASCADE, outcome.deadLettered().get(0).reason(),
+                "X depends on an already-orphaned coordinate, not itself poison");
+        assertEquals(0, buffer.size(), "X must never be left buffered");
+    }
+
+    /**
+     * Regression test for BACKLOG.md's orphan-floor-monotonicity finding (the "ignore" direction): once a
+     * coordinate's floor is established, a cascade that later dead-letters an <em>earlier</em> offset of
+     * the same coordinate must durably lower the floor — the earlier offset is the stronger, truer claim
+     * about where the coordinate's contiguous frontier actually freezes.
+     *
+     * <p>T1@10 is dead-lettered at ingest first, establishing floor(T1) = 10 — simulating an earlier,
+     * independent proof reached before V (T1@5) is even known about. V (T1@5) is then buffered depending
+     * on an unrelated, not-yet-observed coordinate (T4@0); when T4@0 is later dead-lettered as a root
+     * cause, the cascade catches V and durably orphans its own coordinate, T1@5 — under the
+     * inverted-monotonicity bug this used to be silently dropped as a no-op ({@code 10 >= 5}), leaving
+     * the floor stuck at 10. A record depending on {@code T1@7} — between the true floor (5) and the
+     * stale one (10) — arriving afterwards must be caught immediately: under the bug it would be buffered
+     * forever, since T1's frontier can never reach 5, let alone 7.
+     *
+     * <p>Asserts the orphan floor lowers to 5 once V is cascaded, and a dependent on {@code T1@7} is
+     * dead-lettered immediately on admission rather than buffered.
+     */
+    @Test
+    void orphaningAnEarlierOffsetOfAnAlreadyOrphanedCoordinateStrengthensItsFloor() {
+        MockBufferStore<String, String> buffer = new MockBufferStore<>();
+        MockOrphanIndex orphanIndex = new MockOrphanIndex();
+        ParsleyEngine<String, String> engine = new ParsleyEngine<>(ParsleyClock.empty(), buffer,
+                new MockCandidateIndex(), new MockForwardedIndex(), orphanIndex, ParsleyMetrics.NOOP,
+                CausalAudit.NOOP, System::currentTimeMillis, true);
+
+        engine.deadLetterAtIngest(T1_ID, 0, 10);
+        assertEquals(10L, orphanIndex.orphanFloor(T1_ID, 0), "the stale floor must be established at 10 first");
+
+        // V (t1@5) depends on the not-yet-observed t4@0 — buffered, its own coordinate independent of
+        // the floor already recorded for T1.
+        ParsleyClock needsT4 = ParsleyClock.empty().observe(T4_ID, 0, 0);
+        engine.onRecord(message(T1, 5, T1_ID, needsT4));
+        assertEquals(1, buffer.size(), "V must be held before T4@0 is ever dead-lettered");
+
+        // T4@0 dead-lettered as a root cause cascades to V, durably orphaning its own coordinate T1@5 —
+        // the stronger, truer floor.
+        engine.deadLetterAtIngest(T4_ID, 0, 0);
+        assertEquals(5L, orphanIndex.orphanFloor(T1_ID, 0),
+                "an earlier, truer floor discovered later must lower the stale one, not be ignored");
+        assertEquals(0, buffer.size(), "V must not be left buffered forever");
+
+        // W (t2@0) depends on t1@7 — between the true floor (5) and the stale one (10) — must be caught
+        // immediately.
+        ParsleyClock needsT1at7 = ParsleyClock.empty().observe(T1_ID, 0, 7);
+        ParsleyEngine.Outcome<String, String> outcome = engine.onRecord(message(T2, 0, T2_ID, needsT1at7));
+
+        assertTrue(outcome.delivered().isEmpty(), "W must never be delivered on a provably impossible premise");
+        assertEquals(1, outcome.deadLettered().size(), "W must be dead-lettered immediately, on admission");
+        assertEquals(ParsleyEngine.DeadLetter.Reason.ORPHAN_CASCADE, outcome.deadLettered().get(0).reason(),
+                "W depends on an already-orphaned coordinate, not itself poison");
+        assertEquals(0, buffer.size(), "W must never be left buffered");
+    }
+
     private static ParsleyMessage<String, String> message(TopicPartition tp, long offset,
                                                            Uuid topicId, ParsleyClock dependencies) {
         return new ParsleyMessage<>(tp.topic(), topicId, tp.partition(), offset, 0L,

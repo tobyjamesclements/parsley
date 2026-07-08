@@ -9,8 +9,10 @@ import org.apache.kafka.common.Uuid;
  * decide whether a buffered or incoming record is itself now unrecoverable (its dependencies require an
  * offset at or above an orphaned coordinate's floor) and must be dead-lettered rather than held forever.
  *
- * <p>Monotonic per coordinate, like {@link ParsleyForwardedIndex}: a coordinate's floor only ever
- * increases — a later dead-letter on the same coordinate can only prove a stronger (higher) floor.
+ * <p>Monotonic per coordinate, unlike {@link ParsleyForwardedIndex}: a coordinate's floor only ever
+ * decreases (or is first established) — the coordinate's contiguous frontier freezes at the
+ * <em>earliest</em> offset ever proven unreachable, regardless of what is proven unreachable
+ * afterward, so a later dead-letter on the same coordinate can only prove a stronger (lower) floor.
  *
  * <p>{@link #prune} is the hook a future topology-epoch-exclusion mechanism uses: once a coordinate's
  * floor has legitimately advanced past an orphan entry (e.g. an epoch transition strips any dependency
@@ -21,12 +23,12 @@ interface ParsleyOrphanIndex {
 
     /**
      * Records that {@code (topicId, partition)} can never legitimately advance past {@code floor - 1}
-     * again. A no-op if this coordinate is already orphaned at a floor {@code >= floor}.
+     * again. A no-op if this coordinate is already orphaned at a floor {@code <= floor}.
      *
      * @param topicId   the orphaned coordinate's topic UUID
      * @param partition the orphaned coordinate's partition
      * @param floor     the offset the coordinate can never advance past (exclusive lower bound of the gap)
-     * @return {@code true} if this call newly established or raised the floor (the caller should cascade)
+     * @return {@code true} if this call newly established or lowered the floor (the caller should cascade)
      */
     boolean markOrphaned(Uuid topicId, int partition, long floor);
 

@@ -31,8 +31,7 @@ final class RocksOrphanIndex implements ParsleyOrphanIndex {
     public boolean markOrphaned(Uuid topicId, int partition, long floor) {
         byte[] key = key(topicId, partition);
         byte[] existing = store.get(key);
-        long existingFloor = existing == null ? -1L : ByteBuffer.wrap(existing).getLong();
-        if (existingFloor >= floor) {
+        if (existing != null && ByteBuffer.wrap(existing).getLong() <= floor) {
             return false;
         }
         store.put(key, ByteBuffer.allocate(8).putLong(floor).array());

@@ -7,6 +7,23 @@ All notable changes to this project are documented in this file. The format is b
 ## [Unreleased]
 
 ### Fixed
+- **`ParsleyOrphanIndex.markOrphaned` kept the highest floor ever recorded for a coordinate, but the
+  lowest dead-lettered offset is the true, permanent floor — a coordinate's contiguous frontier freezes
+  at the earliest offset ever proven unreachable, regardless of what is proven unreachable afterward.**
+  Keeping the maximum resolved cross-offset dead-letters in the wrong direction both ways: a later
+  dead-letter at a higher offset silently weakened an already-established floor (overwriting it upward);
+  a cascade discovering a lower, truer floor for an already-orphaned coordinate was silently dropped as a
+  no-op. Either way, a dependent requiring an offset between the true floor and the wrongly-recorded one
+  could pass `isProvenImpossible`'s check and be buffered instead of dead-lettered — and since the
+  coordinate's frontier is frozen below the true floor forever, that dependent was never released, never
+  proven impossible, and never cascaded: a permanent silent wedge, exactly the failure mode
+  dead-lettering exists to prevent.
+
+  `RocksOrphanIndex` and `MockOrphanIndex` now keep the minimum floor: `markOrphaned` is a no-op only
+  when an existing floor is already at or below the new one, and always establishes on a coordinate's
+  first call regardless of the new floor's value (the `-1` "not orphaned" sentinel is now an explicit
+  absence check, not folded into the numeric comparison). `isProvenImpossible` and `pruneStaleOrphans`
+  were already written correctly for minimum semantics and needed no change.
 - **The handoff grace cache was in-memory only, so a crash inside the handoff window could lose a
   departing topic's grace cycle permanently.** `pollEpochCoordination` gave a topic that just stopped
   being an external source (some member declared it as their sink) exactly one more adoption cycle from

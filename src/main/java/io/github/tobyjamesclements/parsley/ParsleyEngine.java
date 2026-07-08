@@ -702,7 +702,7 @@ final class ParsleyEngine<K, V> {
      * transitivity in reverse: if A can never be delivered, anything depending on A can never be
      * delivered either. Iterative (an explicit worklist, not recursion) so an arbitrarily long buffered
      * dependency chain cannot grow the call stack. A no-op if dead-lettering is disabled, or if the
-     * coordinate is already orphaned at a floor {@code >= floor} (idempotent — a cascade an earlier
+     * coordinate is already orphaned at a floor {@code <= floor} (idempotent — a cascade an earlier
      * crash interrupted is safely resumed by a later {@link #drainSatisfied} pass finding nothing new
      * to do for the coordinates it already reached).
      *

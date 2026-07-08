@@ -20,7 +20,7 @@ final class MockOrphanIndex implements ParsleyOrphanIndex {
     public boolean markOrphaned(Uuid topicId, int partition, long floor) {
         CoordKey key = new CoordKey(topicId, partition);
         Long existing = floors.get(key);
-        if (existing != null && existing >= floor) {
+        if (existing != null && existing <= floor) {
             return false;
         }
         floors.put(key, floor);
