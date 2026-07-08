@@ -710,7 +710,12 @@ final class ParsleyEngine<K, V> {
      * entries (for coordinates besides the one that triggered its removal) — mirrors {@link #propagate}'s
      * existing lazy-pruning philosophy: a stale entry is harmless, cleaned up the next time that other
      * coordinate happens to advance (or orphan) and finds {@link ParsleyBufferStore#get} return
-     * {@code null}.
+     * {@code null}. That "next time" never arrives for an <em>orphaned</em> coordinate's own candidate
+     * entry, though: unlike a normal coordinate, an orphaned one never advances again, so {@link
+     * #propagate}/{@link #drainSatisfied} never revisit it — a stale entry {@code findCandidatesRequiringAtLeast}
+     * turns up here (a candidate already removed by an earlier step this same pass) is therefore pruned
+     * immediately, in the {@code letter == null} branch below, rather than left to a revisit that can't
+     * happen.
      *
      * <p>{@code markOrphaned} is called unconditionally for every task, including one whose coordinate a
      * caller (or an earlier task in this same worklist, via {@link #fetchForDeadLetter}) already marked
@@ -750,7 +755,13 @@ final class ParsleyEngine<K, V> {
                     task.topicId(), task.partition(), task.floor())) {
                 if (!seenRecords.add(candidate.recordId())) continue;
                 DeadLetter<K, V> letter = fetchForDeadLetter(candidate.recordId(), DeadLetter.Reason.ORPHAN_CASCADE);
-                if (letter == null) continue;                             // removed by an earlier step this pass
+                if (letter == null) {
+                    // Removed by an earlier step this pass. Unlike propagate()'s lazy-pruning (see this
+                    // method's Javadoc), an orphaned coordinate never advances again, so nothing else
+                    // will ever revisit and prune this stale entry — do it now.
+                    candidateIndex.prune(candidate);
+                    continue;
+                }
                 recordDeadLetter(deadLetters, letter);
                 // The victim's own offset — not offset + 1 — is the first unreachable point: the
                 // victim itself will never be marked delivered, so a dependent requiring exactly this

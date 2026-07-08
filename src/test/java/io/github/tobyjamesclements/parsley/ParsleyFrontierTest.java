@@ -250,6 +250,11 @@ class ParsleyFrontierTest {
                 persistedOffsetAtUnmarkTime.add(persistedView.snapshot().offsetFor(T1_ID, 0));
                 delegate.unmark(topicId, partition, offset);
             }
+
+            @Override
+            public void pruneAtOrBelow(Uuid topicId, int partition, long watermark) {
+                delegate.pruneAtOrBelow(topicId, partition, watermark);
+            }
         };
 
         ParsleyFrontier frontier = new ParsleyFrontier(store, recordingIndex, new MockOrphanIndex());
@@ -285,6 +290,11 @@ class ParsleyFrontierTest {
             public void unmark(Uuid topicId, int partition, long offset) {
                 if (offset == 0) return; // the changelog write for this one unmark never lands
                 delegate.unmark(topicId, partition, offset);
+            }
+
+            @Override
+            public void pruneAtOrBelow(Uuid topicId, int partition, long watermark) {
+                delegate.pruneAtOrBelow(topicId, partition, watermark);
             }
         };
         ParsleyFrontier frontier = new ParsleyFrontier(ParsleyClock.empty(), crashyIndex, new MockOrphanIndex());
@@ -335,5 +345,60 @@ class ParsleyFrontierTest {
                 "a replayed already-delivered offset must never be marked in the forwarded index — the "
                         + "absorb walk only scans strictly above the watermark, so it could never be "
                         + "found and unmarked again");
+    }
+
+    /**
+     * Regression test for BACKLOG.md's LOW item: a stale below-watermark forwarded-index entry — left
+     * over from the acknowledged benign tear direction {@link #deliver}'s Javadoc describes (frontier
+     * persisted, unmark lost) — is never reachable by the absorb walk again (it only scans strictly
+     * above the watermark), so it would otherwise linger in the changelog-backed store forever. A fresh
+     * {@link ParsleyFrontier} over a restored store must sweep it away once, at load.
+     *
+     * <p>Mirrors {@link #aCrashBetweenPersistAndUnmarkLeavesOnlyAHarmlessStaleEntryNeverAWedge}'s setup
+     * (a forwarded index that swallows one {@code unmark} call) but then reloads a second frontier over
+     * the same durable store, asserting the leaked entry is gone afterwards.
+     *
+     * Asserts the stale entry lingers before restore and is swept away by the restoring constructor.
+     */
+    @Test
+    void restoringADurableFrontierSweepsStaleBelowWatermarkForwardedIndexEntries() {
+        TestKeyValueStore<String, byte[]> store =
+                new TestKeyValueStore<String, byte[]>(Comparator.naturalOrder(), "frontier");
+        MockForwardedIndex delegate = new MockForwardedIndex();
+        ParsleyForwardedIndex crashyIndex = new ParsleyForwardedIndex() {
+            @Override
+            public void mark(Uuid topicId, int partition, long offset) {
+                delegate.mark(topicId, partition, offset);
+            }
+
+            @Override
+            public List<Long> forwardedAfter(Uuid topicId, int partition, long frontierOffset) {
+                return delegate.forwardedAfter(topicId, partition, frontierOffset);
+            }
+
+            @Override
+            public void unmark(Uuid topicId, int partition, long offset) {
+                if (offset == 0) return; // the changelog write for this one unmark never lands
+                delegate.unmark(topicId, partition, offset);
+            }
+
+            @Override
+            public void pruneAtOrBelow(Uuid topicId, int partition, long watermark) {
+                delegate.pruneAtOrBelow(topicId, partition, watermark);
+            }
+        };
+
+        ParsleyFrontier original = new ParsleyFrontier(store, crashyIndex, new MockOrphanIndex());
+        original.deliver(T1_ID, 0, 0); // offset 0 absorbed, but its unmark is lost — leaks below the watermark
+        original.deliver(T1_ID, 0, 1); // watermark advances to 1; the offset-0 entry is now stale
+
+        assertEquals(List.of(0L), delegate.forwardedAfter(T1_ID, 0, -1),
+                "the stale entry must still be sitting in the forwarded index before any restore");
+
+        // Restore: a fresh frontier over the same durable store must sweep the stale entry away.
+        new ParsleyFrontier(store, delegate, new MockOrphanIndex());
+
+        assertTrue(delegate.forwardedAfter(T1_ID, 0, -1).isEmpty(),
+                "restoring the frontier must sweep the stale below-watermark entry left by the crash");
     }
 }

@@ -117,6 +117,14 @@ final class ParsleyFrontier {
      * Durable instance with an explicit epoch floor: loads the frontier clock and channel clocks from
      * key {@code "f"} of {@code store} (empty if absent), and rewrites that single value on every
      * subsequent change.
+     *
+     * <p>On a restored (non-empty) load, also sweeps {@code forwardedIndex} once for every coordinate
+     * the restored frontier carries, deleting any marked offset at or below that coordinate's watermark
+     * — a stale entry that leaked below the contiguous frontier (e.g. via the benign tear direction
+     * {@link #deliver}'s Javadoc describes, now closed off by the {@code exactly_once_v2} requirement,
+     * but still possible in a store carried over from before that requirement existed) can never be
+     * reached by {@link #deliver}'s absorb walk again, so it would otherwise linger in the
+     * changelog-backed store forever. A one-shot pass at load, not on the hot delivery path.
      */
     ParsleyFrontier(KeyValueStore<String, byte[]> store, ParsleyForwardedIndex forwardedIndex,
                     ParsleyOrphanIndex orphanIndex, ParsleyEpoch epoch) {
@@ -129,6 +137,7 @@ final class ParsleyFrontier {
         this.frontier = ParsleyClock.empty();
         if (blob != null) {
             load(blob);
+            frontier.forEach((topicId, partition, offset) -> forwardedIndex.pruneAtOrBelow(topicId, partition, offset));
         }
     }
 

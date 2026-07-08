@@ -7,6 +7,20 @@ All notable changes to this project are documented in this file. The format is b
 ## [Unreleased]
 
 ### Fixed
+- **Two classes of stale index entry were never pruned: below-watermark forwarded-index entries, and
+  candidate-index entries `orphan()` discovers pointing at an already-removed record.** Neither is a
+  correctness bug — both are purely cosmetic, unbounded store growth — but both are permanent once hit,
+  since neither entry's coordinate can ever revisit and clean itself up naturally (a below-watermark
+  offset can never be re-absorbed; an orphaned coordinate never advances again).
+
+  `ParsleyForwardedIndex` gained `pruneAtOrBelow`, called once per restored coordinate when a durable
+  `ParsleyFrontier` loads, sweeping any entry left below that coordinate's watermark (e.g. by the
+  benign tear direction `deliver`'s Javadoc describes — now closed off by the `exactly_once_v2`
+  requirement, but still possible in a store carried over from before that requirement existed).
+  `ParsleyEngine.orphan`'s `letter == null` branch (a stale candidate whose record another step already
+  removed this pass) now calls `candidateIndex.prune` before continuing, instead of leaving the entry
+  indexed forever — mirroring `propagate()`'s existing stale-entry pruning, which an orphaned coordinate
+  can never trigger on its own since it never advances again.
 - **`orphan()`'s scan gating was floor-blind: a coordinate discovered twice in one cascade, via two
   different parent branches, at two different floors, skipped the second scan entirely.** The set
   tracking "coordinates already scanned this pass" keyed on `(topicId, partition)` alone, so once a

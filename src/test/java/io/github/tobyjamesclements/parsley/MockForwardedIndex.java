@@ -40,4 +40,14 @@ final class MockForwardedIndex implements ParsleyForwardedIndex {
         offsets.remove(offset);
         if (offsets.isEmpty()) index.remove(key);
     }
+
+    @Override
+    public void pruneAtOrBelow(Uuid topicId, int partition, long watermark) {
+        if (watermark < 0) return;
+        CoordKey key = new CoordKey(topicId, partition);
+        NavigableSet<Long> offsets = index.get(key);
+        if (offsets == null) return;
+        offsets.headSet(watermark, true).clear();
+        if (offsets.isEmpty()) index.remove(key);
+    }
 }

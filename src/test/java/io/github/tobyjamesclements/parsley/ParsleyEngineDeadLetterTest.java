@@ -678,6 +678,48 @@ class ParsleyEngineDeadLetterTest {
         candidateIndex.index(seq, message.dependencies(), ParsleyClock.empty());
     }
 
+    /**
+     * Regression test for BACKLOG.md's LOW item: {@code orphan()}'s {@code letter == null} branch — a
+     * stale candidate-index entry whose record was already removed from the buffer by some other path,
+     * discovered while scanning an orphaned coordinate — must prune that entry, not merely skip it.
+     * Unlike {@link #propagate}'s equivalent stale handling (a normal coordinate can advance again later
+     * and naturally revisit the entry), an <em>orphaned</em> coordinate never advances again, so nothing
+     * else will ever revisit and prune it if {@code orphan()} itself does not — it would otherwise live
+     * in the changelog-backed candidate index forever.
+     *
+     * <p>V is indexed under X (unsatisfied at index time), then removed from the buffer directly —
+     * standing in for "delivered or dead-lettered via some other path that never called {@code
+     * candidateIndex.prune} for V's X entry" (e.g. a cross-channel completeness advance that bypasses
+     * the candidate-index fast path). Orphaning X then discovers V's now-stale entry.
+     *
+     * Asserts orphaning X leaves nothing dead-lettered (V is already gone) and removes the stale entry
+     * from the candidate index rather than leaving it indexed forever.
+     */
+    @Test
+    void orphanPrunesAStaleCandidateIndexEntryItDiscovers() {
+        MockBufferStore<String, String> buffer = new MockBufferStore<>();
+        MockCandidateIndex candidateIndex = new MockCandidateIndex();
+        ParsleyEngine<String, String> engine = new ParsleyEngine<>(ParsleyClock.empty(), buffer,
+                candidateIndex, new MockForwardedIndex(), new MockOrphanIndex(), ParsleyMetrics.NOOP,
+                CausalAudit.NOOP, System::currentTimeMillis, true);
+
+        TopicPartition v = new TopicPartition("v", 0);
+        Uuid vId = Uuid.randomUuid();
+        Uuid xId = Uuid.randomUuid();
+        ParsleyMessage<String, String> vRecord = message(v, 0, vId, ParsleyClock.empty().observe(xId, 0, 0));
+        long seq = buffer.add(vRecord, 0L);
+        candidateIndex.index(seq, vRecord.dependencies(), ParsleyClock.empty());
+        buffer.remove(seq); // stale: still indexed under X, but already gone from the buffer
+
+        ParsleyEngine.Outcome<String, String> outcome = engine.deadLetterAtIngest(xId, 0, 0);
+
+        assertTrue(outcome.deadLettered().isEmpty(),
+                "the stale entry is skipped, not re-dead-lettered — V is already gone from the buffer");
+        assertTrue(candidateIndex.findCandidatesRequiringAtLeast(xId, 0, 0).isEmpty(),
+                "the stale entry discovered while scanning the orphaned coordinate X must be pruned, "
+                        + "not left indexed forever");
+    }
+
     private static ParsleyMessage<String, String> message(TopicPartition tp, long offset,
                                                            Uuid topicId, ParsleyClock dependencies) {
         return new ParsleyMessage<>(tp.topic(), topicId, tp.partition(), offset, 0L,

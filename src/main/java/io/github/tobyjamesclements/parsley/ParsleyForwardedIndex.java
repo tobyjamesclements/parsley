@@ -49,4 +49,18 @@ interface ParsleyForwardedIndex {
      * @param offset    the offset to unmark
      */
     void unmark(Uuid topicId, int partition, long offset);
+
+    /**
+     * Deletes every marked offset for {@code (topicId, partition)} at or below {@code watermark} — a
+     * one-shot sweep for entries that leaked below the contiguous frontier and can never be reached by
+     * {@link #forwardedAfter}'s absorb walk again (it only ever scans strictly above the watermark), so
+     * they would otherwise linger in a changelog-backed store forever. Purely cosmetic: {@link
+     * ParsleyFrontier} calls this once per restored coordinate at load, not on the hot delivery path.
+     *
+     * @param topicId   the coordinate's topic UUID
+     * @param partition the coordinate's partition
+     * @param watermark the coordinate's restored contiguous frontier offset; a negative value (never
+     *                  observed) is a no-op
+     */
+    void pruneAtOrBelow(Uuid topicId, int partition, long watermark);
 }

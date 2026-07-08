@@ -58,6 +58,25 @@ final class RocksForwardedIndex implements ParsleyForwardedIndex {
         store.delete(key(topicId, partition, offset));
     }
 
+    @Override
+    public void pruneAtOrBelow(Uuid topicId, int partition, long watermark) {
+        if (watermark < 0) {
+            return;
+        }
+        byte[] from = key(topicId, partition, 0L);
+        byte[] to = key(topicId, partition, watermark + 1);
+        List<byte[]> stale = new ArrayList<>();
+        try (KeyValueIterator<byte[], byte[]> iter = store.range(from, to)) {
+            while (iter.hasNext()) {
+                stale.add(iter.next().key);
+            }
+        }
+        // Deleted after the iterator closes, not during the range scan.
+        for (byte[] key : stale) {
+            store.delete(key);
+        }
+    }
+
     static byte[] key(Uuid topicId, int partition, long offset) {
         return ByteBuffer.allocate(KEY_SIZE)
                 .putLong(topicId.getMostSignificantBits())
