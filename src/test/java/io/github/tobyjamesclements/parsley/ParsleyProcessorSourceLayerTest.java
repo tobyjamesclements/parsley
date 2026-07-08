@@ -234,6 +234,76 @@ class ParsleyProcessorSourceLayerTest {
         assertEquals(1L, decodeBoundary(boundaries.get(0)).epochId(), "the injected boundary is epoch 1");
     }
 
+    /**
+     * Regression test for BACKLOG.md's handoff-grace-cache-durability finding: the per-task in-memory
+     * cache this fix replaced reset on restart, so a crash inside the handoff window — between a topic
+     * leaving the live registry and this task's next adoption cycle — lost the departing topic's grace
+     * cycle entirely; the post-restart poll would see empty adoption targets and silently advance past
+     * the handoff epoch with no relay ever sent, permanently.
+     *
+     * <p>Same setup as {@link #outgoingSelfAdopterStillInjectsTheHandoffEpochsBoundaryAfterATopicLeavesTheLiveRegistry},
+     * except B is never polled again after epoch 2 commits — instead, a brand-new {@link Fixture} (and a
+     * brand-new {@link ParsleyEpochRuntime}, sharing only the durable {@code log}, no in-memory state at
+     * all) is constructed, simulating a crash-and-restart landing exactly inside the handoff window. The
+     * grace set is now derived purely from {@link ParsleyEpochLog#externalSourceTopicsAsOfPreviousCommit()},
+     * so the restarted instance computes the identical answer from the log alone.
+     *
+     * <p>Asserts the restarted instance still injects epoch 2's boundary onto t1 on its very first poll,
+     * despite having no memory of ever having adopted epoch 1 itself.
+     */
+    @Test
+    void restartInsideTheHandoffWindowStillInjectsTheAdmittingEpochsBoundary() {
+        InMemoryEpochTransport.SharedLog log = new InMemoryEpochTransport.SharedLog();
+        ParsleyEpochRuntime runtime = new ParsleyEpochRuntime(new InMemoryEpochTransport(log));
+        InMemoryEpochTransport seeder = new InMemoryEpochTransport(log);
+        runtime.runOnce();
+
+        Fixture b = new Fixture(runtime);   // B's init() joins declaring t1 as input, no sink
+        runtime.runOnce();
+        String bMemberId = log.events().stream()
+                .filter(ParsleyEpochEvent.JoinRequested.class::isInstance)
+                .map(e -> ((ParsleyEpochEvent.JoinRequested) e).memberId())
+                .findFirst().orElseThrow();
+
+        // Epoch 1: B is the only running member; t1 is external throughout.
+        seeder.append(new ParsleyEpochEvent.SnapshotRequested(bMemberId));
+        runtime.runOnce();
+        b.processRecord("k0", 0L);
+        runtime.runOnce();
+        seeder.append(new ParsleyEpochEvent.EpochCommitted(1, ParsleyClock.empty()));
+        runtime.runOnce();
+        b.processRecord("k1", 1L);   // B adopts epoch 1 -> injects boundary onto t1
+        runtime.runOnce();
+
+        // P joins declaring t1 as its sink — the instant this folds, t1 leaves the live registry.
+        seeder.append(new ParsleyEpochEvent.JoinRequested("P", Set.of(), Set.of("t1")));
+        runtime.runOnce();
+        seeder.append(new ParsleyEpochEvent.SnapshotRequested("P"));
+        runtime.runOnce();
+        b.processRecord("k2", 2L);   // B publishes for the round that will admit P
+        runtime.runOnce();
+        seeder.append(new ParsleyEpochEvent.EpochCommitted(2, ParsleyClock.empty().observe(T1_ID, 0, 2)));
+        runtime.runOnce();          // P promoted to running; epoch 2 settled — B never polls again
+
+        // B "crashes" here, before ever reacting to epoch 2's commit, and restarts: a brand-new runtime
+        // and processor instance, sharing only the durable log — no lastAdoptedEpoch, no residual state.
+        ParsleyEpochRuntime restartedRuntime = new ParsleyEpochRuntime(new InMemoryEpochTransport(log));
+        restartedRuntime.runOnce();
+        Fixture restarted = new Fixture(restartedRuntime);
+        restartedRuntime.runOnce();
+
+        restarted.processRecord("k3", 3L);   // the restarted instance's very first poll
+        restartedRuntime.runOnce();
+
+        List<? extends MockProcessorContext.CapturedForward<? extends String, ? extends String>> boundaries =
+                restarted.forwardedWith(ParsleyHeader.EPOCH_BOUNDARY);
+        assertEquals(1, boundaries.size(),
+                "the restarted instance must inject epoch 2's boundary onto t1 despite never having "
+                        + "adopted epoch 1 itself — the grace set comes from the log, not from memory "
+                        + "that just crashed");
+        assertEquals(2L, decodeBoundary(boundaries.get(0)).epochId(), "the injected boundary is epoch 2");
+    }
+
     private static ParsleyEpochBoundary decodeBoundary(
             MockProcessorContext.CapturedForward<? extends String, ? extends String> forward) {
         for (Header h : forward.record().headers()) {

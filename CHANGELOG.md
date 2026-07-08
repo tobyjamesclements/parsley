@@ -7,6 +7,21 @@ All notable changes to this project are documented in this file. The format is b
 ## [Unreleased]
 
 ### Fixed
+- **The handoff grace cache was in-memory only, so a crash inside the handoff window could lose a
+  departing topic's grace cycle permanently.** `pollEpochCoordination` gave a topic that just stopped
+  being an external source (some member declared it as their sink) exactly one more adoption cycle from
+  its outgoing self-adopter, tracked via a per-task in-memory field (`lastAdoptedExternalSourceTopicIds`)
+  that reset on restart. A crash between the topic leaving the live registry and this task's next
+  adoption cycle lost that memory: the post-restart poll saw empty adoption targets and silently advanced
+  past the handoff epoch with no relay ever sent for it — a permanent per-epoch floor-advance gap for
+  that one coordinate.
+
+  `ParsleyEpochLog` now retains a two-slot shift register of `externalSourceTopics()` snapshots, updated
+  on every `EpochCommitted` — `externalSourceTopicsAsOfPreviousCommit()` is always "the registry as of
+  one commit ago," derived purely from replaying the log, which every node (including one that just
+  restarted, with no other memory) reconstructs identically. `pollEpochCoordination`'s adoption targets
+  are now `live ∪ externalSourceTopicsAsOfPreviousCommit()` instead of `live ∪ lastAdopted`, so the grace
+  window survives a crash — the per-task in-memory field is gone.
 - **Epoch marker relay depended on a business key that might not exist yet, silently stalling every
   downstream lane for a genuinely idle source-layer task.** `forwardEpochSnapshot`/`forwardEpochBoundary`
   routed by reusing `lastSeenKey` — the most recent business record's key — through whatever partitioner

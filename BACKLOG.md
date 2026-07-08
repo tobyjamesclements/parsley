@@ -7,34 +7,6 @@ Fable 5, plus findings from the follow-up verification review of the four fix co
 `e0109eb..5dc1d04`. Ranked most-severe first. GitHub Issues are disabled on this repo, so these are
 tracked here instead.
 
-## [LOW] The handoff grace cache is in-memory only, losing a departing topic's grace cycle across a crash
-
-**Where:** `pollEpochCoordination`'s `lastAdoptedExternalSourceTopicIds`/`lastAdoptedEpoch` fields
-
-**Narrowed twice now.** The originally-reported registry-timing repro was fixed by the grace-cache/
-pre-seed-removal work (regression test:
-`ParsleyProcessorSourceLayerTest#outgoingSelfAdopterStillInjectsTheHandoffEpochsBoundaryAfterATopicLeavesTheLiveRegistry`).
-The broader finding that marker relay was *key-routed* at all — so a source-layer task with no business
-key yet (notably right after a restart) silently skipped its relay and stalled every downstream lane
-until its first post-restart business record — is now fixed too: `ParsleyMarkerPartitioner`/
-`ParsleyMarkerPartition` route every marker relay to the forwarding task's own owned partition directly,
-never depending on a key at all, so `injectSnapshot`/`adoptAndInjectBoundary` relay unconditionally now
-(regression tests: `ParsleyProcessorSourceLayerTest#sourceLayerTaskInjectsTheSnapshotMarkerEvenWithNoBusinessKeyYet`/
-`#outgoingSelfAdopterInjectsTheBoundaryEvenWithNoBusinessKeyYet`).
-
-**What's still open.** `lastAdoptedEpoch`/`lastAdoptedExternalSourceTopicIds` reset on restart, so a
-crash inside the handoff window (between a topic leaving the live external-source registry and this
-task's next adoption cycle) loses the departing topic's grace cycle; if the departed topic was the
-task's only external input, the post-restart poll sees empty adoption targets and silently advances
-`lastAdoptedEpoch` with no relay ever sent for the handoff epoch. Redundantly covered by the new
-producer's own admitting-epoch relay (the pre-seed-removal fix) for the common case, but that
-redundancy is itself untested.
-
-**Impact:** conservative-safe (never causally unsafe); a permanent per-epoch floor-advance gap for one
-specific coordinate, only when a crash lands inside a narrow handoff window.
-
-**Coverage:** not covered by any existing test.
-
 ## [LOW] In-process write ordering cannot fully guarantee tear direction across separate changelog topics
 
 **Where:** the ordering fixes in `ParsleyEngine#propagate`/`drainSatisfied` (frontier before buffer

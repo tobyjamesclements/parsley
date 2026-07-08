@@ -102,13 +102,6 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
     private @Nullable KIn lastSeenKey;
     private long lastSnapshotRoundEpoch;
     private long lastAdoptedEpoch;
-    // The DAG-wide external-source topic IDs this task injected the boundary onto at its last adopted
-    // epoch. Deliberately kept alongside (not replaced by) the live registry each poll: a topic that
-    // stops being external mid-round (a new member just declared it as a sink) still needs this one
-    // transition epoch's boundary self-adopted by its outgoing self-adopter, since the newly-declared
-    // producer cannot possibly have relayed an in-band marker for the very epoch that admitted it. See
-    // pollEpochCoordination().
-    private Set<Uuid> lastAdoptedExternalSourceTopicIds = Set.of();
     // The snapshot round this task has already published its completeness for (log-driven, so every member
     // publishes — not just source-layer). Reset in memory on restart, so a task that crashes mid-round
     // re-publishes off the folded log alone; that keeps a blocked round from deadlocking when a member's
@@ -718,9 +711,13 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
      * self-adopter (this task, if it was the one consuming that topic) would stop adopting for it in the
      * same poll the topic leaves the live registry, and nobody would ever inject that one epoch's boundary
      * onto it — a permanent gap for any downstream task that only learns of that coordinate's floor
-     * through this one's relay. So boundary adoption targets {@code live ∪ lastAdopted} (the registry as
-     * of this task's previous adoption), giving a departing topic exactly one more adoption cycle from its
-     * outgoing self-adopter before {@link #lastAdoptedExternalSourceTopicIds} catches up to the live set.
+     * through this one's relay. So boundary adoption targets {@code live ∪ }{@link
+     * ParsleyEpochRuntime#externalSourceTopicsAsOfPreviousCommit()} — the registry as of the commit
+     * <em>before</em> the one just adopted, which still includes a topic whose declaring producer's join
+     * folded during the very round that admitted it, giving that topic exactly one more adoption cycle
+     * from its outgoing self-adopter. Purely log-derived (see that method's Javadoc), unlike the per-task
+     * in-memory cache this replaced: a task that crashes inside the handoff window computes the identical
+     * answer on restart, from the log alone, with no local memory to lose.
      *
      * <p>{@link #adoptAndInjectBoundary}/{@link #injectSnapshot} relay unconditionally, whether or not
      * this task has seen a business record yet ({@link #lastSeenKey} may be {@code null}): {@link
@@ -755,16 +752,15 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
         // registry: the external source topics (inputs no member produces) that this task actually consumes.
         // Derived, not configured, and re-read each poll because the registry changes as members join —
         // including, mid-round, dropping a topic a new member just declared as a sink (see above).
-        Set<Uuid> liveExternalSourceTopicIds = resolveExternalSourceTopicIds(runtime);
+        Set<Uuid> liveExternalSourceTopicIds = resolveExternalSourceTopicIds(runtime.externalSourceTopics());
         long committed = runtime.committedEpochId();
         if (committed > lastAdoptedEpoch) {
             Set<Uuid> adoptionTargets = new HashSet<>(liveExternalSourceTopicIds);
-            adoptionTargets.addAll(lastAdoptedExternalSourceTopicIds);
+            adoptionTargets.addAll(resolveExternalSourceTopicIds(runtime.externalSourceTopicsAsOfPreviousCommit()));
             if (!adoptionTargets.isEmpty()) {
                 adoptAndInjectBoundary(new ParsleyEpochBoundary(committed, runtime.committedLowerBounds()), adoptionTargets);
             }
             lastAdoptedEpoch = committed;
-            lastAdoptedExternalSourceTopicIds = liveExternalSourceTopicIds;
         }
         if (liveExternalSourceTopicIds.isEmpty()) {
             return;
@@ -779,12 +775,14 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
     }
 
     /**
-     * The external source coordinates this task owns: the topology's log-derived external source topics
-     * (inputs no member produces) intersected with this task's consumed topics, resolved to their broker
-     * UUIDs. Non-empty iff this task is source-layer for the current registry.
+     * Resolves {@code topicNames} — a log-derived external-source-topic name set, either {@link
+     * ParsleyEpochRuntime#externalSourceTopics()} (the live registry) or {@link
+     * ParsleyEpochRuntime#externalSourceTopicsAsOfPreviousCommit()} (the handoff grace set) — to the
+     * broker UUIDs of the ones this task actually consumes. Non-empty for the live registry iff this task
+     * is source-layer for the current registry.
      */
-    private Set<Uuid> resolveExternalSourceTopicIds(ParsleyEpochRuntime runtime) {
-        return runtime.externalSourceTopics().stream()
+    private Set<Uuid> resolveExternalSourceTopicIds(Set<String> topicNames) {
+        return topicNames.stream()
                 .map(topicUuids::get)
                 .filter(id -> id != null)
                 .collect(java.util.stream.Collectors.toUnmodifiableSet());

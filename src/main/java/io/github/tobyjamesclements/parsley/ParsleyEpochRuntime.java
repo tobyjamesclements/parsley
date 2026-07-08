@@ -82,6 +82,10 @@ final class ParsleyEpochRuntime implements AutoCloseable {
     private volatile Set<String> unpublishedMembersMirror = Set.of();
     // Mirror of the fold's DAG-wide external source topics, refreshed each runOnce for cross-thread readers.
     private volatile Set<String> externalSourceTopicsMirror = Set.of();
+    // Mirror of the fold's externalSourceTopicsAsOfPreviousCommit(), refreshed each runOnce. See
+    // ParsleyEpochLog#externalSourceTopicsAsOfPreviousCommit for what this is and why it replaced a
+    // per-task in-memory cache.
+    private volatile Set<String> externalSourceTopicsAsOfPreviousCommitMirror = Set.of();
 
     private volatile boolean running;
     private @Nullable Thread thread;
@@ -194,6 +198,11 @@ final class ParsleyEpochRuntime implements AutoCloseable {
         return externalSourceTopicsMirror;
     }
 
+    /** See {@link ParsleyEpochLog#externalSourceTopicsAsOfPreviousCommit()}. */
+    Set<String> externalSourceTopicsAsOfPreviousCommit() {
+        return externalSourceTopicsAsOfPreviousCommitMirror;
+    }
+
     /**
      * Whether {@code memberId} owes a publication for the currently-open round — a running member that has
      * not yet published its frontier. A task polls this and (re)publishes its completeness when true, so a
@@ -270,6 +279,7 @@ final class ParsleyEpochRuntime implements AutoCloseable {
         runningMembersMirror = fold.runningMembers();
         unpublishedMembersMirror = fold.unpublishedRunningMembers();
         externalSourceTopicsMirror = fold.externalSourceTopics();
+        externalSourceTopicsAsOfPreviousCommitMirror = fold.externalSourceTopicsAsOfPreviousCommit();
         bootstrapped = transport.caughtUp();
         driveCommit();
         applyMembershipStrategy();

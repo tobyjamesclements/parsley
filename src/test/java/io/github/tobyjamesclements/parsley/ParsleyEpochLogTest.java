@@ -246,6 +246,46 @@ class ParsleyEpochLogTest {
                 "with m1 gone, nobody produces mid, so m2's input mid is now an external source");
     }
 
+    /**
+     * {@link ParsleyEpochLog#externalSourceTopicsAsOfPreviousCommit()} is a two-slot shift register:
+     * empty before two commits have happened, then always "the registry as of one commit ago" — the exact
+     * set a departing topic's outgoing self-adopter needs to give it one more adoption cycle, since a
+     * declaring producer's {@code JoinRequested} always folds (excluding the topic from the live registry)
+     * before the commit that promotes it to running.
+     *
+     * <p>Mirrors {@code ParsleyProcessorSourceLayerTest}'s handoff scenario at the log level: B declares t1
+     * as input (epoch 1, t1 external); P then joins declaring t1 as its sink, and epoch 2 commits,
+     * admitting P — t1 has already left the live registry by commit 2, but the previous-commit snapshot
+     * (frozen at commit 1, before P's join) still has it. A further commit with no new declarations lets
+     * the grace window close.
+     */
+    @Test
+    void externalSourceTopicsAsOfPreviousCommitGivesADepartingTopicExactlyOneMoreCycle() {
+        ParsleyEpochLog log = new ParsleyEpochLog();
+        log.apply(new ParsleyEpochEvent.JoinRequested("B", Set.of("t1"), Set.of()));
+        log.apply(new ParsleyEpochEvent.SnapshotRequested("B"));
+        log.apply(log.proposeCommit());   // epoch 1: only B declared, t1 external
+        assertEquals(Set.of(), log.externalSourceTopicsAsOfPreviousCommit(),
+                "before a second commit, there is no 'previous' snapshot yet");
+
+        log.apply(new ParsleyEpochEvent.JoinRequested("P", Set.of(), Set.of("t1")));   // folds immediately
+        assertEquals(Set.of(), log.externalSourceTopics(), "t1 leaves the LIVE registry the instant P joins");
+
+        log.apply(new ParsleyEpochEvent.SnapshotRequested("P"));
+        log.apply(new ParsleyEpochEvent.FrontierPublished("B", ParsleyClock.empty()));   // B is running; P is not yet
+        log.apply(log.proposeCommit());   // epoch 2: admits P
+        assertEquals(Set.of("t1"), log.externalSourceTopicsAsOfPreviousCommit(),
+                "the previous-commit snapshot (frozen at epoch 1, before P's join) must still have t1 — "
+                        + "this is what gives t1 its one handoff cycle at epoch 2");
+
+        log.apply(new ParsleyEpochEvent.SnapshotRequested("B"));
+        log.apply(new ParsleyEpochEvent.FrontierPublished("B", ParsleyClock.empty()));
+        log.apply(new ParsleyEpochEvent.FrontierPublished("P", ParsleyClock.empty()));   // both now running
+        log.apply(log.proposeCommit());   // epoch 3: no new declarations
+        assertEquals(Set.of(), log.externalSourceTopicsAsOfPreviousCommit(),
+                "the grace window has closed — epoch 2's own snapshot (already excluding t1) is now 'previous'");
+    }
+
     // --- helpers --------------------------------------------------------------------------------
 
     /** A log where {@code member} has joined and been committed into epoch 1 (so it is running). */

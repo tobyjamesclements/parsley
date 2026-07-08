@@ -44,6 +44,14 @@ final class ParsleyEpochLog {
     // Each declared member's input/sink topics — the DAG-wide source-topic registry. Keyed by memberId,
     // populated on JoinRequested (pending or running), removed on Leave; persists across commits.
     private final Map<String, MemberTopology> declarations = new HashMap<>();
+    // A two-slot shift register of externalSourceTopics() snapshots, taken at each commit: "current" is
+    // the registry as of the most recent commit, "previous" as of the one before that. Gives every node —
+    // including one that only just started and has no other memory — a purely log-derived answer to "what
+    // was external one commit ago", the exact set a departing topic's outgoing self-adopter needs to give
+    // it one more adoption cycle (see ParsleyProcessor#pollEpochCoordination's handoff grace period). Not
+    // task-local, unlike the field this replaced: every node computes the same value from the same log.
+    private Set<String> previousCommitExternalSourceTopics = Set.of();
+    private Set<String> currentCommitExternalSourceTopics = Set.of();
 
     /** A member's declared input channels (topics it consumes) and sink topics (topics it produces). */
     record MemberTopology(Set<String> inputTopics, Set<String> sinkTopics) {}
@@ -90,6 +98,12 @@ final class ParsleyEpochLog {
                 if (e.epochId() <= committedEpochId) {
                     break;
                 }
+                // Shift the registry snapshot register before adopting the commit: "current" (as of the
+                // commit that just settled) becomes "previous", and a fresh snapshot is taken now — after
+                // every declaration up to and including this log position has already folded, exactly
+                // mirroring what a running node's own live view would have shown right up to this commit.
+                previousCommitExternalSourceTopics = currentCommitExternalSourceTopics;
+                currentCommitExternalSourceTopics = externalSourceTopics();
                 // Adopt the commit: advance the settled epoch, promote joiners, close the round.
                 committedEpochId = e.epochId();
                 runningMembers.addAll(pendingJoiners);
@@ -141,6 +155,20 @@ final class ParsleyEpochLog {
             external.removeAll(declaration.sinkTopics());
         }
         return external;
+    }
+
+    /**
+     * {@link #externalSourceTopics()} as it stood immediately after the commit <em>before</em> the most
+     * recent one — {@code Set.of()} before two commits have happened. A departing topic's outgoing
+     * self-adopter unions this with the current live registry to give that topic exactly one more
+     * adoption cycle after its declaring producer's join folds it out of the live view: since a member's
+     * {@link ParsleyEpochEvent.JoinRequested} always folds before the commit that admits it, the previous
+     * commit's snapshot still includes a topic that departs as part of the very round that commit closes.
+     * Purely derived from this log's own fold, so — unlike a per-task in-memory cache — every node
+     * (including one that just started, with no other memory) computes the identical answer.
+     */
+    Set<String> externalSourceTopicsAsOfPreviousCommit() {
+        return previousCommitExternalSourceTopics;
     }
 
     /** Whether {@code memberId} is currently a running member — the join block waits until this is true. */
