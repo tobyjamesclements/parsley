@@ -13,9 +13,6 @@ tracked here instead.
   at-or-below-watermark marks, but entries already leaked below the watermark (e.g. by the
   acknowledged benign tear direction in `deliver`: frontier persisted, unmark lost) linger forever —
   the absorb walk only scans strictly above the watermark. A cheap sweep (delete entries ≤ watermark
-  on restore or on epoch promotion) would clean both classes. Purely cosmetic store growth.
-- **`injectSnapshot` republishes to the coordination log on every poll tick while `lastSeenKey` is
-  null and a round is open** (the retry guard intentionally doesn't advance `lastSnapshotRoundEpoch`,
-  but `snapshotPublisher.publish` runs unconditionally inside `injectSnapshot`). Bounded by the round's
-  duration and idempotent to fold, but appends one log event per 200ms tick per key-less source-layer
-  task for the life of the round.
+  on restore or on epoch promotion) would clean both classes. Purely cosmetic store growth. Also now
+  largely moot: `exactly_once_v2` (required as of the write-ordering fix) means the acknowledged benign
+  tear direction that caused this leak can no longer happen at all.
