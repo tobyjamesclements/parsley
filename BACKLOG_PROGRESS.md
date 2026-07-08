@@ -53,8 +53,8 @@ by `pruneToScope` for the identical "this node's own channel coordinates" concep
 - [x] 1. HIGH — tryAdvanceEpoch scope fix. Commit: c1f7cb2
 - [x] 2. MEDIUM — orphan() lowestScannedFloor fix. Commit: e85f80f
 - [x] 3. LOW pair — stale forwarded-index sweep + candidate-index prune on orphan null branch. Commit: 254ebbb
-- [ ] 4. LOW — torn committedEpochId/committedLowerBounds read. Commit: (pending, about to commit)
-- [ ] 5. LOW — epoch floor monotonicity clamp. Commit: (pending)
+- [x] 4. LOW — torn committedEpochId/committedLowerBounds read. Commit: 582dca0
+- [ ] 5. LOW — epoch floor monotonicity clamp. Commit: (pending, about to commit)
 - [ ] 6. LOW — marker routing / partition-parity strictness under coordination. Commit: (pending)
 - [ ] Final: BACKLOG.md cleared, progress file retired. Commit: (pending)
 

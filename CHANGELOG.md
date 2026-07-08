@@ -7,6 +7,19 @@ All notable changes to this project are documented in this file. The format is b
 ## [Unreleased]
 
 ### Fixed
+- **Epoch floors were not actually monotonic across epochs, contrary to `ParsleyEpochState.onBoundary`'s
+  documented assumption.** `proposeCommit`'s raw `mergeMin` of published frontiers can drag a shared
+  coordinate's floor backwards: a member admitted mid-round that consumes from `earliest` publishes
+  completeness far behind the already-committed floor, so the next commit's `mergeMin` on that
+  coordinate reflects the newcomer's lag, not genuine progress. Every consumer of the floor tolerates a
+  regression except `ParsleyFrontier#pruneStaleOrphans` — an orphan entry pruned under a floor that
+  later regresses below it holds that coordinate's dependents forever again.
+
+  `ParsleyEpochLog` now tracks the last committed `lowerBounds` and `proposeCommit` clamps the proposed
+  floor to it via `ParsleyClock#merge` (the per-coordinate maximum) before returning the commit — a
+  floor can only ever hold or advance, never regress, regardless of what a newly-promoted member's
+  frontier reports. Every node computes the identical clamp (a pure function of the same ordered log),
+  so the leaderless collect-then-commit protocol's "every node agrees" property is unaffected.
 - **`ParsleyEpochRuntime`'s committed epoch id and lower bounds were two independent volatile fields, so
   a caller reading both back-to-back could observe a torn pairing.** `pollEpochCoordination` reads the id
   and then the bounds as two separate volatile reads while `runOnce` writes id-then-bounds; a commit

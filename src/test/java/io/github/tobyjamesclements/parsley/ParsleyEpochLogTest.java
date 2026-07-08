@@ -96,6 +96,52 @@ class ParsleyEpochLogTest {
                 "T2 is bounded at 4 — only A observed it, so it is kept at A's value");
     }
 
+    /**
+     * Regression test for BACKLOG.md's LOW item: the committed floor is not actually monotonic across
+     * epochs from the raw {@code mergeMin} alone. A member admitted mid-round that consumes from {@code
+     * earliest} publishes completeness far behind the already-committed floor, and {@code mergeMin}
+     * would drag a shared coordinate's floor <em>backwards</em> on promotion — every consumer of the
+     * floor tolerates that except {@code ParsleyFrontier#pruneStaleOrphans}, where a regression below an
+     * already-pruned orphan entry would hold that coordinate's dependents forever again.
+     *
+     * <p>Epoch 2 commits {@code T1@5, T2@3} (A alone). B then joins and is promoted to running by that
+     * same commit. Epoch 3's round has both publish: A has advanced on both coordinates ({@code
+     * T1@10, T2@8}), but B — freshly admitted, reading from {@code earliest} — is far behind on T1
+     * ({@code T1@2}) though ahead on T2 ({@code T2@9}). The raw {@code mergeMin} would report {@code
+     * T1@2} (a regression from 5) and {@code T2@8} (genuine progress from 3, no clamp needed).
+     *
+     * Asserts epoch 3's floor keeps T1 clamped at the previous commit's value (5, not the regressed 2)
+     * while T2 advances normally to 8 — the clamp only ever raises a floor back to where it already was,
+     * never further, and never touches a coordinate that did not regress.
+     */
+    @Test
+    void proposeCommitClampsTheFloorToNeverRegressBelowThePreviousCommit() {
+        ParsleyEpochLog log = bootstrappedWithRunningMember("A");   // epoch 1, A running, floor empty
+        log.apply(new ParsleyEpochEvent.JoinRequested("B", Set.of(), Set.of()));   // B pending
+
+        log.apply(new ParsleyEpochEvent.SnapshotRequested("A"));
+        log.apply(new ParsleyEpochEvent.FrontierPublished("A",
+                ParsleyClock.empty().observe(T1_ID, 0, 5).observe(T2_ID, 0, 3)));
+        log.apply(log.proposeCommit());   // epoch 2: floor {T1:5, T2:3}; B promoted to running
+        assertEquals(2L, log.committedEpochId(), "epoch 2 is committed, promoting B to running");
+
+        log.apply(new ParsleyEpochEvent.SnapshotRequested("A"));
+        log.apply(new ParsleyEpochEvent.FrontierPublished("A",
+                ParsleyClock.empty().observe(T1_ID, 0, 10).observe(T2_ID, 0, 8)));
+        // B, freshly running and reading from earliest, is far behind on T1 but ahead on T2.
+        log.apply(new ParsleyEpochEvent.FrontierPublished("B",
+                ParsleyClock.empty().observe(T1_ID, 0, 2).observe(T2_ID, 0, 9)));
+
+        ParsleyEpochEvent.EpochCommitted commit = log.proposeCommit();
+        assertEquals(3L, commit.epochId(), "the epoch id is still strictly increasing");
+        assertEquals(5L, commit.lowerBounds().offsetFor(T1_ID, 0),
+                "T1's raw mergeMin(10, 2) = 2 would regress below epoch 2's floor of 5 — the clamp must "
+                        + "hold it at 5, never letting the floor move backwards");
+        assertEquals(8L, commit.lowerBounds().offsetFor(T2_ID, 0),
+                "T2's mergeMin(8, 9) = 8 is genuine forward progress from epoch 2's floor of 3 — the "
+                        + "clamp must not interfere with a coordinate that did not regress");
+    }
+
     /** A commit advances the epoch monotonically, promotes pending joiners to running, and clears the round. */
     @Test
     void commitAdvancesEpochPromotesJoinersAndClearsTheRound() {

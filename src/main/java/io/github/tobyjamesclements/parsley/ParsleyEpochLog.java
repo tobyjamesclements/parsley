@@ -37,6 +37,9 @@ import java.util.Set;
 final class ParsleyEpochLog {
 
     private long committedEpochId;                             // last committed epoch; 0 = none yet
+    // The last committed epoch's lowerBounds — consulted by proposeCommit to clamp the next round's
+    // mergeMin so a per-coordinate floor can never regress across epochs (see proposeCommit's Javadoc).
+    private ParsleyClock committedLowerBounds = ParsleyClock.empty();
     private final Set<String> runningMembers = new HashSet<>();
     private final Set<String> pendingJoiners = new HashSet<>();
     private @Nullable String roundOwner;                       // non-null iff a round is open
@@ -104,8 +107,9 @@ final class ParsleyEpochLog {
                 // mirroring what a running node's own live view would have shown right up to this commit.
                 previousCommitExternalSourceTopics = currentCommitExternalSourceTopics;
                 currentCommitExternalSourceTopics = externalSourceTopics();
-                // Adopt the commit: advance the settled epoch, promote joiners, close the round.
+                // Adopt the commit: advance the settled epoch and its floor, promote joiners, close the round.
                 committedEpochId = e.epochId();
+                committedLowerBounds = e.lowerBounds();
                 runningMembers.addAll(pendingJoiners);
                 pendingJoiners.clear();
                 publications.clear();
@@ -196,8 +200,16 @@ final class ParsleyEpochLog {
      * The commit the owner should write for the now-complete round: {@code (nextEpochId, lowerBounds)}
      * where {@code lowerBounds} is the {@link ParsleyClock#mergeMin} fold of the published frontiers —
      * per coordinate, the minimum over the members that observed it (a member without a coordinate does
-     * not constrain it). With no publications this is an empty clock (no coordinate bounded), i.e. the
-     * epoch-0 floor.
+     * not constrain it) — then clamped per coordinate to never regress below the previously committed
+     * floor via {@link ParsleyClock#merge} (the per-coordinate maximum): a member admitted mid-round that
+     * consumes from {@code earliest} publishes completeness far behind the current floor, and the raw
+     * {@code mergeMin} would otherwise drag a shared coordinate's floor backwards on promotion — every use
+     * of the floor tolerates that (it is conservative-safe on regression) except {@code
+     * ParsleyFrontier#pruneStaleOrphans}, where a floor that later regresses below an already-pruned
+     * orphan entry would leave that coordinate's dependents held forever again, unrecoverable. Clamping
+     * here, once, keeps the floor honestly monotonic for every consumer instead of requiring each one to
+     * guard against a regression that should never have been possible in the first place. With no
+     * publications this is an empty clock (no coordinate bounded), i.e. the epoch-0 floor.
      *
      * @throws IllegalStateException if the round is not complete
      */
@@ -209,7 +221,7 @@ final class ParsleyEpochLog {
         for (ParsleyClock published : publications.values()) {
             lowerBounds = (lowerBounds == null) ? published : lowerBounds.mergeMin(published);
         }
-        return new ParsleyEpochEvent.EpochCommitted(nextEpochId(),
-                lowerBounds == null ? ParsleyClock.empty() : lowerBounds);
+        ParsleyClock proposed = lowerBounds == null ? ParsleyClock.empty() : lowerBounds;
+        return new ParsleyEpochEvent.EpochCommitted(nextEpochId(), proposed.merge(committedLowerBounds));
     }
 }
