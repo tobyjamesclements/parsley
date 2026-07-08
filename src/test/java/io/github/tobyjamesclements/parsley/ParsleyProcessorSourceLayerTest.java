@@ -4,12 +4,14 @@ import org.apache.kafka.common.Uuid;
 import org.apache.kafka.common.header.Header;
 import org.apache.kafka.common.header.Headers;
 import org.apache.kafka.common.serialization.Serdes;
+import org.apache.kafka.streams.processor.PunctuationType;
 import org.apache.kafka.streams.processor.api.MockProcessorContext;
 import org.apache.kafka.streams.processor.api.Processor;
 import org.apache.kafka.streams.processor.api.ProcessorContext;
 import org.apache.kafka.streams.processor.api.Record;
 import org.junit.jupiter.api.Test;
 
+import java.time.Duration;
 import java.util.Arrays;
 import java.util.Comparator;
 import java.util.List;
@@ -63,7 +65,50 @@ class ParsleyProcessorSourceLayerTest {
                 f.forwardedWith(ParsleyHeader.EPOCH_SNAPSHOT);
         assertEquals(1, snapshots.size(), "the source-layer task injects the snapshot marker exactly once");
         assertEquals("k", snapshots.get(0).record().key(),
-                "the injected marker reuses the last-seen key so it lands on this task's partition lane");
+                "the injected marker reuses the last-seen key as informational wire content (routing "
+                        + "itself no longer depends on it — see ParsleyMarkerPartition)");
+    }
+
+    /**
+     * Regression test for BACKLOG.md's marker-relay finding: before {@link ParsleyMarkerPartition}
+     * existed, a source-layer task that had never processed a business record ({@code lastSeenKey} still
+     * {@code null}) — exactly the state right after a restart, per the finding's repro — silently skipped
+     * its snapshot-marker relay entirely, stalling every downstream lane until the first post-restart
+     * business record finally triggered a retry. Routing no longer depends on a key at all, so the relay
+     * must go out on the very first poll, key or no key.
+     *
+     * <p>Same setup as {@link #sourceLayerTaskPublishesAndInjectsSnapshotWhenARoundOpens}, except the
+     * open-round poll is reached via {@link Fixture#triggerEpochPoll()} (the wall-clock punctuator an idle
+     * task reacts through) instead of {@link Fixture#processRecord}, so {@code lastSeenKey} never becomes
+     * non-null.
+     *
+     * <p>Asserts the source-layer task still publishes its completeness and injects the snapshot marker
+     * exactly once, with no business record ever processed.
+     */
+    @Test
+    void sourceLayerTaskInjectsTheSnapshotMarkerEvenWithNoBusinessKeyYet() {
+        InMemoryEpochTransport.SharedLog log = new InMemoryEpochTransport.SharedLog();
+        ParsleyEpochRuntime runtime = new ParsleyEpochRuntime(new InMemoryEpochTransport(log));
+
+        InMemoryEpochTransport seeder = new InMemoryEpochTransport(log);
+        seeder.append(new ParsleyEpochEvent.JoinRequested("X", Set.of(), Set.of()));
+        seeder.append(new ParsleyEpochEvent.SnapshotRequested("X"));
+        runtime.runOnce();
+
+        Fixture f = new Fixture(runtime);
+        runtime.runOnce();   // folds this task's own join before its first poll
+
+        f.triggerEpochPoll();   // the idle-task wall-clock poll — no business record has ever been processed
+        runtime.runOnce();      // flush the publication the poll enqueued
+
+        assertTrue(log.events().stream().anyMatch(e -> e instanceof ParsleyEpochEvent.FrontierPublished),
+                "the source-layer task must publish its completeness for the open round even with no "
+                        + "business key yet");
+        List<? extends MockProcessorContext.CapturedForward<? extends String, ? extends String>> snapshots =
+                f.forwardedWith(ParsleyHeader.EPOCH_SNAPSHOT);
+        assertEquals(1, snapshots.size(),
+                "the snapshot marker must still be injected with lastSeenKey null — routing no longer "
+                        + "depends on a business key, so there is nothing to skip or retry");
     }
 
     // The running-node boundary adopt-and-inject path (pollEpochCoordination on a node that was present
@@ -143,6 +188,52 @@ class ParsleyProcessorSourceLayerTest {
         assertEquals(2L, decodeBoundary(afterEpoch2.get(1)).epochId(), "the second injected boundary is epoch 2");
     }
 
+    /**
+     * Regression test for BACKLOG.md's marker-relay finding, the epoch-boundary counterpart to {@link
+     * #sourceLayerTaskInjectsTheSnapshotMarkerEvenWithNoBusinessKeyYet}: an outgoing self-adopter that
+     * promotes an epoch on its very first poll — before ever processing a business record — must still
+     * inject the boundary marker onto its external-source coordinate, not silently skip it because {@code
+     * lastSeenKey} is {@code null}. This is exactly the finding's restart repro: a source-layer task
+     * restarts (in-memory {@code lastSeenKey} wiped) with completeness already dominating a floor
+     * committed while it was down, and self-adopts on its very first post-restart poll.
+     *
+     * <p>Single running member B, reaching every poll via {@link Fixture#triggerEpochPoll()} instead of
+     * {@link Fixture#processRecord} throughout, so {@code lastSeenKey} never becomes non-null.
+     *
+     * <p>Asserts B injects epoch 1's boundary onto t1 despite never having processed a business record.
+     */
+    @Test
+    void outgoingSelfAdopterInjectsTheBoundaryEvenWithNoBusinessKeyYet() {
+        InMemoryEpochTransport.SharedLog log = new InMemoryEpochTransport.SharedLog();
+        ParsleyEpochRuntime runtime = new ParsleyEpochRuntime(new InMemoryEpochTransport(log));
+        InMemoryEpochTransport seeder = new InMemoryEpochTransport(log);
+        runtime.runOnce();   // marks the runtime bootstrapped before init() blocks on it
+
+        Fixture b = new Fixture(runtime);   // B's init() joins declaring t1 as input, no sink
+        runtime.runOnce();
+        String bMemberId = log.events().stream()
+                .filter(ParsleyEpochEvent.JoinRequested.class::isInstance)
+                .map(e -> ((ParsleyEpochEvent.JoinRequested) e).memberId())
+                .findFirst().orElseThrow();
+
+        // Epoch 1 commits with B never having processed a single business record.
+        seeder.append(new ParsleyEpochEvent.SnapshotRequested(bMemberId));
+        runtime.runOnce();
+        b.triggerEpochPoll();                // B publishes for the open round (owesPublication) — no key needed
+        runtime.runOnce();
+        seeder.append(new ParsleyEpochEvent.EpochCommitted(1, ParsleyClock.empty()));
+        runtime.runOnce();                   // B promoted to running; epoch 1 settled
+        b.triggerEpochPoll();                // B's poll adopts epoch 1 -> must inject the boundary regardless
+        runtime.runOnce();
+
+        List<? extends MockProcessorContext.CapturedForward<? extends String, ? extends String>> boundaries =
+                b.forwardedWith(ParsleyHeader.EPOCH_BOUNDARY);
+        assertEquals(1, boundaries.size(),
+                "B must inject epoch 1's boundary even with lastSeenKey still null — routing no longer "
+                        + "depends on a business key, so there is nothing to skip or retry");
+        assertEquals(1L, decodeBoundary(boundaries.get(0)).epochId(), "the injected boundary is epoch 1");
+    }
+
     private static ParsleyEpochBoundary decodeBoundary(
             MockProcessorContext.CapturedForward<? extends String, ? extends String> forward) {
         for (Header h : forward.record().headers()) {
@@ -195,6 +286,20 @@ class ParsleyProcessorSourceLayerTest {
             Headers deps = ParsleyHeader.mutableHeaders();
             deps.add(ParsleyHeader.CAUSAL_DEPENDENCIES, ParsleyClock.empty().toBytes());
             processor.process(new Record<>(key, "v", 0L, deps));
+        }
+
+        /**
+         * Fires the wall-clock {@code pollEpochCoordination()} punctuator directly — the path an idle
+         * source-layer task reacts through, with no business record ever processed (so {@code
+         * lastSeenKey} stays {@code null}). {@code MockProcessorContext} never processes a business
+         * record on its own, so this is the only way to reach {@code pollEpochCoordination()} without
+         * also setting {@code lastSeenKey} via {@link #processRecord}.
+         */
+        void triggerEpochPoll() {
+            context.scheduledPunctuators().stream()
+                    .filter(p -> p.getType() == PunctuationType.WALL_CLOCK_TIME
+                            && Duration.ofMillis(200).equals(p.getInterval()))
+                    .forEach(p -> p.getPunctuator().punctuate(0L));
         }
 
         List<? extends MockProcessorContext.CapturedForward<? extends String, ? extends String>> forwardedWith(

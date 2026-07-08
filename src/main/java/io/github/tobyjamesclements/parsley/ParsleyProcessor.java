@@ -722,12 +722,12 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
      * of this task's previous adoption), giving a departing topic exactly one more adoption cycle from its
      * outgoing self-adopter before {@link #lastAdoptedExternalSourceTopicIds} catches up to the live set.
      *
-     * <p><strong>Relay-skip retry.</strong> {@link #adoptAndInjectBoundary}/{@link #injectSnapshot} skip
-     * their downstream relay when {@link #lastSeenKey} is {@code null} (nothing to route a marker on yet —
-     * harmless, since nothing downstream depends on a partition lane that has produced nothing). The
-     * per-epoch/per-round guards below only advance once the relay has actually gone out (or there was
-     * nothing to relay), so a task that has not forwarded anything yet keeps retrying on every poll until
-     * it finally has a key to route on, rather than silently forfeiting its one chance forever.
+     * <p>{@link #adoptAndInjectBoundary}/{@link #injectSnapshot} relay unconditionally, whether or not
+     * this task has seen a business record yet ({@link #lastSeenKey} may be {@code null}): {@link
+     * ParsleyMarkerPartition} routes the marker to this task's own owned partition regardless of the key
+     * carried on the record, so there is nothing to wait for and nothing to retry. Before that routing
+     * existed, a relay with no key to route on had to be skipped and retried on a later poll once a key
+     * became available — the source of the restart stall this Javadoc used to document as an open gap.
      */
     private void pollEpochCoordination() {
         ParsleyEpochRuntime runtime = epochRuntime;
@@ -763,10 +763,8 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
             if (!adoptionTargets.isEmpty()) {
                 adoptAndInjectBoundary(new ParsleyEpochBoundary(committed, runtime.committedLowerBounds()), adoptionTargets);
             }
-            if (adoptionTargets.isEmpty() || lastSeenKey != null) {
-                lastAdoptedEpoch = committed;
-                lastAdoptedExternalSourceTopicIds = liveExternalSourceTopicIds;
-            }
+            lastAdoptedEpoch = committed;
+            lastAdoptedExternalSourceTopicIds = liveExternalSourceTopicIds;
         }
         if (liveExternalSourceTopicIds.isEmpty()) {
             return;
@@ -775,9 +773,7 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
             long round = committed + 1;   // the epoch a commit of the currently open round would carry
             if (round != lastSnapshotRoundEpoch) {
                 injectSnapshot();
-                if (lastSeenKey != null) {
-                    lastSnapshotRoundEpoch = round;
-                }
+                lastSnapshotRoundEpoch = round;
             }
         }
     }
@@ -796,21 +792,22 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
 
     /**
      * Publishes this node's completeness for the open round (so the owner's merge-min includes it) and
-     * relays the snapshot marker downstream on the last-seen key, opening the in-band cut for the next
-     * layer. If no key has been seen yet the marker cannot be routed to this partition — skipped, which
-     * is harmless because nothing downstream depends on a partition that has produced nothing.
+     * relays the snapshot marker downstream, opening the in-band cut for the next layer. The relay is
+     * keyed with {@link #lastSeenKey} when available (informational — a real business key on the wire is
+     * still preferable to none) but routes correctly to this task's own owned partition either way, via
+     * {@link ParsleyMarkerPartition}, so a task that has not yet seen a business record ({@code
+     * lastSeenKey} still {@code null}) relays exactly the same as one that has.
      */
     private void injectSnapshot() {
         snapshotPublisher.publish(memberId, engine.completeness());
-        if (lastSeenKey != null) {
-            forwardEpochSnapshot(lastSeenKey);
-        }
+        forwardEpochSnapshot(lastSeenKey);
     }
 
     /**
      * Adopts {@code boundary} for this task's external-source coordinates — a topology-source channel's
      * floor arrives from the log, since no in-band marker will ever reach it (break #1) — then relays the
-     * boundary downstream on the last-seen key so the next layer transitions in-band.
+     * boundary downstream so the next layer transitions in-band. See {@link #injectSnapshot} for why the
+     * relay needs no business key to route correctly.
      */
     private void adoptAndInjectBoundary(ParsleyEpochBoundary boundary, Set<Uuid> externalSourceTopicIds) {
         int partition = context.taskId().partition();
@@ -823,9 +820,7 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
         }
         deliver(released);
         deadLetter(deadLettered);
-        if (lastSeenKey != null) {
-            forwardEpochBoundary(lastSeenKey, boundary.toBytes());
-        }
+        forwardEpochBoundary(lastSeenKey, boundary.toBytes());
     }
 
     /**
@@ -881,12 +876,12 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
      * Forwards a protocol watermark carrying this node's current {@link ParsleyEngine#completeness()
      * completeness frontier} to every business sink ({@link #sinkNodeNames} — never a zero-arg
      * broadcast, so a configured dead-letter sink never receives one; see {@link ParsleyProcessorContext}),
-     * keyed with {@code triggerKey} — the key of the input record that triggered this emission. Reusing
-     * that key routes the watermark, through whatever partitioner the business records use, to the same
-     * partition those records land on, so a downstream task's channel clock for that partition advances
-     * even across a sink boundary. With a null key (the previous behaviour) a sink partitioner sends the
-     * watermark to an arbitrary partition, so a downstream task can starve waiting on a channel that
-     * never advances.
+     * keyed with {@code triggerKey} — the key of the input record that triggered this emission, carried
+     * through as informational wire content, not for routing: {@link ParsleyMarkerPartition} (set by
+     * {@link #forwardToSinks}) routes the watermark to this task's own owned partition regardless of
+     * {@code triggerKey}, including when it is {@code null} — so a downstream task's channel clock for
+     * that partition always advances across a sink boundary, never dependent on a business key having
+     * been observed yet.
      *
      * <p>The watermark carries a null value and is distinguished from a business tombstone by the
      * {@link ParsleyHeader#WATERMARK} header; downstream Parsley consumers skip it by that header, not
@@ -897,9 +892,7 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
      *
      * <p>The {@code KIn}-to-{@code KOut} cast is sound under the co-partitioning contract: a causal
      * processor must not change the key across the node (doing so reshards the causally-related
-     * events), so the input and output key types coincide. A null-keyed input yields a null-keyed
-     * watermark, which degrades to arbitrary routing — consistent with the fact that null-keyed
-     * records are not shard-partitioned to begin with.
+     * events), so the input and output key types coincide.
      */
     @SuppressWarnings({"NullAway", "unchecked"}) // null value by design; KIn==KOut under the co-partitioning contract
     private void forwardWatermark(@Nullable KIn triggerKey) {
@@ -913,12 +906,12 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
     }
 
     /**
-     * Relays an epoch-snapshot marker to every business sink, keyed with {@code triggerKey} so it
-     * stays on the same partition lane (see {@link #forwardWatermark} for the key-routing rationale, the
-     * {@code KIn}-to-{@code KOut} cast, the targeted-forwarding rationale, and the null-value / null-key
-     * handling — identical here). The marker also carries this node's current completeness in the
-     * {@link ParsleyHeader#CAUSAL_DEPENDENCIES} header, so one record both propagates the cut and
-     * advances the downstream channel clock.
+     * Relays an epoch-snapshot marker to every business sink, keyed with {@code triggerKey} — carried
+     * through as informational wire content only, not for routing (see {@link #forwardWatermark} for the
+     * routing rationale, the {@code KIn}-to-{@code KOut} cast, the targeted-forwarding rationale, and the
+     * null-value / null-key handling — identical here). The marker also carries this node's current
+     * completeness in the {@link ParsleyHeader#CAUSAL_DEPENDENCIES} header, so one record both propagates
+     * the cut and advances the downstream channel clock.
      */
     @SuppressWarnings({"NullAway", "unchecked"}) // null value by design; KIn==KOut under the co-partitioning contract
     private void forwardEpochSnapshot(@Nullable KIn triggerKey) {
@@ -930,10 +923,9 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
 
     /**
      * Relays an epoch-boundary marker (carrying the unchanged {@code boundaryBytes}: the same epochId +
-     * lowerBounds everywhere) to every business sink, keyed with {@code triggerKey} so it stays on
-     * the same partition lane. Also carries this node's completeness so the downstream channel clock
-     * advances from the same record. See {@link #forwardWatermark} for the routing/cast/targeted-forward
-     * rationale.
+     * lowerBounds everywhere) to every business sink, keyed with {@code triggerKey} — informational only,
+     * not for routing. Also carries this node's completeness so the downstream channel clock advances
+     * from the same record. See {@link #forwardWatermark} for the routing/cast/targeted-forward rationale.
      */
     @SuppressWarnings({"NullAway", "unchecked"}) // null value by design; KIn==KOut under the co-partitioning contract
     private void forwardEpochBoundary(@Nullable KIn triggerKey, byte[] boundaryBytes) {
@@ -949,14 +941,27 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
      * the common case, with no dead-letter sink configured. Named forwarding is required the moment a
      * dead-letter sink is a sibling child of this processor's business sink(s): see
      * {@link ParsleyProcessorContext}.
+     *
+     * <p>The sole call site for every marker forward (business forwards go through the stamping proxy,
+     * never here), so this is also the sole place {@link ParsleyMarkerPartition} is set: {@link
+     * CausalTopology} installs a {@link ParsleyMarkerPartitioner} on every sink this stage declares,
+     * which reads this override to route the marker to this task's own owned partition — {@code
+     * context.taskId().partition()} — regardless of {@code record}'s key. Set immediately before, cleared
+     * immediately after (a {@code finally}, so an exception mid-forward never leaks the override onto a
+     * later, unrelated business forward on this thread).
      */
     private void forwardToSinks(Record<KOut, VOut> record) {
-        if (sinkNodeNames.isEmpty()) {
-            context.forward(record);
-            return;
-        }
-        for (String name : sinkNodeNames) {
-            context.forward(record, name);
+        ParsleyMarkerPartition.set(context.taskId().partition());
+        try {
+            if (sinkNodeNames.isEmpty()) {
+                context.forward(record);
+                return;
+            }
+            for (String name : sinkNodeNames) {
+                context.forward(record, name);
+            }
+        } finally {
+            ParsleyMarkerPartition.clear();
         }
     }
 

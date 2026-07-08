@@ -4,6 +4,7 @@ import org.apache.kafka.common.serialization.Serde;
 import org.apache.kafka.common.serialization.Serdes;
 import org.apache.kafka.streams.StreamsConfig;
 import org.apache.kafka.streams.Topology;
+import org.apache.kafka.streams.processor.StreamPartitioner;
 import org.jspecify.annotations.Nullable;
 
 import java.util.LinkedHashMap;
@@ -109,14 +110,19 @@ public final class CausalTopology {
             sourceNames[i++] = sourceName;
         }
         topology.addProcessor(processorName, supplier, sourceNames);
+        // Wrap once per stage (not per sink): every sink a stage declares shares one partitioner
+        // (CausalStreamsBuilder's own contract), and the wrapper's only job — routing a Parsley protocol
+        // marker to the forwarding task's own owned partition, via ParsleyMarkerPartition, regardless of
+        // the marker's key — is identical for every one of this stage's sinks. stage.partitioner may
+        // itself be null (no custom partitioner declared); the wrapper still falls back to Kafka's
+        // default key-hash partitioner for every non-marker (business) forward.
+        StreamPartitioner<? super KOut, ? super VOut> markerAwarePartitioner =
+                new ParsleyMarkerPartitioner<>(stage.partitioner);
         for (ParsleyStageSpec.SinkSpec<KOut, VOut> sink : stage.sinks) {
             Serde<KOut> keySerde = sink.keySerde() != null ? sink.keySerde() : defaults.key();
             Serde<VOut> valueSerde = sink.valueSerde() != null ? sink.valueSerde() : defaults.value();
-            // partitioner may be null here — Topology.addSink's partitioner-accepting overload treats
-            // that identically to the no-partitioner overload (falls back to the default key-hash
-            // partitioner), so one call covers both cases.
             topology.addSink(sink.name(), sink.topic(),
-                    keySerde.serializer(), valueSerde.serializer(), stage.partitioner, processorName);
+                    keySerde.serializer(), valueSerde.serializer(), markerAwarePartitioner, processorName);
         }
         // This stage's own dead-letter sink — parented only on this stage's processor node (never
         // shared across stages as a multi-parent sink; see the class javadoc), raw bytes, no

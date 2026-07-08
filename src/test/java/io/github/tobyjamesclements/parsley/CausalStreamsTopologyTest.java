@@ -290,6 +290,57 @@ class CausalStreamsTopologyTest {
     }
 
     /**
+     * Regression test for BACKLOG.md's marker-relay finding: {@link CausalTopology} installs a {@link
+     * ParsleyMarkerPartitioner} wrapping a stage's own {@code withPartitioner(...)} partitioner, so a
+     * Parsley protocol marker's routing is decided by {@link ParsleyMarkerPartition} — the forwarding
+     * task's own owned partition — and never reaches the stage's own partitioner at all.
+     *
+     * <p>A single "drop" input is never forwarded by the delegate, so Parsley emits exactly one stand-in
+     * watermark to reach "out". Proving the recording partitioner is genuinely wired into this sink but
+     * never invoked for the watermark is the whole point of this test: {@code TopologyTestDriver}'s
+     * single-partition topic can't otherwise distinguish "routed by the override" from "routed by the
+     * delegate" by outcome alone, since both land on the same (only) partition either way.
+     *
+     * Asserts the watermark still reaches the output topic, and the recording partitioner was never
+     * invoked for it.
+     */
+    @Test
+    void markerForwardsNeverReachTheStagesOwnPartitioner() {
+        RecordingPartitioner<String, String> recorder = new RecordingPartitioner<>();
+        ProcessorSupplier<String, String, String, String> neverEmits = () -> new Processor<>() {
+            @Override
+            public void init(ProcessorContext<String, String> context) {
+            }
+
+            @Override
+            public void process(Record<String, String> record) {
+                // forwards nothing -- Parsley emits a stand-in watermark for this input
+            }
+        };
+
+        CausalStreamsBuilder builder = new CausalStreamsBuilder();
+        builder.stream("t1", Serdes.String(), Serdes.String())
+                .process(neverEmits)
+                .to("out-sink", "out", Serdes.String(), Serdes.String())
+                .withPartitioner(recorder);
+        Topology topology = assemble(builder, ADMIN);
+
+        try (TopologyTestDriver driver = new TopologyTestDriver(topology, config())) {
+            TestInputTopic<String, String> t1 =
+                    driver.createInputTopic("t1", new StringSerializer(), new StringSerializer());
+            TestOutputTopic<String, String> out =
+                    driver.createOutputTopic("out", new StringDeserializer(), new StringDeserializer());
+
+            t1.pipeInput(new TestRecord<>("k", "drop", depsHeader(CausalDependencies.empty())));
+
+            assertTrue(isWatermark(out.readRecord()), "the stand-in watermark must still reach the sink");
+            assertTrue(recorder.invocations.isEmpty(),
+                    "the marker forward must never reach the stage's own partitioner — "
+                            + "ParsleyMarkerPartition must have intercepted it first");
+        }
+    }
+
+    /**
      * A delivered record the delegate forwards to only ONE named sink still causes Parsley's
      * stand-in watermark (emitted because the delegate's forward count for this input was zero — see
      * {@link ParsleyProcessor#deliver}) to reach EVERY sink connected to the processor node, not just

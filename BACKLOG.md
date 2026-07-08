@@ -7,56 +7,33 @@ Fable 5, plus findings from the follow-up verification review of the four fix co
 `e0109eb..5dc1d04`. Ranked most-severe first. GitHub Issues are disabled on this repo, so these are
 tracked here instead.
 
-## [LOW-MEDIUM] Marker relay is key-routed and key-gated, so epoch markers can be withheld in more cases than the idle-partition one
+## [LOW] The handoff grace cache is in-memory only, losing a departing topic's grace cycle across a crash
 
-**Where:** `forwardEpochBoundary`/`forwardEpochSnapshot` (via `injectSnapshot`/`adoptAndInjectBoundary`
-and `handleEpochBoundary`/`handleEpochSnapshot`'s downstream relay), all of which route the outbound
-marker on `lastSeenKey`/`record.key()` — a single business key, not an explicit per-partition broadcast
+**Where:** `pollEpochCoordination`'s `lastAdoptedExternalSourceTopicIds`/`lastAdoptedEpoch` fields
 
-**Narrowed from the original finding, then re-broadened by the verification review.** The
-originally-reported registry-timing repro is fixed (`lastAdoptedExternalSourceTopicIds` grace cache,
-fresh-joiner pre-seed removal, relay-skip retry guards; regression test:
+**Narrowed twice now.** The originally-reported registry-timing repro was fixed by the grace-cache/
+pre-seed-removal work (regression test:
 `ParsleyProcessorSourceLayerTest#outgoingSelfAdopterStillInjectsTheHandoffEpochsBoundaryAfterATopicLeavesTheLiveRegistry`).
-The verification review confirmed the grace-cache timing argument, including the coalescing case
-(two commits between polls): `ParsleyEpochState#onBoundary`'s supersede semantics (a higher-epoch
-marker replaces a pending lower one) plus monotone floors make a skipped intermediate epoch safe at
-every hop, and the cache stays in the adoption targets until the first *successful* adoption cycle.
+The broader finding that marker relay was *key-routed* at all — so a source-layer task with no business
+key yet (notably right after a restart) silently skipped its relay and stalled every downstream lane
+until its first post-restart business record — is now fixed too: `ParsleyMarkerPartitioner`/
+`ParsleyMarkerPartition` route every marker relay to the forwarding task's own owned partition directly,
+never depending on a key at all, so `injectSnapshot`/`adoptAndInjectBoundary` relay unconditionally now
+(regression tests: `ParsleyProcessorSourceLayerTest#sourceLayerTaskInjectsTheSnapshotMarkerEvenWithNoBusinessKeyYet`/
+`#outgoingSelfAdopterInjectsTheBoundaryEvenWithNoBusinessKeyYet`).
 
-**What's still open — broader than "an idle partition among several".** The underlying problem is
-that a marker relay needs a business key to route on, and local settling does not wait for it:
+**What's still open.** `lastAdoptedEpoch`/`lastAdoptedExternalSourceTopicIds` reset on restart, so a
+crash inside the handoff window (between a topic leaving the live external-source registry and this
+task's next adoption cycle) loses the departing topic's grace cycle; if the departed topic was the
+task's only external input, the post-restart poll sees empty adoption targets and silently advances
+`lastAdoptedEpoch` with no relay ever sent for the handoff epoch. Redundantly covered by the new
+producer's own admitting-epoch relay (the pre-seed-removal fix) for the common case, but that
+redundancy is itself untested.
 
-- *A promoted transition does not imply its markers were relayed.* That implication holds only for
-  markers received in-band (`handleEpochBoundary` relays unconditionally on receipt, and the relay is
-  producer-flushed before the marker's source offset commits, so a crash replays and re-relays). A
-  source-layer task's own channels get their markers **self-injected** by `adoptAndInjectBoundary`,
-  which records them on every channel (and can promote, via `onEpochBoundary` → `tryAdvanceEpoch`, in
-  the same poll) while its single downstream relay is skipped whenever `lastSeenKey` is null. Concrete
-  repro: a source-layer task restarts (`lastSeenKey` is in-memory and wiped) with its restored
-  completeness already dominating a floor committed while it was down; the first 200ms punctuator poll
-  self-adopts, records markers on all channels, and promotes — settled, with zero downstream relays.
-  Downstream transitions on *every* lane (single-partition case included) then stall until this task's
-  first post-restart business record finally triggers the retried relay. Conservative-safe, but the
-  stall length is the input topic's idle time, unbounded.
-- *The handoff grace cache is in-memory only.* `lastAdoptedEpoch`/`lastAdoptedExternalSourceTopicIds`
-  reset on restart, so a crash inside the handoff window loses the departing topic's grace cycle; if
-  the departed topic was the task's only external input, the post-restart poll sees empty adoption
-  targets and silently advances `lastAdoptedEpoch` with no relay ever sent for the handoff epoch.
-  Redundantly covered by the new producer's own admitting-epoch relay (the pre-seed-removal fix), but
-  that path is itself key-gated and currently untested.
-- A note on the reverted "settle re-broadcast" fix: the revert's *reasoning* ("promote implies every
-  marker was already relayed at receipt") is falsified by the self-adoption scenario above, but the
-  reverted fix would not have closed it either — a key-routed re-broadcast still has no key at settle
-  time. The real fix is the same one this item has always pointed at: explicit broadcast to every
-  owned output partition (or a persisted relay obligation with key-independent routing), not another
-  client-side cache.
+**Impact:** conservative-safe (never causally unsafe); a permanent per-epoch floor-advance gap for one
+specific coordinate, only when a crash lands inside a narrow handoff window.
 
-**Impact:** conservative-safe (never causally unsafe) but a real, sometimes-long floor-advance stall
-for downstream tasks; permanent per-epoch for a genuinely idle lane.
-
-**Coverage:** the grace cache is pinned by the regression test above. The fresh-joiner pre-seed
-removal and the relay-skip retry guards are **not pinned by any test** (verified by mutation: re-adding
-the pre-seed and reverting both guards passes the full suite). The settle-without-relay scenarios are
-not covered by any test.
+**Coverage:** not covered by any existing test.
 
 ## [LOW] In-process write ordering cannot fully guarantee tear direction across separate changelog topics
 

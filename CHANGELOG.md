@@ -7,6 +7,26 @@ All notable changes to this project are documented in this file. The format is b
 ## [Unreleased]
 
 ### Fixed
+- **Epoch marker relay depended on a business key that might not exist yet, silently stalling every
+  downstream lane for a genuinely idle source-layer task.** `forwardEpochSnapshot`/`forwardEpochBoundary`
+  routed by reusing `lastSeenKey` — the most recent business record's key — through whatever partitioner
+  the sink used, because that was the only way to steer a record onto a specific partition. A source-layer
+  task that had not yet processed a business record (notably right after a restart, whose in-memory
+  `lastSeenKey` is wiped) had nothing to route on, so `injectSnapshot`/`adoptAndInjectBoundary` silently
+  skipped the relay and retried on a later poll — but if that task's restored completeness already
+  dominated a floor committed while it was down, its very first poll could self-adopt and promote in the
+  same tick, settling with zero downstream relays ever sent. Every downstream lane then stalled until the
+  task's first post-restart business record finally triggered a retry — unbounded, since the input topic's
+  idle time bounds it.
+
+  `ParsleyMarkerPartitioner` (installed by `CausalTopology` on every sink a stage declares, wrapping
+  whatever partitioner — custom or default — the stage already used) now routes a marker to the
+  forwarding task's own owned partition directly, via a new `ParsleyMarkerPartition` thread-local
+  `ParsleyProcessor#forwardToSinks` sets immediately before and clears immediately after every marker
+  forward. A business forward is unaffected — the override is only ever set around a marker's own
+  `context.forward` call. Since routing no longer depends on a key at all, the `lastSeenKey != null`
+  relay-skip-and-retry gates in `injectSnapshot`/`adoptAndInjectBoundary`/`pollEpochCoordination` are gone;
+  every relay now goes out unconditionally, on the very first poll.
 - **Dead-letter paths removed a victim from the buffer before durably recording its orphan floor, the
   same torn-write shape the delivery paths were fixed for.** `ParsleyEngine#fetchForDeadLetter` (used by
   `drainSatisfied`'s proven-impossible branch and `orphan`'s own cascade loop) and the poison/
