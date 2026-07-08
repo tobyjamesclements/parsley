@@ -7,6 +7,17 @@ All notable changes to this project are documented in this file. The format is b
 ## [Unreleased]
 
 ### Fixed
+- **A mismatched sink partition count only warned by default, but under topology-epoch coordination it
+  crash-loops the task instead.** `ParsleyMarkerPartitioner` routes an epoch marker to this task's own
+  owned partition (`taskId().partition()`) unconditionally; with a sink that has fewer partitions than
+  a source, the produce fails outright at runtime, and the task restarts into the same failure instead
+  of surfacing a clear, one-time startup error.
+
+  `ParsleyProcessor#validatePartitionParity` now escalates a partition-count mismatch to a hard failure
+  whenever topology-epoch coordination is configured, regardless of the configured `parsley.topology.validation`
+  mode — `strict` behaves as before, and an explicit `off` still disables the check entirely (a
+  deliberate, complete opt-out), but the default `warn` is treated as `strict` under coordination since
+  the failure mode a warning would otherwise hide is a crash loop, not a quiet correctness gap.
 - **Epoch floors were not actually monotonic across epochs, contrary to `ParsleyEpochState.onBoundary`'s
   documented assumption.** `proposeCommit`'s raw `mergeMin` of published frontiers can drag a shared
   coordinate's floor backwards: a member admitted mid-round that consumes from `earliest` publishes

@@ -545,6 +545,78 @@ class CausalStreamsTopologyTest {
     }
 
     /**
+     * Regression test for BACKLOG.md's LOW item: under the default {@code warn} mode, a mismatched sink
+     * partition count is normally just logged (see {@link #mismatchedSinkPartitionCountWarnsButStartsUnderDefaultValidation}) —
+     * but when topology-epoch coordination is configured, {@link ParsleyMarkerPartitioner} routes an
+     * epoch marker to this task's own owned partition unconditionally, so a mismatch fails the produce
+     * at runtime and crash-loops the task instead of surfacing as a clear startup error. The mismatch
+     * must therefore be escalated to a hard failure regardless of the configured mode, so it surfaces
+     * once, clearly, at {@code init()}.
+     *
+     * Asserts driver construction throws even under {@code warn}, once coordination is configured.
+     */
+    @Test
+    void mismatchedSinkPartitionCountFailsStartupUnderDefaultValidationWhenCoordinationIsConfigured()
+            throws IOException {
+        ParsleyTopicAdmin mismatched = TestTopicAdmin.of(
+                Map.of("t1", T1_ID), Map.of("t1", 2, "out", 3));
+        InMemoryEpochTransport.SharedLog eventLog = new InMemoryEpochTransport.SharedLog();
+        ParsleyEpochRuntime runtime = new ParsleyEpochRuntime(new InMemoryEpochTransport(eventLog));
+        ParsleyCoordination coordination = ParsleyCoordination.forRuntime(runtime);
+        runtime.runOnce(); // bootstrap the empty log before init() blocks on it
+
+        CausalStreamsBuilder builder = new CausalStreamsBuilder();
+        builder.stream("t1", Serdes.String(), Serdes.String())
+                .process(upperCaser())
+                .to("out-sink", "out", Serdes.String(), Serdes.String());
+        Topology topology = builder.topicAdmin(mismatched).build()
+                .assemble(config(), ParsleyQuiesce.create(), coordination);
+
+        StreamsException thrown = assertThrows(StreamsException.class,
+                () -> new TopologyTestDriver(topology, config(tempStateDir())),
+                "a partition-count mismatch must fail startup under warn once coordination is configured");
+        assertEquals(IllegalStateException.class, thrown.getCause().getClass(),
+                "the wrapped cause must be the coordination-escalated validation failure");
+        assertTrue(thrown.getCause().getMessage().contains("mismatched partition counts"),
+                "the message must name the mismatch: " + thrown.getCause().getMessage());
+        assertTrue(thrown.getCause().getMessage().contains("coordination"),
+                "the message must explain why warn was escalated: " + thrown.getCause().getMessage());
+    }
+
+    /**
+     * The counterpart to the escalation above: an explicit {@code off} still disables every check this
+     * method performs, including under coordination — {@code off} is a deliberate, complete opt-out, not
+     * merely a weaker mode coordination should override.
+     *
+     * Asserts the topology constructs and processes normally despite the mismatch.
+     */
+    @Test
+    void mismatchedSinkPartitionCountStillSkippedUnderExplicitOffEvenWithCoordination() {
+        ParsleyTopicAdmin mismatched = TestTopicAdmin.of(
+                Map.of("t1", T1_ID), Map.of("t1", 2, "out", 3));
+        InMemoryEpochTransport.SharedLog eventLog = new InMemoryEpochTransport.SharedLog();
+        ParsleyEpochRuntime runtime = new ParsleyEpochRuntime(new InMemoryEpochTransport(eventLog));
+        ParsleyCoordination coordination = ParsleyCoordination.forRuntime(runtime);
+        runtime.runOnce();
+
+        Properties offProps = config();
+        offProps.put(ParsleyConfig.TOPOLOGY_VALIDATION, "off");
+        CausalStreamsBuilder builder = new CausalStreamsBuilder();
+        builder.stream("t1", Serdes.String(), Serdes.String())
+                .process(upperCaser())
+                .to("out-sink", "out", Serdes.String(), Serdes.String());
+        Topology topology = builder.topicAdmin(mismatched).build()
+                .assemble(offProps, ParsleyQuiesce.create(), coordination);
+
+        try (TopologyTestDriver driver = new TopologyTestDriver(topology, offProps)) {
+            driver.createInputTopic("t1", new StringSerializer(), new StringSerializer())
+                    .pipeInput(new TestRecord<>("k", "live", depsHeader(CausalDependencies.empty())));
+            assertEquals(List.of("live"), processed,
+                    "validation=off must skip the check entirely, even with coordination configured");
+        }
+    }
+
+    /**
      * A sink topic whose partition count cannot be resolved (e.g. not yet created) is skipped for
      * the co-partitioning check rather than failing the task — unlike a registered input buffer, a
      * sink is not required to exist before the stage starts, even under strict validation.

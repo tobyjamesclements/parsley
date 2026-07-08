@@ -54,8 +54,8 @@ by `pruneToScope` for the identical "this node's own channel coordinates" concep
 - [x] 2. MEDIUM — orphan() lowestScannedFloor fix. Commit: e85f80f
 - [x] 3. LOW pair — stale forwarded-index sweep + candidate-index prune on orphan null branch. Commit: 254ebbb
 - [x] 4. LOW — torn committedEpochId/committedLowerBounds read. Commit: 582dca0
-- [ ] 5. LOW — epoch floor monotonicity clamp. Commit: (pending, about to commit)
-- [ ] 6. LOW — marker routing / partition-parity strictness under coordination. Commit: (pending)
+- [x] 5. LOW — epoch floor monotonicity clamp. Commit: 9f57c35
+- [ ] 6. LOW — marker routing / partition-parity strictness under coordination. Commit: (pending, about to commit)
 - [ ] Final: BACKLOG.md cleared, progress file retired. Commit: (pending)
 
 Update each line with the commit hash immediately after committing, before moving to the next item.

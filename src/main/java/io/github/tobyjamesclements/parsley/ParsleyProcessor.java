@@ -1119,6 +1119,13 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
      * topics so that a single task owns the complete partition set for a related group; unequal
      * counts make that impossible and let the completeness frontier evaluate against an incomplete
      * partition set. A single topic in the check (or {@code off}) is always vacuously fine.
+     *
+     * <p>When topology-epoch coordination is configured ({@link #coordination} non-null), a mismatch is
+     * escalated to a hard failure even under the default {@code warn} — {@link ParsleyMarkerPartitioner}
+     * routes an epoch marker to this task's own owned partition ({@code taskId().partition()})
+     * unconditionally, so a sink with fewer partitions than a source makes the produce fail outright,
+     * crash-looping the task instead of surfacing what is actually a startup misconfiguration. {@code
+     * off} is still honoured as an explicit, deliberate opt-out of every check this method performs.
      */
     private void validatePartitionParity(Map<String, Integer> partitionCounts) {
         ParsleyConfig.ValidationMode mode = config.topologyValidation();
@@ -1133,6 +1140,12 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
                 + "topics so each task owns the complete partition set for a related group";
         if (mode == ParsleyConfig.ValidationMode.STRICT) {
             throw new IllegalStateException("parsley.topology.validation=strict: " + detail);
+        }
+        if (coordination != null) {
+            throw new IllegalStateException("parsley.topology.validation=warn, but topology-epoch "
+                    + "coordination is configured: " + detail + "; a mismatch under coordination fails "
+                    + "epoch-marker routing at produce time instead of at startup, so it is treated as "
+                    + "strict regardless of the configured mode");
         }
         log.warn("parsley.topology.validation=warn: {}", detail);
     }
