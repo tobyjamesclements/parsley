@@ -42,6 +42,7 @@ class CausalStreamsTest {
         props.put(StreamsConfig.BOOTSTRAP_SERVERS_CONFIG, "localhost:1");
         props.put(StreamsConfig.DEFAULT_KEY_SERDE_CLASS_CONFIG, Serdes.String().getClass());
         props.put(StreamsConfig.DEFAULT_VALUE_SERDE_CLASS_CONFIG, Serdes.String().getClass());
+        props.put(StreamsConfig.PROCESSING_GUARANTEE_CONFIG, StreamsConfig.EXACTLY_ONCE_V2);
         props.put(StreamsConfig.STATE_DIR_CONFIG,
                 Files.createTempDirectory("causal-streams-test-").toAbsolutePath().toString());
         return props;

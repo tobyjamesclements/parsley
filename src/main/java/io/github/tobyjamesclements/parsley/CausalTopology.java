@@ -22,6 +22,9 @@ import java.util.Set;
  * quiesce/coordination wiring, become known. Construct one with {@link CausalStreamsBuilder}; hand it to
  * {@code new CausalStreams(topology, props)}.
  *
+ * <p><strong>{@code processing.guarantee=exactly_once_v2} is required, unconditionally.</strong> {@link
+ * #assemble} throws {@link IllegalStateException} otherwise — see {@link #requireExactlyOnce} for why.
+ *
  * <p><strong>Every stage gets its own dead-letter sink node, all writing to one shared topic.</strong>
  * A single sink parented on every stage's processor node would union every stage into one Kafka Streams
  * node group (sub-topology/task assignment is computed per node group), coupling stages that are
@@ -47,8 +50,10 @@ public final class CausalTopology {
      * @param quiesce      the shared quiesce coordinator every stage's tasks register with
      * @param coordination the shared topology-epoch coordination handle, or {@code null} to run in epoch 0
      * @return the assembled {@code Topology}
+     * @throws IllegalStateException if {@code props} does not configure {@code exactly_once_v2}
      */
     Topology assemble(Properties props, ParsleyQuiesce quiesce, @Nullable ParsleyCoordination coordination) {
+        requireExactlyOnce(props);
         ParsleyConfig config = resolveConfig(props);
         DefaultSerdes defaults = new DefaultSerdes(props);
         String applicationId = props.getProperty(StreamsConfig.APPLICATION_ID_CONFIG);
@@ -67,6 +72,33 @@ public final class CausalTopology {
             assembleStage(topology, stage, name, config, defaults, quiesce, coordination, deadLetterTopic);
         }
         return topology;
+    }
+
+    /**
+     * Requires {@code processing.guarantee=exactly_once_v2}, unconditionally — never gated by {@code
+     * parsley.topology.validation}, since this is a correctness requirement, not a topology-shape lint.
+     *
+     * <p>Parsley's crash-safety reasoning (the frontier-before-buffer-removal and orphan-before-buffer-
+     * removal write orderings throughout {@code ParsleyEngine}/{@code ParsleyFrontier}) narrows an
+     * at-least-once torn-write window to a benign tear direction, but two separate changelog topics still
+     * have no cross-store atomicity under at-least-once: a crash during the commit-time flush can, rarely,
+     * ack one topic's batch and lose the other's. Exactly-once-v2 wraps every state-store changelog write,
+     * every produced record, and the consumer offset commit into one Kafka transaction, so a crash can
+     * never leave a torn write between them at all — closing that residual window completely, the same way
+     * a transactional producer requires {@code enable.idempotence}/a transactional id rather than treating
+     * it as optional hardening.
+     *
+     * @throws IllegalStateException if {@code props} does not configure {@code exactly_once_v2}
+     */
+    private static void requireExactlyOnce(Properties props) {
+        String guarantee = props.getProperty(StreamsConfig.PROCESSING_GUARANTEE_CONFIG, StreamsConfig.AT_LEAST_ONCE);
+        if (!StreamsConfig.EXACTLY_ONCE_V2.equals(guarantee)) {
+            throw new IllegalStateException("parsley requires " + StreamsConfig.PROCESSING_GUARANTEE_CONFIG + "="
+                    + StreamsConfig.EXACTLY_ONCE_V2 + " (found '" + guarantee + "'); Parsley's dead-letter and "
+                    + "orphan-index crash-safety guarantees depend on Kafka Streams' transactional multi-store "
+                    + "commit to fully close a torn-write window that write ordering alone can only narrow, "
+                    + "never eliminate, under at-least-once");
+        }
     }
 
     private <KIn, VIn, KOut, VOut> void assembleStage(

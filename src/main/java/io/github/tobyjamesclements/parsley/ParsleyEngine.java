@@ -101,6 +101,15 @@ import java.util.function.LongSupplier;
  * fetch branches of {@link #propagate}/{@link #drainSatisfied} and {@link #propagate}'s proven-impossible
  * branch do it inline, since they already hold the record needed to know its own coordinate.
  *
+ * <p><strong>The "always" above is literal, not just likely.</strong> {@link CausalTopology#assemble}
+ * requires {@code processing.guarantee=exactly_once_v2} unconditionally, which wraps every state-store
+ * changelog write, every produced record, and the consumer offset commit for one commit interval into a
+ * single Kafka transaction — so the two writes in each ordering above either both land or neither does;
+ * a crash genuinely cannot tear one from the other. The write orderings themselves remain, as
+ * defense-in-depth and because the reasoning above is what makes {@link #drainAfterRestore}'s "resolves
+ * as a harmless duplicate" claim correct in the first place, but they no longer carry the whole guarantee
+ * alone the way they would under at-least-once.
+ *
  * @param <K> the record key type
  * @param <V> the record value type
  */

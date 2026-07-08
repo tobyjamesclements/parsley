@@ -64,6 +64,7 @@ class CausalStreamsTopologyTest {
         props.put(StreamsConfig.BOOTSTRAP_SERVERS_CONFIG, "dummy:1234");
         props.put(StreamsConfig.DEFAULT_KEY_SERDE_CLASS_CONFIG, Serdes.String().getClass());
         props.put(StreamsConfig.DEFAULT_VALUE_SERDE_CLASS_CONFIG, Serdes.String().getClass());
+        props.put(StreamsConfig.PROCESSING_GUARANTEE_CONFIG, StreamsConfig.EXACTLY_ONCE_V2);
         if (stateDir != null) {
             props.put(StreamsConfig.STATE_DIR_CONFIG, stateDir.getAbsolutePath());
         }
@@ -742,6 +743,35 @@ class CausalStreamsTopologyTest {
             assertEquals(0, admin.sinkPartitionCountCalls, "off must skip the sink partition-count admin call entirely");
             assertEquals(0, admin.sinkCleanupPolicyCalls, "off must skip the sink cleanup-policy admin call entirely");
         }
+    }
+
+    /**
+     * Regression test for BACKLOG.md's write-ordering-overclaim finding: {@link CausalTopology#assemble}
+     * requires {@code processing.guarantee=exactly_once_v2} unconditionally — never gated by {@code
+     * parsley.topology.validation}, unlike the partition-count/cleanup-policy checks above — since the
+     * crash-safety reasoning throughout {@code ParsleyEngine}/{@code ParsleyFrontier} (a torn write always
+     * lands on the benign side) only holds without exception under exactly-once's transactional
+     * multi-store commit.
+     *
+     * Asserts {@code assemble()} throws {@link IllegalStateException} immediately — before any {@code
+     * Topology} node is even added — when {@code processing.guarantee} is left at its at-least-once
+     * default, naming the required setting in the message.
+     */
+    @Test
+    void assembleFailsFastWithoutExactlyOnceProcessingGuarantee() {
+        CausalStreamsBuilder builder = new CausalStreamsBuilder();
+        builder.stream("t1", Serdes.String(), Serdes.String())
+                .process(upperCaser())
+                .to("out-sink", "out", Serdes.String(), Serdes.String());
+
+        Properties atLeastOnce = config();
+        atLeastOnce.remove(StreamsConfig.PROCESSING_GUARANTEE_CONFIG);
+
+        IllegalStateException thrown = assertThrows(IllegalStateException.class,
+                () -> assemble(builder, ADMIN, atLeastOnce),
+                "assemble() must fail fast without exactly_once_v2");
+        assertTrue(thrown.getMessage().contains("exactly_once_v2"),
+                "the message must name the required setting: " + thrown.getMessage());
     }
 
     /**

@@ -187,7 +187,11 @@ final class ParsleyFrontier {
      * entry below it still lingers" — harmless, purely cosmetic (the same degraded outcome the watermark
      * guard below prevents on the ordinary replay path) — never the reverse, where an entry is pruned but
      * the frontier advance that accounted for it was lost, which would permanently strand every offset
-     * above it.
+     * above it. This "always" is literal: {@link CausalTopology#assemble} requires {@code
+     * processing.guarantee=exactly_once_v2} unconditionally, so the frontier write and the forwarded-index
+     * prune are part of one Kafka transaction — a crash cannot tear one from the other at all, not merely
+     * "usually toward" the benign side (see {@link ParsleyEngine}'s class Javadoc for the fuller version
+     * of this note).
      *
      * <p>A <em>below-floor</em> delivery ({@code offset < startsAt}) is a no-op on the causal frontier:
      * the record still feeds state and is forwarded by the engine, but an out-of-domain offset must not

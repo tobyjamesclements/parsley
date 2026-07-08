@@ -164,6 +164,20 @@ All notable changes to this project are documented in this file. The format is b
   before shutdown could hit it. The existing periodic metrics-refresh punctuator (every 5s) now also
   re-pushes the drained state, closing the gap within one tick.
 
+### Changed
+- **Breaking: `CausalTopology#assemble` (and therefore `CausalStreams`) now requires
+  `processing.guarantee=exactly_once_v2`, unconditionally.** The write-ordering fixes throughout
+  `ParsleyEngine`/`ParsleyFrontier` (frontier-before-buffer-removal, orphan-before-buffer-removal,
+  persist-before-prune) narrow an at-least-once torn-write window to a benign tear direction, but two
+  separate changelog topics have no cross-store atomicity under at-least-once — a crash during the
+  commit-time flush can, rarely, ack one topic's batch and lose the other's, so their "always tears
+  toward the benign side" claims overclaimed slightly. Exactly-once-v2 wraps every state-store changelog
+  write, every produced record, and the consumer offset commit into one Kafka transaction, so a crash
+  genuinely cannot tear one write from the other at all — the same way a transactional producer requires
+  `enable.idempotence`/a transactional id rather than treating it as optional hardening. Assembling a
+  topology without it now fails fast with `IllegalStateException`, never gated by
+  `parsley.topology.validation` (a correctness requirement, not a topology-shape lint).
+
 ### Added
 - **`mvn test` (and therefore CI) now fails on a unit-test coverage regression.** Jacoco's `check` goal
   gates the overall bundle at 80% instruction / 75% branch coverage — a few points below the current
