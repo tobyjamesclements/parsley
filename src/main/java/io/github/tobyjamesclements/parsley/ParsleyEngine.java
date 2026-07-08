@@ -87,6 +87,20 @@ import java.util.function.LongSupplier;
  * and the one that fails before a record ever becomes engine state — an ingest-time undecodable
  * causal-dependencies header — via {@link #deadLetterAtIngest}.
  *
+ * <p><strong>Dead-letter persistence ordering:</strong> mirroring the frontier-persistence rule above,
+ * every dead-letter path calls {@link ParsleyOrphanIndex#markOrphaned} on a victim's own coordinate
+ * <em>before</em> removing it from {@link #buffer} — never the reverse. The orphan index and the buffer
+ * are separate changelog topics with no cross-store atomicity, so a crash between the two writes must
+ * always tear toward "orphan floor recorded, victim still buffered" (harmless — the next {@link
+ * #drainSatisfied}/{@link #drainAfterRestore} pass finds the record still there, already proven
+ * impossible by the durably-recorded floor, and dead-letters it again as a harmless duplicate) and never
+ * the reverse, which would leave the record gone with no floor recorded — permanently stranding anything
+ * depending on that exact coordinate, the same wedge shape {@link #deadLetterAtIngest} exists to close on
+ * the ingest side. {@link #fetchForDeadLetter} enforces this for its two callers ({@link
+ * #drainSatisfied}'s proven-impossible branch and {@link #orphan}'s own cascade loop); the poison-on-
+ * fetch branches of {@link #propagate}/{@link #drainSatisfied} and {@link #propagate}'s proven-impossible
+ * branch do it inline, since they already hold the record needed to know its own coordinate.
+ *
  * @param <K> the record key type
  * @param <V> the record value type
  */
@@ -452,8 +466,13 @@ final class ParsleyEngine<K, V> {
                 entry = buffer.get(meta.sequence());
             } catch (ParsleyBufferDeserializationException e) {
                 if (deadLetterEnabled) {
+                    DeadLetter<K, V> letter = undecodable(e, DeadLetter.Reason.POISON);
+                    // Durably orphan this coordinate before removing the record from the buffer — see
+                    // the class Javadoc's "Dead-letter persistence ordering" — so a crash between the
+                    // two writes always tears toward "orphan floor recorded, victim still buffered".
+                    orphanIndex.markOrphaned(letter.topicId(), letter.partition(), letter.offset());
                     buffer.remove(meta.sequence());
-                    deadLetterRoot(deadLetters, undecodable(e, DeadLetter.Reason.POISON));
+                    deadLetterRoot(deadLetters, letter);
                     continue;
                 }
                 failPoison(e);                                             // fail closed
@@ -605,8 +624,12 @@ final class ParsleyEngine<K, V> {
                             entry = buffer.get(candidate.recordId());
                         } catch (ParsleyBufferDeserializationException e) {
                             if (deadLetterEnabled) {
+                                DeadLetter<K, V> letter = undecodable(e, DeadLetter.Reason.POISON);
+                                // Durably orphan this coordinate before removing the record from the
+                                // buffer — see the class Javadoc's "Dead-letter persistence ordering".
+                                orphanIndex.markOrphaned(letter.topicId(), letter.partition(), letter.offset());
                                 buffer.remove(candidate.recordId());
-                                deadLetterRoot(deadLetters, undecodable(e, DeadLetter.Reason.POISON));
+                                deadLetterRoot(deadLetters, letter);
                                 continue;
                             }
                             failPoison(e);                                     // fail closed
@@ -622,9 +645,13 @@ final class ParsleyEngine<K, V> {
                         // (it looked satisfied, via cross-channel header advertisement, at buffer
                         // time), so orphan()'s cascade for that coordinate never reaches it directly.
                         if (isProvenImpossible(entry.record())) {
+                            DeadLetter<K, V> letter =
+                                    new DeadLetter.Decoded<>(entry.record(), DeadLetter.Reason.ORPHAN_CASCADE);
+                            // See the class Javadoc's "Dead-letter persistence ordering": mark orphaned
+                            // before the buffer removal, not after.
+                            orphanIndex.markOrphaned(letter.topicId(), letter.partition(), letter.offset());
                             buffer.remove(entry.sequence());
-                            deadLetterRoot(deadLetters,
-                                    new DeadLetter.Decoded<>(entry.record(), DeadLetter.Reason.ORPHAN_CASCADE));
+                            deadLetterRoot(deadLetters, letter);
                             continue;
                         }
                         if (!isDeliverable(entry.record())) continue;
@@ -675,6 +702,17 @@ final class ParsleyEngine<K, V> {
      * existing lazy-pruning philosophy: a stale entry is harmless, cleaned up the next time that other
      * coordinate happens to advance (or orphan) and finds {@link ParsleyBufferStore#get} return
      * {@code null}.
+     *
+     * <p>{@code markOrphaned} is called unconditionally for every task, including one whose coordinate a
+     * caller (or an earlier task in this same worklist, via {@link #fetchForDeadLetter}) already marked
+     * orphaned before ever reaching here — see the class Javadoc's "Dead-letter persistence ordering".
+     * That makes the call idempotent in the common case, so scanning for dependents cannot be gated on
+     * its return value the way it used to be (a re-mark of an already-orphaned coordinate would then
+     * always report "nothing new" and skip the scan, truncating the cascade at depth one). Scanning is
+     * instead gated on {@code scannedCoordinates}, a set local to this call: a coordinate discovered via
+     * a <em>different</em>, separate top-level {@link #orphan} call earlier in the same outer engine
+     * operation could in principle be re-scanned here — strictly safer than skipping it (never misses a
+     * candidate), just occasionally redundant, harmless work.
      */
     private void orphan(List<DeadLetter<K, V>> deadLetters, Uuid topicId, int partition, long floor) {
         if (!deadLetterEnabled) {
@@ -682,15 +720,17 @@ final class ParsleyEngine<K, V> {
         }
         Deque<OrphanTask> worklist = new ArrayDeque<>();
         worklist.add(new OrphanTask(topicId, partition, floor));
-        Set<Long> seen = new HashSet<>();
+        Set<Long> seenRecords = new HashSet<>();
+        Set<Coord> scannedCoordinates = new HashSet<>();
         while (!worklist.isEmpty()) {
             OrphanTask task = worklist.poll();
-            if (!orphanIndex.markOrphaned(task.topicId(), task.partition(), task.floor())) {
-                continue;
+            orphanIndex.markOrphaned(task.topicId(), task.partition(), task.floor());
+            if (!scannedCoordinates.add(new Coord(task.topicId(), task.partition()))) {
+                continue;                                                 // already scanned this pass
             }
             for (ParsleyCandidateIndex.Candidate candidate : candidateIndex.findCandidatesRequiringAtLeast(
                     task.topicId(), task.partition(), task.floor())) {
-                if (!seen.add(candidate.recordId())) continue;
+                if (!seenRecords.add(candidate.recordId())) continue;
                 DeadLetter<K, V> letter = fetchForDeadLetter(candidate.recordId(), DeadLetter.Reason.ORPHAN_CASCADE);
                 if (letter == null) continue;                             // removed by an earlier step this pass
                 recordDeadLetter(deadLetters, letter);
@@ -705,27 +745,41 @@ final class ParsleyEngine<K, V> {
     private record OrphanTask(Uuid topicId, int partition, long floor) {
     }
 
+    /** A bare coordinate, ignoring offset — used by {@link #orphan} to track which coordinates this
+     * call has already scanned for dependents, independent of {@link ParsleyOrphanIndex#markOrphaned}'s
+     * return value (see that method's Javadoc for why they must be tracked separately). */
+    private record Coord(Uuid topicId, int partition) {
+    }
+
     /**
-     * Fetches the buffered entry for {@code sequence} and removes it, producing the {@link DeadLetter}
-     * it becomes: {@link DeadLetter.Decoded} if it still deserialises fine, {@link DeadLetter.Undecodable}
-     * (from the caught exception, same {@code reason}) if the fetch itself now fails — recursion into
-     * the poison disposition, unified rather than special-cased. Returns {@code null} if the entry was
-     * already removed by an earlier step in this same pass (stale, tolerated exactly like {@link
-     * #propagate}'s stale-candidate handling).
+     * Fetches the buffered entry for {@code sequence}, durably orphans its own coordinate, and removes
+     * it, producing the {@link DeadLetter} it becomes: {@link DeadLetter.Decoded} if it still
+     * deserialises fine, {@link DeadLetter.Undecodable} (from the caught exception, same {@code reason})
+     * if the fetch itself now fails — recursion into the poison disposition, unified rather than
+     * special-cased. Returns {@code null} if the entry was already removed by an earlier step in this
+     * same pass (stale, tolerated exactly like {@link #propagate}'s stale-candidate handling).
+     *
+     * <p>{@code markOrphaned} runs on the victim's own coordinate <em>before</em> {@code buffer.remove} —
+     * see the class Javadoc's "Dead-letter persistence ordering" — so a crash between the two writes
+     * always tears toward "orphan floor recorded, victim still buffered", never the reverse.
      */
     private @Nullable DeadLetter<K, V> fetchForDeadLetter(long sequence, DeadLetter.Reason reason) {
         ParsleyBufferStore.Entry<K, V> entry;
         try {
             entry = buffer.get(sequence);
         } catch (ParsleyBufferDeserializationException e) {
+            DeadLetter<K, V> letter = undecodable(e, reason);
+            orphanIndex.markOrphaned(letter.topicId(), letter.partition(), letter.offset());
             buffer.remove(sequence);
-            return undecodable(e, reason);
+            return letter;
         }
         if (entry == null) {
             return null;
         }
+        DeadLetter<K, V> letter = new DeadLetter.Decoded<>(entry.record(), reason);
+        orphanIndex.markOrphaned(letter.topicId(), letter.partition(), letter.offset());
         buffer.remove(entry.sequence());
-        return new DeadLetter.Decoded<>(entry.record(), reason);
+        return letter;
     }
 
     /** Builds a {@link DeadLetter.Undecodable} from a caught {@link ParsleyBufferDeserializationException}. */

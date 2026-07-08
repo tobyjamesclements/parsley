@@ -7,6 +7,22 @@ All notable changes to this project are documented in this file. The format is b
 ## [Unreleased]
 
 ### Fixed
+- **Dead-letter paths removed a victim from the buffer before durably recording its orphan floor, the
+  same torn-write shape the delivery paths were fixed for.** `ParsleyEngine#fetchForDeadLetter` (used by
+  `drainSatisfied`'s proven-impossible branch and `orphan`'s own cascade loop) and the poison/
+  proven-impossible branches of `propagate`/`drainSatisfied` all called `buffer.remove` before
+  `deadLetterRoot` (and therefore before `ParsleyOrphanIndex#markOrphaned`) ever ran for that record's own
+  coordinate. A crash between the two writes left the record gone from the buffer with no orphan floor
+  recorded — a buffered dependent on that exact coordinate was then held forever, never proven impossible,
+  the same permanent-wedge shape as the dead-letter-at-ingest bug above, and the record could be lost
+  without ever reaching the dead-letter topic. Every dead-letter path now marks a victim's own coordinate
+  orphaned *before* removing it from the buffer, mirroring the earlier frontier-persistence-ordering fix,
+  so a crash always tears toward "orphan floor recorded, victim still buffered" — resolved as a harmless
+  duplicate dead-letter by the next `drainSatisfied`/restore pass. `orphan`'s worklist loop now tracks
+  which coordinates it has scanned for dependents in a set local to the call, independent of
+  `markOrphaned`'s return value — needed because that return value can no longer double as "first time
+  seeing this coordinate" once a victim's own coordinate may already be pre-marked by the time its
+  worklist task is popped.
 - **An `UNRESOLVABLE_CLOCK` record dead-lettered at ingest never orphaned its coordinate, deterministically
   stranding dependents.** `ParsleyProcessor#onUnresolvableClock` dead-lettered a record whose
   causal-dependencies header could not be decoded entirely inside the processor — `engine.onRecord` was

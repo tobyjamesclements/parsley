@@ -4,7 +4,9 @@ import org.apache.kafka.common.TopicPartition;
 import org.apache.kafka.common.Uuid;
 import org.junit.jupiter.api.Test;
 
+import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -109,6 +111,71 @@ class ParsleyEngineDeadLetterTest {
         assertTrue(outcome.deadLettered().get(2) instanceof ParsleyEngine.DeadLetter.Decoded,
                 "C decoded fine — only its premise is gone");
         assertEquals(0, buffer.size(), "the buffer must end empty — nothing left waiting on a dead coordinate");
+    }
+
+    /**
+     * Regression test for BACKLOG.md's dead-letter torn-changelog-write finding: every dead-letter path
+     * must durably orphan a victim's own coordinate <em>before</em> removing it from the buffer, so a
+     * crash between the two writes always tears toward "orphan floor recorded, victim still buffered" (a
+     * harmless duplicate the next {@code drainSatisfied}/{@code drainAfterRestore} pass resolves) — never
+     * the reverse, which would leave the record gone with no floor recorded, permanently stranding
+     * anything depending on that exact coordinate.
+     *
+     * <p>Same three-record chain as {@link #poisonCascadesToEveryBufferedDependentInOnePass} — A (t1@5,
+     * poison) triggers {@code propagate()}'s poison-on-fetch branch directly; B (t2@0, depends on A) and
+     * C (t3@0, depends on B) are each caught by {@code orphan()}'s cascade via {@link
+     * ParsleyEngine#fetchForDeadLetter} — but here the buffer and orphan index are recording wrappers
+     * sharing one call-order log, so the test asserts the actual write order rather than just the
+     * outcome (which {@link #poisonCascadesToEveryBufferedDependentInOnePass} already covers).
+     *
+     * Asserts, for each of A, B, and C, that its own coordinate's {@code mark:} log entry precedes its
+     * {@code remove:} log entry.
+     */
+    @Test
+    void markOrphanedAlwaysPrecedesTheVictimsOwnBufferRemoval() {
+        List<String> log = new ArrayList<>();
+        Map<Uuid, String> labels = Map.of(T1_ID, "t1", T2_ID, "t2", T3_ID, "t3", T4_ID, "t4");
+        RecordingBufferStore<String, String> buffer = new RecordingBufferStore<>(log);
+        RecordingOrphanIndex orphanIndex = new RecordingOrphanIndex(log, labels);
+        // trackChannels = false, matching poisonCascadesToEveryBufferedDependentInOnePass's convenience
+        // constructor: single-layer frontier-only mode, so A's own advertisement of its t4@0 dependency
+        // does not trivially self-satisfy it (which the multi-channel completeness mode would allow with
+        // only one channel registered).
+        ParsleyFrontier frontier = new ParsleyFrontier(ParsleyClock.empty(), new MockForwardedIndex(), orphanIndex, false);
+        ParsleyEngine<String, String> engine = new ParsleyEngine<>(frontier, buffer, new MockCandidateIndex(),
+                ParsleyMetrics.NOOP, CausalAudit.NOOP, System::currentTimeMillis, true);
+
+        // A (t1@5) depends on the not-yet-observed trigger t4@0 — buffered as sequence 0.
+        ParsleyClock needsT4 = ParsleyClock.empty().observe(T4_ID, 0, 0);
+        engine.onRecord(message(T1, 5, T1_ID, needsT4));
+        buffer.poison(0L);
+
+        // B (t2@0) depends on A's own coordinate t1@5 — buffered as sequence 1.
+        ParsleyClock needsA = ParsleyClock.empty().observe(T1_ID, 0, 5);
+        engine.onRecord(message(T2, 0, T2_ID, needsA));
+
+        // C (t3@0) depends on B's own coordinate t2@0 — buffered as sequence 2.
+        ParsleyClock needsB = ParsleyClock.empty().observe(T2_ID, 0, 0);
+        engine.onRecord(message(T3, 0, T3_ID, needsB));
+
+        // The trigger (t4@0, no deps) delivers immediately, cascading through A (propagate's poison
+        // branch), then B and C (orphan()'s cascade via fetchForDeadLetter).
+        ParsleyEngine.Outcome<String, String> outcome = engine.onRecord(message(T4, 0, T4_ID, ParsleyClock.empty()));
+        assertEquals(3, outcome.deadLettered().size(), "A, B, and C must all be dead-lettered in this one pass");
+
+        assertMarkedBeforeRemoved(log, "t1@5", "remove:seq0", "A (propagate's poison-on-fetch branch)");
+        assertMarkedBeforeRemoved(log, "t2@0", "remove:seq1", "B (orphan()'s cascade, via fetchForDeadLetter)");
+        assertMarkedBeforeRemoved(log, "t3@0", "remove:seq2", "C (orphan()'s cascade, via fetchForDeadLetter)");
+    }
+
+    /** Asserts {@code log} contains {@code "mark:" + coord} strictly before {@code removeEntry}. */
+    private static void assertMarkedBeforeRemoved(List<String> log, String coord, String removeEntry, String who) {
+        int markIndex = log.indexOf("mark:" + coord);
+        int removeIndex = log.indexOf(removeEntry);
+        assertTrue(markIndex >= 0, "expected a mark: entry for " + coord + " in " + log);
+        assertTrue(removeIndex >= 0, "expected a " + removeEntry + " entry in " + log);
+        assertTrue(markIndex < removeIndex, who + ": markOrphaned(" + coord + ") must precede " + removeEntry
+                + " — log was " + log);
     }
 
     /**

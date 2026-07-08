@@ -7,28 +7,6 @@ Fable 5, plus findings from the follow-up verification review of the four fix co
 `e0109eb..5dc1d04`. Ranked most-severe first. GitHub Issues are disabled on this repo, so these are
 tracked here instead.
 
-## [MEDIUM] Dead-letter paths still have the torn-changelog-write shape the delivery paths were fixed for
-
-**Where:** `ParsleyEngine#fetchForDeadLetter` (buffer removal at the `buffer.remove(entry.sequence())`
-call), the poison branches of `propagate`/`drainSatisfied` (`buffer.remove` before `deadLetterRoot`),
-and `orphan`'s worklist ordering (a victim is removed from the buffer in one iteration; its own
-coordinate's `markOrphaned` happens only in a later iteration)
-
-The `e0109eb` fix reordered the *delivery* paths so the frontier/forwarded-index advance is persisted
-before the buffer removal, making a torn crash always land on the benign side. The dead-letter paths
-were not touched and still tear the dangerous way: the buffer entry is removed (buffer changelog)
-*before* the victim's coordinate is recorded in the orphan index (orphan changelog) and before the
-dead-letter record itself is emitted to the DLQ topic. A crash between those writes leaves the record
-gone from the buffer with no orphan floor recorded — its buffered dependents are then held forever,
-never proven impossible (the same permanent-wedge shape, on the dead-letter side) — and can lose the
-record entirely without it ever landing on the dead-letter topic.
-
-**Fix shape:** mirror the delivery-path fix — `markOrphaned` (durable) before `buffer.remove`, so the
-tear direction becomes "orphan floor recorded, victim still buffered", which the restore-time
-`drainSatisfied` pass resolves as a harmless duplicate dead-letter.
-
-**Coverage:** not covered by any existing test.
-
 ## [LOW-MEDIUM] Marker relay is key-routed and key-gated, so epoch markers can be withheld in more cases than the idle-partition one
 
 **Where:** `forwardEpochBoundary`/`forwardEpochSnapshot` (via `injectSnapshot`/`adoptAndInjectBoundary`
