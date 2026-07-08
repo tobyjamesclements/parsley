@@ -718,10 +718,16 @@ final class ParsleyEngine<K, V> {
      * That makes the call idempotent in the common case, so scanning for dependents cannot be gated on
      * its return value the way it used to be (a re-mark of an already-orphaned coordinate would then
      * always report "nothing new" and skip the scan, truncating the cascade at depth one). Scanning is
-     * instead gated on {@code scannedCoordinates}, a set local to this call: a coordinate discovered via
-     * a <em>different</em>, separate top-level {@link #orphan} call earlier in the same outer engine
-     * operation could in principle be re-scanned here — strictly safer than skipping it (never misses a
-     * candidate), just occasionally redundant, harmless work.
+     * instead gated on {@code lowestScannedFloor}, local to this call: a coordinate can be discovered
+     * more than once in one cascade, via different parent coordinates, at <em>different</em> floors (the
+     * FIFO worklist gives no ordering guarantee across branches) — a task at a higher floor than one
+     * already scanned for this coordinate would, under a plain "scanned once" set, wrongly skip the
+     * range {@code [thisFloor, previouslyScannedFloor)} forever. Recording the lowest floor scanned so
+     * far and rescanning whenever a new task's floor is strictly lower closes that gap: {@link
+     * ParsleyCandidateIndex#findCandidatesRequiringAtLeast} is monotonically broader as the floor drops,
+     * so a rescan at a lower floor is a strict superset of any narrower scan already done, and a task at
+     * a floor already covered is skipped as before — strictly safer than a single boolean, just
+     * occasionally redundant, harmless work.
      */
     private void orphan(List<DeadLetter<K, V>> deadLetters, Uuid topicId, int partition, long floor) {
         if (!deadLetterEnabled) {
@@ -730,13 +736,16 @@ final class ParsleyEngine<K, V> {
         Deque<OrphanTask> worklist = new ArrayDeque<>();
         worklist.add(new OrphanTask(topicId, partition, floor));
         Set<Long> seenRecords = new HashSet<>();
-        Set<Coord> scannedCoordinates = new HashSet<>();
+        Map<Coord, Long> lowestScannedFloor = new HashMap<>();
         while (!worklist.isEmpty()) {
             OrphanTask task = worklist.poll();
             orphanIndex.markOrphaned(task.topicId(), task.partition(), task.floor());
-            if (!scannedCoordinates.add(new Coord(task.topicId(), task.partition()))) {
-                continue;                                                 // already scanned this pass
+            Coord coord = new Coord(task.topicId(), task.partition());
+            Long recorded = lowestScannedFloor.get(coord);
+            if (recorded != null && task.floor() >= recorded) {
+                continue;                                                 // already scanned at this floor or lower
             }
+            lowestScannedFloor.put(coord, task.floor());
             for (ParsleyCandidateIndex.Candidate candidate : candidateIndex.findCandidatesRequiringAtLeast(
                     task.topicId(), task.partition(), task.floor())) {
                 if (!seenRecords.add(candidate.recordId())) continue;
@@ -754,9 +763,10 @@ final class ParsleyEngine<K, V> {
     private record OrphanTask(Uuid topicId, int partition, long floor) {
     }
 
-    /** A bare coordinate, ignoring offset — used by {@link #orphan} to track which coordinates this
-     * call has already scanned for dependents, independent of {@link ParsleyOrphanIndex#markOrphaned}'s
-     * return value (see that method's Javadoc for why they must be tracked separately). */
+    /** A bare coordinate, ignoring offset — used by {@link #orphan} to track which floor this call has
+     * already scanned for dependents on each coordinate, independent of {@link
+     * ParsleyOrphanIndex#markOrphaned}'s return value (see that method's Javadoc for why they must be
+     * tracked separately). */
     private record Coord(Uuid topicId, int partition) {
     }
 

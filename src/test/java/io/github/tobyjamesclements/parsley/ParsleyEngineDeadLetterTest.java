@@ -30,6 +30,19 @@ class ParsleyEngineDeadLetterTest {
     private static final Uuid T3_ID = Uuid.randomUuid();
     private static final Uuid T4_ID = Uuid.randomUuid();
 
+    // Coordinates for the cross-branch orphan-cascade repro below: root Z fans out to D and E, each of
+    // which fans out to a distinct record on C — so C is discovered twice, at two different floors.
+    private static final TopicPartition Z = new TopicPartition("z", 0);
+    private static final TopicPartition D = new TopicPartition("d", 0);
+    private static final TopicPartition E = new TopicPartition("e", 0);
+    private static final TopicPartition C = new TopicPartition("c", 0);
+    private static final TopicPartition REQ = new TopicPartition("req", 0);
+    private static final Uuid Z_ID = Uuid.randomUuid();
+    private static final Uuid D_ID = Uuid.randomUuid();
+    private static final Uuid E_ID = Uuid.randomUuid();
+    private static final Uuid C_ID = Uuid.randomUuid();
+    private static final Uuid REQ_ID = Uuid.randomUuid();
+
     /**
      * With no dead-letter sink configured ({@code deadLetterEnabled = false}), a poison record on the
      * forward path fails the task exactly as before dead-lettering existed — the regression guard for
@@ -602,6 +615,67 @@ class ParsleyEngineDeadLetterTest {
         assertEquals(ParsleyEngine.DeadLetter.Reason.ORPHAN_CASCADE, outcome.deadLettered().get(0).reason(),
                 "W depends on an already-orphaned coordinate, not itself poison");
         assertEquals(0, buffer.size(), "W must never be left buffered");
+    }
+
+    /**
+     * Regression test for BACKLOG.md's floor-blind scan-gating finding: a coordinate discovered twice in
+     * one {@code orphan()} cascade, via two different parent branches, at two different floors, must be
+     * scanned at the <em>lower</em> of the two floors — otherwise the range between them is never
+     * scanned in this pass and a genuine dependent in that range is stranded.
+     *
+     * <p>Root Z is orphaned. Scanning Z's dependents finds V1 (D@0, indexed requiring Z@0) and V2 (E@0,
+     * indexed requiring Z@1) — Z's required-offset ordering (ascending) guarantees V1 is scanned first,
+     * so its cascade reaches the worklist before V2's. Scanning V1's own coordinate (D@0) finds C10
+     * (C@10, indexed requiring D@0); scanning V2's own coordinate (E@0) finds C5 (C@5, indexed requiring
+     * E@0). The worklist is now {@code [(C,10), (C,5)]} in that order — cross-branch discovery order is
+     * unconstrained, so the higher floor for C is reached first.
+     *
+     * <p>REQ (indexed requiring C@7) sits strictly between the two floors: {@code 5 <= 7 < 10}. Popping
+     * {@code (C,10)} first and scanning at floor 10 does not find it ({@code 7 < 10}); the fix must then
+     * still rescan at the lower floor 5 when {@code (C,5)} is popped next, finding REQ then. A single
+     * "scanned once" set would instead skip the {@code (C,5)} scan entirely (C already seen), leaving
+     * REQ buffered forever.
+     *
+     * <p>Every record is seeded directly into the buffer and candidate index — mirroring {@link
+     * #drainAfterRestoreCompletesAnOrphanCascadeInterruptedBeforeTheCrash}'s pattern — rather than via
+     * {@code onRecord}, so the scenario exercises {@code orphan()}'s worklist alone, without the
+     * completeness/channel machinery (irrelevant here) also shaping which records get buffered.
+     *
+     * Asserts REQ is dead-lettered as an orphan-cascade victim and the buffer ends empty.
+     */
+    @Test
+    void orphanRescansACoordinateAtALowerFloorDiscoveredLaterInTheSameCascade() {
+        MockBufferStore<String, String> buffer = new MockBufferStore<>();
+        MockCandidateIndex candidateIndex = new MockCandidateIndex();
+        ParsleyEngine<String, String> engine = new ParsleyEngine<>(ParsleyClock.empty(), buffer,
+                candidateIndex, new MockForwardedIndex(), new MockOrphanIndex(), ParsleyMetrics.NOOP,
+                CausalAudit.NOOP, System::currentTimeMillis, true);
+
+        seed(buffer, candidateIndex, message(D, 0, D_ID, ParsleyClock.empty().observe(Z_ID, 0, 0)));
+        seed(buffer, candidateIndex, message(E, 0, E_ID, ParsleyClock.empty().observe(Z_ID, 0, 1)));
+        seed(buffer, candidateIndex, message(C, 10, C_ID, ParsleyClock.empty().observe(D_ID, 0, 0)));
+        seed(buffer, candidateIndex, message(C, 5, C_ID, ParsleyClock.empty().observe(E_ID, 0, 0)));
+        seed(buffer, candidateIndex, message(REQ, 0, REQ_ID, ParsleyClock.empty().observe(C_ID, 0, 7)));
+        assertEquals(5, buffer.size(), "all five records must be held before Z is ever orphaned");
+
+        ParsleyEngine.Outcome<String, String> outcome = engine.deadLetterAtIngest(Z_ID, 0, 0);
+
+        assertEquals(
+                List.of("d", "e", "c", "c", "req"),
+                outcome.deadLettered().stream().map(ParsleyEngine.DeadLetter::topic).toList(),
+                "the cascade must reach every dependent, including REQ at the lower of C's two discovered floors");
+        assertTrue(outcome.deadLettered().stream()
+                        .allMatch(letter -> letter.reason() == ParsleyEngine.DeadLetter.Reason.ORPHAN_CASCADE),
+                "every victim here is a cascade dependent, none itself poison");
+        assertEquals(0, buffer.size(), "REQ must not be left stranded in the buffer forever");
+    }
+
+    /** Adds {@code message} to {@code buffer} and indexes it against an empty frontier, exactly as a
+     * restored task's one-time construction-time pass would (see {@link ParsleyEngine}'s constructor). */
+    private static void seed(MockBufferStore<String, String> buffer, MockCandidateIndex candidateIndex,
+                             ParsleyMessage<String, String> message) {
+        long seq = buffer.add(message, 0L);
+        candidateIndex.index(seq, message.dependencies(), ParsleyClock.empty());
     }
 
     private static ParsleyMessage<String, String> message(TopicPartition tp, long offset,

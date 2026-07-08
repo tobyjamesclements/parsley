@@ -7,6 +7,19 @@ All notable changes to this project are documented in this file. The format is b
 ## [Unreleased]
 
 ### Fixed
+- **`orphan()`'s scan gating was floor-blind: a coordinate discovered twice in one cascade, via two
+  different parent branches, at two different floors, skipped the second scan entirely.** The set
+  tracking "coordinates already scanned this pass" keyed on `(topicId, partition)` alone, so once a
+  coordinate was scanned at some floor, a later worklist task for the same coordinate at a *lower*
+  floor was dropped without ever scanning `[lowerFloor, alreadyScannedFloor)` — a genuine dependent
+  requiring an offset in that range was never dead-lettered in this pass, staying buffered until (at
+  best) the next full drain, an unbounded liveness delay on an idle topology.
+
+  `ParsleyEngine.orphan` now tracks `Map<Coord, Long> lowestScannedFloor` instead of a set, and rescans
+  whenever a newly-popped task's floor is strictly lower than what's already recorded for that
+  coordinate, recording the new minimum. `findCandidatesRequiringAtLeast` at a lower floor is a strict
+  superset of any narrower scan already done, so already-handled records are skipped via the existing
+  `seenRecords` guard; nothing is scanned twice for no reason beyond the genuinely-new range.
 - **`tryAdvanceEpoch` gated on the DAG-wide committed floor, so an epoch transition could never settle
   at a non-terminal node.** The committed floor `F_e` is the `mergeMin` of every member's published
   completeness, so it names coordinates for every topic in the DAG — including topics downstream of (or
