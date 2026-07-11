@@ -3,6 +3,7 @@ package io.github.tobyjamesclements.parsley;
 import org.apache.kafka.clients.admin.Admin;
 import org.apache.kafka.clients.admin.CreateTopicsResult;
 import org.apache.kafka.clients.admin.NewTopic;
+import org.apache.kafka.common.config.TopicConfig;
 import org.apache.kafka.clients.consumer.ConsumerConfig;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.apache.kafka.clients.consumer.KafkaConsumer;
@@ -122,7 +123,7 @@ class ParsleyCoordinationLeaveDrainIT {
                     "the marker record confirms X has consumed past — and so is buffering — the held `order` record");
 
             // Call leave() on a background thread: phase 1 blocks until X's buffer drains.
-            Thread leaverThread = new Thread(coordinationX::leave, "leave-drain");
+            Thread leaverThread = new Thread(() -> coordinationX.leave(() -> true), "leave-drain");
             leaver = leaverThread;
             leaverThread.start();
 
@@ -304,7 +305,10 @@ class ParsleyCoordinationLeaveDrainIT {
         try (Admin admin = Admin.create(Map.of("bootstrap.servers", bootstrap))) {
             Set<NewTopic> newTopics = new HashSet<>();
             for (String topic : topics) {
-                newTopics.add(new NewTopic(topic, 1, (short) 1));
+                newTopics.add(new NewTopic(topic, 1, (short) 1)
+                        // retention.ms=-1: the epoch-events log must never lose history (KafkaEpochTransport
+                        // fails fast otherwise); harmless for the business topics created alongside.
+                        .configs(Map.of(TopicConfig.RETENTION_MS_CONFIG, "-1")));
             }
             CreateTopicsResult result = admin.createTopics(newTopics);
             result.all().get();

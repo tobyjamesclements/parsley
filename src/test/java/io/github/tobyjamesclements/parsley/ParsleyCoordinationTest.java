@@ -105,7 +105,7 @@ class ParsleyCoordinationTest {
             runtime.requestSnapshot("A");                 // cold start: commits epoch 1, promoting A to running
             waitUntil(() -> runtime.isRunningMember("A"));
 
-            Thread leaver = new Thread(coordination::leave, "leave-test");
+            Thread leaver = new Thread(() -> coordination.leave(() -> true), "leave-test");
             leaver.start();
 
             // Phase 1 blocks while A's buffer is not reported drained: A stays a running member.
@@ -120,6 +120,46 @@ class ParsleyCoordinationTest {
             assertFalse(runtime.isRunningMember("A"), "leave() removed A from the running set");
             waitUntil(() -> runtime.committedEpochId() >= 2L);   // phase 3 committed a new epoch without A
             assertEquals(2L, runtime.committedEpochId(), "leave() requested a new epoch (epoch 2) excluding A");
+        } finally {
+            runtime.close();
+        }
+    }
+
+    /**
+     * {@link ParsleyCoordination#leave} abandons the decommission — promptly, without hanging — when
+     * its liveness probe reports the instance can no longer drain (the streams runtime died in ERROR,
+     * or was already stopped): an undrained buffer on a dead instance will never empty, so the old
+     * unbounded phase-1 wait could never return. Abandoning must also leave the member IN the domain
+     * — never evicted with an undrained buffer ("only a drained node is excluded") — exactly as a
+     * crash would, so a later restart resumes it as a running member under the unchanged floor.
+     *
+     * Asserts leave() returns despite the never-drained buffer, the member is still a running member
+     * on the log, and no re-settle epoch was requested (the committed epoch is unchanged).
+     */
+    @Test
+    void leaveAbandonsTheDecommissionWhenTheInstanceCanNoLongerDrain() throws Exception {
+        InMemoryEpochTransport.SharedLog log = new InMemoryEpochTransport.SharedLog();
+        ParsleyEpochRuntime runtime = new ParsleyEpochRuntime(new InMemoryEpochTransport(log));
+        ParsleyCoordination coordination = ParsleyCoordination.forRuntime(runtime);
+        runtime.start();
+        try {
+            runtime.join("A", Set.of(), Set.of());
+            runtime.requestSnapshot("A");                 // cold start: commits epoch 1, promoting A to running
+            waitUntil(() -> runtime.isRunningMember("A"));
+            runtime.reportDrained("A", false);            // a held record the dead instance can never drain
+
+            Thread leaver = new Thread(() -> coordination.leave(() -> false), "leave-abandon-test");
+            leaver.start();
+            leaver.join(5000);
+
+            assertFalse(leaver.isAlive(),
+                    "leave() must abandon the decommission promptly when the instance can no longer "
+                            + "drain, instead of hanging forever on a buffer no task will ever empty");
+            assertTrue(runtime.isRunningMember("A"),
+                    "an abandoned decommission must leave the member in the domain (as a crash would), "
+                            + "never evict it with an undrained buffer");
+            assertEquals(1L, runtime.committedEpochId(),
+                    "no re-settle epoch may be requested for an abandoned decommission");
         } finally {
             runtime.close();
         }
@@ -220,7 +260,7 @@ class ParsleyCoordinationTest {
             // ever reporting B drained (its buffer state on this instance is now stale forever).
             runtime.unregisterMember("B");
 
-            Thread leaver = new Thread(coordination::leave, "leave-test");
+            Thread leaver = new Thread(() -> coordination.leave(() -> true), "leave-test");
             leaver.start();
 
             // Phase 1 blocks on A alone — B is no longer local, so it is not part of the drain gate.

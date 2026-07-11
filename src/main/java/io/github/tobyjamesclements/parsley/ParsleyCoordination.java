@@ -1,10 +1,13 @@
 package io.github.tobyjamesclements.parsley;
 
 import org.jspecify.annotations.Nullable;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.time.Duration;
 import java.util.Map;
 import java.util.Objects;
+import java.util.function.BooleanSupplier;
 
 /**
  * Turns on topology-epoch coordination for a {@link CausalStreams} runtime. {@code CausalStreams} builds
@@ -27,6 +30,8 @@ import java.util.Objects;
  * {@link #requestEpochTransition()} / {@link #close()} from an unrelated thread.
  */
 final class ParsleyCoordination {
+
+    private static final Logger log = LoggerFactory.getLogger(ParsleyCoordination.class);
 
     private static final Duration COORDINATION_POLL_INTERVAL = Duration.ofMillis(20);
 
@@ -182,15 +187,33 @@ final class ParsleyCoordination {
      * A no-op if no task has initialised coordination or no local member has joined. <strong>Contract:</strong>
      * the caller must have stopped feeding this node new input before decommissioning — {@code leave()}
      * drains the in-flight buffer, not records that arrive after it returns.
+     *
+     * <p>The phase-1 drain wait is unbounded only while draining can actually progress: when
+     * {@code canStillDrain} reports false (the streams instance died in {@code ERROR}, or was already
+     * stopped), no task will ever deliver again, so the whole decommission is <em>abandoned</em> — the
+     * members stay in the domain exactly as a crash would leave them, never evicted with an undrained
+     * buffer ("only a drained node is excluded"), and a later restart resumes them as running members
+     * under the unchanged floor.
+     *
+     * @param canStillDrain whether the owning streams instance can still deliver records — polled each
+     *                      wait iteration; returning {@code false} abandons the decommission
      */
-    void leave() {
+    void leave(BooleanSupplier canStillDrain) {
         ParsleyEpochRuntime runtime = currentRuntime();
         if (runtime == null || runtime.anyLocalMember() == null) {
             return;
         }
-        // Phase 1 — drain: block until every local member's buffer is empty (unbounded; the StreamThreads
-        // keep delivering, so the buffer drains as dependencies arrive).
+        // Phase 1 — drain: block until every local member's buffer is empty (unbounded while draining can
+        // progress; the StreamThreads keep delivering, so the buffer drains as dependencies arrive). A
+        // dead streams instance can never drain, so abandon the decommission rather than hang — and
+        // rather than evict members whose buffers still hold records.
         while (!runtime.allLocalMembersDrained()) {
+            if (!canStillDrain.getAsBoolean()) {
+                log.warn("Abandoning the epoch-domain decommission: the streams instance can no longer "
+                        + "deliver, so the causal buffer will never drain. Members stay in the domain "
+                        + "(as after a crash) and resume as running members on the next start.");
+                return;
+            }
             sleep();
         }
         // Phase 2 — remove: append a Leave for each local member, then block until the fold has dropped them

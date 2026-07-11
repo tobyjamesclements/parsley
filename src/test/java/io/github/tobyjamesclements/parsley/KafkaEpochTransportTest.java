@@ -28,6 +28,37 @@ class KafkaEpochTransportTest {
     private static final String TOPIC = "t1-epoch-events";
 
     /**
+     * The epoch-events topic must never lose history: every instance's fold replays the whole log
+     * from the beginning, so a {@code cleanup.policy} including {@code compact} or a finite
+     * {@code retention.ms} silently amputates the join/commit history — a restarted instance then
+     * folds the truncated log, sees epoch 0, and treats an established domain as a cold start.
+     * {@code requireEternalLogConfig} is the pure validator the broker-backed constructor runs at
+     * startup, mirroring the single-partition fail-fast.
+     *
+     * Asserts a compacting policy and a finite retention each fail fast, while delete-with-infinite
+     * -retention passes, and an unknown (null/unparseable) value is tolerated as not provably wrong.
+     */
+    @Test
+    void requireEternalLogConfigFailsFastOnCompactionOrFiniteRetention() {
+        assertThrows(IllegalStateException.class,
+                () -> KafkaEpochTransport.requireEternalLogConfig(TOPIC, "compact", "-1"),
+                "a compacting epoch-events topic removes events the fold needs and must fail startup");
+        assertThrows(IllegalStateException.class,
+                () -> KafkaEpochTransport.requireEternalLogConfig(TOPIC, "compact,delete", "-1"),
+                "compact,delete still compacts and must fail startup");
+        assertThrows(IllegalStateException.class,
+                () -> KafkaEpochTransport.requireEternalLogConfig(TOPIC, "delete", "604800000"),
+                "finite retention silently deletes join/commit history and must fail startup");
+        assertThrows(IllegalStateException.class,
+                () -> KafkaEpochTransport.requireEternalLogConfig(TOPIC, "delete", "0"),
+                "zero retention is finite retention and must fail startup");
+
+        KafkaEpochTransport.requireEternalLogConfig(TOPIC, "delete", "-1");   // the documented config
+        KafkaEpochTransport.requireEternalLogConfig(TOPIC, null, null);       // unknown: tolerated
+        KafkaEpochTransport.requireEternalLogConfig(TOPIC, "delete", "not-a-number");
+    }
+
+    /**
      * Every append targets partition 0 explicitly — the one partition every fold reads. Left to the
      * producer's own partitioner, a null-key send would scatter events across the partitions of a
      * mis-created topic, landing a join or a publication where no fold ever looks — silent,

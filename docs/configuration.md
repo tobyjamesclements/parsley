@@ -49,10 +49,11 @@ parsley.topology.validation = warn
 # coordination for a CausalStreams runtime. Absent (the default), a topology runs in epoch 0 exactly
 # as without coordination: no epoch-events log, no coordination thread.
 #
-# The topic must exist with EXACTLY ONE partition (validated at startup; the protocol's total order
-# is that partition's offset order) and must retain its full history: every instance replays the log
-# from the beginning on startup, so use cleanup.policy=delete with retention.ms=-1 — finite retention
-# or compaction silently erases membership and epoch history.
+# The topic must exist with EXACTLY ONE partition and must retain its full history: every instance
+# replays the log from the beginning on startup, so use cleanup.policy=delete with retention.ms=-1 —
+# finite retention or compaction silently erases membership and epoch history. Both are validated at
+# startup (the partition count, the cleanup policy, and the retention), failing fast on a topic that
+# could ever lose events the fold needs.
 # parsley.coordination.epoch-events-topic = parsley-epoch-events
 
 # The comma-separated set of every topic in the coordinated domain (every member's inputs and sinks,

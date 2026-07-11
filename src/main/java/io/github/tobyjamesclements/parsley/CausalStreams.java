@@ -106,7 +106,10 @@ public final class CausalStreams implements AutoCloseable {
      * already stopped), no task will ever deliver again, so the wait ends and shutdown proceeds — every
      * held record is changelog-backed and survives to the next start, so nothing is lost by closing an
      * already-dead instance (see {@link ParsleyQuiesce}: the drain is a stall-avoidance optimisation,
-     * not a correctness requirement).
+     * not a correctness requirement). The coordination decommission honours the same liveness rule: on
+     * an instance that can no longer drain, {@link ParsleyCoordination#leave} abandons the removal
+     * (members stay in the domain, exactly as a crash would leave them) instead of hanging on a buffer
+     * no task will ever empty.
      */
     @Override
     public void close() {
@@ -115,7 +118,7 @@ public final class CausalStreams implements AutoCloseable {
             awaitDrain(quiesce, kafkaStreams::state);
         }
         if (coordination != null) {
-            coordination.leave();
+            coordination.leave(() -> canStillDrain(kafkaStreams.state()));
         }
         kafkaStreams.close();
         if (coordination != null) {
@@ -133,12 +136,17 @@ public final class CausalStreams implements AutoCloseable {
      */
     static void awaitDrain(ParsleyQuiesce quiesce, Supplier<KafkaStreams.State> state) {
         while (!quiesce.isSafeToClose()) {
-            KafkaStreams.State current = state.get();
-            if (current != KafkaStreams.State.RUNNING && current != KafkaStreams.State.REBALANCING) {
+            if (!canStillDrain(state.get())) {
                 return;
             }
             sleep();
         }
+    }
+
+    /** Whether tasks in {@code state} can still deliver records — the liveness rule both {@link
+     * #awaitDrain} and the coordination decommission's drain wait poll. */
+    private static boolean canStillDrain(KafkaStreams.State state) {
+        return state == KafkaStreams.State.RUNNING || state == KafkaStreams.State.REBALANCING;
     }
 
     private static void sleep() {

@@ -7,6 +7,26 @@ All notable changes to this project are documented in this file. The format is b
 ## [Unreleased]
 
 ### Fixed
+- **`CausalStreams#close()` could hang forever on a dead coordinated instance.** The quiesce drain
+  wait already ended when the streams instance left `RUNNING`/`REBALANCING`, but the coordination
+  decommission's phase-1 drain wait had no such escape: an instance that died in `ERROR` with a
+  non-empty buffer spun in `ParsleyCoordination#leave` unbounded, waiting on a buffer no task would
+  ever empty. `leave` now takes the same liveness probe `close()` already applies to the quiesce
+  wait, and *abandons* the decommission when the instance can no longer drain — the members stay in
+  the domain exactly as a crash would leave them (never evicted with an undrained buffer; "only a
+  drained node is excluded"), and a later restart resumes them as running members under the
+  unchanged floor.
+- **The epoch-events log's history requirements are now validated at startup.** Every instance's
+  fold replays the log from the beginning, so a `cleanup.policy` including `compact` or a finite
+  `retention.ms` silently amputates the join/commit history — after which a restarted instance sees
+  `committedEpochId == 0` and treats an established domain as a cold start. This was documented in
+  `configuration.md` but never enforced, unlike the equally fatal partition-count misconfiguration.
+  `KafkaEpochTransport` now describes the topic's config before building any client and fails fast
+  unless the policy is non-compacting and retention is infinite, mirroring the single-partition
+  check; the coordination integration tests create their epoch-events topics with
+  `retention.ms=-1` accordingly.
+
+### Fixed
 - **A user-delegate exception during a marker-triggered release was swallowed, permanently losing the
   released records.** The epoch marker channel-clock path wrapped not just the carried clock's decode
   but the whole `onWatermark` + delivery in one `catch (Exception)` that logged *"Failed to decode

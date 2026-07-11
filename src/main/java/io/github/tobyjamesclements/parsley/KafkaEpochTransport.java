@@ -1,5 +1,8 @@
 package io.github.tobyjamesclements.parsley;
 
+import org.apache.kafka.clients.admin.Admin;
+import org.apache.kafka.clients.admin.Config;
+import org.apache.kafka.clients.admin.ConfigEntry;
 import org.apache.kafka.clients.consumer.ConsumerConfig;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.apache.kafka.clients.consumer.ConsumerRecords;
@@ -9,9 +12,12 @@ import org.apache.kafka.clients.producer.Producer;
 import org.apache.kafka.clients.producer.ProducerConfig;
 import org.apache.kafka.clients.producer.ProducerRecord;
 import org.apache.kafka.common.TopicPartition;
+import org.apache.kafka.common.config.ConfigResource;
+import org.apache.kafka.common.config.TopicConfig;
 import org.apache.kafka.common.serialization.ByteArrayDeserializer;
 import org.apache.kafka.common.serialization.ByteArraySerializer;
 import org.apache.kafka.clients.consumer.Consumer;
+import org.jspecify.annotations.Nullable;
 
 import java.time.Duration;
 import java.util.ArrayList;
@@ -53,9 +59,13 @@ final class KafkaEpochTransport implements ParsleyEpochTransport {
     // bootstrapped once its position reaches it. -1 until captured.
     private long bootstrapEndOffset = -1;
 
-    /** Builds the raw clients from {@code appConfigs} and assigns the consumer to the log's one partition. */
+    /**
+     * Builds the raw clients from {@code appConfigs} and assigns the consumer to the log's one
+     * partition. Validates the topic's {@code cleanup.policy}/{@code retention.ms} first (see
+     * {@link #requireEternalLogConfig}), before any client is built.
+     */
     KafkaEpochTransport(Map<String, Object> appConfigs, String topic) {
-        this(topic,
+        this(requireEternalLog(appConfigs, topic),
                 new KafkaProducer<>(producerConfig(appConfigs)),
                 new KafkaConsumer<>(consumerConfig(appConfigs)));
     }
@@ -77,6 +87,75 @@ final class KafkaEpochTransport implements ParsleyEpochTransport {
         // Read the whole log from the start on every instance — the fold's determinism depends on it.
         consumer.assign(List.of(partition));
         consumer.seekToBeginning(List.of(partition));
+    }
+
+    /**
+     * Describes {@code topic}'s configuration through a short-lived {@link Admin} over {@code
+     * appConfigs} and validates it with {@link #requireEternalLogConfig}, returning {@code topic} so
+     * the broker-backed constructor can run this before building any client. Mirrors {@link
+     * #requireSinglePartition}: both misconfigurations silently corrupt the protocol rather than
+     * failing loudly, so both are checked at startup, before the first append.
+     */
+    private static String requireEternalLog(Map<String, Object> appConfigs, String topic) {
+        ConfigResource resource = new ConfigResource(ConfigResource.Type.TOPIC, topic);
+        Config config;
+        try (Admin admin = Admin.create(new HashMap<>(appConfigs))) {
+            config = admin.describeConfigs(List.of(resource)).all().get().get(resource);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new IllegalStateException("interrupted describing epoch-events topic '" + topic + "'", e);
+        } catch (ExecutionException e) {
+            throw new IllegalStateException("failed to describe epoch-events topic '" + topic
+                    + "'; the leaderless epoch protocol requires it to exist (single partition, "
+                    + "cleanup.policy=delete, retention.ms=-1) before a coordinated topology starts",
+                    e.getCause());
+        }
+        requireEternalLogConfig(topic,
+                configValue(config, TopicConfig.CLEANUP_POLICY_CONFIG),
+                configValue(config, TopicConfig.RETENTION_MS_CONFIG));
+        return topic;
+    }
+
+    private static @Nullable String configValue(@Nullable Config config, String key) {
+        if (config == null) {
+            return null;
+        }
+        ConfigEntry entry = config.get(key);
+        return entry == null ? null : entry.value();
+    }
+
+    /**
+     * Fails fast when the epoch-events topic could ever lose history. Every instance's {@link
+     * ParsleyEpochLog} fold replays this log <em>from the beginning</em>, and its correctness depends
+     * on the entire history surviving: a {@code cleanup.policy} that includes {@code compact}, or a
+     * finite {@code retention.ms}, silently amputates old {@code JoinRequested}/{@code EpochCommitted}
+     * events — after which a restarted instance folds the truncated log, sees {@code committedEpochId
+     * == 0}, and treats an established domain as a cold start. That failure is silent and unbounded-in
+     * -time, so — exactly like {@link #requireSinglePartition} — it is checked loudly at startup
+     * instead. A {@code null} or unparseable value is tolerated (unknown, not provably wrong).
+     */
+    static void requireEternalLogConfig(String topic, @Nullable String cleanupPolicy, @Nullable String retentionMs) {
+        if (cleanupPolicy != null && cleanupPolicy.contains(TopicConfig.CLEANUP_POLICY_COMPACT)) {
+            throw new IllegalStateException("epoch-events topic '" + topic + "' has cleanup.policy="
+                    + cleanupPolicy + "; the leaderless epoch protocol replays the whole log from the "
+                    + "beginning on every start, and compaction removes events the fold needs — set "
+                    + "cleanup.policy=delete with retention.ms=-1");
+        }
+        if (retentionMs == null || retentionMs.isBlank()) {
+            return;
+        }
+        long retention;
+        try {
+            retention = Long.parseLong(retentionMs.trim());
+        } catch (NumberFormatException e) {
+            return;
+        }
+        if (retention >= 0) {
+            throw new IllegalStateException("epoch-events topic '" + topic + "' has retention.ms="
+                    + retention + "; the leaderless epoch protocol replays the whole log from the "
+                    + "beginning on every start, and finite retention silently deletes the join/commit "
+                    + "history the fold needs — set retention.ms=-1");
+        }
     }
 
     private void requireSinglePartition() {
