@@ -14,9 +14,10 @@ import java.util.List;
  * The engine's typed envelope: a record together with the causal metadata Parsley needs, all as
  * typed fields rather than re-parsed headers. {@code headers} holds the user's headers only — the
  * source coordinate ({@code topic}/{@code topicId}/{@code partition}/{@code offset}) and the causal
- * {@code dependencies} are first-class fields, encoded back into the {@code _parsley_*} /
- * {@code parsley-causal-dependencies} wire headers only when a message crosses a Kafka boundary
- * (the buffer store).
+ * {@code dependencies} are first-class fields. They are written as typed framing fields (never
+ * headers) when a message is persisted to the buffer store ({@link ParsleySerializer}), and the
+ * dependencies re-materialise as the {@code parsley-causal-dependencies} header only for the
+ * delegate's view ({@link #headersWithDependencies}).
  *
  * @param <K> the record key type
  * @param <V> the record value type
@@ -71,8 +72,8 @@ record ParsleyMessage<K, V>(String topic, Uuid topicId, int partition, long offs
 
     /**
      * The user headers plus the {@code parsley-causal-dependencies} header carrying
-     * {@link #dependencies} — the header set a delegate processor sees. Carries no internal
-     * {@code _parsley_src_*} routing headers.
+     * {@link #dependencies} — the header set a delegate processor sees. Carries no
+     * {@code _parsley_*}-prefixed internal marker headers.
      */
     Headers headersWithDependencies() {
         Headers out = userHeadersView();

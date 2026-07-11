@@ -8,9 +8,11 @@ import java.io.IOException;
 
 /**
  * A topology epoch-boundary marker: the {@code epochId} (strictly increasing) and the epoch's
- * {@code lowerBounds} — the new per-coordinate floor, carried as a {@link ParsleyClock}. Written by the
- * Topology Co-ordinator to every input channel and carried in the {@link ParsleyHeader#EPOCH_BOUNDARY}
- * control header; a processor adopts it into its {@link ParsleyEpochState} on receipt.
+ * {@code lowerBounds} — the new per-coordinate floor, carried as a {@link ParsleyClock}. Leaderless:
+ * a source-layer task injects it onto its own sinks when a commit folds from the epoch-events log
+ * ({@code ParsleyProcessor#adoptAndInjectBoundary}), and each consuming node relays it edge by edge
+ * through the DAG in the {@link ParsleyHeader#EPOCH_BOUNDARY} control header; a processor adopts it
+ * into its {@link ParsleyEpochState} on receipt.
  *
  * @param epochId     the new epoch's id, strictly increasing across boundaries
  * @param lowerBounds the new floor {@code F_e}: the lowest in-domain offset per {@code (topicId, partition)}

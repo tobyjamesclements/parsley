@@ -6,6 +6,19 @@ All notable changes to this project are documented in this file. The format is b
 
 ## [Unreleased]
 
+### Changed
+- **Documentation drift swept.** `ParsleyEpochBoundary` no longer credits a "Topology Co-ordinator"
+  (the protocol is leaderless: source-layer tasks inject, peers relay); `ParsleyEpochEvent` counts
+  its five events (not four) and, with `ParsleyEpochLog`/`ParsleyEpochSnapshotPublisher`, describes
+  the commit as any-node-appends-the-deterministic-fold rather than an owner's or coordinator's
+  decision; member ids are documented as `application.id/taskId`, not bare task ids;
+  `ParsleyBufferStore#remove` no longer references the deleted `entries()`; `ParsleyMessage` no
+  longer claims `_parsley_src_*` routing headers or header-encoding at the buffer boundary (the
+  serializer writes typed framing fields); `ParsleyConfig`'s domain-topics key describes the actual
+  same-node passthrough wiring, not a "dedicated passthrough processor node";
+  `ParsleyClock#mergeMin`'s contradictory "ignoring … is kept" wording now says what it does; and a
+  stale `ParsleyKafkaEpochTransport` class name in the pom's coverage note is corrected.
+
 ### Fixed
 - **`CausalStreams#close()` could hang forever on a dead coordinated instance.** The quiesce drain
   wait already ended when the streams instance left `RUNNING`/`REBALANCING`, but the coordination

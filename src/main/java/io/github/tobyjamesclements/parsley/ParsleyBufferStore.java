@@ -72,7 +72,7 @@ interface ParsleyBufferStore<K, V> {
     /**
      * Removes the entry with the given insertion sequence.
      *
-     * @param sequence the sequence of an entry previously returned by {@link #entries()}
+     * @param sequence the sequence of an entry previously returned by {@link #add}
      */
     void remove(long sequence);
 

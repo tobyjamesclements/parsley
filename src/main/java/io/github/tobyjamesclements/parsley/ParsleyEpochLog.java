@@ -20,8 +20,10 @@ import java.util.Set;
  *       later requests (and joins) while the round is open <strong>coalesce</strong> into it.
  *   <li>Running members publish ({@link ParsleyEpochEvent.FrontierPublished}); the round is
  *       {@linkplain #isRoundComplete() complete} once every running member has published.
- *   <li>The owner then commits {@link #proposeCommit()} = {@code (nextEpochId, mergeMin(published))};
- *       applying the resulting {@link ParsleyEpochEvent.EpochCommitted} advances the settled epoch, promotes
+ *   <li>Any node with a local member then commits {@link #proposeCommit()} = {@code (nextEpochId,
+ *       mergeMin(published))} — deterministic, so every node computes the identical commit and
+ *       dedup-by-{@code epochId} absorbs concurrent appends; applying the resulting
+ *       {@link ParsleyEpochEvent.EpochCommitted} advances the settled epoch, promotes
  *       pending joiners to running, and clears the round.
  * </ul>
  *
@@ -251,7 +253,7 @@ final class ParsleyEpochLog {
     }
 
     /**
-     * The commit the owner should write for the now-complete round: {@code (nextEpochId, lowerBounds)}
+     * The commit to append for the now-complete round: {@code (nextEpochId, lowerBounds)}
      * where {@code lowerBounds} is the {@link ParsleyClock#mergeMin} fold of the published frontiers —
      * per coordinate, the minimum over the members that observed it (a member without a coordinate does
      * not constrain it) — then clamped per coordinate to never regress below the previously committed

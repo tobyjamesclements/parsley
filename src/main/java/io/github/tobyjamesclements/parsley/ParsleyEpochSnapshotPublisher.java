@@ -28,11 +28,11 @@ interface ParsleyEpochSnapshotPublisher {
 
     /**
      * Publishes {@code completeness} — the node's delivered frontier at the snapshot point — tagged with
-     * {@code memberId} (the Kafka Streams task id), for the coordinator to merge-min into the next
-     * epoch's lower bounds.
+     * {@code memberId} ({@code application.id/taskId}), for every node's deterministic fold to merge-min
+     * into the next epoch's lower bounds.
      */
     void publish(String memberId, ParsleyClock completeness);
 
-    /** The no-op publisher used when no coordinator is deployed: a snapshot marker publishes nothing. */
+    /** The no-op publisher used when coordination is not configured: a snapshot marker publishes nothing. */
     ParsleyEpochSnapshotPublisher NOOP = (memberId, completeness) -> {};
 }

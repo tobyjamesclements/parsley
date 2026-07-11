@@ -68,9 +68,9 @@ final class ParsleyConfig {
      * alongside {@link #COORDINATION_EPOCH_EVENTS_TOPIC} — {@link #from} fails startup if this is set
      * without it. The reverse is not required: coordination works without this key exactly as it always
      * has (full-mesh validation derives its own domain from the shared log's live declarations, not from
-     * this static config) — set it only when a stage needs {@link CausalTopology#assemble} to auto-wire a
-     * dedicated passthrough processor
-     * node for any domain topic a stage does not otherwise consume or produce, so that stage's declared
+     * this static config) — set it only when a stage needs {@link CausalTopology#assemble} to auto-wire
+     * extra raw-bytes passthrough sources into that stage's own processor node
+     * for any domain topic a stage does not otherwise consume or produce, so that stage's declared
      * subscriptions can cover the full domain ({@link ParsleyProcessor#validateFullMeshCoverage}) without
      * hand-wiring an "independent input" pass-through stage for every such topic. Kafka Streams has no
      * public API to add a source topic to an already-running task, so the full domain must be known

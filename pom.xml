@@ -454,7 +454,7 @@
                  at target/site/jacoco/ as part of plain 'mvn test'.
 
                  'check' gates on the BUNDLE total only, not per-class: several classes (ParsleyTopicAdmin,
-                 ParsleyKafkaEpochTransport, CausalStream, ...) are broker-dependent and legitimately
+                 KafkaEpochTransport, CausalStream, ...) are broker-dependent and legitimately
                  exercised only by the ITs this report excludes, so a per-class minimum would fail the
                  build on files with no real gap. Thresholds sit a few points below the baseline this
                  report measured (86.0% instructions / 80.9% branches) so routine refactors don't trip it,

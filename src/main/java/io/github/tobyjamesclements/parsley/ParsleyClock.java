@@ -89,9 +89,10 @@ final class ParsleyClock {
     }
 
     /**
-     * Returns the per-coordinate minimum of this clock and {@code other}, ignoring coordinates that
-     * only one side records (unknown ≠ zero): a coordinate present in just one clock is kept at its
-     * value; a coordinate present in both takes {@code Math.min}. Used to fold a topology-epoch floor
+     * Returns the per-coordinate minimum of this clock and {@code other}, treating an absent
+     * coordinate as unknown rather than zero: a coordinate present in just one clock is kept at its
+     * value (the absent side does not constrain it, and never drags it to zero); a coordinate present
+     * in both takes {@code Math.min}. Used to fold a topology-epoch floor
      * across the running members' published completeness clocks ({@code ParsleyEpochLog}) — the
      * committed floor is bounded by the slowest member.
      */

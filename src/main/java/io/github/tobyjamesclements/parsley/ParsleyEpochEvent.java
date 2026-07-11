@@ -14,17 +14,18 @@ import java.util.Set;
  * ownership, membership, and the committed lower bounds without a leader. This log carries only the
  * handshake; the runtime floor itself still travels in-band via {@link ParsleyEpochBoundary} markers.
  *
- * <p>The four events:
+ * <p>The five events:
  * <ul>
  *   <li>{@link JoinRequested} — a node announces itself; it becomes a running member at the next commit.
  *   <li>{@link SnapshotRequested} — a node proposes a snapshot round. The first one after the last
- *       {@link EpochCommitted} (by log order) opens the round and elects its author as owner; the rest
- *       coalesce.
+ *       {@link EpochCommitted} (by log order) opens the round; the rest coalesce.
  *   <li>{@link FrontierPublished} — a running member publishes its completeness frontier for the open
  *       round (safe without a consistent cut: completeness is monotonic).
- *   <li>{@link EpochCommitted} — the round owner records the decided {@code epochId} and {@code
- *       lowerBounds} (the {@link ParsleyClock#mergeMin} fold of the published frontiers). Idempotent,
- *       dedup by {@code epochId}.
+ *   <li>{@link EpochCommitted} — the decided {@code epochId} and {@code lowerBounds} (the {@link
+ *       ParsleyClock#mergeMin} fold of the published frontiers). Appended by <em>any</em> node with a
+ *       local member once the round is complete — the fold is deterministic, so every node computes
+ *       the identical commit and dedup-by-{@code epochId} makes concurrent appends idempotent.
+ *   <li>{@link Leave} — a member is removed from the domain (graceful, explicit decommission only).
  * </ul>
  */
 sealed interface ParsleyEpochEvent
@@ -53,7 +54,8 @@ sealed interface ParsleyEpochEvent
     /** A running member's completeness frontier for the currently open round. */
     record FrontierPublished(String memberId, ParsleyClock completeness) implements ParsleyEpochEvent {}
 
-    /** The round owner's decision: the new epoch id and its lower bounds. */
+    /** A complete round's decision — the new epoch id and its lower bounds — appended by any node
+     * with a local member (identical everywhere; dedup by {@code epochId}). */
     record EpochCommitted(long epochId, ParsleyClock lowerBounds) implements ParsleyEpochEvent {}
 
     /**
