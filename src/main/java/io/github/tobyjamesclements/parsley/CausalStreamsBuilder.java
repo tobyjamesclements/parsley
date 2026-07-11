@@ -131,11 +131,17 @@ public final class CausalStreamsBuilder {
     /**
      * Builds the {@link CausalTopology}: every stage this builder declared, ready to be assembled into a
      * real Kafka Streams {@code Topology} once a {@link CausalStreams} runtime supplies its {@code props}.
+     * Every stage is frozen: a retained {@link CausalProcessedStream} handle can no longer add sinks or
+     * change the partitioner, so the built topology is genuinely immutable.
      *
      * @return the assembled {@code CausalTopology}
-     * @throws IllegalStateException if a declared stage has no source or no sink
+     * @throws IllegalStateException if no stage was declared, or a declared stage has no source or no sink
      */
     public CausalTopology build() {
+        if (stages.isEmpty()) {
+            throw new IllegalStateException(
+                    "no causal stage declared; call stream(...).process(...).to(...) at least once before build()");
+        }
         for (ParsleyStageSpec<?, ?, ?, ?> stage : stages) {
             if (stage.sources.isEmpty()) {
                 throw new IllegalStateException(
@@ -145,6 +151,7 @@ public final class CausalStreamsBuilder {
                 throw new IllegalStateException(
                         "at least one sink is required; call to(...) for every output topic");
             }
+            stage.freeze();
         }
         return new CausalTopology(List.copyOf(stages), topicAdminOverride);
     }

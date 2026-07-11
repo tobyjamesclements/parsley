@@ -210,6 +210,63 @@ class CausalStreamsTopologyTest {
     }
 
     /**
+     * {@link CausalStreamsBuilder#build()} rejects a builder with no declared stage at all — the built
+     * topology would silently run nothing.
+     *
+     * Asserts an {@link IllegalStateException} naming the missing stage declaration.
+     */
+    @Test
+    void buildFailsOnAnEmptyBuilder() {
+        CausalStreamsBuilder builder = new CausalStreamsBuilder();
+
+        IllegalStateException e = assertThrows(IllegalStateException.class, builder::build,
+                "build() must fail when no stage was declared");
+        assertEquals(true, e.getMessage().contains("no causal stage"),
+                "message must say no stage was declared, got: " + e.getMessage());
+    }
+
+    /**
+     * A built {@link CausalTopology} is immutable: declaring a further sink, or swapping the
+     * partitioner, through a {@link CausalProcessedStream} handle retained from before
+     * {@code build()} is rejected instead of silently mutating the built topology.
+     *
+     * Asserts both late mutations throw {@link IllegalStateException}.
+     */
+    @Test
+    void aBuiltTopologyRejectsLateSinkAndPartitionerMutations() {
+        CausalStreamsBuilder builder = new CausalStreamsBuilder();
+        CausalProcessedStream<String, String> handle = builder
+                .<String, String>stream("t1", Serdes.String(), Serdes.String())
+                .process(upperCaser())
+                .to("out-sink", "out", Serdes.String(), Serdes.String());
+        builder.build();
+
+        assertThrows(IllegalStateException.class,
+                () -> handle.to("late-sink", "late", Serdes.String(), Serdes.String()),
+                "a sink declared after build() must be rejected — the built topology is immutable");
+        assertThrows(IllegalStateException.class,
+                () -> handle.withPartitioner((topic, key, value, partitions) -> java.util.Optional.empty()),
+                "a partitioner set after build() must be rejected — the built topology is immutable");
+    }
+
+    /**
+     * {@link CausalStream#merge} rejects two streams declaring the same topic: merging would silently
+     * pick one stream's serdes over the other's (last-write-wins), a bug every time.
+     *
+     * Asserts an {@link IllegalArgumentException} naming the duplicated topic.
+     */
+    @Test
+    void mergeRejectsADuplicateTopicAcrossStreams() {
+        CausalStreamsBuilder builder = new CausalStreamsBuilder();
+        CausalStream<String, String> first = builder.stream(List.of("t1", "t2"), Serdes.String(), Serdes.String());
+        CausalStream<String, String> second = builder.stream("t2", Serdes.String(), Serdes.String());
+
+        IllegalArgumentException e = assertThrows(IllegalArgumentException.class, () -> first.merge(second),
+                "merging two streams that both declare t2 must be rejected");
+        assertEquals(true, e.getMessage().contains("t2"), "message must name the duplicated topic");
+    }
+
+    /**
      * Assembling a stage whose {@code userSupplier} is already a package-private
      * {@code ParsleyProcessorSupplier} rejects it — the double-wrap guard lives in
      * {@code ParsleyProcessors#builder}, which {@link CausalTopology#assemble} composes internally, so

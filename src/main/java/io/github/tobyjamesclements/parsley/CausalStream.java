@@ -33,7 +33,9 @@ public final class CausalStream<K, V> {
      *
      * @param other another stream from the same {@link CausalStreamsBuilder}
      * @return a new {@code CausalStream} over the union of both streams' source topics
-     * @throws IllegalArgumentException if {@code other} was not built from the same builder
+     * @throws IllegalArgumentException if {@code other} was not built from the same builder, or if the
+     *         two streams declare the same topic (whose serdes would otherwise silently collide,
+     *         last-write-wins)
      */
     public CausalStream<K, V> merge(CausalStream<K, V> other) {
         if (other.owner != owner) {
@@ -41,7 +43,13 @@ public final class CausalStream<K, V> {
                     "cannot merge a CausalStream built from a different CausalStreamsBuilder");
         }
         Map<String, ParsleyStageSpec.SourceSpec<K, V>> merged = new LinkedHashMap<>(sources);
-        merged.putAll(other.sources);
+        for (Map.Entry<String, ParsleyStageSpec.SourceSpec<K, V>> entry : other.sources.entrySet()) {
+            if (merged.putIfAbsent(entry.getKey(), entry.getValue()) != null) {
+                throw new IllegalArgumentException("both streams declare topic '" + entry.getKey()
+                        + "'; declare each source topic exactly once — merging would silently pick one "
+                        + "stream's serdes over the other's");
+            }
+        }
         return new CausalStream<>(owner, merged);
     }
 

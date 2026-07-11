@@ -28,12 +28,40 @@ final class ParsleyStageSpec<KIn, VIn, KOut, VOut> {
     final Map<String, SourceSpec<KIn, VIn>> sources;
     final List<SinkSpec<KOut, VOut>> sinks = new ArrayList<>();
     @Nullable StreamPartitioner<? super KOut, ? super VOut> partitioner;
+    // Set by CausalStreamsBuilder#build(): a built CausalTopology is immutable, so the
+    // CausalProcessedStream handle the user still holds must not mutate this stage afterwards.
+    private boolean frozen;
 
     ParsleyStageSpec(@Nullable String explicitName, Map<String, SourceSpec<KIn, VIn>> sources,
               ProcessorSupplier<KIn, VIn, KOut, VOut> userSupplier) {
         this.explicitName = explicitName;
         this.sources = new LinkedHashMap<>(sources);
         this.userSupplier = userSupplier;
+    }
+
+    /** Adds a sink declaration; rejected once {@link #freeze() frozen}. */
+    void addSink(SinkSpec<KOut, VOut> sink) {
+        requireMutable();
+        sinks.add(sink);
+    }
+
+    /** Sets the stage-wide sink partitioner; rejected once {@link #freeze() frozen}. */
+    void partitioner(StreamPartitioner<? super KOut, ? super VOut> partitioner) {
+        requireMutable();
+        this.partitioner = partitioner;
+    }
+
+    /** Marks this stage immutable — called by {@code CausalStreamsBuilder#build()} on every stage it snapshots. */
+    void freeze() {
+        frozen = true;
+    }
+
+    private void requireMutable() {
+        if (frozen) {
+            throw new IllegalStateException(
+                    "this stage's CausalStreamsBuilder has already built its CausalTopology; declare every "
+                            + "sink (to) and the partitioner (withPartitioner) before calling build()");
+        }
     }
 
     /** A registered source topic's key/value serdes, or {@code null} to defer to the runtime's defaults. */

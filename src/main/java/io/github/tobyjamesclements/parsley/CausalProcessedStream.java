@@ -67,7 +67,7 @@ public final class CausalProcessedStream<K, V> {
      */
     public CausalProcessedStream<K, V> to(
             String name, String topic, @Nullable Serde<K> keySerde, @Nullable Serde<V> valueSerde) {
-        stage.sinks.add(new ParsleyStageSpec.SinkSpec<>(name, topic, keySerde, valueSerde));
+        stage.addSink(new ParsleyStageSpec.SinkSpec<>(name, topic, keySerde, valueSerde));
         return this;
     }
 
@@ -83,7 +83,7 @@ public final class CausalProcessedStream<K, V> {
      * @return this
      */
     public CausalProcessedStream<K, V> withPartitioner(StreamPartitioner<? super K, ? super V> partitioner) {
-        stage.partitioner = partitioner;
+        stage.partitioner(partitioner);
         return this;
     }
 }

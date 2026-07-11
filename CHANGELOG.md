@@ -7,6 +7,20 @@ All notable changes to this project are documented in this file. The format is b
 ## [Unreleased]
 
 ### Fixed
+- **A built `CausalTopology` was silently mutable through handles the user still held.**
+  `CausalStreamsBuilder#build()` snapshotted the stage *list* but not the stages: calling
+  `.to(...)`/`.withPartitioner(...)` on a retained `CausalProcessedStream` after `build()` — even
+  after `new CausalStreams(topology, props)` — mutated the supposedly immutable topology in place.
+  Stages are now frozen at `build()`; a late mutation throws `IllegalStateException`. Also hardened:
+  `build()` rejects a builder with no declared stage (the topology would silently run nothing), and
+  `CausalStream#merge` rejects two streams declaring the same topic (whose serdes previously collided
+  silently, last-write-wins).
+- **Marker handlers fabricated a source coordinate when record metadata was absent.**
+  `handleWatermark`/`handleEpochBoundary`/`advanceChannelClockFromMarker`/`ingest` defaulted a missing
+  `recordMetadata()` to partition 0 / offset 0, which would write causal state for a coordinate
+  nothing actually consumed. Unreachable on today's call paths (all run inside `process()`, where
+  Streams supplies the metadata), so it is now an invariant: absence throws `IllegalStateException`
+  instead of silently corrupting partition 0's state if a future refactor ever breaks the assumption.
 - **`CausalStreams#close()` hung forever when the underlying streams instance was already dead.** The
   graceful drain polled `ParsleyQuiesce#isSafeToClose()` unbounded, but that requires at least one
   registered, currently-drained task — an instance in `ERROR` (every task closed and unregistered), or

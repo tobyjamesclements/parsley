@@ -647,9 +647,9 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
      * buffered.
      */
     private void handleEpochBoundary(Record<KIn, VIn> record) {
-        Optional<RecordMetadata> meta = context.recordMetadata();
-        String topic = meta.map(RecordMetadata::topic).orElse("");
-        int partition = meta.map(RecordMetadata::partition).orElse(0);
+        RecordMetadata meta = requireRecordMetadata();
+        String topic = meta.topic();
+        int partition = meta.partition();
         Uuid topicId = topicUuids.get(topic);
         if (topicId == null) {
             log.warn("Received epoch boundary on unregistered topic '{}'; ignoring", topic);
@@ -697,10 +697,10 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
      *         clock-invisible-markers discussion).
      */
     private boolean advanceChannelClockFromMarker(Record<KIn, VIn> record) {
-        Optional<RecordMetadata> meta = context.recordMetadata();
-        String topic = meta.map(RecordMetadata::topic).orElse("");
-        int partition = meta.map(RecordMetadata::partition).orElse(0);
-        long offset = meta.map(RecordMetadata::offset).orElse(0L);
+        RecordMetadata meta = requireRecordMetadata();
+        String topic = meta.topic();
+        int partition = meta.partition();
+        long offset = meta.offset();
         Uuid topicId = topicUuids.get(topic);
         if (topicId == null) {
             return false;
@@ -865,10 +865,10 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
      * watermark forever (clock-invisible markers; see the class Javadoc).
      */
     private void handleWatermark(Record<KIn, VIn> record) {
-        Optional<RecordMetadata> meta = context.recordMetadata();
-        String topic = meta.map(RecordMetadata::topic).orElse("");
-        int partition = meta.map(RecordMetadata::partition).orElse(0);
-        long offset = meta.map(RecordMetadata::offset).orElse(0L);
+        RecordMetadata meta = requireRecordMetadata();
+        String topic = meta.topic();
+        int partition = meta.partition();
+        long offset = meta.offset();
         Uuid topicId = topicUuids.get(topic);
         if (topicId == null) {
             // Watermark on an unregistered topic — not expected in a correctly wired topology, but
@@ -1003,21 +1003,34 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
      * Decodes {@code record} into a {@link ParsleyMessage}, ready for {@link ParsleyEngine#receive}.
      */
     private ParsleyMessage<KIn, VIn> ingest(Record<KIn, VIn> record) {
-        Optional<RecordMetadata> meta = context.recordMetadata();
-        String topic = meta.map(RecordMetadata::topic).orElse("");
-        TopicPartition source = new TopicPartition(topic, meta.map(RecordMetadata::partition).orElse(0));
+        RecordMetadata meta = requireRecordMetadata();
+        String topic = meta.topic();
+        TopicPartition source = new TopicPartition(topic, meta.partition());
         Uuid topicId = topicUuids.get(topic);
         if (topicId == null) {
             throw new IllegalStateException(
                     "no ParsleyBuffer registered for topic '" + topic
                             + "'; call addBuffer(...) on the ParsleyProcessors builder for every input topic");
         }
-        long offset = meta.map(RecordMetadata::offset).orElse(0L);
         try {
-            return ParsleyMessage.from(record, source, offset, topicId);
+            return ParsleyMessage.from(record, source, meta.offset(), topicId);
         } catch (ParsleyClockResolutionException e) {
             throw onUnresolvableClock(e);
         }
+    }
+
+    /**
+     * The current record's source metadata, required present: every caller runs inside
+     * {@link #process}, where Kafka Streams always supplies it for a source-fed record. Absence means
+     * a record reached the causal path from a context with no source coordinate (e.g. a punctuator
+     * forward) — fabricating a coordinate (the old {@code partition 0, offset 0} fallback) would write
+     * causal state for a coordinate nothing actually consumed, so this is an invariant violation, not
+     * a recoverable input.
+     */
+    private RecordMetadata requireRecordMetadata() {
+        return context.recordMetadata().orElseThrow(() -> new IllegalStateException(
+                "record metadata is unavailable on the causal path; Parsley processes records only from "
+                        + "topic sources, where Kafka Streams supplies the source coordinate"));
     }
 
     /**
