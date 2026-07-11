@@ -124,9 +124,13 @@ final class ParsleyClock {
      * {@code this} unchanged when every coordinate is kept (so the common all-in-scope case allocates
      * nothing). Used on recorded state a processor owns — pruning a restored frontier/pending-epoch
      * clock down to the coordinates currently in scope after a topic UUID change or scope narrowing
-     * ({@link ParsleyFrontier#pruneToScope}) — never on an inbound record's own dependency clock: a
-     * dependency naming a coordinate outside scope is not something to silently drop, see {@link
-     * ParsleyEngine}'s fail-closed handling of that case.
+     * ({@link ParsleyFrontier#pruneToScope}) — never used to silently drop a coordinate this node
+     * merely has no channel for from an inbound record's own dependency clock: a dependency naming a
+     * coordinate outside scope is not something to silently drop, see {@link ParsleyEngine}'s
+     * fail-closed handling of that case. The one narrower, different exception is {@link
+     * ParsleyEngine#effectiveDependencies}/{@code onWatermark} stripping a node's own produced
+     * coordinates specifically — see {@code ParsleyEngine#ownSinkTopics}'s Javadoc for why that is
+     * sound rather than a relaxation of this rule.
      */
     ParsleyClock retaining(CoordinatePredicate inScope) {
         boolean anyDropped = false;

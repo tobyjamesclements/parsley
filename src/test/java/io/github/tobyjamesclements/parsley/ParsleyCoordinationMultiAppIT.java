@@ -6,8 +6,12 @@ import org.apache.kafka.clients.admin.NewTopic;
 import org.apache.kafka.clients.consumer.ConsumerConfig;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.apache.kafka.clients.consumer.KafkaConsumer;
+import org.apache.kafka.clients.producer.KafkaProducer;
+import org.apache.kafka.clients.producer.ProducerConfig;
+import org.apache.kafka.clients.producer.ProducerRecord;
 import org.apache.kafka.common.serialization.Serdes;
 import org.apache.kafka.common.serialization.StringDeserializer;
+import org.apache.kafka.common.serialization.StringSerializer;
 import org.apache.kafka.streams.KafkaStreams;
 import org.apache.kafka.streams.StreamsBuilder;
 import org.apache.kafka.streams.StreamsConfig;
@@ -48,11 +52,17 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * KafkaStreams} applications with distinct {@code application.id}s, sharing one epoch-events log. This
  * ordinary two-stage pipeline is <em>not</em> a full mesh under the coordinated-domain definition: A
  * never consumes or produces {@code out}, and B never consumes or produces {@code t1} — each is missing
- * a domain topic only the other side touches. Neither app auto-wires a passthrough source for the
- * coordinate it is missing (that auto-wiring is a separate, not-yet-built piece of the full-mesh design)
- * so B's own startup self-check ({@code ParsleyProcessor#validateFullMeshCoverage}) must fail closed the
- * moment it joins an epoch where A has already declared {@code t1} — never silently proceed and let the
- * gap surface later as a data-path crash loop or a round that can never complete.
+ * a domain topic only the other side touches.
+ *
+ * <p>{@link #bJoiningAnIncompleteMeshFailsClosedAtStartup} proves the fail-closed side of this, over the
+ * low-level {@link ParsleyProcessors} API with no {@code parsley.coordination.domain-topics} configured:
+ * B's own startup self-check ({@code ParsleyProcessor#validateFullMeshCoverage}) must fail closed the
+ * moment it joins an epoch where A has already declared {@code t1}. {@link
+ * #domainTopicsAutoWiresPassthroughSoBothAppsRunAndDeliverEndToEnd} proves the other side: with {@code
+ * parsley.coordination.domain-topics} configured (over the higher-level {@link CausalStreamsBuilder}/
+ * {@link CausalStreams} API, which is what actually wires it), the exact same otherwise-incomplete
+ * two-stage pipeline auto-wires a passthrough source for each app's missing coordinate, both apps reach
+ * {@code RUNNING}, and a real record still flows end to end through the genuine business path.
  */
 @Testcontainers(disabledWithoutDocker = true)
 class ParsleyCoordinationMultiAppIT {
@@ -116,6 +126,226 @@ class ParsleyCoordinationMultiAppIT {
         } finally {
             coordinationA.close();
             coordinationB.close();
+        }
+    }
+
+    /**
+     * The exact same two-stage pipeline shape as {@link #bJoiningAnIncompleteMeshFailsClosedAtStartup} —
+     * app A ({@code t1 -> mid}), app B ({@code mid -> out}), neither directly consuming or producing the
+     * other's missing coordinate — but built through {@link CausalStreamsBuilder}/{@link CausalStreams}
+     * with {@code parsley.coordination.domain-topics = t1,mid,out} configured on both. Each app's {@link
+     * CausalTopology#assemble} auto-wires a passthrough source for the one domain topic it does not
+     * otherwise touch ({@code t1} for B, {@code out} for A), so both members' declared subscriptions cover
+     * the whole domain and the startup self-check that failed the other test now passes for both.
+     *
+     * Asserts both apps reach {@code RUNNING}, and a record produced to {@code t1} still flows through the
+     * genuine business transforms in both stages (A upper-cases, B prefixes {@code "B:"}) all the way to
+     * {@code out} — proving the auto-wired passthrough sources coexist correctly with the real delivery
+     * path rather than merely avoiding a startup crash.
+     */
+    @Test
+    void domainTopicsAutoWiresPassthroughSoBothAppsRunAndDeliverEndToEnd() throws Exception {
+        String bootstrap = kafka.getBootstrapServers();
+        createTopics(bootstrap, IN, MID, OUT, EPOCH_EVENTS);
+        String runId = UUID.randomUUID().toString().substring(0, 8);
+        String appIdA = "dag-a-domain-" + runId;
+        String appIdB = "dag-b-domain-" + runId;
+        Path stateA = Files.createTempDirectory("parsley-dag-a-domain");
+        Path stateB = Files.createTempDirectory("parsley-dag-b-domain");
+
+        try (CausalStreams appA = new CausalStreams(stageATopology(), causalStreamsConfig(bootstrap, appIdA, stateA));
+             CausalStreams appB = new CausalStreams(stageBTopology(), causalStreamsConfig(bootstrap, appIdB, stateB))) {
+            appA.start();
+            appB.start();
+            await().atMost(Duration.ofSeconds(60)).until(() -> appA.state() == KafkaStreams.State.RUNNING);
+            await().atMost(Duration.ofSeconds(60)).until(() -> appB.state() == KafkaStreams.State.RUNNING);
+
+            try (KafkaProducer<String, String> producer = new KafkaProducer<>(producerConfig(bootstrap))) {
+                producer.send(stampEmptyDeps(new ProducerRecord<>(IN, "k", "hello"))).get();
+            }
+
+            assertTrue(awaitServed(bootstrap, "B:HELLO"),
+                    "a record produced to t1 must flow t1 -> mid -> out through both real business stages");
+        }
+    }
+
+    /**
+     * A genuine two-node <strong>cycle</strong> across two separate real applications — app A ({@code
+     * t1, from-b -> from-a}) and app B ({@code from-a -> from-b}), each its own {@link KafkaStreams}
+     * instance with its own {@code application.id} and its own {@link Topology}, so (unlike a single
+     * shared {@code Topology}, where Kafka Streams allows only one source node per topic) there is no
+     * topology-wiring conflict between A's direct consumption of {@code t1} and — via {@code
+     * parsley.coordination.domain-topics = t1,from-a,from-b} — B's passthrough-wired visibility into the
+     * same topic. A absorbs (does not re-forward) a record sourced from {@code from-b}, so the cycle
+     * terminates after one round trip.
+     *
+     * <p>This is the headline capability the whole max-merge redesign (PR1) plus clock-invisible markers
+     * (PR2) plus passthrough auto-wiring (PR5) plus {@link ParsleyEngine}'s own-coordinate stripping
+     * (added during this same PR6 verification pass, after a {@link TopologyTestDriver} single-node
+     * self-loop test — see {@code CausalCyclicTopologyTest} — caught a genuine infinite watermark loop)
+     * together exist to enable: a topology where a node consumes both an ancestor and its own descendant,
+     * which the old {@code ParsleyClock#intersectMin} gate made a documented, permanent deadlock.
+     *
+     * Asserts both apps reach {@code RUNNING} and a record produced to {@code t1} flows all the way
+     * around the cycle to {@code from-b} exactly once.
+     */
+    @Test
+    void twoNodeCycleAcrossSeparateAppsDeliversEndToEnd() throws Exception {
+        String bootstrap = kafka.getBootstrapServers();
+        String fromA = "from-a";
+        String fromB = "from-b";
+        createTopics(bootstrap, IN, fromA, fromB, EPOCH_EVENTS);
+        String runId = UUID.randomUUID().toString().substring(0, 8);
+        String appIdA = "cycle-a-" + runId;
+        String appIdB = "cycle-b-" + runId;
+        Path stateA = Files.createTempDirectory("parsley-cycle-a");
+        Path stateB = Files.createTempDirectory("parsley-cycle-b");
+
+        CausalStreamsBuilder aBuilder = new CausalStreamsBuilder();
+        aBuilder.stream(List.of(IN, fromB), Serdes.String(), Serdes.String())
+                .process(cycleStage("t1", "A:"))
+                .to("from-a-sink", fromA, Serdes.String(), Serdes.String());
+        CausalStreamsBuilder bBuilder = new CausalStreamsBuilder();
+        bBuilder.stream(fromA, Serdes.String(), Serdes.String())
+                .process(cycleStage(null, "B:"))
+                .to("from-b-sink", fromB, Serdes.String(), Serdes.String());
+
+        Properties domainConfig = cycleConfig(IN + "," + fromA + "," + fromB);
+        try (CausalStreams appA = new CausalStreams(aBuilder.build(),
+                     causalStreamsConfig(bootstrap, appIdA, stateA, domainConfig));
+             CausalStreams appB = new CausalStreams(bBuilder.build(),
+                     causalStreamsConfig(bootstrap, appIdB, stateB, domainConfig))) {
+            appA.start();
+            appB.start();
+            await().atMost(Duration.ofSeconds(60)).until(() -> appA.state() == KafkaStreams.State.RUNNING);
+            await().atMost(Duration.ofSeconds(60)).until(() -> appB.state() == KafkaStreams.State.RUNNING);
+
+            try (KafkaProducer<String, String> producer = new KafkaProducer<>(producerConfig(bootstrap))) {
+                producer.send(stampEmptyDeps(new ProducerRecord<>(IN, "k", "hello"))).get();
+            }
+
+            assertTrue(awaitServedOn(bootstrap, fromB, "B:A:hello"),
+                    "a record produced to t1 must flow all the way around the cycle to from-b");
+        }
+    }
+
+    /**
+     * A stage that forwards a record sourced from {@code forwardOnlyFromTopic} (or every record, if
+     * {@code null}) with {@code prefix} prepended, and absorbs (never re-forwards) anything else — the
+     * termination strategy for a cyclic topology: without an absorbing side, the business cycle would
+     * circulate forever, which is a workload concern this gate deliberately does not suppress (see
+     * {@code ParsleyProcessor}'s class Javadoc).
+     */
+    private static ProcessorSupplier<String, String, String, String> cycleStage(
+            String forwardOnlyFromTopic, String prefix) {
+        return () -> new Processor<>() {
+            private ProcessorContext<String, String> ctx;
+            @Override public void init(ProcessorContext<String, String> context) { this.ctx = context; }
+            @Override public void process(Record<String, String> record) {
+                String sourceTopic = ctx.recordMetadata().map(org.apache.kafka.streams.processor.api.RecordMetadata::topic).orElse("");
+                if (forwardOnlyFromTopic == null || forwardOnlyFromTopic.equals(sourceTopic)) {
+                    ctx.forward(record.withValue(prefix + record.value()));
+                }
+            }
+        };
+    }
+
+    private static Properties cycleConfig(String domainTopics) {
+        Properties props = new Properties();
+        props.put(ParsleyConfig.COORDINATION_DOMAIN_TOPICS, domainTopics);
+        return props;
+    }
+
+    /** As {@link #causalStreamsConfig(String, String, Path)}, overlaying {@code extra} on top. */
+    private static Properties causalStreamsConfig(String bootstrap, String appId, Path stateDir, Properties extra) {
+        Properties props = causalStreamsConfig(bootstrap, appId, stateDir);
+        props.putAll(extra);
+        return props;
+    }
+
+    /** As {@link #awaitServed(String, String)}, against an explicitly named topic rather than {@link #OUT}. */
+    private static boolean awaitServedOn(String bootstrap, String topic, String expected) {
+        Map<String, Object> config = Map.of(
+                ConsumerConfig.BOOTSTRAP_SERVERS_CONFIG, bootstrap,
+                ConsumerConfig.GROUP_ID_CONFIG, "cycle-reader-" + UUID.randomUUID(),
+                ConsumerConfig.AUTO_OFFSET_RESET_CONFIG, "earliest",
+                ConsumerConfig.KEY_DESERIALIZER_CLASS_CONFIG, StringDeserializer.class.getName(),
+                ConsumerConfig.VALUE_DESERIALIZER_CLASS_CONFIG, StringDeserializer.class.getName());
+        try (KafkaConsumer<String, String> consumer = new KafkaConsumer<>(config)) {
+            consumer.subscribe(List.of(topic));
+            long deadline = System.currentTimeMillis() + 30_000;
+            while (System.currentTimeMillis() < deadline) {
+                for (ConsumerRecord<String, String> record : consumer.poll(Duration.ofMillis(300))) {
+                    if (expected.equals(record.value())) {
+                        return true;
+                    }
+                }
+            }
+            return false;
+        }
+    }
+
+    private static CausalTopology stageATopology() {
+        CausalStreamsBuilder builder = new CausalStreamsBuilder();
+        builder.stream(IN, Serdes.String(), Serdes.String())
+                .process(mapper(v -> v.toUpperCase(Locale.ROOT)))
+                .to("mid-sink", MID, Serdes.String(), Serdes.String());
+        return builder.build();
+    }
+
+    private static CausalTopology stageBTopology() {
+        CausalStreamsBuilder builder = new CausalStreamsBuilder();
+        builder.stream(MID, Serdes.String(), Serdes.String())
+                .process(mapper(v -> "B:" + v))
+                .to("out-sink", OUT, Serdes.String(), Serdes.String());
+        return builder.build();
+    }
+
+    private static Properties causalStreamsConfig(String bootstrap, String appId, Path stateDir) {
+        Properties props = new Properties();
+        props.put(StreamsConfig.APPLICATION_ID_CONFIG, appId);
+        props.put(StreamsConfig.BOOTSTRAP_SERVERS_CONFIG, bootstrap);
+        props.put(StreamsConfig.DEFAULT_KEY_SERDE_CLASS_CONFIG, Serdes.String().getClass().getName());
+        props.put(StreamsConfig.DEFAULT_VALUE_SERDE_CLASS_CONFIG, Serdes.String().getClass().getName());
+        props.put(StreamsConfig.COMMIT_INTERVAL_MS_CONFIG, 200);
+        props.put(StreamsConfig.PROCESSING_GUARANTEE_CONFIG, StreamsConfig.EXACTLY_ONCE_V2);
+        props.put(StreamsConfig.STATE_DIR_CONFIG, stateDir.toAbsolutePath().toString());
+        props.put(ParsleyConfig.COORDINATION_EPOCH_EVENTS_TOPIC, EPOCH_EVENTS);
+        props.put(ParsleyConfig.COORDINATION_DOMAIN_TOPICS, IN + "," + MID + "," + OUT);
+        return props;
+    }
+
+    private static ProducerRecord<String, String> stampEmptyDeps(ProducerRecord<String, String> record) {
+        record.headers().add(ParsleyHeader.CAUSAL_DEPENDENCIES, ParsleyClock.empty().toBytes());
+        return record;
+    }
+
+    private static Map<String, Object> producerConfig(String bootstrap) {
+        return Map.of(
+                ProducerConfig.BOOTSTRAP_SERVERS_CONFIG, bootstrap,
+                ProducerConfig.KEY_SERIALIZER_CLASS_CONFIG, StringSerializer.class.getName(),
+                ProducerConfig.VALUE_SERIALIZER_CLASS_CONFIG, StringSerializer.class.getName());
+    }
+
+    /** Awaits a record whose value equals {@code expected} arriving on {@code out}, up to the IT timeout. */
+    private static boolean awaitServed(String bootstrap, String expected) {
+        Map<String, Object> config = Map.of(
+                ConsumerConfig.BOOTSTRAP_SERVERS_CONFIG, bootstrap,
+                ConsumerConfig.GROUP_ID_CONFIG, "out-reader-" + UUID.randomUUID(),
+                ConsumerConfig.AUTO_OFFSET_RESET_CONFIG, "earliest",
+                ConsumerConfig.KEY_DESERIALIZER_CLASS_CONFIG, StringDeserializer.class.getName(),
+                ConsumerConfig.VALUE_DESERIALIZER_CLASS_CONFIG, StringDeserializer.class.getName());
+        try (KafkaConsumer<String, String> consumer = new KafkaConsumer<>(config)) {
+            consumer.subscribe(List.of(OUT));
+            long deadline = System.currentTimeMillis() + 30_000;
+            while (System.currentTimeMillis() < deadline) {
+                for (ConsumerRecord<String, String> record : consumer.poll(Duration.ofMillis(300))) {
+                    if (expected.equals(record.value())) {
+                        return true;
+                    }
+                }
+            }
+            return false;
         }
     }
 

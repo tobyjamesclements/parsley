@@ -127,6 +127,10 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
     // Source topic name -> stable UUID, resolved from the broker at init() (the topology decorator
     // has no broker config until then). Used by ingest() to stamp each record's causal identity.
     private Map<String, Uuid> topicUuids = Map.of();
+    // This stage's own sink topics' UUIDs, best-effort resolved at init() (see resolveSinkTopicUuids) —
+    // fed to engine() so ParsleyEngine can strip a node's own produced coordinates from any inbound
+    // dependency/marker clock. Never used to route or gate an inbound record by itself.
+    private Set<Uuid> sinkTopicUuids = Set.of();
 
     // The most-recent business key seen on this task's owned partition — reused to route a self-injected
     // marker back to that partition lane (null until the first record). And the last snapshot-round /
@@ -439,8 +443,15 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
             frontier.channelUpdate(topicId, taskPartition, ParsleyClock.empty());
         }
 
+        // This stage's own sink topics — never a delivery-scope concern (inScope, above), but fed to
+        // the engine so it can strip a node's own produced coordinates from any inbound dependency or
+        // marker clock; see ParsleyEngine's Javadoc on ownSinkTopics for why this is sound.
+        Set<Uuid> ownSinkTopicIds = sinkTopicUuids;
+        ParsleyClock.CoordinatePredicate ownSinkTopics = (topicId, partition) -> ownSinkTopicIds.contains(topicId);
+
         return new ParsleyEngine<>(frontier, buffer, candidateIndex,
-                wiredMetrics.metrics(), audit, context::currentSystemTimeMs, deadLetterSinkName != null, inScope);
+                wiredMetrics.metrics(), audit, context::currentSystemTimeMs, deadLetterSinkName != null, inScope,
+                ownSinkTopics);
     }
 
     /**
@@ -1194,6 +1205,7 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
             partitionCounts = new HashMap<>(admin.partitionCounts(topicList));
             partitionCounts.putAll(additionalTopicInfo(admin, "partition count", ParsleyTopicAdmin::partitionCounts));
             cleanupPolicies = additionalTopicInfo(admin, "cleanup.policy", ParsleyTopicAdmin::cleanupPolicies);
+            this.sinkTopicUuids = resolveSinkTopicUuids(admin);
         } catch (Exception e) {
             throw new IllegalStateException(
                     "failed to resolve topic metadata for causal buffers " + topics
@@ -1209,6 +1221,30 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
         validatePartitionParity(partitionCounts);
         validateCleanupPolicy(cleanupPolicies);
         return resolved;
+    }
+
+    /**
+     * Best-effort, per-topic UUID resolution over {@link #sinkTopics} — unlike {@link
+     * #additionalTopicInfo}, this always runs, never gated by {@code parsley.topology.validation}: it
+     * feeds {@link #engine}'s own-coordinate stripping (see {@link ParsleyEngine}'s Javadoc on {@code
+     * ownSinkTopics}), a correctness mechanism, not a topology-misconfiguration lint. A sink that does
+     * not exist yet is skipped, exactly as {@link #additionalTopicInfo} tolerates — before a sink exists,
+     * nothing could meaningfully depend on it anyway, so there is nothing to strip for it until it does.
+     */
+    private Set<Uuid> resolveSinkTopicUuids(ParsleyTopicAdmin admin) {
+        Set<Uuid> ids = new HashSet<>();
+        for (String topic : sinkTopics) {
+            try {
+                Uuid id = admin.topicIds(List.of(topic)).get(topic);
+                if (id != null) {
+                    ids.add(id);
+                }
+            } catch (Exception e) {
+                log.warn("Could not resolve topic id for sink topic '{}' (it may not exist yet); "
+                        + "skipping own-coordinate stripping for it until it does", topic, e);
+            }
+        }
+        return ids;
     }
 
     /**

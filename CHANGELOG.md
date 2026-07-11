@@ -92,8 +92,32 @@ All notable changes to this project are documented in this file. The format is b
   other channel, contributing its causal progress to the frontier, but is never handed to the delegate —
   every *other* record a passthrough delivery happens to release from the shared buffer as a side effect
   still reaches the real delegate correctly, since there is only ever one delegate per processor node.
+  Verified end to end against a real broker, including a genuine two-application cyclic topology
+  (A→B→A, B's visibility into A's root topic supplied entirely by passthrough) delivering correctly —
+  the headline capability this whole redesign exists to enable.
 
 ### Fixed
+- **A node observing its own produced coordinate reflected back to it — directly, by also consuming its
+  own sink, or indirectly, via a downstream peer's stamp in a topology cycle — could fail two different
+  ways.** A direct self-consumer (the tightest possible cycle) never converged: every watermark it
+  received on that channel carried its own ever-advancing self-position, which the ordinary out-of-scope
+  logic cannot distinguish from genuine foreign progress, so `channelAdvanced` never settled `false` and
+  the marker relayed forever — an infinite loop, found via a `TopologyTestDriver` test during this
+  redesign's verification pass, not merely a slow test. Indirectly, a peer's stamp reflecting this node's
+  own coordinate back to it (e.g. B, in a two-node A→B→A cycle, stamping a reply with A's own `from-a`
+  position) was instead wrongly rejected as an unreachable dependency, even though the coordinate is this
+  node's own and therefore never actually unverifiable.
+
+  `ParsleyEngine` gains `ownSinkTopics`, a predicate for coordinates this node itself produces
+  (`ParsleyProcessor` resolves sink-topic UUIDs unconditionally at `init()`, never gated by `parsley.
+  topology.validation`, since this is a correctness mechanism, not a lint). Both `effectiveDependencies`
+  (the business-record gate) and `onWatermark` now strip a node's own sink coordinates from any inbound
+  dependency or marker clock before every check. This is sound and deliberately narrower than — not a
+  relaxation of — the general out-of-scope fail-closed rule: a claim naming this node's own coordinate can
+  only ever have arisen from something this node itself already produced, since nothing else can ever
+  advance it, so the claim is either already, trivially known here or could not have legitimately arisen
+  at all. `ParsleyClock#retaining`'s Javadoc is updated to document this one narrower exception to its
+  "never on an inbound dependency clock" rule.
 - **A mismatched sink partition count only warned by default, but under topology-epoch coordination it
   crash-loops the task instead.** `ParsleyMarkerPartitioner` routes an epoch marker to this task's own
   owned partition (`taskId().partition()`) unconditionally; with a sink that has fewer partitions than

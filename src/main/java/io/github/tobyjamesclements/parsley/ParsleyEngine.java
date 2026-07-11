@@ -157,6 +157,25 @@ final class ParsleyEngine<K, V> {
     // predicate are unaffected; ParsleyProcessor passes its real per-task predicate.
     private final ParsleyClock.CoordinatePredicate inScope;
 
+    // Coordinates for a topic THIS NODE ITSELF produces (a registered sink). Stripped from any inbound
+    // dependency clock or marker-carried completeness before every gate check — see
+    // effectiveDependencies and onWatermark — never merely marked "in scope". This is sound, and a
+    // narrower, different case from the general out-of-scope rule above: a claim naming this node's own
+    // coordinate can only ever have arisen from something THIS node itself already produced (nothing
+    // else can ever advance it), so the claim is either already, trivially known here or could not have
+    // legitimately arisen at all — there is nothing to verify, unlike a genuinely foreign coordinate
+    // this node has no independent way to confirm. Concretely, this closes two related gaps: (1) a
+    // downstream node's stamp reflecting this node's own coordinate back toward it (e.g. in a topology
+    // cycle) would otherwise fail closed as "unreachable", even though the coordinate is this node's
+    // own and therefore never actually unverifiable; and (2) a node that also directly consumes its own
+    // sink (the tightest possible cycle) would otherwise never converge — every watermark it receives on
+    // that channel carries its own ever-advancing self-position, which the plain out-of-scope logic
+    // cannot distinguish from genuine foreign progress, so channelAdvanced never settles false and the
+    // marker never stops relaying. Defaults to "nothing is ever this node's own sink" so existing
+    // callers/tests that never construct with an explicit predicate are unaffected; ParsleyProcessor
+    // passes its real per-stage sink-topic predicate.
+    private final ParsleyClock.CoordinatePredicate ownSinkTopics;
+
     // --- Convenience constructors: build an in-memory ParsleyFrontier from an initial clock and a
     // forwarded/orphan index. Production and restart-style callers pass a pre-built ParsleyFrontier to
     // the full constructor below (so channel + frontier state can be shared/persisted). Dead-lettering
@@ -247,6 +266,24 @@ final class ParsleyEngine<K, V> {
     }
 
     /**
+     * As {@link #ParsleyEngine(ParsleyFrontier, ParsleyBufferStore, ParsleyCandidateIndex, ParsleyMetrics,
+     * CausalAudit, LongSupplier, boolean, ParsleyClock.CoordinatePredicate, ParsleyClock.CoordinatePredicate)
+     * the full constructor}, with nothing ever treated as this node's own sink — for callers/tests that do
+     * not need to exercise own-coordinate stripping.
+     */
+    ParsleyEngine(ParsleyFrontier frontier,
+                 ParsleyBufferStore<K, V> buffer,
+                 ParsleyCandidateIndex candidateIndex,
+                 ParsleyMetrics metrics,
+                 CausalAudit audit,
+                 LongSupplier clock,
+                 boolean deadLetterEnabled,
+                 ParsleyClock.CoordinatePredicate inScope) {
+        this(frontier, buffer, candidateIndex, metrics, audit, clock, deadLetterEnabled, inScope,
+                (topicId, partition) -> false);
+    }
+
+    /**
      * Full constructor. Takes a pre-built {@link ParsleyFrontier} — the single owner of the frontier
      * clock, channel clocks, forwarded index, and orphan index — so callers control its persistence (a
      * store-backed frontier in production, an in-memory one in tests).
@@ -262,6 +299,9 @@ final class ParsleyEngine<K, V> {
      *                          scope fails closed (dead-lettered, or a hard task failure without a
      *                          dead-letter sink) rather than being silently treated as satisfied — see
      *                          {@link DeadLetter.Reason#UNREACHABLE_DEPENDENCY}.
+     * @param ownSinkTopics     coordinates for a topic this node itself produces. Stripped from any
+     *                          inbound dependency or marker clock before every gate check — see this
+     *                          field's own Javadoc for the soundness argument.
      */
     ParsleyEngine(ParsleyFrontier frontier,
                  ParsleyBufferStore<K, V> buffer,
@@ -270,7 +310,8 @@ final class ParsleyEngine<K, V> {
                  CausalAudit audit,
                  LongSupplier clock,
                  boolean deadLetterEnabled,
-                 ParsleyClock.CoordinatePredicate inScope) {
+                 ParsleyClock.CoordinatePredicate inScope,
+                 ParsleyClock.CoordinatePredicate ownSinkTopics) {
         this.frontier = frontier;
         this.orphanIndex = frontier.orphanIndex();
         this.buffer = buffer;
@@ -280,6 +321,7 @@ final class ParsleyEngine<K, V> {
         this.clock = clock;
         this.deadLetterEnabled = deadLetterEnabled;
         this.inScope = inScope;
+        this.ownSinkTopics = ownSinkTopics;
         // Populate the candidate index for any records already in the buffer (e.g., restored from
         // a state store after a restart). This is a one-time O(n) pass at construction. It decodes
         // only the dependency clock (never the user-serde key/value), so a record whose value can no
@@ -635,6 +677,14 @@ final class ParsleyEngine<K, V> {
      * watermark only when it did, since a marker's own delivery must never itself be treated as a
      * reason to relay further (that would ping-pong forever around any cycle in the topology).
      *
+     * <p>Before anything else, {@code frontierClock} has this node's own {@link #ownSinkTopics}
+     * coordinates stripped (see that field's Javadoc) — without this, a node whose own produced
+     * coordinate is reflected back to it (directly, by consuming its own sink, or indirectly, via a
+     * downstream peer's stamp in a topology cycle) would see that coordinate as perpetually "new":
+     * receiving it always advances this node's own frontier for that channel by construction (a fresh
+     * offset each time), which then shows up in the very next stamp this node emits — so {@code
+     * channelAdvanced} would never settle {@code false} and the marker would never stop relaying.
+     *
      * @param sourceTopicId  the topic UUID of the watermark's source channel
      * @param sourcePartition the partition of the watermark's source channel
      * @param offset         the watermark record's own offset on its source channel
@@ -645,14 +695,16 @@ final class ParsleyEngine<K, V> {
     WatermarkOutcome<K, V> onWatermark(Uuid sourceTopicId, int sourcePartition, long offset, ParsleyClock frontierClock) {
         List<ParsleyMessage<K, V>> out = new ArrayList<>();
         List<DeadLetter<K, V>> deadLetters = new ArrayList<>();
+        ParsleyClock strippedFrontierClock =
+                frontierClock.retaining((depTopicId, depPartition) -> !ownSinkTopics.test(depTopicId, depPartition));
 
         if (frontier.seedIfFirstSeen(sourceTopicId, sourcePartition, offset)) {
             propagate(out, deadLetters, sourceTopicId, sourcePartition);
         }
 
         ParsleyClock channelBefore = frontier.channelGet(sourceTopicId, sourcePartition);
-        boolean channelAdvanced = !channelBefore.dominates(frontierClock);
-        frontier.channelUpdate(sourceTopicId, sourcePartition, frontierClock);
+        boolean channelAdvanced = !channelBefore.dominates(strippedFrontierClock);
+        frontier.channelUpdate(sourceTopicId, sourcePartition, strippedFrontierClock);
         frontier.deliver(sourceTopicId, sourcePartition, offset);
         propagate(out, deadLetters, sourceTopicId, sourcePartition);
 
@@ -1100,7 +1152,7 @@ final class ParsleyEngine<K, V> {
     }
 
     /**
-     * The dependency clock actually checked by the gate: two view-only preprocessing steps, neither of
+     * The dependency clock actually checked by the gate: three view-only preprocessing steps, none of
      * which ever rewrites recorded state or the outbound stamp (which is completeness(), computed
      * separately and carrying the raw, unfiltered picture for transitive downstream propagation).
      * <ol>
@@ -1109,6 +1161,9 @@ final class ParsleyEngine<K, V> {
      *       dependency, so it must not wait on itself (this keeps a self-referential stamp on a fused
      *       chain from deadlocking). A backward same-partition dependency ({@code req < offset}) is an
      *       intra-topic dependency like any other and flows through unchanged.</li>
+     *   <li>Any coordinate belonging to a topic this node itself produces ({@link #ownSinkTopics}) is
+     *       stripped — see that field's Javadoc for why this is sound and different from the
+     *       out-of-scope case below, not a relaxation of it.</li>
      *   <li>Any dependency below its coordinate's topology-epoch {@code startsAt} bound is stripped
      *       ({@link ParsleyClock#strippedBelow}) — an out-of-domain reference to a prior, closed epoch
      *       that no channel in this epoch will ever confirm. A no-op with epoch bounding disabled.</li>
@@ -1122,6 +1177,7 @@ final class ParsleyEngine<K, V> {
      */
     private ParsleyClock effectiveDependencies(ParsleyClock deps, Uuid topicId, int partition, long offset) {
         return withoutSelfReference(deps, topicId, partition, offset)
+                .retaining((depTopicId, depPartition) -> !ownSinkTopics.test(depTopicId, depPartition))
                 .strippedBelow(frontier.epoch());
     }
 
