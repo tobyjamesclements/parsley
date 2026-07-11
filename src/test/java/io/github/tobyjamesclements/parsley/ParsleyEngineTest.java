@@ -642,6 +642,61 @@ class ParsleyEngineTest {
     }
 
     /**
+     * Restart regression: the "coordinate marked seen even if the record is held" guard must survive
+     * a restart. Pre-crash, T1@0 is held (deps on a third coordinate that never arrives before the
+     * crash), so nothing on T1 was ever delivered and the persisted frontier has NO entry for T1 (the
+     * offset-0 seed is a no-op); a record d on T2 depending on T1@0 is held too — correctly, since
+     * its cause has not been delivered. After a restart (a fresh engine over the restored buffer,
+     * with a fresh in-memory seen-set), the first new record on T1 arrives at offset 5. Without the
+     * engine constructor re-marking T1 seen from the restored buffer, the baseline seed would fold
+     * offsets 0-4 into the frontier as "outside the engine's purview" and release d before its
+     * still-held cause T1@0 — an effect-before-cause delivery of exactly the kind the library exists
+     * to prevent.
+     *
+     * Asserts the post-restart record does not re-trigger the seed (the T1 frontier stays at -1, the
+     * gap at 0 intact), d stays held, and the whole chain then drains in causal order — d only after
+     * T1@0 — once the third coordinate finally delivers.
+     */
+    @Test
+    void restartDoesNotReSeedPastAStillHeldRecordAndReleaseItsDependents() {
+        TopicPartition t3 = new TopicPartition("t3", 0);
+        MockBufferStore<String, String> sharedBuffer = new MockBufferStore<>();
+        MockForwardedIndex sharedIndex = new MockForwardedIndex();
+        ParsleyEngine<String, String> first = new ParsleyEngine<>(ParsleyClock.empty(), sharedBuffer,
+                new MockCandidateIndex(), sharedIndex, ParsleyMetrics.NOOP);
+
+        // T1@0 held on T3@0 (never arriving pre-crash); d = T2@0 held on its cause T1@0.
+        first.receive(incomingRecord(T1, 0, ParsleyClock.empty().observe(T3_ID, 0, 0)));
+        first.receive(incomingRecord(T2, 0, ParsleyClock.empty().observe(T1_ID, 0, 0)));
+        assertEquals(2, sharedBuffer.size(), "both records must be held before the crash");
+        assertEquals(-1L, first.frontier().offsetFor(T1_ID, 0),
+                "nothing on T1 was delivered, so the persisted frontier must have no T1 entry");
+
+        // Restart: fresh engine (fresh seen-set) over the restored buffer and persisted frontier.
+        ParsleyEngine<String, String> restarted = new ParsleyEngine<>(first.frontier(), sharedBuffer,
+                new MockCandidateIndex(), sharedIndex, ParsleyMetrics.NOOP);
+
+        // The first post-restart record on T1 arrives at offset 5, dependency-free.
+        List<ParsleyMessage<String, String>> onT1At5 =
+                restarted.receive(incomingRecord(T1, 5, ParsleyClock.empty())).delivered();
+
+        assertEquals(List.of(5L), onT1At5.stream().map(ParsleyMessage::offset).toList(),
+                "only T1@5 itself may deliver; d must stay held because its cause T1@0 is still held");
+        assertEquals(-1L, restarted.frontier().offsetFor(T1_ID, 0),
+                "the baseline seed must not re-fire past the still-held T1@0: the contiguous frontier "
+                        + "keeps the gap at offset 0 open");
+        assertEquals(2, sharedBuffer.size(), "T1@0 and d must both still be held");
+
+        // T3@0 finally arrives: T1@0 releases, then d — cause strictly before effect.
+        List<ParsleyMessage<String, String>> drained = restarted.receive(
+                incomingRecordWithId(t3, 0, T3_ID, ParsleyClock.empty())).delivered();
+
+        assertEquals(List.of("t3", "t1", "t2"), drained.stream().map(ParsleyMessage::topic).toList(),
+                "the chain must drain in causal order: T3@0, then T1@0, then its dependent d");
+        assertEquals(0, sharedBuffer.size(), "everything must have left the buffer");
+    }
+
+    /**
      * A record depending on a coordinate below its topology-epoch {@code startsAt} bound is delivered:
      * the below-bound dependency is stripped before the completeness check, so a coordinate no channel
      * will ever confirm no longer holds the record forever.

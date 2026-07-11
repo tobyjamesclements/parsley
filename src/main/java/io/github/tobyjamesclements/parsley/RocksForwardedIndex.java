@@ -64,7 +64,10 @@ final class RocksForwardedIndex implements ParsleyForwardedIndex {
             return;
         }
         byte[] from = key(topicId, partition, 0L);
-        byte[] to = key(topicId, partition, watermark + 1);
+        // range() is inclusive of both bounds, so the upper key is the watermark itself — one higher
+        // would also delete a legitimately marked offset at watermark + 1, the very next candidate
+        // the contiguous absorb walk would consume.
+        byte[] to = key(topicId, partition, watermark);
         List<byte[]> stale = new ArrayList<>();
         try (KeyValueIterator<byte[], byte[]> iter = store.range(from, to)) {
             while (iter.hasNext()) {

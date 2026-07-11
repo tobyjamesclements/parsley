@@ -55,6 +55,51 @@ class ParsleyFrontierTest {
                         + "genuine witness suffices, so the higher advertised value wins, not the lower one");
     }
 
+    /**
+     * {@code pruneToScope} prunes each surviving channel's advertised clock to the scope, not just
+     * the frontier entries and the channel keys. A channel's clock is monotonic (channelUpdate only
+     * ever max-merges) and feeds completeness — the outbound stamp — so a transitive entry for a
+     * coordinate that has left the topology (a retired topic, or one recreated under a new UUID)
+     * would otherwise be re-advertised downstream forever, where every receiver's fail-closed gate
+     * rejects it as an unreachable dependency: a permanent crash loop regenerated from this store on
+     * every restart.
+     *
+     * Asserts that after pruning to a scope without the retired ancestor coordinate, completeness no
+     * longer carries it — while the in-scope channel entry and frontier survive — and that the prune
+     * persists (a reload sees the same pruned completeness).
+     */
+    @Test
+    void pruneToScopeAlsoPrunesRetiredCoordinatesOutOfChannelClockValues() {
+        TestKeyValueStore<String, byte[]> store =
+                new TestKeyValueStore<String, byte[]>(Comparator.naturalOrder(), "frontier");
+        ParsleyFrontier frontier = new ParsleyFrontier(store, new MockForwardedIndex());
+
+        // T1's channel advertises transitive ancestry on ANC (an upstream topic) and on T2 (a
+        // consumed sibling); ANC is then retired from the topology.
+        frontier.deliver(T1_ID, 0, 0);
+        frontier.deliver(T1_ID, 0, 1);
+        frontier.channelUpdate(T1_ID, 0,
+                ParsleyClock.empty().observe(ANC_ID, 0, 4).observe(T2_ID, 0, 2));
+        assertEquals(4L, frontier.completeness().offsetFor(ANC_ID, 0),
+                "precondition: the retired ancestor is advertised before the prune");
+
+        // The new scope: T1 and T2 on partition 0 — ANC has left the topology.
+        frontier.pruneToScope((topicId, partition) ->
+                partition == 0 && (topicId.equals(T1_ID) || topicId.equals(T2_ID)));
+
+        assertEquals(-1L, frontier.completeness().offsetFor(ANC_ID, 0),
+                "the retired coordinate must be pruned out of the channel clock's value, or the stamp "
+                        + "would re-advertise it downstream forever");
+        assertEquals(2L, frontier.completeness().offsetFor(T2_ID, 0),
+                "live transitive ancestry inside the same channel clock must survive the prune");
+        assertEquals(1L, frontier.snapshot().offsetFor(T1_ID, 0),
+                "the in-scope frontier entry must survive the prune");
+
+        ParsleyFrontier reloaded = new ParsleyFrontier(store, new MockForwardedIndex());
+        assertEquals(-1L, reloaded.completeness().offsetFor(ANC_ID, 0),
+                "the prune must persist: a reload must not resurrect the retired coordinate");
+    }
+
     // --- Epoch flooring (WS1) -------------------------------------------------------------------
     //
     // Each below floors T1 at startsAt = 100; every other coordinate is unbounded (NO_BOUND). The

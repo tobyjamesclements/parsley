@@ -90,6 +90,36 @@ class RocksForwardedIndexTest {
                 "unmarking one topic must not delete the identical offset on a neighboring topic");
     }
 
+    /**
+     * {@code pruneAtOrBelow} deletes marked offsets at or below the watermark and nothing else —
+     * in particular never the offset at {@code watermark + 1}, which is a legitimately marked entry
+     * above the contiguous frontier and the very next candidate the absorb walk would consume.
+     * {@code range} is inclusive of both bounds, so an upper key of {@code watermark + 1} (the old
+     * off-by-one) would have deleted it.
+     *
+     * Asserts offsets at and below the watermark are gone, the offset exactly one above survives,
+     * and a negative watermark is a no-op.
+     */
+    @Test
+    void pruneAtOrBelowDeletesOnlyAtOrBelowTheWatermarkNeverTheNextCandidateAbove() {
+        RocksForwardedIndex index = new RocksForwardedIndex(newRocksStore());
+        index.mark(TOPIC_ID, 0, 3);
+        index.mark(TOPIC_ID, 0, 5);
+        index.mark(TOPIC_ID, 0, 6); // watermark + 1: must survive the prune
+        index.mark(TOPIC_ID, 0, 8);
+
+        index.pruneAtOrBelow(TOPIC_ID, 0, 5);
+
+        assertEquals(List.of(6L, 8L), index.forwardedAfter(TOPIC_ID, 0, -1),
+                "only offsets at or below the watermark (3 and 5) may be pruned; the marked offset at "
+                        + "watermark + 1 is the absorb walk's next candidate and must survive");
+
+        index.pruneAtOrBelow(TOPIC_ID, 0, -1);
+
+        assertEquals(List.of(6L, 8L), index.forwardedAfter(TOPIC_ID, 0, -1),
+                "a negative watermark (coordinate never observed) must be a no-op");
+    }
+
     private static org.apache.kafka.streams.state.KeyValueStore<byte[], byte[]> newRocksStore() {
         return new TestKeyValueStore<byte[], byte[]>(Arrays::compareUnsigned);
     }

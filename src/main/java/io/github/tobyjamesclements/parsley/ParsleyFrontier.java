@@ -214,7 +214,9 @@ final class ParsleyFrontier {
      * {@code offset - 1} into the frontier lets the contiguous walk start there. Returns {@code true} if
      * a seed was applied (the caller should then cascade). The coordinate is marked seen on the first
      * call even if the record is held, so a later record cannot re-trigger the seed and skip the
-     * still-held earlier one.
+     * still-held earlier one. The seen-set is in-memory only; {@link ParsleyEngine}'s constructor
+     * replays this call for every restored held record's source coordinate (at its lowest held
+     * offset) so the guard survives a restart.
      *
      * <p>The epoch generalises the per-channel origin into a domain-wide one: the causal frontier for a
      * coordinate begins at the <em>epoch origin</em> {@code startsAt - 1} (nothing below the floor is
@@ -339,13 +341,27 @@ final class ParsleyFrontier {
     }
 
     /**
-     * Prunes causal state to the coordinates {@code inScope} accepts: retains the frontier clock and
+     * Prunes causal state to the coordinates {@code inScope} accepts: retains the frontier clock,
      * drops any channel whose coordinate is out of scope (e.g. a topic dropped and recreated with a
-     * new UUID). Called once at init before seeding the current input channels.
+     * new UUID), and prunes each surviving channel's <em>advertised clock</em> to the same scope.
+     * Called once at init before seeding the current input channels.
+     *
+     * <p>Pruning the channel <em>values</em> is what lets a coordinate ever be retired from the DAG.
+     * A channel's advertised clock is monotonic ({@link #channelUpdate} only ever max-merges) and
+     * feeds {@link #completeness()} — the outbound stamp — so an entry for a topic that has left the
+     * topology would otherwise be re-advertised downstream forever, where every receiver's gate fails
+     * it fast as an unreachable dependency (a permanent crash loop regenerated from this store on
+     * every restart). The prune is safe because a live advertised coordinate is always in scope here:
+     * every stage channels its whole causal ancestry (the full-mesh/ancestry contract the engine's
+     * fail-closed unreachable check enforces), upstream stamps are co-partitioned onto this task's
+     * own partition, and this node's own sink coordinates were already stripped before folding
+     * ({@code ParsleyEngine#advertised}) — so an out-of-scope entry inside a channel clock can only
+     * be a retired or recreated coordinate, never live transitive ancestry.
      */
     void pruneToScope(ParsleyClock.CoordinatePredicate inScope) {
         frontier = frontier.retaining(inScope);
         channels.keySet().removeIf(key -> !inScope.test(key.topicId(), key.partition()));
+        channels.replaceAll((key, clock) -> clock.retaining(inScope));
         persist();
     }
 

@@ -204,6 +204,28 @@ final class ParsleyEngine<K, V> {
         this.clock = clock;
         this.inScope = inScope;
         this.ownSinkTopics = ownSinkTopics;
+        List<ParsleyBufferStore.IndexEntry> restored = buffer.indexEntries();
+        // Replay receive()'s first-sighting seed for every restored held record's source coordinate,
+        // at its lowest held offset, BEFORE anything else can. ParsleyFrontier's "seen" guard is
+        // in-memory and does not survive a restart, so without this a post-restart record arriving on
+        // a coordinate whose only prior activity is a still-held record (frontier entry absent —
+        // possible only when that record sits at offset 0, whose seed is a no-op) would re-trigger
+        // the baseline seed and fold the held record's offset into the frontier as "outside the
+        // engine's purview" — releasing records that depend on it before it has ever been delivered
+        // (an effect-before-cause delivery). Seeding at the lowest held offset reproduces exactly
+        // what the first in-run sighting did: marks the coordinate seen, and never seeds past a held
+        // record. Out-of-scope coordinates are skipped — a held record on one fails the drain fast
+        // anyway, and re-seeding an entry pruneToScope just removed would resurrect it.
+        Map<Uuid, Map<Integer, Long>> lowestHeld = new HashMap<>();
+        for (ParsleyBufferStore.IndexEntry entry : restored) {
+            lowestHeld.computeIfAbsent(entry.topicId(), k -> new HashMap<>())
+                    .merge(entry.partition(), entry.offset(), Math::min);
+        }
+        lowestHeld.forEach((topicId, byPartition) -> byPartition.forEach((partition, offset) -> {
+            if (inScope.test(topicId, partition)) {
+                frontier.seedIfFirstSeen(topicId, partition, offset);
+            }
+        }));
         // Populate the candidate index for any records already in the buffer (e.g., restored from
         // a state store after a restart). This is a one-time O(n) pass at construction. It decodes
         // only the dependency clock (never the user-serde key/value), so a record whose value can no
@@ -213,7 +235,7 @@ final class ParsleyEngine<K, V> {
         // coordinate a channel merely claims (satisfied by completeness but not by the frontier)
         // must stay indexed, or the frontier advance that eventually genuinely proves it would find
         // no candidate to release.
-        for (ParsleyBufferStore.IndexEntry entry : buffer.indexEntries()) {
+        for (ParsleyBufferStore.IndexEntry entry : restored) {
             candidateIndex.index(entry.sequence(),
                     effectiveDependencies(entry.dependencies(), entry.topicId(), entry.partition(), entry.offset()),
                     frontier.snapshot());

@@ -7,6 +7,38 @@ All notable changes to this project are documented in this file. The format is b
 ## [Unreleased]
 
 ### Fixed
+- **A restart could re-trigger the baseline frontier seed past a still-held record, releasing its
+  dependents before it — an effect-before-cause delivery.** `ParsleyFrontier#seedIfFirstSeen` folds
+  everything below a coordinate's first-ever-observed offset into the frontier, guarded by an
+  in-memory "seen" set so a later record cannot re-seed past a held earlier one — but that set did
+  not survive a restart. With a held record at offset 0 (whose seed is a no-op, so the persisted
+  frontier carries no entry for the coordinate), the first post-restart record on that coordinate
+  re-fired the seed, folded the held record's offset into the frontier as "outside the engine's
+  purview", and the resulting cascade released records depending on it before it had ever been
+  delivered. `ParsleyEngine`'s constructor now replays the first-sighting seed for every restored
+  held record's source coordinate (at its lowest held offset) before anything else can, so the guard
+  is reconstructed from the buffer exactly as the original sightings built it.
+- **Channel clocks never forgot a retired coordinate, so removing a topic from the DAG permanently
+  poisoned every downstream stamp.** A channel's advertised clock is monotonic (`channelUpdate` only
+  ever max-merges) and feeds `completeness()` — the outbound stamp — so a transitive entry for a
+  topic that left the topology (retired, or recreated under a new UUID) was re-advertised downstream
+  forever, where every receiver's fail-closed gate rejected it as an unreachable dependency: a
+  permanent crash loop regenerated from the persisted store on every restart, defeating the
+  topology-epochs pillar's "evolve without dragging pre-change history" claim for any evolution that
+  retires a coordinate. `ParsleyFrontier#pruneToScope` now prunes each surviving channel's clock
+  *values* to the scope, not just the frontier entries and channel keys — sound because under the
+  ancestry/full-mesh contract every live advertised coordinate is a consumed topic on the task's own
+  partition, so an out-of-scope entry inside a channel value can only be retirement garbage. A
+  rolling restart after the topology change (already required to change subscriptions) now actually
+  cleans the stamps.
+- **`RocksForwardedIndex#pruneAtOrBelow` deleted one offset above its contract.** The store's
+  `range(from, to)` is inclusive of both bounds, so an upper key of `watermark + 1` also deleted a
+  legitimately marked offset at `watermark + 1` — an entry above the contiguous frontier and the
+  absorb walk's very next candidate. Reachable only through a store carried over from before the
+  `exactly_once_v2` requirement and self-healing on replay, but now the upper bound is the watermark
+  itself, matching the method's name and Javadoc.
+
+### Fixed
 - **Epoch-floor publications could reflect uncommitted state, misclassifying in-epoch records as
   pre-epoch history for a fresh joiner.** A member's `FrontierPublished` rides the idempotent
   epoch-events side channel, deliberately outside the task's EOS transaction — but the published clock
