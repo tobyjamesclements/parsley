@@ -243,6 +243,7 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
             // source-topic registry; then block until this member is a running member.
             runtime.join(memberId, topics, sinkTopics);
             coordination.awaitJoinCommit(runtime, memberId);
+            validateFullMeshCoverage(runtime);
         }
 
         // The task's epoch state floors gating against the settled epoch. A fresh task that joined an
@@ -304,7 +305,7 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
         }
 
         this.engine = new ParsleyEngine<>(frontier, buffer, candidateIndex,
-                wiredMetrics.metrics(), audit, context::currentSystemTimeMs, deadLetterSinkName != null);
+                wiredMetrics.metrics(), audit, context::currentSystemTimeMs, deadLetterSinkName != null, inScope);
         // Initialise stampFrontier from completeness() so the stamping proxy reflects the restored
         // channel-clock state (not just the in-scope frontier) from the first forward onward.
         this.stampFrontier = engine.completeness();
@@ -1148,6 +1149,47 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
                     + "strict regardless of the configured mode");
         }
         log.warn("parsley.topology.validation=warn: {}", detail);
+    }
+
+    /**
+     * Warns or fails (per {@code parsley.topology.validation}) when this member's own declared
+     * subscriptions do not cover the coordinated domain's full topic set — some other member on the
+     * shared epoch-events log consumes or produces a topic this member neither consumes nor produces.
+     * Escalated to a hard failure even under the default {@code warn} — mirroring {@link
+     * #validatePartitionParity}'s coordination precedent — since this member could later be asked to
+     * gate a record on a coordinate it can never see (fail-closed in {@link ParsleyEngine}, not silently
+     * satisfied), and an incomplete mesh also blocks every epoch round from ever completing (see {@link
+     * ParsleyEpochLog#isFullMeshSatisfied()}). Surfacing this loudly at startup is better than a
+     * data-path crash loop discovering it record by record, or every round silently hanging forever.
+     * {@code off} is still honoured as an explicit, deliberate opt-out.
+     *
+     * <p>Called immediately after {@link ParsleyCoordination#awaitJoinCommit}, so this member's own join
+     * has already folded and the runtime has already bootstrapped — {@code runtime.domainTopics()}
+     * reflects every member declared on the log as of at least this member's own join.
+     */
+    private void validateFullMeshCoverage(ParsleyEpochRuntime runtime) {
+        ParsleyConfig.ValidationMode mode = config.topologyValidation();
+        if (mode == ParsleyConfig.ValidationMode.OFF) {
+            return;
+        }
+        Set<String> domain = runtime.domainTopics();
+        Set<String> missing = new HashSet<>(domain);
+        missing.removeAll(topics);
+        missing.removeAll(sinkTopics);
+        if (missing.isEmpty()) {
+            return;
+        }
+        String detail = "this member's own subscriptions (inputs " + topics + ", sinks " + sinkTopics
+                + ") do not cover the coordinated domain " + domain + "; missing: " + missing
+                + " — every running member must be able to see every domain coordinate for the "
+                + "completeness it publishes to be sound";
+        if (mode == ParsleyConfig.ValidationMode.STRICT) {
+            throw new IllegalStateException("parsley.topology.validation=strict: " + detail);
+        }
+        throw new IllegalStateException("parsley.topology.validation=warn, but topology-epoch "
+                + "coordination is configured: " + detail + "; an incomplete mesh under coordination "
+                + "blocks every epoch round from ever completing, so it is treated as strict regardless "
+                + "of the configured mode");
     }
 
     /**

@@ -58,9 +58,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
  *   <li><strong>Each processor maintains its own contiguous, scoped frontier.</strong> Two
  *       independent causal processors share one input topic but also each read a topic unique to them.
  *       Each stamps forwarded records with the high-water of <em>only</em> its own source topics: the
- *       other processor's unique topic never leaks in, and the upstream client's out-of-scope
- *       coordinates are vacuously satisfied (they never block delivery and never appear in the
- *       stamp).</li>
+ *       other processor's unique topic never leaks in.</li>
  * </ol>
  *
  * <p>Every topic is single-partition, so source offsets are deterministic and the records are chained
@@ -149,32 +147,26 @@ class CausalFanOutScopedFrontierIT {
      * separate Streams applications (distinct application ids, so distinct consumer groups) — Kafka
      * Streams forbids two source nodes within one topology from subscribing to overlapping-but-unequal
      * topic sets, and independent applications are anyway the faithful model of two independent
-     * processors. Every inbound record additionally carries the upstream client's max frontier
-     * ({@code SRC1}/{@code SRC2}), which neither processor consumes. The records are chained by
-     * dependency ({@code SHARED@1} gates the unique-topic records) so each admission frontier is
-     * deterministic.
+     * processors. The unique-topic records are produced first, each depending on {@code SHARED@1} —
+     * every record is checked against this node's actual, already-proven state, never against its own
+     * declared claim, so each is genuinely held until its own processor's direct consumption of
+     * {@code SHARED} actually, contiguously reaches offset 1.
      *
-     * <p>Completeness is the per-coordinate minimum across every one of a processor's input channels
-     * ({@link ParsleyFrontier#completeness()} / {@code ParsleyClock.intersectMin}): a coordinate
-     * missing from even one channel's view is dropped entirely, not carried through regardless (see
-     * {@code ParsleyEngineCompletenessTest.coordinateOnOnlyOneChannelIsDroppedNotConfirmedByAllChannels}
-     * for the unit-level analog, and the "Independent inputs" topology-contract note in
-     * {@code docs/internals/causal-consistency.md}). {@code SRC1}/{@code SRC2} survive for both
-     * processors because the upstream client stamps them onto every record on every topic, so both of
-     * a processor's channels witness them. Each processor's own unique topic ({@code A_ONLY} for A,
-     * {@code B_ONLY} for B) does not: it is witnessed only by that one channel — the shared topic never
-     * carries a dependency on it — so it is dropped from both stamps, which is why {@code expectedA0},
-     * {@code expectedB0}, and {@code expectedShared1} below are all identical. This isn't a scenario
-     * limitation: for either unique-topic coordinate to survive, the shared topic would need to carry a
-     * dependency on it, which would make the record undeliverable to whichever sibling processor has no
-     * channel for that topic at all (the delivery gate holds forever rather than dropping the
-     * coordinate) — so there is no topology shape in which one processor's unique topic can appear in
-     * its stamp while remaining absent from the sibling's.
+     * <p>Completeness is this processor's own frontier max-merged with every input channel's advertised
+     * dependencies ({@link ParsleyFrontier#completeness()} / {@link ParsleyClock#merge}). Once
+     * {@code SHARED@1} genuinely delivers, the same {@code onRecord} call's cascade
+     * ({@link ParsleyEngine#onRecord}'s {@code propagate()}) releases the held unique-topic record in
+     * the same pass — so both records are stamped with the same post-cascade completeness, and
+     * {@code SHARED@1}'s own stamp already carries the unique-topic coordinate too. Each processor's
+     * own unique topic is that processor's own directly-consumed coordinate — part of its own
+     * contiguous frontier — so once delivered, every subsequent stamp from that processor carries it.
+     * Neither unique topic ever leaks into the sibling processor's stamp, since neither channel nor
+     * frontier for the sibling ever observes it.
      */
     @Test
     void scopedFrontiersStayIndependentAcrossTwoProcessorsSharingATopic() throws Exception {
         String bootstrap = kafka.getBootstrapServers();
-        createTopics(bootstrap, SRC1, SRC2, SHARED, A_ONLY, B_ONLY, A_OUT, B_OUT);
+        createTopics(bootstrap, SHARED, A_ONLY, B_ONLY, A_OUT, B_OUT);
 
         // Two independent applications: each reads the shared topic plus its own unique topic, into
         // its own buffer-store namespace, forwarding to its own output topic.
@@ -190,35 +182,28 @@ class CausalFanOutScopedFrontierIT {
             resolverProps.put("bootstrap.servers", bootstrap);
             ParsleyTopics topics = ParsleyTopics.of(resolverProps);
 
-            // What an upstream client carrying its max frontier (see the other test) would stamp.
-            // Neither processor consumes SRC1/SRC2, so these coordinates are out of every scope.
-            CausalDependencies upstream = CausalDependencies.builder(topics)
-                    .require(SRC1, 0, 2)
-                    .require(SRC2, 0, 1)
-                    .build();
-            CausalDependencies afterShared0 = upstream.merge(
-                    CausalDependencies.builder(topics).require(SHARED, 0, 0).build());
-            CausalDependencies afterShared1 = upstream.merge(
-                    CausalDependencies.builder(topics).require(SHARED, 0, 1).build());
+            CausalDependencies afterShared1 = CausalDependencies.builder(topics).require(SHARED, 0, 1).build();
 
             try (KafkaProducer<String, String> producer = new KafkaProducer<>(producerConfig(bootstrap))) {
-                // Unique-topic records depend on SHARED@1, so they are buffered until it arrives.
+                // Unique-topic records depend on SHARED@1 — genuinely buffered until it arrives.
                 producer.send(afterShared1.stamp(new ProducerRecord<>(A_ONLY, "ak", "a0"))).get();
                 producer.send(afterShared1.stamp(new ProducerRecord<>(B_ONLY, "bk", "b0"))).get();
-                // SHARED@0 then SHARED@1, in that order, advancing both scoped frontiers contiguously.
-                producer.send(upstream.stamp(new ProducerRecord<>(SHARED, "sk", "s0"))).get();
-                producer.send(afterShared0.stamp(new ProducerRecord<>(SHARED, "sk", "s1"))).get();
+                // SHARED@0 then SHARED@1, in that order, advancing both scoped frontiers contiguously
+                // and releasing the held unique-topic records once SHARED@1 genuinely delivers.
+                producer.send(CausalDependencies.empty().stamp(new ProducerRecord<>(SHARED, "sk", "s0"))).get();
+                producer.send(CausalDependencies.empty().stamp(new ProducerRecord<>(SHARED, "sk", "s1"))).get();
             }
 
-            // SRC1/SRC2 survive completeness because every channel of both processors witnesses
-            // them (the upstream client stamps them onto every record on every topic). Each
-            // processor's own unique topic (A_ONLY / B_ONLY) does not: it is witnessed by only one
-            // of that processor's two channels, so it is dropped by the per-channel minimum — for
-            // both processors alike, which is why all three expected values below coincide.
-            CausalDependencies expected = CausalDependencies.builder(topics)
+            // SHARED@1's delivery and the cascade release of the held unique-topic record happen in
+            // the same onRecord call, so both are stamped with the same post-cascade completeness:
+            // SHARED@1 plus this processor's own unique-topic coordinate.
+            CausalDependencies expectedA = CausalDependencies.builder(topics)
                     .require(SHARED, 0, 1)
-                    .require(SRC1, 0, 2)
-                    .require(SRC2, 0, 1)
+                    .require(A_ONLY, 0, 0)
+                    .build();
+            CausalDependencies expectedB = CausalDependencies.builder(topics)
+                    .require(SHARED, 0, 1)
+                    .require(B_ONLY, 0, 0)
                     .build();
 
             try (KafkaConsumer<String, byte[]> aConsumer = new KafkaConsumer<>(stampConsumerConfig(bootstrap));
@@ -228,16 +213,20 @@ class CausalFanOutScopedFrontierIT {
                 Map<String, CausalDependencies> aStamps = pollStamps(aConsumer, 3);
                 Map<String, CausalDependencies> bStamps = pollStamps(bConsumer, 3);
 
-                assertEquals(expected, aStamps.get("S1"),
-                        "SHARED@1 + SRC ancestry witnessed by both of processor A's channels");
-                assertEquals(expected, bStamps.get("S1"),
-                        "SHARED@1 + SRC ancestry witnessed by both of processor B's channels");
-                assertEquals(expected, aStamps.get("A0"),
-                        "processor A's stamp carries SHARED+SRC completeness; A_ONLY is dropped "
-                                + "because only the A_ONLY channel witnesses it, not SHARED");
-                assertEquals(expected, bStamps.get("B0"),
-                        "processor B's stamp carries SHARED+SRC completeness; B_ONLY is dropped "
-                                + "because only the B_ONLY channel witnesses it, not SHARED");
+                assertEquals(expectedA, aStamps.get("S1"),
+                        "processor A's SHARED@1 stamp carries A_ONLY too: A_ONLY@0 was released by the "
+                                + "same onRecord cascade that delivered SHARED@1, so both share one stamp");
+                assertEquals(expectedB, bStamps.get("S1"),
+                        "processor B's SHARED@1 stamp carries B_ONLY too: B_ONLY@0 was released by the "
+                                + "same onRecord cascade that delivered SHARED@1, so both share one stamp");
+                assertEquals(expectedA, aStamps.get("A0"),
+                        "processor A's released A_ONLY@0 stamp carries SHARED@1 (its genuine dependency, "
+                                + "reached only once this processor's own SHARED channel actually got there) "
+                                + "plus its own A_ONLY coordinate — never B_ONLY, which this processor never "
+                                + "observes");
+                assertEquals(expectedB, bStamps.get("B0"),
+                        "processor B's released B_ONLY@0 stamp carries SHARED@1 plus its own B_ONLY "
+                                + "coordinate — never A_ONLY, which this processor never observes");
             }
         }
     }

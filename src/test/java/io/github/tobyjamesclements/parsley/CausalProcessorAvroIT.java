@@ -91,7 +91,9 @@ class CausalProcessorAvroIT {
      * An Avro {@code Order} stamped (via {@code from(prices@0)}) and produced before the {@code Price}
      * it depends on is buffered and released in causal order once the Price advances the frontier. The
      * held Order round-trips through the buffer under its source-topic subject against the real
-     * registry, arriving field-for-field equal to the original.
+     * registry, arriving field-for-field equal to the original. Its own declared claim is not proof
+     * enough on its own: every record is checked against this processor's actual current state, never
+     * against its own stamp.
      *
      * Asserts the output topic delivers the Price first and the Order second, each equal to the
      * original Avro record.
@@ -118,9 +120,9 @@ class CausalProcessorAvroIT {
 
             try (KafkaProducer<String, SpecificRecord> producer =
                          new KafkaProducer<>(producerConfig(bootstrap, registryUrl))) {
-                // Produce the dependent Order FIRST — it must be buffered (Avro bytes in the store).
+                // Produce the dependent Order FIRST — it must be buffered, not delivered early.
                 producer.send(orderDeps.stamp(new ProducerRecord<>(ORDERS, "o-buf", order))).get();
-                // Then the Price it depends on, which unblocks it.
+                // Then the Price it depends on (lands at prices@0), unblocking it.
                 producer.send(CausalDependencies.empty()
                         .stamp(new ProducerRecord<>(PRICES, "ACME", price))).get();
             }
@@ -130,9 +132,9 @@ class CausalProcessorAvroIT {
                 consumer.subscribe(List.of(OUT));
                 List<SpecificRecord> delivered = pollValues(consumer, 2);
                 assertEquals(price, delivered.get(0),
-                        "the Price (the dependency) must be delivered first, equal to the original");
+                        "the Price (the dependency) must be delivered first, Avro round-tripped equal to the original");
                 assertEquals(order, delivered.get(1),
-                        "the buffered Order must drain second, round-tripped through Avro equal to the original");
+                        "the buffered Order must drain second, once the Price satisfied its dependency");
             }
         }
     }

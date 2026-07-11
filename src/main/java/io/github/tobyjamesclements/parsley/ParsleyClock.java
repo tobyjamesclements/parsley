@@ -102,26 +102,6 @@ final class ParsleyClock {
     }
 
     /**
-     * Returns the per-coordinate minimum over the coordinates present in <em>both</em> this clock and
-     * {@code other} (intersection-min): a coordinate present in just one side is <em>dropped</em>, a
-     * coordinate present in both takes {@code Math.min}. This is the completeness fold across a node's
-     * input channels: a coordinate is settled to offset {@code k} only when <em>every</em> channel has
-     * observed it to {@code ≥ k}; a channel that has not observed a coordinate (it is absent here)
-     * leaves it out of the result entirely, so a dependency on it is not satisfied until that channel
-     * advertises it. Contrast {@link #mergeMin}, which keeps a coordinate seen on only one side.
-     */
-    ParsleyClock intersectMin(ParsleyClock other) {
-        Map<Uuid, Map<Integer, Long>> kept = new HashMap<>();
-        forEach((topicId, partition, offset) -> {
-            long otherOffset = other.offsetFor(topicId, partition);
-            if (otherOffset >= 0) {
-                kept.computeIfAbsent(topicId, k -> new HashMap<>()).put(partition, Math.min(offset, otherOffset));
-            }
-        });
-        return new ParsleyClock(freeze(kept));
-    }
-
-    /**
      * Returns a copy of this clock with the {@code (topicId, partition)} coordinate removed, if
      * present. Used to strip a record's self-reference before the admissibility check.
      */
@@ -142,9 +122,11 @@ final class ParsleyClock {
     /**
      * Returns a copy of this clock keeping only the coordinates for which {@code inScope} holds, or
      * {@code this} unchanged when every coordinate is kept (so the common all-in-scope case allocates
-     * nothing). Used to drop dependency coordinates a processor does not consume — a different
-     * partition, or a topic outside its registered buffers — so they are treated as vacuously
-     * satisfied rather than waited on.
+     * nothing). Used on recorded state a processor owns — pruning a restored frontier/pending-epoch
+     * clock down to the coordinates currently in scope after a topic UUID change or scope narrowing
+     * ({@link ParsleyFrontier#pruneToScope}) — never on an inbound record's own dependency clock: a
+     * dependency naming a coordinate outside scope is not something to silently drop, see {@link
+     * ParsleyEngine}'s fail-closed handling of that case.
      */
     ParsleyClock retaining(CoordinatePredicate inScope) {
         boolean anyDropped = false;

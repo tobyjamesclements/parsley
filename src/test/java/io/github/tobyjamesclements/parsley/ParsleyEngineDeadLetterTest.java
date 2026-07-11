@@ -17,7 +17,10 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * is diverted rather than failing the task when a dead-letter sink is configured, and any buffered
  * dependent whose own dependencies now require an unreachable coordinate is dead-lettered too. Also
  * covers {@link ParsleyEngine#deadLetterAtIngest}, the counterpart for a record dead-lettered before it
- * ever became engine state at all (an undecodable causal-dependencies header).
+ * ever became engine state at all (an undecodable causal-dependencies header), and a record whose
+ * dependencies name a coordinate this node has no channel for at all — fail-closed
+ * ({@link ParsleyEngine.DeadLetter.Reason#UNREACHABLE_DEPENDENCY}), never silently treated as
+ * satisfied.
  */
 class ParsleyEngineDeadLetterTest {
 
@@ -124,6 +127,61 @@ class ParsleyEngineDeadLetterTest {
         assertTrue(outcome.deadLettered().get(2) instanceof ParsleyEngine.DeadLetter.Decoded,
                 "C decoded fine — only its premise is gone");
         assertEquals(0, buffer.size(), "the buffer must end empty — nothing left waiting on a dead coordinate");
+    }
+
+    /**
+     * A record whose dependencies name a coordinate this node has no input channel for at all — here,
+     * a coordinate simply outside the configured scope — can never be confirmed no matter how long it
+     * waits. With no dead-letter sink configured, this fails the task fast rather than silently
+     * treating the unreachable coordinate as satisfied: this node can prove it cannot check the
+     * coordinate, never that the coordinate is irrelevant.
+     *
+     * Asserts {@code onRecord} throws {@link ParsleyUnreachableDependencyException} and the record is
+     * never added to the buffer.
+     */
+    @Test
+    void unreachableDependencyFailsTheTaskWhenDeadLetteringIsDisabled() {
+        // Only T1 is in scope; T2 is a coordinate this node has no channel for at all.
+        ParsleyClock.CoordinatePredicate onlyT1 = (topicId, partition) -> partition == 0 && topicId.equals(T1_ID);
+        ParsleyFrontier frontier = new ParsleyFrontier(ParsleyClock.empty(), new MockForwardedIndex(), new MockOrphanIndex());
+        MockBufferStore<String, String> buffer = new MockBufferStore<>();
+        ParsleyEngine<String, String> engine = new ParsleyEngine<>(frontier, buffer, new MockCandidateIndex(),
+                ParsleyMetrics.NOOP, CausalAudit.NOOP, System::currentTimeMillis, false, onlyT1);
+
+        ParsleyClock needsT2 = ParsleyClock.empty().observe(T2_ID, 0, 0);
+
+        assertThrows(ParsleyUnreachableDependencyException.class,
+                () -> engine.onRecord(message(T1, 0, T1_ID, needsT2)),
+                "a dependency on a coordinate outside this node's scope must fail the task when no "
+                        + "dead-letter sink is configured");
+        assertEquals(0, buffer.size(), "the record must never be added to the buffer");
+    }
+
+    /**
+     * The same scenario as {@link #unreachableDependencyFailsTheTaskWhenDeadLetteringIsDisabled}, but
+     * with a dead-letter sink configured: the record is diverted (reason {@link
+     * ParsleyEngine.DeadLetter.Reason#UNREACHABLE_DEPENDENCY}) rather than failing the task, and never
+     * occupies a buffer slot.
+     *
+     * Asserts the outcome dead-letters the record with reason {@code UNREACHABLE_DEPENDENCY}, nothing
+     * is delivered, and the buffer stays empty.
+     */
+    @Test
+    void unreachableDependencyIsDeadLetteredWhenDeadLetteringIsEnabled() {
+        ParsleyClock.CoordinatePredicate onlyT1 = (topicId, partition) -> partition == 0 && topicId.equals(T1_ID);
+        ParsleyFrontier frontier = new ParsleyFrontier(ParsleyClock.empty(), new MockForwardedIndex(), new MockOrphanIndex());
+        MockBufferStore<String, String> buffer = new MockBufferStore<>();
+        ParsleyEngine<String, String> engine = new ParsleyEngine<>(frontier, buffer, new MockCandidateIndex(),
+                ParsleyMetrics.NOOP, CausalAudit.NOOP, System::currentTimeMillis, true, onlyT1);
+
+        ParsleyClock needsT2 = ParsleyClock.empty().observe(T2_ID, 0, 0);
+        ParsleyEngine.Outcome<String, String> outcome = engine.onRecord(message(T1, 0, T1_ID, needsT2));
+
+        assertTrue(outcome.delivered().isEmpty(), "the record must never be delivered on an unproven premise");
+        assertEquals(1, outcome.deadLettered().size(), "the record must be dead-lettered");
+        assertEquals(ParsleyEngine.DeadLetter.Reason.UNREACHABLE_DEPENDENCY, outcome.deadLettered().get(0).reason(),
+                "the reason must name the unreachable dependency, not an orphan cascade");
+        assertEquals(0, buffer.size(), "the record must never occupy a buffer slot");
     }
 
     /**
@@ -288,13 +346,20 @@ class ParsleyEngineDeadLetterTest {
      * orphan cascade) an entry already collected as deliverable but not yet removed from the buffer —
      * the release loop then forwarded it anyway.
      *
-     * <p>Three fan-in channels C, D, E (a cross-channel completeness gate, {@code trackChannels =
-     * true}, is required to reach this bug — see the class comment on the constructor used below).
-     * R (D@3) depends on {@code {C@5, E@7}}; P (C@5, poison) depends on {@code {E@7}} — both indexed
-     * on the same coordinate (E@7), R first (lower buffer sequence). Once cross-channel headers make
-     * completeness(C) reach 5 and E@7 itself delivers, {@code propagate(E, 7)} finds R then P in one
-     * scan: R passes the deliverability check, P throws on fetch (poisoned) and cascades an orphan of
-     * C@5 — which used to catch R still sitting in the buffer.
+     * <p>Three fan-in channels C, D, E ({@code trackChannels = true}). R and P are pre-seeded directly
+     * into the buffer store (via {@code buffer.add}, before the engine is constructed) rather than
+     * processed through {@code onRecord}, since every record — including one this engine constructs the
+     * candidate index for — is checked against real, already-proven state, never against its own
+     * declared claim (see the class Javadoc's gate discussion): pre-seeding is what lets R and P be
+     * genuinely held pending some <em>other</em> record's channel advance, exactly as this regression
+     * needs. R (D@3) depends on {@code {C@5, E@7}}; P (C@5, poison) depends on {@code {E@7}} — both
+     * indexed on the same coordinate (E@7), R first (lower buffer sequence). completeness(C) is
+     * separately raised to 5 by directly pre-establishing channel D's advertisement (standing in for
+     * "some other, already-delivered record on D genuinely proved C@5" — not modelled in detail here),
+     * so C@5 is confirmed without C@5 (P) itself ever truly delivering. Once E@7 itself genuinely
+     * delivers, {@code propagate(E, 7)} finds R then P in one scan: R passes the deliverability check,
+     * P throws on fetch (poisoned) and cascades an orphan of C@5 — which used to catch R still sitting
+     * in the buffer.
      *
      * <p>Asserts R (D@3) is delivered exactly once and never also appears as dead-lettered — the
      * {@link ParsleyEngine.Outcome} disjointness contract.
@@ -309,48 +374,48 @@ class ParsleyEngineDeadLetterTest {
         Uuid teId = Uuid.randomUuid();
 
         PoisonableBufferStore<String, String> buffer = new PoisonableBufferStore<>();
+
+        // R = D@3, deps {C@5, E@7} — pre-seeded directly (bypasses onRecord's self-fold), sequence 0.
+        ParsleyClock rDeps = ParsleyClock.empty().observe(tcId, 0, 5).observe(teId, 0, 7);
+        buffer.add(message(td, 3, tdId, rDeps), 0L);
+        // P = C@5, deps {E@7} — pre-seeded directly too, sequence 1. Poisoned so its later fetch throws.
+        ParsleyClock pDeps = ParsleyClock.empty().observe(teId, 0, 7);
+        buffer.add(message(tc, 5, tcId, pDeps), 0L);
+        buffer.poison(1L);
+
         ParsleyFrontier frontier = new ParsleyFrontier(ParsleyClock.empty(), new MockForwardedIndex(), new MockOrphanIndex());
         // Pre-register every input channel (as the processor does at registration), so a channel that
         // has not yet advertised anything still holds the completeness min rather than being absent.
         frontier.channelUpdate(tcId, 0, ParsleyClock.empty());
         frontier.channelUpdate(tdId, 0, ParsleyClock.empty());
         frontier.channelUpdate(teId, 0, ParsleyClock.empty());
+        // The engine's constructor indexes R and P (already in the buffer) against the completeness at
+        // construction time (empty) — neither C@5 nor E@7 is met yet, so both are genuinely held.
         ParsleyEngine<String, String> engine = new ParsleyEngine<>(frontier, buffer, new MockCandidateIndex(),
                 ParsleyMetrics.NOOP, CausalAudit.NOOP, System::currentTimeMillis, true);
 
-        // Advance C's own frontier to 4 (no deps) so completeness(C) has somewhere to rise from.
-        for (long offset = 0; offset < 5; offset++) {
-            engine.onRecord(message(tc, offset, tcId, ParsleyClock.empty()));
+        assertEquals(2, buffer.size(), "R and P must both be genuinely held from construction");
+
+        // Directly pre-establish that channel D has already, genuinely advertised C@5 — standing in
+        // for "some other, already-delivered D record proved this", so completeness(C) reaches 5
+        // without C@5 (P) itself ever truly delivering (it never can — it is poisoned).
+        frontier.channelUpdate(tdId, 0, ParsleyClock.empty().observe(tcId, 0, 5));
+
+        // Advance E's own frontier to 6 (no deps), so E@7 below is a clean, contiguous next advance.
+        engine.onRecord(message(te, 0, teId, ParsleyClock.empty()));
+        for (long offset = 1; offset <= 6; offset++) {
+            engine.onRecord(message(te, offset, teId, ParsleyClock.empty()));
         }
-        // Advance D's own frontier to 1 (no deps).
-        engine.onRecord(message(td, 0, tdId, ParsleyClock.empty()));
-        engine.onRecord(message(td, 1, tdId, ParsleyClock.empty()));
-
-        // R = D@3, deps {C@5, E@7} — held; advertises C@5 and E@7 on channel D.
-        ParsleyClock rDeps = ParsleyClock.empty().observe(tcId, 0, 5).observe(teId, 0, 7);
-        engine.onRecord(message(td, 3, tdId, rDeps));
-
-        // P = C@5, deps {E@7} — held; advertises E@7 on channel C. Poisoned so its later fetch throws.
-        ParsleyClock pDeps = ParsleyClock.empty().observe(teId, 0, 7);
-        engine.onRecord(message(tc, 5, tcId, pDeps));
-        buffer.poison(1L); // R took sequence 0 (the C@0-4 and D@0-1 records never buffer); P is seq 1
-
-        // C@6, deps {C@5} — held (an intra-topic backward reference); its receipt-time channelUpdate
-        // makes channel C advertise C@5, which is what lets completeness(C) reach 5 below.
-        ParsleyClock c6Deps = ParsleyClock.empty().observe(tcId, 0, 5);
-        engine.onRecord(message(tc, 6, tcId, c6Deps));
-
-        assertEquals(3, buffer.size(), "R, P, and C@6 must all be held before E@7 arrives");
-
-        // E@7, deps {C@5} — its own receipt-time channelUpdate is what makes channel E advertise C@5
-        // too (channels C and D already do, via C@6 and R respectively), so completeness(C) reaches 5
-        // and E@7 itself delivers in the very same step, triggering propagate(E, 7), which finds R
-        // (seq 0) then P (seq 2) in the same scan.
-        ParsleyClock e7Deps = ParsleyClock.empty().observe(tcId, 0, 5);
-        ParsleyEngine.Outcome<String, String> outcome = engine.onRecord(message(te, 7, teId, e7Deps));
 
         assertEquals(5L, engine.completeness().offsetFor(tcId, 0),
-                "completeness(C) must have reached 5 for R to have been judged deliverable at all");
+                "completeness(C) must have reached 5 via D's channel advertisement, independent of "
+                        + "C@5 (P) ever genuinely delivering");
+        assertEquals(2, buffer.size(), "R and P must still be held — neither has been triggered yet");
+
+        // E@7, deps {} — delivers immediately (contiguous, no deps), triggering propagate(E, 7), which
+        // finds R (seq 0) then P (seq 1) in the same scan.
+        ParsleyEngine.Outcome<String, String> outcome = engine.onRecord(message(te, 7, teId, ParsleyClock.empty()));
+
         List<String> delivered = outcome.delivered().stream()
                 .map(m -> m.topic() + "@" + m.offset()).toList();
         List<String> deadLettered = outcome.deadLettered().stream()
@@ -370,25 +435,29 @@ class ParsleyEngineDeadLetterTest {
      * to never check {@code isProvenImpossible}, unlike {@code onRecord} and {@code drainSatisfied}, so
      * a candidate that is simultaneously "deliverable" (per the completeness frontier) and "proven
      * impossible" (per the orphan index) would be forwarded if {@code propagate()}'s own candidate-index
-     * scan reached it — because completeness is driven by cross-channel header advertisement, not
+     * scan reached it — because completeness is driven by channel-clock advertisement, not necessarily
      * genuine local delivery, a coordinate can look satisfied even though the buffered record that would
      * have supplied it is independently proven poison and orphaned.
      *
-     * <p>Three channels G, W, V. W (the poison record) and V (the record under test) are both held on
-     * {@code G@2} (so a single {@code propagate(G, 2)} scan finds both, W first by buffer sequence). W
-     * depends on {@code {G@2, W@0}} — the second an exact self-reference, which advertises {@code W@0}
-     * on channel W without gating W's own deliverability (self-cycles are stripped from the gate but
-     * not from the raw channel advertisement). Another held record on G (never released in this test)
-     * advertises {@code W@0} on channel G. Combined with V's own admission advertising {@code W@0} on
-     * channel V, all three channels confirm {@code W@0} by the time V is buffered — so {@code W@0} is
-     * already satisfied and never indexed against V at all; only {@code G@2} is.
+     * <p>Three channels G, W, V. W (the poison record) and V (the record under test) are pre-seeded
+     * directly into the buffer store (via {@code buffer.add}, before the engine is constructed) rather
+     * than processed through {@code onRecord} — every record is checked against real, already-proven
+     * state, never against its own declared claim, so pre-seeding is what lets each be genuinely held
+     * (see the class Javadoc's gate discussion). Both are held on {@code G@2} (so a single
+     * {@code propagate(G, 2)} scan finds both, W first by buffer sequence). W (at {@code tw@0}) depends
+     * on {@code {G@2, W@0}} — the second an exact self-reference (its own position), stripped from its
+     * own deliverability gate by the engine constructor's indexing pass, so W is genuinely held on
+     * {@code G@2} alone. Channel G's advertisement of {@code W@0} is pre-established directly, standing
+     * in for "some other, already-delivered G record proved this" — not modelled in detail here — so
+     * completeness(W) reaches 0 without W (tw@0) ever truly delivering (it never can — it is poisoned).
+     * V depends on {@code {G@2, W@0}} too; neither is met at index time, so V is indexed against both.
      *
-     * <p>When {@code G@2} finally delivers, {@code propagate(G, 2)} finds W first: it is poisoned,
-     * dead-lettered, and orphans coordinate W at floor 0. It then finds V: {@code isDeliverable(V)}
-     * holds (completeness dominates both {@code G@2} and {@code W@0}, the latter via cross-channel
-     * headers, independent of W ever truly delivering) — without the fix this would forward V; with the
-     * fix, {@code isProvenImpossible(V)} catches it first, since V's own {@code W@0} dependency is now
-     * at/above W's orphan floor.
+     * <p>When {@code G@2} finally, genuinely delivers, {@code propagate(G, 2)} finds W first: it is
+     * poisoned, dead-lettered, and orphans coordinate W at floor 0. It then finds V:
+     * {@code isDeliverable(V)} holds (completeness dominates both {@code G@2} and {@code W@0}, the
+     * latter via G's pre-established channel advertisement, independent of W ever truly delivering) —
+     * without the fix this would forward V; with the fix, {@code isProvenImpossible(V)} catches it
+     * first, since V's own {@code W@0} dependency is now at/above W's orphan floor.
      *
      * <p>Asserts V is dead-lettered ({@link ParsleyEngine.DeadLetter.Reason#ORPHAN_CASCADE}) and never
      * delivered.
@@ -403,50 +472,46 @@ class ParsleyEngineDeadLetterTest {
         Uuid tvId = Uuid.randomUuid();
 
         PoisonableBufferStore<String, String> buffer = new PoisonableBufferStore<>();
+
+        // W = W@0, deps {G@2, W@0} — pre-seeded (bypasses onRecord's self-fold), sequence 0. The W@0
+        // is an exact self-reference, stripped from W's own gate by the constructor's indexing pass.
+        ParsleyClock wDeps = ParsleyClock.empty().observe(tgId, 0, 2).observe(twId, 0, 0);
+        buffer.add(message(tw, 0, twId, wDeps), 0L);
+        buffer.poison(0L);
+        // V = v@2, deps {G@2, W@0} — pre-seeded too, sequence 1.
+        ParsleyClock vDeps = ParsleyClock.empty().observe(tgId, 0, 2).observe(twId, 0, 0);
+        buffer.add(message(tv, 2, tvId, vDeps), 0L);
+
         ParsleyFrontier frontier = new ParsleyFrontier(ParsleyClock.empty(), new MockForwardedIndex(), new MockOrphanIndex());
         frontier.channelUpdate(tgId, 0, ParsleyClock.empty());
         frontier.channelUpdate(twId, 0, ParsleyClock.empty());
         frontier.channelUpdate(tvId, 0, ParsleyClock.empty());
+        // The engine's constructor indexes W (under {G@2} — W@0 stripped as its own self-reference) and
+        // V (under {G@2, W@0}) against completeness at construction time (empty) — genuinely held.
         ParsleyEngine<String, String> engine = new ParsleyEngine<>(frontier, buffer, new MockCandidateIndex(),
                 ParsleyMetrics.NOOP, CausalAudit.NOOP, System::currentTimeMillis, true);
 
-        // Advance G's own frontier to 1 (no deps), so G@2 below is a clean, contiguous next advance.
+        assertEquals(2, buffer.size(), "W (tw@0) and V (v@2) must both be genuinely held from construction");
+
+        // Directly pre-establish that channel G has already, genuinely advertised W@0 — standing in
+        // for "some other, already-delivered G record proved this", so completeness(W) reaches 0
+        // without W (tw@0) itself ever truly delivering (it never can — it is poisoned).
+        frontier.channelUpdate(tgId, 0, ParsleyClock.empty().observe(twId, 0, 0));
+
+        // G's own frontier advances to 1 (no deps) — genuine, sequential delivery, so G@2 below is a
+        // clean, contiguous next advance.
         engine.onRecord(message(tg, 0, tgId, ParsleyClock.empty()));
         engine.onRecord(message(tg, 1, tgId, ParsleyClock.empty()));
 
-        // A held filler on G (never released in this test) advertises W@0 on channel G, without
-        // disturbing G's contiguous frontier (it sits at an offset past where G actually advances).
-        engine.onRecord(message(tg, 5, tgId, ParsleyClock.empty().observe(twId, 0, 0)));
-
-        // W = W@0, deps {G@2, W@0} — the W@0 is an exact self-reference (stripped from W's own
-        // deliverability gate, so W is held on G@2 alone) but still advertises W@0 on channel W via the
-        // raw, unstripped receipt-time channelUpdate.
-        ParsleyClock wDeps = ParsleyClock.empty().observe(tgId, 0, 2).observe(twId, 0, 0);
-        engine.onRecord(message(tw, 0, twId, wDeps));
-        buffer.poison(1L); // seq 0 is the G@5 filler, W@0 is seq 1
-
-        // V (the record under test): v@2 depends on {G@2, W@0} — buffered while G@2 is not yet
-        // observed. By now channels G (via the filler) and W (via W@0's self-reference) already
-        // advertise W@0, and V's own admission advertises it on channel V too, so completeness(W)
-        // already dominates 0 by the time this record is indexed — W@0 is satisfied and never indexed
-        // against V; only G@2 is.
-        ParsleyClock vDeps = ParsleyClock.empty().observe(tgId, 0, 2).observe(twId, 0, 0);
-        engine.onRecord(message(tv, 2, tvId, vDeps));
-
-        // The G@5 filler's only purpose was to advertise W@0 on channel G; the moment V's own admission
-        // makes completeness(W) reach 0 (the last of the three channels to confirm it), the filler's
-        // own pending dependency on W@0 is satisfied too, and the resulting cross-channel drain
-        // (triggered by V's channel-clock advance) releases it in this same call — it does not
-        // interfere with G's contiguous frontier (delivered out of order, at offset 5 with a gap before
-        // it) or with what follows.
-        assertEquals(2, buffer.size(), "W@0 and V (v@2) must still be held before G@2 arrives");
+        assertEquals(2, buffer.size(), "W (tw@0) and V (v@2) must still be held before G@2 arrives");
         assertEquals(0L, engine.completeness().offsetFor(twId, 0),
-                "completeness(W) must already dominate W@0 via cross-channel advertisement, before W@0 "
-                        + "is ever proven poison below");
+                "completeness(W) must already dominate W@0 via G's pre-established channel advertisement, "
+                        + "before W@0 (tw@0) is ever proven poison below");
 
         // G@2, deps {} — delivers immediately, advancing G's frontier to 2 and triggering
-        // propagate(G, 2), which finds W@0 first (poisoned, orphaning W at floor 0) and then V (v@2) —
-        // deliverable per completeness, but its direct dependency on W@0 is now provably impossible.
+        // propagate(G, 2), which finds W (tw@0) first (poisoned, orphaning W at floor 0) and then V
+        // (v@2) — deliverable per completeness, but its direct dependency on W@0 is now provably
+        // impossible.
         ParsleyEngine.Outcome<String, String> outcome = engine.onRecord(message(tg, 2, tgId, ParsleyClock.empty()));
 
         List<String> delivered = outcome.delivered().stream()
@@ -463,30 +528,39 @@ class ParsleyEngineDeadLetterTest {
     }
 
     /**
-     * Regression test for the BACKLOG.md liveness gap: {@code onRecord}'s receipt-time channel-clock
-     * update (before the gate) runs for <em>every</em> record, including one that turns out
-     * proven-impossible — so a record's own dead-lettering must not skip the channel-advance drain its
-     * arrival may have unlocked for other, unrelated buffered records, or they would be stuck with no
-     * further trigger to re-check them.
+     * A proven-impossible (dead-lettered) record's declared claims are never folded into its channel —
+     * it never genuinely delivers, so its assertions are never trusted, exactly like any other record
+     * that never passes the gate. A record depending on what only a dead-lettered message claimed
+     * therefore stays held; nothing has actually proven it.
      *
-     * <p>Two fan-in channels T1, T2 ({@code trackChannels = true}, required to reach this bug — a
-     * single-channel processor's completeness is its own frontier, fully covered by {@code propagate}).
-     * R (T1@10) depends on {@code T1@5}: delivered locally on channel T1, but channel T2 has not yet
-     * advertised it, so completeness(T1) is entirely absent and R is held. X (T2@1) then arrives
-     * advertising {@code T1@5} in its own header — the last channel needed to confirm it — but X itself
-     * depends on {@code T3@0}, a coordinate already orphaned, so it is dead-lettered instead of
-     * forwarded.
+     * <p>This supersedes an earlier version of this test built around the receipt-time channel-clock
+     * update that ran before the gate for every record, dead-lettered or not — a shortcut removed once
+     * every record is checked uniformly against real, already-proven state (see the class Javadoc's
+     * gate discussion). Under that shortcut, X's mere claim of {@code F@5} would have released R even
+     * though X itself never delivered; today it correctly does not.
      *
-     * <p>Asserts R is still released in the very same {@code onRecord(X)} call, and X is dead-lettered —
-     * the channel advance recorded before X's disposition was decided must not be lost just because X
-     * itself never delivers.
+     * <p>Two fan-in channels T1, T2. R (T1@10, depends on a foreign coordinate {@code F@5}) is
+     * pre-seeded directly into the buffer (bypassing {@code onRecord}, so it is genuinely held — R's
+     * own claim is never trusted for its own check either). X (T2@1) then arrives claiming
+     * {@code F@5} in its own header, but X itself depends on {@code T3@0}, a coordinate already
+     * orphaned, so it is dead-lettered rather than delivered — and its claim about {@code F@5} is
+     * therefore never folded into channel T2 at all.
+     *
+     * <p>Asserts R remains held (not released) after X is dead-lettered, and that channel T2 never
+     * advertises {@code F@5}.
      */
     @Test
-    void aProvenImpossibleRecordsChannelAdvanceStillReleasesOtherHeldRecords() {
+    void aProvenImpossibleRecordsClaimIsNeverTrustedForOtherHeldRecords() {
+        Uuid fId = Uuid.randomUuid(); // a foreign coordinate neither T1 nor T2 directly consumes
+
         MockOrphanIndex orphanIndex = new MockOrphanIndex();
         orphanIndex.markOrphaned(T3_ID, 0, 0); // T3 offset 0 and above is already proven impossible
 
         MockBufferStore<String, String> buffer = new MockBufferStore<>();
+        // R = T1@10, deps {F@5} — pre-seeded directly (bypasses onRecord's self-fold), so it is
+        // genuinely held: neither channel has advertised F@5 at index time (completeness is empty).
+        buffer.add(message(T1, 10, T1_ID, ParsleyClock.empty().observe(fId, 0, 5)), 0L);
+
         ParsleyFrontier frontier = new ParsleyFrontier(ParsleyClock.empty(), new MockForwardedIndex(), orphanIndex);
         // Pre-register both input channels, as the processor does at registration.
         frontier.channelUpdate(T1_ID, 0, ParsleyClock.empty());
@@ -494,31 +568,26 @@ class ParsleyEngineDeadLetterTest {
         ParsleyEngine<String, String> engine = new ParsleyEngine<>(frontier, buffer, new MockCandidateIndex(),
                 ParsleyMetrics.NOOP, CausalAudit.NOOP, System::currentTimeMillis, true);
 
-        // T1@5, deps {} — delivers immediately, advancing T1's own frontier to 5. Channel T1's
-        // advertised clock stays empty (this record's own deps are empty).
-        engine.onRecord(message(T1, 5, T1_ID, ParsleyClock.empty()));
-
-        // R = T1@10, deps {T1@5} — held: completeness(T1) requires every channel to confirm T1@5, and
-        // channel T2 has said nothing about T1 at all yet, so T1 is entirely absent from completeness.
-        ParsleyEngine.Outcome<String, String> beforeX =
-                engine.onRecord(message(T1, 10, T1_ID, ParsleyClock.empty().observe(T1_ID, 0, 5)));
-        assertTrue(beforeX.delivered().isEmpty(), "R (T1@10) must be held: channel T2 has not yet confirmed T1@5");
         assertEquals(1, buffer.size(), "R must be sitting in the buffer before X arrives");
 
-        // X = T2@1, deps {T1@5, T3@0} — its receipt-time channelUpdate advertises T1@5 on channel T2
-        // (the confirmation R was waiting on), but X itself depends on the already-orphaned T3@0.
-        ParsleyClock xDeps = ParsleyClock.empty().observe(T1_ID, 0, 5).observe(T3_ID, 0, 0);
+        // X = T2@1, deps {F@5, T3@0} — claims F@5 in its own header, but depends on the
+        // already-orphaned T3@0, so it is dead-lettered rather than delivered.
+        ParsleyClock xDeps = ParsleyClock.empty().observe(fId, 0, 5).observe(T3_ID, 0, 0);
         ParsleyEngine.Outcome<String, String> outcome = engine.onRecord(message(T2, 1, T2_ID, xDeps));
 
-        List<String> delivered = outcome.delivered().stream().map(m -> m.topic() + "@" + m.offset()).toList();
-        assertTrue(delivered.contains("t1@10"),
-                "R (T1@10) must still be released — X's channel advance must not be skipped just "
-                        + "because X itself was dead-lettered");
         assertEquals(1, outcome.deadLettered().size(), "X (T2@1) itself must be dead-lettered");
         assertEquals("t2", outcome.deadLettered().get(0).topic());
         assertEquals(1L, outcome.deadLettered().get(0).offset());
         assertEquals(ParsleyEngine.DeadLetter.Reason.ORPHAN_CASCADE, outcome.deadLettered().get(0).reason(),
                 "X depends on an already-orphaned coordinate, not itself poison");
+
+        assertEquals(List.of(), outcome.delivered(),
+                "R (T1@10) must remain held — X's dead-lettered claim about F@5 is never trusted, "
+                        + "since X itself never genuinely delivered");
+        assertEquals(1, buffer.size(), "R must still be sitting in the buffer");
+        assertEquals(-1L, engine.completeness().offsetFor(fId, 0),
+                "channel T2 must never have advertised F@5 — X's claim was never folded in, since X "
+                        + "was dead-lettered rather than genuinely delivered");
     }
 
     /**

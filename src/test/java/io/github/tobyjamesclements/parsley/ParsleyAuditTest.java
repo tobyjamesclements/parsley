@@ -38,6 +38,7 @@ class ParsleyAuditTest {
         audit.recordReleased("t1", 0, 1L, 0);
         audit.recordDeserializationFailure("t1", 0, 1L, "reason");
         audit.recordClockResolutionFailure("t1", 0, 1L, "reason");
+        audit.recordUnreachableDependencyFailure("t1", 0, 1L, "reason");
         audit.recordDeadLetter("t1", 0, 1L, "reason");
         audit.processorInitialized("task-0", false);
         audit.processorClosing("task-0");
@@ -59,6 +60,7 @@ class ParsleyAuditTest {
             @Override public void recordReleased(String topic, int partition, long offset, int bufferDepthAfter) { calls.add("recordReleased"); }
             @Override public void recordDeserializationFailure(String topic, int partition, long offset, String reason) { calls.add("recordDeserializationFailure"); }
             @Override public void recordClockResolutionFailure(String topic, int partition, long offset, String reason) { calls.add("recordClockResolutionFailure"); }
+            @Override public void recordUnreachableDependencyFailure(String topic, int partition, long offset, String reason) { calls.add("recordUnreachableDependencyFailure"); }
             @Override public void recordDeadLetter(String topic, int partition, long offset, String reason) { calls.add("recordDeadLetter"); }
             @Override public void processorInitialized(String taskId, boolean frontierRestored) { calls.add("processorInitialized"); }
             @Override public void processorClosing(String taskId) { calls.add("processorClosing"); }
@@ -69,12 +71,14 @@ class ParsleyAuditTest {
         audit.recordReleased("t1", 0, 1L, 0);
         audit.recordDeserializationFailure("t1", 0, 1L, "reason");
         audit.recordClockResolutionFailure("t1", 0, 1L, "reason");
+        audit.recordUnreachableDependencyFailure("t1", 0, 1L, "reason");
         audit.recordDeadLetter("t1", 0, 1L, "reason");
         audit.processorInitialized("task-0", false);
         audit.processorClosing("task-0");
 
         assertEquals(List.of("recordForwarded", "recordHeld", "recordReleased",
-                "recordDeserializationFailure", "recordClockResolutionFailure", "recordDeadLetter",
+                "recordDeserializationFailure", "recordClockResolutionFailure",
+                "recordUnreachableDependencyFailure", "recordDeadLetter",
                 "processorInitialized", "processorClosing"), calls,
                 "every call must reach the delegate exactly once, unmodified");
     }
@@ -85,6 +89,7 @@ class ParsleyAuditTest {
         @Override public void recordReleased(String topic, int partition, long offset, int bufferDepthAfter) { throw new RuntimeException("boom"); }
         @Override public void recordDeserializationFailure(String topic, int partition, long offset, String reason) { throw new RuntimeException("boom"); }
         @Override public void recordClockResolutionFailure(String topic, int partition, long offset, String reason) { throw new RuntimeException("boom"); }
+        @Override public void recordUnreachableDependencyFailure(String topic, int partition, long offset, String reason) { throw new RuntimeException("boom"); }
         @Override public void recordDeadLetter(String topic, int partition, long offset, String reason) { throw new RuntimeException("boom"); }
         @Override public void processorInitialized(String taskId, boolean frontierRestored) { throw new RuntimeException("boom"); }
         @Override public void processorClosing(String taskId) { throw new RuntimeException("boom"); }

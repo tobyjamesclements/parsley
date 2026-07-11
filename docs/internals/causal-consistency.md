@@ -61,40 +61,42 @@ will receive, every event its dependency clocks reference. Kafka's subscription 
 provide this for free — the processor will never receive T2's messages, so it cannot satisfy a
 dependency on T2 through its own delivery.
 
-Parsley's response is to **require total visibility of the topology** rather than weaken the
-guarantee. The delivery rule is strict: a record is delivered only once *every* input channel has
-confirmed *every* coordinate the record depends on. For that to be answerable, the topology must
-route every depended-upon coordinate through every input branch of the node (the
-[topology contract](#the-topology-contract)). The alternative — scoping a coordinate out when the
-node does not consume it, treating it as vacuously satisfied — is unsound: it lets a node deliver a
-record before a sibling branch confirms a shared ancestor, and lets a lagging or recovering branch
-later introduce an earlier-ordered record after the fact. Parsley does not scope; it waits for every
-channel.
+Parsley's response is to **require every coordinate a message could ever depend on to be reachable
+to this node** — directly, or via a genuine relay — rather than weaken the guarantee. But it does not
+require every one of a node's own input channels to independently corroborate the same coordinate: a
+single channel that has genuinely, contiguously delivered up to a coordinate is enough. Requiring
+unanimous confirmation across a node's own channels adds nothing to correctness — see
+[why a single witness suffices](#why-a-single-witness-suffices) — and would forbid an ordinary
+consumption pattern (a node consuming both an ancestor topic and one of its own descendants) for no
+safety reason. Parsley does not scope a coordinate out when this node happens not to consume it —
+that would be unsound, since a coordinate no channel here can ever observe is never satisfiable — but
+it also does not require every channel to agree.
 
 ## Parsley's algorithm
 
-> A record is delivered only once every input channel has confirmed every coordinate the record
-> depends on.
+> A record is delivered once this node's own completeness clock dominates every coordinate the
+> record depends on. A single genuine witness — this node's own delivery, or a channel's honestly
+> advertised dependency — is enough for any one coordinate; no cross-channel corroboration is
+> required.
 
-### The completeness frontier
+### The completeness clock
 
-For each coordinate, the **completeness frontier** is the greatest offset that every input channel
-has confirmed. It is the per-coordinate minimum across all input channels
-(`ParsleyClock.intersectMin`), computed in `ParsleyEngine.completeness()`. Each channel contributes:
+The **completeness clock** is this node's own delivered frontier, max-merged with every input
+channel's advertised dependencies (`ParsleyClock.merge`), computed in `ParsleyFrontier.completeness()`.
+Each channel contributes the dependencies its records and watermarks have advertised (the pairwise-max
+over what it has seen on that channel). This node's own coordinates — the `ParsleyFrontier` offset for
+each channel it directly, contiguously delivers — always win any merge against a channel's separately
+advertised view of the same coordinate, since this node's own gate already required that value to be
+proven before it could advance.
 
-- the dependencies its records and watermarks have advertised (the pairwise-max over what it has
-  seen on that channel), and
-- its own contiguous delivered position — the `ParsleyFrontier` offset for the channel's own
-  coordinate.
-
-A coordinate that any input channel has **not** observed is absent from the completeness frontier
-entirely: it is not confirmed by all branches, so a dependency on it is not yet satisfiable. Channels
-are seeded at registration, so a silent channel holds the minimum down rather than being absent from
-the fold.
+A coordinate that no input channel has ever observed is absent from the completeness clock: it is not
+yet confirmed by anything reachable to this node, so a dependency on it is not yet satisfiable. Once
+*any* channel has genuinely advertised it, it counts — there is no requirement that every channel
+independently repeat the same confirmation.
 
 ### The delivery gate
 
-A record is delivered when the completeness frontier dominates its dependency clock, with only the
+A record is delivered when the completeness clock dominates its dependency clock, with only the
 record's own self-cycle removed (a record never waits on its own offset). That is the entire gate,
 `ParsleyEngine.isDeliverable()`:
 
@@ -102,46 +104,68 @@ record's own self-cycle removed (a record never waits on its own offset). That i
 completeness().dominates(deps.withoutSelfReference())
 ```
 
-There is no in-scope filtering and no vacuously-satisfied dependency. A dependency on coordinate K is
-satisfied only when every input channel has advertised K to at least the required offset; until then
-the record is buffered. Forwarded records and protocol watermarks are stamped with this same
-completeness frontier (`ParsleyProcessor` reads `engine.completeness()`).
+There is no vacuously-satisfied dependency. A dependency on coordinate K is satisfied once *any* input
+channel has advertised K to at least the required offset; until then the record is buffered. Forwarded
+records and protocol watermarks are stamped with this same completeness clock (`ParsleyProcessor` reads
+`engine.completeness()`).
 
-### Why every channel must confirm
+A dependency naming a coordinate this node has **no channel for at all** — not merely one that hasn't
+advertised yet, but one structurally outside this node's own registered inputs — is a different case
+from an ordinary unsatisfied dependency, and is not treated as either: it fails closed (dead-lettered,
+or a hard task failure with no dead-letter sink configured) rather than being buffered forever or
+silently admitted. This node can prove it has no way to confirm such a coordinate, never that the
+coordinate is genuinely irrelevant — so guessing either way (waiting forever with no way to ever
+succeed, or delivering on an unproven premise) is unsound. See
+[Independent inputs](#the-topology-contract) for why this arises and how to fix the topology instead
+of relying on this fail-closed behavior as a substitute.
 
-The protocol cannot prove that a causally-earlier message will not later arrive on some other input
-channel until that channel has advertised past the dependency. A channel that is behind — or crashed
-and recovering — is exactly the case where, on catching up, it emits records that belong earlier in
-the order. Holding a record until every channel confirms its dependencies is therefore the guarantee
-working, not a stall. This is strictly stronger than the happened-before minimum, and it is what lets
-Parsley enforce a transitive ordering (`T1 → ... → T3`) at a node that does not consume the
-intermediate topics — provided the contract below is met.
+### Why a single witness suffices
+
+This is structurally a per-process vector clock — the Birman-Schiper-Stephenson CBCAST delivery
+condition, instantiated directly on Kafka's own `(topicId, partition)` coordinates. A dependency
+names a fact about some coordinate's stream ("K has reached offset k"), and once *one* channel has
+genuinely, contiguously delivered up to k on K — its own gate already required that before it could
+advance — the fact is true, full stop. Waiting for a second, unrelated channel to separately confirm
+the same already-true fact adds nothing: the second channel's own lag is a fact about *its* coordinate,
+never about whether K really reached k. A gate clock only ever advances at the moment of a genuinely
+gated delivery — never from a received-but-undelivered message or from ungated gossip — which is what
+makes an honestly advertised value trustworthy no matter which channel relays it.
+
+What the model still requires is that every coordinate a node's messages could ever depend on be
+*reachable* to it, directly or through a channel that genuinely, transitively carries it — see the
+[topology contract](#the-topology-contract). That is a liveness requirement (can this node ever learn
+the fact at all), not a safety one (single-witness merge never lets a node deliver something before it
+is genuinely true).
 
 ### The topology contract
 
-Because every input channel must confirm a declared coordinate, the topology must be built so that
-**every input branch of a node observes (consumes and watermarks) every coordinate any branch's
-records depend on.** This is the metadata overhead of causal consistency without built-in total
-visibility, placed on topology construction rather than hidden in the engine. Two consequences:
+Every coordinate any of a node's dependency clocks could ever name must be reachable to that node
+through **at least one** input channel — directly, or transitively through a channel that has itself
+genuinely observed it. This is the metadata overhead of causal consistency without built-in total
+visibility, placed on topology construction rather than hidden in the engine.
 
-- **Independent inputs.** A node joining unrelated sources will hold a record depending on a
-  coordinate that a sibling input never observes (its channel never confirms that coordinate, so the
-  completeness minimum never includes it). To make such a record deliverable, route the coordinate
-  through every input branch — have each branch consume and pass it through, emitting watermarks even
-  when it runs no business logic.
-- **No ancestor with its own descendant.** A node must not consume both a topic `T` and a topic
-  derived from `T`. The `T` channel can never confirm the derived topic — `T` records are produced
-  before the derived records exist — so a dependency on the derived topic is never satisfied. Consume
-  only the derived topic; the ancestor's progress arrives transitively through the derived topic's
-  completeness stamp.
+- **Independent inputs.** A node joining unrelated sources can receive a record depending on a
+  coordinate no input channel of this node ever observes — nothing here can ever confirm it, so the
+  completeness clock never includes it. Rather than buffer such a record forever (an undiagnosable,
+  permanent stall) or admit it on the unproven assumption that the coordinate is irrelevant, this fails
+  closed immediately: dead-lettered if a sink is configured, otherwise a hard task failure. To make
+  such a record genuinely deliverable, route the coordinate through some input branch instead — have it
+  consume and pass the coordinate through, emitting watermarks even when it runs no business logic.
+- **Consuming both an ancestor and its own descendant is fine.** A node may consume both a topic `T`
+  and a topic derived from `T` — single-witness merge has no unanimity requirement to violate. The
+  descendant's completeness stamp already carries `T`'s progress transitively; the `T` channel's own
+  contribution simply merges in alongside it, redundantly but harmlessly. (An earlier version of this
+  contract forbade this pattern; that restriction was a consequence of the retired intersection-based
+  gate, not a fundamental limit — see the changelog.)
 
 ### Protocol watermarks (heartbeats)
 
-The completeness minimum advances only as channels advertise progress, so a node must keep
-advertising even when it produces no business output. A consumed message that yields no business
-record — a filter that drops it, a record held in the buffer, a not-yet-ready aggregate — emits a
-*protocol watermark*: a record with a null value, marked with the `_parsley_watermark` header,
-carrying the node's current completeness frontier (emitted when a held record advances completeness,
+The completeness clock advances only as this node's own frontier or its channels advertise progress,
+so a node must keep advertising even when it produces no business output. A consumed message that
+yields no business record — a filter that drops it, a record held in the buffer, a not-yet-ready
+aggregate — emits a *protocol watermark*: a record with a null value, marked with the
+`_parsley_watermark` header, carrying the node's current completeness frontier (emitted when a held
+record advances completeness,
 or when a delivered record produces no forward). The watermark is keyed with the triggering record's
 key so it routes to the same partition that record's business output would, which keeps completeness
 propagation correct across a sink boundary; it is identified by the header, never by its key. A

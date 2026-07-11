@@ -6,6 +6,60 @@ All notable changes to this project are documented in this file. The format is b
 
 ## [Unreleased]
 
+### Changed
+- **The completeness gate required every one of a node's input channels to independently corroborate a
+  coordinate before it counted (`ParsleyClock#intersectMin`), which permanently excludes a coordinate
+  genuinely present on only one channel** — the documented "no ancestor with its own descendant" fan-in
+  restriction existed only to route around this, and a node's private, unshared coordinate could be
+  starved forever by an unrelated sibling channel that had no reason to ever mention it.
+
+  `ParsleyFrontier#completeness` now takes the max-merge of a node's own frontier and every channel's
+  advertised clock instead of intersecting them — a single genuine witness suffices, matching the
+  Birman-Schiper-Stephenson CBCAST delivery condition instantiated directly on Kafka's own
+  `(topicId, partition)` coordinates. `ParsleyClock#intersectMin` is deleted (its only caller); no wire
+  format change. The channel-clock update that feeds this merge now happens only at the moment of a
+  record's own genuine, gated delivery — never pre-loaded from the record's own claimed dependencies —
+  so every message, including a node's own broadcast, is checked against this node's actual, already-
+  proven state, never against a stamp the record itself supplies. The "no ancestor with its own
+  descendant" restriction in `docs/internals/causal-consistency.md` is retired: under max-merge, a node
+  consuming both an ancestor and its own descendant is ordinary, safe vector-clock composition.
+- **A dependency on a coordinate this node has no input channel for at all (an undeclared topic, or a
+  partition a different task instance owns) was silently dropped from the gate check and treated as
+  satisfied** — sound only if the coordinate is genuinely, permanently irrelevant, but this node cannot
+  actually prove that; it can only prove it has no way to check. Guessing "satisfied" traded an
+  unbounded stall for an unproven delivery, which the causal-safety contract does not permit.
+
+  A new `ParsleyClock.CoordinatePredicate` scope on `ParsleyEngine` now fails such a dependency closed
+  instead: dead-lettered (`DeadLetter.Reason#UNREACHABLE_DEPENDENCY`) when a dead-letter sink is
+  configured, or a hard task failure (`ParsleyUnreachableDependencyException`) otherwise — checked
+  independently of whether dead-lettering is enabled, since scope is a static, structural fact, not
+  something a missing DLQ should suppress. New `ParsleyMetrics#recordUnreachableDependencyError` and
+  `CausalAudit#recordUnreachableDependencyFailure` hooks mirror the existing poison/clock-resolution
+  failure signals. This removes the "carry an unconsumed coordinate through the stamp ungated, for a
+  downstream node to enforce ordering against later" relay pattern some topologies relied on — that
+  record now fails at the first node that cannot verify the coordinate, rather than passing through;
+  route the coordinate through a genuine input branch instead (see "Independent inputs" in
+  `docs/internals/causal-consistency.md`).
+
+- **Topology-epoch coordination never checked that a multi-app DAG's declared subscriptions actually
+  formed a full mesh** — a member could join and run indefinitely with real gaps (a downstream app never
+  consuming an upstream app's own input topic), silently relying on the very vacuous-satisfaction
+  behavior the fail-closed change above removes. Once removed, such a gap surfaced only as a data-path
+  crash loop, discovered per record instead of at startup, or a round that silently hung forever.
+
+  `ParsleyEpochLog` gains `domainTopics()` (∪ every declared member's inputs and sinks),
+  `missingSubscriptions(memberId)`, and `isFullMeshSatisfied()` (true iff every running member's own
+  subscriptions cover the whole domain) — the last is now a conjunct of `isRoundComplete()`, so an epoch
+  can never commit while any running member cannot actually see the full domain. `ParsleyEpochRuntime`
+  mirrors `domainTopics()` for cross-thread readers and logs a `WARN`/`INFO` transition when the mesh
+  becomes insufficient or recovers. `ParsleyProcessor.init()` adds a startup self-check
+  (`validateFullMeshCoverage`), called immediately after `awaitJoinCommit`, that fails fast — mirroring
+  the existing `validatePartitionParity` coordination precedent, escalating the default `warn` mode to
+  strict — when this member's own declared topics do not cover the known domain. A genuine multi-stage
+  pipeline (app A produces a topic app B alone consumes) is not yet a valid full mesh under this check;
+  it requires each member to also cover the topics only a sibling touches, which today means direct,
+  possibly redundant subscription — automatic passthrough wiring for this is not yet built.
+
 ### Fixed
 - **A mismatched sink partition count only warned by default, but under topology-epoch coordination it
   crash-loops the task instead.** `ParsleyMarkerPartitioner` routes an epoch marker to this task's own

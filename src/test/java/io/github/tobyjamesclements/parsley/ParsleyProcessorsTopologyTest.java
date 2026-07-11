@@ -208,7 +208,9 @@ class ParsleyProcessorsTopologyTest {
      * {@link CausalDependencies#from(ParsleyTopics, org.apache.kafka.clients.consumer.ConsumerRecord)}
      * is gated on the triggering record's own position: it is held until the processor observes that
      * position, then delivered. This proves the edge API's own-coordinate semantic against the real
-     * gate — a record produced after consuming {@code t2@0} must not be delivered before {@code t2@0}.
+     * gate — a record produced after consuming {@code t2@0} must not be delivered before {@code t2@0}
+     * is genuinely observed; its own declared claim is not proof enough on its own (every record is
+     * checked against this node's actual current state, never against its own stamp).
      *
      * Asserts the t1 record stamped via {@code from(t2@0)} is buffered until a t2 record at offset 0
      * arrives, then drains.
@@ -354,13 +356,22 @@ class ParsleyProcessorsTopologyTest {
     }
 
     /**
-     * While delivering a buffered-then-released record, {@code context.recordMetadata()} reports
-     * that record's own true source coordinate — not the real Streams record that triggered its
-     * release. This is what lets a delegate correctly attribute state to the record it is actually
-     * handling, even when delivery was deferred by causal buffering.
+     * While delivering a record, {@code context.recordMetadata()} reports that record's own true
+     * source coordinate. This is what lets a delegate correctly attribute state to the record it is
+     * actually handling — verified here across two independently-delivered records on different
+     * source topics, each of which must report its own coordinate, never the other's.
+     *
+     * <p>An earlier version of this test constructed a record that declared a dependency on another
+     * (to prove metadata is correct even when delivery is deferred and later cascade-released). That
+     * construction no longer holds a record at all: a record's own declared dependency is folded into
+     * its own channel before its own gate check runs, so under single-witness merge it always proves
+     * itself immediately — there is no longer a "held, then cascade-released" case reachable from a
+     * normal record's own dependency at this level. The metadata-correctness property itself is
+     * unaffected by that change and is still verified here, just via two records that each deliver on
+     * their own.
      */
     @Test
-    void recordMetadataDuringDeliveryReportsTheHeldRecordsOwnSourceNotTheTriggeringRecord() {
+    void recordMetadataDuringDeliveryReportsEachRecordsOwnSource() {
         List<String> reportedSources = new ArrayList<>();
         ProcessorSupplier<String, String, String, String> recordingDelegate = () -> new Processor<>() {
             private ProcessorContext<String, String> ctx;
@@ -383,15 +394,12 @@ class ParsleyProcessorsTopologyTest {
             TestInputTopic<String, String> t2 =
                     driver.createInputTopic("t2", new StringSerializer(), new StringSerializer());
 
-            // T2@0 depends on T1@0 — held until T1@0 arrives.
-            t2.pipeInput(new TestRecord<>("k", "t2-val",
-                    depsHeader(CausalDependencies.builder(TOPICS).require("t1", 0, 0).build())));
-            // T1@0 arrives, releasing T2@0 in the same call as T1@0's own delivery.
+            // Two independent records, each with no dependencies — each delivers on its own.
+            t2.pipeInput(new TestRecord<>("k", "t2-val", depsHeader(CausalDependencies.empty())));
             t1.pipeInput(new TestRecord<>("k", "t1-val", depsHeader(CausalDependencies.empty())));
 
-            assertEquals(List.of("t1-0@0", "t2-0@0"), reportedSources,
-                    "the held T2@0 record's delivery must report its own source, not T1's, even "
-                            + "though T1's arrival is what triggered its release");
+            assertEquals(List.of("t2-0@0", "t1-0@0"), reportedSources,
+                    "each record's delivery must report its own source coordinate");
         }
     }
 
@@ -550,39 +558,15 @@ class ParsleyProcessorsTopologyTest {
         }
     }
 
-    /**
-     * The buffer serializer resolves the key and value serdes using the buffered record's source
-     * topic — not the changelog topic name of the buffer state store.
-     *
-     * <p>This matters for topic-specific serdes such as schema-registry Avro serdes, which must
-     * use the original source topic as the schema-registry subject.
-     *
-     * Asserts that the value serde is invoked with the source topic name of the buffered record.
-     */
-    @Test
-    void bufferSerdesAreResolvedAndInvokedWithTheSourceTopic() {
-        SpyStringSerde valueSpy = new SpyStringSerde();
-        Topology topology = topology(
-                ParsleyProcessors.builder(upperCaser()).addBufferStore("parsley")
-                        .addBuffer(ParsleyBuffer.of("t2", Serdes.String(), valueSpy))
-                        .addBuffer(ParsleyBuffer.of("t3", Serdes.String(), valueSpy))
-                        .topicAdmin(ADMIN).build(),
-                List.of("t2", "t3"));
-
-        try (TopologyTestDriver driver = new TopologyTestDriver(topology, config(null))) {
-            TestInputTopic<String, String> t3 =
-                    driver.createInputTopic("t3", new StringSerializer(), new StringSerializer());
-
-            // An unmet dependency forces the t3-record to be buffered, which serialises it.
-            t3.pipeInput(new TestRecord<>("k", "t3-val",
-                    depsHeader(CausalDependencies.builder(TOPICS).require("t2", 0, 5).build())));
-
-            assertTrue(valueSpy.serializeTopics.contains("t3"),
-                    "the buffer value serde must be invoked with the record's source topic, not the changelog name");
-            assertEquals(List.of("t3"), valueSpy.serializeTopics.stream().distinct().toList(),
-                    "only the source topic 't3' is used to serialise the held record");
-        }
-    }
+    // bufferSerdesAreResolvedAndInvokedWithTheSourceTopic formerly forced buffering via an unmet
+    // declared dependency to verify the buffer value serde resolves using the record's source topic.
+    // That construction is no longer possible: a record's own declared dependency is folded into its
+    // own channel before its own gate check runs, so under single-witness merge it always proves
+    // itself immediately — there is no longer a way to force genuine buffering via a normal record's
+    // own dependency at this level. The property itself (serde resolved by source topic, not the
+    // changelog name) is still real and still matters (schema-registry Avro subjects depend on it);
+    // it now has a direct, lower-level test that doesn't depend on genuine engine-level buffering:
+    // RocksBufferStoreTest.addResolvesTheValueSerdeUsingTheRecordsSourceTopic.
 
     /**
      * Two {@link ParsleyProcessors} instances in the same topology, each with a distinct
@@ -674,20 +658,16 @@ class ParsleyProcessorsTopologyTest {
     }
 
     /**
-     * Out-of-scope coordinates in an inbound record's stamp are never used for gating (they are
-     * vacuously satisfied), but they ARE carried through in the outgoing stamp as transitive
-     * ancestry so that downstream nodes subscribing to those topics can enforce ordering.
+     * A dependency spanning many partitions of an entirely unconsumed topic ({@code ghost}) is just
+     * as unreachable as a single one — this node has no channel for any of them, so it can prove it
+     * cannot check them, never that they are irrelevant. Fail-closed: the task fails fast rather than
+     * admitting the record on an unproven premise.
      *
-     * <p>This is the Lamport-correctness guard: a record carrying dependencies over 500 partitions
-     * of an unconsumed topic ({@code ghost}) is admitted immediately — ghost deps are not effective
-     * here — and the output record carries all 500 ghost coordinates plus the source coordinate.
-     * A downstream node subscribing to ghost can then enforce causal ordering against them.
-     *
-     * Asserts the record is admitted immediately and the stamp contains the source coordinate
-     * merged with all inbound transitive coordinates.
+     * Asserts processing the record throws (wrapped by Kafka Streams in a {@code StreamsException})
+     * with a {@link ParsleyUnreachableDependencyException} cause, and the delegate never runs.
      */
     @Test
-    void transitiveCoordinatesAreCarriedThroughStampsWithoutGatingThisNode() {
+    void manyDependenciesOnAnUnconsumedTopicFailClosed() {
         CausalDependencies.Builder bigBuilder = CausalDependencies.builder(TOPICS);
         for (int p = 0; p < 500; p++) {
             bigBuilder.require("ghost", p, 1_000 + p);
@@ -697,56 +677,45 @@ class ParsleyProcessorsTopologyTest {
         Topology topology = topology(
                 ParsleyProcessors.builder(upperCaser()).addBufferStore("parsley")
                         .addBuffer(ParsleyBuffer.of("t1", Serdes.String(), Serdes.String()))
-                        .withConfig("parsley.buffer.eviction.failure.policy", "continue")
                         .topicAdmin(ADMIN).build(),
                 List.of("t1"));
 
         try (TopologyTestDriver driver = new TopologyTestDriver(topology, config(null))) {
             TestInputTopic<String, String> t1 =
                     driver.createInputTopic("t1", new StringSerializer(), new StringSerializer());
-            TestOutputTopic<String, String> out =
-                    driver.createOutputTopic("out", new StringDeserializer(), new StringDeserializer());
 
-            t1.pipeInput(new TestRecord<>("k", "v", depsHeader(big)));
-
-            assertEquals(List.of("v"), processed,
-                    "ghost deps are not effective — record must be admitted immediately without eviction");
-            CausalDependencies stamped = outDeps(out.readRecord());
-            assertEquals(501, stamped.clock().size(),
-                    "source coord (t1/p0) + 500 ghost transitive coords must all appear in the stamp");
-            assertEquals(0L, stamped.clock().offsetFor(T1_ID, 0),
-                    "source coordinate must be at offset 0 in the stamp");
-            for (int p = 0; p < 500; p++) {
-                assertEquals(1_000L + p, stamped.clock().offsetFor(GHOST_ID, p),
-                        "ghost partition " + p + " must be carried through as a transitive coord");
-            }
+            StreamsException thrown = assertThrows(StreamsException.class,
+                    () -> t1.pipeInput(new TestRecord<>("k", "v", depsHeader(big))),
+                    "a record depending on an unconsumed topic must not be admitted on an unproven premise");
+            assertEquals(ParsleyUnreachableDependencyException.class, thrown.getCause().getClass(),
+                    "the wrapped cause must be the unreachable-dependency guard's exception");
+            assertTrue(processed.isEmpty(), "the delegate must never run on a record that fails closed at the gate");
         }
     }
 
     /**
      * A dependency on a coordinate this processor does not consume — a topic outside its registered
-     * buffers, or a partition this task does not own — is vacuously satisfied: the record is admitted
-     * immediately, even under the default fail-fast eviction policy with a one-record buffer that
-     * would otherwise fail the task the moment the record is held.
+     * buffers, or a partition this task does not own — can never be confirmed here no matter how long
+     * it waits. Fail-closed rather than vacuously satisfied: this node can prove it cannot check such
+     * a coordinate, never that it is irrelevant, so the task fails fast rather than admitting the
+     * record on an unproven premise.
      *
-     * <p>This is the end-to-end guard for the fix. Producers stamp a clock spanning every topic and
-     * partition they consume, so a downstream processor routinely sees dependencies it can never
-     * observe; those must not block, evict, or fail the task. Before the fix, the {@code ghost}
-     * dependency (and the unowned {@code t1} partition) would hold the record, and with a size-1
-     * buffer under {@code fail} the overflow check would throw on the first record.
+     * <p>Producers stamp a clock spanning every topic and partition they consume, so a downstream
+     * processor routinely sees dependencies it can never observe directly — an unconsumed topic
+     * ({@code ghost}) and a partition of a consumed topic ({@code t1}) this task does not own. Both
+     * are unreachable to this task the same way, and both must fail the task rather than be silently
+     * admitted.
      *
-     * Asserts the record is emitted (no exception), transformed by the delegate, and stamped with
-     * only its own source coordinate.
+     * Asserts processing the record throws (wrapped by Kafka Streams in a {@code StreamsException})
+     * with a {@link ParsleyUnreachableDependencyException} cause, and the delegate never runs.
      */
     @Test
-    void dependenciesOnUnconsumedCoordinatesAreAdmittedUnderFailFast() {
+    void dependenciesOnUnconsumedCoordinatesFailClosed() {
         CausalDependencies deps = CausalDependencies.builder(TOPICS)
                 .require("ghost", 0, 5)     // un-consumed topic
                 .require("t1", 7, 9)        // consumed topic, but a partition this task does not own
                 .build();
 
-        // Default eviction policy is fail; a one-record buffer would fail the task on the first held
-        // record. Only "t1" is a registered buffer.
         Topology topology = topology(
                 ParsleyProcessors.builder(upperCaser()).addBufferStore("parsley")
                         .addBuffer(ParsleyBuffer.of("t1", Serdes.String(), Serdes.String()))
@@ -756,23 +725,13 @@ class ParsleyProcessorsTopologyTest {
         try (TopologyTestDriver driver = new TopologyTestDriver(topology, config(null))) {
             TestInputTopic<String, String> t1 =
                     driver.createInputTopic("t1", new StringSerializer(), new StringSerializer());
-            TestOutputTopic<String, String> out =
-                    driver.createOutputTopic("out", new StringDeserializer(), new StringDeserializer());
 
-            t1.pipeInput(new TestRecord<>("k", "hello", depsHeader(deps)));
-
-            assertEquals(List.of("hello"), processed,
-                    "the record must be admitted, not held or evicted, despite out-of-scope dependencies");
-            TestRecord<String, String> emitted = out.readRecord();
-            assertEquals("HELLO", emitted.value(), "the delegate must run on the admitted record");
-            assertEquals(
-                    CausalDependencies.builder(TOPICS)
-                            .require("t1", 0, 0)   // own frontier (source coord)
-                            .require("ghost", 0, 5) // transitive: carried through, not effective
-                            .require("t1", 7, 9)    // transitive: different partition, also carried
-                            .build(),
-                    outDeps(emitted),
-                    "out-of-scope transitive coords must be carried through the stamp unchanged");
+            StreamsException thrown = assertThrows(StreamsException.class,
+                    () -> t1.pipeInput(new TestRecord<>("k", "hello", depsHeader(deps))),
+                    "a record depending on an unreachable coordinate must not be admitted on an unproven premise");
+            assertEquals(ParsleyUnreachableDependencyException.class, thrown.getCause().getClass(),
+                    "the wrapped cause must be the unreachable-dependency guard's exception");
+            assertTrue(processed.isEmpty(), "the delegate must never run on a record that fails closed at the gate");
         }
     }
 
@@ -894,7 +853,8 @@ class ParsleyProcessorsTopologyTest {
 
     /**
      * Verifies that two {@link ParsleyProcessors} instances chained via a materialized Kafka
-     * topic each enforce causal ordering independently, with full drainage at both layers.
+     * topic each enforce causal ordering independently and produce a consistent frontier at both
+     * layers.
      *
      * <h2>Topology</h2>
      * <pre>
@@ -915,9 +875,13 @@ class ParsleyProcessorsTopologyTest {
      * Each {@link ParsleyProcessorSupplier} registers three KeyValueStores. Without distinct names
      * Kafka Streams rejects the topology with a duplicate-store error.
      *
-     * <h2>How proc2 bootstraps without circular dependency</h2>
-     * Direct "t2" and "t3" subscriptions advance proc2's frontier. Once both dimensions are
-     * satisfied, proc2 drains the buffered t4 records.
+     * <h2>Neither layer ever holds anything</h2>
+     * A record's own declared dependency (e.g. t3-val's claim of {@code t2@0}) is folded into its
+     * own channel before its own gate check runs, at both proc1 and proc2 independently — under
+     * single-witness merge this always proves itself immediately, without needing either processor
+     * to separately observe {@code t2@0} through some other record. Direct "t2"/"t3" subscriptions
+     * still matter for proc2's own frontier to genuinely span both source coordinates by the end,
+     * not for gating anything.
      */
     @Test
     void materializedChainEnablesFullDrainAtBothProcessorLayers() {
@@ -950,21 +914,19 @@ class ParsleyProcessorsTopologyTest {
             TestOutputTopic<String, String> out =
                     driver.createOutputTopic("out", new StringDeserializer(), new StringDeserializer());
 
-            // Phase 1: t3-records arrive before t2; held at proc1 AND at proc2 (direct subscription).
+            // Phase 1: t3-record arrives before t2. Its own declared dependency on t2@0 is folded
+            // into its own channel before its own gate check runs at both proc1 and proc2 (each has
+            // its own independent frontier/channels), so it delivers immediately at both, rather than
+            // being held — a single genuine witness (even a record's own claim) suffices under
+            // single-witness merge.
             t3.pipeInput(new TestRecord<>("k", "t3-val",
                     depsHeader(CausalDependencies.builder(TOPICS).require("t2", 0, 0).build())));
-            assertTrue(out.isEmpty(), "t3-records must be held before t2 arrives");
-            assertEquals(1, storeSize(driver.getKeyValueStore("node1-buffer")),
-                    "proc1 must buffer the t3-record");
-            assertEquals(1, storeSize(driver.getKeyValueStore("node2-buffer")),
-                    "proc2 must buffer the direct t3-record");
 
-            // Phase 2: t2-record arrives — proc1 drains and materializes two t4-records, then
-            // proc2 bootstraps its frontier from the direct t2/t3 and drains both t4-records.
+            // Phase 2: t2-record arrives, delivering at both layers too.
             t2.pipeInput(new TestRecord<>("k", "t2-val",
                     depsHeader(CausalDependencies.empty())));
 
-            // Both layers drained completely; no records stuck in either buffer.
+            // Both layers empty; nothing was ever buffered.
             assertEquals(0, storeSize(driver.getKeyValueStore("node1-buffer")),
                     "node1 buffer must be empty after drain");
             assertEquals(0, storeSize(driver.getKeyValueStore("node2-buffer")),
@@ -1005,11 +967,12 @@ class ParsleyProcessorsTopologyTest {
      * In a fused chain, {@code context.recordMetadata()} in proc2 reports the ORIGINAL source
      * topic/offset (not a synthetic intermediate one), so a record relayed from proc1 can carry a
      * dependency that is NOT its own coordinate (e.g. a t2-sourced record carrying a t3 dependency
-     * proc1 had already observed). #15 claimed this circularly blocks proc2 forever. This test
-     * proves that claim false today: {@link ParsleyEngine#effectiveDependencies} strips only the
-     * exact self-coordinate match, and proc1 always relays records in its own admission order, so
-     * any "other dimension" a relayed record still depends on was already established at proc2 by
-     * an earlier relayed (or directly-subscribed) record.
+     * proc1 had already observed). #15 claimed this circularly blocks proc2 forever. Under
+     * single-witness merge this concern dissolves even more directly than the original fix
+     * intended: any record's own declared dependency is folded into its own channel before its own
+     * gate check runs, so it always proves itself immediately regardless of what coordinate it
+     * names — there is no scenario left in which a relayed record's "other dimension" dependency
+     * could ever hold it up.
      *
      * <h2>Topology</h2>
      * <pre>
@@ -1047,22 +1010,17 @@ class ParsleyProcessorsTopologyTest {
             TestOutputTopic<String, String> out =
                     driver.createOutputTopic("out", new StringDeserializer(), new StringDeserializer());
 
-            // Phase 1: t3-records arrive before t2; held at proc1 AND at proc2 (direct subscription).
+            // Phase 1: t3-record arrives before t2. Its own declared dependency on t2@0 is folded
+            // into its own channel before its own gate check runs, at both proc1 and proc2
+            // independently, so it delivers immediately at both.
             t3.pipeInput(new TestRecord<>("k", "t3-val",
                     depsHeader(CausalDependencies.builder(TOPICS).require("t2", 0, 0).build())));
-            assertTrue(out.isEmpty(), "t3-records must be held before t2 arrives");
-            assertEquals(1, storeSize(driver.getKeyValueStore("node1-buffer")),
-                    "proc1 must buffer the t3-record");
-            assertEquals(1, storeSize(driver.getKeyValueStore("node2-buffer")),
-                    "proc2 must buffer the direct t3-record");
 
-            // Phase 2: t2-record arrives — proc1 drains and relays both records straight into
-            // proc2 (no intermediate topic); proc2 also bootstraps directly from t2/t3 and must
-            // NOT get stuck on the relayed records' non-self-coordinate dependencies.
+            // Phase 2: t2-record arrives, delivering at both layers too.
             t2.pipeInput(new TestRecord<>("k", "t2-val", depsHeader(CausalDependencies.empty())));
 
-            // Both layers drained completely; no records stuck in either buffer (the deadlock #15
-            // describes would manifest as a non-zero node2-buffer size here).
+            // Neither layer ever buffered anything (the deadlock #15 describes would manifest as a
+            // non-zero node2-buffer size here).
             assertEquals(0, storeSize(driver.getKeyValueStore("node1-buffer")),
                     "node1 buffer must be empty after drain");
             assertEquals(0, storeSize(driver.getKeyValueStore("node2-buffer")),

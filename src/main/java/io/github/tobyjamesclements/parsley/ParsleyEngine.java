@@ -32,6 +32,14 @@ import java.util.function.LongSupplier;
  * disabled, a poison/proven-impossible record still fails the task fast, exactly as before dead-lettering
  * existed.
  *
+ * <p>A record whose dependencies name a coordinate this node has no input channel for at all — an
+ * undeclared topic, or a partition a different task instance owns — is rejected before it ever enters
+ * the buffer ({@link DeadLetter.Reason#UNREACHABLE_DEPENDENCY}), the same way as proven-impossible.
+ * This is deliberately fail-closed rather than a shortcut: this node can prove it has no way to confirm
+ * such a coordinate, never that the coordinate is genuinely irrelevant, so it is never silently treated
+ * as satisfied. Checked independently of whether dead-lettering is enabled — with no dead-letter sink
+ * configured, it still fails the task fast rather than delivering on an unproven premise.
+ *
  * <p><strong>The frontier is a contiguous watermark, not a running max.</strong> The engine does
  * not head-of-line block: a later-offset record on a partition may forward before an earlier one
  * still held on the same partition. So a coordinate's frontier offset must only ever advance once
@@ -139,6 +147,16 @@ final class ParsleyEngine<K, V> {
     // in via the full constructor.
     private final boolean deadLetterEnabled;
 
+    // Coordinates this node could ever genuinely confirm — a registered input channel, on the
+    // partition this task owns. A dependency outside this scope (an undeclared topic, or a partition
+    // a different task instance owns) can never be observed here no matter how long it waits — but
+    // that does not make it safe to disregard: this node can prove it cannot check the coordinate,
+    // never that the coordinate is genuinely irrelevant. So it is fail-closed, not vacuously
+    // satisfied — see isUnreachableDependency and DeadLetter.Reason#UNREACHABLE_DEPENDENCY. Defaults
+    // to "everything in scope" so existing callers/tests that never construct with an explicit
+    // predicate are unaffected; ParsleyProcessor passes its real per-task predicate.
+    private final ParsleyClock.CoordinatePredicate inScope;
+
     // --- Convenience constructors: build an in-memory ParsleyFrontier from an initial clock and a
     // forwarded/orphan index. Production and restart-style callers pass a pre-built ParsleyFrontier to
     // the full constructor below (so channel + frontier state can be shared/persisted). Dead-lettering
@@ -207,9 +225,9 @@ final class ParsleyEngine<K, V> {
     }
 
     /**
-     * Full constructor. Takes a pre-built {@link ParsleyFrontier} — the single owner of the frontier
-     * clock, channel clocks, forwarded index, and orphan index — so callers control its persistence (a
-     * store-backed frontier in production, an in-memory one in tests).
+     * As {@link #ParsleyEngine(ParsleyFrontier, ParsleyBufferStore, ParsleyCandidateIndex,
+     * ParsleyMetrics, CausalAudit, LongSupplier, boolean) the full constructor}, with every coordinate
+     * in scope — for callers/tests that do not need to exercise per-task partition scoping.
      *
      * @param deadLetterEnabled whether a proven-impossible record (poison, or a dependent of an orphaned
      *                          coordinate) is dead-lettered via {@link Outcome#deadLettered()} rather
@@ -225,6 +243,34 @@ final class ParsleyEngine<K, V> {
                  CausalAudit audit,
                  LongSupplier clock,
                  boolean deadLetterEnabled) {
+        this(frontier, buffer, candidateIndex, metrics, audit, clock, deadLetterEnabled, (topicId, partition) -> true);
+    }
+
+    /**
+     * Full constructor. Takes a pre-built {@link ParsleyFrontier} — the single owner of the frontier
+     * clock, channel clocks, forwarded index, and orphan index — so callers control its persistence (a
+     * store-backed frontier in production, an in-memory one in tests).
+     *
+     * @param deadLetterEnabled whether a proven-impossible record (poison, or a dependent of an orphaned
+     *                          coordinate) is dead-lettered via {@link Outcome#deadLettered()} rather
+     *                          than failing the task fast. {@link ParsleyProcessor} derives this directly
+     *                          from whether a dead-letter sink is configured — one source of truth, so a
+     *                          caller that has not wired a DLQ never silently loses a record it can't
+     *                          route anywhere.
+     * @param inScope           coordinates this node could ever genuinely confirm (a registered input
+     *                          channel, on the partition this task owns). A dependency outside this
+     *                          scope fails closed (dead-lettered, or a hard task failure without a
+     *                          dead-letter sink) rather than being silently treated as satisfied — see
+     *                          {@link DeadLetter.Reason#UNREACHABLE_DEPENDENCY}.
+     */
+    ParsleyEngine(ParsleyFrontier frontier,
+                 ParsleyBufferStore<K, V> buffer,
+                 ParsleyCandidateIndex candidateIndex,
+                 ParsleyMetrics metrics,
+                 CausalAudit audit,
+                 LongSupplier clock,
+                 boolean deadLetterEnabled,
+                 ParsleyClock.CoordinatePredicate inScope) {
         this.frontier = frontier;
         this.orphanIndex = frontier.orphanIndex();
         this.buffer = buffer;
@@ -233,6 +279,7 @@ final class ParsleyEngine<K, V> {
         this.audit = audit;
         this.clock = clock;
         this.deadLetterEnabled = deadLetterEnabled;
+        this.inScope = inScope;
         // Populate the candidate index for any records already in the buffer (e.g., restored from
         // a state store after a restart). This is a one-time O(n) pass at construction. It decodes
         // only the dependency clock (never the user-serde key/value), so a record whose value can no
@@ -240,7 +287,7 @@ final class ParsleyEngine<K, V> {
         // not block startup; that failure surfaces later, on the forward path.
         for (ParsleyBufferStore.IndexEntry entry : buffer.indexEntries()) {
             candidateIndex.index(entry.sequence(),
-                    withoutSelfReference(entry.dependencies(), entry.topicId(), entry.partition(), entry.offset()),
+                    effectiveDependencies(entry.dependencies(), entry.topicId(), entry.partition(), entry.offset()),
                     completeness());
         }
     }
@@ -275,7 +322,15 @@ final class ParsleyEngine<K, V> {
              * The record's own dependencies require a coordinate that a poison or unresolvable-clock
              * record elsewhere already proved can never advance again.
              */
-            ORPHAN_CASCADE
+            ORPHAN_CASCADE,
+            /**
+             * The record's own dependencies name a coordinate this node has no input channel for — an
+             * undeclared topic, or a partition a different task instance owns — so it can never be
+             * confirmed here no matter how long it waits. Fail-closed rather than vacuously satisfied:
+             * this node can prove it cannot check the coordinate, not that the coordinate is genuinely
+             * irrelevant.
+             */
+            UNREACHABLE_DEPENDENCY
         }
 
         Reason reason();
@@ -336,40 +391,51 @@ final class ParsleyEngine<K, V> {
     Outcome<K, V> onRecord(ParsleyMessage<K, V> message) {
         List<ParsleyMessage<K, V>> out = new ArrayList<>();
         List<DeadLetter<K, V>> deadLetters = new ArrayList<>();
-
-        // Receipt-time channel-clock update (BEFORE the gate). A record's carried frontier is the
-        // upstream branch's *proven* completeness, valid the moment it arrives regardless of whether
-        // this node has delivered it. Recording it here lets the completeness min advance as soon as a
-        // channel advertises a coordinate, and prevents a mutual deadlock where two sibling records
-        // each depending on a shared ancestor S@k each wait for the other's channel to confirm S@k.
-        ParsleyClock channelBefore = frontier.channelGet(message.topicId(), message.partition());
-        boolean channelAdvanced = !channelBefore.dominates(message.dependencies());
-        frontier.channelUpdate(message.topicId(), message.partition(), message.dependencies());
+        boolean channelAdvanced = false;
 
         if (frontier.seedIfFirstSeen(message.topicId(), message.partition(), message.offset())) {
             propagate(out, deadLetters, message.topicId(), message.partition());
         }
 
+        // A record whose dependencies name a coordinate this node has no channel for at all can never
+        // be checked here no matter how long it waits. Fail-closed rather than vacuously satisfied:
+        // this node can prove it cannot check the coordinate, never that the coordinate is irrelevant.
+        if (isUnreachableDependency(message)) {
+            if (deadLetterEnabled) {
+                log.warn("Dead-lettering {}-{} @{} (depends on a coordinate this node has no channel for)",
+                        message.topic(), message.partition(), message.offset());
+                deadLetterRoot(deadLetters, new DeadLetter.Decoded<>(message, DeadLetter.Reason.UNREACHABLE_DEPENDENCY));
+            } else {
+                throw failUnreachableDependency(message.topic(), message.topicId(), message.partition(), message.offset());
+            }
         // A record whose dependencies already require a coordinate this node has proven can never
         // advance again is provably undeliverable — dead-letter it immediately rather than buffer it
-        // forever against a gate that can now never be satisfied. This does not return early: the
-        // channel-clock advance recorded above (line 321) happened regardless of this record's own
-        // disposition, and may have satisfied the completeness gate for other buffered records — the
-        // tail of this method must still run to release them (and to close a now-ready epoch
-        // transition), or they would stay held indefinitely with no other trigger to re-check them.
-        if (isProvenImpossible(message)) {
+        // forever against a gate that can now never be satisfied.
+        } else if (isProvenImpossible(message)) {
             log.warn("Dead-lettering {}-{} @{} (depends on a coordinate proven never to advance again)",
                     message.topic(), message.partition(), message.offset());
             deadLetterRoot(deadLetters, new DeadLetter.Decoded<>(message, DeadLetter.Reason.ORPHAN_CASCADE));
         } else {
-            ParsleyClock deps = withoutSelfReference(message.dependencies(),
+            ParsleyClock deps = effectiveDependencies(message.dependencies(),
                     message.topicId(), message.partition(), message.offset());
 
+            // Every record is checked against this node's own current, already-proven state — never
+            // against a stamp this same record just supplied. A message's declared dependencies are
+            // only trustworthy once genuinely delivered somewhere; merging them in before that check
+            // would let a record prove its own prerequisite by merely asserting it. This is the
+            // uniform receive() predicate causal broadcast specifies: every message, including one
+            // this node itself might be the sole witness to, is evaluated identically against the
+            // receiver's actual current knowledge, never pre-loaded with its own claim.
             if (isDeliverable(message)) {
                 log.debug("Forwarding {}-{} @{} (satisfied immediately)",
                         message.topic(), message.partition(), message.offset());
                 audit.recordForwarded(message.topic(), message.partition(), message.offset());
                 frontier.deliver(message.topicId(), message.partition(), message.offset());
+                // The channel-clock update happens only now, at genuine gated delivery — the message
+                // has just proven its own claim against real, prior state, so folding its declared
+                // deps in here is safe and lets other channels benefit from what it genuinely proved.
+                ParsleyClock channelBefore = frontier.channelGet(message.topicId(), message.partition());
+                channelAdvanced = !channelBefore.dominates(message.dependencies());
                 frontier.channelUpdate(message.topicId(), message.partition(), message.dependencies());
                 out.add(message);
                 propagate(out, deadLetters, message.topicId(), message.partition());
@@ -456,6 +522,20 @@ final class ParsleyEngine<K, V> {
      */
     private void drainSatisfied(List<ParsleyMessage<K, V>> out, List<DeadLetter<K, V>> deadLetters) {
         for (ParsleyBufferStore.IndexEntry meta : orderedIndex()) {
+            // Normally unreachable: onRecord already rejects an unreachable-dependency record before
+            // it is ever buffered. This only catches a record buffered by an older binary version
+            // (before this check existed) surviving a restart onto this one.
+            if (isUnreachableDependency(meta.dependencies(), meta.topicId(), meta.partition(), meta.offset())) {
+                if (deadLetterEnabled) {
+                    DeadLetter<K, V> letter = fetchForDeadLetter(meta.sequence(), DeadLetter.Reason.UNREACHABLE_DEPENDENCY);
+                    if (letter != null) {
+                        deadLetterRoot(deadLetters, letter);
+                    }
+                } else {
+                    throw failUnreachableDependency(meta.topic(), meta.topicId(), meta.partition(), meta.offset());
+                }
+                continue;
+            }
             if (isProvenImpossible(meta.dependencies(), meta.topicId(), meta.partition(), meta.offset())) {
                 DeadLetter<K, V> letter = fetchForDeadLetter(meta.sequence(), DeadLetter.Reason.ORPHAN_CASCADE);
                 if (letter != null) {
@@ -463,10 +543,9 @@ final class ParsleyEngine<K, V> {
                 }
                 continue;
             }
-            // The completeness gate, on metadata only: every declared coordinate (self-cycle stripped)
-            // is within the per-coordinate min across all input channels. A record whose dependencies
-            // name a coordinate no input channel will ever confirm stays held — the topology contract,
-            // not a special case to short-circuit.
+            // The completeness gate, on metadata only: every declared coordinate (self-cycle stripped,
+            // out-of-scope already rejected above) is within the max-merge completeness frontier — a
+            // single genuine witness among this node's input channels suffices.
             if (!isDeliverable(meta.dependencies(), meta.topicId(), meta.partition(), meta.offset())) {
                 continue;
             }
@@ -562,29 +641,24 @@ final class ParsleyEngine<K, V> {
     }
 
     /**
-     * Returns the causal completeness frontier: for each coordinate, the greatest offset that
-     * <em>every</em> input channel has confirmed.
+     * Returns the causal completeness clock: this node's own delivered frontier, max-merged with every
+     * input channel's advertised dependencies.
      *
-     * <p>It is the per-coordinate {@link ParsleyClock#intersectMin(ParsleyClock) intersection-minimum}
-     * across all input channels. Each channel contributes the dependencies its records and watermarks
-     * have advertised, plus its own contiguous delivered position (the {@link ParsleyFrontier} offset
-     * for its coordinate), so the channel that owns a coordinate supplies that coordinate's delivered
-     * value. A coordinate that any input channel has not observed is absent from the result entirely —
-     * a dependency on it is therefore not satisfied until that channel advertises it. This is the
-     * delivery gate and the outbound stamp.
-     *
-     * <p>The model is strict by design: a dependency on coordinate {@code K} is satisfied only when
-     * all input channels have observed {@code K}, because the protocol cannot prove a causally-earlier
-     * message will not later arrive on a channel that has not yet advertised past {@code K}. The
-     * topology must therefore make every input branch observe (consume and watermark) every coordinate
-     * any branch depends on; otherwise records depending on an unobserved coordinate are held
-     * indefinitely. See {@code docs/internals/causal-consistency.md}.
+     * <p>A single genuine witness is enough for a foreign coordinate to count — there is no requirement
+     * that every input channel independently confirm the same coordinate. This node's own coordinates
+     * always win the merge against a channel's view of the same coordinate: delivering a channel's
+     * record already required the gate to dominate its stamp, so the frontier can never be behind what
+     * any channel could tell it. This is structurally a per-process vector clock (Birman-Schiper-
+     * Stephenson CBCAST, instantiated on Kafka's own {@code (topicId, partition)} coordinates): the
+     * topology must still make every coordinate a message could ever depend on reachable to this node,
+     * directly or via a genuine relay, but no channel needs to independently corroborate a fact another
+     * channel has already genuinely reported. This is the delivery gate and the outbound stamp.
      *
      * <p>When no channel clocks have been recorded, this returns {@link #frontier()} unchanged. The
      * computation lives on {@link ParsleyFrontier}, which owns both the frontier clock and the channel
      * clocks; this method delegates.
      *
-     * @return the completeness frontier; never {@code null}
+     * @return the completeness clock; never {@code null}
      */
     ParsleyClock completeness() {
         return frontier.completeness();
@@ -647,6 +721,21 @@ final class ParsleyEngine<K, V> {
                         if (entry == null) {
                             stale.add(candidate);
                             continue;
+                        }
+                        // Normally unreachable here — onRecord already rejects an unreachable-dependency
+                        // record before it is ever buffered — but a record buffered by an older binary
+                        // (before this check existed) can still surface it after a restart.
+                        if (isUnreachableDependency(entry.record())) {
+                            if (deadLetterEnabled) {
+                                DeadLetter<K, V> letter = new DeadLetter.Decoded<>(
+                                        entry.record(), DeadLetter.Reason.UNREACHABLE_DEPENDENCY);
+                                orphanIndex.markOrphaned(letter.topicId(), letter.partition(), letter.offset());
+                                buffer.remove(entry.sequence());
+                                deadLetterRoot(deadLetters, letter);
+                                continue;
+                            }
+                            throw failUnreachableDependency(entry.record().topic(), entry.record().topicId(),
+                                    entry.record().partition(), entry.record().offset());
                         }
                         // Proven-impossible takes precedence over deliverable, exactly as it does in
                         // onRecord and drainSatisfied: a candidate's own dependency can be orphaned by
@@ -876,9 +965,10 @@ final class ParsleyEngine<K, V> {
 
     /**
      * The causal delivery gate: every coordinate {@code record} depends on (its own self-cycle
-     * stripped) is within the {@link #completeness()} frontier — i.e. confirmed by every input
-     * channel. This is the single source of truth for "may this record be delivered now", used on
-     * every release path ({@link #onRecord}, {@link #drainSatisfied}, {@link #propagate}).
+     * stripped) is within the {@link #completeness()} frontier — i.e. confirmed by at least one input
+     * channel (max-merge; a single genuine witness suffices, see {@link #completeness()}). This is the
+     * single source of truth for "may this record be delivered now", used on every release path
+     * ({@link #onRecord}, {@link #drainSatisfied}, {@link #propagate}).
      */
     private boolean isDeliverable(ParsleyMessage<K, V> record) {
         return isDeliverable(record.dependencies(), record.topicId(), record.partition(), record.offset());
@@ -889,25 +979,64 @@ final class ParsleyEngine<K, V> {
      * source coordinate alone, without decoding its user value. Used by {@link #drainSatisfied} so a
      * held, undecodable record that is not releasable is never deserialised.
      *
-     * <p>Two dependency preprocessing steps run before the completeness check, both view-only (they
-     * never rewrite recorded state): the record's exact self-cycle is removed
-     * ({@link #withoutSelfReference}), and any dependency below its coordinate's topology-epoch
-     * {@code startsAt} bound is stripped ({@link ParsleyClock#strippedBelow}) — an out-of-domain
-     * reference to a prior, closed epoch that no channel in this epoch will ever confirm. With epoch
-     * bounding disabled the strip is a no-op (every bound is {@link ParsleyEpoch#NO_BOUND}).
+     * <p>The completeness check runs against {@link #effectiveDependencies}, never the raw clock — see
+     * that method for the preprocessing steps. Only ever called on a record already proven reachable
+     * ({@link #isUnreachableDependency} false) — {@code effectiveDependencies} does not itself filter
+     * out-of-scope coordinates, so this would otherwise wait forever on one.
      */
     private boolean isDeliverable(ParsleyClock dependencies, Uuid topicId, int partition, long offset) {
-        ParsleyClock effective = withoutSelfReference(dependencies, topicId, partition, offset)
-                .strippedBelow(frontier.epoch());
-        return completeness().dominates(effective);
+        return completeness().dominates(effectiveDependencies(dependencies, topicId, partition, offset));
     }
 
     /**
-     * Returns {@code true} if any coordinate {@code message} depends on (self-cycle and below-epoch
-     * dependencies stripped, exactly as {@link #isDeliverable} strips them) requires an offset this node
-     * has already proven that coordinate can never legitimately reach — i.e. an orphan floor at or below
-     * the required offset is recorded in {@link #orphanIndex}. Always {@code false} when dead-lettering
+     * Returns {@code true} if any coordinate {@code message} depends on ({@link #effectiveDependencies},
+     * the same preprocessing {@link #isDeliverable} applies) names a coordinate outside {@link #inScope}
+     * — this node has no input channel for it at all, so it can never be confirmed here no matter how
+     * long it waits. Checked independently of {@link #deadLetterEnabled}: unlike {@link
+     * #isProvenImpossible}, scope is a static, structural fact known regardless of whether a dead-letter
+     * sink is configured, so this must still fail closed (a hard task failure) rather than silently pass
+     * when there is nowhere to divert the record.
+     */
+    private boolean isUnreachableDependency(ParsleyMessage<K, V> message) {
+        return isUnreachableDependency(message.dependencies(), message.topicId(), message.partition(), message.offset());
+    }
+
+    private boolean isUnreachableDependency(ParsleyClock dependencies, Uuid topicId, int partition, long offset) {
+        ParsleyClock effective = effectiveDependencies(dependencies, topicId, partition, offset);
+        boolean[] unreachable = {false};
+        effective.forEach((depTopicId, depPartition, requiredOffset) -> {
+            if (!inScope.test(depTopicId, depPartition)) {
+                unreachable[0] = true;
+            }
+        });
+        return unreachable[0];
+    }
+
+    /**
+     * Builds (but does not throw) the exception for a record whose dependencies name a coordinate this
+     * node has no channel for, with no dead-letter sink configured to divert it instead. Records the
+     * failure via {@link #metrics}/{@link #audit} first, mirroring {@link #failPoison}, then returns the
+     * exception for the caller to throw — never buffering the record and never treating the unreachable
+     * coordinate as satisfied.
+     */
+    private ParsleyUnreachableDependencyException failUnreachableDependency(
+            String topic, Uuid topicId, int partition, long offset) {
+        metrics.recordUnreachableDependencyError();
+        audit.recordUnreachableDependencyFailure(topic, partition, offset,
+                "depends on a coordinate this node has no channel for");
+        log.error("{}-{} @{} depends on a coordinate this node has no channel for; failing fast "
+                + "(fail-closed). The record was not forwarded and is reprocessed on restart.",
+                topic, partition, offset);
+        return new ParsleyUnreachableDependencyException(topic, topicId, partition, offset);
+    }
+
+    /**
+     * Returns {@code true} if any coordinate {@code message} depends on ({@link #effectiveDependencies},
+     * the same preprocessing {@link #isDeliverable} applies) requires an offset this node has already
+     * proven that coordinate can never legitimately reach — i.e. an orphan floor at or below the
+     * required offset is recorded in {@link #orphanIndex}. Always {@code false} when dead-lettering
      * is disabled, so the check costs nothing and changes nothing for a caller that hasn't opted in.
+     * Only ever called on a record already proven reachable — see {@link #isUnreachableDependency}.
      */
     private boolean isProvenImpossible(ParsleyMessage<K, V> message) {
         return isProvenImpossible(message.dependencies(), message.topicId(), message.partition(), message.offset());
@@ -917,8 +1046,7 @@ final class ParsleyEngine<K, V> {
         if (!deadLetterEnabled) {
             return false;
         }
-        ParsleyClock effective = withoutSelfReference(dependencies, topicId, partition, offset)
-                .strippedBelow(frontier.epoch());
+        ParsleyClock effective = effectiveDependencies(dependencies, topicId, partition, offset);
         boolean[] impossible = {false};
         effective.forEach((depTopicId, depPartition, requiredOffset) -> {
             long floor = orphanIndex.orphanFloor(depTopicId, depPartition);
@@ -930,15 +1058,31 @@ final class ParsleyEngine<K, V> {
     }
 
     /**
-     * Returns {@code deps} with the record's <em>exact</em> source coordinate removed if present — a
-     * record depending on its own {@code (topicId, partition, offset)} has, by being delivered, met
-     * that dependency, so it must not wait on itself (this keeps a self-referential stamp on a fused
-     * chain from deadlocking). A backward same-partition dependency ({@code req < offset}) is an
-     * intra-topic dependency like any other and flows through the gate unchanged. This exact self-cycle
-     * strip is the <em>only</em> dependency preprocessing: there is no in-scope filtering — a
-     * dependency on any other coordinate must be confirmed by every input channel (see
-     * {@link #completeness()}).
+     * The dependency clock actually checked by the gate: two view-only preprocessing steps, neither of
+     * which ever rewrites recorded state or the outbound stamp (which is completeness(), computed
+     * separately and carrying the raw, unfiltered picture for transitive downstream propagation).
+     * <ol>
+     *   <li>The record's exact self-cycle is removed ({@link #withoutSelfReference}) — a record
+     *       depending on its own {@code (topicId, partition, offset)} has, by being delivered, met that
+     *       dependency, so it must not wait on itself (this keeps a self-referential stamp on a fused
+     *       chain from deadlocking). A backward same-partition dependency ({@code req < offset}) is an
+     *       intra-topic dependency like any other and flows through unchanged.</li>
+     *   <li>Any dependency below its coordinate's topology-epoch {@code startsAt} bound is stripped
+     *       ({@link ParsleyClock#strippedBelow}) — an out-of-domain reference to a prior, closed epoch
+     *       that no channel in this epoch will ever confirm. A no-op with epoch bounding disabled.</li>
+     * </ol>
+     * <p>Unlike an earlier version of this method, a coordinate outside {@link #inScope} is
+     * <strong>not</strong> dropped here — this node cannot prove such a coordinate is safe to disregard,
+     * only that it cannot check it, so it is never silently treated as satisfied. {@link
+     * #isUnreachableDependency} checks for one before this result is ever handed to {@link
+     * #isDeliverable} or {@link #isProvenImpossible}, and fails closed (dead-letter, or a hard task
+     * failure with no dead-letter sink configured) instead.
      */
+    private ParsleyClock effectiveDependencies(ParsleyClock deps, Uuid topicId, int partition, long offset) {
+        return withoutSelfReference(deps, topicId, partition, offset)
+                .strippedBelow(frontier.epoch());
+    }
+
     private ParsleyClock withoutSelfReference(ParsleyClock deps, Uuid topicId, int partition, long offset) {
         if (deps.offsetFor(topicId, partition) == offset) {
             return deps.without(topicId, partition);

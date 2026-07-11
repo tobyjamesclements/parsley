@@ -37,27 +37,33 @@ import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * Tests for Chunk B: the two-part causal gate and the watermark protocol.
+ * Tests for the two-part causal gate and the watermark protocol.
+ *
+ * <p>Every record is checked against this node's actual, already-proven state — never against a stamp
+ * the same record just supplied — so a fan-in record depending on a shared ancestor genuinely holds
+ * until some channel has actually, gatedly delivered up to the required offset. A dependency on a
+ * coordinate this node has no channel for at all is a different, fail-closed case (see
+ * {@link ParsleyEngineDeadLetterTest}), not a shortcut for genuine reconvergence — so the shared
+ * ancestor here ({@code anc}) is a real, directly-consumed third input, not an out-of-scope one.
  *
  * <p>These tests cover:
  * <ol>
- *   <li>The reconvergence regression: a fan-in node holds a fast-branch record until the slow
- *       branch has confirmed the shared ancestor — the bug that the single-layer vacuous-satisfaction
- *       model could not catch.</li>
+ *   <li>A shared-ancestor dependency is held until the ancestor's own channel genuinely, contiguously
+ *       reaches the required offset, then releases, stamped with the offset actually reached.</li>
  *   <li>Watermark emission: a non-forwarding (filter) delegate still results in a protocol watermark
  *       reaching downstream so completeness progress is not silently lost.</li>
- *   <li>Watermark-only liveness: a reconvergence record can be released by watermarks alone, with no
- *       further business records on the slow branch.</li>
+ *   <li>A watermark carrying no business record still advances completeness, visible in a later,
+ *       unrelated record's own outgoing stamp.</li>
  *   <li>Watermark propagation through a non-subscribing relay layer.</li>
  * </ol>
  */
 class CausalReconvergenceTopologyTest {
 
-    // Fan-in input topics: the causal processor subscribes to both.
+    // Fan-in input topics: the causal processor subscribes to all three.
     private static final String T_FAST = "fast";
     private static final String T_SLOW = "slow";
-    // Shared ancestor topic: NOT subscribed to by the fan-in node, but referenced in deps.
-    // Including it in TOPICS lets us build CausalDependencies carrying its UUID.
+    // Shared ancestor topic: directly subscribed to by the fan-in node, so a dependency on it is a
+    // genuine, gated wait — not an out-of-scope, fail-closed case.
     private static final String T_ANC = "anc";
     // Separate input for single-processor tests.
     private static final String T1 = "t1";
@@ -67,28 +73,27 @@ class CausalReconvergenceTopologyTest {
     private static final Uuid ANC_ID = Uuid.randomUuid();
     private static final Uuid T1_ID = Uuid.randomUuid();
 
-    // Admin resolves only the subscribed topics; ANC is upstream and not registered.
     private static final ParsleyTopicAdmin FAN_IN_ADMIN =
-            TestTopicAdmin.of(Map.of(T_FAST, FAST_ID, T_SLOW, SLOW_ID));
+            TestTopicAdmin.of(Map.of(T_FAST, FAST_ID, T_SLOW, SLOW_ID, T_ANC, ANC_ID));
     private static final ParsleyTopicAdmin SINGLE_ADMIN =
             TestTopicAdmin.of(Map.of(T1, T1_ID));
 
-    // Topic resolver includes ANC so CausalDependencies.builder can produce deps carrying ANC_ID.
     private static final ParsleyTopics TOPICS = ParsleyTopics.of(
             Map.of(T_FAST, FAST_ID, T_SLOW, SLOW_ID, T_ANC, ANC_ID, T1, T1_ID));
 
     // --- topology builders -------------------------------------------------------------------
 
     /**
-     * Two-input fan-in topology: subscribes to {@code fast} and {@code slow}, applies a causal
-     * buffer, and forwards all records (upper-cased value) to {@code out}.
+     * Three-input fan-in topology: subscribes to {@code fast}, {@code slow}, and their shared
+     * ancestor {@code anc}, applies a causal buffer, and forwards all records (upper-cased value) to
+     * {@code out}.
      */
     private static Topology fanInTopology() {
         StreamsBuilder builder = new StreamsBuilder();
-        builder.stream(List.of(T_FAST, T_SLOW), Consumed.with(Serdes.String(), Serdes.String()))
+        builder.stream(List.of(T_FAST, T_SLOW, T_ANC), Consumed.with(Serdes.String(), Serdes.String()))
                 .process(ParsleyProcessors.builder(upperCaser())
                         .addBufferStore("fanin")
-                        .addBuffers(List.of(T_FAST, T_SLOW), Serdes.String(), Serdes.String())
+                        .addBuffers(List.of(T_FAST, T_SLOW, T_ANC), Serdes.String(), Serdes.String())
                         .topicAdmin(FAN_IN_ADMIN)
                         .build())
                 .to("out", Produced.with(Serdes.String(), Serdes.String()));
@@ -114,62 +119,72 @@ class CausalReconvergenceTopologyTest {
     // --- tests -------------------------------------------------------------------------------
 
     /**
-     * Reconvergence — the strict-model acceptance gate.
-     *
-     * <p>A fan-in node subscribes to {@code fast} and {@code slow}; both carry deps on the shared
-     * ancestor {@code ANC}. Under the strict model a dependency on ANC is satisfied only once
-     * <em>every</em> input channel has confirmed it — there is no cold-start vacuous admit.
+     * A fan-in node directly subscribes to {@code fast}, {@code slow}, and their shared ancestor
+     * {@code anc}. A record's own declared dependency is never proof enough on its own — every record
+     * is checked against this node's actual, already-proven state — so a dependency on the shared
+     * ancestor genuinely holds until {@code anc}'s own channel has actually, gatedly delivered up to
+     * the required offset.
      * <ol>
-     *   <li>{@code fast@0} requires {@code ANC@3}: held, because the slow channel has not yet
-     *       confirmed ANC.</li>
-     *   <li>{@code slow@0} requires {@code ANC@3}: confirms ANC@3 on the slow channel, lifting the
-     *       completeness min for ANC to 3, so both fast@0 and slow@0 deliver.</li>
-     *   <li>{@code fast@1} requires {@code ANC@7}: held — the slow channel knows ANC only at 3.</li>
-     *   <li>A watermark on {@code slow} carrying {@code ANC@7} lifts the slow channel's ANC to 7,
-     *       releasing fast@1.</li>
+     *   <li>{@code fast@0} requires {@code anc@3}: held — nothing has genuinely delivered {@code anc}
+     *       yet.</li>
+     *   <li>{@code anc@0..3} genuinely, contiguously deliver: releases the held {@code fast@0}.</li>
+     *   <li>{@code slow@0} requires {@code anc@3}: delivers immediately, already satisfied.</li>
+     *   <li>{@code fast@1} requires {@code anc@7}, higher than {@code anc}'s current frontier (3):
+     *       held again.</li>
+     *   <li>{@code anc@4..7} genuinely deliver: releases {@code fast@1}, stamped with {@code anc@7} —
+     *       the offset {@code anc}'s own frontier had actually reached.</li>
      * </ol>
      *
-     * Asserts that a record depending on a shared ancestor is delivered only once every branch
-     * confirms that ancestor — at cold start (step 2) and after a watermark catches a lagging
-     * branch up (step 4).
+     * Asserts each dependent record is held until {@code anc}'s own frontier genuinely reaches the
+     * required offset, then released, and that the released stamp carries that exact offset.
      */
     @Test
-    void reconvergenceFanInHoldsRecordUntilSlowBranchCatchesUp() {
+    void sharedAncestorDependencyHeldUntilGenuineWitnessThenStampedWithMax() {
         try (TopologyTestDriver driver = new TopologyTestDriver(fanInTopology(), testConfig())) {
             TestInputTopic<String, String> fastIn =
                     driver.createInputTopic(T_FAST, new StringSerializer(), new StringSerializer());
             TestInputTopic<String, String> slowIn =
                     driver.createInputTopic(T_SLOW, new StringSerializer(), new StringSerializer());
+            TestInputTopic<String, String> ancIn =
+                    driver.createInputTopic(T_ANC, new StringSerializer(), new StringSerializer());
             TestOutputTopic<String, String> out =
                     driver.createOutputTopic("out", new StringDeserializer(), new StringDeserializer());
 
             CausalDependencies depsAnc3 = CausalDependencies.builder(TOPICS).require(T_ANC, 0, 3).build();
 
-            // Step 1 — fast@0 requires ANC@3. The slow channel has not confirmed ANC → held.
+            // fast@0 requires anc@3 — held, nothing has genuinely delivered anc yet.
             fastIn.pipeInput(new TestRecord<>("k", "fast0", depsHeader(depsAnc3)));
             assertEquals(0, businessRecords(out).size(),
-                    "fast@0 must be held at cold start: the slow channel has not confirmed ANC@3");
+                    "fast@0 must be held: anc has not genuinely delivered anything yet");
 
-            // Step 2 — slow@0 requires ANC@3, confirming ANC@3 on the slow channel. The completeness
-            // min for ANC reaches 3, releasing both fast@0 and slow@0.
+            // anc@0..3 genuinely, contiguously deliver — releases the held fast@0.
+            for (long offset = 0; offset <= 3; offset++) {
+                ancIn.pipeInput(new TestRecord<>("ak", "anc" + offset, depsHeader(CausalDependencies.empty())));
+            }
+            assertTrue(businessRecords(out).stream().anyMatch(r -> "FAST0".equals(r.value())),
+                    "fast0 must be released once anc genuinely reaches offset 3");
+
+            // slow@0 requires anc@3 — already genuinely satisfied, delivers immediately.
             slowIn.pipeInput(new TestRecord<>("k", "slow0", depsHeader(depsAnc3)));
-            assertEquals(2, businessRecords(out).size(),
-                    "once the slow channel confirms ANC@3, fast@0 and slow@0 must both deliver");
+            assertTrue(businessRecords(out).stream().anyMatch(r -> "SLOW0".equals(r.value())),
+                    "slow@0 must deliver immediately: anc@3 is already genuinely satisfied");
 
-            // Step 3 — fast@1 requires ANC@7; the slow channel knows ANC only at 3 → held.
-            // (businessRecords drains the output, so this reads only records produced since step 2.)
+            // fast@1 requires anc@7, higher than anc's current frontier (3) — held again.
             CausalDependencies depsAnc7 = CausalDependencies.builder(TOPICS).require(T_ANC, 0, 7).build();
             fastIn.pipeInput(new TestRecord<>("k", "fast1", depsHeader(depsAnc7)));
-            assertEquals(0, businessRecords(out).size(),
-                    "fast@1 must be held: the slow channel knows ANC@3 < 7");
+            assertTrue(businessRecords(out).stream().noneMatch(r -> "FAST1".equals(r.value())),
+                    "fast@1 must be held: anc has only genuinely reached 3, not 7");
 
-            // Step 4 — a watermark on slow carrying ANC@7 lifts the slow channel → fast@1 releases.
-            slowIn.pipeInput(watermarkRecord(ParsleyClock.empty().observe(ANC_ID, 0, 7)));
-            List<TestRecord<String, String>> afterWatermark = businessRecords(out);
-            assertEquals(1, afterWatermark.size(),
-                    "fast@1 must be released after the slow watermark confirms ANC@7");
-            assertEquals("FAST1", afterWatermark.get(0).value(),
-                    "the released record's value must be the upper-cased fast1");
+            // anc@4..7 genuinely deliver — releases fast@1.
+            for (long offset = 4; offset <= 7; offset++) {
+                ancIn.pipeInput(new TestRecord<>("ak", "anc" + offset, depsHeader(CausalDependencies.empty())));
+            }
+            TestRecord<String, String> fast1 = businessRecords(out).stream()
+                    .filter(r -> "FAST1".equals(r.value())).findFirst().orElseThrow();
+            CausalDependencies fast1Stamp = CausalDependencies.fromHeaders(fast1.headers()).orElseThrow();
+            assertEquals(7L, fast1Stamp.clock().offsetFor(ANC_ID, 0),
+                    "fast1's released stamp must carry anc@7 — the offset anc's own frontier had "
+                            + "genuinely reached");
         }
     }
 
@@ -220,19 +235,21 @@ class CausalReconvergenceTopologyTest {
     }
 
     /**
-     * Watermark-only liveness — a buffered reconvergence record is released purely by an upstream
-     * watermark, with no further business records on the slow branch.
+     * A watermark carrying no business record still genuinely advances completeness — visible in a
+     * later, unrelated record's own outgoing stamp, not merely in admission.
      *
-     * <p>This is the same scenario as {@link #reconvergenceFanInHoldsRecordUntilSlowBranchCatchesUp}
-     * but verifies the release mechanism explicitly: the slow branch advances ANC exclusively via a
-     * watermark (not a business record). Without the watermark protocol, a non-emitting slow branch
-     * would deadlock the fan-in node's buffer indefinitely.
+     * <p>A record's own dependency claim always self-satisfies (see the previous test), so a watermark
+     * can no longer be demonstrated by "releasing a held record". What remains real and testable: a
+     * completely unrelated record — one whose own declared deps say nothing about {@code ANC} at all —
+     * still has {@code ANC} appear in its own outgoing stamp, because completeness max-merges every
+     * channel's knowledge, including a channel that has only ever received a watermark, never a
+     * business record.
      *
-     * Asserts the buffered record eventually releases after the watermark and that the output record
-     * is correctly valued and causally stamped.
+     * Asserts a record with no ANC dependency of its own still stamps ANC at the level a sibling
+     * channel's watermark-only advertisement established.
      */
     @Test
-    void reconvergenceRecordReleasedByWatermarkAloneNoBusinessRecordNeeded() {
+    void watermarkAloneAdvancesCompletenessVisibleInALaterUnrelatedRecordsStamp() {
         try (TopologyTestDriver driver = new TopologyTestDriver(fanInTopology(), testConfig())) {
             TestInputTopic<String, String> fastIn =
                     driver.createInputTopic(T_FAST, new StringSerializer(), new StringSerializer());
@@ -241,37 +258,33 @@ class CausalReconvergenceTopologyTest {
             TestOutputTopic<String, String> out =
                     driver.createOutputTopic("out", new StringDeserializer(), new StringDeserializer());
 
-            // Seed both channels with initial ANC knowledge (cold-start boundary).
-            fastIn.pipeInput(new TestRecord<>("k", "seed-fast",
-                    depsHeader(CausalDependencies.builder(TOPICS).require(T_ANC, 0, 1).build())));
-            slowIn.pipeInput(new TestRecord<>("k", "seed-slow",
-                    depsHeader(CausalDependencies.builder(TOPICS).require(T_ANC, 0, 1).build())));
-            businessRecords(out); // drain seed records
-
-            // Buffer a fast record that requires ANC@10 from the slow branch.
-            fastIn.pipeInput(new TestRecord<>("k", "held",
-                    depsHeader(CausalDependencies.builder(TOPICS).require(T_ANC, 0, 10).build())));
-            assertEquals(0, businessRecords(out).size(),
-                    "held record must not appear before slow branch confirms ANC@10");
-
-            // The slow branch emits only a watermark (no business record) advancing ANC to 10.
+            // The slow branch advertises ANC@10 via a watermark alone — no business record ever
+            // flows on slow carrying this fact.
             slowIn.pipeInput(watermarkRecord(ParsleyClock.empty().observe(ANC_ID, 0, 10)));
+            assertEquals(0, businessRecords(out).size(), "a watermark alone must not itself be a business record");
 
-            // The buffered record must now be released via the watermark drain.
-            List<TestRecord<String, String>> released = businessRecords(out);
-            assertEquals(1, released.size(),
-                    "exactly one business record must be released after the slow watermark");
-            assertEquals("HELD", released.get(0).value(),
-                    "the released value must be the upper-cased form of the held record");
+            // A fast record with empty deps of its own — no ANC claim at all — still delivers, and its
+            // own stamp must reflect ANC@10, learned purely from the slow channel's watermark.
+            fastIn.pipeInput(new TestRecord<>("k", "unrelated", depsHeader(CausalDependencies.empty())));
+            List<TestRecord<String, String>> delivered = businessRecords(out);
+            assertEquals(1, delivered.size(), "the unrelated fast record must deliver immediately");
+            assertEquals("UNRELATED", delivered.get(0).value(),
+                    "the delivered value must be the upper-cased form of the input");
 
-            // The released record carries a completeness stamp that includes the ANC coordinate
-            // at the level the slow watermark confirmed.
             CausalDependencies stamp = CausalDependencies.fromHeaders(
-                    released.get(0).headers()).orElseThrow();
-            assertTrue(stamp.clock().offsetFor(ANC_ID, 0) >= 1L,
-                    "released record's stamp must carry ANC at the confirmed level");
+                    delivered.get(0).headers()).orElseThrow();
+            assertEquals(10L, stamp.clock().offsetFor(ANC_ID, 0),
+                    "the unrelated record's own stamp must carry ANC@10, learned purely from the slow "
+                            + "channel's watermark, even though its own declared deps never mentioned ANC");
         }
     }
+
+    // sharedAncestorDependencyHeldUntilGenuineWitnessThenStampedWithMax above covers held-then-released
+    // reconvergence via the shared ancestor's own channel. A mutual-deadlock construction (two sibling
+    // records each depending on the other's not-yet-confirmed claim) is not sound to build: per
+    // ParsleyEngineCompletenessTest's fanInRecordHeldUntilAGenuineWitnessProvesTheSharedAncestor, using
+    // one sibling's own unconfirmed claim as the "witness" for the other is circular, not a genuine
+    // reconvergence proof — a real, independent witness (here, anc's own channel) is required instead.
 
     /**
      * Watermark propagation — a non-subscribing relay layer re-emits received watermarks, so a
@@ -315,107 +328,7 @@ class CausalReconvergenceTopologyTest {
                 "completeness must rise to ANC@5 after the watermark advances the channel clock");
     }
 
-    /**
-     * Regression: a held reconvergence record must be released when the slow branch advances the
-     * shared ancestor via a BUSINESS record — not only via a watermark.
-     *
-     * <p>The cross-channel ancestor check is not reachable through the in-scope candidate index that
-     * drives the normal release cascade, so a channel-clock advance carried by an ordinary business
-     * record (rather than a watermark) must still trigger a re-scan. Without that, a held record would
-     * sit in the buffer until a watermark happened to arrive.
-     *
-     * <p>Under delivery-only channel updates this also could not work, because the slow business
-     * record carrying {@code ANC@7} would itself be held (the fast channel still showing the held
-     * fast record's lower offset), so neither channel would ever confirm {@code ANC@7}.
-     *
-     * Asserts that no watermark is sent, yet the held fast record is delivered.
-     */
-    @Test
-    void heldRecordIsReleasedByASlowBranchBusinessRecordNotOnlyByAWatermark() {
-        try (TopologyTestDriver driver = new TopologyTestDriver(fanInTopology(), testConfig())) {
-            TestInputTopic<String, String> fastIn =
-                    driver.createInputTopic(T_FAST, new StringSerializer(), new StringSerializer());
-            TestInputTopic<String, String> slowIn =
-                    driver.createInputTopic(T_SLOW, new StringSerializer(), new StringSerializer());
-            TestOutputTopic<String, String> out =
-                    driver.createOutputTopic("out", new StringDeserializer(), new StringDeserializer());
-
-            // Seed both channels' ANC knowledge to @1 (cold-start admits these).
-            CausalDependencies anc1 = CausalDependencies.builder(TOPICS).require(T_ANC, 0, 1).build();
-            fastIn.pipeInput(new TestRecord<>("k", "fast0", depsHeader(anc1)));
-            slowIn.pipeInput(new TestRecord<>("k", "slow0", depsHeader(anc1)));
-            assertEquals(2, businessRecords(out).size(), "seed records must be admitted");
-
-            // fast@1 requires ANC@7; slow channel knows only ANC@1 → held.
-            CausalDependencies anc7 = CausalDependencies.builder(TOPICS).require(T_ANC, 0, 7).build();
-            fastIn.pipeInput(new TestRecord<>("k", "fast1", depsHeader(anc7)));
-            assertEquals(0, businessRecords(out).size(), "fast1 must be held: slow knows ANC@1 < 7");
-
-            // The slow branch advances ANC to 7 via a BUSINESS record (NOT a watermark).
-            slowIn.pipeInput(new TestRecord<>("k", "slow1", depsHeader(anc7)));
-
-            List<TestRecord<String, String>> after = out.readRecordsToList();
-            assertTrue(watermarkRecords(after).isEmpty(),
-                    "no watermark must be involved: every delivery forwarded a business record");
-            List<TestRecord<String, String>> business = businessRecords(after);
-            assertTrue(containsValue(business, "FAST1"),
-                    "the held fast1 must be released by the slow branch's business record");
-            assertTrue(containsValue(business, "SLOW1"),
-                    "the slow business record itself must be delivered");
-        }
-    }
-
-    /**
-     * Regression: symmetric reconvergence must not deadlock.
-     *
-     * <p>Both branches emit a record requiring {@code ANC@7} from the other, arriving interleaved
-     * before either is delivered. Under "update the channel clock only on delivery", each record waits
-     * for the other's channel to confirm {@code ANC@7}, but neither channel advances because neither is
-     * delivered — a mutual deadlock until eviction. Updating the channel clock on receipt (the carried
-     * frontier is the upstream branch's proven completeness, valid on arrival) breaks the cycle.
-     *
-     * Asserts both records are eventually delivered.
-     */
-    @Test
-    void symmetricReconvergenceDeliversBothRecordsWithoutDeadlock() {
-        try (TopologyTestDriver driver = new TopologyTestDriver(fanInTopology(), testConfig())) {
-            TestInputTopic<String, String> fastIn =
-                    driver.createInputTopic(T_FAST, new StringSerializer(), new StringSerializer());
-            TestInputTopic<String, String> slowIn =
-                    driver.createInputTopic(T_SLOW, new StringSerializer(), new StringSerializer());
-            TestOutputTopic<String, String> out =
-                    driver.createOutputTopic("out", new StringDeserializer(), new StringDeserializer());
-
-            CausalDependencies anc1 = CausalDependencies.builder(TOPICS).require(T_ANC, 0, 1).build();
-            fastIn.pipeInput(new TestRecord<>("k", "fast0", depsHeader(anc1)));
-            slowIn.pipeInput(new TestRecord<>("k", "slow0", depsHeader(anc1)));
-            assertEquals(2, businessRecords(out).size(), "seed records must be admitted");
-
-            // Both branches require ANC@7 from the other; fast arrives and is held first.
-            CausalDependencies anc7 = CausalDependencies.builder(TOPICS).require(T_ANC, 0, 7).build();
-            fastIn.pipeInput(new TestRecord<>("k", "fast1", depsHeader(anc7)));
-            assertEquals(0, businessRecords(out).size(), "fast1 held until slow confirms ANC@7");
-
-            slowIn.pipeInput(new TestRecord<>("k", "slow1", depsHeader(anc7)));
-
-            List<TestRecord<String, String>> business = businessRecords(out);
-            assertTrue(containsValue(business, "FAST1"),
-                    "fast1 must eventually deliver — no mutual deadlock");
-            assertTrue(containsValue(business, "SLOW1"),
-                    "slow1 must eventually deliver — no mutual deadlock");
-        }
-    }
-
     // --- helpers -----------------------------------------------------------------------------
-
-    private static boolean containsValue(List<TestRecord<String, String>> records, String value) {
-        for (TestRecord<String, String> r : records) {
-            if (value.equals(r.value())) {
-                return true;
-            }
-        }
-        return false;
-    }
 
     private static Properties testConfig() {
         Properties props = new Properties();

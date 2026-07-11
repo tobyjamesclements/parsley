@@ -9,19 +9,28 @@ import java.util.List;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 
 /**
- * Tests for {@link ParsleyEngine#completeness()}: the per-coordinate minimum across <em>all</em>
- * input channels that produces the node's causal completeness frontier.
+ * Tests for {@link ParsleyEngine#completeness()}: this node's own frontier max-merged with every
+ * input channel's advertised dependencies.
  *
  * <p>Each channel contributes the dependencies its records have advertised (the pairwise-max over
- * records on that channel) plus its own delivered position. {@code completeness()} is the
- * {@link ParsleyClock#intersectMin intersection-minimum} across those channels: a coordinate is
- * carried only when <em>every</em> channel has observed it, valued at the slowest branch. A
- * coordinate observed by only one channel is dropped entirely — it is not confirmed by all branches,
- * so a dependency on it is not satisfied until the other channels also advertise it (the topology
- * contract). This is strictly stronger than a min that keeps coordinates seen on a single branch.
+ * records on that channel). {@code completeness()} is {@link ParsleyClock#merge}, not an
+ * intersection: a coordinate counts the moment <em>any</em> channel has genuinely advertised it —
+ * there is no requirement that every one of a node's channels independently repeat the same
+ * confirmation. A node's own directly-consumed coordinates (part of the frontier) are always present,
+ * since they are this node's own proven delivery history, not something any channel needs to confirm.
+ *
+ * <p>Genuine confirmation still matters: a channel only advertises a dependency once a record
+ * carrying it has actually, gatedly delivered through that channel (see
+ * {@link ParsleyEngineTest}/{@link ParsleyEngineDeadLetterTest} for the delivery gate itself — every
+ * record is checked against this node's current, already-proven state, never against a stamp the same
+ * record just supplied). Several tests here pre-establish channel state directly via
+ * {@link ParsleyFrontier#channelUpdate}/{@link ParsleyFrontier#deliver}, standing in for "some record
+ * already, genuinely delivered this" so the merge logic itself can be tested in isolation from gate
+ * timing.
  *
  * <p>The per-channel value is a max (not a running min) so a channel's view can always rise as it
- * advances; the cross-channel combination is the min so the boundary is bounded by the slowest branch.
+ * advances; the cross-channel combination is also a max (not a min) so a single genuine witness is
+ * never held back by a sibling channel that simply hasn't mentioned the same coordinate.
  */
 class ParsleyEngineCompletenessTest {
 
@@ -34,8 +43,8 @@ class ParsleyEngineCompletenessTest {
     // T4 is a coordinate unique to one branch (appears only in T1 records).
     private static final Uuid T4_ID = Uuid.randomUuid();
 
-    // The node consumes T1 and T2; T3/T4 are upstream ancestors carried in deps. SCOPE is used only
-    // for the engine's diagnostics/pruning, not as a delivery filter (the gate waits for all channels).
+    // The node consumes T1 and T2; T3/T4 are upstream ancestors carried in deps, out of this node's
+    // own scope (it has no channel for them) — genuinely unreachable, not merely unconfirmed yet.
     private static final ParsleyClock.CoordinatePredicate SCOPE = (topicId, partition) ->
             partition == 0 && (topicId.equals(T1_ID) || topicId.equals(T2_ID));
 
@@ -44,98 +53,94 @@ class ParsleyEngineCompletenessTest {
     // --- tests ----------------------------------------------------------------------------------
 
     /**
-     * A fan-in node consuming T1 and T2, both of which descend from a shared ancestor T3.
-     * T1 records carry a dep on T3 at offset 5; T2 records carry a dep on T3 at offset 3.
+     * A fan-in node consuming T1 and T2, both of which descend from a shared ancestor T3. Channel T1
+     * has already, genuinely delivered a record advertising T3 at 5; channel T2 has already,
+     * genuinely delivered one advertising T3 at 3 (pre-established directly, standing in for genuine
+     * prior delivery through each channel).
      *
-     * <p>T3 is the only coordinate <em>both</em> channels observe, so {@code completeness()} reports
-     * it at the minimum (3) across the two branches — bounded by the slowest branch. T1 and T2 each
-     * appear only on their own channel, so the strict intersection drops them: completeness carries
-     * only coordinates every input channel has confirmed.
+     * <p>{@code completeness()} reports T3 at the maximum (5) across the two branches — a single
+     * genuine witness (T1's channel) is enough, the slower branch's silence does not hold it back.
+     * T1 and T2 each appear at their own delivered offset (10 and 7 respectively): a node's own
+     * directly-consumed coordinates are always present in completeness, not dependent on any channel
+     * advertising them.
      *
-     * Asserts T3 appears at min(5, 3)=3 and that the single-channel coordinates T1/T2 are absent.
+     * Asserts T3 appears at max(5,3)=5, and T1/T2 appear at their own delivered offsets.
      */
     @Test
-    void fanInCompleteness_reportsSharedAncestorAtMinAcrossBranches() {
-        ParsleyEngine<String, String> engine = fanInEngine();
-
-        // T1@10 carries dep {T3: 5} — the fast branch advanced T3 further.
-        engine.onRecord(record(T1, 10, T1_ID, clock(T3_ID, 5)));
-        // T2@7 carries dep {T3: 3} — the slow branch advanced T3 less.
-        engine.onRecord(record(T2, 7, T2_ID, clock(T3_ID, 3)));
+    void fanInCompleteness_reportsSharedAncestorAtMaxAcrossBranches() {
+        ParsleyFrontier frontier = newFrontier();
+        deliverSequentially(frontier, T1_ID, 10);
+        frontier.channelUpdate(T1_ID, 0, clock(T3_ID, 5));
+        deliverSequentially(frontier, T2_ID, 7);
+        frontier.channelUpdate(T2_ID, 0, clock(T3_ID, 3));
+        ParsleyEngine<String, String> engine = engineOver(frontier, SCOPE);
 
         ParsleyClock completeness = engine.completeness();
 
-        assertEquals(3L, completeness.offsetFor(T3_ID, 0),
-                "T3 (shared ancestor) must appear at the minimum across branches: min(5,3)=3");
-        assertEquals(-1L, completeness.offsetFor(T1_ID, 0),
-                "T1 is observed only by its own channel, so it is not confirmed by all channels");
-        assertEquals(-1L, completeness.offsetFor(T2_ID, 0),
-                "T2 is observed only by its own channel, so it is not confirmed by all channels");
+        assertEquals(5L, completeness.offsetFor(T3_ID, 0),
+                "T3 (shared ancestor) must appear at the maximum across branches: max(5,3)=5 — a "
+                        + "single genuine witness suffices, the slower branch does not hold it back");
+        assertEquals(10L, completeness.offsetFor(T1_ID, 0),
+                "T1 is this node's own directly-consumed coordinate, always present at its delivered offset");
+        assertEquals(7L, completeness.offsetFor(T2_ID, 0),
+                "T2 is this node's own directly-consumed coordinate, always present at its delivered offset");
     }
 
     /**
-     * A coordinate that appears in one input channel's deps but not the other is <em>dropped</em>
-     * from completeness — under the strict min, a coordinate is carried only when every channel has
-     * confirmed it.
+     * A coordinate that a genuine delivery on one channel advertised, but the other never mentioned,
+     * is still <em>included</em> in completeness — a single genuine witness is enough, there is no
+     * cross-channel unanimity requirement.
      *
-     * <p>T1 records carry a dep on T4; T2 records never mention T4. After delivering both, the
-     * completeness frontier must not carry T4, because the T2 branch has not confirmed it.
-     *
-     * Asserts T4 is absent from completeness, while the shared ancestor T3 is present at the min.
+     * Asserts T4 is present at 2 (from T1's channel alone), while the shared ancestor T3 is present at the max.
      */
     @Test
-    void coordinateOnOnlyOneChannelIsDroppedNotConfirmedByAllChannels() {
-        ParsleyEngine<String, String> engine = fanInEngine();
-
-        // T1@10 carries deps {T3: 5, T4: 2}; T4 is unique to this branch.
-        engine.onRecord(record(T1, 10, T1_ID, clock(T3_ID, 5).observe(T4_ID, 0, 2)));
-        // T2@7 carries dep {T3: 3}; T4 is absent.
-        engine.onRecord(record(T2, 7, T2_ID, clock(T3_ID, 3)));
+    void coordinateOnOnlyOneChannelIsIncludedSingleWitnessSuffices() {
+        ParsleyFrontier frontier = newFrontier();
+        deliverSequentially(frontier, T1_ID, 10);
+        frontier.channelUpdate(T1_ID, 0, clock(T3_ID, 5).observe(T4_ID, 0, 2));
+        deliverSequentially(frontier, T2_ID, 7);
+        frontier.channelUpdate(T2_ID, 0, clock(T3_ID, 3));
+        ParsleyEngine<String, String> engine = engineOver(frontier, SCOPE);
 
         ParsleyClock completeness = engine.completeness();
 
-        assertEquals(-1L, completeness.offsetFor(T4_ID, 0),
-                "T4 (on only one channel) must be absent from completeness — not confirmed by the "
-                        + "channel that never mentioned it");
-        assertEquals(3L, completeness.offsetFor(T3_ID, 0),
-                "T3 (shared ancestor) must still appear at min(5,3)=3");
+        assertEquals(2L, completeness.offsetFor(T4_ID, 0),
+                "T4 (advertised by only one channel) must still be included — a single genuine "
+                        + "witness suffices, no cross-channel corroboration is required");
+        assertEquals(5L, completeness.offsetFor(T3_ID, 0),
+                "T3 (shared ancestor) must still appear at max(5,3)=5");
     }
 
     /**
-     * In a single-input relay (one channel), the completeness frontier rises to match the latest
-     * delivered record's deps — it is not pinned at the smallest value ever seen.
+     * A channel's clock is a per-channel <em>max</em> across every record genuinely delivered through
+     * it, not a running minimum — the guard against a running-min regression: if it were a minimum, the
+     * first genuine delivery's low T3 value would pin completeness there forever. Two genuine
+     * deliveries are pre-established directly via {@link ParsleyFrontier#channelUpdate} (standing in
+     * for two records having actually, gatedly delivered through the T1 channel in sequence, the second
+     * carrying a higher T3 value than the first — see the class Javadoc on pre-establishing genuine
+     * channel state directly).
      *
-     * <p>This is the guard against a running-min regression: if the channel clock were a running
-     * minimum across all records on a channel (rather than a per-channel max), the first record's
-     * low T3 value would pin completeness there forever. The per-channel max ensures completeness
-     * rises as the relay advances.
-     *
-     * Asserts completeness after two deliveries rises to the second (higher) T3 dep, not the first.
+     * Asserts completeness after the second genuine delivery rises to the higher T3 value, not the
+     * first.
      */
     @Test
     void singleInputRelayCompletenessRisesToLatestDeps() {
-        // Single-channel engine: only T1 in scope.
         ParsleyClock.CoordinatePredicate singleScope =
                 (topicId, partition) -> partition == 0 && topicId.equals(T1_ID);
-        ParsleyEngine<String, String> engine = engineOver(newFrontier(), singleScope);
+        ParsleyFrontier frontier = newFrontier();
+        deliverSequentially(frontier, T1_ID, 1);
+        ParsleyEngine<String, String> engine = engineOver(frontier, singleScope);
 
-        // First record: T1@0 with dep {T3: 3}. Use offset 0 so the frontier seeds cleanly.
-        engine.onRecord(record(T1, 0, T1_ID, clock(T3_ID, 3)));
-        ParsleyClock afterFirst = engine.completeness();
+        // First genuine delivery on the T1 channel advertises T3 at 3.
+        frontier.channelUpdate(T1_ID, 0, clock(T3_ID, 3));
+        assertEquals(3L, engine.completeness().offsetFor(T3_ID, 0),
+                "completeness after the first genuine delivery must report T3 at 3");
 
-        assertEquals(3L, afterFirst.offsetFor(T3_ID, 0),
-                "completeness after first delivery must report T3 at 3");
-
-        // Second record: T1@1 (consecutive) with dep {T3: 7} — a later, higher dep.
-        // Consecutive offsets ensure no gap so the frontier actually advances to offset 1.
-        engine.onRecord(record(T1, 1, T1_ID, clock(T3_ID, 7)));
-        ParsleyClock afterSecond = engine.completeness();
-
-        assertEquals(7L, afterSecond.offsetFor(T3_ID, 0),
-                "completeness after second delivery must rise to T3=7, not remain pinned at 3 "
+        // A second genuine delivery on the same channel advertises a higher T3 value.
+        frontier.channelUpdate(T1_ID, 0, clock(T3_ID, 7));
+        assertEquals(7L, engine.completeness().offsetFor(T3_ID, 0),
+                "completeness after the second delivery must rise to T3=7, not remain pinned at 3 "
                         + "(per-channel max ensures the channel clock advances, not a running min)");
-        assertEquals(1L, afterSecond.offsetFor(T1_ID, 0),
-                "T1 coordinate must reflect the latest delivered offset");
     }
 
     /**
@@ -143,18 +148,18 @@ class ParsleyEngineCompletenessTest {
      * {@code completeness()} returns an identical result to the pre-restart value, without replaying
      * any records: the frontier clock and the per-channel clocks both restore from the single "f" blob.
      *
-     * Asserts that the completeness frontier is identical after restart.
+     * Asserts that the completeness clock is identical after restart.
      */
     @Test
     void completenessRestoredIdenticallyAfterSimulatedRestart() {
         TestKeyValueStore<String, byte[]> sharedStore =
                 new TestKeyValueStore<String, byte[]>(java.util.Comparator.naturalOrder());
         ParsleyFrontier firstFrontier = new ParsleyFrontier(sharedStore, new MockForwardedIndex(), new MockOrphanIndex());
+        deliverSequentially(firstFrontier, T1_ID, 10);
+        firstFrontier.channelUpdate(T1_ID, 0, clock(T3_ID, 5));
+        deliverSequentially(firstFrontier, T2_ID, 7);
+        firstFrontier.channelUpdate(T2_ID, 0, clock(T3_ID, 3));
         ParsleyEngine<String, String> first = engineOver(firstFrontier, SCOPE);
-
-        // Deliver one record from each branch.
-        first.onRecord(record(T1, 10, T1_ID, clock(T3_ID, 5)));
-        first.onRecord(record(T2, 7, T2_ID, clock(T3_ID, 3)));
 
         ParsleyClock completenessBeforeRestart = first.completeness();
 
@@ -183,38 +188,53 @@ class ParsleyEngineCompletenessTest {
     }
 
     /**
-     * The strict gate end to end: a fan-in record depending on a shared ancestor is held until
-     * <em>every</em> input channel has confirmed that ancestor, then released.
+     * A fan-in record depending on a shared ancestor is held until a genuine witness — a channel that
+     * has actually, gatedly delivered a record reaching the required offset — exists. It cannot prove
+     * its own claim merely by declaring it: every record is checked against this node's current,
+     * already-proven state, never against a stamp the record itself just supplied. Nor can a sibling's
+     * declared claim about the same not-yet-proven ancestor serve as the witness — that sibling would
+     * need the identical proof first, which is exactly the mutual-deadlock shape a genuine, direct
+     * witness (here, this node's own third channel directly consuming T3) breaks.
      *
-     * <p>Both input channels are seeded (as the processor does at registration) so a silent channel
-     * holds the completeness min rather than being absent from it. A T1 record depending on the
-     * shared ancestor T3@5 is held while the T2 channel has not confirmed T3, and releases as soon as
-     * a T2 record advertises T3@5 — the cross-channel confirmation that completeness requires.
+     * <p>T3 must be in scope here (this specific engine directly consumes T1, T2, <em>and</em> T3) —
+     * a dependency on a coordinate outside scope entirely is a different, fail-closed case (see
+     * {@link ParsleyEngineDeadLetterTest}), not vacuous satisfaction, and would defeat the point of
+     * this test either way (a thrown/dead-lettered T1@0 rather than a genuinely held one).
      *
-     * Asserts the record is buffered until the sibling channel confirms the ancestor, then both deliver.
+     * Asserts T1@0 depending on T3@5 is held (no genuine witness anywhere yet), then releases once a
+     * real T3 record genuinely, contiguously delivers up to offset 5.
      */
     @Test
-    void fanInRecordHeldUntilEveryChannelConfirmsSharedAncestor() {
+    void fanInRecordHeldUntilAGenuineWitnessProvesTheSharedAncestor() {
+        ParsleyClock.CoordinatePredicate scopeIncludingAncestor = (topicId, partition) ->
+                partition == 0 && (topicId.equals(T1_ID) || topicId.equals(T2_ID) || topicId.equals(T3_ID));
         ParsleyFrontier frontier = newFrontier();
         frontier.channelUpdate(T1_ID, 0, ParsleyClock.empty());
         frontier.channelUpdate(T2_ID, 0, ParsleyClock.empty());
-        ParsleyEngine<String, String> engine = engineOver(frontier, SCOPE);
+        frontier.channelUpdate(T3_ID, 0, ParsleyClock.empty());
+        ParsleyEngine<String, String> engine = engineOver(frontier, scopeIncludingAncestor);
+        TopicPartition t3 = new TopicPartition("t3", 0);
 
-        // T1@0 depends on shared ancestor T3@5; the T2 channel has not confirmed T3 → held.
+        // T1@0 depends on shared ancestor T3@5 — nothing has genuinely proven T3@5 yet, so it is held.
         List<ParsleyMessage<String, String>> out1 = engine.onRecord(record(T1, 0, T1_ID, clock(T3_ID, 5))).delivered();
-        assertEquals(List.of(), out1, "T1@0 must be held: the T2 channel has not confirmed T3@5");
+        assertEquals(List.of(), out1, "T1@0 must be held: no channel has genuinely proven T3@5 yet");
 
-        // T2@0 advertises T3@5 on the T2 channel → completeness[T3] reaches 5 → both deliver.
-        List<ParsleyMessage<String, String>> out2 = engine.onRecord(record(T2, 0, T2_ID, clock(T3_ID, 5))).delivered();
+        // A real T3 record, genuinely and contiguously delivered up to offset 5, is the direct witness
+        // that releases the held T1@0.
+        for (long offset = 0; offset < 5; offset++) {
+            engine.onRecord(record(t3, offset, T3_ID, ParsleyClock.empty()));
+        }
+        List<ParsleyMessage<String, String>> out2 = engine.onRecord(record(t3, 5, T3_ID, ParsleyClock.empty())).delivered();
         assertEquals(2, out2.size(),
-                "T2@0 delivers and releases the held T1@0 once both channels confirm T3@5");
+                "T3@5 delivers genuinely and releases the held T1@0, which depended on exactly that");
     }
 
     /**
      * An intra-topic dependency — a record depending on an earlier offset of its <em>own</em> input
      * topic — is satisfied immediately. It is treated like any other dependency (no special stripping
-     * beyond the exact self-cycle), but the record's own channel already confirms its own topic's
-     * progress, so a backward dependency on that same topic never has to wait on a sibling.
+     * beyond the exact self-cycle), but the record's own channel already, genuinely confirms its own
+     * topic's progress via ordinary contiguous delivery, so a backward dependency on that same topic
+     * never has to wait on a sibling.
      *
      * Asserts a single-input node forwards a record that depends on an earlier offset of its own topic.
      */
@@ -223,35 +243,36 @@ class ParsleyEngineCompletenessTest {
         // Single-input node consuming only T1.
         ParsleyClock.CoordinatePredicate t1Only =
                 (topicId, partition) -> partition == 0 && topicId.equals(T1_ID);
-        ParsleyFrontier frontier = newFrontier();
-        frontier.channelUpdate(T1_ID, 0, ParsleyClock.empty());
-        ParsleyEngine<String, String> engine = engineOver(frontier, t1Only);
+        ParsleyEngine<String, String> engine = engineOver(newFrontier(), t1Only);
 
         assertEquals(1, engine.onRecord(record(T1, 0, T1_ID, ParsleyClock.empty())).delivered().size(),
                 "T1@0 with no dependencies delivers immediately");
-        // T1@1 depends on T1@0 — an earlier offset of its own topic (intra-topic).
+        // T1@1 depends on T1@0 — an earlier offset of its own topic (intra-topic), already genuinely
+        // delivered above.
         assertEquals(1, engine.onRecord(record(T1, 1, T1_ID, clock(T1_ID, 0))).delivered().size(),
                 "an intra-topic dependency (on the record's own topic) is satisfied immediately");
     }
 
     /**
      * An inter-topic dependency on a coordinate a sibling channel owns is held until that sibling
-     * confirms it — the strict cross-channel gate. Distinct from the intra-topic case above: here the
-     * dependency names a different input topic, whose channel must catch up first.
+     * genuinely, gatedly delivers a record reaching it — the record's own claim about T2 is not
+     * itself proof, since T2's own channel has never actually delivered anything yet.
      *
-     * Asserts a T1 record depending on T2@0 is held until the T2 channel delivers T2@0, then releases.
+     * Asserts a T1 record depending on T2@0 is held until T2@0 genuinely delivers, then releases.
      */
     @Test
-    void interTopicDependencyIsHeldUntilTheSiblingChannelConfirmsIt() {
+    void interTopicDependencyHeldUntilTheSiblingChannelGenuinelyDelivers() {
         ParsleyFrontier frontier = newFrontier();
         frontier.channelUpdate(T1_ID, 0, ParsleyClock.empty());
         frontier.channelUpdate(T2_ID, 0, ParsleyClock.empty());
         ParsleyEngine<String, String> engine = engineOver(frontier, SCOPE);
 
-        assertEquals(List.of(), engine.onRecord(record(T1, 0, T1_ID, clock(T2_ID, 0))).delivered(),
-                "an inter-topic dependency is held until the sibling channel confirms it");
-        assertEquals(2, engine.onRecord(record(T2, 0, T2_ID, ParsleyClock.empty())).delivered().size(),
-                "T2@0 delivers and releases the held T1@0 once the T2 channel confirms T2@0");
+        List<ParsleyMessage<String, String>> out1 = engine.onRecord(record(T1, 0, T1_ID, clock(T2_ID, 0))).delivered();
+        assertEquals(List.of(), out1, "T1@0 must be held: T2 has not genuinely delivered anything yet");
+
+        List<ParsleyMessage<String, String>> out2 = engine.onRecord(record(T2, 0, T2_ID, ParsleyClock.empty())).delivered();
+        assertEquals(2, out2.size(),
+                "T2@0 delivers genuinely and releases the held T1@0, which depended on exactly that");
     }
 
     // --- helpers --------------------------------------------------------------------------------
@@ -260,11 +281,18 @@ class ParsleyEngineCompletenessTest {
         return new ParsleyFrontier(ParsleyClock.empty(), new MockForwardedIndex(), new MockOrphanIndex());
     }
 
+    /** Genuinely, contiguously delivers offsets {@code 0..upTo} on {@code topicId}'s channel. */
+    private static void deliverSequentially(ParsleyFrontier frontier, Uuid topicId, long upTo) {
+        for (long offset = 0; offset <= upTo; offset++) {
+            frontier.deliver(topicId, 0, offset);
+        }
+    }
+
     private ParsleyEngine<String, String> engineOver(ParsleyFrontier frontier,
                                                      ParsleyClock.CoordinatePredicate scope) {
         return new ParsleyEngine<>(frontier, buffer,
                 new MockCandidateIndex(), ParsleyMetrics.NOOP, CausalAudit.NOOP,
-                System::currentTimeMillis);
+                System::currentTimeMillis, false, scope);
     }
 
     private ParsleyEngine<String, String> fanInEngine() {

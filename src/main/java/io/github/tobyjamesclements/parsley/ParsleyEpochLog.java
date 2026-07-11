@@ -144,6 +144,53 @@ final class ParsleyEpochLog {
     }
 
     /**
+     * Every topic any declared member (pending or running) consumes or produces — {@code ∪inputTopics ∪
+     * sinkTopics} — the domain a full mesh must cover. Unlike {@link #externalSourceTopics()} this does
+     * not subtract sinks: a topic one member only produces is still part of the domain a <em>different</em>
+     * member consuming it must be able to see, and {@link #missingSubscriptions} needs the whole domain to
+     * compute what a given member is missing.
+     */
+    Set<String> domainTopics() {
+        Set<String> domain = new HashSet<>();
+        for (MemberTopology declaration : declarations.values()) {
+            domain.addAll(declaration.inputTopics());
+            domain.addAll(declaration.sinkTopics());
+        }
+        return domain;
+    }
+
+    /**
+     * The domain topics {@code memberId} has declared neither as an input nor a sink of its own — empty
+     * means this member's own subscriptions fully cover the domain. A member not (yet) declared at all is
+     * treated as missing every domain topic.
+     */
+    Set<String> missingSubscriptions(String memberId) {
+        MemberTopology declaration = declarations.get(memberId);
+        Set<String> missing = new HashSet<>(domainTopics());
+        if (declaration != null) {
+            missing.removeAll(declaration.inputTopics());
+            missing.removeAll(declaration.sinkTopics());
+        }
+        return missing;
+    }
+
+    /**
+     * Whether every <em>running</em> member's own declared subscriptions cover the whole domain — full
+     * mesh. Pending joiners are excluded: a joiner's own insufficiency is caught by its own startup
+     * self-check (see {@code ParsleyProcessor#init}) rather than blocking every other member's round.
+     * Consulted by {@link #isRoundComplete()} — an epoch must never commit, and so never seed a newly
+     * required subscriber's floor, while any running member cannot actually see the full domain.
+     */
+    boolean isFullMeshSatisfied() {
+        for (String memberId : runningMembers) {
+            if (!missingSubscriptions(memberId).isEmpty()) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    /**
      * The topology's external source topics, derived DAG-wide from every declared member:
      * {@code ∪inputTopics − ∪sinkTopics}. A topic some member consumes but no member produces is an
      * external entry point — no in-band epoch marker ever reaches it, so a stage consuming one must
@@ -188,12 +235,17 @@ final class ParsleyEpochLog {
     }
 
     /**
-     * Whether the open round is complete — every running member has published its frontier — so the
+     * Whether the open round is complete — every running member has published its frontier, and every
+     * running member's own subscriptions cover the full domain ({@link #isFullMeshSatisfied()}) — so the
      * owner may commit. Always {@code false} when no round is open. A round with no running members
-     * (e.g. the very first join into an empty topology) is vacuously complete.
+     * (e.g. the very first join into an empty topology) is vacuously complete. The full-mesh conjunct is
+     * unconditional, never bypassable by a validation mode: an epoch must never commit — and so never
+     * seed a newly required subscriber's floor — while any running member cannot actually see the whole
+     * domain, since the completeness it publishes would then be unsound for coordinates it never
+     * observes.
      */
     boolean isRoundComplete() {
-        return roundOwner != null && publications.keySet().containsAll(runningMembers);
+        return roundOwner != null && publications.keySet().containsAll(runningMembers) && isFullMeshSatisfied();
     }
 
     /**

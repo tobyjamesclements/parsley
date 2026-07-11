@@ -414,6 +414,11 @@ class CausalStreamsTopologyTest {
      * {@code isSafeToClose} false even after quiesce is requested, and delivering that record via the
      * ordinary satisfying-message path (never a synthetic watermark) must flip it back to true.
      *
+     * <p>The held record's dependency ({@code t2@0}) is genuinely unmet, not merely undeclared: every
+     * record is checked against this node's actual current state, never against its own declared
+     * claim, so a record cannot prove its own prerequisite by simply asserting it (see
+     * {@code ParsleyEngineDeadLetterTest}'s class Javadoc for the general reasoning).
+     *
      * Asserts {@code isSafeToClose} is false while a record is held, then true once it drains.
      */
     @Test

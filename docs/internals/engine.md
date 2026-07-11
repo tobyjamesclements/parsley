@@ -42,10 +42,11 @@ evictOverflow() / evictExpired():
                                                          # cascading via propagate per release
 ```
 
-`completeness()` is the per-coordinate minimum across every input channel (`ParsleyClock.intersectMin`):
-a record is deliverable only once every channel has confirmed every coordinate it depends on. See the
-[causal consistency model](causal-consistency.md) for why the gate is strict and the topology contract
-it implies.
+`completeness()` is this node's own frontier max-merged with every input channel's advertised
+dependencies (`ParsleyClock.merge`): a record is deliverable once any reachable channel has confirmed
+each coordinate it depends on — no cross-channel unanimity required. See the
+[causal consistency model](causal-consistency.md) for why a single witness suffices and the topology
+contract it implies.
 
 Each piece is covered in its own section below: [`onRecord()` algorithm](#onrecord-algorithm)
 for admission, [Propagation cascade](#propagation-cascade-propagate) for the cascade, and
@@ -55,7 +56,7 @@ for admission, [Propagation cascade](#propagation-cascade-propagate) for the cas
 
 | Field | Type | Purpose |
 |---|---|---|
-| `frontier` | `ParsleyFrontier` | All causal state: contiguous frontier clock, per-input-channel clocks, `completeness()`, forwarded-offset index, and baseline seeding — self-persisting as the single `"f"` value. Channel clocks are the dependencies advertised on each `(topicId, partition)` this node consumes, seeded at registration so silent channels are present in the completeness fold |
+| `frontier` | `ParsleyFrontier` | All causal state: contiguous frontier clock, per-input-channel clocks, `completeness()`, forwarded-offset index, and baseline seeding — self-persisting as the single `"f"` value. Channel clocks are the dependencies advertised on each `(topicId, partition)` this node consumes, seeded at registration for bookkeeping (marker-seen tracking, scope pruning) even though a silent channel contributes nothing to the completeness merge |
 | `buffer` | `ParsleyBufferStore<K,V>` | Durable set of held records |
 | `candidateIndex` | `ParsleyCandidateIndex` | Secondary index: coordinate -> candidate record IDs |
 | `sizeLimit` | `int` | Buffer depth at which eviction triggers |
@@ -65,14 +66,15 @@ for admission, [Propagation cascade](#propagation-cascade-propagate) for the cas
 predicate), `deliver(coordinate, callback)` (advance the frontier and notify), and
 `seedIfFirstSeen(coordinate)` (establish the baseline for a newly observed coordinate).
 
-`channelStore` backs the delivery gate and the node's outbound stamp. `completeness()` is the
-per-coordinate minimum across every input channel (`ParsleyClock.intersectMin`): each channel
-contributes the dependencies it has advertised plus its own contiguous delivered position, and a
-coordinate any channel has not observed is absent from the result. The single gate is
-`completeness().dominates(deps.withoutSelfReference())` — a record is delivered only once every input
-channel has confirmed every coordinate it depends on. The same `completeness()` stamps forwarded
-records and protocol watermarks. See the [causal consistency model](causal-consistency.md) for why the
-gate is strict and the topology contract it implies.
+`channelStore` backs the delivery gate and the node's outbound stamp. `completeness()` is this node's
+own frontier max-merged with every input channel's advertised dependencies (`ParsleyClock.merge`):
+each channel contributes the dependencies it has advertised, and this node's own coordinates always
+win the merge against any channel's separate view of them. A coordinate no channel has ever observed
+is absent from the result. The single gate is
+`completeness().dominates(deps.withoutSelfReference())` — a record is delivered once any reachable
+channel has confirmed each coordinate it depends on. The same `completeness()` stamps forwarded
+records and protocol watermarks. See the [causal consistency model](causal-consistency.md) for why a
+single witness suffices and the topology contract it implies.
 
 ## `onRecord()` algorithm
 

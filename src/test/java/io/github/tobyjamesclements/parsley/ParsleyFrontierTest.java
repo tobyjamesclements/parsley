@@ -50,8 +50,9 @@ class ParsleyFrontierTest {
                 "T1 must restore at its delivered offset 1");
         assertEquals(completenessBefore, restored.completeness(),
                 "completeness must be identical after reload — both channel clocks restored");
-        assertEquals(4L, restored.completeness().offsetFor(ANC_ID, 0),
-                "the shared ancestor must restore at the min across channels: min(4, 7) = 4");
+        assertEquals(7L, restored.completeness().offsetFor(ANC_ID, 0),
+                "the shared ancestor must restore at the max across channels: max(4, 7) = 7 — a single "
+                        + "genuine witness suffices, so the higher advertised value wins, not the lower one");
     }
 
     // --- Epoch flooring (WS1) -------------------------------------------------------------------
@@ -142,22 +143,25 @@ class ParsleyFrontierTest {
 
     /**
      * Completeness is the unfloored delivered frontier — the epoch does not strip it. A channel
-     * advertising a below-floor position on T1 is carried through as-is; flooring a <em>dependency</em>
-     * on it is the delivery gate's job (against the effective floor), not completeness's. This is the
-     * WS2 reversal of WS1's completeness flooring: the stamp is the plain delivered frontier so the
-     * epoch transition stays invisible in the data plane.
+     * advertising a below-floor position is carried through as-is; flooring a <em>dependency</em> on it
+     * is the delivery gate's job (against the effective floor), not completeness's. This is the WS2
+     * reversal of WS1's completeness flooring: the stamp is the plain delivered frontier so the epoch
+     * transition stays invisible in the data plane.
      *
-     * Asserts the below-floor channel advertisement survives in completeness (min across channels).
+     * <p>Isolated to a single channel's advertisement (rather than two channels merged) so the below-floor
+     * value is directly observable: under max-merge, a second, higher channel value would dominate the
+     * result regardless of flooring, which would not distinguish "unfloored" from "floored-then-merged".
+     *
+     * Asserts the below-floor channel advertisement survives in completeness, unstripped.
      */
     @Test
     void completenessIsTheUnflooredDeliveredFrontier() {
         ParsleyFrontier frontier = flooredFrontier(FLOOR_T1_AT_100);
 
-        frontier.channelUpdate(T2_ID, 0, ParsleyClock.empty().observe(T1_ID, 0, 5));    // below floor
-        frontier.channelUpdate(ANC_ID, 0, ParsleyClock.empty().observe(T1_ID, 0, 150)); // in domain
+        frontier.channelUpdate(T2_ID, 0, ParsleyClock.empty().observe(T1_ID, 0, 5)); // below floor
 
         assertEquals(5L, frontier.completeness().offsetFor(T1_ID, 0),
-                "completeness is unfloored: the min across channels keeps the below-floor T1@5, not stripped");
+                "completeness is unfloored: the below-floor T1@5 advertisement is carried through, not stripped");
     }
 
     /**

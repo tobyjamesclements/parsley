@@ -15,6 +15,7 @@ final class RecordingCausalAudit implements CausalAudit {
     record Violation(String topic, int partition, long offset, CausalDependencies gap) {}
     record DeserializationFailure(String topic, int partition, long offset, String reason) {}
     record ClockResolutionFailure(String topic, int partition, long offset, String reason) {}
+    record UnreachableDependencyFailure(String topic, int partition, long offset, String reason) {}
     record DeadLetter(String topic, int partition, long offset, String reason) {}
     record EvictionLimitExceeded(String topic, int partition, long offset, CausalDependencies gap) {}
     record ProcessorInitialized(String taskId, boolean frontierRestored) {}
@@ -26,6 +27,7 @@ final class RecordingCausalAudit implements CausalAudit {
     final List<Violation> violations = new ArrayList<>();
     final List<DeserializationFailure> deserializationFailures = new ArrayList<>();
     final List<ClockResolutionFailure> clockResolutionFailures = new ArrayList<>();
+    final List<UnreachableDependencyFailure> unreachableDependencyFailures = new ArrayList<>();
     final List<DeadLetter> deadLetters = new ArrayList<>();
     final List<EvictionLimitExceeded> evictionLimitExceeded = new ArrayList<>();
     final List<ProcessorInitialized> initializations = new ArrayList<>();
@@ -54,6 +56,11 @@ final class RecordingCausalAudit implements CausalAudit {
     @Override
     public void recordClockResolutionFailure(String topic, int partition, long offset, String reason) {
         clockResolutionFailures.add(new ClockResolutionFailure(topic, partition, offset, reason));
+    }
+
+    @Override
+    public void recordUnreachableDependencyFailure(String topic, int partition, long offset, String reason) {
+        unreachableDependencyFailures.add(new UnreachableDependencyFailure(topic, partition, offset, reason));
     }
 
     @Override

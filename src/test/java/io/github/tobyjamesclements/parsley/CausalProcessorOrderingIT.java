@@ -68,7 +68,8 @@ class CausalProcessorOrderingIT {
      * An {@code IN} record whose dependencies are {@code from(PREREQ@0)} is held by the processor and
      * only forwarded once {@code PREREQ@0} has been observed, so the output topic shows the
      * {@code PREREQ} record's output before the {@code IN} record's — even though {@code IN} is
-     * produced first.
+     * produced first. Its own declared claim is not proof enough on its own: every record is checked
+     * against this node's actual current state, never against its own stamp.
      *
      * Asserts the output topic delivers the two records in causal order (prereq before order).
      */

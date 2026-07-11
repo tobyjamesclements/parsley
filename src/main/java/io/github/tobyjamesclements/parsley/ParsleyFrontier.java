@@ -28,9 +28,10 @@ import java.util.Set;
  *   <li>the <strong>contiguous frontier clock</strong> — the highest offset delivered without a gap
  *       on each coordinate this node consumes; and
  *   <li>the <strong>channel clocks</strong> — for each input channel {@code (topicId, partition)},
- *       the dependencies advertised on it (max-merged). {@link #completeness()} is the per-coordinate
- *       minimum across all channels (each channel's advertised deps plus its own delivered position),
- *       which is the delivery gate and the outbound stamp.
+ *       the dependencies advertised on it (max-merged). {@link #completeness()} is the frontier clock
+ *       max-merged with every channel's advertised view — a single genuine witness suffices for a
+ *       foreign coordinate, no cross-channel unanimity required — which is the delivery gate and the
+ *       outbound stamp.
  * </ul>
  *
  * <p>The <strong>forwarded-offset index</strong> is <em>not</em> in the {@code "f"} blob: it is a
@@ -157,11 +158,13 @@ final class ParsleyFrontier {
     }
 
     /**
-     * The causal completeness frontier: for each coordinate, the greatest offset every input channel
-     * has confirmed — the per-coordinate {@link ParsleyClock#intersectMin intersection-minimum} across
-     * channels, each channel contributing its advertised dependencies plus its own contiguous delivered
-     * position. A coordinate any channel has not observed is absent, so a dependency on it is not yet
-     * satisfiable. With no channel clocks recorded, this is the node's own frontier.
+     * The causal completeness clock: this node's own contiguous frontier, max-merged with every input
+     * channel's advertised dependencies. A single genuine witness is enough for a foreign coordinate to
+     * count — there is no cross-channel unanimity requirement. This node's own coordinates (part of
+     * {@link #frontier}) always win any merge against a channel's advertised view of the same
+     * coordinate, since a node's own delivered position can never be behind what any channel could have
+     * told it (delivering the channel's record already required the gate to dominate its stamp). With no
+     * channel clocks recorded, this is exactly the node's own frontier.
      *
      * <p>This is the delivered frontier and the outbound stamp, carried as-is — <em>not</em> floored to
      * the epoch. The epoch transition is invisible in the data plane: each node floors <em>incoming</em>
@@ -170,19 +173,11 @@ final class ParsleyFrontier {
      * and a below-floor origin a downstream might see is floored out by that downstream's own gate.
      */
     ParsleyClock completeness() {
-        ParsleyClock result = null;
-        for (Map.Entry<CoordKey, ParsleyClock> entry : channels.entrySet()) {
-            CoordKey key = entry.getKey();
-            // Each channel's view = the dependencies it has advertised, plus its own delivered
-            // position so the owning channel supplies its coordinate's contiguous value.
-            long ownDelivered = frontier.offsetFor(key.topicId(), key.partition());
-            ParsleyClock view = ownDelivered >= 0
-                    ? entry.getValue().observe(key.topicId(), key.partition(), ownDelivered)
-                    : entry.getValue();
-            result = (result == null) ? view : result.intersectMin(view);
+        ParsleyClock result = frontier;
+        for (ParsleyClock advertised : channels.values()) {
+            result = result.merge(advertised);
         }
-        // No channel clocks (cold start): fall back to the node's own frontier.
-        return result == null ? frontier : result;
+        return result;
     }
 
     /**
@@ -282,6 +277,12 @@ final class ParsleyFrontier {
      * position a channel advertises is harmless — a dependency on it is stripped at the gate (against
      * the effective floor), so it never gates anything, and completeness carries it only as the
      * unfloored delivered frontier the stamp advertises.
+     *
+     * <p>A channel's entry no longer holds {@link #completeness()} down to an intersection minimum —
+     * {@link #completeness()} is a plain max-merge now, so a channel with nothing advertised simply
+     * contributes nothing rather than excluding a coordinate every other channel has confirmed. What a
+     * seeded-but-silent channel entry still does is give {@link #tryAdvanceEpoch}'s per-channel
+     * marker-seen bookkeeping and {@link #pruneToScope} something to check against.
      */
     void channelUpdate(Uuid topicId, int partition, ParsleyClock clock) {
         if (!trackChannels) {

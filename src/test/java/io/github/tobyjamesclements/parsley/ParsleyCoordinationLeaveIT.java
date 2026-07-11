@@ -34,7 +34,6 @@ import java.time.Duration;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
-import java.util.Locale;
 import java.util.Map;
 import java.util.Properties;
 import java.util.Set;
@@ -53,6 +52,13 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * after both are running members, app B is hard-killed. The surviving app A opens a round that cannot
  * commit while B is absent; once B <strong>restarts</strong> and publishes, the epoch commits — and no
  * {@code Leave} for B is ever written (it was never evicted).
+ *
+ * <p>Both apps consume the <em>same</em> input topic and produce to the <em>same</em> output topic
+ * (rather than a chained {@code t1 -> mid -> out} pipeline) so each app's own declared subscriptions
+ * trivially cover the whole coordinated domain — a genuine full mesh (see {@link
+ * ParsleyEpochLog#isFullMeshSatisfied()}) — without needing the passthrough-source auto-wiring a chained
+ * pipeline would require, which does not exist yet. This is purely a topology-shape choice for the test;
+ * it does not change what member-lifecycle behaviour is under test.
  */
 @Testcontainers(disabledWithoutDocker = true)
 class ParsleyCoordinationLeaveIT {
@@ -62,12 +68,11 @@ class ParsleyCoordinationLeaveIT {
             new KafkaContainer(DockerImageName.parse("apache/kafka:3.7.0"));
 
     private static final String IN = "t1";
-    private static final String MID = "mid";
     private static final String OUT = "out";
     private static final String EPOCH_EVENTS = "epoch-events";
 
     /**
-     * App A (t1 -> mid) and app B (mid -> out) both become running members; app B is then hard-killed
+     * App A and app B (each {@code t1 -> out}) both become running members; app B is then hard-killed
      * without leaving. A transition is driven on A; A's round opens but cannot commit while B is absent
      * (asserted: the epoch does not advance for a window). App B is then restarted over its own state; it
      * rejoins as the same running member and publishes, and the epoch finally commits. Asserts the epoch
@@ -77,7 +82,7 @@ class ParsleyCoordinationLeaveIT {
     @Test
     void aHardKilledAppBlocksTheEpochUntilItRestartsAndPublishes() throws Exception {
         String bootstrap = kafka.getBootstrapServers();
-        createTopics(bootstrap, IN, MID, OUT, EPOCH_EVENTS);
+        createTopics(bootstrap, IN, OUT, EPOCH_EVENTS);
         String runId = UUID.randomUUID().toString().substring(0, 8);
         String appIdA = "leave-a-" + runId;
         String appIdB = "leave-b-" + runId;
@@ -87,8 +92,10 @@ class ParsleyCoordinationLeaveIT {
         Path stateA = Files.createTempDirectory("parsley-leave-a");
         Path stateB = Files.createTempDirectory("parsley-leave-b");
 
-        KafkaStreams appA = new KafkaStreams(stageA(coordinationA), streamsConfig(bootstrap, appIdA, stateA));
-        KafkaStreams appB = new KafkaStreams(stageB(coordinationB), streamsConfig(bootstrap, appIdB, stateB));
+        KafkaStreams appA = new KafkaStreams(
+                stage(coordinationA, "parsley-a", v -> "A:" + v), streamsConfig(bootstrap, appIdA, stateA));
+        KafkaStreams appB = new KafkaStreams(
+                stage(coordinationB, "parsley-b", v -> "B:" + v), streamsConfig(bootstrap, appIdB, stateB));
         KafkaStreams appBRestarted = null;
         ParsleyCoordination coordinationBRestarted = null;
         try {
@@ -124,7 +131,8 @@ class ParsleyCoordinationLeaveIT {
             // RESTART app B over its own state: it rejoins as the same running member and publishes, so the
             // blocked round finally commits.
             coordinationBRestarted = ParsleyCoordination.create(EPOCH_EVENTS);
-            appBRestarted = new KafkaStreams(stageB(coordinationBRestarted), streamsConfig(bootstrap, appIdB, stateB));
+            appBRestarted = new KafkaStreams(stage(coordinationBRestarted, "parsley-b", v -> "B:" + v),
+                    streamsConfig(bootstrap, appIdB, stateB));
             appBRestarted.start();
             ParsleyCoordination coordB = coordinationBRestarted;
             await().atMost(Duration.ofSeconds(90)).until(() -> {
@@ -155,24 +163,18 @@ class ParsleyCoordinationLeaveIT {
                 .anyMatch(e -> e instanceof ParsleyEpochEvent.Leave leave && leave.memberId().startsWith(appIdPrefix));
     }
 
-    private static Topology stageA(ParsleyCoordination coordination) {
+    /**
+     * Builds one member's topology: {@code t1 -> out}, namespaced under its own buffer store. Both A and
+     * B use this — same input, same output — so each member's own declared subscriptions trivially cover
+     * the whole domain (see the class Javadoc).
+     */
+    private static Topology stage(ParsleyCoordination coordination, String namespace,
+                                  java.util.function.UnaryOperator<String> fn) {
         StreamsBuilder builder = new StreamsBuilder();
         builder.stream(IN, Consumed.with(Serdes.String(), Serdes.String()))
-                .process(ParsleyProcessors.builder(mapper(v -> v.toUpperCase(Locale.ROOT)))
-                        .addBufferStore("parsley-a")
+                .process(ParsleyProcessors.builder(mapper(fn))
+                        .addBufferStore(namespace)
                         .addBuffer(ParsleyBuffer.of(IN, Serdes.String(), Serdes.String()))
-                        .withCoordination(coordination)
-                        .build())
-                .to(MID, Produced.with(Serdes.String(), Serdes.String()));
-        return builder.build();
-    }
-
-    private static Topology stageB(ParsleyCoordination coordination) {
-        StreamsBuilder builder = new StreamsBuilder();
-        builder.stream(MID, Consumed.with(Serdes.String(), Serdes.String()))
-                .process(ParsleyProcessors.builder(mapper(v -> "B:" + v))
-                        .addBufferStore("parsley-b")
-                        .addBuffer(ParsleyBuffer.of(MID, Serdes.String(), Serdes.String()))
                         .withCoordination(coordination)
                         .build())
                 .to(OUT, Produced.with(Serdes.String(), Serdes.String()));

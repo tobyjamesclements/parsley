@@ -114,6 +114,26 @@ class RocksBufferStoreTest {
         assertEquals(deps, indexEntries.get(0).dependencies(), "the dependency clock must decode correctly");
     }
 
+    /**
+     * {@code add()} resolves and invokes the value serde using the buffered record's own source
+     * topic — not any other name (e.g. a changelog topic) — which matters for topic-specific serdes
+     * such as schema-registry Avro serdes, whose subject is derived from the topic argument.
+     *
+     * Asserts the value serde is invoked with exactly the record's source topic.
+     */
+    @Test
+    void addResolvesTheValueSerdeUsingTheRecordsSourceTopic() {
+        ParsleyProcessorsTopologyTest.SpyStringSerde valueSpy = new ParsleyProcessorsTopologyTest.SpyStringSerde();
+        ParsleySerializer<String, String> spySerializer =
+                new ParsleySerializer<>(new ParsleyResolver<>(topic -> Serdes.String(), topic -> valueSpy));
+        RocksBufferStore<String, String> store = new RocksBufferStore<>(newRocksStore(), spySerializer);
+
+        store.add(record(T1, 0, ParsleyClock.empty()), 100L);
+
+        assertEquals(List.of("t1"), valueSpy.serializeTopics,
+                "the value serde must be invoked with the record's own source topic ('t1')");
+    }
+
     // --- helpers --------------------------------------------------------------------------------
 
     private static KeyValueStore<Long, byte[]> newRocksStore() {

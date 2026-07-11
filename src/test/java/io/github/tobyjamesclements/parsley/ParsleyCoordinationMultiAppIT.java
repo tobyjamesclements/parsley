@@ -6,16 +6,13 @@ import org.apache.kafka.clients.admin.NewTopic;
 import org.apache.kafka.clients.consumer.ConsumerConfig;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.apache.kafka.clients.consumer.KafkaConsumer;
-import org.apache.kafka.clients.producer.KafkaProducer;
-import org.apache.kafka.clients.producer.ProducerConfig;
-import org.apache.kafka.clients.producer.ProducerRecord;
-import org.apache.kafka.common.serialization.ByteArrayDeserializer;
 import org.apache.kafka.common.serialization.Serdes;
-import org.apache.kafka.common.serialization.StringSerializer;
+import org.apache.kafka.common.serialization.StringDeserializer;
 import org.apache.kafka.streams.KafkaStreams;
 import org.apache.kafka.streams.StreamsBuilder;
 import org.apache.kafka.streams.StreamsConfig;
 import org.apache.kafka.streams.Topology;
+import org.apache.kafka.streams.errors.StreamsUncaughtExceptionHandler;
 import org.apache.kafka.streams.kstream.Consumed;
 import org.apache.kafka.streams.kstream.Produced;
 import org.apache.kafka.streams.processor.api.Processor;
@@ -31,7 +28,6 @@ import org.testcontainers.utility.DockerImageName;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Duration;
-import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
@@ -39,17 +35,24 @@ import java.util.Map;
 import java.util.Properties;
 import java.util.Set;
 import java.util.UUID;
+import java.util.concurrent.atomic.AtomicReference;
 
 import static org.awaitility.Awaitility.await;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * Proves topology-epoch coordination spans a <strong>DAG of many independently-deployed applications</strong>
- * — the production shape. App A ({@code t1 -> mid}) and app B ({@code mid -> out}) are separate
- * {@link KafkaStreams} applications with distinct {@code application.id}s, sharing one epoch-events log for
- * the causal domain. Asserts both apps appear as <em>distinct</em> members on the shared log (the member id
- * being {@code application.id/taskId}, so A's {@code 0_0} and B's {@code 0_0} do not collide) and that a
- * transition commits an epoch — coordination the single-app ITs cannot exercise.
+ * Proves topology-epoch coordination requires a genuine <strong>full mesh</strong> — every running
+ * member's own subscriptions must cover the whole coordinated domain — rather than silently admitting
+ * an incomplete one. App A ({@code t1 -> mid}) and app B ({@code mid -> out}) are separate {@link
+ * KafkaStreams} applications with distinct {@code application.id}s, sharing one epoch-events log. This
+ * ordinary two-stage pipeline is <em>not</em> a full mesh under the coordinated-domain definition: A
+ * never consumes or produces {@code out}, and B never consumes or produces {@code t1} — each is missing
+ * a domain topic only the other side touches. Neither app auto-wires a passthrough source for the
+ * coordinate it is missing (that auto-wiring is a separate, not-yet-built piece of the full-mesh design)
+ * so B's own startup self-check ({@code ParsleyProcessor#validateFullMeshCoverage}) must fail closed the
+ * moment it joins an epoch where A has already declared {@code t1} — never silently proceed and let the
+ * gap surface later as a data-path crash loop or a round that can never complete.
  */
 @Testcontainers(disabledWithoutDocker = true)
 class ParsleyCoordinationMultiAppIT {
@@ -64,20 +67,24 @@ class ParsleyCoordinationMultiAppIT {
     private static final String EPOCH_EVENTS = "epoch-events";
 
     /**
-     * Two applications form one causal DAG over a shared epoch-events log. Records flow t1 -> A -> mid ->
-     * B -> out (across the app boundary), and a transition is driven; asserts the DAG serves end to end,
-     * both apps are distinct members on the log, and an epoch commits.
+     * App A joins alone first — its self-check passes, since at that moment the only declared member is
+     * itself and its own {@code {t1, mid}} trivially covers the whole (so-far) domain. App B then joins
+     * an epoch where A has already declared {@code t1}, growing the domain to {@code {t1, mid, out}}; B's
+     * own {@code {mid, out}} does not cover {@code t1}, so B's startup self-check must fail closed rather
+     * than silently proceed.
+     *
+     * Asserts app A reaches {@code RUNNING}, app B's {@code KafkaStreams} client reaches {@code ERROR}
+     * (its task never got past {@code init()}), the captured startup exception names the missing
+     * coordinate, and no record ever reaches {@code out} (B never actually ran).
      */
     @Test
-    void aDagOfTwoApplicationsCoordinatesOverOneSharedLog() throws Exception {
+    void bJoiningAnIncompleteMeshFailsClosedAtStartup() throws Exception {
         String bootstrap = kafka.getBootstrapServers();
         createTopics(bootstrap, IN, MID, OUT, EPOCH_EVENTS);
         String runId = UUID.randomUUID().toString().substring(0, 8);
         String appIdA = "dag-a-" + runId;
         String appIdB = "dag-b-" + runId;
 
-        // App A is source-layer (t1 is external); app B consumes mid (internal to the DAG), so it declares
-        // no external sources and is driven by A's in-band markers relayed through mid.
         ParsleyCoordination coordinationA = ParsleyCoordination.create(EPOCH_EVENTS);
         ParsleyCoordination coordinationB = ParsleyCoordination.create(EPOCH_EVENTS);
         Path stateA = Files.createTempDirectory("parsley-dag-a");
@@ -85,31 +92,27 @@ class ParsleyCoordinationMultiAppIT {
 
         try (KafkaStreams appA = new KafkaStreams(stageA(coordinationA), streamsConfig(bootstrap, appIdA, stateA));
              KafkaStreams appB = new KafkaStreams(stageB(coordinationB), streamsConfig(bootstrap, appIdB, stateB))) {
+            // App A joins alone first, so its own declaration is the whole domain when its self-check runs.
             appA.start();
+            await().atMost(Duration.ofSeconds(60)).until(() -> appA.state() == KafkaStreams.State.RUNNING);
+
+            // App B joins second, into a domain that already includes A's t1 — which B never declares.
+            AtomicReference<Throwable> startupFailure = new AtomicReference<>();
+            appB.setUncaughtExceptionHandler(exception -> {
+                startupFailure.compareAndSet(null, exception);
+                return StreamsUncaughtExceptionHandler.StreamThreadExceptionResponse.SHUTDOWN_CLIENT;
+            });
             appB.start();
-            await().atMost(Duration.ofSeconds(60)).until(() ->
-                    appA.state() == KafkaStreams.State.RUNNING && appB.state() == KafkaStreams.State.RUNNING);
+            await().atMost(Duration.ofSeconds(60)).until(() -> appB.state() == KafkaStreams.State.ERROR);
 
-            try (KafkaProducer<String, String> producer = new KafkaProducer<>(producerConfig(bootstrap))) {
-                for (int i = 0; i < 3; i++) {
-                    producer.send(stampEmptyDeps(new ProducerRecord<>(IN, "k", "v" + i))).get();
-                }
-            }
+            Throwable failure = startupFailure.get();
+            assertTrue(failure != null && messageChainContains(failure, "cover the coordinated domain"),
+                    "B's startup failure must be the full-mesh self-check, not something else: " + failure);
+            assertTrue(messageChainContains(failure, "missing: [" + IN + "]"),
+                    "the failure must name the missing coordinate (" + IN + "): " + failure);
 
-            // The DAG serves end to end across the app boundary: t1 -> A (upper) -> mid -> B ("B:") -> out.
-            assertTrue(awaitServed(bootstrap), "records must flow through both applications to out");
-
-            // Drive a transition; both apps participate as distinct members on the shared log.
-            requestUntilCommitted(coordinationA, coordinationB, bootstrap, 1L);
-            requestUntilCommitted(coordinationA, coordinationB, bootstrap, 2L);
-
-            Set<String> members = memberIds(bootstrap);
-            assertTrue(members.stream().anyMatch(m -> m.startsWith(appIdA)),
-                    "app A must be a member on the shared log (members: " + members + ")");
-            assertTrue(members.stream().anyMatch(m -> m.startsWith(appIdB)),
-                    "app B must be a distinct member on the shared log (members: " + members + ")");
-            assertTrue(highestCommittedEpoch(bootstrap) >= 2,
-                    "the two-app DAG must commit an epoch transition over the shared log");
+            assertFalse(awaitServedBriefly(bootstrap),
+                    "no record can ever reach out — B's task never got past init()");
         } finally {
             coordinationA.close();
             coordinationB.close();
@@ -150,77 +153,31 @@ class ParsleyCoordinationMultiAppIT {
         };
     }
 
-    private static void requestUntilCommitted(ParsleyCoordination a, ParsleyCoordination b, String bootstrap, long target) {
-        await().atMost(Duration.ofSeconds(90)).until(() -> {
-            if (highestCommittedEpoch(bootstrap) >= target) {
+    /** Whether {@code exception} or any cause in its chain has a message containing {@code substring}. */
+    private static boolean messageChainContains(Throwable exception, String substring) {
+        for (Throwable t = exception; t != null; t = t.getCause()) {
+            if (t.getMessage() != null && t.getMessage().contains(substring)) {
                 return true;
             }
-            requestQuietly(a);
-            requestQuietly(b);
-            return false;
-        });
-    }
-
-    private static void requestQuietly(ParsleyCoordination coordination) {
-        try {
-            coordination.requestEpochTransition();
-        } catch (IllegalStateException notReadyYet) {
-            // No local member has initialised on this app yet; retry next tick.
         }
+        return false;
     }
 
-    private static Set<String> memberIds(String bootstrap) {
-        Set<String> members = new HashSet<>();
-        for (ParsleyEpochEvent event : readEpochEvents(bootstrap)) {
-            if (event instanceof ParsleyEpochEvent.JoinRequested j) {
-                members.add(j.memberId());
-            } else if (event instanceof ParsleyEpochEvent.FrontierPublished f) {
-                members.add(f.memberId());
-            }
-        }
-        return members;
-    }
-
-    private static long highestCommittedEpoch(String bootstrap) {
-        long highest = 0;
-        for (ParsleyEpochEvent event : readEpochEvents(bootstrap)) {
-            if (event instanceof ParsleyEpochEvent.EpochCommitted commit) {
-                highest = Math.max(highest, commit.epochId());
-            }
-        }
-        return highest;
-    }
-
-    private static List<ParsleyEpochEvent> readEpochEvents(String bootstrap) {
-        List<ParsleyEpochEvent> events = new ArrayList<>();
-        Map<String, Object> config = Map.of(
-                ConsumerConfig.BOOTSTRAP_SERVERS_CONFIG, bootstrap,
-                ConsumerConfig.GROUP_ID_CONFIG, "epoch-reader-" + UUID.randomUUID(),
-                ConsumerConfig.AUTO_OFFSET_RESET_CONFIG, "earliest",
-                ConsumerConfig.KEY_DESERIALIZER_CLASS_CONFIG, ByteArrayDeserializer.class.getName(),
-                ConsumerConfig.VALUE_DESERIALIZER_CLASS_CONFIG, ByteArrayDeserializer.class.getName());
-        try (KafkaConsumer<byte[], byte[]> consumer = new KafkaConsumer<>(config)) {
-            consumer.subscribe(List.of(EPOCH_EVENTS));
-            long deadline = System.currentTimeMillis() + 2000;
-            while (System.currentTimeMillis() < deadline) {
-                for (ConsumerRecord<byte[], byte[]> record : consumer.poll(Duration.ofMillis(200))) {
-                    events.add(ParsleyEpochEvent.fromBytes(record.value()));
-                }
-            }
-        }
-        return events;
-    }
-
-    private static boolean awaitServed(String bootstrap) {
+    /**
+     * Whether a {@code "B:"}-prefixed record ever reaches {@code out} within a short window — used to
+     * assert a negative (B's task never got past {@code init()}, so it can never produce one), not to
+     * await a positive outcome, so the window is short rather than the usual generous IT timeout.
+     */
+    private static boolean awaitServedBriefly(String bootstrap) {
         Map<String, Object> config = Map.of(
                 ConsumerConfig.BOOTSTRAP_SERVERS_CONFIG, bootstrap,
                 ConsumerConfig.GROUP_ID_CONFIG, "out-reader-" + UUID.randomUUID(),
                 ConsumerConfig.AUTO_OFFSET_RESET_CONFIG, "earliest",
-                ConsumerConfig.KEY_DESERIALIZER_CLASS_CONFIG, org.apache.kafka.common.serialization.StringDeserializer.class.getName(),
-                ConsumerConfig.VALUE_DESERIALIZER_CLASS_CONFIG, org.apache.kafka.common.serialization.StringDeserializer.class.getName());
+                ConsumerConfig.KEY_DESERIALIZER_CLASS_CONFIG, StringDeserializer.class.getName(),
+                ConsumerConfig.VALUE_DESERIALIZER_CLASS_CONFIG, StringDeserializer.class.getName());
         try (KafkaConsumer<String, String> consumer = new KafkaConsumer<>(config)) {
             consumer.subscribe(List.of(OUT));
-            long deadline = System.currentTimeMillis() + 60_000;
+            long deadline = System.currentTimeMillis() + 5_000;
             while (System.currentTimeMillis() < deadline) {
                 for (ConsumerRecord<String, String> record : consumer.poll(Duration.ofMillis(300))) {
                     if (record.value() != null && record.value().startsWith("B:")) {
@@ -232,11 +189,6 @@ class ParsleyCoordinationMultiAppIT {
         }
     }
 
-    private static ProducerRecord<String, String> stampEmptyDeps(ProducerRecord<String, String> record) {
-        record.headers().add(ParsleyHeader.CAUSAL_DEPENDENCIES, ParsleyClock.empty().toBytes());
-        return record;
-    }
-
     private static Properties streamsConfig(String bootstrap, String appId, Path stateDir) {
         Properties props = new Properties();
         props.put(StreamsConfig.APPLICATION_ID_CONFIG, appId);
@@ -246,13 +198,6 @@ class ParsleyCoordinationMultiAppIT {
         props.put(StreamsConfig.COMMIT_INTERVAL_MS_CONFIG, 200);
         props.put(StreamsConfig.STATE_DIR_CONFIG, stateDir.toAbsolutePath().toString());
         return props;
-    }
-
-    private static Map<String, Object> producerConfig(String bootstrap) {
-        return Map.of(
-                ProducerConfig.BOOTSTRAP_SERVERS_CONFIG, bootstrap,
-                ProducerConfig.KEY_SERIALIZER_CLASS_CONFIG, StringSerializer.class.getName(),
-                ProducerConfig.VALUE_SERIALIZER_CLASS_CONFIG, StringSerializer.class.getName());
     }
 
     private static void createTopics(String bootstrap, String... topics) throws Exception {

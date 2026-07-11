@@ -5,6 +5,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.time.Duration;
+import java.util.HashMap;
 import java.util.Map;
 import java.util.Queue;
 import java.util.Set;
@@ -61,6 +62,9 @@ final class ParsleyEpochRuntime implements AutoCloseable {
     // Runtime-thread-only: the epoch we have already appended a commit for, so this node appends each
     // round's EpochCommitted exactly once (the commit round-trips through the log and advances the fold).
     private long lastCommitAppendedFor;
+    // Runtime-thread-only: the full-mesh state as of the last runOnce, so logMeshInsufficiencyTransitions
+    // logs only on a true→false or false→true edge, not on every 100ms poll while blocked.
+    private boolean lastMeshSatisfied = true;
     // Read/written by the runtime thread alone in autoPublishStalledLocalMembers, but removed from by
     // unregisterMember, which task threads call (via ParsleyProcessor#close). Concurrent, like every other
     // member-keyed collection here, for that cross-thread write.
@@ -89,6 +93,9 @@ final class ParsleyEpochRuntime implements AutoCloseable {
     private volatile Set<String> unpublishedMembersMirror = Set.of();
     // Mirror of the fold's DAG-wide external source topics, refreshed each runOnce for cross-thread readers.
     private volatile Set<String> externalSourceTopicsMirror = Set.of();
+    // Mirror of the fold's domain topics (every declared member's inputs ∪ sinks), refreshed each
+    // runOnce — consulted by a joining task's own full-mesh self-check (see ParsleyProcessor#init).
+    private volatile Set<String> domainTopicsMirror = Set.of();
     // Mirror of the fold's externalSourceTopicsAsOfPreviousCommit(), refreshed each runOnce. See
     // ParsleyEpochLog#externalSourceTopicsAsOfPreviousCommit for what this is and why it replaced a
     // per-task in-memory cache.
@@ -205,6 +212,11 @@ final class ParsleyEpochRuntime implements AutoCloseable {
         return externalSourceTopicsMirror;
     }
 
+    /** Every topic any declared member consumes or produces — see {@link ParsleyEpochLog#domainTopics()}. */
+    Set<String> domainTopics() {
+        return domainTopicsMirror;
+    }
+
     /** See {@link ParsleyEpochLog#externalSourceTopicsAsOfPreviousCommit()}. */
     Set<String> externalSourceTopicsAsOfPreviousCommit() {
         return externalSourceTopicsAsOfPreviousCommitMirror;
@@ -297,6 +309,8 @@ final class ParsleyEpochRuntime implements AutoCloseable {
         unpublishedMembersMirror = fold.unpublishedRunningMembers();
         externalSourceTopicsMirror = fold.externalSourceTopics();
         externalSourceTopicsAsOfPreviousCommitMirror = fold.externalSourceTopicsAsOfPreviousCommit();
+        domainTopicsMirror = fold.domainTopics();
+        logMeshInsufficiencyTransitions();
         bootstrapped = transport.caughtUp();
         driveCommit();
         applyMembershipStrategy();
@@ -360,6 +374,34 @@ final class ParsleyEpochRuntime implements AutoCloseable {
                 new ParsleyBlockedRound(outstanding, fold.runningMembers()));
         for (String member : excludable) {
             transport.append(new ParsleyEpochEvent.Leave(member));
+        }
+    }
+
+    /**
+     * Logs (at {@code WARN}) when the domain stops being a full mesh — some running member's own
+     * declared subscriptions no longer cover every domain topic, which blocks every round from ever
+     * completing until it is fixed — and (at {@code INFO}) when it recovers. Logged only on the
+     * true→false / false→true edge, not on every 100ms poll while the condition persists, so a
+     * long-blocked round does not flood the log.
+     */
+    private void logMeshInsufficiencyTransitions() {
+        boolean meshSatisfied = fold.isFullMeshSatisfied();
+        if (meshSatisfied == lastMeshSatisfied) {
+            return;
+        }
+        lastMeshSatisfied = meshSatisfied;
+        if (!meshSatisfied) {
+            Map<String, Set<String>> meshInsufficientMembers = new HashMap<>();
+            for (String memberId : fold.runningMembers()) {
+                Set<String> missing = fold.missingSubscriptions(memberId);
+                if (!missing.isEmpty()) {
+                    meshInsufficientMembers.put(memberId, missing);
+                }
+            }
+            log.warn("Domain is no longer a full mesh — every epoch round is blocked until every running "
+                    + "member's own subscriptions cover the whole domain: {}", meshInsufficientMembers);
+        } else {
+            log.info("Domain is a full mesh again — epoch rounds can complete");
         }
     }
 

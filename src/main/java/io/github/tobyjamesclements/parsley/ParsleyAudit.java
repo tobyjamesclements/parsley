@@ -53,6 +53,12 @@ final class ParsleyAudit implements CausalAudit {
     }
 
     @Override
+    public void recordUnreachableDependencyFailure(String topic, int partition, long offset, String reason) {
+        safely("recordUnreachableDependencyFailure",
+                () -> delegate.recordUnreachableDependencyFailure(topic, partition, offset, reason));
+    }
+
+    @Override
     public void recordDeadLetter(String topic, int partition, long offset, String reason) {
         safely("recordDeadLetter", () -> delegate.recordDeadLetter(topic, partition, offset, reason));
     }

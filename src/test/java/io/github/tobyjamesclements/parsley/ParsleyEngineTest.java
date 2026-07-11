@@ -186,6 +186,7 @@ class ParsleyEngineTest {
             @Override public void recordDeserializationError()  {}
             @Override public void recordClockResolutionError()  {}
             @Override public void recordDeadLetter()            {}
+            @Override public void recordUnreachableDependencyError() {}
             @Override public void reportState(int depth, OptionalLong oldest) { reportedDepths.add(depth); }
         };
         ParsleyEngine<String, String> engine = new ParsleyEngine<>(

@@ -2,8 +2,10 @@ package io.github.tobyjamesclements.parsley;
 
 /**
  * Receives Parsley's per-record causal-buffering events: forwarded, held, released, undecodable,
- * unresolvable-clock (an undecodable dependencies header at ingest), and dead-lettered (a record
- * removed from the causal execution path because its dependencies are proven impossible to satisfy).
+ * unresolvable-clock (an undecodable dependencies header at ingest), unreachable-dependency (a
+ * dependency naming a coordinate this node has no channel for), and dead-lettered (a record removed
+ * from the causal execution path because its dependencies are proven impossible to satisfy, or
+ * unreachable).
  * Register one with
  * {@link ParsleyProcessors.Builder#withAudit} to route these events wherever your audit/compliance
  * trail needs them (a SIEM, a durable audit store, structured logs) — Parsley itself never decides
@@ -93,16 +95,33 @@ public interface CausalAudit {
     void recordClockResolutionFailure(String topic, int partition, long offset, String reason);
 
     /**
-     * A record was removed from the causal execution path onto the dead-letter sink, because its
-     * dependencies are proven impossible to satisfy. Fires for every dead-lettered record, including an
-     * orphan-cascade victim that was never itself a {@link #recordDeserializationFailure}/{@link
-     * #recordClockResolutionFailure} occurrence — this is the one disposition signal common to all three
-     * causes.
+     * A record's declared dependencies named a coordinate this node has no input channel for — an
+     * undeclared topic, or a partition a different task instance owns — and can therefore never confirm
+     * no matter how long it waits. This is the detection signal; the record is not delivered on the
+     * unproven assumption that the coordinate is irrelevant. If a dead-letter sink is configured the
+     * record is then dead-lettered ({@link #recordDeadLetter} fires too) rather than failing the task —
+     * without one, the task fails fast and the record is reprocessed on restart.
      *
      * @param topic     the record's source topic
      * @param partition the record's source partition
      * @param offset    the record's source offset
-     * @param reason    the cause: {@code "POISON"}, {@code "UNRESOLVABLE_CLOCK"}, or {@code "ORPHAN_CASCADE"}
+     * @param reason    an operator-facing diagnostic (the unreachable coordinate, never the payload bytes)
+     */
+    void recordUnreachableDependencyFailure(String topic, int partition, long offset, String reason);
+
+    /**
+     * A record was removed from the causal execution path onto the dead-letter sink, because its
+     * dependencies are proven impossible to satisfy, or unreachable. Fires for every dead-lettered
+     * record, including an orphan-cascade victim that was never itself a {@link
+     * #recordDeserializationFailure}/{@link #recordClockResolutionFailure}/{@link
+     * #recordUnreachableDependencyFailure} occurrence — this is the one disposition signal common to
+     * every cause.
+     *
+     * @param topic     the record's source topic
+     * @param partition the record's source partition
+     * @param offset    the record's source offset
+     * @param reason    the cause: {@code "POISON"}, {@code "UNRESOLVABLE_CLOCK"}, {@code "ORPHAN_CASCADE"},
+     *                  or {@code "UNREACHABLE_DEPENDENCY"}
      */
     void recordDeadLetter(String topic, int partition, long offset, String reason);
 
@@ -129,6 +148,7 @@ public interface CausalAudit {
         @Override public void recordReleased(String topic, int partition, long offset, int bufferDepthAfter) {}
         @Override public void recordDeserializationFailure(String topic, int partition, long offset, String reason) {}
         @Override public void recordClockResolutionFailure(String topic, int partition, long offset, String reason) {}
+        @Override public void recordUnreachableDependencyFailure(String topic, int partition, long offset, String reason) {}
         @Override public void recordDeadLetter(String topic, int partition, long offset, String reason) {}
         @Override public void processorInitialized(String taskId, boolean frontierRestored) {}
         @Override public void processorClosing(String taskId) {}
