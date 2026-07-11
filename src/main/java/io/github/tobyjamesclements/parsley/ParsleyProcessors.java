@@ -1,11 +1,13 @@
 package io.github.tobyjamesclements.parsley;
 
 import org.apache.kafka.common.serialization.Serde;
+import org.apache.kafka.common.serialization.Serdes;
 import org.apache.kafka.streams.processor.api.ProcessorSupplier;
 import org.jspecify.annotations.Nullable;
 
 import java.util.Collection;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Properties;
@@ -91,6 +93,7 @@ final class ParsleyProcessors {
         private @Nullable String deadLetterSinkName = null;
         private @Nullable ParsleyQuiesce quiesce = null;
         private @Nullable ParsleyCoordination coordination = null;
+        private Set<String> declaredTopics = Set.of();
 
         private Builder(ProcessorSupplier<KIn, VIn, KOut, VOut> userSupplier) {
             this.userSupplier = userSupplier;
@@ -325,6 +328,25 @@ final class ParsleyProcessors {
         }
 
         /**
+         * Declares a domain topic this stage does not otherwise consume or produce, wired by the caller
+         * (see {@link CausalTopology}'s domain-topics wiring) as an <strong>extra, raw byte[]/byte[]
+         * source</strong> feeding this same processor node — never through a registered {@link
+         * ParsleyBuffer}, since a passthrough topic's value schema is unrelated to this stage's own
+         * {@code KIn}/{@code VIn} types. Folded into this member's coordination-log declaration and
+         * startup topic-metadata resolution (UUID lookup, partition-count parity) alongside the registered
+         * {@link ParsleyBuffer} topics, and into {@link ParsleyProcessor}'s own passthrough-record handling
+         * (see its class Javadoc) so a record arriving on it is recognised and never reaches the delegate.
+         * Package-private: not part of the low-level API's documented surface.
+         *
+         * @param topics extra topics, unioned with the registered {@link ParsleyBuffer} topics
+         * @return this builder
+         */
+        Builder<KIn, VIn, KOut, VOut> declareTopics(Set<String> topics) {
+            this.declaredTopics = Set.copyOf(topics);
+            return this;
+        }
+
+        /**
          * Builds the {@link ParsleyProcessorSupplier}.
          *
          * @return a decorated supplier ready for {@code stream(...).process(...)}
@@ -341,14 +363,30 @@ final class ParsleyProcessors {
             }
             String store = storeName;
             Map<String, ParsleyBuffer<KIn, VIn>> resolved = Map.copyOf(buffers);
-            Function<String, Serde<KIn>> keySerdeByTopic = topic -> serdeFor(resolved, topic).keySerde();
-            Function<String, Serde<VIn>> valueSerdeByTopic = topic -> serdeFor(resolved, topic).valueSerde();
+            // A declared-but-not-buffered topic is a passthrough source: this stage never registered a
+            // ParsleyBuffer for it (its value schema is unrelated to KIn/VIn), so it round-trips through
+            // the buffer store as raw bytes — see ParsleyProcessor's passthrough-record handling.
+            Set<String> passthroughTopics = new LinkedHashSet<>(declaredTopics);
+            passthroughTopics.removeAll(resolved.keySet());
+            Set<String> finalPassthroughTopics = Set.copyOf(passthroughTopics);
+            Function<String, Serde<KIn>> keySerdeByTopic = topic -> finalPassthroughTopics.contains(topic)
+                    ? byteArraySerde() : serdeFor(resolved, topic).keySerde();
+            Function<String, Serde<VIn>> valueSerdeByTopic = topic -> finalPassthroughTopics.contains(topic)
+                    ? byteArraySerde() : serdeFor(resolved, topic).valueSerde();
             ParsleyConfig effectiveConfig = configOverride != null ? configOverride : effectiveConfig();
+            Set<String> topics = new LinkedHashSet<>(resolved.keySet());
+            topics.addAll(declaredTopics);
             return new ParsleyProcessorSupplier<>(
                     userSupplier, keySerdeByTopic, valueSerdeByTopic,
                     store + "-frontier", store + "-buffer", store + "-candidate-index", store + "-forwarded-index",
-                    store + "-orphan-index", resolved.keySet(), sinkTopics, sinkNodeNames, deadLetterSinkName,
-                    adminFactory, effectiveConfig, ParsleyAudit.wrap(audit), quiesce, coordination);
+                    store + "-orphan-index", Set.copyOf(topics), finalPassthroughTopics, sinkTopics, sinkNodeNames,
+                    deadLetterSinkName, adminFactory, effectiveConfig, ParsleyAudit.wrap(audit), quiesce,
+                    coordination);
+        }
+
+        @SuppressWarnings("unchecked") // a passthrough topic's records are raw bytes at runtime regardless of K/V
+        private static <T> Serde<T> byteArraySerde() {
+            return (Serde<T>) (Serde<?>) Serdes.ByteArray();
         }
 
         /** Classpath {@code parsley.properties} as a base layer, overlaid with builder-supplied keys. */

@@ -56,6 +56,21 @@ import java.util.function.Function;
  * taught nothing new could not have just formed a new dependency on that non-event either — skipping
  * the re-emission strands nothing.
  *
+ * <p><strong>Passthrough topics.</strong> {@code passthroughTopics} (a subset of {@code topics}, wired
+ * by {@link CausalTopology} from {@code parsley.coordination.domain-topics}) names a coordinated
+ * domain's topic this stage does not otherwise consume or produce — declared solely so this member's
+ * subscriptions cover the whole domain ({@link #validateFullMeshCoverage}) and so its causal progress
+ * reaches this task's frontier. It is wired as an ordinary extra source into this same processor node,
+ * deserialised as raw {@code byte[]}/{@code byte[]} (never the stage's own {@code KIn}/{@code VIn} —
+ * a passthrough topic's value schema is unrelated to this stage's business types). {@link #process}
+ * and {@link #deliver} recognise it by its own source topic (never a header) and route it through the
+ * ordinary {@link ParsleyEngine} gate exactly like any other channel, but skip {@code delegate.process}
+ * for it specifically, emitting a watermark instead. Critically, this check is per <em>released</em>
+ * message, not per triggering record: a passthrough record's own delivery can, as a side effect of the
+ * shared buffer/candidate-index, release an unrelated held business record in the very same batch — that
+ * business record still reaches the real delegate correctly, on its own turn through {@link #deliver}'s
+ * loop, keyed by its own topic, never the passthrough record that happened to trigger the drain.
+ *
  * @param <KIn>  the input key type
  * @param <VIn>  the input value type
  * @param <KOut> the forwarded key type
@@ -77,6 +92,10 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
     private final String forwardedIndexStoreName;
     private final String orphanIndexStoreName;
     private final Set<String> topics;
+    // A subset of topics wired as extra, raw byte[]/byte[] sources into this same processor node — a
+    // domain topic this stage does not otherwise consume or produce (see the class Javadoc's "Passthrough
+    // topics" paragraph). Empty for the ordinary case (no CausalTopology domain-topics configured).
+    private final Set<String> passthroughTopics;
     // The topics this stage produces. Feeds the partition-count parity check and, when coordination is
     // configured, this member's declaration on the epoch-events log for the DAG-wide source-topic registry.
     private final Set<String> sinkTopics;
@@ -165,7 +184,7 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
                      CausalAudit audit,
                      @Nullable ParsleyQuiesce quiesce) {
         this(delegate, serializer, frontierStoreName, bufferStoreName, candidateIndexStoreName,
-                forwardedIndexStoreName, orphanIndexStoreName, topics, sinkTopics, sinkNodeNames,
+                forwardedIndexStoreName, orphanIndexStoreName, topics, Set.of(), sinkTopics, sinkNodeNames,
                 deadLetterSinkName, adminFactory, config, audit, quiesce, ParsleyEpochSnapshotPublisher.NOOP);
     }
 
@@ -177,6 +196,7 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
                      String forwardedIndexStoreName,
                      String orphanIndexStoreName,
                      Set<String> topics,
+                     Set<String> passthroughTopics,
                      Set<String> sinkTopics,
                      List<String> sinkNodeNames,
                      @Nullable String deadLetterSinkName,
@@ -186,7 +206,7 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
                      @Nullable ParsleyQuiesce quiesce,
                      ParsleyEpochSnapshotPublisher snapshotPublisher) {
         this(delegate, serializer, frontierStoreName, bufferStoreName, candidateIndexStoreName,
-                forwardedIndexStoreName, orphanIndexStoreName, topics, sinkTopics, sinkNodeNames,
+                forwardedIndexStoreName, orphanIndexStoreName, topics, passthroughTopics, sinkTopics, sinkNodeNames,
                 deadLetterSinkName, adminFactory, config, audit, quiesce, snapshotPublisher, null);
     }
 
@@ -198,6 +218,7 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
                      String forwardedIndexStoreName,
                      String orphanIndexStoreName,
                      Set<String> topics,
+                     Set<String> passthroughTopics,
                      Set<String> sinkTopics,
                      List<String> sinkNodeNames,
                      @Nullable String deadLetterSinkName,
@@ -209,6 +230,7 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
                      @Nullable ParsleyCoordination coordination) {
         this.delegate = delegate;
         this.serializer = serializer;
+        this.passthroughTopics = passthroughTopics;
         this.frontierStoreName = frontierStoreName;
         this.bufferStoreName = bufferStoreName;
         this.candidateIndexStoreName = candidateIndexStoreName;
@@ -448,9 +470,14 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
             handleEpochSnapshot(record);
             return;
         }
-        // Remember the most-recent business key seen on this task's owned partition; a source-layer task
-        // reuses it to route a self-injected marker back onto that partition lane.
-        lastSeenKey = record.key();
+        // A passthrough record's key/value are raw bytes, not genuine KIn/VIn values (see the class
+        // Javadoc's "Passthrough topics" paragraph) — never recorded as the most-recent business key.
+        boolean passthrough = isPassthroughRecord(record);
+        if (!passthrough) {
+            // Remember the most-recent business key seen on this task's owned partition; a source-layer
+            // task reuses it to route a self-injected marker back onto that partition lane.
+            lastSeenKey = record.key();
+        }
         Optional<ParsleyMessage<KIn, VIn>> ingested = ingest(record);
         if (ingested.isEmpty()) {
             // Already dead-lettered inside onUnresolvableClock (a dead-letter sink is configured) —
@@ -470,12 +497,27 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
         // flood downstream with no-op watermarks.
         if (outcome.delivered().isEmpty() && !engine().completeness().equals(completenessBefore)) {
             // Key the heartbeat with the buffered record's own key so it routes to that record's
-            // partition, matching where its eventual business output will land.
-            forwardWatermark(record.key());
+            // partition, matching where its eventual business output will land — except a passthrough
+            // record, whose own key is not a genuine KIn/KOut value; lastSeenKey routes just as well
+            // (ParsleyMarkerPartition ignores the key for routing regardless).
+            forwardWatermark(passthrough ? lastSeenKey : record.key());
         }
         // A source-layer task also checks the coordination log after each record, so a round that opened
         // (or an epoch that committed) is acted on promptly without waiting for the wall-clock tick.
         pollEpochCoordination();
+    }
+
+    /**
+     * Returns {@code true} if {@code record} arrived on a {@link #passthroughTopics} source — a domain
+     * topic this stage does not otherwise consume or produce, wired only so its causal progress reaches
+     * this task's frontier (see the class Javadoc's "Passthrough topics" paragraph). Its key/value are raw
+     * bytes, never genuine {@code KIn}/{@code VIn} values.
+     */
+    private boolean isPassthroughRecord(Record<KIn, VIn> record) {
+        if (passthroughTopics.isEmpty()) {
+            return false;
+        }
+        return context.recordMetadata().map(RecordMetadata::topic).map(passthroughTopics::contains).orElse(false);
     }
 
     @Override
@@ -507,19 +549,32 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
             // single-layer topologies. Downstream nodes receive the sound multi-layer boundary.
             stampFrontier = engine().completeness();
             deliveryMetadata = new ParsleyRecordMetadata(message.topic(), message.partition(), message.offset());
-            // User headers + the producer's dependencies only; the source coordinate is surfaced via
-            // context.recordMetadata(), and ParsleyProcessorContext re-stamps the frontier on forward.
-            stampingContext.resetForwardCount();
-            delegate.process(new Record<>(message.key(), message.value(), message.timestamp(),
-                    message.headersWithDependencies()));
-            // If the delegate did not forward any business record for this input, emit a watermark
-            // carrying the current completeness frontier so that downstream nodes still learn about
-            // this node's causal progress. Without this, a non-emitting processor silently stalls
-            // downstream completeness, breaking the inductive correctness of multi-layer topologies.
-            if (stampingContext.forwardCount() == 0) {
-                // Reuse the delivered record's key so the stand-in watermark routes to the same
-                // partition its business output would have.
-                forwardWatermark(message.key());
+            if (passthroughTopics.contains(message.topic())) {
+                // A passthrough message never reaches the delegate — its key/value are raw bytes, not a
+                // genuine KIn/VIn value the delegate could make sense of (see the class Javadoc's
+                // "Passthrough topics" paragraph). Its own delivery still needs advertising, exactly like a
+                // genuinely non-emitting delegate invocation; lastSeenKey (not this message's own raw key)
+                // keeps the watermark's routing key well-typed. This also correctly delivers a *different*
+                // message this passthrough delivery released as a side effect (e.g. a held business
+                // record depending on this coordinate) through the real delegate below, on that message's
+                // own turn through this same loop — every released message is routed by its own topic,
+                // never by whichever message triggered the drain.
+                forwardWatermark(lastSeenKey);
+            } else {
+                // User headers + the producer's dependencies only; the source coordinate is surfaced via
+                // context.recordMetadata(), and ParsleyProcessorContext re-stamps the frontier on forward.
+                stampingContext.resetForwardCount();
+                delegate.process(new Record<>(message.key(), message.value(), message.timestamp(),
+                        message.headersWithDependencies()));
+                // If the delegate did not forward any business record for this input, emit a watermark
+                // carrying the current completeness frontier so that downstream nodes still learn about
+                // this node's causal progress. Without this, a non-emitting processor silently stalls
+                // downstream completeness, breaking the inductive correctness of multi-layer topologies.
+                if (stampingContext.forwardCount() == 0) {
+                    // Reuse the delivered record's key so the stand-in watermark routes to the same
+                    // partition its business output would have.
+                    forwardWatermark(message.key());
+                }
             }
         }
         deliveryMetadata = null;

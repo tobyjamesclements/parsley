@@ -56,9 +56,9 @@ All notable changes to this project are documented in this file. The format is b
   (`validateFullMeshCoverage`), called immediately after `awaitJoinCommit`, that fails fast — mirroring
   the existing `validatePartitionParity` coordination precedent, escalating the default `warn` mode to
   strict — when this member's own declared topics do not cover the known domain. A genuine multi-stage
-  pipeline (app A produces a topic app B alone consumes) is not yet a valid full mesh under this check;
-  it requires each member to also cover the topics only a sibling touches, which today means direct,
-  possibly redundant subscription — automatic passthrough wiring for this is not yet built.
+  pipeline (app A produces a topic app B alone consumes) requires each member to also cover the topics
+  only a sibling touches; see the new `parsley.coordination.domain-topics` passthrough wiring below for
+  covering such a topic without a direct, redundant business subscription.
 
 - **A received watermark or epoch marker (snapshot/boundary) was always relayed downstream unconditionally,
   even when it taught this node's channel nothing it did not already know** — sound only on an acyclic
@@ -79,6 +79,19 @@ All notable changes to this project are documented in this file. The format is b
   Source-layer marker injection (`injectSnapshot`/`adoptAndInjectBoundary`, driven by the coordination log
   rather than a received marker) is unaffected — it was already correctly gated on genuine epoch/round
   advance by its own counters.
+
+### Added
+- **`parsley.coordination.domain-topics`** (comma-separated; only meaningful alongside
+  `parsley.coordination.epoch-events-topic` — the reverse is not required, so an existing coordinated
+  deployment needs no change) declares the full coordinated domain's topic set — every member's inputs
+  and sinks, external sources included. `CausalTopology#assemble` uses it to auto-wire, for each stage, a
+  domain topic that stage does not otherwise consume or produce as an extra, raw `byte[]`/`byte[]` source
+  feeding that stage's own processor node, so `validateFullMeshCoverage` (see above) can pass without a
+  hand-wired, redundant business subscription. `ParsleyProcessor` recognises a passthrough record by its
+  own source topic (never a header): it flows through the ordinary completeness gate exactly like any
+  other channel, contributing its causal progress to the frontier, but is never handed to the delegate —
+  every *other* record a passthrough delivery happens to release from the shared buffer as a side effect
+  still reaches the real delegate correctly, since there is only ever one delegate per processor node.
 
 ### Fixed
 - **A mismatched sink partition count only warned by default, but under topology-epoch coordination it

@@ -3,6 +3,7 @@ package io.github.tobyjamesclements.parsley;
 import org.junit.jupiter.api.Test;
 
 import java.util.Properties;
+import java.util.Set;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -65,5 +66,71 @@ class ParsleyConfigTest {
 
         assertThrows(IllegalStateException.class, () -> ParsleyConfig.from(props),
                 "an unrecognised topology-validation value must be rejected");
+    }
+
+    /**
+     * {@code parsley.coordination.domain-topics} parses as a comma-separated set, trimming whitespace
+     * around each entry and dropping empty entries, when {@code parsley.coordination.epoch-events-topic}
+     * is also set.
+     *
+     * Asserts the parsed set matches exactly, order and duplicates aside.
+     */
+    @Test
+    void fromParsesDomainTopicsAsATrimmedCommaSeparatedSet() {
+        Properties props = new Properties();
+        props.setProperty("parsley.coordination.epoch-events-topic", "epoch-events");
+        props.setProperty("parsley.coordination.domain-topics", " t1, t2 ,t3,, t2");
+
+        assertEquals(Set.of("t1", "t2", "t3"), ParsleyConfig.from(props).coordinationDomainTopics(),
+                "domain-topics must parse as a trimmed, deduplicated comma-separated set");
+    }
+
+    /**
+     * With neither coordination key set, {@link ParsleyConfig#coordinationDomainTopics()} is empty —
+     * the common, uncoordinated case, unaffected by this new key's existence.
+     *
+     * Asserts the default is an empty set.
+     */
+    @Test
+    void coordinationDomainTopicsDefaultsToEmpty() {
+        assertEquals(Set.of(), ParsleyConfig.load().coordinationDomainTopics(),
+                "domain-topics must default to empty when coordination is not configured");
+    }
+
+    /**
+     * {@code parsley.coordination.domain-topics} is only meaningful alongside {@code parsley.coordination.
+     * epoch-events-topic} — setting it without the epoch-events-topic key is rejected at startup rather
+     * than silently ignored, since a passthrough-wiring config with no coordination log to validate
+     * against would create dead, never-exercised topology nodes with no way to detect the
+     * misconfiguration later.
+     *
+     * Asserts {@code IllegalStateException} is thrown when domain-topics is set alone.
+     */
+    @Test
+    void fromRejectsDomainTopicsWithoutEpochEventsTopic() {
+        Properties props = new Properties();
+        props.setProperty("parsley.coordination.domain-topics", "t1,t2");
+
+        assertThrows(IllegalStateException.class, () -> ParsleyConfig.from(props),
+                "domain-topics without epoch-events-topic must be rejected");
+    }
+
+    /**
+     * The reverse pairing is not required: {@code parsley.coordination.epoch-events-topic} alone (with no
+     * domain-topics) is exactly today's existing, already-supported coordination configuration — full-mesh
+     * validation derives its own domain from the shared log's live declarations, not from this static
+     * config, so there is nothing for an existing coordinated deployment to migrate.
+     *
+     * Asserts no exception is thrown and domain-topics is empty.
+     */
+    @Test
+    void fromAllowsEpochEventsTopicWithoutDomainTopics() {
+        Properties props = new Properties();
+        props.setProperty("parsley.coordination.epoch-events-topic", "epoch-events");
+
+        ParsleyConfig config = ParsleyConfig.from(props);
+        assertEquals("epoch-events", config.coordinationEpochEventsTopic());
+        assertEquals(Set.of(), config.coordinationDomainTopics(),
+                "epoch-events-topic alone must not require domain-topics");
     }
 }

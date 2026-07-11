@@ -30,6 +30,7 @@ final class ParsleyProcessorSupplier<KIn, VIn, KOut, VOut>
     private final String forwardedIndexStoreName;
     private final String orphanIndexStoreName;
     private final Set<String> topics;
+    private final Set<String> passthroughTopics;
     private final Set<String> sinkTopics;
     private final List<String> sinkNodeNames;
     private final @Nullable String deadLetterSinkName;
@@ -56,6 +57,37 @@ final class ParsleyProcessorSupplier<KIn, VIn, KOut, VOut>
                                       CausalAudit audit,
                                       @Nullable ParsleyQuiesce quiesce,
                                       @Nullable ParsleyCoordination coordination) {
+        this(userSupplier, keySerdeByTopic, valueSerdeByTopic, frontierStoreName, bufferStoreName,
+                candidateIndexStoreName, forwardedIndexStoreName, orphanIndexStoreName, topics, Set.of(),
+                sinkTopics, sinkNodeNames, deadLetterSinkName, adminFactory, config, audit, quiesce, coordination);
+    }
+
+    /**
+     * @param passthroughTopics a subset of {@code topics} that {@link CausalTopology} wires as extra,
+     *                          raw byte[]/byte[] sources into the same processor node — a domain topic
+     *                          this stage does not otherwise consume or produce, whose sole purpose is
+     *                          contributing its causal progress to this task's frontier (see {@link
+     *                          ParsleyProcessor}'s passthrough-record handling). Empty for the low-level
+     *                          {@link ParsleyProcessors} API's ordinary use.
+     */
+    ParsleyProcessorSupplier(ProcessorSupplier<KIn, VIn, KOut, VOut> userSupplier,
+                                      Function<String, Serde<KIn>> keySerdeByTopic,
+                                      Function<String, Serde<VIn>> valueSerdeByTopic,
+                                      String frontierStoreName,
+                                      String bufferStoreName,
+                                      String candidateIndexStoreName,
+                                      String forwardedIndexStoreName,
+                                      String orphanIndexStoreName,
+                                      Set<String> topics,
+                                      Set<String> passthroughTopics,
+                                      Set<String> sinkTopics,
+                                      List<String> sinkNodeNames,
+                                      @Nullable String deadLetterSinkName,
+                                      Function<Map<String, Object>, ParsleyTopicAdmin> adminFactory,
+                                      ParsleyConfig config,
+                                      CausalAudit audit,
+                                      @Nullable ParsleyQuiesce quiesce,
+                                      @Nullable ParsleyCoordination coordination) {
         this.userSupplier = userSupplier;
         this.keySerdeByTopic = keySerdeByTopic;
         this.valueSerdeByTopic = valueSerdeByTopic;
@@ -65,6 +97,7 @@ final class ParsleyProcessorSupplier<KIn, VIn, KOut, VOut>
         this.forwardedIndexStoreName = forwardedIndexStoreName;
         this.orphanIndexStoreName = orphanIndexStoreName;
         this.topics = topics;
+        this.passthroughTopics = passthroughTopics;
         this.sinkTopics = sinkTopics;
         this.sinkNodeNames = sinkNodeNames;
         this.deadLetterSinkName = deadLetterSinkName;
@@ -81,7 +114,7 @@ final class ParsleyProcessorSupplier<KIn, VIn, KOut, VOut>
                 userSupplier.get(),
                 new ParsleySerializer<>(new ParsleyResolver<>(keySerdeByTopic, valueSerdeByTopic)),
                 frontierStoreName, bufferStoreName, candidateIndexStoreName, forwardedIndexStoreName,
-                orphanIndexStoreName, topics, sinkTopics, sinkNodeNames, deadLetterSinkName,
+                orphanIndexStoreName, topics, passthroughTopics, sinkTopics, sinkNodeNames, deadLetterSinkName,
                 adminFactory, config, audit, quiesce, ParsleyEpochSnapshotPublisher.NOOP, coordination);
     }
 

@@ -6,8 +6,10 @@ import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
 import java.io.InputStream;
+import java.util.LinkedHashSet;
 import java.util.Locale;
 import java.util.Properties;
+import java.util.Set;
 
 /**
  * Parsley's own configuration, loaded from a {@code parsley.properties} classpath resource. This is
@@ -63,6 +65,24 @@ final class ParsleyConfig {
     static final String COORDINATION_EPOCH_EVENTS_TOPIC = "parsley.coordination.epoch-events-topic";
 
     /**
+     * {@code parsley.coordination.domain-topics} — the comma-separated set of every topic in the
+     * coordinated domain (every member's inputs and sinks, external sources included). Only meaningful
+     * alongside {@link #COORDINATION_EPOCH_EVENTS_TOPIC} — {@link #from} fails startup if this is set
+     * without it. The reverse is not required: coordination works without this key exactly as it always
+     * has (full-mesh validation derives its own domain from the shared log's live declarations, not from
+     * this static config) — set it only when a stage needs {@link CausalTopology#assemble} to auto-wire a
+     * dedicated passthrough processor
+     * node for any domain topic a stage does not otherwise consume or produce, so that stage's declared
+     * subscriptions can cover the full domain ({@link ParsleyProcessor#validateFullMeshCoverage}) without
+     * hand-wiring an "independent input" pass-through stage for every such topic. Kafka Streams has no
+     * public API to add a source topic to an already-running task, so the full domain must be known
+     * statically, ahead of runtime, for every member's source nodes to be wired correctly at all — the
+     * coordination log's own full-mesh validation is then a runtime cross-check that this configuration
+     * was applied correctly, never a mechanism that discovers or wires topics itself.
+     */
+    static final String COORDINATION_DOMAIN_TOPICS = "parsley.coordination.domain-topics";
+
+    /**
      * {@code parsley.deadletter.topic} — the dead-letter topic name every stage's dead-letter sink writes
      * to. Absent (the default), {@link CausalTopology#assemble} computes {@code {application.id}-deadletter}.
      */
@@ -81,13 +101,16 @@ final class ParsleyConfig {
 
     private final ValidationMode topologyValidation;
     private final @Nullable String coordinationEpochEventsTopic;
+    private final Set<String> coordinationDomainTopics;
     private final @Nullable String deadLetterTopic;
     private final int deadLetterPartitions;
 
     private ParsleyConfig(ValidationMode topologyValidation, @Nullable String coordinationEpochEventsTopic,
+                          Set<String> coordinationDomainTopics,
                           @Nullable String deadLetterTopic, int deadLetterPartitions) {
         this.topologyValidation = topologyValidation;
         this.coordinationEpochEventsTopic = coordinationEpochEventsTopic;
+        this.coordinationDomainTopics = coordinationDomainTopics;
         this.deadLetterTopic = deadLetterTopic;
         this.deadLetterPartitions = deadLetterPartitions;
     }
@@ -100,6 +123,11 @@ final class ParsleyConfig {
     /** The shared epoch-events log topic, or {@code null} if topology-epoch coordination is not configured. */
     @Nullable String coordinationEpochEventsTopic() {
         return coordinationEpochEventsTopic;
+    }
+
+    /** The full coordinated domain's topic set, or empty if topology-epoch coordination is not configured. */
+    Set<String> coordinationDomainTopics() {
+        return coordinationDomainTopics;
     }
 
     /** The configured dead-letter topic name, or {@code null} to fall back to the applicationId-derived default. */
@@ -138,11 +166,33 @@ final class ParsleyConfig {
     /** Builds from explicit properties (programmatic override / tests). */
     static ParsleyConfig from(Properties props) {
         String epochEventsTopic = props.getProperty(COORDINATION_EPOCH_EVENTS_TOPIC);
+        String resolvedEpochEventsTopic =
+                (epochEventsTopic == null || epochEventsTopic.isBlank()) ? null : epochEventsTopic.trim();
+        Set<String> domainTopics = domainTopics(props);
+        if (resolvedEpochEventsTopic == null && !domainTopics.isEmpty()) {
+            throw new IllegalStateException(COORDINATION_DOMAIN_TOPICS + " is set but "
+                    + COORDINATION_EPOCH_EVENTS_TOPIC + " is not; domain-topics only has meaning "
+                    + "under topology-epoch coordination");
+        }
         String deadLetterTopic = props.getProperty(DEADLETTER_TOPIC);
-        return new ParsleyConfig(validationMode(props),
-                (epochEventsTopic == null || epochEventsTopic.isBlank()) ? null : epochEventsTopic.trim(),
+        return new ParsleyConfig(validationMode(props), resolvedEpochEventsTopic, domainTopics,
                 (deadLetterTopic == null || deadLetterTopic.isBlank()) ? null : deadLetterTopic.trim(),
                 deadLetterPartitions(props));
+    }
+
+    private static Set<String> domainTopics(Properties props) {
+        String value = props.getProperty(COORDINATION_DOMAIN_TOPICS);
+        if (value == null || value.isBlank()) {
+            return Set.of();
+        }
+        Set<String> topics = new LinkedHashSet<>();
+        for (String topic : value.split(",")) {
+            String trimmed = topic.trim();
+            if (!trimmed.isEmpty()) {
+                topics.add(trimmed);
+            }
+        }
+        return Set.copyOf(topics);
     }
 
     private static ValidationMode validationMode(Properties props) {

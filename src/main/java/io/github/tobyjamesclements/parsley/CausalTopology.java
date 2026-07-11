@@ -115,9 +115,22 @@ public final class CausalTopology {
         List<String> sinkNodeNames = stage.sinks.stream().map(ParsleyStageSpec.SinkSpec::name).toList();
         String deadLetterSinkName = name + "-deadletter-sink";
 
+        // A domain topic this stage neither consumes nor produces: wired below as an extra, raw
+        // byte[]/byte[] source into this SAME processor node (see ParsleyProcessor's passthrough-record
+        // handling), so this stage's declared subscriptions can cover the full coordinated domain
+        // (ParsleyProcessor#validateFullMeshCoverage) without hand-wiring an "independent input" stage for
+        // it. Empty whenever domain-topics is not configured — no behaviour change then.
+        Set<String> passthroughTopics = new LinkedHashSet<>(config.coordinationDomainTopics());
+        passthroughTopics.removeAll(sources.keySet());
+        passthroughTopics.removeAll(sinkTopics);
+        if (coordination == null) {
+            passthroughTopics = Set.of();
+        }
+
         ParsleyProcessors.Builder<KIn, VIn, KOut, VOut> causalBuilder = ParsleyProcessors.builder(stage.userSupplier)
                 .addBufferStore(name)
                 .addBuffers(sources.values())
+                .declareTopics(passthroughTopics)
                 .config(config)
                 .withAudit(stage.audit)
                 .sinkTopics(sinkTopics)
@@ -133,12 +146,21 @@ public final class CausalTopology {
         ParsleyProcessorSupplier<KIn, VIn, KOut, VOut> supplier = causalBuilder.build();
 
         String processorName = name + "-processor";
-        String[] sourceNames = new String[sources.size()];
+        String[] sourceNames = new String[sources.size() + passthroughTopics.size()];
         int i = 0;
         for (ParsleyBuffer<KIn, VIn> buffer : sources.values()) {
             String sourceName = name + "-source-" + buffer.topic();
             topology.addSource(sourceName,
                     buffer.keySerde().deserializer(), buffer.valueSerde().deserializer(), buffer.topic());
+            sourceNames[i++] = sourceName;
+        }
+        for (String passthroughTopic : passthroughTopics) {
+            String sourceName = name + "-passthrough-source-" + passthroughTopic;
+            // Raw byte[]/byte[] regardless of this stage's own KIn/VIn — a passthrough topic's value
+            // schema is unrelated to this stage's business types. ParsleyProcessor recognises it by its
+            // own source topic and never hands it to the delegate; see its class Javadoc.
+            topology.addSource(sourceName,
+                    Serdes.ByteArray().deserializer(), Serdes.ByteArray().deserializer(), passthroughTopic);
             sourceNames[i++] = sourceName;
         }
         topology.addProcessor(processorName, supplier, sourceNames);

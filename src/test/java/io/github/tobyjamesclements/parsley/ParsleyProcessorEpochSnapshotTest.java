@@ -82,7 +82,7 @@ class ParsleyProcessorEpochSnapshotTest {
         ParsleyProcessor<String, String, String, String> processor = new ParsleyProcessor<>(
                 delegate, serializer,
                 "frontier", "buffer", "candidate-index", "forwarded-index", "orphan-index",
-                Set.of("t1"), Set.of(), List.of(), null,
+                Set.of("t1"), Set.of(), Set.of(), List.of(), null,
                 configs -> ADMIN, ParsleyConfig.from(new Properties()), CausalAudit.NOOP, null, publisher);
 
         MockProcessorContext<String, String> context = new MockProcessorContext<>();
