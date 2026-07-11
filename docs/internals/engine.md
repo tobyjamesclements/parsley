@@ -12,9 +12,6 @@ it spills to disk rather than growing in memory.
 
 ```
 receive(record):
-    channelAdvanced = !channelClock(record.channel).dominates(record.dependencies)
-    channelStore.update(record.channel, record.dependencies)  # receipt-time: record the branch's
-                                                               # proven completeness before gating
     frontier.seedIfFirstSeen(record.coordinate)        # one-time per coordinate, folds in
                                                         # everything below the first-seen offset
 
@@ -25,32 +22,36 @@ receive(record):
     deps = effectiveDependencies(record.dependencies)  # strip self-cycle, this node's own sink
                                                         # coordinates, and any below-epoch-floor entry
 
-    if completeness().dominates(deps):                 # the gate: some reachable channel has
-                                                        #   confirmed every depended coordinate
+    if frontier.dominates(deps):                       # the gate: this node has ITSELF delivered
+                                                        #   every depended coordinate — a peer's claim
+                                                        #   never substitutes for local delivery
         frontier.deliver(record.coordinate)            # advance frontier, self-persist "f"
+        channelStore.update(record.channel, deps')     # stamp-only fold (deps minus own-sink coords)
         out.add(record)
         propagate(record.coordinate)                   # cascade releases (see below)
     else:
         buffer.add(record)                             # hold until satisfied (no limit, no timeout)
-        candidateIndex.index(record, deps, completeness())
+        candidateIndex.index(record, deps, frontier)
 
-    if channelAdvanced and channelStore.size() > 1:    # a fan-in branch advanced: re-scan, since a
-        out.addAll(drainSatisfied())                   # channel advance can lift completeness for held records
-    if frontier.tryAdvanceEpoch():                      # a normal delivery can close a pending epoch
+    if frontier.tryAdvanceEpoch():                      # a delivery can close a pending epoch
         out.addAll(drainSatisfied())                    #   transition window; see topology-epochs.md
     return out
 
-onWatermark(channel, carriedFrontier):
-    channelStore.update(channel, carriedFrontier)      # advance the source channel's clock
-    delivered = drainSatisfied()                        # release records the new completeness permits
+onWatermark(channel, offset, carriedFrontier):
+    channelAdvanced = !channelClock(channel).dominates(carriedFrontier')   # own-sink coords stripped
+    channelStore.update(channel, carriedFrontier')     # stamp-only: feeds completeness(), not the gate
+    frontier.deliver(channel, offset)                   # the marker's OWN offset genuinely delivered
+    propagate(channel)                                  # releases via the frontier advance alone
+    if frontier.tryAdvanceEpoch(): drainSatisfied()
     return (delivered, channelAdvanced)                 # caller relays downstream only if genuinely new
 ```
 
-`completeness()` is this node's own frontier max-merged with every input channel's advertised
-dependencies (`ParsleyClock.merge`): a record is deliverable once any reachable channel has confirmed
-each coordinate it depends on — no cross-channel unanimity required. See the
-[causal consistency model](causal-consistency.md) for why a single witness suffices and the topology
-contract it implies.
+The gate is `frontier.dominates(effectiveDependencies)`: this node's own contiguous delivered
+frontier must cover every depended coordinate. `completeness()` — the frontier max-merged with every
+input channel's advertised dependencies (`ParsleyClock.merge`) — is the *outbound stamp*, carrying
+transitive ancestry downstream where each receiver's own gate verifies it locally; it never releases
+anything here. See the [causal consistency model](causal-consistency.md) for why local delivery is
+required and the topology contract it implies.
 
 Each piece is covered in its own section below: [`receive()` algorithm](#receive-algorithm)
 for admission, [Propagation cascade](#propagation-cascade-propagate) for the cascade, and
@@ -73,36 +74,35 @@ predicate's input), `deliver(coordinate)` (advance the frontier and notify), and
 topology-epoch coordination is configured, the per-coordinate epoch floor (see
 [topology epochs](topology-epochs.md)).
 
-`channelStore` backs the delivery gate and the node's outbound stamp. `completeness()` is this node's
-own frontier max-merged with every input channel's advertised dependencies (`ParsleyClock.merge`):
-each channel contributes the dependencies it has advertised, and this node's own coordinates always
-win the merge against any channel's separate view of them. A coordinate no channel has ever observed
-is absent from the result. The single gate is
-`completeness().dominates(effectiveDependencies(deps))` — a record is delivered once any reachable
-channel has confirmed each coordinate it depends on. The same `completeness()` stamps forwarded
-records and protocol watermarks. See the [causal consistency model](causal-consistency.md) for why a
-single witness suffices and the topology contract it implies.
+`channelStore` backs the node's outbound stamp. `completeness()` is this node's own frontier
+max-merged with every input channel's advertised dependencies (`ParsleyClock.merge`): each channel
+contributes the dependencies it has advertised, so transitive ancestry — a coordinate an upstream
+channel delivered that this node may not itself consume — flows through to downstream receivers,
+whose own gates verify it against their own delivery history. The delivery gate here is
+`frontier.dominates(effectiveDependencies(deps))` — this node's own contiguous frontier, exclusively;
+an advertised claim never substitutes for local delivery of the cause. The same `completeness()`
+stamps forwarded records and protocol watermarks. See the
+[causal consistency model](causal-consistency.md) for the soundness argument and the topology
+contract it implies.
 
 ## `receive()` algorithm
 
 1. The dependency clock is decoded once at the boundary (`ParsleyMessage.from`): a missing header
-   (logged at `DEBUG`) becomes an empty, vacuously satisfied clock. An undecodable header is handled
-   by `ParsleyProcessor.onUnresolvableClock()` before the engine is called: under the default `fail`
-   policy the task is failed fast (`ParsleyClockResolutionException`); under `continue` the clock is
-   replaced with `ParsleyClock.empty()` (logged at `WARN`) and the engine receives it as vacuously
-   satisfied. Either way, the engine always receives a typed `ParsleyClock`.
-2. Update the source channel's clock with the record's dependencies, at receipt time, before the gate. This is how a channel advertises its progress: a record's carried frontier is its branch's proven completeness the moment it arrives, regardless of whether this node has delivered the record yet. Recording it here lets `completeness()` advance as soon as a channel advertises a coordinate, and prevents a mutual deadlock between two sibling records that each depend on a shared ancestor. Whether this advanced the channel is remembered for step 7.
+   becomes an empty, vacuously satisfied clock. An undecodable header is handled by
+   `ParsleyProcessor.onUnresolvableClock()` before the engine is called — the task fails fast
+   (`ParsleyClockResolutionException`); a record is never forwarded on an unknown premise. The
+   engine always receives a typed `ParsleyClock`.
+2. Seed the frontier if this is the coordinate's first sighting (`seedIfFirstSeen` — consumption need
+   not start at offset 0), cascading any releases the seed enables.
 3. Check reachability: if any of the record's declared coordinates (after preprocessing) names a topic-partition `inScope` rejects, the engine cannot ever confirm it no matter how long it waits. Fail-closed rather than vacuously satisfied — throw `ParsleyUnreachableDependencyException`, never buffer, never treat as satisfied.
 4. Compute `effectiveDependencies`: strip the self-cycle (a `(topicId, partition)` entry whose required offset equals the record's own source offset — `ParsleyClock.without`), strip any coordinate this node itself produces (`ownSinkTopics`), and strip anything below the current topology-epoch floor (`ParsleyClock.strippedBelow`; a no-op when epoch coordination is off). This is the only dependency preprocessing.
-5. Apply the gate: `completeness().dominates(effectiveDependencies)`. `completeness()` is the max-merge across every input channel plus this node's own frontier, so a single genuine witness suffices. If it passes: advance frontier, add the record to output, call `propagate()`.
-6. Otherwise: add the record to the buffer (assigned an insertion sequence and a `bufferedAt` timestamp, no size or time limit) and index its unsatisfied coordinates in the candidate index.
-7. If the receipt-time channel update in step 2 advanced this channel *and* the node has more than one input channel, run `drainSatisfied()` — a full-buffer re-scan — to release any held record the lifted completeness now permits. This release is not reachable through the candidate index that drives `propagate()` (which keys on frontier advances). A single-channel node's completeness is its own frontier, fully covered by `propagate`, so it skips this.
-8. If this delivery advanced completeness past a pending epoch-transition boundary, `frontier.tryAdvanceEpoch()` closes the window and this step drains anything the raised floor releases. See [topology epochs](topology-epochs.md).
+5. Apply the gate: `frontier.dominates(effectiveDependencies)` — this node's own contiguous delivered frontier must cover every depended coordinate; a claim advertised on another channel never substitutes for local delivery. If it passes: advance the frontier, fold the record's dependencies (own-sink coordinates stripped) into its channel's clock — a stamp-only update feeding `completeness()`, made only at genuine gated delivery so the stamp never carries a claim from a record that was not actually forwarded — add the record to output, and call `propagate()`.
+6. Otherwise: add the record to the buffer (assigned an insertion sequence and a `bufferedAt` timestamp, no size or time limit) and index its coordinates unsatisfied by the frontier in the candidate index.
+7. If this delivery advanced the frontier past a pending epoch-transition boundary, `frontier.tryAdvanceEpoch()` closes the window and drains anything the raised floor releases. See [topology epochs](topology-epochs.md).
 
-A missing header, or an undecodable one under `continue` policy, becomes an empty dependency clock,
-which `completeness().dominates` satisfies trivially (step 5). It never reaches the buffer. The
-frontier still advances on these records, so buffered records waiting on that coordinate are not
-permanently stalled.
+A missing header becomes an empty dependency clock, which the gate satisfies trivially (step 5). It
+never reaches the buffer. The frontier still advances on these records, so buffered records waiting
+on that coordinate are not permanently stalled.
 
 ## Propagation cascade (`propagate`)
 
@@ -113,20 +113,20 @@ and A has been delivered, B can now be delivered; and if B → C, C follows in t
 ```
 toScan = {C}
 while toScan not empty:
+  nextScan = {}
   for each coordinate in toScan:
-    candidates = candidateIndex.findCandidates(topicId, partition, newOffset)
+    candidates = candidateIndex.findCandidates(topicId, partition, frontierOffset)
     for each candidate:
       entry = buffer.get(candidate.recordId)
       if entry == null: prune stale index entry, skip
       if isUnreachableDependency(entry): throw ParsleyUnreachableDependencyException
-      if frontier.isDeliverable(effectiveDependencies(entry.dependencies)):
-        releasable.add(entry)
-  toScan = {}
-  for each releasable entry:
-    buffer.remove(sequence)
-    frontier.deliver(entry's source coordinate)
-    toScan.add(entry's source coordinate)
-    output.add(entry.record)
+      if frontier.dominates(effectiveDependencies(entry.dependencies)):
+        frontier.deliver(entry's source coordinate)     # committed the moment it is decided,
+        channelStore.update(entry's channel, deps')     #   never staged for a later batch step
+        buffer.remove(sequence)
+        nextScan.add(entry's source coordinate)
+        output.add(entry.record)
+  toScan = nextScan
 ```
 
 Each iteration finds records whose dependencies are now met after the most recent frontier advances. Those releases can in turn advance the frontier on further coordinates, triggering additional releases. The loop terminates when no new records become satisfiable.

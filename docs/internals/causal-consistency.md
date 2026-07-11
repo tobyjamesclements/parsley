@@ -62,52 +62,44 @@ provide this for free — the processor will never receive T2's messages, so it 
 dependency on T2 through its own delivery.
 
 Parsley's response is to **require every coordinate a message could ever depend on to be reachable
-to this node** — directly, or via a genuine relay — rather than weaken the guarantee. But it does not
-require every one of a node's own input channels to independently corroborate the same coordinate: a
-single channel that has genuinely, contiguously delivered up to a coordinate is enough. Requiring
-unanimous confirmation across a node's own channels adds nothing to correctness — see
-[why a single witness suffices](#why-a-single-witness-suffices) — and would forbid an ordinary
-consumption pattern (a node consuming both an ancestor topic and one of its own descendants) for no
-safety reason. Parsley does not scope a coordinate out when this node happens not to consume it —
-that would be unsound, since a coordinate no channel here can ever observe is never satisfiable — but
-it also does not require every channel to agree.
+to this node** — every dependency a record can carry must name a topic-partition this node itself
+consumes — rather than weaken the guarantee. Parsley does not scope a coordinate out when this node
+happens not to consume it — that would be unsound, since a coordinate no channel here can ever
+observe is never satisfiable. And it does not accept a *claim* in place of a delivery: a peer's
+advertised clock saying "K reached k over there" is never a substitute for this node having delivered
+K up to k itself — see [why local delivery is required](#why-local-delivery-is-required).
 
 ## Parsley's algorithm
 
-> A record is delivered once this node's own completeness clock dominates every coordinate the
-> record depends on. A single genuine witness — this node's own delivery, or a channel's honestly
-> advertised dependency — is enough for any one coordinate; no cross-channel corroboration is
-> required.
+> A record is delivered once this node's own contiguous delivered frontier dominates every
+> coordinate the record depends on. A dependency is satisfied only by this node having itself
+> delivered the cause; a claim advertised on another channel never substitutes for local delivery.
 
-### The completeness clock
+### The delivery gate
+
+A record is delivered when this node's own contiguous frontier dominates its dependency clock, with
+only the record's own self-cycle removed (a record never waits on its own offset). That is the
+entire gate, `ParsleyEngine.isDeliverable()`:
+
+```java
+frontier().dominates(deps.withoutSelfReference())
+```
+
+There is no vacuously-satisfied dependency. A dependency on coordinate K is satisfied once this
+node's own K channel has contiguously delivered up to the required offset; until then the record is
+buffered.
+
+### The completeness clock (the outbound stamp)
 
 The **completeness clock** is this node's own delivered frontier, max-merged with every input
 channel's advertised dependencies (`ParsleyClock.merge`), computed in `ParsleyFrontier.completeness()`.
 Each channel contributes the dependencies its records and watermarks have advertised (the pairwise-max
-over what it has seen on that channel). This node's own coordinates — the `ParsleyFrontier` offset for
-each channel it directly, contiguously delivers — always win any merge against a channel's separately
-advertised view of the same coordinate, since this node's own gate already required that value to be
-proven before it could advance.
-
-A coordinate that no input channel has ever observed is absent from the completeness clock: it is not
-yet confirmed by anything reachable to this node, so a dependency on it is not yet satisfiable. Once
-*any* channel has genuinely advertised it, it counts — there is no requirement that every channel
-independently repeat the same confirmation.
-
-### The delivery gate
-
-A record is delivered when the completeness clock dominates its dependency clock, with only the
-record's own self-cycle removed (a record never waits on its own offset). That is the entire gate,
-`ParsleyEngine.isDeliverable()`:
-
-```java
-completeness().dominates(deps.withoutSelfReference())
-```
-
-There is no vacuously-satisfied dependency. A dependency on coordinate K is satisfied once *any* input
-channel has advertised K to at least the required offset; until then the record is buffered. Forwarded
-records and protocol watermarks are stamped with this same completeness clock (`ParsleyProcessor` reads
-`engine.completeness()`).
+over what it has seen on that channel). Forwarded records and protocol watermarks are stamped with
+this clock (`ParsleyProcessor` reads `engine.completeness()`): it carries *transitive ancestry* — a
+coordinate an upstream node delivered that this node's stamp must keep advertising — downstream,
+where each receiving node's own gate verifies every coordinate it names against its own delivery
+history. The stamp is how facts travel; the gate is where they are proven, locally, before anything
+is released on them.
 
 A dependency naming a coordinate this node has **no channel for at all** — not merely one that hasn't
 advertised yet, but one structurally outside this node's own registered inputs — is a different case
@@ -118,23 +110,25 @@ with no way to ever succeed, or delivering on an unproven premise) is unsound. S
 [Independent inputs](#the-topology-contract) for why this arises and how to fix the topology instead
 of relying on this fail-closed behavior as a substitute.
 
-### Why a single witness suffices
+### Why local delivery is required
 
-This is structurally a per-process vector clock — the Birman-Schiper-Stephenson CBCAST delivery
-condition, instantiated directly on Kafka's own `(topicId, partition)` coordinates. A dependency
-names a fact about some coordinate's stream ("K has reached offset k"), and once *one* channel has
-genuinely, contiguously delivered up to k on K — its own gate already required that before it could
-advance — the fact is true, full stop. Waiting for a second, unrelated channel to separately confirm
-the same already-true fact adds nothing: the second channel's own lag is a fact about *its* coordinate,
-never about whether K really reached k. A gate clock only ever advances at the moment of a genuinely
-gated delivery — never from a received-but-undelivered message or from ungated gossip — which is what
-makes an honestly advertised value trustworthy no matter which channel relays it.
+This is the Birman-Schiper-Stephenson CBCAST delivery condition, instantiated on Kafka's own
+`(topicId, partition)` coordinates: in BSS, a process delivers a message only once *its own*
+delivered vector covers the message's timestamp — the condition is over the receiver's own delivery
+history, never over what a peer reports having delivered. The distinction matters because the
+guarantee Parsley makes is about the *order this node's processor observes events in*, not merely
+about whether an event exists somewhere. "K reached offset k" being true at some peer does not mean
+this node's delegate has processed K@k yet: if a claim carried on a sibling channel could satisfy the
+gate, a record caused by K@k could reach the delegate before K@k itself does on this node's own K
+subscription — an effect delivered before its cause, to a processor subscribed to both. So the gate
+checks the local frontier exclusively, and an advertised claim is only ever *carried* (in the
+outbound stamp) for downstream nodes to verify against their own frontiers in turn.
 
 What the model still requires is that every coordinate a node's messages could ever depend on be
-*reachable* to it, directly or through a channel that genuinely, transitively carries it — see the
-[topology contract](#the-topology-contract). That is a liveness requirement (can this node ever learn
-the fact at all), not a safety one (single-witness merge never lets a node deliver something before it
-is genuinely true).
+consumed by that node — see the [topology contract](#the-topology-contract). That is both a liveness
+requirement (this node must eventually deliver the fact locally) and the reason the fail-closed
+unreachable-dependency check exists (a coordinate this node never consumes could never be proven
+here at all).
 
 ### The topology contract
 
@@ -151,15 +145,15 @@ visibility, placed on topology construction rather than hidden in the engine.
   some input branch instead — have it consume and pass the coordinate through, emitting watermarks even
   when it runs no business logic.
 - **Consuming both an ancestor and its own descendant is fine.** A node may consume both a topic `T`
-  and a topic derived from `T` — single-witness merge has no unanimity requirement to violate. The
-  descendant's completeness stamp already carries `T`'s progress transitively; the `T` channel's own
-  contribution simply merges in alongside it, redundantly but harmlessly. (An earlier version of this
-  contract forbade this pattern; that restriction was a consequence of the retired intersection-based
-  gate, not a fundamental limit — see the changelog.)
+  and a topic derived from `T`. A descendant record's dependency on `T` is satisfied by the node's
+  own `T` channel delivering up to it — the ordinary gate, no special case; the descendant's stamp
+  carrying `T`'s progress transitively matters only for the node's own outbound stamp, never for its
+  gate. (An earlier version of this contract forbade this pattern; that restriction was a consequence
+  of the retired intersection-based gate, not a fundamental limit — see the changelog.)
 
 ### Protocol watermarks (heartbeats)
 
-The completeness clock advances only as this node's own frontier or its channels advertise progress,
+The completeness stamp advances only as this node's own frontier or its channels advertise progress,
 so a node must keep advertising even when it produces no business output. A consumed message that
 yields no business record — a filter that drops it, a record held in the buffer, a not-yet-ready
 aggregate — emits a *protocol watermark*: a record with a null value, marked with the
@@ -168,25 +162,27 @@ record advances completeness,
 or when a delivered record produces no forward). The watermark is keyed with the triggering record's
 key so it routes to the same partition that record's business output would, which keeps completeness
 propagation correct across a sink boundary; it is identified by the header, never by its key. A
-downstream node folds the carried frontier into
-that source channel's clock and re-runs its drain, then re-emits its own watermark, so progress
-propagates contiguously through layers that produce no business records. Parsley's own processors
+downstream node delivers the watermark's *own offset* on its source channel — advancing that
+channel's contiguous frontier exactly like a business record's own coordinate, which is what can
+release held records — and folds the carried frontier into that channel's advertised clock, feeding
+its own outbound stamp (never its gate). It then re-emits its own watermark only when the carried
+clock taught it something new, so progress propagates contiguously through layers that produce no
+business records without ping-ponging around a cycle. Parsley's own processors
 consume watermarks internally (`ParsleyProcessor` / `ParsleyEngine.onWatermark`); a plain Kafka
 client folds them into its running frontier with `CausalDependencies.observe` while skipping them as
 business records, which it detects with `CausalDependencies.isWatermark`.
 
 ### Each channel's own coordinate is a contiguous boundary
 
-A channel's contribution for its own coordinate is a *contiguous* delivered boundary, not a running
+The frontier's value for each coordinate is a *contiguous* delivered boundary, not a running
 maximum: the highest offset delivered on that channel without a gap. A later record on a partition
 can be forwarded before an earlier record still held on the same partition; the boundary only
-advances past the held record's position once that record is itself delivered (by release or
-eviction). This matters because completeness feeds the `dominates` check: if a channel's own
-coordinate jumped over a gap, a record waiting on an offset inside the gap would be released on
-bookkeeping alone, without the record at that offset having been delivered. The contiguous boundary
-ensures completeness reflects actual delivery history, not observed-but-undelivered offsets. (It is
-distinct from the *protocol watermark* records above, which carry a completeness frontier between
-nodes.)
+advances past the held record's position once that record is itself delivered. This matters because
+the frontier is exactly what the `dominates` gate checks: if a coordinate jumped over a gap, a
+record waiting on an offset inside the gap would be released on bookkeeping alone, without the
+record at that offset having been delivered. The contiguous boundary ensures the gate reflects
+actual delivery history, not observed-but-undelivered offsets. (It is distinct from the *protocol
+watermark* records above, which carry a completeness frontier between nodes.)
 
 ## Violations
 

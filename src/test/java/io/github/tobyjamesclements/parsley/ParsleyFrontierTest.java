@@ -60,6 +60,36 @@ class ParsleyFrontierTest {
     // Each below floors T1 at startsAt = 100; every other coordinate is unbounded (NO_BOUND). The
     // invariant: no causal clock the frontier builds carries an entry below its coordinate's floor.
 
+    /**
+     * An epoch-transition window closes only when this node's OWN contiguous frontier dominates the
+     * pending floor — a channel's advertised claim (hearsay from a peer's watermark) must never close
+     * it, or the raised floor would strip a held e-1 record's below-floor dependencies before this
+     * node had actually delivered them, releasing it out of causal order.
+     */
+    @Test
+    void epochWindowClosesOnOwnFrontierNotOnAChannelsAdvertisedClaim() {
+        ParsleyEpochState state = new ParsleyEpochState();
+        ParsleyFrontier frontier =
+                new ParsleyFrontier(ParsleyClock.empty(), new MockForwardedIndex(), true, state);
+        frontier.channelUpdate(T1_ID, 0, ParsleyClock.empty());          // the node's one input channel
+        frontier.recordEpochMarker(1, ParsleyClock.empty().observe(T1_ID, 0, 3), T1_ID, 0);
+
+        // A peer's watermark claims T1@3 on the channel clock — completeness now dominates the floor,
+        // but this node has delivered nothing itself.
+        frontier.channelUpdate(T1_ID, 0, ParsleyClock.empty().observe(T1_ID, 0, 3));
+        assertFalse(frontier.tryAdvanceEpoch(),
+                "a channel's advertised claim of T1@3 must not close the window — this node has not "
+                        + "delivered T1@0..3 itself, so e-1 is not provably drained here");
+
+        for (long offset = 0; offset <= 3; offset++) {
+            frontier.deliver(T1_ID, 0, offset);
+        }
+        assertTrue(frontier.tryAdvanceEpoch(),
+                "once this node's own contiguous frontier reaches the floor, the window closes");
+        assertEquals(1L, state.settledEpochId(),
+                "the pending epoch must be promoted to settled when the window closes");
+    }
+
     /** T1 floored at 100; every other coordinate unbounded. */
     private static final ParsleyEpoch FLOOR_T1_AT_100 = (topicId, partition) ->
             topicId.equals(T1_ID) ? 100L : ParsleyEpoch.NO_BOUND;

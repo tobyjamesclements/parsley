@@ -41,13 +41,15 @@ indefinitely.</p>
   which are protocol metadata rather than business records.</dd>
 
   <dt><strong>Completeness frontier</strong></dt>
-  <dd>A node's own contiguous frontier max-merged with every input channel's advertised clock — a
-  single genuine witness to a coordinate is enough, it need not be corroborated on every channel. A
-  record is delivered once this completeness dominates every coordinate the record depends on. A
-  dependency naming a coordinate this node has no input channel for is never treated as vacuously
-  satisfied; it fails the task fast instead, so every input branch of a node must be able to observe
-  every coordinate any branch's records depend on. The frontier is internal to Parsley's processor
-  engine and is not a separate public type.</dd>
+  <dd>A node's own contiguous frontier max-merged with every input channel's advertised clock — the
+  <em>outbound stamp</em>, carrying transitive ancestry downstream for each receiver's own gate to
+  verify locally. The delivery gate itself checks the node's own contiguous frontier alone: a record
+  is delivered once this node has itself delivered every coordinate the record depends on, and a
+  peer's advertised claim never substitutes for local delivery. A dependency naming a coordinate this
+  node has no input channel for is never treated as vacuously satisfied; it fails the task fast
+  instead, so every input branch of a node must be able to observe every coordinate any branch's
+  records depend on. The frontier is internal to Parsley's processor engine and is not a separate
+  public type.</dd>
 
   <dt><strong>Protocol watermark</strong></dt>
   <dd>A record with a null value, keyed with the triggering record's key, marked with a

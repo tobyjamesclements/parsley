@@ -80,15 +80,16 @@ not an instant.
 `ParsleyEpochState` sits above `ParsleyFrontier` and holds the settled floor plus, while a transition
 is open, the pending next floor and the set of channels on which its opening marker has been seen. The
 window opens on the first epoch marker and becomes engaged once that marker has arrived on every input
-channel (a Chandy-Lamport cut across the node's inputs). It closes once the node's completeness
-dominates the pending floor, at which point the pending floor is promoted to settled. The effective
+channel (a Chandy-Lamport cut across the node's inputs). It closes once the node's own contiguous
+frontier dominates the pending floor — everything below the new floor has been delivered *here*, so
+the old epoch is provably drained locally; a channel's advertised claim that a peer delivered it is
+never proof — at which point the pending floor is promoted to settled. The effective
 floor stays at the previous epoch's value for the whole window, so a record written under the old epoch
 is still gated correctly while the new floor is being adopted. This state lives in the frontier's
 persisted blob, so a restart in the middle of a transition resumes it.
 
-The transition is invisible in the data plane. A node's outgoing stamp is its delivered frontier, which
-equals its completeness, carried unfloored; only the epoch-events log ever sees the received frontiers
-and the decided floor.
+The transition is invisible in the data plane. A node's outgoing stamp is its completeness clock,
+carried unfloored; only the epoch-events log ever sees the received frontiers and the decided floor.
 
 ## In-band markers
 

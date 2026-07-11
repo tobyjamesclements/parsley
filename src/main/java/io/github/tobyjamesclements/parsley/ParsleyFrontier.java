@@ -29,9 +29,9 @@ import java.util.Set;
  *       on each coordinate this node consumes; and
  *   <li>the <strong>channel clocks</strong> — for each input channel {@code (topicId, partition)},
  *       the dependencies advertised on it (max-merged). {@link #completeness()} is the frontier clock
- *       max-merged with every channel's advertised view — a single genuine witness suffices for a
- *       foreign coordinate, no cross-channel unanimity required — which is the delivery gate and the
- *       outbound stamp.
+ *       max-merged with every channel's advertised view — the <em>outbound stamp</em>, carrying
+ *       transitive ancestry downstream. The delivery gate itself checks the contiguous frontier alone
+ *       (see {@link ParsleyEngine}); an advertised claim never substitutes for local delivery.
  * </ul>
  *
  * <p>The <strong>forwarded-offset index</strong> is <em>not</em> in the {@code "f"} blob: it is a
@@ -135,12 +135,12 @@ final class ParsleyFrontier {
 
     /**
      * The causal completeness clock: this node's own contiguous frontier, max-merged with every input
-     * channel's advertised dependencies. A single genuine witness is enough for a foreign coordinate to
-     * count — there is no cross-channel unanimity requirement. This node's own coordinates (part of
-     * {@link #frontier}) always win any merge against a channel's advertised view of the same
-     * coordinate, since a node's own delivered position can never be behind what any channel could have
-     * told it (delivering the channel's record already required the gate to dominate its stamp). With no
-     * channel clocks recorded, this is exactly the node's own frontier.
+     * channel's advertised dependencies. This is the <em>outbound stamp</em> — the boundary this node
+     * advertises downstream, carrying transitive ancestry (coordinates a channel has advertised that
+     * this node may not itself have delivered yet) for each receiver's own gate to verify locally. It
+     * is <em>not</em> the delivery gate: the gate ({@link ParsleyEngine}) checks {@link #snapshot()}
+     * alone, so an advertised claim can never release a record here ahead of local delivery of its
+     * cause. With no channel clocks recorded, this is exactly the node's own frontier.
      *
      * <p>This is the delivered frontier and the outbound stamp, carried as-is — <em>not</em> floored to
      * the epoch. The epoch transition is invisible in the data plane: each node floors <em>incoming</em>
@@ -270,11 +270,6 @@ final class ParsleyFrontier {
         persist();
     }
 
-    /** The number of channels currently recorded (including seeded, silent ones). */
-    int channelCount() {
-        return channels.size();
-    }
-
     /**
      * Records an epoch-boundary marker received on channel {@code (channelTopicId, channelPartition)}
      * and persists. A no-op unless this frontier's epoch is a live {@link ParsleyEpochState} (tests and
@@ -289,12 +284,19 @@ final class ParsleyFrontier {
 
     /**
      * Closes an in-progress epoch transition if it is ready — the boundary marker has been received on
-     * <em>every</em> input channel and the delivered frontier ({@link #completeness()}) dominates the
-     * pending floor {@code F_e}, restricted to the coordinates this node can ever observe — promoting
-     * {@code F_e} to the settled floor and persisting. Returns {@code true} if it advanced (the caller
-     * should then re-drain, since a raised floor can strip a held replay record's below-floor
-     * dependencies). A no-op with no live {@link ParsleyEpochState} or no ready transition. Called after
-     * every engine operation that can advance completeness.
+     * <em>every</em> input channel and this node's own contiguous frontier ({@link #snapshot()})
+     * dominates the pending floor {@code F_e}, restricted to the coordinates this node can ever observe
+     * — promoting {@code F_e} to the settled floor and persisting. Returns {@code true} if it advanced
+     * (the caller should then re-drain, since a raised floor can strip a held replay record's
+     * below-floor dependencies). A no-op with no live {@link ParsleyEpochState} or no ready transition.
+     * Called after every engine operation that can advance the frontier.
+     *
+     * <p>The dominance check deliberately uses the frontier, not {@link #completeness()}: the window
+     * closing is the proof that everything below {@code F_e} has been delivered <em>here</em>, and a
+     * channel's advertised claim that a peer delivered it is no such proof — closing on completeness
+     * would let the raised floor strip a held e-1 record's dependencies before this node had actually
+     * delivered them, releasing it out of causal order (the same hearsay hole the delivery gate
+     * closes; see {@link ParsleyEngine#isDeliverable}).
      *
      * <p>{@code F_e} is the DAG-wide committed floor — the {@code mergeMin} of every member's published
      * completeness — so it can carry coordinates for topics downstream of (or parallel to) this node
@@ -304,14 +306,13 @@ final class ParsleyFrontier {
      * channel tracking is on (the production case; see {@link #trackChannels}), the floor is filtered
      * here to {@link #channels}' own coordinates — the same scoping {@link #pruneToScope} already
      * applies to the frontier — before the dominance check. A coordinate that <em>is</em> in scope but
-     * not yet advertised by that channel is deliberately left in the filtered floor rather than dropped:
+     * not yet delivered here is deliberately left in the filtered floor rather than dropped:
      * {@link ParsleyClock#dominates} then reads it as unsatisfied (an absent coordinate is never
-     * dominated), so the window correctly keeps holding until that channel catches up — conservative,
+     * dominated), so the window correctly keeps holding until this node catches up — conservative,
      * not permissive, exactly mirroring "hold over guess" for causal safety. With channel tracking off
-     * (the single-layer, frontier-only test mode, where {@link #channels} is permanently empty and
-     * {@link #completeness()} falls back to the raw frontier) there is no channel concept to scope by,
-     * so the floor is left unfiltered — scoping to an always-empty key set would strip every coordinate
-     * and vacuously close every window.
+     * (the single-layer, frontier-only test mode, where {@link #channels} is permanently empty) there
+     * is no channel concept to scope by, so the floor is left unfiltered — scoping to an always-empty
+     * key set would strip every coordinate and vacuously close every window.
      */
     boolean tryAdvanceEpoch() {
         if (!(epoch instanceof ParsleyEpochState state)) {
@@ -329,7 +330,7 @@ final class ParsleyFrontier {
         ParsleyClock scopedFloor = trackChannels
                 ? pendingFloor.retaining((topicId, partition) -> channels.containsKey(new CoordKey(topicId, partition)))
                 : pendingFloor;
-        if (!completeness().dominates(scopedFloor)) {
+        if (!snapshot().dominates(scopedFloor)) {
             return false;
         }
         state.promote();

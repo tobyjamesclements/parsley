@@ -57,12 +57,18 @@ further releases occur.
 
 ## Delivery
 
-A record is delivered once this node's **completeness** — its own contiguous frontier max-merged with
-every input channel's advertised clock — dominates the record's dependencies. A single genuine
-witness to a coordinate is enough: it does not need to be corroborated by every input channel, only by
-*some* channel that has itself genuinely, contiguously delivered up to it. This covers a record
-delivered immediately, a record delivered after a wait, and a record that claims no dependencies or
-carries an undecodable header (an empty dependency set, trivially satisfied).
+A record is delivered once this node's **own contiguous frontier** — the positions it has itself
+delivered, gap-free — dominates the record's dependencies. A dependency is satisfied only by this
+node having delivered the cause locally; a claim carried on another channel's clock (a peer's
+watermark advertising a coordinate the peer delivered) never substitutes for local delivery, or the
+processor could see an effect before the cause it directly subscribes to. This covers a record
+delivered immediately and a record delivered after a wait; a record that claims no dependencies (an
+empty dependency set) is trivially satisfied.
+
+The **completeness** clock — the frontier max-merged with every input channel's advertised clock —
+is the *outbound stamp*, not the delivery gate: it carries transitive ancestry (coordinates an
+upstream channel has advertised) downstream, where each receiver's own gate verifies them against
+its own delivery history.
 
 There is no vacuous satisfaction, though: a dependency naming a coordinate this node has **no input
 channel for at all** — an undeclared topic, or a partition a different task instance owns — is not

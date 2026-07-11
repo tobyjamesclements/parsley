@@ -29,11 +29,12 @@ import java.util.Set;
  *       <em>pending</em>; the settled (effective) floor stays {@code F_{e-1}} — the lower held floor.
  *   <li>The window is fully engaged once the marker has arrived on <em>every</em> input channel
  *       (Chandy-Lamport-exact; Kafka per-partition order means a marker on a channel implies all e-1
- *       records on it have been received) and closes once the delivered frontier
- *       ({@code completeness()}) <em>dominates</em> {@code F_e} — everything up to the new floor is
- *       delivered, so e-1 is provably drained. {@link #promote} then makes {@code F_e} the settled
- *       floor. Because it only closes once the delivered frontier dominates {@code F_e}, advancing the
- *       floor needs no re-flooring of already-recorded state.
+ *       records on it have been received) and closes once this node's own contiguous frontier
+ *       <em>dominates</em> {@code F_e} — everything up to the new floor has been delivered
+ *       <em>here</em>, so e-1 is provably drained locally (a peer's advertised claim is never proof;
+ *       see {@link ParsleyFrontier#tryAdvanceEpoch}). {@link #promote} then makes {@code F_e} the
+ *       settled floor. Because it only closes once the local frontier dominates {@code F_e},
+ *       advancing the floor needs no re-flooring of already-recorded state.
  * </ul>
  * While the window is open the effective floor is {@code F_{e-1}}, so in-flight e-1 records drain in
  * causal order (their deps are ≥ {@code F_{e-1}} and gated normally) while e records (deps ≥ {@code F_e}

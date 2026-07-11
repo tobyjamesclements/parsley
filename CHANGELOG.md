@@ -6,6 +6,42 @@ All notable changes to this project are documented in this file. The format is b
 
 ## [Unreleased]
 
+### Fixed
+- **A peer's advertised claim could satisfy the delivery gate, releasing a record before this node had
+  itself delivered its cause.** The gate checked `completeness()` — the max-merge of this node's own
+  contiguous frontier and every input channel's advertised clock — so a watermark or epoch marker
+  arriving on one channel and carrying a claim about a *sibling* channel's coordinate (e.g. upstream U,
+  which also consumes T2, advertising "T2@9 delivered") could release a held record depending on
+  T2@9 while this node's own T2 consumption was still at a lower offset. The delegate then processed
+  the effect before the cause it directly subscribes to — precisely the ordering violation the README
+  forbids ("every Kafka Streams processor that subscribes to both topics processes A before B"). The
+  claim of Birman-Schiper-Stephenson equivalence was wrong on exactly this point: BSS's delivery
+  condition is over the receiving process's *own* delivered vector, never over peer hearsay.
+
+  The delivery gate (`ParsleyEngine#isDeliverable`) now checks this node's own contiguous frontier
+  exclusively, on every release path (`receive`, `drainSatisfied`, `propagate`), and the candidate
+  index is built against the frontier rather than completeness so a claimed-but-not-locally-delivered
+  coordinate stays indexed until the frontier genuinely reaches it. `ParsleyFrontier#tryAdvanceEpoch`'s
+  window-close dominance check moves from `completeness()` to the frontier for the same reason — a
+  hearsay-closed window would raise the floor and strip a held e-1 record's below-floor dependencies
+  before this node had actually delivered them. `completeness()` is unchanged in shape and remains the
+  outbound stamp (transitive ancestry each downstream receiver's own gate verifies locally) and the
+  `channelAdvanced` relay signal; the channel-hearsay-triggered `drainSatisfied` rescans in
+  `receive`/`onWatermark` are gone (a channel-clock change can no longer make anything deliverable —
+  only a frontier advance or an epoch-floor rise can), and `ParsleyFrontier#channelCount` is deleted
+  with them. Liveness is unaffected: a dependency on a directly-consumed coordinate is satisfied by
+  this node's own (possibly passthrough) consumption genuinely catching up, which Kafka delivers
+  regardless — the hearsay path only ever released it *early*, which is exactly the bug. Every channel
+  fold now also uniformly strips this node's own produced coordinates (`ownSinkTopics`) — previously
+  only `onWatermark` stripped them while the business-record paths folded raw clocks, so a cyclic
+  topology's reflected self-position triggered a full-buffer rescan plus a spurious heartbeat on every
+  business record. New `ParsleyEngineWatermarkTest` (the first engine-level `onWatermark` tests) pins
+  the hearsay scenarios; `ParsleyFrontierTest` pins the epoch-window one. Docs (`concepts.md`,
+  `streams.md`, `internals/engine.md`, `internals/causal-consistency.md`,
+  `internals/topology-epochs.md`, `internals/overview.md`, `overview.html`) rewritten to describe the
+  gate/stamp split — including retiring `internals/engine.md`'s stale receipt-time channel-update and
+  `continue`-policy passages, which described code removed several changes ago.
+
 ### Changed
 - **Breaking: `CausalAudit` is removed entirely.** Per-record audit callbacks
   (`recordForwarded`/`recordHeld`/`recordReleased`/`recordDeserializationFailure`/

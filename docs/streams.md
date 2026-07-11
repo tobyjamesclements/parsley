@@ -81,10 +81,10 @@ completeness signal. Set `cleanup.policy=delete` on any sink topic of a causal s
 checks this for you at startup; see [Startup validation](#startup-validation).
 
 **Every branch into a node must see every coordinate that node's records depend on.** A node is
-delivered a record only once its own completeness — the max-merge of its contiguous frontier and every
-input channel's advertised clock — dominates that record's dependencies. There is no "this dependency
-is out of scope, treat it as satisfied" fallback: a dependency naming a coordinate this node has no
-input channel for fails the task. In particular, a topology-epoch-coordinated deployment must ensure
+delivered a record only once its own contiguous frontier — the positions it has itself delivered —
+dominates that record's dependencies; another channel's advertised claim never substitutes for local
+delivery. There is no "this dependency is out of scope, treat it as satisfied" fallback: a dependency
+naming a coordinate this node has no input channel for fails the task. In particular, a topology-epoch-coordinated deployment must ensure
 every member's declared inputs and sinks jointly cover the full coordinated domain; see
 [Evolving a running topology](#evolving-a-running-topology) for how `parsley.coordination.domain-topics`
 and auto-wired passthrough sources satisfy that without a redundant business subscription.
@@ -151,7 +151,7 @@ A genuine multi-stage pipeline — app A produces a topic only app B consumes �
 also cover the topics only a sibling touches. Set `parsley.coordination.domain-topics` (comma-separated,
 the full coordinated domain) so `CausalTopology` auto-wires, for each stage, a passthrough source for
 any domain topic that stage does not otherwise consume or produce: it flows through the ordinary
-completeness gate, contributing to the frontier, but is never handed to your processor. This is what
+delivery gate, contributing to the frontier, but is never handed to your processor. This is what
 makes a genuinely cyclic topology (A produces to B, B produces back to A) coordinate correctly, without
 a redundant business subscription on either side.
 

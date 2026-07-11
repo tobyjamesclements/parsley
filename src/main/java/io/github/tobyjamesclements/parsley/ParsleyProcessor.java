@@ -473,9 +473,9 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
         // Advertise this node's progress so downstream channel clocks advance gap-free. A delivered
         // record advertises through its business output's completeness stamp — or, if the delegate
         // forwarded nothing, the watermark emitted in deliver(). A consumed record that was buffered
-        // produces neither, so emit a heartbeat watermark — but only when its receipt-time
-        // channel-clock update actually advanced completeness, so an unrelated held record does not
-        // flood downstream with no-op watermarks.
+        // produces neither, so emit a heartbeat watermark — but only when receiving it genuinely
+        // advanced completeness (a coordinate's first sighting seeds the frontier), so an unrelated
+        // held record does not flood downstream with no-op watermarks.
         if (outcome.delivered().isEmpty() && !engine().completeness().equals(completenessBefore)) {
             // Key the heartbeat with the buffered record's own key so it routes to that record's
             // partition, matching where its eventual business output will land — except a passthrough

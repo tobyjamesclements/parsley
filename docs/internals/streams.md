@@ -37,7 +37,7 @@ There is no eviction and no buffer-size punctuator: the causal buffer is uncondi
 
 ## Passthrough topics
 
-When `parsley.coordination.domain-topics` is configured, `CausalTopology#assemble` wires an extra, raw `byte[]`/`byte[]` source into this same processor node for any domain topic this stage does not otherwise consume or produce (see `CausalTopology`). `ParsleyProcessor` recognises such a record by its own source topic (never a header) — it flows through the ordinary completeness gate exactly like any other channel, contributing its causal progress to the frontier, but its key/value are never handed to the delegate (they are not genuine `KIn`/`VIn` values). Any *other* record a passthrough delivery happens to release from the shared buffer as a side effect still reaches the real delegate correctly, on that message's own turn through the delivery loop.
+When `parsley.coordination.domain-topics` is configured, `CausalTopology#assemble` wires an extra, raw `byte[]`/`byte[]` source into this same processor node for any domain topic this stage does not otherwise consume or produce (see `CausalTopology`). `ParsleyProcessor` recognises such a record by its own source topic (never a header) — it flows through the ordinary delivery gate exactly like any other channel, contributing its causal progress to the frontier, but its key/value are never handed to the delegate (they are not genuine `KIn`/`VIn` values). Any *other* record a passthrough delivery happens to release from the shared buffer as a side effect still reaches the real delegate correctly, on that message's own turn through the delivery loop.
 
 ## `process()` path
 
@@ -73,16 +73,17 @@ process(Record<KIn,VIn>)
     clear deliveryMetadata
 
   # a consumed record that was buffered (nothing delivered) emits a heartbeat watermark only if
-  # its receipt-time channel update advanced completeness, so progress still propagates downstream
+  # receiving it advanced completeness (a first sighting seeds the frontier), so progress still
+  # propagates downstream without flooding no-op watermarks
   if outcome.delivered().isEmpty() and completeness() advanced past completenessBefore:
     forwardWatermark(passthrough ? lastSeenKey : record.key())
 
   pollEpochCoordination()   # act promptly on a coordination-log change, not just on the wall-clock tick
 ```
 
-Each admitted record is stamped with `engine().completeness()` — the max-merge of this node's own contiguous frontier and every input channel's advertised clock; a single genuine witness to a coordinate is enough, it need not be corroborated on every channel (see [Causal consistency model](causal-consistency.md#the-completeness-frontier)). A record is delivered only once this node's completeness dominates every coordinate it depends on. The same completeness value is stamped on forwarded records and watermarks.
+Each admitted record is stamped with `engine().completeness()` — the max-merge of this node's own contiguous frontier and every input channel's advertised clock, carrying transitive ancestry downstream (see [Causal consistency model](causal-consistency.md)). The delivery gate itself is the node's own contiguous frontier: a record is delivered only once this node has itself delivered every coordinate it depends on; an advertised claim feeds only the stamp. The same completeness value is stamped on forwarded records and watermarks.
 
-When the delegate forwards no business record for a delivered input (`forwardCount() == 0`), the processor emits a protocol watermark in its place: a null-value record keyed with the triggering record's key (so it routes to that record's partition), carrying `engine().completeness()` and the `_parsley_watermark` header, so a non-emitting node still advances downstream completeness. On the receiving side `handleWatermark()` decodes the carried frontier, calls `engine().onWatermark(topicId, partition, frontier)` to update that source channel's clock and drain any newly releasable records, then relays a watermark downstream — but only when that channel's clock genuinely advanced, never unconditionally; otherwise a cyclic topology's marker would ping-pong forever.
+When the delegate forwards no business record for a delivered input (`forwardCount() == 0`), the processor emits a protocol watermark in its place: a null-value record keyed with the triggering record's key (so it routes to that record's partition), carrying `engine().completeness()` and the `_parsley_watermark` header, so a non-emitting node still advances downstream completeness. On the receiving side `handleWatermark()` decodes the carried frontier and calls `engine().onWatermark(topicId, partition, offset, frontier)`: the watermark's own offset is genuinely delivered on its source channel (advancing that channel's contiguous frontier, which is what can release held records), and the carried clock updates the channel's advertised view — feeding the outbound stamp, never the gate. It then relays a watermark downstream — but only when that channel's carried clock genuinely advanced, never unconditionally; otherwise a cyclic topology's marker would ping-pong forever.
 
 ## `ParsleyProcessorContext`
 
