@@ -28,8 +28,9 @@ import java.util.Set;
  * <p>Membership: a {@link ParsleyEpochEvent.JoinRequested} member is <em>pending</em> until the next commit,
  * then <em>running</em>. Running members are the ones whose publication a round waits for and whose
  * frontiers are folded into {@code lowerBounds}; a joiner (blocked, not yet consuming) publishes nothing
- * and does not constrain the cut. A {@link ParsleyEpochEvent.Leave} removes a member (a graceful leave or an
- * eviction). Each {@link ParsleyEpochEvent.JoinRequested} also declares the member's input/sink topics, from
+ * and does not constrain the cut. A {@link ParsleyEpochEvent.Leave} removes a member — appended only by a
+ * graceful, explicit decommission; there is no automatic eviction. Each {@link ParsleyEpochEvent.JoinRequested}
+ * also declares the member's input/sink topics, from
  * which {@link #externalSourceTopics()} derives the DAG-wide source-topic registry.
  *
  * <p>Not thread-safe: a single consumer thread applies the log in order.
@@ -86,8 +87,9 @@ final class ParsleyEpochLog {
                 }
             }
             case ParsleyEpochEvent.Leave e -> {
-                // Remove the member from the domain — a graceful leave or an eviction of a silent member.
-                // Dropping it from the open round's publications keeps the completeness check honest (a
+                // Remove the member from the domain — always a graceful, explicit decommission; there is
+                // no automatic eviction of a silent member. Dropping it from the open round's publications
+                // keeps the completeness check honest (a
                 // left member is no longer awaited). Idempotent: a Leave for a non-member is a no-op.
                 runningMembers.remove(e.memberId());
                 pendingJoiners.remove(e.memberId());
@@ -227,7 +229,7 @@ final class ParsleyEpochLog {
         return runningMembers.contains(memberId);
     }
 
-    /** The running members that have not yet published for the open round — eviction candidates once a round waits too long. */
+    /** The running members that have not yet published for the open round — the reason a round is not yet complete; no automatic eviction, the round simply waits until each has published or an explicit {@link ParsleyEpochEvent.Leave} removes it. */
     Set<String> unpublishedRunningMembers() {
         Set<String> outstanding = new HashSet<>(runningMembers);
         outstanding.removeAll(publications.keySet());

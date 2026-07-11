@@ -55,55 +55,38 @@ checks the buffer for records that were waiting on that coordinate. Any record t
 is released, and its own source coordinate advances the frontier in turn. This cascades until no
 further releases occur.
 
-## Buffer limits
+## Delivery
 
-A `CausalBufferLimit` bounds how long or how large the buffer may grow before eviction fires.
+A record is delivered once this node's **completeness** — its own contiguous frontier max-merged with
+every input channel's advertised clock — dominates the record's dependencies. A single genuine
+witness to a coordinate is enough: it does not need to be corroborated by every input channel, only by
+*some* channel that has itself genuinely, contiguously delivered up to it. This covers a record
+delivered immediately, a record delivered after a wait, and a record that claims no dependencies or
+carries an undecodable header (an empty dependency set, trivially satisfied).
 
-| Limit | Factory | Description |
-|---|---|---|
-| Size | `CausalBufferLimit.ofSize(n)` | Fires when the buffer holds at least `n` records. |
-| Duration | `CausalBufferLimit.ofDuration(d)` | Fires after the buffer has held a record for `d`. This is time-based and requires the processor to call eviction on schedule. |
-| First-of | `CausalBufferLimit.first(a, b, ...)` | Fires when the first of several limits fires. |
+There is no vacuous satisfaction, though: a dependency naming a coordinate this node has **no input
+channel for at all** — an undeclared topic, or a partition a different task instance owns — is not
+treated as satisfied just because it is out of scope. This node can prove it has no way to confirm such
+a coordinate, never that the coordinate is genuinely irrelevant, so it fails the task fast instead of
+buffering forever or guessing. The corollary is the **topology contract**: every coordinate a node's
+records could ever depend on must be reachable to that node through at least one input channel,
+directly or transitively. A join of fully independent sources can still receive a record depending on a
+coordinate no input channel observes — route that coordinate through some input branch instead (see
+[`parsley.coordination.domain-topics`](configuration.md) for doing this without a redundant business
+subscription). Unlike the topology contract, there is no restriction on a node consuming both a topic
+and a topic derived from it — single-witness merge has no unanimity requirement for that to violate.
+See the [causal consistency model](internals/causal-consistency.md) for the full contract and why a
+single witness suffices.
 
-## Delivery and eviction
+## Causal buffer is unbounded and fail-closed
 
-A record is delivered in causal order once its dependencies are confirmed by every input channel of
-the processor. This covers a record delivered immediately, a record delivered after a wait, and a
-record that claims no dependencies or carries an undecodable header (an empty dependency set, trivially
-satisfied).
-
-The gate is strict: a dependency on coordinate K is satisfied only when *every* input channel the
-processor consumes has advertised K to at least the required offset. A producer stamps its full causal
-frontier, which can span topics a given processor does not read directly — and the processor waits for
-all of its input channels to confirm those coordinates rather than ignoring them. This is what lets the
-processor enforce an ordering that runs through topics it does not itself consume, but it means the
-**topology must route every depended-upon coordinate through every input branch** of a node (consuming
-and watermarking it, even with no business logic). A coordinate that some input branch never observes
-holds the record indefinitely. Two corollaries: a join of fully independent sources will hold a record
-that depends on a coordinate an unrelated input never sees, and a node must not consume both a topic and
-a topic derived from it (the ancestor channel can never confirm the descendant). See the
-[causal consistency model](internals/causal-consistency.md) for the full contract.
-
-When a held record's dependencies are still not satisfied and the configured `CausalBufferLimit`
-fires, what happens next is governed by `parsley.buffer.eviction.failure.policy`. The default is
-`fail`. Under `fail`, Parsley fails the task rather than deliver the record out of causal order. The
-record stays in the buffer and is retried after a restart or once the backlog eases. A record whose
-dependency never arrives is therefore never force-delivered under the default policy.
-
-Setting the policy to `continue` makes Parsley forward records rather than fail. Under
-`continue`, the limit evicts the oldest qualifying record and delivers it out of causal order.
-Eviction still feeds the frontier exactly like a normal delivery, so once the evicted record's
-coordinate closes its gap, every record already forwarded above it, and any record buffered
-downstream that was waiting on it, catches up in the same step. An eviction under `continue` never
-permanently stalls the records behind it. The [Configuration](configuration.md) page describes the
-policy in full.
-
-## Causal violations
-
-Every eviction under the `continue` policy, and every fail-fast firing under the default policy, is
-logged with the current frontier, the required dependencies, and the causal gap. The causal gap is a
-per-coordinate shortfall that shows exactly how far the frontier was behind at the time the limit
-fired. Each firing is also counted by a metric.
+The causal buffer never evicts and never delivers a record out of causal order. There is no
+configuration that trades causal safety for liveness. A record whose dependencies are proven
+impossible — an undecodable payload or dependencies header, or a dependency naming a coordinate this
+node has no channel for — unconditionally fails the task; it is never dropped or forwarded on an
+unproven premise. The failure is logged with the record's coordinate and, for a decode failure, its
+metadata (never the payload), and counted by a metric. See [Troubleshooting](troubleshooting.md) for
+the operational playbook and [Configuration](configuration.md#metrics) for the metrics.
 
 ## Co-partitioning
 
@@ -117,14 +100,12 @@ coarser function of the key with a custom `StreamPartitioner`, provided the part
 rather than the value, since a protocol watermark carries no value to read.
 
 Parsley does not enforce co-partitioning end to end, and most of it cannot be checked, so a
-misconfigured topology evaluates against an incomplete partition set. A bare `ParsleyProcessors`
-decorator can check one necessary part at startup, that its causal input topics share a partition
-count, controlled by `parsley.topology.validation` (`warn` by default, `strict` to fail fast, `off`
-to disable). `CausalStreams` (see [Streams integration](streams.md#the-high-level-api-causalstreams))
-owns the sinks too, so it widens the same check to the sink topics, and applies one partitioner
-uniformly across every sink it declares so a shard cannot drift onto different partitions across
-topics by accident. See the [Streams integration](streams.md#startup-validation) preconditions for
-the full contract.
+misconfigured topology evaluates against an incomplete partition set. At startup, `parsley.topology.validation`
+(`warn` by default, `strict` to fail fast, `off` to disable) checks that a stage's causal input topics
+share a partition count, and, since a stage built through `CausalStreamsBuilder` owns its sinks too,
+folds sink partition counts into the same check and applies one partitioner uniformly across every sink
+a stage declares so a shard cannot drift onto different partitions across topics by accident. See the
+[Streams integration](streams.md#preconditions) preconditions for the full contract.
 
 ## Topology epochs
 
@@ -136,10 +117,18 @@ floor per coordinate; history below the floor is pre-epoch, so it feeds the dele
 not participate in causal time. A node deployed into a running topology adopts the current floor and
 replays with everything below it stripped, so it never drags the frontier down.
 
-`ParsleyCoordination` turns this on. It is optional and leaderless: participating applications share one
-single-partition epoch-events log and each folds it identically to agree on every epoch's floor, which
-then propagates through the topology in-band. Which topics are external entry points is derived from
-what each node declares it consumes and produces, not configured by hand. Without a `ParsleyCoordination`
-a topology runs in epoch 0 and behaves exactly as one with no epoch machinery. See
-[Evolving a running topology](streams.md#evolving-a-running-topology) for the API and
-[Topology epochs](internals/topology-epochs.md) for the protocol.
+Setting `parsley.coordination.epoch-events-topic` turns this on. It is optional and leaderless:
+participating applications share one single-partition epoch-events log and each folds it identically
+to agree on every epoch's floor, which then propagates through the topology in-band. Which topics are
+external entry points is derived from what each node declares it consumes and produces, not configured
+by hand. Absent that key, a topology runs in epoch 0 and behaves exactly as one with no epoch
+machinery.
+
+Coordination also requires every running member's declared inputs and sinks to jointly cover the full
+coordinated domain, or an epoch round cannot commit — a genuine multi-stage pipeline (app A produces a
+topic only app B consumes) needs every member to also cover the topics only a sibling touches. Set
+`parsley.coordination.domain-topics` so `CausalTopology` auto-wires a passthrough source for any domain
+topic a stage does not otherwise consume or produce, covering it without a redundant business
+subscription — this is what makes a genuinely cyclic topology (A produces to B, B produces back to A)
+coordinate correctly. See [Evolving a running topology](streams.md#evolving-a-running-topology) for the
+API and [Topology epochs](internals/topology-epochs.md) for the protocol.

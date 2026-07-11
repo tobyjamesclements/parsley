@@ -14,10 +14,12 @@ import org.apache.kafka.common.Uuid;
  * <p>Returns {@link #NO_BOUND} for any coordinate with no recorded bound, so a dependency on it is
  * never stripped and it is gated normally over its full history (epoch 0, the conservative default).
  *
- * <p>Nothing populates a non-{@link #NONE NONE} epoch yet: bounds are established by the Topology
- * Co-ordinator via an in-band epoch-boundary marker (parked design — see
- * {@code ~/.claude/plans/resume-the-topology-epochs-reactive-owl.md}); until that lands, every gate
- * runs with {@link #NONE} (epoch 0), so the whole invariant is a no-op and behaviour is unchanged.
+ * <p>{@link #NONE} (epoch 0) is the default whenever topology-epoch coordination is not configured
+ * ({@code parsley.coordination.epoch-events-topic} unset). When it is configured, {@link
+ * ParsleyEpochState} is the live implementation: it populates real per-coordinate bounds from
+ * committed floors relayed in-band by {@code ParsleyEpochBoundary} markers, driven by the leaderless
+ * epoch protocol ({@link ParsleyEpochLog} / {@link ParsleyEpochRuntime}) and consumed by
+ * {@link ParsleyProcessor}'s epoch-marker handlers.
  */
 @FunctionalInterface
 interface ParsleyEpoch {

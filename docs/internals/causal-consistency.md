@@ -190,17 +190,16 @@ nodes.)
 
 ## Violations
 
-Eviction is the only path that breaks Lamport's happened-before guarantee. Under the default
-policy (`parsley.buffer.eviction.failure.policy = fail`), the engine throws rather than deliver
-a record whose dependencies are not met, and the task restarts. No violation reaches downstream.
+There is no path that breaks Lamport's happened-before guarantee. Delivery is unconditionally
+fail-closed: there is no eviction and no configuration that trades causal order for availability. A
+record whose dependencies are proven impossible to satisfy — an undecodable payload or dependencies
+header, or a dependency naming a coordinate this node has no channel for (see
+[the topology contract](#the-topology-contract)) — fails the task fast rather than being delivered out
+of order or dropped. The engine throws, the task restarts, and the record stays in the buffer changelog
+for recovery. No violation ever reaches downstream.
 
-Under the `continue` policy, the record is delivered out of causal order. Its outgoing stamp
-carries the node's completeness frontier at eviction time, which does not dominate the evicted
-record's declared dependencies. Downstream nodes receiving that stamp may release records they would
-otherwise have held. The violation is transitive. The `continue` policy is an explicit trade of
-Lamport's guarantee for availability under a full buffer; it is logged, metered, and documented
-as a deliberate choice.
-
-The distinction between `fail` and `continue` maps directly onto the consistency-availability
-trade-off described in the CAP theorem and in the causal consistency literature. The default
-takes the consistency side.
+This takes the consistency side of the trade-off described in the CAP theorem and in the causal
+consistency literature unconditionally: Parsley has no policy knob that spends causal order for
+liveness. A genuinely stuck dependency (a lagging partition, a co-partitioning gap, a producing topic
+that was deleted) shows up as unbounded buffer growth or a fail-closed task restart, never as a silent
+reordering — see [Troubleshooting](../troubleshooting.md).

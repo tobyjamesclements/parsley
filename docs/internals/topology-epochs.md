@@ -12,10 +12,12 @@ Topology epochs solve this without a coordinator process and without stopping th
 **epoch** defines a floor per `(topicId, partition)` coordinate. History below the floor is pre-epoch:
 it feeds state but does not participate in causal time. A node deployed into a running topology adopts
 the current floor, replays its inputs from the start with everything below the floor stripped, and so
-never pins the shared frontier down. The whole mechanism is opt-in through
-[`ParsleyCoordination`](../streams.md#evolving-a-running-topology); without it a topology runs in
+never pins the shared frontier down. The whole mechanism is opt-in through setting
+`parsley.coordination.epoch-events-topic`, described from the user's side in
+[Evolving a running topology](../streams.md#evolving-a-running-topology); without it a topology runs in
 **epoch 0**, whose floor is 0 everywhere, and behaves exactly as a topology with no epoch machinery at
-all.
+all. Internally, `CausalStreams` owns a `ParsleyCoordination` handle over the configured topic — it is
+not user-constructed.
 
 ## The floored clock
 
@@ -99,9 +101,11 @@ covered because every upstream task relays. A marker is never delivered to the u
 
 A node consuming a marker also advances: the relayed marker carries the node's own completeness, so one
 record both drives the transition and advances the downstream channel clock. This reuses the machinery
-that already propagates watermarks edge by edge through the DAG. Because the causal contract forbids a
-node from consuming both a topic and a topic derived from it, the topology is a DAG, and marker fan-in
-at a join reuses the same "seen on every channel" rule as the overlapping transition.
+that already propagates watermarks edge by edge through the topology — relayed further only when the
+receiving channel's clock genuinely advanced, never unconditionally. That gate is what keeps a topology
+with a genuine cycle (a stage that also consumes something derived from its own output) from
+ping-ponging the same marker forever: once a node has already folded a marker's carried clock and it
+teaches the node nothing new, relay stops there instead of looping.
 
 ## The source-topic registry
 
@@ -130,8 +134,9 @@ This replaces an earlier design in which each application was configured by hand
 source topic names. A hand-written declaration could silently disagree with the real topology — a genuine
 intermediate topic marked external, or an external topic left undeclared — and either mistake breaks the
 wave for that coordinate. Deriving the registry from what every node actually consumes and produces
-removes that class of misconfiguration. On the high-level API sinks are declared automatically by
-`addSink(...)`; on the low-level decorator they are declared with `ParsleyProcessors.Builder.sinkTopics(...)`.
+removes that class of misconfiguration. Sink topics are declared automatically from
+`CausalStreamsBuilder`/`CausalProcessedStream#to(...)`; internally these become `sinkTopics` passed to
+`ParsleyProcessors.Builder#sinkTopics`.
 
 ## Joining a running topology
 
@@ -175,10 +180,8 @@ protects its own un-drained work automatically, because its frontier pulls the `
 its buffered dependencies.
 
 The cost is that a crashed member blocks the next epoch *transition* — and therefore any new join — until
-it returns. Ongoing processing in the current epoch is unaffected; only topology evolution waits. How an
-absent member is handled is `ParsleyMembershipStrategy`; the only strategy today, `blockUntilDrained()`,
-never excludes. Richer strategies — recovery, buffer hand-off, or an operator-driven forced exclusion —
-could reintroduce a pluggable seam here, but nothing needs one yet.
+it returns. Ongoing processing in the current epoch is unaffected; only topology evolution waits. Block
+until drained, never evict, is the only membership behavior — it is hardcoded, not a pluggable strategy.
 
 Because a round needs every member's publication to commit, publication is driven off the folded log, not
 off a one-shot in-band marker: any member that observes a round it has not yet published to publishes its
@@ -188,10 +191,17 @@ and re-publishes, so a lost publication cannot deadlock the round.
 ## Deployment
 
 The coordination is entirely optional and requires no separate process. A domain needs one
-single-partition epoch-events log topic, shared by every participating application, and each application
-registers a `ParsleyCoordination` over that topic with its causal builders. Without a handle a topology
-runs in epoch 0. Because a Kafka Streams application must run one topology on every instance, a
-zero-downtime rolling topology change is not a Streams capability; a genuine new stage is a redeploy. The
-epochs machinery is what lets that redeploy re-enter causal time cleanly rather than replaying obsolete
-history into the shared frontier. See
+single-partition epoch-events log topic, shared by every participating application, named via
+`parsley.coordination.epoch-events-topic` in the `Properties` each application passes to its
+`CausalStreams`. Without that key a topology runs in epoch 0. Because a Kafka Streams application must
+run one topology on every instance, a zero-downtime rolling topology change is not a Streams capability;
+a genuine new stage is a redeploy. The epochs machinery is what lets that redeploy re-enter causal time
+cleanly rather than replaying obsolete history into the shared frontier.
+
+Coordination also requires every running member's declared inputs and sinks to jointly cover the full
+coordinated domain — `ParsleyEpochLog#isFullMeshSatisfied()` is a conjunct of `isRoundComplete()`, so a
+round cannot commit while any running member has a gap. `parsley.coordination.domain-topics` plus
+auto-wired passthrough sources (see `CausalTopology#assemble`) let a stage cover a domain topic it does
+not otherwise consume or produce, without a redundant business subscription — this is what makes a
+genuinely cyclic topology coordinate correctly. See
 [Evolving a running topology](../streams.md#evolving-a-running-topology) for the user-facing API.

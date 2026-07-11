@@ -8,23 +8,20 @@ message's causal dependencies onto the message and buffering records until those
 been observed.</p>
 
 <p>The entire public surface lives in a single package, {@link io.github.tobyjamesclements.parsley}.
-It consists of interfaces and value types. Every implementation is package-private and obtained
-through a static factory: {@link io.github.tobyjamesclements.parsley.ParsleyProcessors},
-{@link io.github.tobyjamesclements.parsley.CausalStreams}, and
-{@link io.github.tobyjamesclements.parsley.CausalDependencies}.</p>
-
-<p>There are two entry points into the causal guarantee. {@link io.github.tobyjamesclements.parsley.ParsleyProcessors}
-is the low-level decorator: it wraps one user {@code Processor} and you wire it into a topology you
-build and own yourself. {@link io.github.tobyjamesclements.parsley.CausalStreams} is the high-level,
-topology-owning builder: it composes the same decorator internally, but owns the surrounding sources,
-processor, and sinks itself, which unlocks guarantees the decorator alone cannot provide — a sink
-partitioner applied uniformly across every sink, co-partitioning validation that covers sinks as well
-as inputs, and coordinated graceful shutdown via {@link io.github.tobyjamesclements.parsley.ParsleyQuiesce}.</p>
+The topology-level entry point is three roles mirroring Kafka Streams' own {@code StreamsBuilder} /
+{@code Topology} / {@code KafkaStreams}: {@link io.github.tobyjamesclements.parsley.CausalStreamsBuilder}
+declares one or more causal stages, {@code .build()} produces a
+{@link io.github.tobyjamesclements.parsley.CausalTopology}, and
+{@link io.github.tobyjamesclements.parsley.CausalStreams} is the runtime that wraps the underlying
+{@code KafkaStreams} instance. The low-level processor decorator that powers it,
+{@code ParsleyProcessors}, is package-private internal machinery, not constructed directly.</p>
 
 <p>A running topology can also evolve — add a stage, replace a stage, recompile — across a leaderless
-epoch boundary coordinated by {@link io.github.tobyjamesclements.parsley.ParsleyCoordination}, so a new
-node adopts the current causal floor instead of replaying pre-epoch history into the shared frontier.
-It is optional; without it a topology runs in epoch 0, unchanged.</p>
+epoch boundary: {@link io.github.tobyjamesclements.parsley.CausalStreams#requestEpochTransition()}
+evolves every participating member through it, so a new node adopts the current causal floor instead of
+replaying pre-epoch history into the shared frontier. This is optional and off by default; setting
+{@code parsley.coordination.epoch-events-topic} turns it on. Absent that key, a topology runs in epoch 0
+indefinitely.</p>
 
 <h2>Core concepts</h2>
 <dl>
@@ -33,8 +30,8 @@ It is optional; without it a topology runs in epoch 0, unchanged.</p>
   They are a producer's snapshot of what it had seen when it sent the record. They are carried as
   {@link io.github.tobyjamesclements.parsley.CausalDependencies} in a
   {@code parsley-causal-dependencies} header. Build one from a consumed record by starting with
-  {@link io.github.tobyjamesclements.parsley.CausalDependencies#using using} to bind a topic
-  resolver, then folding in each record with
+  {@link io.github.tobyjamesclements.parsley.CausalDependencies#using(java.util.Properties) using} to
+  bind a topic resolver, then folding in each record with
   {@link io.github.tobyjamesclements.parsley.CausalDependencies#observe observe}. Combine several
   for a fan-in with {@link io.github.tobyjamesclements.parsley.CausalDependencies#merge merge}, and
   attach the result to an outbound record with
@@ -43,71 +40,60 @@ It is optional; without it a topology runs in epoch 0, unchanged.</p>
   {@link io.github.tobyjamesclements.parsley.CausalDependencies#isWatermark isWatermark} returns true,
   which are protocol metadata rather than business records.</dd>
 
-  <dt><strong>Causal frontier</strong></dt>
-  <dd>The highest offset a causal processor has <em>contiguously</em> admitted on each topic-partition.
-  It is never a coordinate the processor merely happens to have seen something later on, because a
-  later-offset record may be forwarded before an earlier one that is still held on the same partition.
-  The frontier is keyed by topic UUID, so topic deletion and recreation produce a distinct identity
-  even when the name is reused. A record is delivered once every input channel has confirmed every
-  coordinate the record depends on (the per-coordinate minimum across all input channels). The
-  frontier is internal to {@link io.github.tobyjamesclements.parsley.ParsleyProcessors} and is not a
-  separate public type.</dd>
+  <dt><strong>Completeness frontier</strong></dt>
+  <dd>A node's own contiguous frontier max-merged with every input channel's advertised clock — a
+  single genuine witness to a coordinate is enough, it need not be corroborated on every channel. A
+  record is delivered once this completeness dominates every coordinate the record depends on. A
+  dependency naming a coordinate this node has no input channel for is never treated as vacuously
+  satisfied; it fails the task fast instead, so every input branch of a node must be able to observe
+  every coordinate any branch's records depend on. The frontier is internal to Parsley's processor
+  engine and is not a separate public type.</dd>
 
   <dt><strong>Protocol watermark</strong></dt>
   <dd>A record with a null value, keyed with the triggering record's key, marked with a
   {@code _parsley_watermark} header, that carries a node's completeness frontier downstream when a
   delivered input produced no business output. Reusing the key routes it to the same partition the
   record's output would. It keeps causal progress flowing through filters and not-yet-emitting
-  aggregates. Parsley's processors handle
-  watermarks internally; a plain Kafka client detects them with
-  {@link io.github.tobyjamesclements.parsley.CausalDependencies#isWatermark isWatermark}.</dd>
+  aggregates, and relays further downstream only when the receiving channel's clock genuinely
+  advanced — never unconditionally, which is what keeps a cyclic topology's marker traffic from
+  ping-ponging forever. Parsley's processors handle watermarks internally; a plain Kafka client detects
+  them with {@link io.github.tobyjamesclements.parsley.CausalDependencies#isWatermark isWatermark}.</dd>
 
   <dt><strong>Causal buffer</strong></dt>
-  <dd>Records whose dependencies are not yet satisfied are held in a changelog-backed buffer and
-  released as soon as the frontier catches up. A
-  {@link io.github.tobyjamesclements.parsley.CausalBufferLimit} bounds how long or how large the
-  buffer may grow. When the limit fires before a held record's dependencies are satisfied, the
-  outcome is governed by the {@code parsley.buffer.eviction.failure.policy} configuration. By default
-  Parsley fails the task and leaves the record buffered for retry, which keeps delivery in causal
-  order. Setting the policy to {@code continue} forwards the held record out of causal order instead.
-  Parsley never drops or diverts a record under either policy, and every firing is logged and
-  counted.</dd>
+  <dd>Records whose dependencies are not yet satisfied are held in an unbounded, changelog-backed
+  buffer and released as soon as the frontier catches up. There is no configuration that trades causal
+  order for liveness: a record whose dependencies are proven impossible — an undecodable payload or
+  dependencies header, or a dependency naming a coordinate this node has no channel for — unconditionally
+  fails the task rather than being dropped, evicted, or delivered out of order.</dd>
 </dl>
 
 <h2>Entry points</h2>
 <table>
   <thead><tr><th>Type</th><th>Purpose</th></tr></thead>
   <tbody>
-    <tr><td>{@link io.github.tobyjamesclements.parsley.ParsleyProcessorSupplier}</td><td>Wraps a user Kafka Streams {@code Processor} so that its state access and its {@code forward} calls run behind the causal guarantee. It is built through {@link io.github.tobyjamesclements.parsley.ParsleyProcessors}.</td></tr>
-    <tr><td>{@link io.github.tobyjamesclements.parsley.CausalStreams}</td><td>The topology-owning builder: composes {@link io.github.tobyjamesclements.parsley.ParsleyProcessors} internally and owns the sources, processor, and sinks around it, so it can apply a uniform sink partitioner and validate co-partitioning across sinks as well as inputs.</td></tr>
-    <tr><td>{@link io.github.tobyjamesclements.parsley.ParsleyQuiesce}</td><td>A shared handle for coordinating graceful shutdown across every causal task in one application instance. Register it via {@code withQuiesce} on either builder; call {@code requestQuiesce()} and poll {@code isSafeToClose()} before closing {@code KafkaStreams}.</td></tr>
-    <tr><td>{@link io.github.tobyjamesclements.parsley.ParsleyCoordination}</td><td>A shared, leaderless handle for evolving a running topology across an epoch boundary, so a new or replaced stage adopts the current causal floor rather than replaying pre-epoch history into the shared frontier. Register it via {@code withCoordination} on either builder; call {@code requestEpochTransition()} to evolve, and {@code close()} in shutdown. Optional — without it a topology runs in epoch 0.</td></tr>
+    <tr><td>{@link io.github.tobyjamesclements.parsley.CausalStreamsBuilder}</td><td>Declares one or more causal stages: {@code stream(...)} one or more source topics, {@code .process(supplier)} to bind them to a causal-decorated processor, {@code .to(...)} to declare its sink(s). {@code .build()} produces a {@link io.github.tobyjamesclements.parsley.CausalTopology}.</td></tr>
+    <tr><td>{@link io.github.tobyjamesclements.parsley.CausalTopology}</td><td>The built causal topology — a specification, not yet a real Kafka Streams {@code Topology} — ready for {@code new CausalStreams(topology, props)}.</td></tr>
+    <tr><td>{@link io.github.tobyjamesclements.parsley.CausalStreams}</td><td>The runtime: wraps the underlying {@code KafkaStreams} instance, and owns graceful causal drain on {@code close()} and, when {@code parsley.coordination.epoch-events-topic} is configured, topology-epoch coordination. Evolve a running topology through an epoch boundary with {@code requestEpochTransition()}.</td></tr>
     <tr><td>{@link io.github.tobyjamesclements.parsley.CausalDependencies}</td><td>Stamps and reads causal dependencies directly on plain {@code ProducerRecord} and {@code ConsumerRecord} objects, for talking to a Parsley topology from outside Kafka Streams.</td></tr>
   </tbody>
 </table>
 
 <h2>Typical usage</h2>
 <pre>{@code
-// Low-level: inside a Kafka Streams topology you build and own
-builder.stream(List.of("prices", "orders"), Consumed.with(Serdes.String(), orderSerde))
-       .process(ParsleyProcessors.builder(userSupplier)
-               .addBufferStore("parsley", CausalBufferLimit.ofDuration(limit))
-               .addBuffer(ParsleyBuffer.of("prices", Serdes.String(), priceSerde))
-               .addBuffer(ParsleyBuffer.of("orders", Serdes.String(), orderSerde))
-               .build())
-       .to("output-topic");
+CausalStreamsBuilder builder = new CausalStreamsBuilder();
 
-// High-level: CausalStreams owns the topology itself
-Topology topology = CausalStreams.builder(userSupplier)
-        .addBufferStore("parsley", CausalBufferLimit.ofDuration(limit))
-        .addSource(ParsleyBuffer.of("prices", Serdes.String(), priceSerde))
-        .addSource(ParsleyBuffer.of("orders", Serdes.String(), orderSerde))
-        .addSink("enriched-sink", "enriched-output", Serdes.String(), enrichedSerde)
-        .build();
-new KafkaStreams(topology, props).start();
+builder.stream(List.of("prices", "orders"), Serdes.String(), orderSerde)
+       .process(new EnrichOrderSupplier())
+       .to("enriched-output", Serdes.String(), enrichedSerde);
+
+CausalTopology topology = builder.build();
+
+CausalStreams causalStreams = new CausalStreams(topology, props);
+causalStreams.start();
+Runtime.getRuntime().addShutdownHook(new Thread(causalStreams::close));
 
 // At the edge, from a plain Kafka client
-CausalDependencies deps = CausalDependencies.using(topics).observe(consumedRecord);
+CausalDependencies deps = CausalDependencies.using(props).observe(consumedRecord);
 producer.send(deps.stamp(new ProducerRecord<>("orders", key, value)));
 }</pre>
 </body>

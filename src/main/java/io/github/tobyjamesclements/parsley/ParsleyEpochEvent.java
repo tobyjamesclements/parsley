@@ -57,9 +57,11 @@ sealed interface ParsleyEpochEvent
     record EpochCommitted(long epochId, ParsleyClock lowerBounds) implements ParsleyEpochEvent {}
 
     /**
-     * A member is removed from the domain — appended by the member itself (a graceful
-     * {@code ParsleyCoordination.leave()}) or by any node evicting a silent member after a round waits too
-     * long. Either way the fold drops it from membership, so a gone member cannot freeze rounds forever.
+     * A member is removed from the domain — appended only by the member itself, via a graceful
+     * {@code ParsleyCoordination.leave()}. There is no automatic eviction: a round with a silent member
+     * simply waits, unbounded, until that member publishes or explicitly leaves — evicting it and
+     * committing a floor without it could strand records it still holds below that floor and release
+     * them before their causes.
      */
     record Leave(String memberId) implements ParsleyEpochEvent {}
 

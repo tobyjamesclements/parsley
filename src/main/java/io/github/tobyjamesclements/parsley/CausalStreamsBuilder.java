@@ -39,7 +39,7 @@ import java.util.Map;
  * {@code Consumed}/{@code Produced}: neither exposes its serdes for reading back, and Parsley's causal
  * buffer needs the real {@link Serde} to round-trip a held record across a restart.
  *
- * <p>See {@link ParsleyProcessorSupplier} for the causal guarantee and its preconditions — they apply
+ * <p>See {@link ParsleyProcessor} for the causal guarantee and its preconditions — they apply
  * unchanged here. Every source and sink a stage declares shares one {@code StreamPartitioner}
  * ({@link CausalProcessedStream#withPartitioner}, default Kafka's own key-hash partitioner), so a shard
  * never drifts onto different partitions across topics.

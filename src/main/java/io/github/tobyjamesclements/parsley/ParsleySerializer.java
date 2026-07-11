@@ -133,12 +133,12 @@ final class ParsleySerializer<K, V> {
     record IndexMetadata(String topic, Uuid topicId, int partition, long offset, ParsleyClock dependencies) {}
 
     /**
-     * Reconstructs only the metadata a restored buffer needs to rebuild its candidate index, and to
-     * identify a record for eviction reporting — the source coordinate and the insertion-time
-     * dependency clock — <strong>without invoking the user serde</strong>. Both are part of Parsley's
-     * own framing (written before the key/value bytes), so a value Parsley cannot decode (e.g. an
-     * incompatible Schema Registry change) never blocks startup or eviction; that failure surfaces
-     * only when the record is actually forwarded via {@link #deserialize}.
+     * Reconstructs only the metadata a restored buffer needs to rebuild its candidate index — the
+     * source coordinate and the insertion-time dependency clock — <strong>without invoking the user
+     * serde</strong>. Both are part of Parsley's own framing (written before the key/value bytes), so a
+     * value Parsley cannot decode (e.g. an incompatible Schema Registry change) never blocks startup or
+     * the drain scan; that failure surfaces only when the record is actually forwarded via
+     * {@link #deserialize}.
      *
      * @param bytes the buffered-record bytes
      * @return the record's source coordinate and decoded dependency clock

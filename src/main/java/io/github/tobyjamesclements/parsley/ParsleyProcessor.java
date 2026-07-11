@@ -330,8 +330,8 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
                 });
 
         // Refreshes the oldest-record gauge independent of buffer traffic, so it stays current on a
-        // buffer that sits idle between admits/releases/evictions (notably a size-only buffer, which
-        // has no other periodic tick at all). Also re-pushes this task's quiesce-drained state: without
+        // buffer that sits idle between admits and releases, which has no other periodic tick at all.
+        // Also re-pushes this task's quiesce-drained state: without
         // this, a task whose buffer emptied before requestQuiesce() was ever called would report
         // drained=false forever — updateQuiesceState() only runs on a depth-changing event, and once the
         // buffer is idle there is no such event left to re-evaluate isQuiesceRequested() && empty after
@@ -565,7 +565,7 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
     /**
      * Reports this task's current buffer-drained state, to {@link #quiesce} (if registered) and to the
      * epoch runtime (if coordinated). Called after every buffer-depth-changing event (every path that can
-     * hold, release, or evict a record funnels through {@link #deliver}), so the signal reflects the
+     * hold or release a record funnels through {@link #deliver}), so the signal reflects the
      * current buffer depth without polling. Never fabricates completeness — it only observes the buffer
      * depth the ordinary delivery path already produced. Quiesce additionally gates its drained flag on
      * {@link ParsleyQuiesce#isQuiesceRequested()}; the runtime tracks the raw depth so

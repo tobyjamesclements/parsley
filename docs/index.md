@@ -33,12 +33,11 @@ already delivered on each partition. If the frontier already satisfies the depen
 is forwarded immediately. If it does not, the record is held in a causal buffer until the frontier
 catches up.
 
-If the frontier never catches up and the configured `CausalBufferLimit` fires, the outcome is
-governed by `parsley.buffer.eviction.failure.policy`. By default this policy is `fail`: Parsley fails
-the task and leaves the record in the buffer for retry, which preserves causal order at the cost of
-availability. Setting the policy to `continue` instead forwards the held record out of causal order
-once the limit fires. Either way, the event is logged with the causal gap and counted by a metric.
-The [Configuration](configuration.md) page describes the policy in full.
+The causal buffer is unbounded — there is no configuration that trades causal order for liveness. A
+record whose dependencies are proven impossible to satisfy (an undecodable payload or dependencies
+header, or a dependency naming a coordinate this node has no channel for) unconditionally fails the
+task rather than being delivered out of order. The [Troubleshooting](troubleshooting.md) page covers
+recovery, and [Configuration](configuration.md) covers the resulting metrics.
 
 ## Public API
 
@@ -55,11 +54,9 @@ there is no low-level public entry point to build a topology around by hand.
 
 ## Where to go next
 
-- [Concepts](concepts.md) covers causal dependencies, the frontier, the buffer, and how eviction is
-  handled.
+- [Concepts](concepts.md) covers causal dependencies, the frontier, and the buffer.
 - [Getting started](getting-started.md) covers installation and stamping causal context at the edge.
-- [Streams integration](streams.md) covers wrapping a `Processor`, `CausalStreams`, the
+- [Streams integration](streams.md) covers building a topology with `CausalStreamsBuilder`, the
   preconditions, and recovery.
-- [Configuration](configuration.md) covers buffer limits, the eviction and deserialization policies,
-  and header size.
+- [Configuration](configuration.md) covers the remaining `parsley.*` keys, header size, and metrics.
 - [API reference](api/index.html) is the full Javadoc.

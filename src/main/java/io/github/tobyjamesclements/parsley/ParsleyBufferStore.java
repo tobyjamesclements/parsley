@@ -30,9 +30,9 @@ interface ParsleyBufferStore<K, V> {
     /**
      * The metadata decodable <em>without</em> the user serde: an entry's insertion sequence, its
      * buffer-admission time, source coordinate, and decoded dependencies — but not the deserialised
-     * record. Used both to rebuild the candidate index on restart and to drive eviction without
+     * record. Used both to rebuild the candidate index on restart and to drive the drain scan without
      * all-or-nothing decoding, so a record whose key/value can no longer be decoded (e.g. an
-     * incompatible Schema Registry change) neither blocks startup nor wedges eviction of the other
+     * incompatible Schema Registry change) neither blocks startup nor wedges the drain of the other
      * held records. The coordinate fields are Parsley's own framing (written ahead of the user
      * key/value bytes), so they're always decodable even for a record that is otherwise undecodable.
      */
@@ -63,7 +63,7 @@ interface ParsleyBufferStore<K, V> {
      * Returns every buffered entry, in ascending insertion-sequence (causal arrival) order. Since
      * entries are admitted in real-time order on a single owning thread, this is equivalently
      * ascending {@code bufferedAt} (buffer-start-time) order — callers that need oldest-first
-     * iteration (e.g. duration-based eviction) can rely on this without a separate index.
+     * iteration (e.g. the oldest-buffered-at metrics gauge) can rely on this without a separate index.
      *
      * @return the buffered entries; empty if the buffer is empty
      */

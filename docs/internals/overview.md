@@ -1,12 +1,13 @@
 # Internals overview
 
-Parsley is built around one public entry point — the Streams causal processor — plus stateless edge
-operations for stamping and propagating dependencies from plain Kafka clients, all backed by a shared
-internal implementation.
+Parsley is built around one public, topology-level entry point — `CausalStreamsBuilder` /
+`CausalTopology` / `CausalStreams`, three roles mirroring Kafka Streams' own `StreamsBuilder` /
+`Topology` / `KafkaStreams` — plus stateless edge operations for stamping and propagating dependencies
+from plain Kafka clients, all backed by a shared internal implementation.
 
 | API | Backed by |
 |---|---|
-| `ParsleyProcessorSupplier` | `ParsleyProcessor` |
+| `CausalStreamsBuilder` / `CausalTopology` / `CausalStreams` | `ParsleyProcessors` / `ParsleyProcessorSupplier` / `ParsleyProcessor` (package-private) |
 | `CausalDependencies` edge ops (`using` / `observe` / `stamp` / `merge`) | `ParsleyClock` (no wrapper objects); `using`/`builder` resolve topic UUIDs internally, caching each name against a short-lived Kafka admin client opened on first use |
 
 All share a common set of value types and a single causal engine.
@@ -17,26 +18,29 @@ All share a common set of value types and a single causal engine.
 
 | Class | Role |
 |---|---|
+| `CausalStreamsBuilder` | Declares one or more causal stages: `stream(...)` source topics, `.process(supplier)`, `.to(...)` sink(s); `.build()` produces a `CausalTopology` |
+| `CausalStream` / `CausalProcessedStream` | Fluent intermediate types `CausalStreamsBuilder` returns while declaring a stage (`merge`, `process`, `to`, `withPartitioner`) |
+| `CausalTopology` | The built, immutable topology specification; `assemble(props, quiesce, coordination)` produces the real Kafka Streams `Topology` |
+| `CausalStreams` | The runtime: wraps the underlying `KafkaStreams` instance, owns graceful causal drain on `close()` and, when configured, topology-epoch coordination |
 | `CausalDependencies` | Public facade over a `ParsleyClock`: the causal requirements stamped onto each record, plus the `using`/`observe`/`stamp`/`merge` edge operations and `isWatermark` for skipping protocol watermarks on the consumer side |
-| `ParsleyBuffer` | Registers one causal source on the processor builder: topic name + the serdes the buffer round-trips held records with (the topic's UUID is resolved from the broker) |
-| `CausalBufferLimit` | When to evict held records: `ofDuration`, `ofSize`, `first` |
 
 ### Package-private implementation
 
 | Class | Role |
 |---|---|
 | `ParsleyTopics` / `KafkaTopics` | Resolves topic names to their stable Kafka UUIDs (through a short-lived Kafka admin client, cached), backing `CausalDependencies`'s `using`/`builder` |
-| `ParsleyEngine` | Causal buffer engine: classify, buffer, cascade, evict |
+| `ParsleyBuffer` | One registered causal source: topic name + the serdes the buffer round-trips held records with (the topic's UUID is resolved from the broker) |
+| `ParsleyEngine` | Causal buffer engine: classify, buffer, cascade, fail-closed. No eviction, no buffer limit, no timeout |
 | `ParsleyClock` | The one vector clock: node frontier *and* dependency representation, keyed on `(Uuid, int)` primitives |
 | `ParsleyMessage` | Typed engine envelope: source coordinate + dependency clock as fields, user headers separate |
 | `ParsleyHeader` | A `(key, value)` header plus the header-key vocabulary (`_parsley_*`, reserved keys, factories) |
-| `ParsleyProcessor` | Kafka Streams processor wrapping the user processor and driving the engine; emits and consumes protocol watermarks |
+| `ParsleyProcessor` | Kafka Streams processor wrapping the user processor and driving the engine; emits and consumes protocol watermarks and epoch markers |
 | `ParsleyProcessorSupplier` | Processor factory; registers Parsley's four state stores |
 | `ParsleyProcessorContext` | Stamping proxy: replaces the context given to the user processor; counts business forwards to drive watermark emission |
 | `ParsleyBufferStore` / `RocksBufferStore` | Durable buffer of held records |
 | `ParsleyCandidateIndex` / `RocksCandidateIndex` | Secondary index: coordinate -> candidate record IDs |
 | `ParsleyForwardedIndex` / `RocksForwardedIndex` | Offsets forwarded ahead of the contiguous frontier, so the boundary stays gap-free across restarts |
-| `ParsleyFrontier` | Owns all causal metadata a node persists — the contiguous delivered frontier clock, the per-input-channel clocks, and `completeness()` (the per-coordinate min across all input channels) — self-persisting as the single `"f"` value of the frontier store; holds the forwarded index as a collaborator |
+| `ParsleyFrontier` | Owns all causal metadata a node persists — the contiguous delivered frontier clock, the per-input-channel clocks, and `completeness()` (the max-merge of the frontier and every input channel's advertised clock — a single genuine witness suffices) — self-persisting as the single `"f"` value of the frontier store; holds the forwarded index as a collaborator |
 | `ParsleySerializer` | Binary serde for `ParsleyMessage` (buffer store wire format) |
 
 ## End-to-end flow
@@ -50,14 +54,16 @@ Edge (plain Kafka producer)
 
 Causal processor (Streams)
   ParsleyProcessor.process(record)
-    -> watermark? -> ParsleyEngine.onWatermark(): advance channel clock, drain, re-emit
+    -> watermark/epoch marker? -> advance channel clock, drain, relay onward only if it genuinely advanced
     -> ingest: wrap in ParsleyMessage, embed source coordinates
-    -> gate:   ParsleyEngine.onRecord()
-                 completeness().dominates(deps) — every input channel has confirmed every
-                   depended coordinate (per-coordinate min across all input channels)
-                 satisfied   -> advance frontier, drain cascade
-                 unsatisfied -> buffer (RocksBufferStore) + index (RocksCandidateIndex)
-                 no header   -> trivially satisfied (empty dependencies)
+    -> gate:   ParsleyEngine.receive()
+                 completeness().dominates(deps) — max-merge of this node's frontier and every input
+                   channel's advertised clock; a single genuine witness to a coordinate suffices,
+                   no cross-channel corroboration required
+                 satisfied     -> advance frontier, drain cascade
+                 unsatisfied   -> buffer (RocksBufferStore) + index (RocksCandidateIndex)
+                 no header     -> trivially satisfied (empty dependencies)
+                 unreachable   -> no channel for this coordinate at all -> fail the task fast
     -> deliver: user processor receives records via ParsleyProcessorContext
                 forwarded records carry the node's completeness frontier
                 an input that emits no business record -> a protocol watermark instead
@@ -67,5 +73,5 @@ Causal processor (Streams)
 ## Further reading
 
 - [Wire format](wire-format.md) — binary layouts for all headers and state stores
-- [The engine](engine.md) — buffer, candidate index, drain cascade, eviction
+- [The engine](engine.md) — buffer, candidate index, drain cascade, fail-closed delivery
 - [Streams integration](streams.md) — processor init, state store wiring, stamping proxy

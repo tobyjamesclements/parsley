@@ -154,12 +154,11 @@ The cost grows proportionally with buffer size. In your environment the per-reco
 but the linear relationship will hold. A buffer twice as large will take roughly twice as long to
 restore.
 
-!!! tip "Keep the buffer small for faster restarts"
-    A tight `CausalBufferLimit.ofSize(n)` reduces both the number of records held under lag and the
-    startup cost if those records were persisted at crash time. The trade-off is more frequent limit
-    firings. Under the default `fail` policy a firing is a task failure and retry, and under
-    `continue` it is a causal violation. Size the buffer to the lag you can tolerate, not the maximum
-    possible.
+!!! tip "Buffer restore cost tracks buffer depth"
+    The causal buffer is unbounded, so buffer restore cost is entirely a function of how much lag
+    accumulates before a restart, not a configurable limit. Keep an eye on the `buffer-depth` gauge
+    (see [Configuration](configuration.md#metrics)) in production — a lagging or co-partitioning-broken
+    topology drives up both restart cost and steady-state buffer footprint.
 
 ---
 

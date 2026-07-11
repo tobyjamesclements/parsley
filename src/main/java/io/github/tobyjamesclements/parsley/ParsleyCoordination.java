@@ -49,8 +49,9 @@ final class ParsleyCoordination {
      * epoch marker ever arrives — are <strong>derived from the log</strong>: every participating stage
      * declares its input channels and sink topics on join, and a topic some member consumes but no member
      * produces is an external source (so a stage consuming one self-initiates the wave and adopts that
-     * coordinate's floor from the log). Declare sink topics via {@code CausalStreams.addSink(...)} — which
-     * does so automatically — or {@code ParsleyProcessors.Builder.sinkTopics(...)} on the low-level path.
+     * coordinate's floor from the log). Sink topics are declared automatically from
+     * {@code CausalStreamsBuilder}/{@code CausalProcessedStream#to(...)}, which {@code CausalTopology}
+     * passes through to {@code ParsleyProcessors.Builder#sinkTopics(...)}.
      *
      * <p>An epoch transition blocks — unbounded — until every running member has published; a member is
      * removed from the domain only by an explicit {@link #leave()}, never automatically, since only a

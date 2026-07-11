@@ -153,8 +153,8 @@ Three distinct failures, each with its own exception:
   only fires on an actual forward attempt. The record remains in the buffer changelog for recovery
   once the schema is fixed or rolled back.
 - **An unresolvable dependency header** (`ParsleyClockResolutionException`) — handled by
-  `ParsleyProcessor` before the engine is ever called (see step 1 of the `receive()` algorithm above),
-  under `parsley.clock.resolution.failure.policy`.
+  `ParsleyProcessor` before the engine is ever called (see step 1 of the `receive()` algorithm above);
+  unconditionally fails the task, never forwarded on an unknown premise.
 
 All three are logged with metadata only — coordinate, dependency clock, header keys, payload
 lengths — never the payload bytes themselves.

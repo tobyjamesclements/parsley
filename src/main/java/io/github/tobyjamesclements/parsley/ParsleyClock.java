@@ -91,8 +91,9 @@ final class ParsleyClock {
     /**
      * Returns the per-coordinate minimum of this clock and {@code other}, ignoring coordinates that
      * only one side records (unknown ≠ zero): a coordinate present in just one clock is kept at its
-     * value; a coordinate present in both takes {@code Math.min}. Used to combine the completeness
-     * frontiers of a node's input channels — the settled boundary is bounded by the slowest branch.
+     * value; a coordinate present in both takes {@code Math.min}. Used to fold a topology-epoch floor
+     * across the running members' published completeness clocks ({@code ParsleyEpochLog}) — the
+     * committed floor is bounded by the slowest member.
      */
     ParsleyClock mergeMin(ParsleyClock other) {
         Map<Uuid, Map<Integer, Long>> merged = mutableCopy();
@@ -209,7 +210,7 @@ final class ParsleyClock {
      * every coordinate this clock requires a higher offset than {@code frontier} has observed, the
      * result records the <em>shortfall</em> ({@code required − observed}, counting an absent frontier
      * coordinate as {@code -1} so the gap is {@code required + 1}). Empty exactly when
-     * {@code frontier.dominates(this)}. For diagnostics (eviction logging).
+     * {@code frontier.dominates(this)}. For diagnostics (buffer-hold logging).
      */
     ParsleyClock missing(ParsleyClock frontier) {
         Map<Uuid, Map<Integer, Long>> gap = new HashMap<>();

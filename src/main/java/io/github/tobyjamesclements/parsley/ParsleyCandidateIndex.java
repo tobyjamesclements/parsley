@@ -14,7 +14,7 @@ import java.util.List;
  *
  * <p>The index is <em>not</em> the source of truth: the buffer store and the current frontier are
  * authoritative. The index only reduces the search space. Stale entries (pointing to
- * already-released or evicted records) are tolerated and cleaned up lazily via {@link #prune}.
+ * already-released records) are tolerated and cleaned up lazily via {@link #prune}.
  */
 interface ParsleyCandidateIndex {
 

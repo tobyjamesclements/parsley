@@ -65,10 +65,10 @@ per user header:
 [value         :value-len]
 ```
 
-`ParsleyEngine`'s startup index rebuild and the duration-based eviction scan decode only the outer
-`bufferedAt` and the `deps` field, through `ParsleySerializer.deserializeDependencies`, and never the
-key or value bytes. A record whose user serde can no longer decode it therefore does not block either
-path.
+`ParsleyEngine`'s startup index rebuild decodes only the outer `bufferedAt` and the `deps` field,
+through `ParsleySerializer.deserializeIndexMetadata`, and never the key or value bytes. A record whose
+user serde can no longer decode it therefore does not block restore or the drain scan — it only fails
+once actually forwarded, via `ParsleySerializer.deserialize`.
 
 ## Candidate-index key
 
@@ -84,7 +84,8 @@ The `{ns}-candidate-index` store maps coordinate+offset+recordId to an empty pre
 
 ## State store names and serdes
 
-The namespace is the `name` passed to `ParsleyProcessors.builder(...).addBufferStore(name, limit)`.
+The namespace is the stage name `CausalTopology#assemble` derives (or an explicit name from
+`CausalStream#process(name, supplier)`), used internally as `ParsleyProcessors.builder(...).addBufferStore(name)`.
 
 | Store | Key serde | Value serde | Purpose |
 |---|---|---|---|
@@ -108,10 +109,11 @@ change; the changelog dedups repeated puts by key per commit):
 
 The frontier clock is the node's contiguous delivered frontier. Each channel clock is the dependencies
 advertised on that input channel `(topicId, partition)`, max-merged over the records and watermarks
-received on it. `completeness()` — the per-coordinate minimum across all input channels (each channel's
-advertised dependencies plus its own contiguous delivered position) — is computed from this value in
-memory. The forwarded-offset index stays its own keyed store (`{ns}-forwarded-index`): it is growable
-and order-sensitive, so folding it into `"f"` would increase Rocks I/O.
+received on it. `completeness()` — the max-merge of the frontier clock and every channel's advertised
+clock, so a single genuine witness to a coordinate is enough, with no requirement that every channel
+independently corroborate it — is computed from this value in memory. The forwarded-offset index stays
+its own keyed store (`{ns}-forwarded-index`): it is growable and order-sensitive, so folding it into
+`"f"` would increase Rocks I/O.
 
 ## Topic UUIDs
 

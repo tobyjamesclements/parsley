@@ -261,8 +261,8 @@ final class ParsleyProcessors {
          *       produces). Declare them so a downstream consumer of a sink is not mistaken for a
          *       source-layer stage.
          * </ul>
-         * {@link CausalStreams} sets this automatically from its {@code addSink(...)} declarations; on
-         * the low-level decorator path, declare it here.
+         * {@link CausalTopology#assemble} sets this automatically from a stage's
+         * {@code CausalProcessedStream#to(...)} declarations.
          *
          * @param topics the stage's output topic names
          * @return this builder

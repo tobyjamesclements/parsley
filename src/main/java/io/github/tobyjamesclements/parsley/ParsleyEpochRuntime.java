@@ -28,9 +28,11 @@ import java.util.function.Supplier;
  * the one runtime thread. The loop body {@link #runOnce} is exposed package-private so tests can drive it
  * synchronously against an in-memory transport with no thread at all.
  *
- * <p>This workstream (WS4a-cont) builds and tests the runtime in isolation; it is not yet wired into
- * {@link ParsleyProcessor} (marker relay and the publish seam are WS4b/WS4c). With no runtime created,
- * a topology runs in epoch 0 exactly as before.
+ * <p>Fully wired into {@link ParsleyProcessor}: {@code init()} joins this runtime and blocks until
+ * admitted, marker relay reads the committed floor via {@link #committedEpoch()}, and {@code close()}
+ * unregisters the local member. Created only when topology-epoch coordination is configured
+ * ({@code parsley.coordination.epoch-events-topic}); with no runtime created, a topology runs in epoch
+ * 0 exactly as before.
  */
 final class ParsleyEpochRuntime implements AutoCloseable {
 

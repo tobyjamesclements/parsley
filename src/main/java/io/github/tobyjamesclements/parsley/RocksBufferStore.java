@@ -86,7 +86,7 @@ final class RocksBufferStore<K, V> implements ParsleyBufferStore<K, V> {
                 var kv = all.next();
                 // Decode only the buffered-at time, source coordinate, and dependency clock (Parsley
                 // framing), never the user-serde key/value, so a record whose value can no longer be
-                // decoded does not block restore or eviction.
+                // decoded does not block restore or the drain scan.
                 long bufferedAt = ByteBuffer.wrap(kv.value, 0, 8).getLong();
                 ParsleySerializer.IndexMetadata meta =
                         serializer.deserializeIndexMetadata(Arrays.copyOfRange(kv.value, 8, kv.value.length));

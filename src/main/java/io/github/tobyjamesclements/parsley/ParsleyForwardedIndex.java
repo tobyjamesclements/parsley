@@ -5,8 +5,8 @@ import org.apache.kafka.common.Uuid;
 import java.util.List;
 
 /**
- * A durable record of every offset the engine has forwarded (whether by immediate admission,
- * release, eviction, or poison-drop) that has not yet been absorbed into the contiguous frontier.
+ * A durable record of every offset the engine has forwarded (whether by immediate admission or
+ * release) that has not yet been absorbed into the contiguous frontier.
  *
  * <p>The engine does not head-of-line block: a later offset on a partition may forward before an
  * earlier offset on the same partition, if the earlier one is still held. Each forward marks its

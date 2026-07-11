@@ -36,9 +36,7 @@ record ParsleyMessage<K, V>(String topic, Uuid topicId, int partition, long offs
      * headers.
      *
      * @throws ParsleyClockResolutionException if the dependencies header is present but cannot be
-     *     decoded; the caller applies {@code parsley.clock.resolution.failure.policy} to decide
-     *     whether to fail or to rebuild with empty dependencies via
-     *     {@link #from(Record, TopicPartition, long, Uuid, ParsleyClock)}
+     *     decoded; the caller fails the task fast rather than forward the record on an unknown premise
      */
     static <K, V> ParsleyMessage<K, V> from(Record<K, V> record, TopicPartition source,
                                             long offset, Uuid topicId) {
@@ -47,9 +45,7 @@ record ParsleyMessage<K, V>(String topic, Uuid topicId, int partition, long offs
     }
 
     /**
-     * Builds a message with caller-supplied {@code dependencies}, skipping header decoding. Used by
-     * the {@code parsley.clock.resolution.failure.policy = continue} path to forward a record whose
-     * dependencies header was unresolvable with empty (vacuously satisfied) dependencies.
+     * Builds a message with caller-supplied {@code dependencies}, skipping header decoding.
      */
     static <K, V> ParsleyMessage<K, V> from(Record<K, V> record, TopicPartition source,
                                             long offset, Uuid topicId, ParsleyClock dependencies) {

@@ -15,13 +15,13 @@ package io.github.tobyjamesclements.parsley;
  * coordination is configured this is backed by {@link ParsleyEpochRuntime#publishFrontier}, appending a
  * {@link ParsleyEpochEvent.FrontierPublished} to the epoch-events log.
  *
- * <p><strong>Known limitation under {@code exactly_once} (to harden with the runtime lifecycle):</strong>
- * the published {@code completeness} is read from the in-memory frontier, which under EOS may momentarily
- * lead the durably-committed frontier store (a crash before the transaction commits reverts it). Because
- * {@code lowerBounds} is the merge-min of published frontiers, a floor could then exceed a node's durable
- * progress and strip a dependency that node still owns after replay. The safe rule is to publish only
- * completeness as of the last Streams commit; the mitigation is deferred to the public wiring (WS4c),
- * where the runtime lifecycle and commit cadence are available.
+ * <p><strong>Known limitation under {@code exactly_once_v2}, still open:</strong> the published
+ * {@code completeness} is read from the in-memory frontier (see {@code ParsleyProcessor}'s
+ * {@code snapshotPublisher.publish(memberId, engine().completeness())} calls), which under EOS may
+ * momentarily lead the durably-committed frontier store (a crash before the transaction commits reverts
+ * it). Because {@code lowerBounds} is the merge-min of published frontiers, a floor could then exceed a
+ * node's durable progress and strip a dependency that node still owns after replay. The safe rule is to
+ * publish only completeness as of the last Streams commit; that hardening has not been applied yet.
  */
 @FunctionalInterface
 interface ParsleyEpochSnapshotPublisher {
