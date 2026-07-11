@@ -143,15 +143,19 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
     private String memberId = "";
 
     private ProcessorContext<KOut, VOut> context;
+    // The task's one engine, built once at init() over the task's state stores. Exactly one Processor
+    // instance ever touches these stores within a task (passthrough topics are wired as extra sources
+    // into this SAME node, never as a separate processor node), so the cached ParsleyFrontier's
+    // in-memory copy of the persisted state cannot diverge from a concurrent writer — there is none.
+    private ParsleyEngine<KIn, VIn> engine;
     private KeyValueStore<String, byte[]> frontierStore;
     private KeyValueStore<Long, byte[]> bufferStore;
     private KeyValueStore<byte[], byte[]> candidateIndexStore;
     private KeyValueStore<byte[], byte[]> forwardedIndexStore;
-    // The one-time seed for a fresh ParsleyEpochState (see engine()) — computed once at init() from
-    // whether this task joined an already-established epoch (epochSeedEpochId > 0) or starts fresh at
-    // epoch 0 (0, the sentinel: no real epoch is ever id 0). Only matters for the very first engine()
-    // call after init(): that call's ParsleyFrontier constructor persists whatever it settles at, so
-    // every later engine() call restores the real thing from the store instead, regardless of this seed.
+    // The one-time seed for a fresh ParsleyEpochState (see buildEngine()) — computed once at init()
+    // from whether this task joined an already-established epoch (epochSeedEpochId > 0) or starts
+    // fresh at epoch 0 (0, the sentinel: no real epoch is ever id 0). Consumed by buildEngine()'s one
+    // ParsleyEpochState construction; a restored task's real state overrides it from the "f" blob.
     private ParsleyClock epochSeedFloor = ParsleyClock.empty();
     private long epochSeedEpochId;
     private ParsleyMetrics.Wired wiredMetrics;
@@ -263,14 +267,13 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
             validateFullMeshCoverage(runtime);
         }
 
-        // The seed for engine()'s very first ParsleyEpochState, gating against the settled epoch. A fresh
+        // The seed for buildEngine()'s ParsleyEpochState, gating against the settled epoch. A fresh
         // task that joined an established epoch settles DIRECTLY at the committed floor F_{k+1}: it has
         // no in-flight prior-epoch records, so every below-floor replay record is pre-epoch history to
         // strip — no overlap window. Otherwise it starts fresh at epoch 0; a restored task's state
         // (settled floor plus any in-progress transition) is loaded from the frontier "f" blob by the
-        // ParsleyFrontier constructor the first engine() call below runs — which is why this is only ever
-        // a seed, not held onto beyond that first call (see the epochSeedFloor/epochSeedEpochId field
-        // Javadoc).
+        // ParsleyFrontier constructor buildEngine() runs below — which is why this is only ever a
+        // seed (see the epochSeedFloor/epochSeedEpochId field Javadoc).
         //
         // lastAdoptedEpoch is deliberately left at its default (0) even here: settling epochState
         // directly is purely local (this task has no in-flight prior-epoch records to gate), but
@@ -291,11 +294,11 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
 
         this.wiredMetrics = ParsleyMetrics.wire(context);
 
-        // The first engine() call: constructs the real ParsleyFrontier (restoring from the store if
-        // restored is true), prunes/seeds it to this task's current scope, and persists — so every
-        // subsequent engine() call (a fresh construction each time; see engine()'s Javadoc) restores that
-        // real, already-correct state rather than needing the seed above again.
-        ParsleyEngine<KIn, VIn> engine = engine();
+        // Build the task's one engine: constructs the real ParsleyFrontier (restoring from the store if
+        // restored is true), prunes/seeds it to this task's current scope, and persists. Cached for the
+        // processor's whole lifetime — see buildEngine().
+        this.engine = buildEngine();
+        ParsleyEngine<KIn, VIn> engine = this.engine;
         if (restored) {
             log.info("Processor initialized [task: {}] — frontier restored: {}", context.taskId(), engine.frontier());
         } else {
@@ -362,29 +365,29 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
     }
 
     /**
-     * Builds a fresh {@link ParsleyEngine}, wrapping this task's state stores, for exactly one caller's
-     * use. Called at the start of every operation that touches causal state — never held across calls
-     * in a field — rather than constructed once in {@link #init} and reused for the processor's whole
-     * lifetime.
+     * The task's one {@link ParsleyEngine}, built by {@link #buildEngine()} at {@code init()} and
+     * cached for the processor's whole lifetime.
      *
-     * <p><strong>Why:</strong> a future passthrough processor node (a genuine multi-app-DAG source this
-     * task's own business processor node does not otherwise consume) shares this task's frontier/buffer
-     * state stores but is a <em>separate</em> {@link Processor} instance with its own {@code init()}
-     * call. {@link ParsleyFrontier} caches its persisted state in private fields, loaded once at
-     * construction and written on change — two long-lived instances wrapping the same store would
-     * silently diverge the instant either side wrote something the other's in-memory copy never saw.
-     * Constructing fresh here instead — every operation re-reads the store's current state and persists
-     * its own changes before returning — means any number of processor nodes sharing these stores always
-     * see each other's latest writes, since Kafka Streams guarantees only one of them ever runs at a time
-     * within a task. This is deliberately the simplest correct thing, accepting the cost of
-     * re-deserialising the frontier blob (and re-running {@link ParsleyFrontier}'s restore-time
-     * forwarded-index sweep) on every call rather than only once per restart — an optimisation to revisit
-     * once the passthrough design this exists for is proven, not before.
-     *
-     * <p>{@link #wiredMetrics} and the {@code epochSeed*} fields must already be set (by {@link #init})
-     * before this is ever called.
+     * <p>Caching is sound because exactly one {@link Processor} instance ever touches this task's
+     * causal state stores: passthrough topics are wired as extra <em>sources into this same processor
+     * node</em> ({@link CausalTopology}), never as a separate processor node sharing the stores. (An
+     * earlier design anticipated such a separate node and rebuilt the engine — a full buffer scan,
+     * candidate re-index, and frontier-blob re-persist — at the top of every operation to keep two
+     * hypothetical instances coherent; that made every operation O(buffer-depth) for a sharer that was
+     * never built.)
      */
     private ParsleyEngine<KIn, VIn> engine() {
+        return engine;
+    }
+
+    /**
+     * Builds the engine over this task's state stores: constructs the {@link ParsleyFrontier}
+     * (restoring the frontier clock, channel clocks, and epoch state from the {@code "f"} blob when
+     * present), prunes restored state to this task's current scope, seeds a channel entry for every
+     * consumed input, and wires the buffer, candidate index, and forwarded index. Called exactly once,
+     * from {@link #init}; {@link #wiredMetrics} and the {@code epochSeed*} fields must already be set.
+     */
+    private ParsleyEngine<KIn, VIn> buildEngine() {
         ParsleyBufferStore<KIn, VIn> buffer = new RocksBufferStore<>(bufferStore, serializer);
         ParsleyCandidateIndex candidateIndex = new RocksCandidateIndex(candidateIndexStore);
         ParsleyForwardedIndex forwardedIndex = new RocksForwardedIndex(forwardedIndexStore);

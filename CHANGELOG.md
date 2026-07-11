@@ -7,6 +7,26 @@ All notable changes to this project are documented in this file. The format is b
 ## [Unreleased]
 
 ### Fixed
+- **Every engine operation rebuilt the entire causal state — a full buffer scan, a candidate-index
+  rewrite, and a frontier-blob re-persist — making each processed record O(buffer-depth).**
+  `ParsleyProcessor#engine()` constructed a fresh `ParsleyEngine`/`ParsleyFrontier`/`RocksBufferStore`
+  at the top of every operation (a `process()` call touched it four or more times; `deliver()` once
+  per released message; the 200ms epoch poll and 5s metrics tick each again while idle). Each
+  construction re-scanned every buffer key (`RocksBufferStore`'s sequence/size seeding), re-decoded
+  every held record's dependency clock and re-put its candidate-index entries (each an EOS changelog
+  write), re-loaded the frontier blob, and re-persisted it via the idempotent prune/seed pass — so a
+  deep dependency stall, the exact scenario the buffer exists for, degraded quadratically:
+  a 10k-deep buffer cost tens of thousands of redundant store writes per incoming record, dwarfing
+  the O(log n + k + r) costs `performance.md` documents (its benchmarks drive `ParsleyEngine`
+  directly and never saw this).
+
+  The per-operation rebuild was a prerequisite for a separate passthrough processor node sharing the
+  stores — a design that was never built: passthrough topics are wired as extra sources into the
+  *same* processor node, so exactly one `Processor` instance ever touches a task's causal stores and
+  a cached `ParsleyFrontier` cannot diverge from a concurrent writer. The engine is now built once at
+  `init()` (`buildEngine()`) and cached for the processor's lifetime, restoring the architecture the
+  performance documentation describes; `ParsleyFrontier`'s restore-time forwarded-index sweep is
+  genuinely one-shot-at-load again.
 - **An epoch-events append could land on a partition no fold ever reads, silently losing the event.**
   `KafkaEpochTransport#append` sent with a null key and no explicit partition, leaving placement to the
   producer's partitioner, while every reader is manually assigned to partition 0 only. On an
