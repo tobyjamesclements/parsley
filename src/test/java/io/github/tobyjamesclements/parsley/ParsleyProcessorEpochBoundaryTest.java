@@ -30,13 +30,18 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 class ParsleyProcessorEpochBoundaryTest {
 
     private static final Uuid T1_ID = Uuid.randomUuid();
+    // A foreign coordinate the marker's carried completeness advertises — distinct from t1 itself, so
+    // the "genuine advance" the marker teaches is unambiguous.
+    private static final Uuid UPSTREAM_ID = Uuid.randomUuid();
     private static final ParsleyTopicAdmin ADMIN = TestTopicAdmin.of(Map.of("t1", T1_ID));
 
     /**
      * An epoch-boundary control record drives the local transition and is relayed downstream: the user
      * delegate never sees it and it is not buffered, but the processor re-emits the marker on the same
      * key, carrying its completeness frontier so downstream channel clocks keep advancing across the
-     * boundary.
+     * boundary. The injected marker carries a completeness header this task's channel does not already
+     * know, so it genuinely advances the channel and the relay fires (clock-invisible markers: a marker
+     * that taught nothing new would not relay — see {@link ParsleyProcessor}'s class Javadoc).
      *
      * Asserts the delegate never runs, nothing is buffered, and exactly one boundary marker (on the same
      * key, carrying a completeness header) is relayed.
@@ -81,6 +86,9 @@ class ParsleyProcessorEpochBoundaryTest {
         ParsleyEpochBoundary boundary = new ParsleyEpochBoundary(1, ParsleyClock.empty().observe(T1_ID, 0, 10));
         Headers headers = ParsleyHeader.mutableHeaders();
         headers.add(ParsleyHeader.EPOCH_BOUNDARY, boundary.toBytes());
+        // Carries completeness this task's t1 channel does not already know, so the marker genuinely
+        // advances the channel and the relay fires.
+        headers.add(ParsleyHeader.CAUSAL_DEPENDENCIES, ParsleyClock.empty().observe(UPSTREAM_ID, 0, 3).toBytes());
         processor.process(new Record<>("k", null, 0L, headers));
 
         assertTrue(processed.isEmpty(), "the epoch-boundary marker must never reach the user delegate");

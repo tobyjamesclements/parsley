@@ -42,6 +42,20 @@ import java.util.function.Function;
  * otherwise be lost). The frontier-before-forward invariant from {@link ParsleyEngine} is preserved
  * on both the admit and punctuator paths.
  *
+ * <p><strong>Clock-invisible markers.</strong> A received watermark or epoch marker
+ * ({@link #handleWatermark}, {@link #handleEpochBoundary}, {@link #handleEpochSnapshot}) is relayed
+ * downstream only when it genuinely taught this node's channel something it did not already know
+ * ({@link ParsleyEngine.WatermarkOutcome#channelAdvanced()}, via {@link #advanceChannelClockFromMarker}).
+ * A marker's own delivery is never itself treated as a reason to relay further — unlike a genuine
+ * business record, whose delivery always unconditionally causes this node to emit something on its own
+ * sink (see {@link #deliver}). Gating on data-taught-something rather than on "a record was delivered"
+ * is what keeps a topology cycle — a marker-only passthrough channel included — from ping-ponging the
+ * same marker forever: a node that has already converged with its peers has nothing new to say, and
+ * simply stops, rather than needing separate per-edge "have I already relayed this" bookkeeping. A
+ * dependency can only ever be created after something real has already been observed, so a marker that
+ * taught nothing new could not have just formed a new dependency on that non-event either — skipping
+ * the re-emission strands nothing.
+ *
  * @param <KIn>  the input key type
  * @param <VIn>  the input value type
  * @param <KOut> the forwarded key type
@@ -610,27 +624,33 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
      * the coordinator (tagged with the task id) via {@link ParsleyEpochSnapshotPublisher}, so the
      * coordinator can merge-min the published clocks into the next epoch's lower bounds. The marker is
      * never delivered to the user delegate and never buffered, but — unlike the earlier
-     * coordinator-broadcast model — it is now <strong>relayed</strong> downstream on the same key (the
-     * leaderless in-band cut propagates edge by edge through the DAG). The relayed marker also carries
+     * coordinator-broadcast model — it is <strong>relayed</strong> downstream on the same key (the
+     * leaderless in-band cut propagates edge by edge through the DAG) <em>only when it genuinely taught
+     * this node's channel something new</em> ({@link #advanceChannelClockFromMarker}) — a marker's own
+     * delivery is never itself a reason to relay further, or a topology cycle would ping-pong the same
+     * marker forever (clock-invisible markers; see the class Javadoc). The relayed marker also carries
      * this node's completeness, so a single record both propagates the cut and advances the downstream
-     * channel clock; if the received marker itself carried completeness (a relay from upstream), that
-     * completeness advances this node's clock for the marker channel too.
+     * channel clock.
      */
     private void handleEpochSnapshot(Record<KIn, VIn> record) {
         snapshotPublisher.publish(memberId, engine.completeness());
-        advanceChannelClockFromMarker(record);
-        forwardEpochSnapshot(record.key());
+        boolean channelAdvanced = advanceChannelClockFromMarker(record);
+        if (channelAdvanced) {
+            forwardEpochSnapshot(record.key());
+        }
     }
 
     /**
      * Handles a received epoch-boundary marker: decodes it, records it on its source channel and (if the
      * transition is now ready) closes the epoch window in the engine, delivers any records the raised
      * floor releases, and <strong>relays the marker downstream</strong> on the same key so the boundary
-     * propagates edge by edge through the DAG (the leaderless in-band model). The relayed marker carries
-     * this node's completeness, so a single downstream record both adopts the boundary and advances the
-     * channel clock; if the received marker carried completeness (a relay from upstream), that
-     * completeness advances this node's clock for the marker channel first. The marker is never forwarded
-     * to the user delegate and never buffered.
+     * propagates edge by edge through the DAG (the leaderless in-band model) — but only when the marker
+     * genuinely taught this node's channel something new ({@link #advanceChannelClockFromMarker}). A
+     * marker's own delivery is never itself a reason to relay further, or a topology cycle would
+     * ping-pong the same marker forever (clock-invisible markers; see the class Javadoc). The relayed
+     * marker carries this node's completeness, so a single downstream record both adopts the boundary
+     * and advances the channel clock. The marker is never forwarded to the user delegate and never
+     * buffered.
      */
     private void handleEpochBoundary(Record<KIn, VIn> record) {
         Optional<RecordMetadata> meta = context.recordMetadata();
@@ -661,16 +681,18 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
 
         // A relayed marker carries the upstream node's completeness; adopt it into this channel's clock
         // (draining anything it releases) before driving the transition, so one record does both.
-        advanceChannelClockFromMarker(record);
+        boolean channelAdvanced = advanceChannelClockFromMarker(record);
 
         ParsleyEngine.Outcome<KIn, VIn> outcome = engine.onEpochBoundary(boundary, topicId, partition);
         deliver(outcome.delivered());
         deadLetter(outcome.deadLettered());
 
         // Relay the boundary downstream on the marker's key so it stays on the same partition lane and
-        // every downstream task transitions its owned partitions. The relay carries this node's own
-        // completeness so the next layer's channel clock advances from the same record.
-        forwardEpochBoundary(record.key(), boundaryBytes);
+        // every downstream task transitions its owned partitions, only when this marker taught this
+        // channel something new — see the class Javadoc's clock-invisible-markers discussion.
+        if (channelAdvanced) {
+            forwardEpochBoundary(record.key(), boundaryBytes);
+        }
     }
 
     /**
@@ -678,28 +700,38 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
      * {@link ParsleyHeader#CAUSAL_DEPENDENCIES} header — as every relayed marker does — advances the
      * marker channel's clock by that frontier and delivers anything the advance releases. A bare marker
      * with no completeness header (e.g. a source-layer injection or a test-injected marker) is a no-op.
+     *
+     * @return whether the marker's carried clock genuinely taught this channel something it did not
+     *         already know ({@link ParsleyEngine.WatermarkOutcome#channelAdvanced()}) — {@code false}
+     *         for a bare marker or a decode failure, so callers relay a marker's own delivery further
+     *         only when it actually advanced something, never unconditionally (see the class Javadoc's
+     *         clock-invisible-markers discussion).
      */
-    private void advanceChannelClockFromMarker(Record<KIn, VIn> record) {
+    private boolean advanceChannelClockFromMarker(Record<KIn, VIn> record) {
         Optional<RecordMetadata> meta = context.recordMetadata();
         String topic = meta.map(RecordMetadata::topic).orElse("");
         int partition = meta.map(RecordMetadata::partition).orElse(0);
+        long offset = meta.map(RecordMetadata::offset).orElse(0L);
         Uuid topicId = topicUuids.get(topic);
         if (topicId == null) {
-            return;
+            return false;
         }
         for (Header h : record.headers()) {
             if (ParsleyHeader.CAUSAL_DEPENDENCIES.equals(h.key()) && h.value() != null) {
                 try {
                     ParsleyClock frontier = ParsleyClock.fromBytes(h.value());
-                    ParsleyEngine.Outcome<KIn, VIn> outcome = engine.onWatermark(topicId, partition, frontier);
-                    deliver(outcome.delivered());
-                    deadLetter(outcome.deadLettered());
+                    ParsleyEngine.WatermarkOutcome<KIn, VIn> watermarkOutcome =
+                            engine.onWatermark(topicId, partition, offset, frontier);
+                    deliver(watermarkOutcome.outcome().delivered());
+                    deadLetter(watermarkOutcome.outcome().deadLettered());
+                    return watermarkOutcome.channelAdvanced();
                 } catch (Exception e) {
                     log.warn("Failed to decode marker completeness on {}-{}; ignoring", topic, partition, e);
+                    return false;
                 }
-                return;
             }
         }
+        return false;
     }
 
     /**
@@ -836,19 +868,23 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
 
     /**
      * Handles a received protocol watermark: decodes its carried completeness frontier, updates the
-     * per-channel clock for the watermark's source channel, performs a full-buffer drain to release
-     * any records newly satisfying the two-part gate, and re-emits a watermark downstream carrying
-     * this node's updated completeness frontier. The watermark is never forwarded to the user
-     * delegate and never buffered.
+     * per-channel clock for the watermark's source channel, releases any records newly satisfying the
+     * gate, and re-emits a watermark downstream carrying this node's updated completeness frontier —
+     * but only when this watermark genuinely taught the channel something new. The watermark is never
+     * forwarded to the user delegate and never buffered.
      *
-     * <p>The downstream re-emission (inductive propagation) ensures that a node which never
-     * produces business records on this path still advertises its causal progress, so a grandchild
-     * node's channel clock can advance without any business record on the path.
+     * <p>The downstream re-emission (inductive propagation) ensures that a node which never produces
+     * business records on this path still advertises its causal progress, so a grandchild node's
+     * channel clock can advance without any business record on the path. But a watermark's own delivery
+     * is never itself a reason to relay further — only a genuine change to what this channel knows is —
+     * or a topology cycle (a marker-only passthrough channel included) would ping-pong the same
+     * watermark forever (clock-invisible markers; see the class Javadoc).
      */
     private void handleWatermark(Record<KIn, VIn> record) {
         Optional<RecordMetadata> meta = context.recordMetadata();
         String topic = meta.map(RecordMetadata::topic).orElse("");
         int partition = meta.map(RecordMetadata::partition).orElse(0);
+        long offset = meta.map(RecordMetadata::offset).orElse(0L);
         Uuid topicId = topicUuids.get(topic);
         if (topicId == null) {
             // Watermark on an unregistered topic — not expected in a correctly wired topology, but
@@ -871,16 +907,21 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
             }
         }
 
-        // Update the channel clock and drain any newly releasable records.
-        ParsleyEngine.Outcome<KIn, VIn> outcome = engine.onWatermark(topicId, partition, frontierClock);
-        deliver(outcome.delivered());
-        deadLetter(outcome.deadLettered());
+        // Update the channel clock and release anything newly satisfied.
+        ParsleyEngine.WatermarkOutcome<KIn, VIn> watermarkOutcome =
+                engine.onWatermark(topicId, partition, offset, frontierClock);
+        deliver(watermarkOutcome.outcome().delivered());
+        deadLetter(watermarkOutcome.outcome().deadLettered());
 
-        // Always re-emit a watermark downstream so the completeness boundary propagates through
-        // non-subscribing layers even when no business records were released. Reuse the incoming
-        // watermark's own key: upstream keyed it to route to this partition, so re-emitting under the
-        // same key keeps the propagated watermark on the co-partitioned downstream partition.
-        forwardWatermark(record.key());
+        // Re-emit a watermark downstream only when this one genuinely advanced the channel, so the
+        // completeness boundary still propagates through non-subscribing layers when it carries real
+        // news, without ping-ponging a marker that taught this node nothing around a topology cycle.
+        // Reuse the incoming watermark's own key: upstream keyed it to route to this partition, so
+        // re-emitting under the same key keeps the propagated watermark on the co-partitioned
+        // downstream partition.
+        if (watermarkOutcome.channelAdvanced()) {
+            forwardWatermark(record.key());
+        }
     }
 
     /**

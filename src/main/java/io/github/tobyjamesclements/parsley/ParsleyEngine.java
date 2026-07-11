@@ -304,6 +304,20 @@ final class ParsleyEngine<K, V> {
     }
 
     /**
+     * {@link #onWatermark}'s result: the ordinary {@link Outcome}, plus whether the marker's carried
+     * clock genuinely taught this node something it did not already know on that channel. A marker's own
+     * delivery must never itself count as a reason to relay further — only a genuine change does — or a
+     * cyclic topology (a marker-only passthrough channel included) would ping-pong the same marker
+     * forever; see {@link ParsleyProcessor}'s marker handlers, which gate their own downstream relay on
+     * {@link #channelAdvanced}.
+     *
+     * @param <K> the record key type
+     * @param <V> the record value type
+     */
+    record WatermarkOutcome<K, V>(Outcome<K, V> outcome, boolean channelAdvanced) {
+    }
+
+    /**
      * A record removed from the causal execution path onto the dead-letter sink, because its
      * dependencies are proven impossible to satisfy — never because of pressure or time.
      *
@@ -503,9 +517,10 @@ final class ParsleyEngine<K, V> {
      *       committed frontier and the last committed buffer-removal (the at-least-once window), and
      *       to complete any orphan cascade interrupted by a crash mid-pass. On fresh starts (empty
      *       buffer) this returns empty.
-     *   <li>Via {@link #onWatermark(Uuid, int, ParsleyClock)} — after a watermark advances a
-     *       channel clock, which can unlock records held by the cross-channel ancestor check (part
-     *       2 of the gate) even when the in-scope frontier has not advanced.
+     *   <li>Via {@link #onWatermark(Uuid, int, long, ParsleyClock)} — when the watermark's carried
+     *       clock genuinely advances the channel and more than one channel is registered, since that can
+     *       teach this node about a foreign coordinate {@link #propagate}'s targeted scan would not
+     *       otherwise reach.
      * </ol>
      *
      * <p>This is an O(buffer-depth) full scan by design — correctness-first choice; the
@@ -598,30 +613,57 @@ final class ParsleyEngine<K, V> {
     }
 
     /**
-     * Handles a received protocol watermark: updates the per-channel clock for the source channel
-     * with the carried frontier, then performs a full-buffer drain to release any buffered records
-     * that the cross-channel ancestor check (part 2 of the two-part gate) now permits.
+     * Handles a received protocol watermark: marks the marker's own position genuinely delivered
+     * (unconditionally, exactly like a business record's own coordinate — see below), updates the
+     * per-channel clock for the source channel with the carried frontier, and releases any buffered
+     * records the advance now permits.
      *
-     * <p>The drain is O(buffer-depth). Records released here are delivered via the normal
-     * {@link ParsleyProcessor#deliver} path. The caller ({@link ParsleyProcessor}) subsequently
-     * emits a downstream watermark carrying the updated {@link #completeness()} frontier to
-     * propagate progress to the next layer.
+     * <p>The marker's own {@code (sourceTopicId, sourcePartition, offset)} is delivered the same way
+     * {@link #onRecord} delivers a genuine business record's own coordinate — {@link
+     * #seedIfFirstSeen} then {@link ParsleyFrontier#deliver} then {@link #propagate} — so a marker-only
+     * (passthrough) channel's own frontier still advances even though no business record ever flows on
+     * it; without this, such a channel would be stuck at its seed offset forever, and this node's own
+     * completeness could never include it. {@link #drainSatisfied} (a full-buffer rescan) additionally
+     * runs when the channel's carried clock genuinely changed and more than one channel is registered —
+     * mirroring {@link #onRecord}'s {@code channelAdvanced} handling — since the carried clock can teach
+     * this node about a <em>foreign</em> coordinate {@link #propagate}'s targeted scan (keyed only on
+     * this channel's own coordinate) would not otherwise reach.
+     *
+     * <p>Records released here are delivered via the normal {@link ParsleyProcessor#deliver} path. The
+     * returned {@link WatermarkOutcome#channelAdvanced()} tells the caller ({@link ParsleyProcessor})
+     * whether this marker taught the channel anything genuinely new — the caller relays a downstream
+     * watermark only when it did, since a marker's own delivery must never itself be treated as a
+     * reason to relay further (that would ping-pong forever around any cycle in the topology).
      *
      * @param sourceTopicId  the topic UUID of the watermark's source channel
      * @param sourcePartition the partition of the watermark's source channel
+     * @param offset         the watermark record's own offset on its source channel
      * @param frontierClock  the completeness frontier carried by the watermark
-     * @return the records released from the buffer by the drain, and any dead-lettered in the process
+     * @return the records released (and any dead-lettered) in the process, plus whether the channel's
+     *         carried clock genuinely advanced
      */
-    Outcome<K, V> onWatermark(Uuid sourceTopicId, int sourcePartition, ParsleyClock frontierClock) {
-        frontier.channelUpdate(sourceTopicId, sourcePartition, frontierClock);
+    WatermarkOutcome<K, V> onWatermark(Uuid sourceTopicId, int sourcePartition, long offset, ParsleyClock frontierClock) {
         List<ParsleyMessage<K, V>> out = new ArrayList<>();
         List<DeadLetter<K, V>> deadLetters = new ArrayList<>();
-        drainSatisfied(out, deadLetters);
+
+        if (frontier.seedIfFirstSeen(sourceTopicId, sourcePartition, offset)) {
+            propagate(out, deadLetters, sourceTopicId, sourcePartition);
+        }
+
+        ParsleyClock channelBefore = frontier.channelGet(sourceTopicId, sourcePartition);
+        boolean channelAdvanced = !channelBefore.dominates(frontierClock);
+        frontier.channelUpdate(sourceTopicId, sourcePartition, frontierClock);
+        frontier.deliver(sourceTopicId, sourcePartition, offset);
+        propagate(out, deadLetters, sourceTopicId, sourcePartition);
+
+        if (channelAdvanced && frontier.channelCount() > 1) {
+            drainSatisfied(out, deadLetters);
+        }
         // A watermark advances completeness, which can close a pending epoch transition window.
         if (frontier.tryAdvanceEpoch()) {
             drainSatisfied(out, deadLetters);
         }
-        return new Outcome<>(out, deadLetters);
+        return new WatermarkOutcome<>(new Outcome<>(out, deadLetters), channelAdvanced);
     }
 
     /** The buffer's metadata index, oldest-first (by insertion sequence); never decodes a value. */

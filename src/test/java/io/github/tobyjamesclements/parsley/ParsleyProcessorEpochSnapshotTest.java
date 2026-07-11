@@ -29,6 +29,9 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 class ParsleyProcessorEpochSnapshotTest {
 
     private static final Uuid T1_ID = Uuid.randomUuid();
+    // A foreign coordinate the marker's carried completeness advertises — distinct from t1 itself, so
+    // the "genuine advance" the marker teaches is unambiguous.
+    private static final Uuid UPSTREAM_ID = Uuid.randomUuid();
     private static final ParsleyTopicAdmin ADMIN = TestTopicAdmin.of(Map.of("t1", T1_ID));
 
     /** A publisher double that records every (memberId, completeness) publication. */
@@ -47,7 +50,10 @@ class ParsleyProcessorEpochSnapshotTest {
      * An epoch-snapshot marker publishes this node's current completeness frontier (tagged with the
      * task id) and is relayed downstream: the user delegate never sees it, it is not buffered, but the
      * marker is re-emitted on the same key so the in-band cut propagates through the DAG, carrying this
-     * node's completeness so the downstream channel clock advances from the same record.
+     * node's completeness so the downstream channel clock advances from the same record. The injected
+     * marker carries a completeness header this task's channel does not already know, so it genuinely
+     * advances the channel and the relay fires (clock-invisible markers: a marker that taught nothing
+     * new would not relay — see {@link ParsleyProcessor}'s class Javadoc).
      *
      * Asserts the publisher is called once with the post-delivery completeness (T1@5), the delegate saw
      * only the business record, and the snapshot marker is relayed on the same key carrying completeness.
@@ -94,10 +100,12 @@ class ParsleyProcessorEpochSnapshotTest {
         processor.process(new Record<>("k", "v", 0L, deps));
         assertEquals(List.of("v"), processed, "the business record must be delivered to the delegate");
 
-        // Inject the snapshot marker: a control record with no business payload.
+        // Inject the snapshot marker: a control record with no business payload, carrying completeness
+        // this task's t1 channel does not already know, so it genuinely advances the channel.
         context.setRecordMetadata("t1", 0, 6);
         Headers snapshot = ParsleyHeader.mutableHeaders();
         snapshot.add(ParsleyHeader.EPOCH_SNAPSHOT, new byte[0]);
+        snapshot.add(ParsleyHeader.CAUSAL_DEPENDENCIES, ParsleyClock.empty().observe(UPSTREAM_ID, 0, 3).toBytes());
         processor.process(new Record<>("k", null, 0L, snapshot));
 
         assertEquals(List.of("v"), processed, "the snapshot marker must never reach the user delegate");
@@ -114,8 +122,10 @@ class ParsleyProcessorEpochSnapshotTest {
         assertEquals(1, relayed.size(), "the snapshot marker must be relayed downstream exactly once");
         assertEquals("k", relayed.get(0).record().key(),
                 "the relayed marker keeps the incoming key so it stays on the same partition lane");
-        assertEquals(5L, markerCompleteness(relayed.get(0).record()).offsetFor(T1_ID, 0),
-                "the relayed marker carries this node's completeness (T1@5) so the downstream clock advances");
+        assertEquals(6L, markerCompleteness(relayed.get(0).record()).offsetFor(T1_ID, 0),
+                "the relayed marker carries this node's completeness including its own position (T1@6, "
+                        + "not merely T1@5) — a marker's own arrival is delivered exactly like a business "
+                        + "record's own coordinate, so a marker-only channel's frontier still advances");
     }
 
     /** Decodes the completeness clock a relayed marker carries in its causal-dependencies header. */

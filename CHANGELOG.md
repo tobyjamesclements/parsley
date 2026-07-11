@@ -60,6 +60,26 @@ All notable changes to this project are documented in this file. The format is b
   it requires each member to also cover the topics only a sibling touches, which today means direct,
   possibly redundant subscription — automatic passthrough wiring for this is not yet built.
 
+- **A received watermark or epoch marker (snapshot/boundary) was always relayed downstream unconditionally,
+  even when it taught this node's channel nothing it did not already know** — sound only on an acyclic
+  topology, since a marker's own delivery is itself a "genuine advance" by the old logic, so a cycle (a
+  full mesh, or any marker-only passthrough channel) would ping-pong the same marker forever, formally
+  identified as the one real gap in the max-merge model's termination proof.
+
+  `ParsleyEngine.onWatermark` now takes the marker's own offset and marks that position genuinely
+  delivered unconditionally — `seedIfFirstSeen`, then `deliver`, then `propagate`, exactly like a business
+  record's own coordinate — so a marker-only channel's frontier still advances even though no business
+  record ever flows on it (previously such a channel could never contribute to this node's own
+  completeness). It returns a new `WatermarkOutcome` reporting whether the channel's carried clock
+  genuinely changed. `ParsleyProcessor`'s three marker handlers (`handleWatermark`, `handleEpochBoundary`,
+  `handleEpochSnapshot`, via the shared `advanceChannelClockFromMarker`) now relay downstream only when
+  that report is `true` — gated on record kind (a marker's own delivery is never itself a reason to relay
+  further), not on whether any business data changed, so a node that has already converged with its peers
+  has nothing new to say and simply stops, without needing per-edge "already relayed this" bookkeeping.
+  Source-layer marker injection (`injectSnapshot`/`adoptAndInjectBoundary`, driven by the coordination log
+  rather than a received marker) is unaffected — it was already correctly gated on genuine epoch/round
+  advance by its own counters.
+
 ### Fixed
 - **A mismatched sink partition count only warned by default, but under topology-epoch coordination it
   crash-loops the task instead.** `ParsleyMarkerPartitioner` routes an epoch marker to this task's own

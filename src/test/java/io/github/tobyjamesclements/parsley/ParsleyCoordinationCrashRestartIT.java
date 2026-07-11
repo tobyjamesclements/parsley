@@ -55,6 +55,14 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * running member, resumes at once. The held record must remain buffered — <strong>not</strong> delivered
  * before its cause (the old severing bug) — and drain to {@code out} only once {@code prereq@0} finally
  * arrives.
+ *
+ * <p>App Y — the survivor keeping the domain alive while X is down — consumes the <em>same</em> topics
+ * as X (also {@code prereq + in -> out}, distinguished by a lower-cased value instead of X's
+ * upper-cased one) rather than an unrelated {@code yin -> yout} pair, so each app's own declared
+ * subscriptions trivially cover the whole coordinated domain — a genuine full mesh (see {@link
+ * ParsleyEpochLog#isFullMeshSatisfied()}) — without needing the passthrough-source auto-wiring an
+ * unrelated topic pair would require, which does not exist yet. This is purely a topology-shape choice
+ * for the test; it does not change what member-lifecycle behaviour is under test.
  */
 @Testcontainers(disabledWithoutDocker = true)
 class ParsleyCoordinationCrashRestartIT {
@@ -66,8 +74,6 @@ class ParsleyCoordinationCrashRestartIT {
     private static final String PREREQ = "prereq";   // X's held record depends on prereq@0
     private static final String IN = "in";           // X's business input
     private static final String OUT = "out";         // X's sink
-    private static final String YIN = "yin";         // survivor Y's input
-    private static final String YOUT = "yout";       // survivor Y's sink
     private static final String EPOCH_EVENTS = "epoch-events";
 
     /**
@@ -81,7 +87,7 @@ class ParsleyCoordinationCrashRestartIT {
     @Test
     void aCrashedMemberBlocksThenRestartsAndDrainsInCausalOrder() throws Exception {
         String bootstrap = kafka.getBootstrapServers();
-        createTopics(bootstrap, PREREQ, IN, OUT, YIN, YOUT, EPOCH_EVENTS);
+        createTopics(bootstrap, PREREQ, IN, OUT, EPOCH_EVENTS);
         String runId = UUID.randomUUID().toString().substring(0, 8);
         String appIdX = "crash-x-" + runId;   // stable across the restart
         String appIdY = "crash-y-" + runId;
@@ -101,10 +107,8 @@ class ParsleyCoordinationCrashRestartIT {
             await().atMost(Duration.ofSeconds(60)).until(() ->
                     appY.state() == KafkaStreams.State.RUNNING && appX.state() == KafkaStreams.State.RUNNING);
 
-            // Kick Y so it is active, and establish an epoch so both X and Y are running members.
-            try (KafkaProducer<String, String> producer = new KafkaProducer<>(producerConfig(bootstrap))) {
-                producer.send(CausalDependencies.empty().stamp(new ProducerRecord<>(YIN, "yk", "y"))).get();
-            }
+            // Establish an epoch so both X and Y are running members (Y needs no separate "kick" — it
+            // shares X's input topics, so it is already actively consuming).
             requestUntilCommitted(coordinationY, coordinationX1, bootstrap, 1L);
 
             // Buffer a record in X: an `in` record that depends on prereq@0 (never yet produced) is held.
@@ -176,15 +180,21 @@ class ParsleyCoordinationCrashRestartIT {
         return builder.build();
     }
 
+    /**
+     * Y's own topology: the same {@code prereq + in -> out} shape as X, distinguished by a lower-cased
+     * value instead of X's upper-cased one, so both apps' outputs coexist on {@code out} without
+     * colliding with the test's exact-match assertions on X's "ORDER" value (see the class Javadoc for
+     * why Y shares X's topics rather than an unrelated pair).
+     */
     private static Topology stageY(ParsleyCoordination coordination) {
         StreamsBuilder builder = new StreamsBuilder();
-        builder.stream(YIN, Consumed.with(Serdes.String(), Serdes.String()))
-                .process(ParsleyProcessors.builder(upperCaser())
+        builder.stream(List.of(PREREQ, IN), Consumed.with(Serdes.String(), Serdes.String()))
+                .process(ParsleyProcessors.builder(lowerCaser())
                         .addBufferStore("parsley-y")
-                        .addBuffer(ParsleyBuffer.of(YIN, Serdes.String(), Serdes.String()))
+                        .addBuffers(List.of(PREREQ, IN), Serdes.String(), Serdes.String())
                         .withCoordination(coordination)
                         .build())
-                .to(YOUT, Produced.with(Serdes.String(), Serdes.String()));
+                .to(OUT, Produced.with(Serdes.String(), Serdes.String()));
         return builder.build();
     }
 
@@ -194,6 +204,16 @@ class ParsleyCoordinationCrashRestartIT {
             @Override public void init(ProcessorContext<String, String> context) { this.ctx = context; }
             @Override public void process(Record<String, String> record) {
                 ctx.forward(record.withValue(record.value().toUpperCase(Locale.ROOT)));
+            }
+        };
+    }
+
+    private static ProcessorSupplier<String, String, String, String> lowerCaser() {
+        return () -> new Processor<>() {
+            private ProcessorContext<String, String> ctx;
+            @Override public void init(ProcessorContext<String, String> context) { this.ctx = context; }
+            @Override public void process(Record<String, String> record) {
+                ctx.forward(record.withValue(record.value().toLowerCase(Locale.ROOT)));
             }
         };
     }

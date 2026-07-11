@@ -294,7 +294,10 @@ class CausalReconvergenceTopologyTest {
      * ParsleyFrontier}: after {@link ParsleyEngine#onWatermark} is called with a frontier carrying an
      * ancestor coordinate, {@link ParsleyEngine#completeness()} must reflect it. This proves the
      * channel clock is updated by the watermark receipt, which is the mechanism that enables inductive
-     * propagation through non-subscribing layers.
+     * propagation through non-subscribing layers. Also asserts {@link
+     * ParsleyEngine.WatermarkOutcome#channelAdvanced()} reports {@code true} — the signal {@link
+     * ParsleyProcessor} gates further relay on (clock-invisible markers; see its class Javadoc) — since
+     * this watermark genuinely taught the channel something it did not already know.
      *
      * Asserts that completeness rises to include the watermark's ancestor coordinate immediately
      * after {@code onWatermark} is called, even though no business record was delivered.
@@ -315,13 +318,17 @@ class CausalReconvergenceTopologyTest {
         assertEquals(-1L, engine.completeness().offsetFor(ANC_ID, 0),
                 "completeness must not know ANC before any watermark arrives");
 
-        // Receive a watermark on T1/0 carrying {ANC@5}.
+        // Receive a watermark at T1/0 offset 0, carrying {ANC@5}.
         ParsleyClock watermarkFrontier = ParsleyClock.empty().observe(ANC_ID, 0, 5);
-        List<ParsleyMessage<String, String>> released = engine.onWatermark(T1_ID, 0, watermarkFrontier).delivered();
+        ParsleyEngine.WatermarkOutcome<String, String> watermarkOutcome =
+                engine.onWatermark(T1_ID, 0, 0, watermarkFrontier);
+        List<ParsleyMessage<String, String>> released = watermarkOutcome.outcome().delivered();
 
         // No records were buffered, so nothing is released.
         assertEquals(0, released.size(),
                 "no records buffered, so onWatermark must return an empty release list");
+        assertTrue(watermarkOutcome.channelAdvanced(),
+                "the channel knew nothing before, so this watermark must report a genuine advance");
 
         // The channel clock for T1/0 now knows ANC@5, which must appear in completeness().
         assertEquals(5L, engine.completeness().offsetFor(ANC_ID, 0),
