@@ -215,15 +215,15 @@ class ParsleyEngineCompletenessTest {
         TopicPartition t3 = new TopicPartition("t3", 0);
 
         // T1@0 depends on shared ancestor T3@5 — nothing has genuinely proven T3@5 yet, so it is held.
-        List<ParsleyMessage<String, String>> out1 = engine.onRecord(record(T1, 0, T1_ID, clock(T3_ID, 5))).delivered();
+        List<ParsleyMessage<String, String>> out1 = engine.receive(record(T1, 0, T1_ID, clock(T3_ID, 5))).delivered();
         assertEquals(List.of(), out1, "T1@0 must be held: no channel has genuinely proven T3@5 yet");
 
         // A real T3 record, genuinely and contiguously delivered up to offset 5, is the direct witness
         // that releases the held T1@0.
         for (long offset = 0; offset < 5; offset++) {
-            engine.onRecord(record(t3, offset, T3_ID, ParsleyClock.empty()));
+            engine.receive(record(t3, offset, T3_ID, ParsleyClock.empty()));
         }
-        List<ParsleyMessage<String, String>> out2 = engine.onRecord(record(t3, 5, T3_ID, ParsleyClock.empty())).delivered();
+        List<ParsleyMessage<String, String>> out2 = engine.receive(record(t3, 5, T3_ID, ParsleyClock.empty())).delivered();
         assertEquals(2, out2.size(),
                 "T3@5 delivers genuinely and releases the held T1@0, which depended on exactly that");
     }
@@ -244,11 +244,11 @@ class ParsleyEngineCompletenessTest {
                 (topicId, partition) -> partition == 0 && topicId.equals(T1_ID);
         ParsleyEngine<String, String> engine = engineOver(newFrontier(), t1Only);
 
-        assertEquals(1, engine.onRecord(record(T1, 0, T1_ID, ParsleyClock.empty())).delivered().size(),
+        assertEquals(1, engine.receive(record(T1, 0, T1_ID, ParsleyClock.empty())).delivered().size(),
                 "T1@0 with no dependencies delivers immediately");
         // T1@1 depends on T1@0 — an earlier offset of its own topic (intra-topic), already genuinely
         // delivered above.
-        assertEquals(1, engine.onRecord(record(T1, 1, T1_ID, clock(T1_ID, 0))).delivered().size(),
+        assertEquals(1, engine.receive(record(T1, 1, T1_ID, clock(T1_ID, 0))).delivered().size(),
                 "an intra-topic dependency (on the record's own topic) is satisfied immediately");
     }
 
@@ -266,10 +266,10 @@ class ParsleyEngineCompletenessTest {
         frontier.channelUpdate(T2_ID, 0, ParsleyClock.empty());
         ParsleyEngine<String, String> engine = engineOver(frontier, SCOPE);
 
-        List<ParsleyMessage<String, String>> out1 = engine.onRecord(record(T1, 0, T1_ID, clock(T2_ID, 0))).delivered();
+        List<ParsleyMessage<String, String>> out1 = engine.receive(record(T1, 0, T1_ID, clock(T2_ID, 0))).delivered();
         assertEquals(List.of(), out1, "T1@0 must be held: T2 has not genuinely delivered anything yet");
 
-        List<ParsleyMessage<String, String>> out2 = engine.onRecord(record(T2, 0, T2_ID, ParsleyClock.empty())).delivered();
+        List<ParsleyMessage<String, String>> out2 = engine.receive(record(T2, 0, T2_ID, ParsleyClock.empty())).delivered();
         assertEquals(2, out2.size(),
                 "T2@0 delivers genuinely and releases the held T1@0, which depended on exactly that");
     }

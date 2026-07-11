@@ -127,7 +127,7 @@ class ParsleyCoordinationJoinerIT {
         builder.stream(MID, Consumed.with(Serdes.String(), Serdes.String()))
                 .process(ParsleyProcessors.builder(prefixer())
                         .addBufferStore("parsley-b")
-                        .addBuffer(ParsleyBuffer.of(MID, Serdes.String(), Serdes.String()))
+                        .addBuffer(new ParsleyBuffer<>(MID, Serdes.String(), Serdes.String()))
                         .withCoordination(coordination)
                         .build())
                 .to(OUT, Produced.with(Serdes.String(), Serdes.String()));
@@ -138,7 +138,7 @@ class ParsleyCoordinationJoinerIT {
         builder.stream(IN, Consumed.with(Serdes.String(), Serdes.String()))
                 .process(ParsleyProcessors.builder(upperCaser())
                         .addBufferStore("parsley-a")
-                        .addBuffer(ParsleyBuffer.of(IN, Serdes.String(), Serdes.String()))
+                        .addBuffer(new ParsleyBuffer<>(IN, Serdes.String(), Serdes.String()))
                         .withCoordination(coordination)
                         .build())
                 .to(MID, Produced.with(Serdes.String(), Serdes.String()));

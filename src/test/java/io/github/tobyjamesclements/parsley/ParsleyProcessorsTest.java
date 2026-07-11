@@ -36,7 +36,7 @@ class ParsleyProcessorsTest {
     @Test
     void buildFailsWithoutBufferStore() {
         ParsleyProcessors.Builder<String, String, String, String> b = ParsleyProcessors.builder(USER)
-                .addBuffer(ParsleyBuffer.of("t1", Serdes.String(), Serdes.String()));
+                .addBuffer(new ParsleyBuffer<>("t1", Serdes.String(), Serdes.String()));
         assertThrows(IllegalStateException.class, b::build,
                 "build() must throw when addBufferStore(name) was not called");
     }
@@ -66,7 +66,7 @@ class ParsleyProcessorsTest {
     void buildsAValidSupplier() {
         ParsleyProcessorSupplier<String, String, String, String> supplier =
                 builderWith()
-                        .addBuffer(ParsleyBuffer.of("t1", Serdes.String(), Serdes.String()))
+                        .addBuffer(new ParsleyBuffer<>("t1", Serdes.String(), Serdes.String()))
                         .build();
         assertNotNull(supplier, "build() must return a non-null supplier");
         assertNotNull(supplier.get(), "supplier.get() must return a non-null processor");
@@ -83,7 +83,7 @@ class ParsleyProcessorsTest {
         ParsleyProcessorSupplier<String, String, String, String> supplier =
                 (ParsleyProcessorSupplier<String, String, String, String>) ParsleyProcessors.builder(USER)
                         .addBufferStore("t1")
-                        .addBuffer(ParsleyBuffer.of("t1", Serdes.String(), Serdes.String()))
+                        .addBuffer(new ParsleyBuffer<>("t1", Serdes.String(), Serdes.String()))
                         .build();
 
         Set<String> storeNames = supplier.stores().stream()
@@ -108,7 +108,7 @@ class ParsleyProcessorsTest {
     void withConfigKeyValueOverridesDefault() {
         ParsleyProcessorSupplier<String, String, String, String> supplier =
                 (ParsleyProcessorSupplier<String, String, String, String>) builderWith()
-                        .addBuffer(ParsleyBuffer.of("t1", Serdes.String(), Serdes.String()))
+                        .addBuffer(new ParsleyBuffer<>("t1", Serdes.String(), Serdes.String()))
                         .withConfig(TOPOLOGY_VALIDATION, "strict")
                         .build();
         assertEquals(ParsleyConfig.ValidationMode.STRICT, supplier.config().topologyValidation(),
@@ -125,7 +125,7 @@ class ParsleyProcessorsTest {
     void defaultConfigUsesWarnValidation() {
         ParsleyProcessorSupplier<String, String, String, String> supplier =
                 (ParsleyProcessorSupplier<String, String, String, String>) builderWith()
-                        .addBuffer(ParsleyBuffer.of("t1", Serdes.String(), Serdes.String()))
+                        .addBuffer(new ParsleyBuffer<>("t1", Serdes.String(), Serdes.String()))
                         .build();
         assertEquals(ParsleyConfig.ValidationMode.WARN, supplier.config().topologyValidation(),
                 "the default topology-validation mode is 'warn'");
@@ -141,7 +141,7 @@ class ParsleyProcessorsTest {
     void withConfigsMapAndPropertiesApplied() {
         ParsleyProcessorSupplier<String, String, String, String> fromMap =
                 (ParsleyProcessorSupplier<String, String, String, String>) builderWith()
-                        .addBuffer(ParsleyBuffer.of("t1", Serdes.String(), Serdes.String()))
+                        .addBuffer(new ParsleyBuffer<>("t1", Serdes.String(), Serdes.String()))
                         .withConfigs(Map.of(TOPOLOGY_VALIDATION, "strict"))
                         .build();
         assertEquals(ParsleyConfig.ValidationMode.STRICT, fromMap.config().topologyValidation(),
@@ -151,7 +151,7 @@ class ParsleyProcessorsTest {
         props.setProperty(TOPOLOGY_VALIDATION, "strict");
         ParsleyProcessorSupplier<String, String, String, String> fromProps =
                 (ParsleyProcessorSupplier<String, String, String, String>) builderWith()
-                        .addBuffer(ParsleyBuffer.of("t2", Serdes.String(), Serdes.String()))
+                        .addBuffer(new ParsleyBuffer<>("t2", Serdes.String(), Serdes.String()))
                         .withConfig(props)
                         .build();
         assertEquals(ParsleyConfig.ValidationMode.STRICT, fromProps.config().topologyValidation(),
@@ -169,7 +169,7 @@ class ParsleyProcessorsTest {
     void builderRejectsAnAlreadyDecoratedSupplier() {
         ParsleyProcessorSupplier<String, String, String, String> alreadyDecorated =
                 builderWith()
-                        .addBuffer(ParsleyBuffer.of("t1", Serdes.String(), Serdes.String()))
+                        .addBuffer(new ParsleyBuffer<>("t1", Serdes.String(), Serdes.String()))
                         .build();
 
         IllegalArgumentException e = assertThrows(IllegalArgumentException.class,

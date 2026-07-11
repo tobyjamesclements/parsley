@@ -28,8 +28,8 @@ import java.util.Set;
 import java.util.function.Function;
 
 /**
- * Wraps a user {@link Processor} and gates delegation on the causal frontier: an incoming record is
- * held until the completeness frontier dominates its causal dependencies. Delivery is strictly
+ * A Decorator (GoF) over a user {@link Processor}, gating delegation on the causal frontier: an incoming
+ * record is held until the completeness frontier dominates its causal dependencies. Delivery is strictly
  * fail-closed — there is no eviction, buffer limit, or timeout that forwards a record ahead of its
  * dependencies. Every record that is delivered reaches {@code delegate.process(...)} exactly once,
  * and the state reads/writes the delegate performs and every record it forwards are causally ordered;
@@ -354,7 +354,7 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
         // Registered last, once init() has otherwise succeeded, so a failed init never leaves a
         // phantom task permanently blocking ParsleyQuiesce#isSafeToClose.
         if (quiesce != null) {
-            quiesce.register(context.taskId());
+            quiesce.register(context.taskId().toString());
         }
         // Report the restored buffer's drained state once up front, so a task that starts idle with an
         // empty buffer is known-drained to quiesce and to leave() without waiting for the first delivery.
@@ -443,17 +443,20 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
 
     @Override
     public void process(Record<KIn, VIn> record) {
-        if (isWatermark(record)) {
-            handleWatermark(record);
-            return;
-        }
-        if (isEpochBoundary(record)) {
-            handleEpochBoundary(record);
-            return;
-        }
-        if (isEpochSnapshot(record)) {
-            handleEpochSnapshot(record);
-            return;
+        switch (classify(record)) {
+            case WATERMARK -> {
+                handleWatermark(record);
+                return;
+            }
+            case EPOCH_BOUNDARY -> {
+                handleEpochBoundary(record);
+                return;
+            }
+            case EPOCH_SNAPSHOT -> {
+                handleEpochSnapshot(record);
+                return;
+            }
+            case BUSINESS -> { }
         }
         // A passthrough record's key/value are raw bytes, not genuine KIn/VIn values (see the class
         // Javadoc's "Passthrough topics" paragraph) — never recorded as the most-recent business key.
@@ -465,7 +468,7 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
         }
         ParsleyMessage<KIn, VIn> ingested = ingest(record);
         ParsleyClock completenessBefore = engine().completeness();
-        ParsleyEngine.Outcome<KIn, VIn> outcome = engine().onRecord(ingested);
+        ParsleyEngine.Outcome<KIn, VIn> outcome = engine().receive(ingested);
         deliver(outcome.delivered());
         // Advertise this node's progress so downstream channel clocks advance gap-free. A delivered
         // record advertises through its business output's completeness stamp — or, if the delegate
@@ -502,7 +505,7 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
     public void close() {
         log.info("Processor closing [task: {}]", context.taskId());
         if (quiesce != null) {
-            quiesce.unregister(context.taskId());
+            quiesce.unregister(context.taskId().toString());
         }
         // Unconditional, not just for a genuine decommission: Kafka Streams calls close() whenever this
         // task stops running here, including a rebalance that migrates it to another instance. Without
@@ -571,57 +574,40 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
     private void updateQuiesceState() {
         boolean empty = engine().bufferSize() == 0;
         if (quiesce != null) {
-            quiesce.setDrained(context.taskId(), quiesce.isQuiesceRequested() && empty);
+            quiesce.setDrained(context.taskId().toString(), quiesce.isQuiesceRequested() && empty);
         }
         if (epochRuntime != null) {
             epochRuntime.reportDrained(memberId, empty);
         }
     }
 
-    /**
-     * Returns {@code true} if {@code record} is a Parsley protocol watermark, identified solely by the
-     * presence of the {@link ParsleyHeader#WATERMARK} header — never by its key, which carries the
-     * triggering record's key for routing. Watermarks carry a null value and must never be forwarded
-     * to the user delegate or buffered — they exist only to propagate causal completeness progress
-     * through non-emitting layers.
-     */
-    private boolean isWatermark(Record<KIn, VIn> record) {
-        for (Header h : record.headers()) {
-            if (ParsleyHeader.WATERMARK.equals(h.key())) {
-                return true;
-            }
-        }
-        return false;
-    }
+    /** Which Parsley protocol marker, if any, {@link #classify} identified a record as. */
+    private enum RecordKind { WATERMARK, EPOCH_BOUNDARY, EPOCH_SNAPSHOT, BUSINESS }
 
     /**
-     * Returns {@code true} if {@code record} is a Parsley topology epoch-boundary marker, identified by
-     * the {@link ParsleyHeader#EPOCH_BOUNDARY} header. Like a watermark it carries no business payload
-     * and must never be forwarded to the user delegate or buffered — it exists only to drive each
-     * node's local overlapping-epoch transition.
+     * Classifies {@code record} by a single pass over its headers, identifying a Parsley protocol
+     * watermark ({@link ParsleyHeader#WATERMARK}), epoch-boundary marker ({@link
+     * ParsleyHeader#EPOCH_BOUNDARY}), or epoch-snapshot marker ({@link ParsleyHeader#EPOCH_SNAPSHOT}) —
+     * never by a record's key, which for a marker carries the triggering record's key for routing. Every
+     * marker carries no business payload and must never be forwarded to the user delegate or buffered —
+     * a watermark exists only to propagate causal completeness progress through non-emitting layers; the
+     * epoch markers drive each node's local epoch transition and the Mattern-cut publish respectively.
+     * Anything else is {@link RecordKind#BUSINESS}.
      */
-    private boolean isEpochBoundary(Record<KIn, VIn> record) {
+    private RecordKind classify(Record<KIn, VIn> record) {
         for (Header h : record.headers()) {
-            if (ParsleyHeader.EPOCH_BOUNDARY.equals(h.key())) {
-                return true;
+            String key = h.key();
+            if (ParsleyHeader.WATERMARK.equals(key)) {
+                return RecordKind.WATERMARK;
+            }
+            if (ParsleyHeader.EPOCH_BOUNDARY.equals(key)) {
+                return RecordKind.EPOCH_BOUNDARY;
+            }
+            if (ParsleyHeader.EPOCH_SNAPSHOT.equals(key)) {
+                return RecordKind.EPOCH_SNAPSHOT;
             }
         }
-        return false;
-    }
-
-    /**
-     * Returns {@code true} if {@code record} is a Parsley topology epoch-snapshot marker, identified by
-     * the {@link ParsleyHeader#EPOCH_SNAPSHOT} header. Like a watermark it carries no business payload
-     * and must never be forwarded to the user delegate or buffered — it triggers this node to publish
-     * its completeness frontier for the Mattern cut.
-     */
-    private boolean isEpochSnapshot(Record<KIn, VIn> record) {
-        for (Header h : record.headers()) {
-            if (ParsleyHeader.EPOCH_SNAPSHOT.equals(h.key())) {
-                return true;
-            }
-        }
-        return false;
+        return RecordKind.BUSINESS;
     }
 
     /**
@@ -667,20 +653,16 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
             return;
         }
 
-        ParsleyEpochBoundary boundary = null;
-        byte[] boundaryBytes = null;
-        for (Header h : record.headers()) {
-            if (ParsleyHeader.EPOCH_BOUNDARY.equals(h.key()) && h.value() != null) {
-                try {
-                    boundaryBytes = h.value();
-                    boundary = ParsleyEpochBoundary.fromBytes(boundaryBytes);
-                } catch (Exception e) {
-                    log.warn("Failed to decode epoch boundary on {}-{}; ignoring", topic, partition, e);
-                }
-                break;
-            }
+        Header marker = record.headers().lastHeader(ParsleyHeader.EPOCH_BOUNDARY);
+        byte[] boundaryBytes = marker == null ? null : marker.value();
+        if (boundaryBytes == null) {
+            return;
         }
-        if (boundary == null || boundaryBytes == null) {
+        ParsleyEpochBoundary boundary;
+        try {
+            boundary = ParsleyEpochBoundary.fromBytes(boundaryBytes);
+        } catch (Exception e) {
+            log.warn("Failed to decode epoch boundary on {}-{}; ignoring", topic, partition, e);
             return;
         }
 
@@ -720,21 +702,20 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
         if (topicId == null) {
             return false;
         }
-        for (Header h : record.headers()) {
-            if (ParsleyHeader.CAUSAL_DEPENDENCIES.equals(h.key()) && h.value() != null) {
-                try {
-                    ParsleyClock frontier = ParsleyClock.fromBytes(h.value());
-                    ParsleyEngine.WatermarkOutcome<KIn, VIn> watermarkOutcome =
-                            engine().onWatermark(topicId, partition, offset, frontier);
-                    deliver(watermarkOutcome.outcome().delivered());
-                    return watermarkOutcome.channelAdvanced();
-                } catch (Exception e) {
-                    log.warn("Failed to decode marker completeness on {}-{}; ignoring", topic, partition, e);
-                    return false;
-                }
-            }
+        Header marker = record.headers().lastHeader(ParsleyHeader.CAUSAL_DEPENDENCIES);
+        if (marker == null || marker.value() == null) {
+            return false;
         }
-        return false;
+        try {
+            ParsleyClock frontier = ParsleyClock.fromBytes(marker.value());
+            ParsleyEngine.WatermarkOutcome<KIn, VIn> watermarkOutcome =
+                    engine().onWatermark(topicId, partition, offset, frontier);
+            deliver(watermarkOutcome.outcome().delivered());
+            return watermarkOutcome.channelAdvanced();
+        } catch (Exception e) {
+            log.warn("Failed to decode marker completeness on {}-{}; ignoring", topic, partition, e);
+            return false;
+        }
     }
 
     /**
@@ -895,15 +876,13 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
 
         // Decode the completeness frontier carried in the parsley-causal-dependencies header.
         ParsleyClock frontierClock = ParsleyClock.empty();
-        for (Header h : record.headers()) {
-            if (ParsleyHeader.CAUSAL_DEPENDENCIES.equals(h.key()) && h.value() != null) {
-                try {
-                    frontierClock = ParsleyClock.fromBytes(h.value());
-                } catch (Exception e) {
-                    log.warn("Failed to decode watermark frontier on {}-{}; treating as empty",
-                            topic, partition, e);
-                }
-                break;
+        Header dependencies = record.headers().lastHeader(ParsleyHeader.CAUSAL_DEPENDENCIES);
+        if (dependencies != null && dependencies.value() != null) {
+            try {
+                frontierClock = ParsleyClock.fromBytes(dependencies.value());
+            } catch (Exception e) {
+                log.warn("Failed to decode watermark frontier on {}-{}; treating as empty",
+                        topic, partition, e);
             }
         }
 
@@ -1018,7 +997,7 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
     }
 
     /**
-     * Decodes {@code record} into a {@link ParsleyMessage}, ready for {@link ParsleyEngine#onRecord}.
+     * Decodes {@code record} into a {@link ParsleyMessage}, ready for {@link ParsleyEngine#receive}.
      */
     private ParsleyMessage<KIn, VIn> ingest(Record<KIn, VIn> record) {
         Optional<RecordMetadata> meta = context.recordMetadata();

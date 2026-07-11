@@ -40,14 +40,14 @@ class ParsleyBufferUnboundedLimitTest {
         List<ParsleyMessage<String, String>> out = new ArrayList<>();
         ParsleyClock needsT1 = ParsleyClock.empty().observe(T1_ID, 0, 4);
         for (long offset = 0; offset < 5; offset++) {
-            out.addAll(engine.onRecord(message(T2, offset, T2_ID, needsT1)).delivered());
+            out.addAll(engine.receive(message(T2, offset, T2_ID, needsT1)).delivered());
         }
 
         assertEquals(5, buffer.size(), "all five records must be held — no eviction must have occurred");
         assertEquals(List.of(), out, "no record must be forwarded before the dependency is satisfied");
 
         for (long offset = 0; offset < 5; offset++) {
-            out.addAll(engine.onRecord(message(T1, offset, T1_ID, ParsleyClock.empty())).delivered());
+            out.addAll(engine.receive(message(T1, offset, T1_ID, ParsleyClock.empty())).delivered());
         }
 
         assertEquals(0, buffer.size(), "buffer must be empty after the dependency is satisfied");

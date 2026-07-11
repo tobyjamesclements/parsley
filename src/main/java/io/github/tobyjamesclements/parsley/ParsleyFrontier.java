@@ -366,23 +366,16 @@ final class ParsleyFrontier {
     private byte[] toBytes() {
         try (ByteArrayOutputStream baos = new ByteArrayOutputStream();
              DataOutputStream dos = new DataOutputStream(baos)) {
-            byte[] f = frontier.toBytes();
-            dos.writeInt(f.length);
-            dos.write(f);
+            ParsleyByteUtils.writeBytes(dos, frontier.toBytes());
             dos.writeInt(channels.size());
             for (Map.Entry<CoordKey, ParsleyClock> entry : channels.entrySet()) {
-                dos.writeLong(entry.getKey().topicId().getMostSignificantBits());
-                dos.writeLong(entry.getKey().topicId().getLeastSignificantBits());
+                ParsleyByteUtils.writeUuid(dos, entry.getKey().topicId());
                 dos.writeInt(entry.getKey().partition());
-                byte[] c = entry.getValue().toBytes();
-                dos.writeInt(c.length);
-                dos.write(c);
+                ParsleyByteUtils.writeBytes(dos, entry.getValue().toBytes());
             }
             if (epoch instanceof ParsleyEpochState state) {
                 dos.writeBoolean(true);
-                byte[] e = state.toBytes();
-                dos.writeInt(e.length);
-                dos.write(e);
+                ParsleyByteUtils.writeBytes(dos, state.toBytes());
             } else {
                 dos.writeBoolean(false);
             }
@@ -395,21 +388,19 @@ final class ParsleyFrontier {
 
     private void load(byte[] blob) {
         try (DataInputStream dis = new DataInputStream(new ByteArrayInputStream(blob))) {
-            byte[] f = dis.readNBytes(dis.readInt());
-            frontier = ParsleyClock.fromBytes(f);
+            frontier = ParsleyClock.fromBytes(ParsleyByteUtils.readBytes(dis));
             int count = dis.readInt();
             for (int i = 0; i < count; i++) {
-                long msb = dis.readLong();
-                long lsb = dis.readLong();
+                Uuid topicId = ParsleyByteUtils.readUuid(dis);
                 int partition = dis.readInt();
-                byte[] c = dis.readNBytes(dis.readInt());
-                channels.put(new CoordKey(new Uuid(msb, lsb), partition), ParsleyClock.fromBytes(c));
+                ParsleyClock clock = ParsleyClock.fromBytes(ParsleyByteUtils.readBytes(dis));
+                channels.put(new CoordKey(topicId, partition), clock);
             }
             // The epoch section is optional and trailing: a blob written before epoch state existed (or
             // by a static-epoch frontier) simply ends after the channels. available() is exact over the
             // backing ByteArrayInputStream.
             if (dis.available() > 0 && dis.readBoolean()) {
-                byte[] e = dis.readNBytes(dis.readInt());
+                byte[] e = ParsleyByteUtils.readBytes(dis);
                 // Only a live ParsleyEpochState can restore epoch bytes; a static epoch (tests/epoch 0)
                 // never wrote them, so this branch is not reached for those.
                 if (epoch instanceof ParsleyEpochState state) {

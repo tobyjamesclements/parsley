@@ -1,6 +1,7 @@
 package io.github.tobyjamesclements.parsley;
 
 import org.apache.kafka.common.Uuid;
+import org.apache.kafka.common.header.Header;
 import org.apache.kafka.common.header.Headers;
 import org.apache.kafka.clients.producer.ProducerRecord;
 import org.jspecify.annotations.Nullable;
@@ -78,6 +79,23 @@ record ParsleyHeader(String key, byte @Nullable [] value) {
      */
     static Headers mutableHeaders() {
         return new ProducerRecord<byte[], byte[]>("", null, null).headers();
+    }
+
+    /**
+     * Returns a fresh {@link Headers} containing every header from {@code original} except {@link
+     * #CAUSAL_DEPENDENCIES}, with a new {@code CAUSAL_DEPENDENCIES} header appended carrying {@code
+     * dependencies}. Used to re-stamp a record's causal dependencies without duplicating the header (any
+     * prior dependencies header is replaced, not accumulated) or disturbing any other header.
+     */
+    static Headers replacingDependencies(Headers original, byte[] dependencies) {
+        Headers stamped = mutableHeaders();
+        for (Header header : original) {
+            if (!header.key().equals(CAUSAL_DEPENDENCIES)) {
+                stamped.add(header.key(), header.value());
+            }
+        }
+        stamped.add(CAUSAL_DEPENDENCIES, dependencies);
+        return stamped;
     }
 
     static byte[] uuidToBytes(Uuid id) {

@@ -8,10 +8,11 @@ import java.time.Duration;
 import java.util.Properties;
 
 /**
- * The causal application runtime: wraps the Kafka Streams instance a {@link CausalTopology} runs as, and
- * owns the causal machinery a plain {@code KafkaStreams} doesn't know about — graceful causal drain on
- * shutdown, and (when configured) topology-epoch coordination. Plays the same role
- * {@link KafkaStreams} plays for a plain Kafka Streams application:
+ * The causal application runtime: a Facade (GoF) over the Kafka Streams instance a {@link CausalTopology}
+ * runs as, and the causal machinery a plain {@code KafkaStreams} doesn't know about — graceful causal
+ * drain on shutdown, and (when configured) topology-epoch coordination — behind the one simple
+ * start/close lifecycle below. Plays the same role {@link KafkaStreams} plays for a plain Kafka Streams
+ * application:
  *
  * <pre>{@code
  * CausalStreamsBuilder builder = new CausalStreamsBuilder();
@@ -30,7 +31,8 @@ import java.util.Properties;
  * {@code parsley.coordination.epoch-events-topic} in {@code props}; {@code application.id} supplies the
  * epoch member identity. Absent that key, the topology runs in epoch 0 — no epoch-events log, no
  * coordination thread. Evolve a running, coordinated topology through an epoch boundary with
- * {@link #requestEpochTransition()}.
+ * {@link #requestEpochTransition()}. A transition blocks — unbounded — until every running member has
+ * published; see {@link ParsleyCoordination#leave()} for how a member is removed from the domain.
  *
  * <p><strong>{@link #close()}</strong> always runs the full graceful shutdown: it waits for every task's
  * causal buffer to drain through the ordinary delivery path, then — if coordination is configured —
@@ -48,30 +50,23 @@ public final class CausalStreams implements AutoCloseable {
 
     /**
      * Assembles {@code topology} into a real Kafka Streams topology and wraps a {@code KafkaStreams}
-     * instance over it, blocking a topology-epoch transition (if configured) until every member has
-     * published — see {@link ParsleyMembershipStrategy#blockUntilDrained()}.
+     * instance over it.
      *
      * @param topology the causal topology to run
      * @param props    standard Kafka Streams configuration plus Parsley's {@code parsley.*} keys
      */
     public CausalStreams(CausalTopology topology, Properties props) {
-        this(topology, props, ParsleyMembershipStrategy.blockUntilDrained());
-    }
-
-    /** As above, with the {@link ParsleyMembershipStrategy} overridden — a test seam. */
-    CausalStreams(CausalTopology topology, Properties props, ParsleyMembershipStrategy membershipStrategy) {
-        this.quiesce = ParsleyQuiesce.create();
-        this.coordination = coordinationFrom(props, membershipStrategy);
+        this.quiesce = new ParsleyQuiesce();
+        this.coordination = coordinationFrom(props);
         Topology assembled = topology.assemble(props, quiesce, coordination);
         this.kafkaStreams = new KafkaStreams(assembled, props);
     }
 
-    private static @Nullable ParsleyCoordination coordinationFrom(
-            Properties props, ParsleyMembershipStrategy membershipStrategy) {
+    private static @Nullable ParsleyCoordination coordinationFrom(Properties props) {
         Properties merged = ParsleyConfig.loadProperties();
         merged.putAll(props);
         String epochEventsTopic = ParsleyConfig.from(merged).coordinationEpochEventsTopic();
-        return epochEventsTopic == null ? null : ParsleyCoordination.create(epochEventsTopic, membershipStrategy);
+        return epochEventsTopic == null ? null : ParsleyCoordination.create(epochEventsTopic);
     }
 
     /** Starts the underlying {@code KafkaStreams} instance. */

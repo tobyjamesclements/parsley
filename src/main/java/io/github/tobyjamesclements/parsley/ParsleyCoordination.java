@@ -35,17 +35,11 @@ final class ParsleyCoordination {
     // the lazy Kafka build, so tests exercise the wiring without a broker.
     private final @Nullable ParsleyEpochRuntime injectedRuntime;
 
-    // How a blocked epoch round treats members that have not published. Unused on the injected-runtime path
-    // (that runtime carries its own). Default: block-until-drained (never excludes).
-    private final ParsleyMembershipStrategy membershipStrategy;
-
     private final Object lock = new Object();
     private @Nullable ParsleyEpochRuntime lazyRuntime;
 
-    private ParsleyCoordination(String epochEventsTopic, ParsleyMembershipStrategy membershipStrategy,
-                               @Nullable ParsleyEpochRuntime injectedRuntime) {
+    private ParsleyCoordination(String epochEventsTopic, @Nullable ParsleyEpochRuntime injectedRuntime) {
         this.epochEventsTopic = epochEventsTopic;
-        this.membershipStrategy = membershipStrategy;
         this.injectedRuntime = injectedRuntime;
     }
 
@@ -58,27 +52,16 @@ final class ParsleyCoordination {
      * coordinate's floor from the log). Declare sink topics via {@code CausalStreams.addSink(...)} — which
      * does so automatically — or {@code ParsleyProcessors.Builder.sinkTopics(...)} on the low-level path.
      *
+     * <p>An epoch transition blocks — unbounded — until every running member has published; a member is
+     * removed from the domain only by an explicit {@link #leave()}, never automatically, since only a
+     * drained member can safely leave.
+     *
      * @param epochEventsTopic the single-partition epoch-events log topic name
      * @return a new coordination handle
      */
     static ParsleyCoordination create(String epochEventsTopic) {
-        return create(epochEventsTopic, ParsleyMembershipStrategy.blockUntilDrained());
-    }
-
-    /**
-     * As {@link #create(String)}, with an explicit {@link ParsleyMembershipStrategy} governing how an epoch
-     * transition treats a member that has not published. The default
-     * {@link ParsleyMembershipStrategy#blockUntilDrained()} blocks the transition until every member
-     * publishes.
-     *
-     * @param epochEventsTopic   the single-partition epoch-events log topic name
-     * @param membershipStrategy how a blocked round treats members that have not published
-     * @return a new coordination handle
-     */
-    static ParsleyCoordination create(String epochEventsTopic, ParsleyMembershipStrategy membershipStrategy) {
         Objects.requireNonNull(epochEventsTopic, "epochEventsTopic must not be null");
-        Objects.requireNonNull(membershipStrategy, "membershipStrategy must not be null");
-        return new ParsleyCoordination(epochEventsTopic, membershipStrategy, null);
+        return new ParsleyCoordination(epochEventsTopic, null);
     }
 
     /**
@@ -86,7 +69,7 @@ final class ParsleyCoordination {
      * {@link InMemoryEpochTransport}-backed runtime with no broker.
      */
     static ParsleyCoordination forRuntime(ParsleyEpochRuntime runtime) {
-        return new ParsleyCoordination("", ParsleyMembershipStrategy.blockUntilDrained(), runtime);
+        return new ParsleyCoordination("", runtime);
     }
 
     /**
@@ -104,7 +87,7 @@ final class ParsleyCoordination {
                 return existing;
             }
             ParsleyEpochRuntime built = new ParsleyEpochRuntime(
-                    new KafkaEpochTransport(appConfigs, epochEventsTopic), membershipStrategy);
+                    new KafkaEpochTransport(appConfigs, epochEventsTopic));
             built.start();
             lazyRuntime = built;
             return built;

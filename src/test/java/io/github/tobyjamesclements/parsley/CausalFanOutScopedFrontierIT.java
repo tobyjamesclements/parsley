@@ -154,8 +154,8 @@ class CausalFanOutScopedFrontierIT {
      *
      * <p>Completeness is this processor's own frontier max-merged with every input channel's advertised
      * dependencies ({@link ParsleyFrontier#completeness()} / {@link ParsleyClock#merge}). Once
-     * {@code SHARED@1} genuinely delivers, the same {@code onRecord} call's cascade
-     * ({@link ParsleyEngine#onRecord}'s {@code propagate()}) releases the held unique-topic record in
+     * {@code SHARED@1} genuinely delivers, the same {@code receive} call's cascade
+     * ({@link ParsleyEngine#receive}'s {@code propagate()}) releases the held unique-topic record in
      * the same pass — so both records are stamped with the same post-cascade completeness, and
      * {@code SHARED@1}'s own stamp already carries the unique-topic coordinate too. Each processor's
      * own unique topic is that processor's own directly-consumed coordinate — part of its own
@@ -195,7 +195,7 @@ class CausalFanOutScopedFrontierIT {
             }
 
             // SHARED@1's delivery and the cascade release of the held unique-topic record happen in
-            // the same onRecord call, so both are stamped with the same post-cascade completeness:
+            // the same receive call, so both are stamped with the same post-cascade completeness:
             // SHARED@1 plus this processor's own unique-topic coordinate.
             CausalDependencies expectedA = CausalDependencies.builder(topics)
                     .require(SHARED, 0, 1)
@@ -215,10 +215,10 @@ class CausalFanOutScopedFrontierIT {
 
                 assertEquals(expectedA, aStamps.get("S1"),
                         "processor A's SHARED@1 stamp carries A_ONLY too: A_ONLY@0 was released by the "
-                                + "same onRecord cascade that delivered SHARED@1, so both share one stamp");
+                                + "same receive cascade that delivered SHARED@1, so both share one stamp");
                 assertEquals(expectedB, bStamps.get("S1"),
                         "processor B's SHARED@1 stamp carries B_ONLY too: B_ONLY@0 was released by the "
-                                + "same onRecord cascade that delivered SHARED@1, so both share one stamp");
+                                + "same receive cascade that delivered SHARED@1, so both share one stamp");
                 assertEquals(expectedA, aStamps.get("A0"),
                         "processor A's released A_ONLY@0 stamp carries SHARED@1 (its genuine dependency, "
                                 + "reached only once this processor's own SHARED channel actually got there) "

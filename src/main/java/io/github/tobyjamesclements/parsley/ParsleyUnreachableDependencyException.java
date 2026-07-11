@@ -11,36 +11,11 @@ import org.apache.kafka.common.Uuid;
  * that the coordinate is genuinely irrelevant. Fail-closed, not vacuous satisfaction — the record is
  * never buffered and its source offset is not committed past it, so it is reprocessed on restart.
  */
-final class ParsleyUnreachableDependencyException extends RuntimeException {
-
-    private final String topic;
-    private final Uuid topicId;
-    private final int partition;
-    private final long offset;
+final class ParsleyUnreachableDependencyException extends ParsleyCoordinateException {
 
     ParsleyUnreachableDependencyException(String topic, Uuid topicId, int partition, long offset) {
         super("record " + topic + "-" + partition + "@" + offset
-                + " depends on a coordinate this node has no channel for; the record was not forwarded");
-        this.topic = topic;
-        this.topicId = topicId;
-        this.partition = partition;
-        this.offset = offset;
-    }
-
-    String topic() {
-        return topic;
-    }
-
-    /** The source topic's stable UUID. */
-    Uuid topicId() {
-        return topicId;
-    }
-
-    int partition() {
-        return partition;
-    }
-
-    long offset() {
-        return offset;
+                + " depends on a coordinate this node has no channel for; the record was not forwarded",
+                null, topic, topicId, partition, offset);
     }
 }

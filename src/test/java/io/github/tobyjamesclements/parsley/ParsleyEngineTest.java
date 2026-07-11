@@ -100,10 +100,10 @@ class ParsleyEngineTest {
     void bufferHoldsAnUnsatisfiedRecordAndReleasesItOnDrain() {
         ParsleyEngine<String, String> engine = engineWith();
 
-        engine.onRecord(incomingRecord(T2, 0, ParsleyClock.empty().observe(T1_ID, 0, 3)));
+        engine.receive(incomingRecord(T2, 0, ParsleyClock.empty().observe(T1_ID, 0, 3)));
         assertEquals(1, buffer.size(), "unsatisfied record must be held in the buffer");
 
-        engine.onRecord(incomingRecord(T1, 3, ParsleyClock.empty()));
+        engine.receive(incomingRecord(T1, 3, ParsleyClock.empty()));
         assertEquals(0, buffer.size(), "drained record must be removed from the buffer");
     }
 
@@ -193,12 +193,12 @@ class ParsleyEngineTest {
                 ParsleyClock.empty(), buffer,
                 new MockCandidateIndex(), forwardedIndex, capturing);
 
-        engine.onRecord(incomingRecord(T2, 0, ParsleyClock.empty().observe(T1_ID, 0, 3)));
+        engine.receive(incomingRecord(T2, 0, ParsleyClock.empty().observe(T1_ID, 0, 3)));
         assertEquals(List.of(1), bufferedCounts, "recordBuffered must fire when a record enters the buffer");
         assertEquals(List.of(1), reportedDepths, "reportState must fire with the new buffer depth");
         assertTrue(releasedCounts.isEmpty(), "recordReleased must not fire while record is buffered");
 
-        engine.onRecord(incomingRecord(T1, 3, ParsleyClock.empty()));
+        engine.receive(incomingRecord(T1, 3, ParsleyClock.empty()));
         assertEquals(List.of(1), releasedCounts, "recordReleased must fire with the count of drained records");
         assertEquals(List.of(1, 0), reportedDepths, "reportState must report the post-drain buffer depth");
     }
@@ -255,7 +255,7 @@ class ParsleyEngineTest {
     /**
      * A dependency on a <em>lower</em> offset of the record's own partition is satisfiable and
      * honoured. Realistically, by the time a record arrives, an earlier offset on its own partition
-     * has already been delivered to {@link ParsleyEngine#onRecord} (Kafka guarantees strictly
+     * has already been delivered to {@link ParsleyEngine#receive} (Kafka guarantees strictly
      * increasing per-partition delivery) — so the interesting case isn't "waiting for it to arrive",
      * it's "waiting for it to actually be forwarded", when that earlier record is itself held on an
      * unrelated dependency.
@@ -507,10 +507,10 @@ class ParsleyEngineTest {
                 sharedForwardedIndex, ParsleyMetrics.NOOP);
 
         // T1@5 is held; T1@6, T1@7, T1@8 each forward immediately, piling up above the gap.
-        first.onRecord(incomingRecord(T1, 5, ParsleyClock.empty().observe(T2_ID, 0, 0)));
-        first.onRecord(incomingRecord(T1, 6, ParsleyClock.empty()));
-        first.onRecord(incomingRecord(T1, 7, ParsleyClock.empty()));
-        first.onRecord(incomingRecord(T1, 8, ParsleyClock.empty()));
+        first.receive(incomingRecord(T1, 5, ParsleyClock.empty().observe(T2_ID, 0, 0)));
+        first.receive(incomingRecord(T1, 6, ParsleyClock.empty()));
+        first.receive(incomingRecord(T1, 7, ParsleyClock.empty()));
+        first.receive(incomingRecord(T1, 8, ParsleyClock.empty()));
         ParsleyClock persistedFrontier = first.frontier();
         assertEquals(4L, persistedFrontier.offsetFor(T1_ID, 0),
                 "frontier persisted at the gap, as it would be before a crash");
@@ -523,7 +523,7 @@ class ParsleyEngineTest {
                 sharedForwardedIndex, ParsleyMetrics.NOOP);
 
         List<ParsleyMessage<String, String>> released =
-                restarted.onRecord(incomingRecord(T2, 0, ParsleyClock.empty())).delivered();
+                restarted.receive(incomingRecord(T2, 0, ParsleyClock.empty())).delivered();
 
         assertEquals(8L, restarted.frontier().offsetFor(T1_ID, 0),
                 "the restarted instance must still catch up through 6, 7, and 8 via the surviving forwarded index");
@@ -553,13 +553,13 @@ class ParsleyEngineTest {
                 new MockCandidateIndex(), new MockForwardedIndex(), ParsleyMetrics.NOOP);
 
         // T2@0 depends on T1@5 and is held (sequence 0 in the buffer).
-        beforeCrash.onRecord(incomingRecord(T2, 0, ParsleyClock.empty().observe(T1_ID, 0, 5)));
+        beforeCrash.receive(incomingRecord(T2, 0, ParsleyClock.empty().observe(T1_ID, 0, 5)));
         assertEquals(1, crashyBuffer.size(), "T2@0 must be held");
 
         // T1@5 satisfies it: propagate() releases T2@0, persisting the frontier advance before its
         // (swallowed) buffer removal — simulating a crash landing in that exact window.
         List<ParsleyMessage<String, String>> releasedBeforeCrash =
-                beforeCrash.onRecord(incomingRecord(T1, 5, ParsleyClock.empty())).delivered();
+                beforeCrash.receive(incomingRecord(T1, 5, ParsleyClock.empty())).delivered();
 
         assertEquals(List.of(5L, 0L), releasedBeforeCrash.stream().map(ParsleyMessage::offset).toList(),
                 "both T1@5 and T2@0 are delivered in-process before the simulated crash");
@@ -841,7 +841,7 @@ class ParsleyEngineTest {
      * A poison record (undecodable on the forward path) always fails the task — the regression guard for
      * the mutation-before-throw hazard: the buffer must not be touched before the throw.
      *
-     * Asserts {@code onRecord} throws {@link ParsleyBufferDeserializationException} and the poisoned
+     * Asserts {@code receive} throws {@link ParsleyBufferDeserializationException} and the poisoned
      * record remains in the buffer (not removed).
      */
     @Test
@@ -854,11 +854,11 @@ class ParsleyEngineTest {
                 System::currentTimeMillis);
 
         ParsleyClock needsT4 = ParsleyClock.empty().observe(t4Id, 0, 0);
-        engine.onRecord(incomingRecordWithId(T1, 5, T1_ID, needsT4));
+        engine.receive(incomingRecordWithId(T1, 5, T1_ID, needsT4));
         buffer.poison(0L); // the only sequence added so far
 
         assertThrows(ParsleyBufferDeserializationException.class,
-                () -> engine.onRecord(incomingRecordWithId(t4, 0, t4Id, ParsleyClock.empty())),
+                () -> engine.receive(incomingRecordWithId(t4, 0, t4Id, ParsleyClock.empty())),
                 "a poison record on the forward path must fail the task");
         assertEquals(1, buffer.size(), "the poisoned record must remain in the buffer for recovery, not be removed");
     }
@@ -870,7 +870,7 @@ class ParsleyEngineTest {
      * satisfied: this node can prove it cannot check the coordinate, never that the coordinate is
      * irrelevant.
      *
-     * Asserts {@code onRecord} throws {@link ParsleyUnreachableDependencyException} and the record is
+     * Asserts {@code receive} throws {@link ParsleyUnreachableDependencyException} and the record is
      * never added to the buffer.
      */
     @Test
@@ -885,7 +885,7 @@ class ParsleyEngineTest {
         ParsleyClock needsT2 = ParsleyClock.empty().observe(T2_ID, 0, 0);
 
         assertThrows(ParsleyUnreachableDependencyException.class,
-                () -> engine.onRecord(incomingRecord(T1, 0, needsT2)),
+                () -> engine.receive(incomingRecord(T1, 0, needsT2)),
                 "a dependency on a coordinate outside this node's scope must fail the task");
         assertEquals(0, buffer.size(), "the record must never be added to the buffer");
     }
@@ -956,7 +956,7 @@ class ParsleyEngineTest {
     }
 
     private void processRecord(ParsleyEngine<String, String> engine, ParsleyMessage<String, String> message) {
-        forwarded.addAll(engine.onRecord(message).delivered());
+        forwarded.addAll(engine.receive(message).delivered());
     }
 
     private static TopicPartition tp(ParsleyMessage<String, String> m) {

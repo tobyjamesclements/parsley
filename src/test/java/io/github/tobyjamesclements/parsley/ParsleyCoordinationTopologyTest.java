@@ -59,7 +59,7 @@ class ParsleyCoordinationTopologyTest {
                 .process(upperCaser())
                 .to("out-sink", "out", Serdes.String(), Serdes.String());
         Topology topology = builder.topicAdmin(ADMIN).build()
-                .assemble(config(), ParsleyQuiesce.create(), coordination);
+                .assemble(config(), new ParsleyQuiesce(), coordination);
 
         try (TopologyTestDriver driver = new TopologyTestDriver(topology, config())) {
             TestInputTopic<String, String> t1 =

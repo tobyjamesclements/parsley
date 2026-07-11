@@ -81,7 +81,7 @@ public class StateRestorationBenchmark {
         StreamsBuilder builder = new StreamsBuilder();
         builder.stream("bench-in", Consumed.with(Serdes.String(), Serdes.String()))
                .process(ParsleyProcessors.builder(noOp).addBufferStore("parsley")
-                       .addBuffer(ParsleyBuffer.of("bench-in", Serdes.String(), Serdes.String()))
+                       .addBuffer(new ParsleyBuffer<>("bench-in", Serdes.String(), Serdes.String()))
                        .topicAdmin(TestTopicAdmin.of(java.util.Map.of("bench-in", Uuid.randomUuid())))
                        .build())
                .to("bench-out", Produced.with(Serdes.String(), Serdes.String()));
@@ -114,7 +114,7 @@ public class StateRestorationBenchmark {
                 new RocksForwardedIndex(forwardedKV), ParsleyMetrics.NOOP);
         for (int i = 0; i < bufferSize; i++) {
             ParsleyClock deps = ParsleyClock.empty().observe(Uuid.randomUuid(), 0, 0L);
-            engine.onRecord(record("bench-" + i, 0, (long) i, deps));
+            engine.receive(record("bench-" + i, 0, (long) i, deps));
         }
         // Discard the engine; benchmark methods will reconstruct it from RocksDB.
     }

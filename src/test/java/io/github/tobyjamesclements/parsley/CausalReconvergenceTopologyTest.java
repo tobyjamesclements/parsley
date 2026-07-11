@@ -109,7 +109,7 @@ class CausalReconvergenceTopologyTest {
         builder.stream(List.of(T1), Consumed.with(Serdes.String(), Serdes.String()))
                 .process(ParsleyProcessors.builder(filter())
                         .addBufferStore("filter")
-                        .addBuffer(ParsleyBuffer.of(T1, Serdes.String(), Serdes.String()))
+                        .addBuffer(new ParsleyBuffer<>(T1, Serdes.String(), Serdes.String()))
                         .topicAdmin(SINGLE_ADMIN)
                         .build())
                 .to("out", Produced.with(Serdes.String(), Serdes.String()));

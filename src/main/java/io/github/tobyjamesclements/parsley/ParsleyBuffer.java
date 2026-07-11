@@ -30,18 +30,4 @@ record ParsleyBuffer<K, V>(String topic, Serde<K> keySerde, Serde<V> valueSerde)
         Objects.requireNonNull(keySerde, "keySerde must not be null");
         Objects.requireNonNull(valueSerde, "valueSerde must not be null");
     }
-
-    /**
-     * Creates a buffer registration for {@code topic} with the given serdes.
-     *
-     * @param topic      the source topic name
-     * @param keySerde   the key serde
-     * @param valueSerde the value serde
-     * @param <K>        the key type
-     * @param <V>        the value type
-     * @return a new {@code ParsleyBuffer}
-     */
-    static <K, V> ParsleyBuffer<K, V> of(String topic, Serde<K> keySerde, Serde<V> valueSerde) {
-        return new ParsleyBuffer<>(topic, keySerde, valueSerde);
-    }
 }

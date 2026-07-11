@@ -1,18 +1,24 @@
 package io.github.tobyjamesclements.parsley;
 
-import org.apache.kafka.streams.processor.TaskId;
-
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
- * Coordinates graceful shutdown across every causal task in one {@link CausalStreams} runtime
- * instance. {@code CausalStreams} owns one {@code ParsleyQuiesce} internally: every participating
- * task registers with it at {@code init()}, and {@code CausalStreams#close()} calls
- * {@link #requestQuiesce()} then polls {@link #isSafeToClose()} before stopping the underlying
- * {@code KafkaStreams} — so a clean shutdown never strands a causally-held record. There is no
- * public handle; this is purely {@code CausalStreams}' internal shutdown mechanism.
+ * Coordinates graceful shutdown across a registered set of causal tasks or members, identified by an
+ * opaque string id — a Kafka Streams {@code TaskId}'s string form for {@link CausalStreams}, or an
+ * epoch member id (see {@link ParsleyEpochRuntime}). {@code CausalStreams} owns one {@code ParsleyQuiesce}
+ * internally: every participating task registers with it at {@code init()}, and
+ * {@code CausalStreams#close()} calls {@link #requestQuiesce()} then polls {@link #isSafeToClose()}
+ * before stopping the underlying {@code KafkaStreams} — so a clean shutdown never strands a
+ * causally-held record. There is no public handle; this is purely an internal shutdown mechanism.
+ *
+ * <p>{@link ParsleyEpochRuntime} reuses this same class for an unrelated but structurally identical
+ * need — tracking which of its local members are currently drained, so {@link ParsleyCoordination#leave()}
+ * waits until every local member is drained before removing it from the epoch domain. There, quiesce is
+ * requested unconditionally at construction (an epoch leave always cares about drain state, never gated
+ * on an external request), so {@link #isSafeToClose()} degenerates to "every registered member is
+ * currently drained".
  *
  * <p>A task registered with a {@code ParsleyQuiesce} keeps processing normally after
  * {@link #requestQuiesce()} — nothing about how it delivers or forwards records changes. It only
@@ -32,19 +38,10 @@ import java.util.concurrent.atomic.AtomicBoolean;
 final class ParsleyQuiesce {
 
     private final AtomicBoolean requested = new AtomicBoolean(false);
-    private final Set<TaskId> registered = ConcurrentHashMap.newKeySet();
-    private final Set<TaskId> drained = ConcurrentHashMap.newKeySet();
+    private final Set<String> registered = ConcurrentHashMap.newKeySet();
+    private final Set<String> drained = ConcurrentHashMap.newKeySet();
 
-    private ParsleyQuiesce() {}
-
-    /**
-     * Creates a new, not-yet-requested {@code ParsleyQuiesce} with no registered tasks.
-     *
-     * @return a new {@code ParsleyQuiesce}
-     */
-    static ParsleyQuiesce create() {
-        return new ParsleyQuiesce();
-    }
+    ParsleyQuiesce() {}
 
     /**
      * Requests quiesce: every registered task starts reporting itself drained once its buffer
@@ -74,23 +71,23 @@ final class ParsleyQuiesce {
         return requested.get() && !registered.isEmpty() && drained.containsAll(registered);
     }
 
-    /** Registers a task, called by {@link ParsleyProcessor#init}. */
-    void register(TaskId taskId) {
-        registered.add(taskId);
+    /** Registers a member, called by {@link ParsleyProcessor#init}. */
+    void register(String memberId) {
+        registered.add(memberId);
     }
 
-    /** Unregisters a task, called by {@link ParsleyProcessor#close}. */
-    void unregister(TaskId taskId) {
-        registered.remove(taskId);
-        drained.remove(taskId);
+    /** Unregisters a member, called by {@link ParsleyProcessor#close}. */
+    void unregister(String memberId) {
+        registered.remove(memberId);
+        drained.remove(memberId);
     }
 
-    /** Marks a task drained (buffer empty) or not, called after every buffer-depth-changing event. */
-    void setDrained(TaskId taskId, boolean isDrained) {
+    /** Marks a member drained (buffer empty) or not, called after every buffer-depth-changing event. */
+    void setDrained(String memberId, boolean isDrained) {
         if (isDrained) {
-            drained.add(taskId);
+            drained.add(memberId);
         } else {
-            drained.remove(taskId);
+            drained.remove(memberId);
         }
     }
 }

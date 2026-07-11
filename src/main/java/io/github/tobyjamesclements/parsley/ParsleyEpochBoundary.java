@@ -26,9 +26,7 @@ record ParsleyEpochBoundary(long epochId, ParsleyClock lowerBounds) {
              DataOutputStream dos = new DataOutputStream(baos)) {
             dos.writeByte(WIRE_VERSION);
             dos.writeLong(epochId);
-            byte[] clock = lowerBounds.toBytes();
-            dos.writeInt(clock.length);
-            dos.write(clock);
+            ParsleyByteUtils.writeBytes(dos, lowerBounds.toBytes());
             dos.flush();
             return baos.toByteArray();
         } catch (IOException e) {
@@ -49,7 +47,7 @@ record ParsleyEpochBoundary(long epochId, ParsleyClock lowerBounds) {
                         "unsupported ParsleyEpochBoundary wire version: " + version + " (expected " + WIRE_VERSION + ")");
             }
             long epochId = dis.readLong();
-            ParsleyClock lowerBounds = ParsleyClock.fromBytes(dis.readNBytes(dis.readInt()));
+            ParsleyClock lowerBounds = ParsleyClock.fromBytes(ParsleyByteUtils.readBytes(dis));
             return new ParsleyEpochBoundary(epochId, lowerBounds);
         } catch (IOException e) {
             throw new IllegalStateException("ParsleyEpochBoundary deserialisation failed", e);

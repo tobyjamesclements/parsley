@@ -79,7 +79,7 @@ class CausalTopologyPassthroughTest {
         builder.stream("t1", Serdes.String(), Serdes.String())
                 .process(delegate)
                 .to("out-sink", "out", Serdes.String(), Serdes.String());
-        Topology topology = builder.topicAdmin(ADMIN).build().assemble(config(), ParsleyQuiesce.create(), coordination);
+        Topology topology = builder.topicAdmin(ADMIN).build().assemble(config(), new ParsleyQuiesce(), coordination);
 
         try (TopologyTestDriver driver = new TopologyTestDriver(topology, config())) {
             TestInputTopic<String, String> t1 =

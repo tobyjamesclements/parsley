@@ -1,6 +1,5 @@
 package io.github.tobyjamesclements.parsley;
 
-import org.apache.kafka.common.header.Header;
 import org.apache.kafka.common.header.Headers;
 import org.apache.kafka.common.serialization.Serde;
 import org.apache.kafka.streams.StreamsMetrics;
@@ -22,7 +21,7 @@ import java.util.Optional;
 import java.util.function.Supplier;
 
 /**
- * A {@link ProcessorContext} that wraps the real context handed to a decorating causal processor's
+ * A Decorator (GoF) over the real {@link ProcessorContext} handed to a decorating causal processor's
  * delegate, stamping the current causal frontier onto every forwarded record's headers and
  * delegating everything else verbatim.
  *
@@ -116,13 +115,7 @@ final class ParsleyProcessorContext<KOut, VOut> implements ProcessorContext<KOut
     }
 
     private <K extends KOut, V extends VOut> Record<K, V> stamp(Record<K, V> record) {
-        Headers stamped = ParsleyHeader.mutableHeaders();
-        for (Header header : record.headers()) {
-            if (!header.key().equals(ParsleyHeader.CAUSAL_DEPENDENCIES)) {
-                stamped.add(header.key(), header.value());
-            }
-        }
-        stamped.add(ParsleyHeader.CAUSAL_DEPENDENCIES, frontier.get().toBytes());
+        Headers stamped = ParsleyHeader.replacingDependencies(record.headers(), frontier.get().toBytes());
         return record.withHeaders(stamped);
     }
 

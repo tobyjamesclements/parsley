@@ -69,12 +69,8 @@ record ParsleyMessage<K, V>(String topic, Uuid topicId, int partition, long offs
     }
 
     private static byte @Nullable [] encodedDependencies(Record<?, ?> record) {
-        for (Header header : record.headers()) {
-            if (ParsleyHeader.CAUSAL_DEPENDENCIES.equals(header.key())) {
-                return header.value();
-            }
-        }
-        return null;
+        Header header = record.headers().lastHeader(ParsleyHeader.CAUSAL_DEPENDENCIES);
+        return header == null ? null : header.value();
     }
 
     /**

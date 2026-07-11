@@ -3,6 +3,30 @@
  * a concise, topology-level API modelled on Kafka Streams; the low-level processor decorator that powers
  * it is package-private internal machinery.
  *
+ * <h2>Three pillars</h2>
+ * <ul>
+ *   <li><strong>Causal broadcast.</strong> Every record carries the producer's causal dependencies in a
+ *       header; a consumer holds a record in a changelog-backed buffer until its own frontier dominates
+ *       those dependencies, then delivers it — so a topology of Kafka Streams processors sees causally
+ *       related events across topics in the order they actually happened, not merely in per-partition
+ *       order. The classic broadcast/receive/deliver vocabulary and where each lives in this package is
+ *       spelled out in {@link io.github.tobyjamesclements.parsley.ParsleyEngine}'s Javadoc. See {@link
+ *       io.github.tobyjamesclements.parsley.CausalDependencies} for the wire contract and the edge
+ *       operations below for talking to a Parsley topology from plain Kafka clients.</li>
+ *   <li><strong>Topology epochs.</strong> A running, coordinated topology can evolve — a stage added,
+ *       replaced, or reconfigured — without dragging pre-change history into causal time: {@link
+ *       io.github.tobyjamesclements.parsley.CausalStreams#requestEpochTransition()} evolves every
+ *       participating member through a leaderless, in-band epoch boundary. Optional and off by default;
+ *       {@code parsley.coordination.epoch-events-topic} turns it on. Absent that key, a topology runs in
+ *       epoch 0 indefinitely — no epoch-events log, no coordination thread.</li>
+ *   <li><strong>Schema handling.</strong> A held record's key and value are (de)serialised with the
+ *       {@code Serde} registered for its own <em>source</em> topic, never the buffer's internal changelog
+ *       topic, so topic-scoped serdes — Avro plus Schema Registry {@code TopicNameStrategy} in particular
+ *       — resolve the correct subject even for a record held across a schema change. A record that
+ *       becomes undecodable while buffered (e.g. an incompatible registry change) fails the task fast
+ *       rather than being silently dropped or forwarded on an unproven causal premise.</li>
+ * </ul>
+ *
  * <h2>Entry point</h2>
  * Three roles mirroring Kafka Streams — {@code StreamsBuilder} / {@code Topology} / {@code KafkaStreams}:
  * <ul>

@@ -93,7 +93,7 @@ public final class CausalTopology {
             Topology topology, ParsleyStageSpec<KIn, VIn, KOut, VOut> stage, String name, ParsleyConfig config,
             DefaultSerdes defaults, ParsleyQuiesce quiesce, @Nullable ParsleyCoordination coordination) {
         Map<String, ParsleyBuffer<KIn, VIn>> sources = new LinkedHashMap<>();
-        stage.sources.forEach((topic, source) -> sources.put(topic, ParsleyBuffer.of(topic,
+        stage.sources.forEach((topic, source) -> sources.put(topic, new ParsleyBuffer<>(topic,
                 source.keySerde() != null ? source.keySerde() : defaults.key(),
                 source.valueSerde() != null ? source.valueSerde() : defaults.value())));
 

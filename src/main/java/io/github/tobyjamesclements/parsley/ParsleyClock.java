@@ -270,8 +270,7 @@ final class ParsleyClock {
             dos.writeInt(size());
             for (Map.Entry<Uuid, Map<Integer, Long>> byTopic : offsets.entrySet()) {
                 for (Map.Entry<Integer, Long> byPartition : byTopic.getValue().entrySet()) {
-                    dos.writeLong(byTopic.getKey().getMostSignificantBits());
-                    dos.writeLong(byTopic.getKey().getLeastSignificantBits());
+                    ParsleyByteUtils.writeUuid(dos, byTopic.getKey());
                     dos.writeInt(byPartition.getKey());
                     dos.writeLong(byPartition.getValue());
                 }
@@ -297,11 +296,10 @@ final class ParsleyClock {
             int count = dis.readInt();
             Map<Uuid, Map<Integer, Long>> map = new HashMap<>();
             for (int i = 0; i < count; i++) {
-                long msb = dis.readLong();
-                long lsb = dis.readLong();
+                Uuid topicId = ParsleyByteUtils.readUuid(dis);
                 int partition = dis.readInt();
                 long offset = dis.readLong();
-                map.computeIfAbsent(new Uuid(msb, lsb), k -> new HashMap<>()).put(partition, offset);
+                map.computeIfAbsent(topicId, k -> new HashMap<>()).put(partition, offset);
             }
             return new ParsleyClock(freeze(map));
         } catch (IOException e) {

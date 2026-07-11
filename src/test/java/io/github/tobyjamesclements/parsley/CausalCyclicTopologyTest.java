@@ -96,8 +96,8 @@ class CausalCyclicTopologyTest {
         builder.stream(List.of("t1", "p-out"), Consumed.with(Serdes.String(), Serdes.String()))
                 .process(ParsleyProcessors.builder(selfLooper)
                         .addBufferStore("parsley")
-                        .addBuffer(ParsleyBuffer.of("t1", Serdes.String(), Serdes.String()))
-                        .addBuffer(ParsleyBuffer.of("p-out", Serdes.String(), Serdes.String()))
+                        .addBuffer(new ParsleyBuffer<>("t1", Serdes.String(), Serdes.String()))
+                        .addBuffer(new ParsleyBuffer<>("p-out", Serdes.String(), Serdes.String()))
                         // Required for ParsleyEngine's own-coordinate stripping (see ParsleyEngine's
                         // ownSinkTopics Javadoc): without this declaration, P has no way to recognise
                         // "p-out" as its own produced coordinate, and a self-consumed watermark carrying

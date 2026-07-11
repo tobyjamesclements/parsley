@@ -7,8 +7,9 @@ import java.util.Optional;
 import java.util.Set;
 
 /**
- * Wraps a stage's own sink {@link StreamPartitioner} (or the default key-hash partitioner, if the stage
- * declared none), routing a Parsley protocol marker to the forwarding task's own owned partition —
+ * A Decorator (GoF) over a stage's own sink {@link StreamPartitioner} (or the default key-hash
+ * partitioner, if the stage declared none), routing a Parsley protocol marker to the forwarding task's
+ * own owned partition —
  * {@link ParsleyMarkerPartition#get()} — instead of whatever the wrapped partitioner would compute from
  * the marker's key. {@link CausalTopology} installs one of these on every sink a stage declares, in place
  * of {@code stage.partitioner} directly, so a marker forward — {@code forwardWatermark}/{@code

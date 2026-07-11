@@ -72,11 +72,11 @@ class CausalStreamsTopologyTest {
 
     /** Assembles {@code builder} against {@code admin} and default (warn) topology validation. */
     private static Topology assemble(CausalStreamsBuilder builder, ParsleyTopicAdmin admin) {
-        return assemble(builder, admin, config(), ParsleyQuiesce.create());
+        return assemble(builder, admin, config(), new ParsleyQuiesce());
     }
 
     private static Topology assemble(CausalStreamsBuilder builder, ParsleyTopicAdmin admin, Properties props) {
-        return assemble(builder, admin, props, ParsleyQuiesce.create());
+        return assemble(builder, admin, props, new ParsleyQuiesce());
     }
 
     private static Topology assemble(
@@ -223,7 +223,7 @@ class CausalStreamsTopologyTest {
         ParsleyProcessorSupplier<String, String, String, String> alreadyDecorated =
                 ParsleyProcessors.builder(upperCaser())
                         .addBufferStore("parsley")
-                        .addBuffer(ParsleyBuffer.of("t1", Serdes.String(), Serdes.String()))
+                        .addBuffer(new ParsleyBuffer<>("t1", Serdes.String(), Serdes.String()))
                         .build();
 
         CausalStreamsBuilder builder = new CausalStreamsBuilder();
@@ -233,7 +233,7 @@ class CausalStreamsTopologyTest {
         CausalTopology topology = builder.topicAdmin(ADMIN).build();
 
         IllegalArgumentException e = assertThrows(IllegalArgumentException.class,
-                () -> topology.assemble(config(), ParsleyQuiesce.create(), null),
+                () -> topology.assemble(config(), new ParsleyQuiesce(), null),
                 "assemble() must reject an already-decorated supplier");
         assertTrue(e.getMessage().contains("ParsleyProcessorSupplier"),
                 "the message must name the double-decoration: " + e.getMessage());
@@ -421,7 +421,7 @@ class CausalStreamsTopologyTest {
      */
     @Test
     void quiesceTracksTheBufferThroughTheOrdinaryDeliveryPath() {
-        ParsleyQuiesce quiesce = ParsleyQuiesce.create();
+        ParsleyQuiesce quiesce = new ParsleyQuiesce();
         CausalStreamsBuilder builder = new CausalStreamsBuilder();
         builder.stream(List.of("t1", "t2"), Serdes.String(), Serdes.String())
                 .process(upperCaser())
@@ -468,7 +468,7 @@ class CausalStreamsTopologyTest {
      */
     @Test
     void quiesceRecoversViaThePeriodicTickWhenTheBufferDrainedBeforeQuiesceWasRequested() {
-        ParsleyQuiesce quiesce = ParsleyQuiesce.create();
+        ParsleyQuiesce quiesce = new ParsleyQuiesce();
         CausalStreamsBuilder builder = new CausalStreamsBuilder();
         builder.stream("t1", Serdes.String(), Serdes.String())
                 .process(upperCaser())
@@ -573,7 +573,7 @@ class CausalStreamsTopologyTest {
                 .process(upperCaser())
                 .to("out-sink", "out", Serdes.String(), Serdes.String());
         Topology topology = builder.topicAdmin(mismatched).build()
-                .assemble(config(), ParsleyQuiesce.create(), coordination);
+                .assemble(config(), new ParsleyQuiesce(), coordination);
 
         StreamsException thrown = assertThrows(StreamsException.class,
                 () -> new TopologyTestDriver(topology, config(tempStateDir())),
@@ -609,7 +609,7 @@ class CausalStreamsTopologyTest {
                 .process(upperCaser())
                 .to("out-sink", "out", Serdes.String(), Serdes.String());
         Topology topology = builder.topicAdmin(mismatched).build()
-                .assemble(offProps, ParsleyQuiesce.create(), coordination);
+                .assemble(offProps, new ParsleyQuiesce(), coordination);
 
         try (TopologyTestDriver driver = new TopologyTestDriver(topology, offProps)) {
             driver.createInputTopic("t1", new StringSerializer(), new StringSerializer())

@@ -15,7 +15,20 @@ import java.util.function.LongSupplier;
 /**
  * The causal buffering engine.
  *
- * <p>The processor feeds incoming records to {@link #onRecord} and forwards the returned records
+ * <p><strong>Vocabulary.</strong> This class is the receive-and-deliver half of the classic causal
+ * broadcast algorithm (Birman-Schiper-Stephenson CBCAST; see {@link #completeness()}) — broadcast itself
+ * is layered underneath, not reimplemented here. <em>Broadcast</em> is Kafka's own {@code
+ * ProducerRecord}/{@code context.forward()} (a partition's total order and replication are already a
+ * reliable-broadcast substrate) plus the causal-metadata attachment classic algorithms add atop plain
+ * broadcast ({@link CausalDependencies#stamp} at the edge, {@link ParsleyProcessorContext} internally).
+ * <em>Receive</em> is {@link #receive}: a record arrives on an input channel and is either delivered at
+ * once or buffered until it can be. <em>Deliver</em> is {@link ParsleyFrontier#deliver} — where the
+ * causal-order guarantee is actually granted, surfaced here via {@link Outcome} and handed to the user's
+ * delegate by {@code ParsleyProcessor#deliver}. {@link #onWatermark} and {@code ParsleyProcessor}'s
+ * epoch-marker handlers sit on top of this algorithm as a liveness/coordination layer — protocol
+ * extensions, not part of the CBCAST core.
+ *
+ * <p>The processor feeds incoming records to {@link #receive} and forwards the returned records
  * downstream, in order. Delivery is strictly fail-closed: a record is forwarded only after its
  * declared dependencies have been satisfied by the completeness frontier. There is no eviction, no
  * buffer limit, and no timeout — a record whose dependencies are not yet satisfied stays buffered
@@ -225,12 +238,13 @@ final class ParsleyEngine<K, V> {
     }
 
     /**
-     * Processes one incoming record.
+     * The causal broadcast <em>receive</em> event (see this class's Javadoc): admits one incoming record,
+     * delivering it at once if its dependencies are already satisfied, buffering it otherwise.
      *
      * @param message the record to process
      * @return the records to forward downstream, in order
      */
-    Outcome<K, V> onRecord(ParsleyMessage<K, V> message) {
+    Outcome<K, V> receive(ParsleyMessage<K, V> message) {
         List<ParsleyMessage<K, V>> out = new ArrayList<>();
         boolean channelAdvanced = false;
 
@@ -342,7 +356,7 @@ final class ParsleyEngine<K, V> {
      */
     private void drainSatisfied(List<ParsleyMessage<K, V>> out) {
         for (ParsleyBufferStore.IndexEntry meta : orderedIndex()) {
-            // Normally unreachable: onRecord already rejects an unreachable-dependency record before
+            // Normally unreachable: receive already rejects an unreachable-dependency record before
             // it is ever buffered. This only catches a record buffered by an older binary version
             // (before this check existed) surviving a restart onto this one.
             if (isUnreachableDependency(meta.dependencies(), meta.topicId(), meta.partition(), meta.offset())) {
@@ -396,13 +410,13 @@ final class ParsleyEngine<K, V> {
      * records the advance now permits.
      *
      * <p>The marker's own {@code (sourceTopicId, sourcePartition, offset)} is delivered the same way
-     * {@link #onRecord} delivers a genuine business record's own coordinate — {@link
+     * {@link #receive} delivers a genuine business record's own coordinate — {@link
      * #seedIfFirstSeen} then {@link ParsleyFrontier#deliver} then {@link #propagate} — so a marker-only
      * (passthrough) channel's own frontier still advances even though no business record ever flows on
      * it; without this, such a channel would be stuck at its seed offset forever, and this node's own
      * completeness could never include it. {@link #drainSatisfied} (a full-buffer rescan) additionally
      * runs when the channel's carried clock genuinely changed and more than one channel is registered —
-     * mirroring {@link #onRecord}'s {@code channelAdvanced} handling — since the carried clock can teach
+     * mirroring {@link #receive}'s {@code channelAdvanced} handling — since the carried clock can teach
      * this node about a <em>foreign</em> coordinate {@link #propagate}'s targeted scan (keyed only on
      * this channel's own coordinate) would not otherwise reach.
      *
@@ -530,7 +544,7 @@ final class ParsleyEngine<K, V> {
                             stale.add(candidate);
                             continue;
                         }
-                        // Normally unreachable here — onRecord already rejects an unreachable-dependency
+                        // Normally unreachable here — receive already rejects an unreachable-dependency
                         // record before it is ever buffered — but a record buffered by an older binary
                         // (before this check existed) can still surface it after a restart.
                         if (isUnreachableDependency(entry.record())) {
@@ -585,7 +599,7 @@ final class ParsleyEngine<K, V> {
      * stripped) is within the {@link #completeness()} frontier — i.e. confirmed by at least one input
      * channel (max-merge; a single genuine witness suffices, see {@link #completeness()}). This is the
      * single source of truth for "may this record be delivered now", used on every release path
-     * ({@link #onRecord}, {@link #drainSatisfied}, {@link #propagate}).
+     * ({@link #receive}, {@link #drainSatisfied}, {@link #propagate}).
      */
     private boolean isDeliverable(ParsleyMessage<K, V> record) {
         return isDeliverable(record.dependencies(), record.topicId(), record.partition(), record.offset());

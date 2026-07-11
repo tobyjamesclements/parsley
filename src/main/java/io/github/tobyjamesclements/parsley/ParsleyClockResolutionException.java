@@ -16,42 +16,17 @@ import org.apache.kafka.common.Uuid;
  * <p>{@link #details()} carries the source coordinate and the encoded header length for an operator
  * log — never the payload bytes themselves.
  */
-final class ParsleyClockResolutionException extends RuntimeException {
+final class ParsleyClockResolutionException extends ParsleyCoordinateException {
 
-    private final String topic;
-    private final Uuid topicId;
-    private final int partition;
-    private final long offset;
     private final byte[] encodedDependencies;
     private final String details;
 
     ParsleyClockResolutionException(String topic, Uuid topicId, int partition, long offset,
                                     byte[] encodedDependencies, String details, Throwable cause) {
         super("failed to resolve the causal-dependencies header on " + topic + "-" + partition + "@" + offset
-                + "; the record was not forwarded", cause);
-        this.topic = topic;
-        this.topicId = topicId;
-        this.partition = partition;
-        this.offset = offset;
+                + "; the record was not forwarded", cause, topic, topicId, partition, offset);
         this.encodedDependencies = encodedDependencies;
         this.details = details;
-    }
-
-    String topic() {
-        return topic;
-    }
-
-    /** The source topic's stable UUID. */
-    Uuid topicId() {
-        return topicId;
-    }
-
-    int partition() {
-        return partition;
-    }
-
-    long offset() {
-        return offset;
     }
 
     /** The raw, undecodable header bytes, for operator forensics. */

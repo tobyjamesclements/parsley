@@ -14,9 +14,9 @@ import java.util.HashSet;
 import java.util.Set;
 
 /**
- * The parent epoch state a task holds over its {@link ParsleyFrontier}: the settled per-coordinate
- * floor, plus an optional in-progress epoch transition. Implements {@link ParsleyEpoch} so the
- * frontier and the delivery gate floor against the settled floor directly ({@link #startsAt}).
+ * The parent epoch state a task holds over its {@link ParsleyFrontier} — a State (GoF): the settled
+ * per-coordinate floor, plus an optional in-progress epoch transition. Implements {@link ParsleyEpoch} so
+ * the frontier and the delivery gate floor against the settled floor directly ({@link #startsAt}).
  *
  * <p><strong>Overlapping-epoch transition (the reason this is stateful).</strong> A message must be
  * gated against the floor of the epoch it was <em>written</em> in, not whatever the latest floor is.
@@ -157,17 +157,16 @@ final class ParsleyEpochState implements ParsleyEpoch {
              DataOutputStream dos = new DataOutputStream(baos)) {
             dos.writeByte(WIRE_VERSION);
             dos.writeLong(settledEpochId);
-            writeClock(dos, settledFloor);
+            ParsleyByteUtils.writeBytes(dos, settledFloor.toBytes());
             if (pending == null) {
                 dos.writeBoolean(false);
             } else {
                 dos.writeBoolean(true);
                 dos.writeLong(pending.epochId);
-                writeClock(dos, pending.floor);
+                ParsleyByteUtils.writeBytes(dos, pending.floor.toBytes());
                 dos.writeInt(pending.markersSeen.size());
                 for (CoordKey key : pending.markersSeen) {
-                    dos.writeLong(key.topicId().getMostSignificantBits());
-                    dos.writeLong(key.topicId().getLeastSignificantBits());
+                    ParsleyByteUtils.writeUuid(dos, key.topicId());
                     dos.writeInt(key.partition());
                 }
             }
@@ -187,17 +186,16 @@ final class ParsleyEpochState implements ParsleyEpoch {
                         "unsupported ParsleyEpochState wire version: " + version + " (expected " + WIRE_VERSION + ")");
             }
             this.settledEpochId = dis.readLong();
-            this.settledFloor = readClock(dis);
+            this.settledFloor = ParsleyClock.fromBytes(ParsleyByteUtils.readBytes(dis));
             if (dis.readBoolean()) {
                 long pendingEpochId = dis.readLong();
-                ParsleyClock pendingFloor = readClock(dis);
+                ParsleyClock pendingFloor = ParsleyClock.fromBytes(ParsleyByteUtils.readBytes(dis));
                 Pending restored = new Pending(pendingEpochId, pendingFloor);
                 int markerCount = dis.readInt();
                 for (int i = 0; i < markerCount; i++) {
-                    long msb = dis.readLong();
-                    long lsb = dis.readLong();
+                    Uuid topicId = ParsleyByteUtils.readUuid(dis);
                     int partition = dis.readInt();
-                    restored.markersSeen.add(new CoordKey(new Uuid(msb, lsb), partition));
+                    restored.markersSeen.add(new CoordKey(topicId, partition));
                 }
                 this.pending = restored;
             } else {
@@ -206,15 +204,5 @@ final class ParsleyEpochState implements ParsleyEpoch {
         } catch (IOException e) {
             throw new IllegalStateException("ParsleyEpochState deserialisation failed", e);
         }
-    }
-
-    private static void writeClock(DataOutputStream dos, ParsleyClock clock) throws IOException {
-        byte[] bytes = clock.toBytes();
-        dos.writeInt(bytes.length);
-        dos.write(bytes);
-    }
-
-    private static ParsleyClock readClock(DataInputStream dis) throws IOException {
-        return ParsleyClock.fromBytes(dis.readNBytes(dis.readInt()));
     }
 }

@@ -26,8 +26,8 @@ import java.util.function.Function;
  * builder.stream(List.of("prices", "orders"), Consumed.with(Serdes.String(), orderSerde))
  *        .process(ParsleyProcessors.builder(userSupplier)
  *                .addBufferStore("parsley")
- *                .addBuffer(ParsleyBuffer.of("prices", Serdes.String(), orderSerde))
- *                .addBuffer(ParsleyBuffer.of("orders", Serdes.String(), orderSerde))
+ *                .addBuffer(new ParsleyBuffer<>("prices", Serdes.String(), orderSerde))
+ *                .addBuffer(new ParsleyBuffer<>("orders", Serdes.String(), orderSerde))
  *                .build())
  *        .to("output-topic");
  * }</pre>
@@ -155,7 +155,7 @@ final class ParsleyProcessors {
         Builder<KIn, VIn, KOut, VOut> addBuffers(
                 Collection<String> topics, Serde<KIn> key, Serde<VIn> value) {
             for (String topic : topics) {
-                addBuffer(ParsleyBuffer.of(topic, key, value));
+                addBuffer(new ParsleyBuffer<>(topic, key, value));
             }
             return this;
         }

@@ -174,7 +174,7 @@ class ParsleyCoordinationLeaveIT {
         builder.stream(IN, Consumed.with(Serdes.String(), Serdes.String()))
                 .process(ParsleyProcessors.builder(mapper(fn))
                         .addBufferStore(namespace)
-                        .addBuffer(ParsleyBuffer.of(IN, Serdes.String(), Serdes.String()))
+                        .addBuffer(new ParsleyBuffer<>(IN, Serdes.String(), Serdes.String()))
                         .withCoordination(coordination)
                         .build())
                 .to(OUT, Produced.with(Serdes.String(), Serdes.String()));

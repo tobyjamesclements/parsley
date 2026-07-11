@@ -131,7 +131,7 @@ public class BufferReleaseBenchmark {
         StreamsBuilder builder = new StreamsBuilder();
         builder.stream("bench-in", Consumed.with(Serdes.String(), Serdes.String()))
                .process(ParsleyProcessors.builder(noOp).addBufferStore("parsley")
-                       .addBuffer(ParsleyBuffer.of("bench-in", Serdes.String(), Serdes.String()))
+                       .addBuffer(new ParsleyBuffer<>("bench-in", Serdes.String(), Serdes.String()))
                        .topicAdmin(TestTopicAdmin.of(java.util.Map.of("bench-in", topicId("bench-in"))))
                        .build())
                .to("bench-out", Produced.with(Serdes.String(), Serdes.String()));
@@ -183,12 +183,12 @@ public class BufferReleaseBenchmark {
 
             // Record 0 waits on the trigger coordinate; only it is released when the trigger fires.
             ParsleyClock triggerDeps = ParsleyClock.empty().observe(topicId("trigger"), 0, 0L);
-            engine.onRecord(syntheticRecord("bench-0", 0, 0L, triggerDeps));
+            engine.receive(syntheticRecord("bench-0", 0, 0L, triggerDeps));
 
             // Records 1..n-1 each wait on a unique, never-satisfied coordinate.
             for (int i = 1; i < bench.n; i++) {
                 ParsleyClock deps = ParsleyClock.empty().observe(topicId("unique-" + i), 0, 0L);
-                engine.onRecord(syntheticRecord("bench-" + i, 0, (long) i, deps));
+                engine.receive(syntheticRecord("bench-" + i, 0, (long) i, deps));
             }
 
             // Trigger: source=(trigger-topic, 0, 0), empty deps — forwarded immediately, advances
@@ -235,13 +235,13 @@ public class BufferReleaseBenchmark {
 
             // k records all waiting on the same trigger coordinate.
             for (int i = 0; i < bench.k; i++) {
-                engine.onRecord(syntheticRecord("bench-" + i, 0, (long) i, triggerDeps));
+                engine.receive(syntheticRecord("bench-" + i, 0, (long) i, triggerDeps));
             }
 
             // FIXED_N - k filler records each waiting on a unique, never-satisfied coordinate.
             for (int i = bench.k; i < FIXED_N; i++) {
                 ParsleyClock deps = ParsleyClock.empty().observe(topicId("unique-" + i), 0, 0L);
-                engine.onRecord(syntheticRecord("filler-" + i, 0, (long) i, deps));
+                engine.receive(syntheticRecord("filler-" + i, 0, (long) i, deps));
             }
 
             trigger = syntheticRecord("trigger", 0, 0L, ParsleyClock.empty());
@@ -286,17 +286,17 @@ public class BufferReleaseBenchmark {
             // This forms an r-hop chain: advancing the trigger releases record 0, which in turn
             // releases record 1, ..., which releases record r-1.
             ParsleyClock dep0 = ParsleyClock.empty().observe(topicId("trigger"), 0, 0L);
-            engine.onRecord(syntheticRecord("chain-0", 0, 0L, dep0));
+            engine.receive(syntheticRecord("chain-0", 0, 0L, dep0));
 
             for (int i = 1; i < bench.r; i++) {
                 ParsleyClock dep = ParsleyClock.empty().observe(topicId("chain-" + (i - 1)), 0, (long) (i - 1));
-                engine.onRecord(syntheticRecord("chain-" + i, 0, (long) i, dep));
+                engine.receive(syntheticRecord("chain-" + i, 0, (long) i, dep));
             }
 
             // Filler records: FIXED_N - r records each waiting on a unique, never-satisfied coordinate.
             for (int i = bench.r; i < FIXED_N; i++) {
                 ParsleyClock deps = ParsleyClock.empty().observe(topicId("unique-" + i), 0, 0L);
-                engine.onRecord(syntheticRecord("filler-" + i, 0, (long) i, deps));
+                engine.receive(syntheticRecord("filler-" + i, 0, (long) i, deps));
             }
 
             trigger = syntheticRecord("trigger", 0, 0L, ParsleyClock.empty());
@@ -313,7 +313,7 @@ public class BufferReleaseBenchmark {
      */
     @Benchmark
     public List<ParsleyMessage<String, String>> bufferSize(SizeSetup s) {
-        return s.engine.onRecord(s.trigger).delivered();
+        return s.engine.receive(s.trigger).delivered();
     }
 
     /**
@@ -322,7 +322,7 @@ public class BufferReleaseBenchmark {
      */
     @Benchmark
     public List<ParsleyMessage<String, String>> positionalOccupancy(OccupancySetup s) {
-        return s.engine.onRecord(s.trigger).delivered();
+        return s.engine.receive(s.trigger).delivered();
     }
 
     /**
@@ -331,6 +331,6 @@ public class BufferReleaseBenchmark {
      */
     @Benchmark
     public List<ParsleyMessage<String, String>> cascadeDepth(CascadeSetup s) {
-        return s.engine.onRecord(s.trigger).delivered();
+        return s.engine.receive(s.trigger).delivered();
     }
 }

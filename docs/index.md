@@ -42,15 +42,15 @@ The [Configuration](configuration.md) page describes the policy in full.
 
 ## Public API
 
-The library is a single jar built around two entry points and a set of edge operations. They share a
-common vocabulary of value types.
+The library is a single jar built around one topology-level entry point and a set of edge operations.
+They share a common vocabulary of value types. Everything else — the processor decorator, the buffer,
+graceful-shutdown quiesce, epoch coordination — is internal machinery `CausalStreams` composes for you;
+there is no low-level public entry point to build a topology around by hand.
 
 | API | Purpose |
 |---|---|
-| `ParsleyProcessorSupplier` | Wraps a Kafka Streams `Processor` behind the causal guarantee. The low-level entry point: you build and own the surrounding topology. |
-| `CausalStreams` | Owns the topology itself — sources, processor, and sinks — around the same causal guarantee, composing `ParsleyProcessorSupplier` internally. The high-level entry point, for guarantees that require owning the sinks (a uniform sink partitioner, co-partitioning validation across sinks, coordinated graceful shutdown). |
-| `ParsleyQuiesce` | Coordinates graceful shutdown across every causal task in one application instance, registered with either entry point. |
-| `ParsleyCoordination` | Coordinates evolving a running topology across an epoch boundary, so a new or replaced stage adopts the current floor instead of dragging pre-epoch history into causal time. Leaderless and optional, registered with either entry point. |
+| `CausalStreamsBuilder` / `CausalTopology` | Declare a causal topology — one or more stages, each a set of source topics feeding a processor and forwarding to sink(s) — the same way `StreamsBuilder`/`Topology` declare a plain Kafka Streams one. |
+| `CausalStreams` | The runtime: wraps the underlying `KafkaStreams` instance around the causal guarantee. Owns graceful causal drain on `close()` and, when `parsley.coordination.epoch-events-topic` is configured, leaderless topology-epoch coordination — evolve a running topology through an epoch boundary with `requestEpochTransition()`. |
 | `CausalDependencies.using` / `observe` / `stamp` / `merge` | Maintain a consumer-side frontier and stamp causal context onto records produced to plain Kafka clients at the topology edge. Topic names are resolved to their stable Kafka UUIDs internally. |
 
 ## Where to go next

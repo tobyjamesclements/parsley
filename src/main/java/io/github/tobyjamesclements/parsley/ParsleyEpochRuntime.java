@@ -40,18 +40,17 @@ final class ParsleyEpochRuntime implements AutoCloseable {
 
     private final ParsleyEpochTransport transport;
     private final ParsleyEpochLog fold = new ParsleyEpochLog();
-    // How a blocked round treats members that have not published. The default (blockUntilDrained) never
-    // excludes, so a transition waits for every member — only a drained member may ever be excluded, and a
-    // crashed member is never known to be drained.
-    private final ParsleyMembershipStrategy membershipStrategy;
 
     // Members whose tasks live on this instance: the runtime folds and commits on their behalf. Written
     // from task threads (join), read by the runtime thread (driveCommit).
     private final Set<String> localMembers = ConcurrentHashMap.newKeySet();
-    // Local members whose causal buffer is currently empty (drained), reported by their task thread.
-    // leave() waits until every local member is drained before appending its Leave — "only a drained node
-    // is excluded". Written by task threads (reportDrained), read by the caller's leave() thread.
-    private final Set<String> drainedLocalMembers = ConcurrentHashMap.newKeySet();
+    // Tracks which local members are currently drained (causal buffer empty), reused from ParsleyQuiesce
+    // rather than a bespoke registered/drained pair — see that class's Javadoc. Always "requested": an
+    // epoch leave cares about drain state unconditionally, never gated on an external request, so
+    // isSafeToClose() here just means "every local member is currently drained". leave() waits on this
+    // before appending its Leave — "only a drained node is excluded". Written by task threads
+    // (reportDrained), read by the caller's leave() thread.
+    private final ParsleyQuiesce localDrainTracker = new ParsleyQuiesce();
     // A local member's live completeness snapshot, registered once its task's engine exists (see
     // registerLocalCompleteness). Lets the runtime thread publish on a member's behalf when its own task
     // thread cannot run pollEpochCoordination() — see autoPublishStalledLocalMembers.
@@ -104,14 +103,10 @@ final class ParsleyEpochRuntime implements AutoCloseable {
     private volatile boolean running;
     private @Nullable Thread thread;
 
-    /** A runtime with the default {@link ParsleyMembershipStrategy#blockUntilDrained() block-until-drained} strategy. */
     ParsleyEpochRuntime(ParsleyEpochTransport transport) {
-        this(transport, ParsleyMembershipStrategy.blockUntilDrained());
-    }
-
-    ParsleyEpochRuntime(ParsleyEpochTransport transport, ParsleyMembershipStrategy membershipStrategy) {
         this.transport = transport;
-        this.membershipStrategy = membershipStrategy;
+        // Local drain tracking is always active — see localDrainTracker's own field Javadoc.
+        this.localDrainTracker.requestQuiesce();
     }
 
     /**
@@ -122,13 +117,14 @@ final class ParsleyEpochRuntime implements AutoCloseable {
      */
     void join(String memberId, Set<String> inputTopics, Set<String> sinkTopics) {
         localMembers.add(memberId);
+        localDrainTracker.register(memberId);
         outbox.add(new ParsleyEpochEvent.JoinRequested(memberId, Set.copyOf(inputTopics), Set.copyOf(sinkTopics)));
     }
 
     /** Stops treating {@code memberId} as local (its task left this instance, e.g. a rebalance). Does not append a log event. */
     void unregisterMember(String memberId) {
         localMembers.remove(memberId);
-        drainedLocalMembers.remove(memberId);
+        localDrainTracker.unregister(memberId);
         localCompletenessSuppliers.remove(memberId);
         lastAutoPublishedRound.remove(memberId);
     }
@@ -151,16 +147,12 @@ final class ParsleyEpochRuntime implements AutoCloseable {
      * local member is drained before removing it — "only a drained node is excluded".
      */
     void reportDrained(String memberId, boolean empty) {
-        if (empty) {
-            drainedLocalMembers.add(memberId);
-        } else {
-            drainedLocalMembers.remove(memberId);
-        }
+        localDrainTracker.setDrained(memberId, empty);
     }
 
     /** Whether every local member's causal buffer is currently empty — the gate {@code leave()} waits on. */
     boolean allLocalMembersDrained() {
-        return !localMembers.isEmpty() && drainedLocalMembers.containsAll(localMembers);
+        return localDrainTracker.isSafeToClose();
     }
 
     /** Whether any local member is still a running member on the log — {@code leave()} waits for this to be false after appending Leave. */
@@ -313,7 +305,6 @@ final class ParsleyEpochRuntime implements AutoCloseable {
         logMeshInsufficiencyTransitions();
         bootstrapped = transport.caughtUp();
         driveCommit();
-        applyMembershipStrategy();
         autoPublishStalledLocalMembers();
     }
 
@@ -356,28 +347,6 @@ final class ParsleyEpochRuntime implements AutoCloseable {
     }
 
     /**
-     * Consults the {@link ParsleyMembershipStrategy} while a round is blocked and appends a {@link
-     * ParsleyEpochEvent.Leave} for any member it says may be excluded. The default {@link
-     * ParsleyMembershipStrategy#blockUntilDrained()} returns none, so the round simply waits for every
-     * member to publish — only a drained member may ever be excluded, and a crashed member is never known
-     * to be drained. The log serialises the decision and dedup makes a duplicate Leave a no-op.
-     */
-    private void applyMembershipStrategy() {
-        if (!bootstrapped || !fold.isRoundOpen() || localMembers.isEmpty()) {
-            return;
-        }
-        Set<String> outstanding = fold.unpublishedRunningMembers();
-        if (outstanding.isEmpty()) {
-            return;
-        }
-        Set<String> excludable = membershipStrategy.excludableMembers(
-                new ParsleyBlockedRound(outstanding, fold.runningMembers()));
-        for (String member : excludable) {
-            transport.append(new ParsleyEpochEvent.Leave(member));
-        }
-    }
-
-    /**
      * Logs (at {@code WARN}) when the domain stops being a full mesh — some running member's own
      * declared subscriptions no longer cover every domain topic, which blocks every round from ever
      * completing until it is fixed — and (at {@code INFO}) when it recovers. Logged only on the
@@ -413,6 +382,12 @@ final class ParsleyEpochRuntime implements AutoCloseable {
      * appends idempotent — there is no single owner to fail (a gone owner cannot freeze the epoch). Guarded
      * so this node appends each round's commit at most once; the commit is read back through the log and
      * folded like any other event.
+     *
+     * <p>A round with an outstanding (unpublished) member simply stays open until that member publishes or
+     * is evicted via an explicit {@link ParsleyEpochEvent.Leave} — there is no automatic exclusion. Only a
+     * drained member may ever safely leave the domain (see {@link ParsleyCoordination#leave()}); a crashed
+     * member's buffer is never knowably drained from outside, so waiting, unbounded, is the only safe
+     * default.
      */
     private void driveCommit() {
         // Never commit before the whole startup backlog is folded: committedEpochId would be stale and

@@ -15,7 +15,7 @@ import java.util.Map;
 import java.util.Set;
 
 /**
- * Narrow abstraction over the Kafka Admin operations Parsley performs at startup: resolving input
+ * A Facade (GoF) narrowing the Kafka Admin operations Parsley performs at startup: resolving input
  * topics' stable UUIDs (the causal identity), reading their partition counts and {@code
  * cleanup.policy} (for the {@code parsley.topology.validation} checks), and creating the outbox
  * topic. Keeping the interface narrow lets tests implement it without the full ~40-method
@@ -59,18 +59,6 @@ interface ParsleyTopicAdmin extends AutoCloseable {
      * @return each topic's effective {@code cleanup.policy}; must include every requested topic
      */
     Map<String, String> cleanupPolicies(List<String> topics) throws Exception;
-
-    /**
-     * Returns a {@link ParsleyTopicAdmin} backed by a real Kafka {@link Admin} connected to
-     * {@code bootstrap}. The returned instance closes the underlying {@code Admin} on
-     * {@link #close()}.
-     *
-     * @param bootstrap the Kafka bootstrap servers string
-     * @return a live, closeable {@code ParsleyTopicAdmin}
-     */
-    static ParsleyTopicAdmin ofBootstrap(String bootstrap) {
-        return ofConfigs(Map.of("bootstrap.servers", bootstrap));
-    }
 
     /**
      * Returns a {@link ParsleyTopicAdmin} backed by a real Kafka {@link Admin} created from

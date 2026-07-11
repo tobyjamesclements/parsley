@@ -256,13 +256,7 @@ public final class CausalDependencies {
      */
     public <K, V> ProducerRecord<K, V> stamp(ProducerRecord<K, V> record) {
         Objects.requireNonNull(record, "record must not be null");
-        Headers stamped = ParsleyHeader.mutableHeaders();
-        for (Header header : record.headers()) {
-            if (!header.key().equals(ParsleyHeader.CAUSAL_DEPENDENCIES)) {
-                stamped.add(header.key(), header.value());
-            }
-        }
-        stamped.add(ParsleyHeader.CAUSAL_DEPENDENCIES, clock.toBytes());
+        Headers stamped = ParsleyHeader.replacingDependencies(record.headers(), clock.toBytes());
         return new ProducerRecord<>(record.topic(), record.partition(), record.timestamp(),
                 record.key(), record.value(), stamped);
     }
@@ -315,11 +309,6 @@ public final class CausalDependencies {
     /** The backing clock; the engine works in {@link ParsleyClock} directly. */
     ParsleyClock clock() {
         return clock;
-    }
-
-    /** Wraps a {@link ParsleyClock} as public dependencies. */
-    static CausalDependencies of(ParsleyClock clock) {
-        return new CausalDependencies(clock);
     }
 
     @Override

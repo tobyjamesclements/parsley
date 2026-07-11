@@ -5,8 +5,6 @@ import java.io.ByteArrayOutputStream;
 import java.io.DataInputStream;
 import java.io.DataOutputStream;
 import java.io.IOException;
-import java.nio.charset.StandardCharsets;
-import java.util.LinkedHashSet;
 import java.util.Set;
 
 /**
@@ -72,27 +70,27 @@ sealed interface ParsleyEpochEvent
             switch (this) {
                 case JoinRequested e -> {
                     dos.writeByte(TAG_JOIN);
-                    writeString(dos, e.memberId());
-                    writeStringSet(dos, e.inputTopics());
-                    writeStringSet(dos, e.sinkTopics());
+                    ParsleyByteUtils.writeString(dos, e.memberId());
+                    ParsleyByteUtils.writeStringSet(dos, e.inputTopics());
+                    ParsleyByteUtils.writeStringSet(dos, e.sinkTopics());
                 }
                 case SnapshotRequested e -> {
                     dos.writeByte(TAG_SNAPSHOT);
-                    writeString(dos, e.memberId());
+                    ParsleyByteUtils.writeString(dos, e.memberId());
                 }
                 case FrontierPublished e -> {
                     dos.writeByte(TAG_FRONTIER);
-                    writeString(dos, e.memberId());
-                    writeClock(dos, e.completeness());
+                    ParsleyByteUtils.writeString(dos, e.memberId());
+                    ParsleyByteUtils.writeBytes(dos, e.completeness().toBytes());
                 }
                 case EpochCommitted e -> {
                     dos.writeByte(TAG_COMMIT);
                     dos.writeLong(e.epochId());
-                    writeClock(dos, e.lowerBounds());
+                    ParsleyByteUtils.writeBytes(dos, e.lowerBounds().toBytes());
                 }
                 case Leave e -> {
                     dos.writeByte(TAG_LEAVE);
-                    writeString(dos, e.memberId());
+                    ParsleyByteUtils.writeString(dos, e.memberId());
                 }
             }
             dos.flush();
@@ -111,51 +109,18 @@ sealed interface ParsleyEpochEvent
         try (DataInputStream dis = new DataInputStream(new ByteArrayInputStream(bytes))) {
             byte tag = dis.readByte();
             return switch (tag) {
-                case TAG_JOIN -> new JoinRequested(readString(dis), readStringSet(dis), readStringSet(dis));
-                case TAG_SNAPSHOT -> new SnapshotRequested(readString(dis));
-                case TAG_FRONTIER -> new FrontierPublished(readString(dis), readClock(dis));
-                case TAG_COMMIT -> new EpochCommitted(dis.readLong(), readClock(dis));
-                case TAG_LEAVE -> new Leave(readString(dis));
+                case TAG_JOIN -> new JoinRequested(ParsleyByteUtils.readString(dis),
+                        ParsleyByteUtils.readStringSet(dis), ParsleyByteUtils.readStringSet(dis));
+                case TAG_SNAPSHOT -> new SnapshotRequested(ParsleyByteUtils.readString(dis));
+                case TAG_FRONTIER -> new FrontierPublished(ParsleyByteUtils.readString(dis),
+                        ParsleyClock.fromBytes(ParsleyByteUtils.readBytes(dis)));
+                case TAG_COMMIT -> new EpochCommitted(dis.readLong(),
+                        ParsleyClock.fromBytes(ParsleyByteUtils.readBytes(dis)));
+                case TAG_LEAVE -> new Leave(ParsleyByteUtils.readString(dis));
                 default -> throw new IllegalStateException("unrecognised ParsleyEpochEvent tag: " + tag);
             };
         } catch (IOException ex) {
             throw new IllegalStateException("ParsleyEpochEvent deserialisation failed", ex);
         }
-    }
-
-    private static void writeString(DataOutputStream dos, String s) throws IOException {
-        byte[] b = s.getBytes(StandardCharsets.UTF_8);
-        dos.writeInt(b.length);
-        dos.write(b);
-    }
-
-    private static String readString(DataInputStream dis) throws IOException {
-        return new String(dis.readNBytes(dis.readInt()), StandardCharsets.UTF_8);
-    }
-
-    private static void writeStringSet(DataOutputStream dos, Set<String> strings) throws IOException {
-        dos.writeInt(strings.size());
-        for (String s : strings) {
-            writeString(dos, s);
-        }
-    }
-
-    private static Set<String> readStringSet(DataInputStream dis) throws IOException {
-        int count = dis.readInt();
-        Set<String> strings = new LinkedHashSet<>();
-        for (int i = 0; i < count; i++) {
-            strings.add(readString(dis));
-        }
-        return strings;
-    }
-
-    private static void writeClock(DataOutputStream dos, ParsleyClock clock) throws IOException {
-        byte[] b = clock.toBytes();
-        dos.writeInt(b.length);
-        dos.write(b);
-    }
-
-    private static ParsleyClock readClock(DataInputStream dis) throws IOException {
-        return ParsleyClock.fromBytes(dis.readNBytes(dis.readInt()));
     }
 }

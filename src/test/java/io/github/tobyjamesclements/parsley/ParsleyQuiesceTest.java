@@ -1,6 +1,5 @@
 package io.github.tobyjamesclements.parsley;
 
-import org.apache.kafka.streams.processor.TaskId;
 import org.junit.jupiter.api.Test;
 
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -12,8 +11,8 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  */
 class ParsleyQuiesceTest {
 
-    private static final TaskId TASK_0 = new TaskId(0, 0);
-    private static final TaskId TASK_1 = new TaskId(0, 1);
+    private static final String TASK_0 = "0_0";
+    private static final String TASK_1 = "0_1";
 
     /**
      * With no task ever registered, {@code isSafeToClose} must never report {@code true} — an empty
@@ -23,7 +22,7 @@ class ParsleyQuiesceTest {
      */
     @Test
     void isSafeToCloseIsFalseWithNoRegisteredTasks() {
-        ParsleyQuiesce quiesce = ParsleyQuiesce.create();
+        ParsleyQuiesce quiesce = new ParsleyQuiesce();
         assertFalse(quiesce.isSafeToClose(), "no task has registered yet");
 
         quiesce.requestQuiesce();
@@ -39,7 +38,7 @@ class ParsleyQuiesceTest {
      */
     @Test
     void isSafeToCloseRequiresQuiesceToBeRequested() {
-        ParsleyQuiesce quiesce = ParsleyQuiesce.create();
+        ParsleyQuiesce quiesce = new ParsleyQuiesce();
         quiesce.register(TASK_0);
         quiesce.setDrained(TASK_0, true);
 
@@ -58,7 +57,7 @@ class ParsleyQuiesceTest {
      */
     @Test
     void isSafeToCloseWaitsForEveryRegisteredTask() {
-        ParsleyQuiesce quiesce = ParsleyQuiesce.create();
+        ParsleyQuiesce quiesce = new ParsleyQuiesce();
         quiesce.register(TASK_0);
         quiesce.register(TASK_1);
         quiesce.requestQuiesce();
@@ -78,7 +77,7 @@ class ParsleyQuiesceTest {
      */
     @Test
     void isSafeToCloseFlipsBackWhenATaskUnDrains() {
-        ParsleyQuiesce quiesce = ParsleyQuiesce.create();
+        ParsleyQuiesce quiesce = new ParsleyQuiesce();
         quiesce.register(TASK_0);
         quiesce.requestQuiesce();
         quiesce.setDrained(TASK_0, true);
@@ -98,7 +97,7 @@ class ParsleyQuiesceTest {
      */
     @Test
     void unregisteringATaskRemovesItFromConsideration() {
-        ParsleyQuiesce quiesce = ParsleyQuiesce.create();
+        ParsleyQuiesce quiesce = new ParsleyQuiesce();
         quiesce.register(TASK_0);
         quiesce.register(TASK_1);
         quiesce.requestQuiesce();

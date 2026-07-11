@@ -18,41 +18,17 @@ import org.apache.kafka.common.Uuid;
  * dependencies, header keys, payload lengths, schema id) for an operator log — never the payload
  * bytes themselves.
  */
-final class ParsleyBufferDeserializationException extends RuntimeException {
+final class ParsleyBufferDeserializationException extends ParsleyCoordinateException {
 
-    private final String topic;
-    private final Uuid topicId;
-    private final int partition;
-    private final long offset;
     private final String details;
 
     ParsleyBufferDeserializationException(String topic, Uuid topicId, int partition, long offset,
                                           int schemaId, String details, Throwable cause) {
         super("failed to deserialise buffered record from " + topic + "-" + partition + "@" + offset
                 + (schemaId >= 0 ? " (writer schema id " + schemaId + ")" : "")
-                + "; the record remains in the buffer changelog for recovery", cause);
-        this.topic = topic;
-        this.topicId = topicId;
-        this.partition = partition;
-        this.offset = offset;
+                + "; the record remains in the buffer changelog for recovery", cause,
+                topic, topicId, partition, offset);
         this.details = details;
-    }
-
-    String topic() {
-        return topic;
-    }
-
-    /** The source topic's stable UUID — used to drive the forwarded-index coordinate on poison-drop. */
-    Uuid topicId() {
-        return topicId;
-    }
-
-    int partition() {
-        return partition;
-    }
-
-    long offset() {
-        return offset;
     }
 
     /** Operator diagnostic: the held record's metadata (no payload bytes). */
