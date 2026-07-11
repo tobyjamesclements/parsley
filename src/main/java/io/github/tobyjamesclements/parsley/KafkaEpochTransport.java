@@ -68,18 +68,36 @@ final class KafkaEpochTransport implements ParsleyEpochTransport {
         this.partition = new TopicPartition(topic, 0);
         this.producer = producer;
         this.consumer = consumer;
+        // The protocol's total order IS partition 0's offset order: every append targets it and every
+        // instance folds it from the beginning. A topic created with more partitions (e.g. a broker
+        // default of 6) has no single total order to agree on, so fail fast here, at startup — before
+        // this misconfiguration existed as a check, an append could land on a partition no fold ever
+        // reads (the old null-key, unpinned send), silently losing a join or a publication forever.
+        requireSinglePartition();
         // Read the whole log from the start on every instance — the fold's determinism depends on it.
-        // seekToBeginning is lazy (applied on the first poll), so no broker round-trip happens here.
         consumer.assign(List.of(partition));
         consumer.seekToBeginning(List.of(partition));
     }
 
+    private void requireSinglePartition() {
+        int partitionCount = consumer.partitionsFor(topic).size();
+        if (partitionCount != 1) {
+            throw new IllegalStateException("epoch-events topic '" + topic + "' has " + partitionCount
+                    + " partitions; the leaderless epoch protocol requires exactly 1 — its total order is that"
+                    + " one partition's offset order, and events on any other partition would never be read."
+                    + " Recreate the topic with a single partition");
+        }
+    }
+
     @Override
     public void append(ParsleyEpochEvent event) {
-        // Null key: the log is single-partition, so ordering is by offset, not key. Block for the ack so
-        // a subsequent poll on this node can observe the appended event's effect deterministically.
+        // Pinned to partition 0 explicitly — the partition every fold reads — never left to the
+        // producer's partitioner (a null-key send would scatter across partitions on a mis-created
+        // topic, landing events where no fold ever looks). Null key: ordering is by offset, not key.
+        // Block for the ack so a subsequent poll on this node can observe the appended event's effect
+        // deterministically.
         try {
-            producer.send(new ProducerRecord<>(topic, null, event.toBytes())).get();
+            producer.send(new ProducerRecord<>(topic, 0, null, event.toBytes())).get();
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             throw new IllegalStateException("interrupted appending to " + topic, e);

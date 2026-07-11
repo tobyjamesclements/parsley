@@ -1,22 +1,80 @@
 package io.github.tobyjamesclements.parsley;
 
 import org.apache.kafka.clients.consumer.ConsumerConfig;
+import org.apache.kafka.clients.consumer.MockConsumer;
+import org.apache.kafka.clients.producer.MockProducer;
 import org.apache.kafka.clients.producer.ProducerConfig;
+import org.apache.kafka.common.PartitionInfo;
 import org.apache.kafka.common.serialization.ByteArrayDeserializer;
 import org.apache.kafka.common.serialization.ByteArraySerializer;
 import org.junit.jupiter.api.Test;
 
+import java.util.List;
 import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * Tests for {@link KafkaEpochTransport}'s client-config derivation — the part that can be verified
- * without a broker. The full broker round-trip (append + full-log replay) is exercised by the WS4d Docker
- * integration test.
+ * Tests for {@link KafkaEpochTransport}'s client-config derivation and single-partition contract —
+ * the parts that can be verified without a broker (Kafka's own {@code MockProducer}/{@code
+ * MockConsumer} stand in for the clients). The full broker round-trip (append + full-log replay) is
+ * exercised by the WS4d Docker integration test.
  */
 class KafkaEpochTransportTest {
+
+    private static final String TOPIC = "t1-epoch-events";
+
+    /**
+     * Every append targets partition 0 explicitly — the one partition every fold reads. Left to the
+     * producer's own partitioner, a null-key send would scatter events across the partitions of a
+     * mis-created topic, landing a join or a publication where no fold ever looks — silent,
+     * permanent protocol-event loss.
+     */
+    @Test
+    void appendPinsEveryEventToPartitionZero() {
+        MockProducer<byte[], byte[]> producer =
+                new MockProducer<>(true, null, new ByteArraySerializer(), new ByteArraySerializer());
+        try (KafkaEpochTransport transport = new KafkaEpochTransport(TOPIC, producer, singlePartitionConsumer())) {
+            transport.append(new ParsleyEpochEvent.SnapshotRequested("member-a"));
+            transport.append(new ParsleyEpochEvent.Leave("member-a"));
+        }
+
+        assertEquals(2, producer.history().size(), "both events must have been sent");
+        assertTrue(producer.history().stream().allMatch(record -> Integer.valueOf(0).equals(record.partition())),
+                "every epoch event must be pinned to partition 0, the only partition the fold reads");
+    }
+
+    /**
+     * Construction fails fast when the epoch-events topic has more than one partition: the protocol's
+     * total order is a single partition's offset order, so a multi-partition topic (e.g. created with
+     * a broker default partition count) is a startup misconfiguration, surfaced once and loudly — not
+     * a protocol that silently degrades.
+     */
+    @Test
+    void constructionFailsFastOnAMultiPartitionEpochEventsTopic() {
+        MockProducer<byte[], byte[]> producer =
+                new MockProducer<>(true, null, new ByteArraySerializer(), new ByteArraySerializer());
+        MockConsumer<byte[], byte[]> consumer = new MockConsumer<>("earliest");
+        consumer.updatePartitions(TOPIC, List.of(
+                new PartitionInfo(TOPIC, 0, null, null, null),
+                new PartitionInfo(TOPIC, 1, null, null, null)));
+
+        IllegalStateException failure = assertThrows(IllegalStateException.class,
+                () -> new KafkaEpochTransport(TOPIC, producer, consumer),
+                "a 2-partition epoch-events topic must fail transport construction");
+        assertTrue(failure.getMessage().contains("exactly 1"),
+                "the failure must state the single-partition requirement, got: " + failure.getMessage());
+    }
+
+    private static MockConsumer<byte[], byte[]> singlePartitionConsumer() {
+        MockConsumer<byte[], byte[]> consumer = new MockConsumer<>("earliest");
+        consumer.updatePartitions(TOPIC, List.of(new PartitionInfo(TOPIC, 0, null, null, null)));
+        consumer.updateBeginningOffsets(Map.of(new org.apache.kafka.common.TopicPartition(TOPIC, 0), 0L));
+        return consumer;
+    }
 
     /**
      * The producer config carries the app's broker settings through, forces byte-array serializers and

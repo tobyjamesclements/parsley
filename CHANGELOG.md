@@ -7,6 +7,19 @@ All notable changes to this project are documented in this file. The format is b
 ## [Unreleased]
 
 ### Fixed
+- **An epoch-events append could land on a partition no fold ever reads, silently losing the event.**
+  `KafkaEpochTransport#append` sent with a null key and no explicit partition, leaving placement to the
+  producer's partitioner, while every reader is manually assigned to partition 0 only. On an
+  epoch-events topic created with more than one partition (e.g. a broker default partition count), a
+  `JoinRequested` scattered onto partition 3 was invisible to every instance — the joiner blocked in
+  `awaitJoinCommit` forever — and a lost `FrontierPublished` blocked its round forever, all with no
+  error anywhere. Appends are now pinned to partition 0 explicitly, and transport construction fails
+  fast (`IllegalStateException`) unless the topic has exactly one partition — a startup
+  misconfiguration surfaced once, not a protocol that silently degrades. `KafkaEpochTransportTest`
+  gains the first tests constructing the transport itself (over Kafka's own
+  `MockProducer`/`MockConsumer`); `configuration.md` now also documents the topic's full-history
+  retention requirement (`cleanup.policy=delete`, `retention.ms=-1`), since every instance replays the
+  log from the beginning.
 - **A peer's advertised claim could satisfy the delivery gate, releasing a record before this node had
   itself delivered its cause.** The gate checked `completeness()` — the max-merge of this node's own
   contiguous frontier and every input channel's advertised clock — so a watermark or epoch marker
