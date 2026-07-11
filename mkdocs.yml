@@ -46,7 +46,6 @@ nav:
     - Getting started: getting-started.md
     - Streams integration: streams.md
     - Configuration: configuration.md
-    - Audit logging: audit-logging.md
     - Migration: migration.md
   - Operations:
     - Performance: performance.md

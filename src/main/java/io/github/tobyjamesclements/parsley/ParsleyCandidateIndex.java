@@ -47,20 +47,6 @@ interface ParsleyCandidateIndex {
     List<Candidate> findCandidates(Uuid topicId, int partition, long newOffset);
 
     /**
-     * Returns all index entries for {@code (topicId, partition)} whose required offset is ≥
-     * {@code floor} — the mirror-image query to {@link #findCandidates}, used by the orphan cascade:
-     * everything that can never be satisfied because this coordinate's frontier can never legitimately
-     * advance past {@code floor - 1} again. The result may include stale entries; callers must verify
-     * with the buffer store and call {@link #prune} for any that no longer have a buffer entry.
-     *
-     * @param topicId   the topic UUID of the coordinate that was just orphaned
-     * @param partition the partition of the coordinate that was just orphaned
-     * @param floor     the coordinate's orphan floor
-     * @return candidates; empty if none are indexed requiring this coordinate at or above {@code floor}
-     */
-    List<Candidate> findCandidatesRequiringAtLeast(Uuid topicId, int partition, long floor);
-
-    /**
      * Removes a single index entry. Called to lazily clean up stale entries discovered during a
      * scan.
      *

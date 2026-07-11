@@ -61,22 +61,6 @@ final class RocksCandidateIndex implements ParsleyCandidateIndex {
     }
 
     @Override
-    public List<Candidate> findCandidatesRequiringAtLeast(Uuid topicId, int partition, long floor) {
-        byte[] from = key(topicId, partition, floor, 0L);
-        byte[] to   = key(topicId, partition, Long.MAX_VALUE, Long.MAX_VALUE);
-        List<Candidate> candidates = new ArrayList<>();
-        try (KeyValueIterator<byte[], byte[]> iter = store.range(from, to)) {
-            while (iter.hasNext()) {
-                byte[] k = iter.next().key;
-                long requiredOffset = ByteBuffer.wrap(k, 20, 8).getLong();
-                long recordId       = ByteBuffer.wrap(k, 28, 8).getLong();
-                candidates.add(new Candidate(topicId, partition, requiredOffset, recordId));
-            }
-        }
-        return candidates;
-    }
-
-    @Override
     public void prune(Candidate candidate) {
         store.delete(key(candidate.topicId(), candidate.partition(),
                 candidate.requiredOffset(), candidate.recordId()));

@@ -87,10 +87,8 @@ final class ParsleyProcessors {
         private final Properties config = new Properties();
         private Function<Map<String, Object>, ParsleyTopicAdmin> adminFactory = ParsleyTopicAdmin::ofConfigs;
         private @Nullable ParsleyConfig configOverride = null;
-        private CausalAudit audit = CausalAudit.NOOP;
         private Set<String> sinkTopics = Set.of();
         private List<String> sinkNodeNames = List.of();
-        private @Nullable String deadLetterSinkName = null;
         private @Nullable ParsleyQuiesce quiesce = null;
         private @Nullable ParsleyCoordination coordination = null;
         private Set<String> declaredTopics = Set.of();
@@ -202,23 +200,6 @@ final class ParsleyProcessors {
         }
 
         /**
-         * Registers a {@link CausalAudit} to receive this processor's per-record causal events
-         * (forwarded, held, released, evicted, undecodable), for routing to your own audit/compliance
-         * trail. Optional — without one, these events are observable only through Parsley's logs and
-         * metrics.
-         *
-         * <p>An exception thrown from the audit is caught and logged; it never fails a record or the
-         * Streams task. See {@link CausalAudit} for the full contract.
-         *
-         * @param audit the audit to notify; must not be {@code null}
-         * @return this builder
-         */
-        Builder<KIn, VIn, KOut, VOut> withAudit(CausalAudit audit) {
-            this.audit = audit;
-            return this;
-        }
-
-        /**
          * Registers this processor's tasks with a {@link ParsleyQuiesce} for coordinated graceful
          * shutdown. Optional — without one, tasks process and close exactly as they do today, with no
          * quiesce tracking.
@@ -296,34 +277,15 @@ final class ParsleyProcessors {
          * unaddressed {@code context.forward(record)} — this processor's business sink(s). Optional:
          * without it (the default, {@code List.of()}), a plain forward broadcasts to every actual child
          * of the processor node, exactly as Kafka Streams itself does — correct as long as every child
-         * shares a compatible type. Required the moment {@link #deadLetterSink} is also configured: the
-         * dead-letter sink is registered with {@code Serdes.ByteArray()}, an incompatible sibling child,
-         * so a plain forward must address only the real business sinks by name or it would also
-         * broadcast to the dead-letter sink and throw a runtime {@code ClassCastException}.
-         * {@link CausalTopology} always supplies this alongside {@link #deadLetterSink} for exactly that
-         * reason; a low-level caller wiring its own dead-letter sink by hand must do the same.
+         * shares a compatible type. Required the moment a sibling child node with an incompatible type
+         * (e.g. a raw-bytes side topic) is also wired onto this processor node, or a plain forward would
+         * also broadcast to it and throw a runtime {@code ClassCastException}.
          *
          * @param names this processor's business sink node names
          * @return this builder
          */
         Builder<KIn, VIn, KOut, VOut> sinkNodeNames(List<String> names) {
             this.sinkNodeNames = List.copyOf(names);
-            return this;
-        }
-
-        /**
-         * Names the dead-letter sink node a proven-impossible record (poison, or an unresolvable
-         * causal-dependencies header, or a dependent of either) is diverted to instead of failing the
-         * task. Optional: without one (the default, {@code null}), delivery is fail-closed exactly as
-         * before dead-lettering existed — a proven-impossible record fails the task fast rather than
-         * being diverted anywhere. {@link CausalTopology} always configures one; a low-level caller opts
-         * in explicitly here (and must also call {@link #sinkNodeNames} to name its real business sinks).
-         *
-         * @param name the dead-letter sink's topology node name
-         * @return this builder
-         */
-        Builder<KIn, VIn, KOut, VOut> deadLetterSink(String name) {
-            this.deadLetterSinkName = name;
             return this;
         }
 
@@ -379,8 +341,8 @@ final class ParsleyProcessors {
             return new ParsleyProcessorSupplier<>(
                     userSupplier, keySerdeByTopic, valueSerdeByTopic,
                     store + "-frontier", store + "-buffer", store + "-candidate-index", store + "-forwarded-index",
-                    store + "-orphan-index", Set.copyOf(topics), finalPassthroughTopics, sinkTopics, sinkNodeNames,
-                    deadLetterSinkName, adminFactory, effectiveConfig, ParsleyAudit.wrap(audit), quiesce,
+                    Set.copyOf(topics), finalPassthroughTopics, sinkTopics, sinkNodeNames,
+                    adminFactory, effectiveConfig, quiesce,
                     coordination);
         }
 

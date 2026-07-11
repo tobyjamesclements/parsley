@@ -143,9 +143,8 @@ class ParsleyProcessorsAvroTopologyTest {
      * through a full topology: a record's own declared dependency is folded into its own channel
      * before its own gate check runs, so under single-witness merge it always proves itself
      * immediately — there is no longer a way to force a record to sit genuinely buffered via a normal
-     * record's own dependency at the topology level (see
-     * {@code ParsleyEngineDeadLetterTest}'s Javadoc for the general reasoning). Constructing the
-     * buffered entry directly still exercises the exact same encode/decode path
+     * record's own dependency at the topology level. Constructing the buffered entry directly still
+     * exercises the exact same encode/decode path
      * ({@code RocksBufferStore} + {@code ParsleySerializer} + real Avro wire bytes) that a genuinely
      * buffered record would have gone through, including the writer-schema-id extraction in the
      * exception.

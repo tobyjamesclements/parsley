@@ -100,9 +100,8 @@ class ParsleyEpochLogTest {
      * Regression test for BACKLOG.md's LOW item: the committed floor is not actually monotonic across
      * epochs from the raw {@code mergeMin} alone. A member admitted mid-round that consumes from {@code
      * earliest} publishes completeness far behind the already-committed floor, and {@code mergeMin}
-     * would drag a shared coordinate's floor <em>backwards</em> on promotion — every consumer of the
-     * floor tolerates that except {@code ParsleyFrontier#pruneStaleOrphans}, where a regression below an
-     * already-pruned orphan entry would hold that coordinate's dependents forever again.
+     * would drag a shared coordinate's floor <em>backwards</em> on promotion — clamped so the floor
+     * stays honestly monotonic for every consumer.
      *
      * <p>Epoch 2 commits {@code T1@5, T2@3} (A alone). B then joins and is promoted to running by that
      * same commit. Epoch 3's round has both publish: A has advanced on both coordinates ({@code

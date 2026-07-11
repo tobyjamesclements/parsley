@@ -48,19 +48,6 @@ final class MockCandidateIndex implements ParsleyCandidateIndex {
     }
 
     @Override
-    public List<Candidate> findCandidatesRequiringAtLeast(Uuid topicId, int partition, long floor) {
-        NavigableMap<Long, Set<Long>> byOffset = index.get(new CoordKey(topicId, partition));
-        if (byOffset == null) return List.of();
-        List<Candidate> result = new ArrayList<>();
-        byOffset.tailMap(floor, true).forEach((offset, recordIds) -> {
-            for (long recordId : recordIds) {
-                result.add(new Candidate(topicId, partition, offset, recordId));
-            }
-        });
-        return result;
-    }
-
-    @Override
     public void prune(Candidate candidate) {
         CoordKey key = new CoordKey(candidate.topicId(), candidate.partition());
         TreeMap<Long, Set<Long>> byOffset = index.get(key);

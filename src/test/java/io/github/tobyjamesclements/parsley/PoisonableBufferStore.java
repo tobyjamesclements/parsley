@@ -8,18 +8,12 @@ import java.util.Set;
 /**
  * Wraps a {@link MockBufferStore}, letting a test mark chosen insertion sequences to make {@link #get}
  * throw {@link ParsleyBufferDeserializationException} instead of returning the entry — simulating a
- * poison record (undecodable on the forward path) without a real serde. The thrown exception carries
- * the poisoned entry's own coordinate (so the engine's cascade orphans the right one) and fixed,
- * recognisable raw bytes, for tests to assert a {@link ParsleyEngine.DeadLetter.Undecodable} carries
- * them through unchanged.
+ * poison record (undecodable on the forward path) without a real serde.
  *
  * @param <K> the record key type
  * @param <V> the record value type
  */
 final class PoisonableBufferStore<K, V> implements ParsleyBufferStore<K, V> {
-
-    static final byte[] POISON_RAW_KEY = {1};
-    static final byte[] POISON_RAW_VALUE = {2, 3};
 
     private final MockBufferStore<K, V> delegate = new MockBufferStore<>();
     private final Set<Long> poisoned = new HashSet<>();
@@ -39,8 +33,7 @@ final class PoisonableBufferStore<K, V> implements ParsleyBufferStore<K, V> {
         if (poisoned.contains(sequence)) {
             IndexEntry meta = indexEntryFor(sequence);
             throw new ParsleyBufferDeserializationException(meta.topic(), meta.topicId(), meta.partition(),
-                    meta.offset(), meta.bufferedAt(), List.of(), POISON_RAW_KEY, POISON_RAW_VALUE, -1,
-                    "poisoned by test", new RuntimeException("simulated poison"));
+                    meta.offset(), -1, "poisoned by test", new RuntimeException("simulated poison"));
         }
         return delegate.get(sequence);
     }

@@ -20,10 +20,10 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
  * since they are this node's own proven delivery history, not something any channel needs to confirm.
  *
  * <p>Genuine confirmation still matters: a channel only advertises a dependency once a record
- * carrying it has actually, gatedly delivered through that channel (see
- * {@link ParsleyEngineTest}/{@link ParsleyEngineDeadLetterTest} for the delivery gate itself — every
- * record is checked against this node's current, already-proven state, never against a stamp the same
- * record just supplied). Several tests here pre-establish channel state directly via
+ * carrying it has actually, gatedly delivered through that channel (see {@link ParsleyEngineTest} for
+ * the delivery gate itself — every record is checked against this node's current, already-proven
+ * state, never against a stamp the same record just supplied). Several tests here pre-establish
+ * channel state directly via
  * {@link ParsleyFrontier#channelUpdate}/{@link ParsleyFrontier#deliver}, standing in for "some record
  * already, genuinely delivered this" so the merge logic itself can be tested in isolation from gate
  * timing.
@@ -154,7 +154,7 @@ class ParsleyEngineCompletenessTest {
     void completenessRestoredIdenticallyAfterSimulatedRestart() {
         TestKeyValueStore<String, byte[]> sharedStore =
                 new TestKeyValueStore<String, byte[]>(java.util.Comparator.naturalOrder());
-        ParsleyFrontier firstFrontier = new ParsleyFrontier(sharedStore, new MockForwardedIndex(), new MockOrphanIndex());
+        ParsleyFrontier firstFrontier = new ParsleyFrontier(sharedStore, new MockForwardedIndex());
         deliverSequentially(firstFrontier, T1_ID, 10);
         firstFrontier.channelUpdate(T1_ID, 0, clock(T3_ID, 5));
         deliverSequentially(firstFrontier, T2_ID, 7);
@@ -164,9 +164,8 @@ class ParsleyEngineCompletenessTest {
         ParsleyClock completenessBeforeRestart = first.completeness();
 
         // Simulate restart: a fresh ParsleyFrontier over the same store reloads the "f" blob (frontier
-        // clock + channel clocks). A fresh forwarded/orphan index is fine — it only affects future
-        // deliveries.
-        ParsleyFrontier restartedFrontier = new ParsleyFrontier(sharedStore, new MockForwardedIndex(), new MockOrphanIndex());
+        // clock + channel clocks). A fresh forwarded index is fine — it only affects future deliveries.
+        ParsleyFrontier restartedFrontier = new ParsleyFrontier(sharedStore, new MockForwardedIndex());
 
         assertEquals(completenessBeforeRestart, restartedFrontier.completeness(),
                 "completeness must be identical after restart when the frontier store is restored");
@@ -198,8 +197,8 @@ class ParsleyEngineCompletenessTest {
      *
      * <p>T3 must be in scope here (this specific engine directly consumes T1, T2, <em>and</em> T3) —
      * a dependency on a coordinate outside scope entirely is a different, fail-closed case (see
-     * {@link ParsleyEngineDeadLetterTest}), not vacuous satisfaction, and would defeat the point of
-     * this test either way (a thrown/dead-lettered T1@0 rather than a genuinely held one).
+     * {@link ParsleyEngineTest}), not vacuous satisfaction, and would defeat the point of this test
+     * either way (a thrown T1@0 rather than a genuinely held one).
      *
      * Asserts T1@0 depending on T3@5 is held (no genuine witness anywhere yet), then releases once a
      * real T3 record genuinely, contiguously delivers up to offset 5.
@@ -278,7 +277,7 @@ class ParsleyEngineCompletenessTest {
     // --- helpers --------------------------------------------------------------------------------
 
     private static ParsleyFrontier newFrontier() {
-        return new ParsleyFrontier(ParsleyClock.empty(), new MockForwardedIndex(), new MockOrphanIndex());
+        return new ParsleyFrontier(ParsleyClock.empty(), new MockForwardedIndex());
     }
 
     /** Genuinely, contiguously delivers offsets {@code 0..upTo} on {@code topicId}'s channel. */
@@ -291,8 +290,8 @@ class ParsleyEngineCompletenessTest {
     private ParsleyEngine<String, String> engineOver(ParsleyFrontier frontier,
                                                      ParsleyClock.CoordinatePredicate scope) {
         return new ParsleyEngine<>(frontier, buffer,
-                new MockCandidateIndex(), ParsleyMetrics.NOOP, CausalAudit.NOOP,
-                System::currentTimeMillis, false, scope);
+                new MockCandidateIndex(), ParsleyMetrics.NOOP,
+                System::currentTimeMillis, scope);
     }
 
     private ParsleyEngine<String, String> fanInEngine() {

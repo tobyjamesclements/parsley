@@ -28,7 +28,6 @@ final class ParsleyStageSpec<KIn, VIn, KOut, VOut> {
     final Map<String, SourceSpec<KIn, VIn>> sources;
     final List<SinkSpec<KOut, VOut>> sinks = new ArrayList<>();
     @Nullable StreamPartitioner<? super KOut, ? super VOut> partitioner;
-    CausalAudit audit = CausalAudit.NOOP;
 
     ParsleyStageSpec(@Nullable String explicitName, Map<String, SourceSpec<KIn, VIn>> sources,
               ProcessorSupplier<KIn, VIn, KOut, VOut> userSupplier) {

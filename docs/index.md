@@ -38,8 +38,7 @@ governed by `parsley.buffer.eviction.failure.policy`. By default this policy is 
 the task and leaves the record in the buffer for retry, which preserves causal order at the cost of
 availability. Setting the policy to `continue` instead forwards the held record out of causal order
 once the limit fires. Either way, the event is logged with the causal gap and counted by a metric.
-Register a `CausalAudit` to receive it as a per-record callback. The
-[Configuration](configuration.md) page describes the policy in full.
+The [Configuration](configuration.md) page describes the policy in full.
 
 ## Public API
 
@@ -63,5 +62,4 @@ common vocabulary of value types.
   preconditions, and recovery.
 - [Configuration](configuration.md) covers buffer limits, the eviction and deserialization policies,
   and header size.
-- [Audit logging](audit-logging.md) covers routing per-record causal events to your own audit trail.
 - [API reference](api/index.html) is the full Javadoc.

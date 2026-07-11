@@ -52,10 +52,6 @@ final class ParsleyFrontier {
     // Coordinates observed at least once; guards the one-time baseline seed in seedIfFirstSeen.
     private final Set<CoordKey> seenCoordinates = new HashSet<>();
     private final ParsleyForwardedIndex forwardedIndex;
-    // The per-coordinate "can never advance past" record a dead-lettered delivery establishes; see
-    // ParsleyOrphanIndex. Owned here alongside forwardedIndex since both are contiguous-frontier
-    // bookkeeping collaborators, consulted by ParsleyEngine's cascade via the orphanIndex() accessor.
-    private final ParsleyOrphanIndex orphanIndex;
     // The topology epoch's lower bounds — the per-coordinate floor consulted on every clock this
     // frontier builds or merges (deliver, seedIfFirstSeen, completeness, channelUpdate), so no causal
     // clock ever carries an entry below the floor. NONE (every coordinate unbounded) disables it, so
@@ -74,19 +70,8 @@ final class ParsleyFrontier {
      * no persistence. Used by tests exercising {@link #completeness()} and any caller that does not
      * need a durable frontier.
      */
-    ParsleyFrontier(ParsleyClock initial, ParsleyForwardedIndex forwardedIndex, ParsleyOrphanIndex orphanIndex) {
-        this(initial, forwardedIndex, orphanIndex, true, ParsleyEpoch.NONE);
-    }
-
-    /**
-     * In-memory instance with channel tracking optionally disabled and no epoch floor
-     * ({@link ParsleyEpoch#NONE}). With {@code trackChannels = false}, {@link #completeness()} is the
-     * node's own frontier and {@link #channelUpdate} is a no-op — the single-layer, frontier-only mode
-     * used to test frontier/buffer mechanics in isolation.
-     */
-    ParsleyFrontier(ParsleyClock initial, ParsleyForwardedIndex forwardedIndex, ParsleyOrphanIndex orphanIndex,
-                    boolean trackChannels) {
-        this(initial, forwardedIndex, orphanIndex, trackChannels, ParsleyEpoch.NONE);
+    ParsleyFrontier(ParsleyClock initial, ParsleyForwardedIndex forwardedIndex) {
+        this(initial, forwardedIndex, true, ParsleyEpoch.NONE);
     }
 
     /**
@@ -94,11 +79,10 @@ final class ParsleyFrontier {
      * {@code trackChannels = false}, {@link #completeness()} is the node's own frontier and
      * {@link #channelUpdate} is a no-op.
      */
-    ParsleyFrontier(ParsleyClock initial, ParsleyForwardedIndex forwardedIndex, ParsleyOrphanIndex orphanIndex,
+    ParsleyFrontier(ParsleyClock initial, ParsleyForwardedIndex forwardedIndex,
                     boolean trackChannels, ParsleyEpoch epoch) {
         this.frontier = initial;
         this.forwardedIndex = forwardedIndex;
-        this.orphanIndex = orphanIndex;
         this.epoch = epoch;
         this.store = null;
         this.trackChannels = trackChannels;
@@ -109,9 +93,8 @@ final class ParsleyFrontier {
      * channel clocks from key {@code "f"} of {@code store} (empty if absent), and rewrites that single
      * value on every subsequent change.
      */
-    ParsleyFrontier(KeyValueStore<String, byte[]> store, ParsleyForwardedIndex forwardedIndex,
-                    ParsleyOrphanIndex orphanIndex) {
-        this(store, forwardedIndex, orphanIndex, ParsleyEpoch.NONE);
+    ParsleyFrontier(KeyValueStore<String, byte[]> store, ParsleyForwardedIndex forwardedIndex) {
+        this(store, forwardedIndex, ParsleyEpoch.NONE);
     }
 
     /**
@@ -127,11 +110,9 @@ final class ParsleyFrontier {
      * reached by {@link #deliver}'s absorb walk again, so it would otherwise linger in the
      * changelog-backed store forever. A one-shot pass at load, not on the hot delivery path.
      */
-    ParsleyFrontier(KeyValueStore<String, byte[]> store, ParsleyForwardedIndex forwardedIndex,
-                    ParsleyOrphanIndex orphanIndex, ParsleyEpoch epoch) {
+    ParsleyFrontier(KeyValueStore<String, byte[]> store, ParsleyForwardedIndex forwardedIndex, ParsleyEpoch epoch) {
         this.store = store;
         this.forwardedIndex = forwardedIndex;
-        this.orphanIndex = orphanIndex;
         this.epoch = epoch;
         this.trackChannels = true;
         byte[] blob = store.get(ParsleyStores.FRONTIER_KEY);
@@ -145,11 +126,6 @@ final class ParsleyFrontier {
     /** The topology epoch's lower bounds this frontier floors against; {@link ParsleyEpoch#NONE} if unbounded. */
     ParsleyEpoch epoch() {
         return epoch;
-    }
-
-    /** The orphan index this frontier's engine consults for the dead-letter cascade. */
-    ParsleyOrphanIndex orphanIndex() {
-        return orphanIndex;
     }
 
     /** The current contiguous frontier clock. */
@@ -357,25 +333,8 @@ final class ParsleyFrontier {
             return false;
         }
         state.promote();
-        pruneStaleOrphans();
         persist();
         return true;
-    }
-
-    /**
-     * Prunes an orphan entry whose coordinate the just-promoted epoch floor has now legitimately
-     * advanced past — any dependency on that coordinate is stripped below the new floor anyway (see
-     * {@link ParsleyClock#strippedBelow}), so the orphan entry can never be consulted again. A no-op
-     * today (nothing yet forces an epoch transition specifically to recover a stuck orphaned coordinate),
-     * but costs nothing to keep current so a future forced-exclusion mechanism gets it for free.
-     */
-    private void pruneStaleOrphans() {
-        for (CoordKey key : channels.keySet()) {
-            long orphanFloor = orphanIndex.orphanFloor(key.topicId(), key.partition());
-            if (orphanFloor >= 0 && epoch.startsAt(key.topicId(), key.partition()) > orphanFloor) {
-                orphanIndex.prune(key.topicId(), key.partition());
-            }
-        }
     }
 
     /**

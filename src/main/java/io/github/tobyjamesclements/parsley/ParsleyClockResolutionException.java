@@ -8,12 +8,10 @@ import org.apache.kafka.common.Uuid;
  * unsupported wire version.
  *
  * <p>The record's key and value were already deserialised fine by Kafka Streams before ingest ever runs
- * — only this header failed to decode. When a dead-letter sink is configured, {@link ParsleyProcessor}
- * dead-letters the record (carrying {@link #encodedDependencies()} verbatim as an operator-forensics
- * header) rather than forwarding it on an unknown causal premise; without one, it fails the task fast —
- * the record was never buffered and its source offset is not committed past it, so it is reprocessed on
- * restart. Either way this is a {@link RuntimeException}, fatal only to the owning Streams task, never
- * crashing the JVM.
+ * — only this header failed to decode. {@link ParsleyProcessor} fails the task fast rather than
+ * forwarding the record on an unknown causal premise — it was never buffered and its source offset is
+ * not committed past it, so it is reprocessed on restart. This is a {@link RuntimeException}, fatal
+ * only to the owning Streams task, never crashing the JVM.
  *
  * <p>{@link #details()} carries the source coordinate and the encoded header length for an operator
  * log — never the payload bytes themselves.
@@ -56,7 +54,7 @@ final class ParsleyClockResolutionException extends RuntimeException {
         return offset;
     }
 
-    /** The raw, undecodable header bytes — preserved verbatim on the dead-letter record for forensics. */
+    /** The raw, undecodable header bytes, for operator forensics. */
     byte[] encodedDependencies() {
         return encodedDependencies;
     }

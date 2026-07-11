@@ -255,10 +255,7 @@ final class ParsleyEpochLog {
      * not constrain it) — then clamped per coordinate to never regress below the previously committed
      * floor via {@link ParsleyClock#merge} (the per-coordinate maximum): a member admitted mid-round that
      * consumes from {@code earliest} publishes completeness far behind the current floor, and the raw
-     * {@code mergeMin} would otherwise drag a shared coordinate's floor backwards on promotion — every use
-     * of the floor tolerates that (it is conservative-safe on regression) except {@code
-     * ParsleyFrontier#pruneStaleOrphans}, where a floor that later regresses below an already-pruned
-     * orphan entry would leave that coordinate's dependents held forever again, unrecoverable. Clamping
+     * {@code mergeMin} would otherwise drag a shared coordinate's floor backwards on promotion. Clamping
      * here, once, keeps the floor honestly monotonic for every consumer instead of requiring each one to
      * guard against a regression that should never have been possible in the first place. With no
      * publications this is an empty clock (no coordinate bounded), i.e. the epoch-0 floor.

@@ -43,7 +43,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * the same record just supplied — so a fan-in record depending on a shared ancestor genuinely holds
  * until some channel has actually, gatedly delivered up to the required offset. A dependency on a
  * coordinate this node has no channel for at all is a different, fail-closed case (see
- * {@link ParsleyEngineDeadLetterTest}), not a shortcut for genuine reconvergence — so the shared
+ * {@link ParsleyEngineTest}), not a shortcut for genuine reconvergence — so the shared
  * ancestor here ({@code anc}) is a real, directly-consumed third input, not an out-of-scope one.
  *
  * <p>These tests cover:
@@ -310,8 +310,8 @@ class CausalReconvergenceTopologyTest {
         MockBufferStore<String, String> buffer = new MockBufferStore<>();
 
         ParsleyEngine<String, String> engine = new ParsleyEngine<>(
-                new ParsleyFrontier(ParsleyClock.empty(), new MockForwardedIndex(), new MockOrphanIndex()),
-                buffer, new MockCandidateIndex(), ParsleyMetrics.NOOP, CausalAudit.NOOP,
+                new ParsleyFrontier(ParsleyClock.empty(), new MockForwardedIndex()),
+                buffer, new MockCandidateIndex(), ParsleyMetrics.NOOP,
                 System::currentTimeMillis);
 
         // Before any watermark, completeness has no ANC coordinate.

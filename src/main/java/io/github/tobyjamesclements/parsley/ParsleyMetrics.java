@@ -41,15 +41,8 @@ interface ParsleyMetrics {
     void recordClockResolutionError();
 
     /**
-     * A record was removed from the causal execution path onto the dead-letter sink (poison,
-     * unresolvable-clock, or an orphan-cascade victim of either). This counts the occurrence.
-     */
-    void recordDeadLetter();
-
-    /**
-     * A record's dependencies named a coordinate this node has no input channel for, and no
-     * dead-letter sink is configured to divert it — the task fails fast instead. This counts the
-     * occurrence.
+     * A record's dependencies named a coordinate this node has no input channel for — the task fails
+     * fast. This counts the occurrence.
      */
     void recordUnreachableDependencyError();
 
@@ -69,7 +62,6 @@ interface ParsleyMetrics {
         @Override public void recordReleased(int c) {}
         @Override public void recordDeserializationError() {}
         @Override public void recordClockResolutionError() {}
-        @Override public void recordDeadLetter() {}
         @Override public void recordUnreachableDependencyError() {}
         @Override public void reportState(int depth, OptionalLong oldestBufferedAtMs) {}
     };
@@ -99,7 +91,6 @@ interface ParsleyMetrics {
         Sensor released  = sm.addRateTotalSensor("parsley", taskId, "records-released",  Sensor.RecordingLevel.INFO);
         Sensor deserErr  = sm.addRateTotalSensor("parsley", taskId, "deserialization-errors", Sensor.RecordingLevel.INFO);
         Sensor clockResErr = sm.addRateTotalSensor("parsley", taskId, "clock-resolution-errors", Sensor.RecordingLevel.INFO);
-        Sensor deadLettered = sm.addRateTotalSensor("parsley", taskId, "dead-lettered", Sensor.RecordingLevel.INFO);
         Sensor unreachableDepErr = sm.addRateTotalSensor("parsley", taskId, "unreachable-dependency-errors",
                 Sensor.RecordingLevel.INFO);
 
@@ -109,14 +100,13 @@ interface ParsleyMetrics {
                 "Buffer-admission time (epoch millis) of the oldest held record, or 0 if the buffer is empty");
 
         List<Sensor> sensors = new ArrayList<>(List.of(buffered, released, deserErr,
-                clockResErr, deadLettered, unreachableDepErr, depth, oldestBufferedAt));
+                clockResErr, unreachableDepErr, depth, oldestBufferedAt));
 
         ParsleyMetrics metrics = new ParsleyMetrics() {
             @Override public void recordBuffered()             { buffered.record(); }
             @Override public void recordReleased(int c)        { released.record(c); }
             @Override public void recordDeserializationError() { deserErr.record(); }
             @Override public void recordClockResolutionError() { clockResErr.record(); }
-            @Override public void recordDeadLetter()           { deadLettered.record(); }
             @Override public void recordUnreachableDependencyError() { unreachableDepErr.record(); }
             @Override public void reportState(int d, OptionalLong oldest) {
                 depth.record(d);

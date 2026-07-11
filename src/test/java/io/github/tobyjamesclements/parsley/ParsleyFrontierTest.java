@@ -31,7 +31,7 @@ class ParsleyFrontierTest {
         TestKeyValueStore<String, byte[]> store =
                 new TestKeyValueStore<String, byte[]>(Comparator.naturalOrder(), "frontier");
 
-        ParsleyFrontier original = new ParsleyFrontier(store, new MockForwardedIndex(), new MockOrphanIndex());
+        ParsleyFrontier original = new ParsleyFrontier(store, new MockForwardedIndex());
         // Advance the contiguous frontier on T1 and record channel clocks for two inputs.
         original.deliver(T1_ID, 0, 0);
         original.deliver(T1_ID, 0, 1);
@@ -42,7 +42,7 @@ class ParsleyFrontierTest {
         ParsleyClock completenessBefore = original.completeness();
 
         // Reload: a fresh frontier over the same store restores from the "f" blob alone.
-        ParsleyFrontier restored = new ParsleyFrontier(store, new MockForwardedIndex(), new MockOrphanIndex());
+        ParsleyFrontier restored = new ParsleyFrontier(store, new MockForwardedIndex());
 
         assertEquals(frontierBefore, restored.snapshot(),
                 "the contiguous frontier clock must round-trip through the \"f\" blob");
@@ -65,7 +65,7 @@ class ParsleyFrontierTest {
             topicId.equals(T1_ID) ? 100L : ParsleyEpoch.NO_BOUND;
 
     private static ParsleyFrontier flooredFrontier(ParsleyEpoch epoch) {
-        return new ParsleyFrontier(ParsleyClock.empty(), new MockForwardedIndex(), new MockOrphanIndex(), true, epoch);
+        return new ParsleyFrontier(ParsleyClock.empty(), new MockForwardedIndex(), true, epoch);
     }
 
     /**
@@ -175,7 +175,7 @@ class ParsleyFrontierTest {
         TestKeyValueStore<String, byte[]> store =
                 new TestKeyValueStore<String, byte[]>(Comparator.naturalOrder(), "frontier");
         ParsleyEpochState epoch = new ParsleyEpochState(ParsleyClock.empty().observe(T1_ID, 0, 5), 1);
-        ParsleyFrontier original = new ParsleyFrontier(store, new MockForwardedIndex(), new MockOrphanIndex(), epoch);
+        ParsleyFrontier original = new ParsleyFrontier(store, new MockForwardedIndex(), epoch);
 
         // Adopt an epoch-2 boundary (marker on one channel); the window stays open (nothing dominates it).
         original.recordEpochMarker(2, ParsleyClock.empty().observe(T1_ID, 0, 20), T1_ID, 0);
@@ -183,7 +183,7 @@ class ParsleyFrontierTest {
 
         // Reload into a fresh epoch state over the same store.
         ParsleyEpochState reloadedEpoch = new ParsleyEpochState();
-        new ParsleyFrontier(store, new MockForwardedIndex(), new MockOrphanIndex(), reloadedEpoch);
+        new ParsleyFrontier(store, new MockForwardedIndex(), reloadedEpoch);
 
         assertEquals(1L, reloadedEpoch.settledEpochId(), "the settled epoch survives the blob round-trip");
         assertEquals(5L, reloadedEpoch.startsAt(T1_ID, 0), "the effective floor stays F_{e-1}=5 mid-window after restart");
@@ -250,7 +250,7 @@ class ParsleyFrontierTest {
             public void unmark(Uuid topicId, int partition, long offset) {
                 // A fresh frontier over the same store sees only what has actually been written —
                 // not this call's own in-progress in-memory state.
-                ParsleyFrontier persistedView = new ParsleyFrontier(store, new MockForwardedIndex(), new MockOrphanIndex());
+                ParsleyFrontier persistedView = new ParsleyFrontier(store, new MockForwardedIndex());
                 persistedOffsetAtUnmarkTime.add(persistedView.snapshot().offsetFor(T1_ID, 0));
                 delegate.unmark(topicId, partition, offset);
             }
@@ -261,7 +261,7 @@ class ParsleyFrontierTest {
             }
         };
 
-        ParsleyFrontier frontier = new ParsleyFrontier(store, recordingIndex, new MockOrphanIndex());
+        ParsleyFrontier frontier = new ParsleyFrontier(store, recordingIndex);
         frontier.deliver(T1_ID, 0, 0);
 
         assertEquals(List.of(0L), persistedOffsetAtUnmarkTime,
@@ -301,7 +301,7 @@ class ParsleyFrontierTest {
                 delegate.pruneAtOrBelow(topicId, partition, watermark);
             }
         };
-        ParsleyFrontier frontier = new ParsleyFrontier(ParsleyClock.empty(), crashyIndex, new MockOrphanIndex());
+        ParsleyFrontier frontier = new ParsleyFrontier(ParsleyClock.empty(), crashyIndex);
 
         frontier.deliver(T1_ID, 0, 0);
 
@@ -333,7 +333,7 @@ class ParsleyFrontierTest {
     @Test
     void replayingAnAlreadyDeliveredOffsetLeavesNoForwardedIndexEntry() {
         MockForwardedIndex forwardedIndex = new MockForwardedIndex();
-        ParsleyFrontier frontier = new ParsleyFrontier(ParsleyClock.empty(), forwardedIndex, new MockOrphanIndex());
+        ParsleyFrontier frontier = new ParsleyFrontier(ParsleyClock.empty(), forwardedIndex);
 
         frontier.deliver(T1_ID, 0, 0);
         frontier.deliver(T1_ID, 0, 1);
@@ -392,7 +392,7 @@ class ParsleyFrontierTest {
             }
         };
 
-        ParsleyFrontier original = new ParsleyFrontier(store, crashyIndex, new MockOrphanIndex());
+        ParsleyFrontier original = new ParsleyFrontier(store, crashyIndex);
         original.deliver(T1_ID, 0, 0); // offset 0 absorbed, but its unmark is lost — leaks below the watermark
         original.deliver(T1_ID, 0, 1); // watermark advances to 1; the offset-0 entry is now stale
 
@@ -400,7 +400,7 @@ class ParsleyFrontierTest {
                 "the stale entry must still be sitting in the forwarded index before any restore");
 
         // Restore: a fresh frontier over the same durable store must sweep the stale entry away.
-        new ParsleyFrontier(store, delegate, new MockOrphanIndex());
+        new ParsleyFrontier(store, delegate);
 
         assertTrue(delegate.forwardedAfter(T1_ID, 0, -1).isEmpty(),
                 "restoring the frontier must sweep the stale below-watermark entry left by the crash");

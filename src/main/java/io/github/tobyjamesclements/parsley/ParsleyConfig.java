@@ -16,14 +16,12 @@ import java.util.Set;
  * deliberately separate from Kafka Streams configuration: Parsley behaviours have causal-frontier
  * consequences with no Streams equivalent, so they are not mapped from Streams' exception handlers.
  *
- * <p>Causal delivery has exactly three dispositions, never a fourth: a record is <strong>forwarded</strong>
+ * <p>Causal delivery has exactly two dispositions, never a third: a record is <strong>forwarded</strong>
  * once its dependencies are satisfied; while unsatisfied it stays <strong>buffered</strong>, unbounded,
- * changelog-backed; and a record whose dependencies are proven impossible (an undecodable payload or
- * dependency header, or — cascading from either — a dependent that can never itself be satisfied) is
- * <strong>dead-lettered</strong>: removed from the causal execution path onto the dead-letter topic, never
- * forwarded downstream as if it were causally valid. There is no configuration that trades causal safety
- * for liveness; dead-lettering is the only escape from an unsatisfiable buffer, and it fires solely on
- * proven impossibility, never on pressure or time.
+ * changelog-backed. A record whose dependencies are proven impossible (an undecodable payload or
+ * dependency header, or a dependency naming a coordinate this node has no channel for) unconditionally
+ * fails the task. There is no configuration that trades causal safety for liveness, and no diversion —
+ * proven impossibility always fails fast, never on pressure or time.
  *
  * <p>An absent file, or absent keys, fall back to defaults. {@link #from(Properties)} builds one from
  * explicit properties (programmatic override / tests).
@@ -82,37 +80,18 @@ final class ParsleyConfig {
      */
     static final String COORDINATION_DOMAIN_TOPICS = "parsley.coordination.domain-topics";
 
-    /**
-     * {@code parsley.deadletter.topic} — the dead-letter topic name every stage's dead-letter sink writes
-     * to. Absent (the default), {@link CausalTopology#assemble} computes {@code {application.id}-deadletter}.
-     */
-    static final String DEADLETTER_TOPIC = "parsley.deadletter.topic";
-
-    /**
-     * {@code parsley.deadletter.partitions} — the partition count {@link CausalStreams#start()} provisions
-     * the dead-letter topic with if it does not already exist. Default {@code 1}: the dead-letter topic is
-     * a diagnostic, operator-facing destination, not part of the causal delivery path, so its partition
-     * count has no correctness consequence.
-     */
-    static final String DEADLETTER_PARTITIONS = "parsley.deadletter.partitions";
-
     /** How {@link #TOPOLOGY_VALIDATION} reacts to a detectable topology misconfiguration. */
     enum ValidationMode { OFF, WARN, STRICT }
 
     private final ValidationMode topologyValidation;
     private final @Nullable String coordinationEpochEventsTopic;
     private final Set<String> coordinationDomainTopics;
-    private final @Nullable String deadLetterTopic;
-    private final int deadLetterPartitions;
 
     private ParsleyConfig(ValidationMode topologyValidation, @Nullable String coordinationEpochEventsTopic,
-                          Set<String> coordinationDomainTopics,
-                          @Nullable String deadLetterTopic, int deadLetterPartitions) {
+                          Set<String> coordinationDomainTopics) {
         this.topologyValidation = topologyValidation;
         this.coordinationEpochEventsTopic = coordinationEpochEventsTopic;
         this.coordinationDomainTopics = coordinationDomainTopics;
-        this.deadLetterTopic = deadLetterTopic;
-        this.deadLetterPartitions = deadLetterPartitions;
     }
 
     /** How to react to a detectable topology misconfiguration at startup. */
@@ -128,16 +107,6 @@ final class ParsleyConfig {
     /** The full coordinated domain's topic set, or empty if topology-epoch coordination is not configured. */
     Set<String> coordinationDomainTopics() {
         return coordinationDomainTopics;
-    }
-
-    /** The configured dead-letter topic name, or {@code null} to fall back to the applicationId-derived default. */
-    @Nullable String deadLetterTopic() {
-        return deadLetterTopic;
-    }
-
-    /** The partition count to provision the dead-letter topic with if it does not already exist. */
-    int deadLetterPartitions() {
-        return deadLetterPartitions;
     }
 
     /** Loads from the {@code parsley.properties} classpath resource, or defaults if it is absent. */
@@ -174,10 +143,7 @@ final class ParsleyConfig {
                     + COORDINATION_EPOCH_EVENTS_TOPIC + " is not; domain-topics only has meaning "
                     + "under topology-epoch coordination");
         }
-        String deadLetterTopic = props.getProperty(DEADLETTER_TOPIC);
-        return new ParsleyConfig(validationMode(props), resolvedEpochEventsTopic, domainTopics,
-                (deadLetterTopic == null || deadLetterTopic.isBlank()) ? null : deadLetterTopic.trim(),
-                deadLetterPartitions(props));
+        return new ParsleyConfig(validationMode(props), resolvedEpochEventsTopic, domainTopics);
     }
 
     private static Set<String> domainTopics(Properties props) {
@@ -202,20 +168,6 @@ final class ParsleyConfig {
         } catch (IllegalArgumentException e) {
             throw new IllegalStateException(
                     TOPOLOGY_VALIDATION + " must be 'off', 'warn' or 'strict', got '" + value + "'");
-        }
-    }
-
-    private static int deadLetterPartitions(Properties props) {
-        String value = props.getProperty(DEADLETTER_PARTITIONS, "1").trim();
-        try {
-            int partitions = Integer.parseInt(value);
-            if (partitions < 1) {
-                throw new NumberFormatException(value);
-            }
-            return partitions;
-        } catch (NumberFormatException e) {
-            throw new IllegalStateException(
-                    DEADLETTER_PARTITIONS + " must be a positive integer, got '" + value + "'");
         }
     }
 }

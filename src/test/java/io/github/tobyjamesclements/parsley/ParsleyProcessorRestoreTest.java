@@ -19,7 +19,6 @@ import java.util.Properties;
 import java.util.Set;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
  * Tests {@link ParsleyProcessor#init} directly via a {@link MockProcessorContext} backed by
@@ -39,12 +38,12 @@ class ParsleyProcessorRestoreTest {
 
     /**
      * When the frontier store already holds a persisted frontier at {@code init()} (as after a
-     * restart), the processor restores it — reported via {@link CausalAudit#processorInitialized}
-     * — and immediately governs admission: a record whose only dependency is exactly satisfied by
-     * the restored frontier is forwarded right away rather than buffered.
+     * restart), the processor restores it and immediately governs admission: a record whose only
+     * dependency is exactly satisfied by the restored frontier is forwarded right away rather than
+     * buffered.
      *
-     * Asserts {@code processorInitialized} reports {@code frontierRestored = true}, and that the
-     * restored frontier is live: the delegate runs immediately and the buffer store stays empty.
+     * Asserts the restored frontier is live: the delegate runs immediately and the buffer store
+     * stays empty.
      */
     @Test
     void initRestoresAPersistedFrontierAndItGatesAdmissionImmediately() {
@@ -60,10 +59,7 @@ class ParsleyProcessorRestoreTest {
                 new TestKeyValueStore<byte[], byte[]>(Arrays::compareUnsigned, "candidate-index");
         TestKeyValueStore<byte[], byte[]> forwardedIndexStore =
                 new TestKeyValueStore<byte[], byte[]>(Arrays::compareUnsigned, "forwarded-index");
-        TestKeyValueStore<byte[], byte[]> orphanIndexStore =
-                new TestKeyValueStore<byte[], byte[]>(Arrays::compareUnsigned, "orphan-index");
 
-        RecordingCausalAudit audit = new RecordingCausalAudit();
         List<String> processed = new ArrayList<>();
         Processor<String, String, String, String> delegate = new Processor<>() {
             @Override public void init(ProcessorContext<String, String> context) {}
@@ -73,22 +69,17 @@ class ParsleyProcessorRestoreTest {
                 new ParsleySerializer<>(new ParsleyResolver<>(t -> Serdes.String(), t -> Serdes.String()));
         ParsleyProcessor<String, String, String, String> processor = new ParsleyProcessor<>(
                 delegate, serializer,
-                "frontier", "buffer", "candidate-index", "forwarded-index", "orphan-index",
-                Set.of("t1"), Set.of(), List.of(), null,
-                configs -> ADMIN, ParsleyConfig.from(new Properties()), audit, null);
+                "frontier", "buffer", "candidate-index", "forwarded-index",
+                Set.of("t1"), Set.of(), List.of(),
+                configs -> ADMIN, ParsleyConfig.from(new Properties()), null);
 
         MockProcessorContext<String, String> context = new MockProcessorContext<>();
         context.addStateStore(frontierStore);
         context.addStateStore(bufferStore);
         context.addStateStore(candidateIndexStore);
         context.addStateStore(forwardedIndexStore);
-        context.addStateStore(orphanIndexStore);
 
         processor.init(context);
-
-        assertEquals(1, audit.initializations.size(), "processorInitialized must fire once during init()");
-        assertTrue(audit.initializations.get(0).frontierRestored(),
-                "a non-empty frontier store must be reported as restored, not a fresh start");
 
         // A record whose only dependency (T1_ID/0@5) is exactly satisfied by the restored frontier
         // — it must be forwarded immediately rather than buffered, which would not be possible if

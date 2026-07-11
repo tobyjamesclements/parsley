@@ -177,8 +177,8 @@ its buffered dependencies.
 The cost is that a crashed member blocks the next epoch *transition* — and therefore any new join — until
 it returns. Ongoing processing in the current epoch is unaffected; only topology evolution waits. How an
 absent member is handled is `ParsleyMembershipStrategy`; the only strategy today, `blockUntilDrained()`,
-never excludes. Richer strategies — recovery, buffer hand-off, or an operator-driven forced exclusion that
-dead-letters the stranded buffer — could reintroduce a pluggable seam here, but nothing needs one yet.
+never excludes. Richer strategies — recovery, buffer hand-off, or an operator-driven forced exclusion —
+could reintroduce a pluggable seam here, but nothing needs one yet.
 
 Because a round needs every member's publication to commit, publication is driven off the folded log, not
 off a one-shot in-band marker: any member that observes a round it has not yet published to publishes its

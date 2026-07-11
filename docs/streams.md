@@ -114,9 +114,7 @@ still not satisfied and the configured `CausalBufferLimit` fires, the outcome de
 `parsley.buffer.eviction.failure.policy`. Under the default `fail` policy, Parsley fails the task and
 leaves the record buffered for retry. Under `continue`, the record is forwarded out of causal order.
 In both cases the firing is logged with the causal gap and counted by a metric rather than signalled
-on the record. See [Configuration](configuration.md) for the policy, and register a `CausalAudit`
-(see [Audit logging](audit-logging.md)) to receive this event, and every other causal-buffering
-event, as a per-record callback instead of a log line.
+on the record. See [Configuration](configuration.md) for the policy.
 
 ## The high-level API: CausalStreams
 

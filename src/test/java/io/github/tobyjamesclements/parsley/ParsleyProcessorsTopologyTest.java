@@ -1153,38 +1153,6 @@ class ParsleyProcessorsTopologyTest {
     }
 
     /**
-     * A {@link CausalAudit} registered via {@link ParsleyProcessors.Builder#withAudit} receives the
-     * processor lifecycle events — {@code processorInitialized} on startup and {@code
-     * processorClosing} when the driver shuts the topology down — in addition to the per-record
-     * events already covered by {@link ParsleyEngineTest}.
-     *
-     * Asserts that {@code processorInitialized} fires once with {@code frontierRestored = false}
-     * on a fresh state directory, and {@code processorClosing} fires once when the driver closes.
-     */
-    @Test
-    void withAuditReceivesProcessorLifecycleEvents() {
-        RecordingCausalAudit audit = new RecordingCausalAudit();
-        Topology topology = topology(
-                ParsleyProcessors.builder(upperCaser()).addBufferStore("parsley")
-                        .addBuffer(ParsleyBuffer.of("t1", Serdes.String(), Serdes.String()))
-                        .topicAdmin(ADMIN).withAudit(audit).build(),
-                List.of("t1"));
-
-        try (TopologyTestDriver driver = new TopologyTestDriver(topology, config(null))) {
-            TestInputTopic<String, String> t1 =
-                    driver.createInputTopic("t1", new StringSerializer(), new StringSerializer());
-            t1.pipeInput(new TestRecord<>("k", "hello", depsHeader(CausalDependencies.empty())));
-
-            assertEquals(1, audit.initializations.size(), "processorInitialized must fire once on startup");
-            assertEquals(false, audit.initializations.get(0).frontierRestored(),
-                    "a fresh state directory has no frontier to restore");
-            assertTrue(audit.closings.isEmpty(), "processorClosing must not fire before the driver closes");
-        }
-
-        assertEquals(1, audit.closings.size(), "processorClosing must fire once when the driver closes");
-    }
-
-    /**
      * A record arrives on a topic for which no {@link ParsleyBuffer} was registered (e.g. an input
      * topic added to the stream but never wired up via {@code addBuffer}). The processor's intake
      * guard rejects it rather than silently treating it as dependency-free.

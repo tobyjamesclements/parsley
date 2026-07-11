@@ -63,8 +63,6 @@ When the configured `CausalBufferLimit` fires before a held record's dependencie
 Either way, Parsley logs the event at `WARN` or `ERROR` with the causal gap, which is the
 per-coordinate shortfall between what was required and what the frontier had observed. It also counts
 the event through its eviction metric, or its eviction-limit-exceeded metric under the `fail` policy.
-Register a `CausalAudit` (see [Audit logging](audit-logging.md)) to receive `recordViolation` or
-`recordEvictionLimitExceeded` as a per-record callback.
 
 ---
 

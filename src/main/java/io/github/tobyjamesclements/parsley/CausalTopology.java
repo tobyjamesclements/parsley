@@ -16,7 +16,7 @@ import java.util.Set;
 
 /**
  * The immutable causal topology {@link CausalStreamsBuilder#build()} produces: every declared stage's
- * source topics, processor, sink(s), partitioner and audit. This is a specification, not yet a real Kafka
+ * source topics, processor, sink(s), and partitioner. This is a specification, not yet a real Kafka
  * Streams {@link Topology} — {@link #assemble} builds that once a {@link CausalStreams} runtime supplies
  * its {@code props}, which is when a stage's default-serde-deferred sources/sinks, and the runtime's
  * quiesce/coordination wiring, become known. Construct one with {@link CausalStreamsBuilder}; hand it to
@@ -24,12 +24,6 @@ import java.util.Set;
  *
  * <p><strong>{@code processing.guarantee=exactly_once_v2} is required, unconditionally.</strong> {@link
  * #assemble} throws {@link IllegalStateException} otherwise — see {@link #requireExactlyOnce} for why.
- *
- * <p><strong>Every stage gets its own dead-letter sink node, all writing to one shared topic.</strong>
- * A single sink parented on every stage's processor node would union every stage into one Kafka Streams
- * node group (sub-topology/task assignment is computed per node group), coupling stages that are
- * otherwise independent sub-topologies chained only through real topics — so each stage's dead-letter
- * sink is its own node, parented only on that stage, and only the destination topic name is shared.
  */
 public final class CausalTopology {
 
@@ -58,18 +52,13 @@ public final class CausalTopology {
         DefaultSerdes defaults = new DefaultSerdes(props);
         String applicationId = props.getProperty(StreamsConfig.APPLICATION_ID_CONFIG);
         String stagePrefix = (applicationId == null || applicationId.isEmpty()) ? "stage-" : applicationId + "-stage-";
-        // One dead-letter topic shared by every stage — each stage gets its own sink NODE (never one
-        // node with many parents; see the class javadoc) writing to this same topic name, so the DLQ is
-        // one operator-facing destination without coupling stages' Kafka Streams node groups together.
-        String deadLetterTopic = config.deadLetterTopic() != null ? config.deadLetterTopic()
-                : (applicationId == null || applicationId.isEmpty() ? "deadletter" : applicationId + "-deadletter");
 
         Topology topology = new Topology();
         int index = 0;
         for (ParsleyStageSpec<?, ?, ?, ?> stage : stages) {
             index++;
             String name = stage.explicitName != null ? stage.explicitName : stagePrefix + index;
-            assembleStage(topology, stage, name, config, defaults, quiesce, coordination, deadLetterTopic);
+            assembleStage(topology, stage, name, config, defaults, quiesce, coordination);
         }
         return topology;
     }
@@ -78,15 +67,14 @@ public final class CausalTopology {
      * Requires {@code processing.guarantee=exactly_once_v2}, unconditionally — never gated by {@code
      * parsley.topology.validation}, since this is a correctness requirement, not a topology-shape lint.
      *
-     * <p>Parsley's crash-safety reasoning (the frontier-before-buffer-removal and orphan-before-buffer-
-     * removal write orderings throughout {@code ParsleyEngine}/{@code ParsleyFrontier}) narrows an
-     * at-least-once torn-write window to a benign tear direction, but two separate changelog topics still
-     * have no cross-store atomicity under at-least-once: a crash during the commit-time flush can, rarely,
-     * ack one topic's batch and lose the other's. Exactly-once-v2 wraps every state-store changelog write,
-     * every produced record, and the consumer offset commit into one Kafka transaction, so a crash can
-     * never leave a torn write between them at all — closing that residual window completely, the same way
-     * a transactional producer requires {@code enable.idempotence}/a transactional id rather than treating
-     * it as optional hardening.
+     * <p>Parsley's crash-safety reasoning (the frontier-before-buffer-removal write ordering throughout
+     * {@code ParsleyEngine}/{@code ParsleyFrontier}) narrows an at-least-once torn-write window to a
+     * benign tear direction, but two separate changelog topics still have no cross-store atomicity under
+     * at-least-once: a crash during the commit-time flush can, rarely, ack one topic's batch and lose the
+     * other's. Exactly-once-v2 wraps every state-store changelog write, every produced record, and the
+     * consumer offset commit into one Kafka transaction, so a crash can never leave a torn write between
+     * them at all — closing that residual window completely, the same way a transactional producer
+     * requires {@code enable.idempotence}/a transactional id rather than treating it as optional hardening.
      *
      * @throws IllegalStateException if {@code props} does not configure {@code exactly_once_v2}
      */
@@ -94,17 +82,16 @@ public final class CausalTopology {
         String guarantee = props.getProperty(StreamsConfig.PROCESSING_GUARANTEE_CONFIG, StreamsConfig.AT_LEAST_ONCE);
         if (!StreamsConfig.EXACTLY_ONCE_V2.equals(guarantee)) {
             throw new IllegalStateException("parsley requires " + StreamsConfig.PROCESSING_GUARANTEE_CONFIG + "="
-                    + StreamsConfig.EXACTLY_ONCE_V2 + " (found '" + guarantee + "'); Parsley's dead-letter and "
-                    + "orphan-index crash-safety guarantees depend on Kafka Streams' transactional multi-store "
-                    + "commit to fully close a torn-write window that write ordering alone can only narrow, "
-                    + "never eliminate, under at-least-once");
+                    + StreamsConfig.EXACTLY_ONCE_V2 + " (found '" + guarantee + "'); Parsley's crash-safety "
+                    + "guarantees depend on Kafka Streams' transactional multi-store commit to fully close a "
+                    + "torn-write window that write ordering alone can only narrow, never eliminate, under "
+                    + "at-least-once");
         }
     }
 
     private <KIn, VIn, KOut, VOut> void assembleStage(
             Topology topology, ParsleyStageSpec<KIn, VIn, KOut, VOut> stage, String name, ParsleyConfig config,
-            DefaultSerdes defaults, ParsleyQuiesce quiesce, @Nullable ParsleyCoordination coordination,
-            String deadLetterTopic) {
+            DefaultSerdes defaults, ParsleyQuiesce quiesce, @Nullable ParsleyCoordination coordination) {
         Map<String, ParsleyBuffer<KIn, VIn>> sources = new LinkedHashMap<>();
         stage.sources.forEach((topic, source) -> sources.put(topic, ParsleyBuffer.of(topic,
                 source.keySerde() != null ? source.keySerde() : defaults.key(),
@@ -113,7 +100,6 @@ public final class CausalTopology {
         Set<String> sinkTopics = new LinkedHashSet<>();
         stage.sinks.forEach(sink -> sinkTopics.add(sink.topic()));
         List<String> sinkNodeNames = stage.sinks.stream().map(ParsleyStageSpec.SinkSpec::name).toList();
-        String deadLetterSinkName = name + "-deadletter-sink";
 
         // A domain topic this stage neither consumes nor produces: wired below as an extra, raw
         // byte[]/byte[] source into this SAME processor node (see ParsleyProcessor's passthrough-record
@@ -132,10 +118,8 @@ public final class CausalTopology {
                 .addBuffers(sources.values())
                 .declareTopics(passthroughTopics)
                 .config(config)
-                .withAudit(stage.audit)
                 .sinkTopics(sinkTopics)
                 .sinkNodeNames(sinkNodeNames)
-                .deadLetterSink(deadLetterSinkName)
                 .withQuiesce(quiesce);
         if (coordination != null) {
             causalBuilder.withCoordination(coordination);
@@ -178,11 +162,6 @@ public final class CausalTopology {
             topology.addSink(sink.name(), sink.topic(),
                     keySerde.serializer(), valueSerde.serializer(), markerAwarePartitioner, processorName);
         }
-        // This stage's own dead-letter sink — parented only on this stage's processor node (never
-        // shared across stages as a multi-parent sink; see the class javadoc), raw bytes, no
-        // partitioner (a diagnostic topic, not part of the causal delivery path).
-        topology.addSink(deadLetterSinkName, deadLetterTopic,
-                Serdes.ByteArray().serializer(), Serdes.ByteArray().serializer(), processorName);
     }
 
     /** Classpath {@code parsley.properties} as a base layer, overlaid with the runtime's {@code props}. */

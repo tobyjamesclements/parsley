@@ -34,8 +34,8 @@ class ParsleyBufferUnboundedLimitTest {
         MockBufferStore<String, String> buffer = new MockBufferStore<>();
         ParsleyEngine<String, String> engine = new ParsleyEngine<>(
                 ParsleyClock.empty(),
-                buffer, new MockCandidateIndex(), new MockForwardedIndex(), new MockOrphanIndex(), ParsleyMetrics.NOOP,
-                CausalAudit.NOOP, System::currentTimeMillis);
+                buffer, new MockCandidateIndex(), new MockForwardedIndex(), ParsleyMetrics.NOOP,
+                System::currentTimeMillis);
 
         List<ParsleyMessage<String, String>> out = new ArrayList<>();
         ParsleyClock needsT1 = ParsleyClock.empty().observe(T1_ID, 0, 4);

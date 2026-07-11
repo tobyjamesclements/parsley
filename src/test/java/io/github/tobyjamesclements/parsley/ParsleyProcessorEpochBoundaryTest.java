@@ -56,8 +56,6 @@ class ParsleyProcessorEpochBoundaryTest {
                 new TestKeyValueStore<byte[], byte[]>(Arrays::compareUnsigned, "candidate-index");
         TestKeyValueStore<byte[], byte[]> forwardedIndexStore =
                 new TestKeyValueStore<byte[], byte[]>(Arrays::compareUnsigned, "forwarded-index");
-        TestKeyValueStore<byte[], byte[]> orphanIndexStore =
-                new TestKeyValueStore<byte[], byte[]>(Arrays::compareUnsigned, "orphan-index");
 
         List<String> processed = new ArrayList<>();
         Processor<String, String, String, String> delegate = new Processor<>() {
@@ -68,16 +66,15 @@ class ParsleyProcessorEpochBoundaryTest {
                 new ParsleySerializer<>(new ParsleyResolver<>(t -> Serdes.String(), t -> Serdes.String()));
         ParsleyProcessor<String, String, String, String> processor = new ParsleyProcessor<>(
                 delegate, serializer,
-                "frontier", "buffer", "candidate-index", "forwarded-index", "orphan-index",
-                Set.of("t1"), Set.of(), List.of(), null,
-                configs -> ADMIN, ParsleyConfig.from(new Properties()), CausalAudit.NOOP, null);
+                "frontier", "buffer", "candidate-index", "forwarded-index",
+                Set.of("t1"), Set.of(), List.of(),
+                configs -> ADMIN, ParsleyConfig.from(new Properties()), null);
 
         MockProcessorContext<String, String> context = new MockProcessorContext<>();
         context.addStateStore(frontierStore);
         context.addStateStore(bufferStore);
         context.addStateStore(candidateIndexStore);
         context.addStateStore(forwardedIndexStore);
-        context.addStateStore(orphanIndexStore);
         processor.init(context);
 
         // Inject an epoch-boundary marker on t1: a control record carrying the serialised ParsleyEpochBoundary,

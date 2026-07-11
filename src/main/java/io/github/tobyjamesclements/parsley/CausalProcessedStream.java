@@ -26,7 +26,7 @@ public final class CausalProcessedStream<K, V> {
      * the stage forwards to more than one sink and the delegate targets one by name.
      *
      * @param topic the sink topic name
-     * @return this, for declaring further sinks or {@link #withPartitioner}/{@link #withAudit}
+     * @return this, for declaring further sinks or {@link #withPartitioner}
      */
     public CausalProcessedStream<K, V> to(String topic) {
         return to(topic, topic, null, null);
@@ -38,7 +38,7 @@ public final class CausalProcessedStream<K, V> {
      * @param topic      the sink topic name
      * @param keySerde   the key serde to serialise forwarded keys with
      * @param valueSerde the value serde to serialise forwarded values with
-     * @return this, for declaring further sinks or {@link #withPartitioner}/{@link #withAudit}
+     * @return this, for declaring further sinks or {@link #withPartitioner}
      */
     public CausalProcessedStream<K, V> to(String topic, Serde<K> keySerde, Serde<V> valueSerde) {
         return to(topic, topic, keySerde, valueSerde);
@@ -50,7 +50,7 @@ public final class CausalProcessedStream<K, V> {
      *
      * @param name  the sink's topology node name
      * @param topic the sink topic name
-     * @return this, for declaring further sinks or {@link #withPartitioner}/{@link #withAudit}
+     * @return this, for declaring further sinks or {@link #withPartitioner}
      */
     public CausalProcessedStream<K, V> to(String name, String topic) {
         return to(name, topic, null, null);
@@ -63,7 +63,7 @@ public final class CausalProcessedStream<K, V> {
      * @param topic      the sink topic name
      * @param keySerde   the key serde to serialise forwarded keys with
      * @param valueSerde the value serde to serialise forwarded values with
-     * @return this, for declaring further sinks or {@link #withPartitioner}/{@link #withAudit}
+     * @return this, for declaring further sinks or {@link #withPartitioner}
      */
     public CausalProcessedStream<K, V> to(
             String name, String topic, @Nullable Serde<K> keySerde, @Nullable Serde<V> valueSerde) {
@@ -84,19 +84,6 @@ public final class CausalProcessedStream<K, V> {
      */
     public CausalProcessedStream<K, V> withPartitioner(StreamPartitioner<? super K, ? super V> partitioner) {
         stage.partitioner = partitioner;
-        return this;
-    }
-
-    /**
-     * Registers a {@link CausalAudit} to receive this stage's per-record causal events, for routing to
-     * your own audit/compliance trail. Optional — without one, these events are observable only through
-     * Parsley's logs and metrics.
-     *
-     * @param audit the audit to notify; must not be {@code null}
-     * @return this
-     */
-    public CausalProcessedStream<K, V> withAudit(CausalAudit audit) {
-        stage.audit = audit;
         return this;
     }
 }

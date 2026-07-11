@@ -111,11 +111,10 @@ records and protocol watermarks are stamped with this same completeness clock (`
 
 A dependency naming a coordinate this node has **no channel for at all** — not merely one that hasn't
 advertised yet, but one structurally outside this node's own registered inputs — is a different case
-from an ordinary unsatisfied dependency, and is not treated as either: it fails closed (dead-lettered,
-or a hard task failure with no dead-letter sink configured) rather than being buffered forever or
-silently admitted. This node can prove it has no way to confirm such a coordinate, never that the
-coordinate is genuinely irrelevant — so guessing either way (waiting forever with no way to ever
-succeed, or delivering on an unproven premise) is unsound. See
+from an ordinary unsatisfied dependency, and is not treated as either: it fails the task fast rather
+than being buffered forever or silently admitted. This node can prove it has no way to confirm such a
+coordinate, never that the coordinate is genuinely irrelevant — so guessing either way (waiting forever
+with no way to ever succeed, or delivering on an unproven premise) is unsound. See
 [Independent inputs](#the-topology-contract) for why this arises and how to fix the topology instead
 of relying on this fail-closed behavior as a substitute.
 
@@ -148,9 +147,9 @@ visibility, placed on topology construction rather than hidden in the engine.
   coordinate no input channel of this node ever observes — nothing here can ever confirm it, so the
   completeness clock never includes it. Rather than buffer such a record forever (an undiagnosable,
   permanent stall) or admit it on the unproven assumption that the coordinate is irrelevant, this fails
-  closed immediately: dead-lettered if a sink is configured, otherwise a hard task failure. To make
-  such a record genuinely deliverable, route the coordinate through some input branch instead — have it
-  consume and pass the coordinate through, emitting watermarks even when it runs no business logic.
+  the task fast immediately. To make such a record genuinely deliverable, route the coordinate through
+  some input branch instead — have it consume and pass the coordinate through, emitting watermarks even
+  when it runs no business logic.
 - **Consuming both an ancestor and its own descendant is fine.** A node may consume both a topic `T`
   and a topic derived from `T` — single-witness merge has no unanimity requirement to violate. The
   descendant's completeness stamp already carries `T`'s progress transitively; the `T` channel's own

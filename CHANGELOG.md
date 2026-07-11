@@ -7,6 +7,38 @@ All notable changes to this project are documented in this file. The format is b
 ## [Unreleased]
 
 ### Changed
+- **Breaking: `CausalAudit` is removed entirely.** Per-record audit callbacks
+  (`recordForwarded`/`recordHeld`/`recordReleased`/`recordDeserializationFailure`/
+  `recordClockResolutionFailure`/`recordUnreachableDependencyFailure`/`processorInitialized`/
+  `processorClosing`) are a production/compliance concern — routing events to a SIEM or durable audit
+  trail — not something the causal-broadcast completeness gate or the topology-epoch coordination
+  protocol need to prove themselves correct. `CausalAudit`, its safe-delegation wrapper `ParsleyAudit`,
+  `ParsleyProcessors.Builder#withAudit`, `CausalProcessedStream#withAudit`, and `ParsleyStageSpec`'s
+  `audit` field are all gone; every constructor that threaded an audit parameter (`ParsleyEngine`,
+  `ParsleyProcessor`, `ParsleyProcessorSupplier`) drops it. `ParsleyMetrics` — the aggregate, always-on
+  counters wired into the Kafka Streams metrics registry — is unaffected and remains the way to observe
+  the algorithm's behavior. Deferred, not abandoned, matching the dead-letter entry below.
+- **Breaking: dead-lettering and the orphan index are removed; delivery is unconditionally fail-closed
+  on any error.** The dead-letter sink, `ParsleyOrphanIndex`/`RocksOrphanIndex`, and the orphan-cascade
+  worklist scan (`ParsleyEngine#orphan`) added below are gone: a poison record, an unresolvable
+  causal-dependencies header, or a dependency naming an unreachable coordinate now always fails the
+  task fast — exactly the behaviour that already existed as the fallback when no dead-letter sink was
+  configured — instead of being diverted. This closes the loop the "Breaking: fail-closed causal
+  delivery" entry below left open (it said an explicit dead-letter path "will replace the fail-fast
+  behaviour in a later change"; this change reverts to fail-closed-only instead). Motivation: the
+  orphan-cascade mechanism added real complexity to compensate for a problem classical causal-broadcast
+  systems (CBCAST, virtual synchrony) never had to solve, since they assumed a reliable transport; at
+  this pre-1.0 stage the priority is proving the core algorithm and ergonomics on the simplest correct
+  model, not carrying that complexity. Re-introducing dead-lettering (or an equivalent) is deferred, not
+  abandoned.
+
+  `CausalAudit#recordDeadLetter` is removed (the one genuinely public-API break). `ParsleyMetrics`'s
+  `dead-lettered` sensor and `recordDeadLetter()` are gone. `ParsleyConfig`'s `parsley.deadletter.topic`
+  and `parsley.deadletter.partitions` keys, and `ParsleyHeader`'s six `DEADLETTER_*` wire headers, are
+  removed. `CausalTopology#assemble` no longer wires a per-stage dead-letter sink node, and
+  `CausalStreams#start()` no longer provisions a dead-letter topic. `ParsleyProcessors.Builder` loses
+  `deadLetterSink(String)`. `ParsleyCandidateIndex#findCandidatesRequiringAtLeast` (the orphan cascade's
+  reverse-scan) is removed as dead weight alongside it.
 - **The completeness gate required every one of a node's input channels to independently corroborate a
   coordinate before it counted (`ParsleyClock#intersectMin`), which permanently excludes a coordinate
   genuinely present on only one channel** — the documented "no ancestor with its own descendant" fan-in

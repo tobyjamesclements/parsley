@@ -2,7 +2,6 @@ package io.github.tobyjamesclements.parsley;
 
 import org.apache.kafka.common.Uuid;
 import org.apache.kafka.common.header.Headers;
-import org.apache.kafka.common.serialization.ByteArrayDeserializer;
 import org.apache.kafka.common.serialization.Serdes;
 import org.apache.kafka.common.serialization.StringDeserializer;
 import org.apache.kafka.common.serialization.StringSerializer;
@@ -416,8 +415,7 @@ class CausalStreamsTopologyTest {
      *
      * <p>The held record's dependency ({@code t2@0}) is genuinely unmet, not merely undeclared: every
      * record is checked against this node's actual current state, never against its own declared
-     * claim, so a record cannot prove its own prerequisite by simply asserting it (see
-     * {@code ParsleyEngineDeadLetterTest}'s class Javadoc for the general reasoning).
+     * claim, so a record cannot prove its own prerequisite by simply asserting it.
      *
      * Asserts {@code isSafeToClose} is false while a record is held, then true once it drains.
      */
@@ -823,6 +821,40 @@ class CausalStreamsTopologyTest {
     }
 
     /**
+     * A corrupted {@code parsley-causal-dependencies} header fails the whole assembled topology closed —
+     * proving the fail-closed model collapses correctly through the full stack ({@link
+     * CausalStreamsBuilder} → {@link CausalTopology} → real {@link Topology}), not just at the engine
+     * unit-test level. There is no dead-letter sink to divert to: an undecodable header always crashes
+     * the task.
+     *
+     * Asserts processing the record throws (wrapped by Kafka Streams in a {@code StreamsException}) with
+     * a {@link ParsleyClockResolutionException} cause, and the delegate never runs.
+     */
+    @Test
+    void unresolvableClockHeaderFailsTheWholeTopologyClosed() {
+        CausalStreamsBuilder builder = new CausalStreamsBuilder();
+        builder.stream("t1", Serdes.String(), Serdes.String())
+                .process(upperCaser())
+                .to("out-sink", "out", Serdes.String(), Serdes.String());
+        Topology topology = assemble(builder, ADMIN);
+
+        try (TopologyTestDriver driver = new TopologyTestDriver(topology, config())) {
+            TestInputTopic<String, String> t1 =
+                    driver.createInputTopic("t1", new StringSerializer(), new StringSerializer());
+
+            Headers corrupted = ParsleyHeader.mutableHeaders();
+            corrupted.add(ParsleyHeader.CAUSAL_DEPENDENCIES, new byte[] {(byte) 0xFF});
+
+            StreamsException thrown = assertThrows(StreamsException.class,
+                    () -> t1.pipeInput(new TestRecord<>("k", "v", corrupted)),
+                    "an undecodable causal-dependencies header must fail the task rather than be diverted");
+            assertEquals(ParsleyClockResolutionException.class, thrown.getCause().getClass(),
+                    "the wrapped cause must be the clock-resolution guard's exception");
+            assertTrue(processed.isEmpty(), "the delegate must never run on a record that fails closed at ingest");
+        }
+    }
+
+    /**
      * Regression test for BACKLOG.md's write-ordering-overclaim finding: {@link CausalTopology#assemble}
      * requires {@code processing.guarantee=exactly_once_v2} unconditionally — never gated by {@code
      * parsley.topology.validation}, unlike the partition-count/cleanup-policy checks above — since the
@@ -849,157 +881,6 @@ class CausalStreamsTopologyTest {
                 "assemble() must fail fast without exactly_once_v2");
         assertTrue(thrown.getMessage().contains("exactly_once_v2"),
                 "the message must name the required setting: " + thrown.getMessage());
-    }
-
-    /**
-     * Each stage's dead-letter sink is its own topology node, parented only on that stage's processor —
-     * never one sink node shared across stages. Sharing one node would union every stage's Kafka Streams
-     * node group (sub-topology/task assignment is computed per node group), improperly coupling stages
-     * that are otherwise fully independent sub-topologies chained only through real topics.
-     *
-     * <p>Confirms the fix for a design risk found during planning: {@code Topology.addSink} does accept
-     * multiple parent names, so one shared dead-letter sink across every stage would compile and run, but
-     * would silently merge node groups. Per-stage sinks avoid that risk entirely.
-     *
-     * Asserts a two-stage topology — each stage with a different (unrelated) source partition count and
-     * its own dead-letter sink — still describes as two separate sub-topologies.
-     */
-    @Test
-    void eachStageKeepsItsOwnSubtopologyDespiteBothHavingADeadLetterSink() {
-        ParsleyTopicAdmin admin = TestTopicAdmin.of(
-                Map.of("t1", T1_ID, "t2", T2_ID), Map.of("t1", 4, "t2", 12));
-        CausalStreamsBuilder builder = new CausalStreamsBuilder();
-        builder.stream("t1", Serdes.String(), Serdes.String())
-                .process(upperCaser())
-                .to("out-sink-1", "out1", Serdes.String(), Serdes.String());
-        builder.stream("t2", Serdes.String(), Serdes.String())
-                .process(upperCaser())
-                .to("out-sink-2", "out2", Serdes.String(), Serdes.String());
-        Topology topology = assemble(builder, admin);
-
-        assertEquals(2, topology.describe().subtopologies().size(),
-                "two independent stages, each with its own dead-letter sink, must remain two separate "
-                        + "sub-topologies — a single dead-letter sink shared across both would union them");
-    }
-
-    /**
-     * Finding B (discovered during planning): before targeted forwarding was added, Parsley's business
-     * and watermark forwards both used Kafka Streams' zero-arg broadcast, which sends to every child of
-     * the processor node. The moment the dead-letter sink became a second child of every stage (this
-     * phase's whole point), a plain business or watermark forward would have also broadcast to it and
-     * thrown {@code ClassCastException} on its {@code Serdes.ByteArray()} serializer — not a corner
-     * case, the very next record. This is the regression test that would have caught it.
-     *
-     * Asserts a normal business record reaches only its real sink, a stand-in watermark (for a
-     * non-emitting record) also reaches only the real sink, and the dead-letter topic receives neither.
-     */
-    @Test
-    void deadLetterSinkNeverReceivesTheOrdinaryBusinessOrWatermarkBroadcast() {
-        ProcessorSupplier<String, String, String, String> maybeEmit = () -> new Processor<>() {
-            private ProcessorContext<String, String> ctx;
-
-            @Override
-            public void init(ProcessorContext<String, String> context) {
-                this.ctx = context;
-            }
-
-            @Override
-            public void process(Record<String, String> record) {
-                if (record.value().equals("emit")) {
-                    ctx.forward(record.withValue(record.value().toUpperCase(Locale.ROOT)));
-                }
-                // "drop": forward nothing — Parsley emits a stand-in watermark for this input.
-            }
-        };
-
-        CausalStreamsBuilder builder = new CausalStreamsBuilder();
-        builder.stream("t1", Serdes.String(), Serdes.String())
-                .process(maybeEmit)
-                .to("out-sink", "out", Serdes.String(), Serdes.String());
-        Topology topology = assemble(builder, ADMIN);
-
-        try (TopologyTestDriver driver = new TopologyTestDriver(topology, config())) {
-            TestInputTopic<String, String> t1 =
-                    driver.createInputTopic("t1", new StringSerializer(), new StringSerializer());
-            TestOutputTopic<String, String> out =
-                    driver.createOutputTopic("out", new StringDeserializer(), new StringDeserializer());
-            TestOutputTopic<byte[], byte[]> deadLetter = driver.createOutputTopic(
-                    "causal-streams-test-deadletter", new ByteArrayDeserializer(), new ByteArrayDeserializer());
-
-            t1.pipeInput(new TestRecord<>("k", "emit", depsHeader(CausalDependencies.empty())));
-            t1.pipeInput(new TestRecord<>("k", "drop", depsHeader(CausalDependencies.empty())));
-
-            assertEquals("EMIT", out.readRecord().value(), "the business record must reach its real sink");
-            assertTrue(isWatermark(out.readRecord()), "the non-emitting record's stand-in watermark must reach the real sink");
-            assertTrue(deadLetter.isEmpty(),
-                    "neither the business forward nor the watermark broadcast may ever reach the dead-letter sink");
-        }
-    }
-
-    /**
-     * Regression test for BACKLOG.md's ingest-time dead-letter finding: an {@code UNRESOLVABLE_CLOCK}
-     * record — its causal-dependencies header undecodable — is dead-lettered entirely inside
-     * {@link ParsleyProcessor#onUnresolvableClock}, before {@code engine.onRecord} is ever called for
-     * it. Unlike the buffered {@code POISON}/{@code ORPHAN_CASCADE} paths, nothing used to durably
-     * record that its coordinate could never advance past that offset, so a dependent buffered on that
-     * exact offset would be held forever, never proven impossible.
-     *
-     * <p>Single-source stage on "t1". t1@0's causal-dependencies header is corrupted (an unsupported
-     * wire-version byte), so decoding throws {@link ParsleyClockResolutionException} at ingest. t1@1
-     * then depends on t1@0's own coordinate — an intra-topic dependency, the finding's minimal repro:
-     * t1's frontier can never legitimately reach offset 0 (it was never delivered), so before the fix
-     * t1@1 would buffer forever with no trigger to ever re-check it.
-     *
-     * Asserts both land on the dead-letter topic (t1@0 as {@code UNRESOLVABLE_CLOCK}, t1@1 as {@code
-     * ORPHAN_CASCADE}), the delegate is never invoked for either (only a heartbeat watermark — never
-     * business data — may still reach "out", since each record's own receipt-time channel-clock update
-     * runs regardless of its eventual dead-letter disposition), and nothing is left buffered.
-     */
-    @Test
-    void unresolvableClockAtIngestOrphansItsCoordinateAndDeadLettersAnIntraTopicDependent() {
-        CausalStreamsBuilder builder = new CausalStreamsBuilder();
-        builder.stream("t1", Serdes.String(), Serdes.String())
-                .process(upperCaser())
-                .to("out-sink", "out", Serdes.String(), Serdes.String());
-        Topology topology = assemble(builder, ADMIN);
-
-        try (TopologyTestDriver driver = new TopologyTestDriver(topology, config())) {
-            TestInputTopic<String, String> t1 =
-                    driver.createInputTopic("t1", new StringSerializer(), new StringSerializer());
-            TestOutputTopic<String, String> out =
-                    driver.createOutputTopic("out", new StringDeserializer(), new StringDeserializer());
-            TestOutputTopic<byte[], byte[]> deadLetter = driver.createOutputTopic(
-                    "causal-streams-test-deadletter", new ByteArrayDeserializer(), new ByteArrayDeserializer());
-
-            Headers corrupted = ParsleyHeader.mutableHeaders();
-            corrupted.add(ParsleyHeader.CAUSAL_DEPENDENCIES, new byte[] {(byte) 0xFF});
-            t1.pipeInput(new TestRecord<>("k0", "zero", corrupted));
-
-            CausalDependencies needsT1At0 = CausalDependencies.builder(TOPICS).require("t1", 0, 0).build();
-            t1.pipeInput(new TestRecord<>("k1", "one", depsHeader(needsT1At0)));
-
-            assertTrue(processed.isEmpty(), "the delegate must never run for either dead-lettered record");
-            while (!out.isEmpty()) {
-                assertTrue(isWatermark(out.readRecord()),
-                        "only a heartbeat watermark may reach the business sink — never business data");
-            }
-
-            TestRecord<byte[], byte[]> first = deadLetter.readRecord();
-            assertEquals("UNRESOLVABLE_CLOCK", headerValue(first, ParsleyHeader.DEADLETTER_REASON),
-                    "t1@0's undecodable dependencies header must dead-letter it as UNRESOLVABLE_CLOCK");
-            TestRecord<byte[], byte[]> second = deadLetter.readRecord();
-            assertEquals("ORPHAN_CASCADE", headerValue(second, ParsleyHeader.DEADLETTER_REASON),
-                    "t1@1 must be dead-lettered as a cascade victim, not left buffered forever");
-            assertTrue(deadLetter.isEmpty(),
-                    "exactly two dead letters — t1@1 must not still be sitting in the buffer");
-        }
-    }
-
-    /** The value of header {@code key} on {@code record}, or {@code null} if absent. */
-    private static @org.jspecify.annotations.Nullable String headerValue(
-            TestRecord<byte[], byte[]> record, String key) {
-        org.apache.kafka.common.header.Header header = record.headers().lastHeader(key);
-        return header == null ? null : new String(header.value(), java.nio.charset.StandardCharsets.UTF_8);
     }
 
     /** A fresh, unique state directory — required when a test expects driver construction itself to

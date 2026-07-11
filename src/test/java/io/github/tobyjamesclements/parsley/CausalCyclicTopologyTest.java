@@ -64,8 +64,8 @@ class CausalCyclicTopologyTest {
      * again, so the loop terminates after one round trip.
      *
      * Asserts: the delegate runs for both the original {@code t1} delivery and the looped-back {@code
-     * p-out} delivery (proving the self-consumed record is genuinely gated and delivered, not dropped or
-     * dead-lettered); exactly one record is ever emitted to {@code p-out} (the loop does not re-emit);
+     * p-out} delivery (proving the self-consumed record is genuinely gated and delivered, not dropped);
+     * exactly one record is ever emitted to {@code p-out} (the loop does not re-emit);
      * and that emitted record's stamped dependency names {@code t1@0} — the ancestor coordinate — proving
      * the derived record's true causal history is preserved across the self-loop.
      */
@@ -119,7 +119,7 @@ class CausalCyclicTopologyTest {
             assertEquals(List.of("t1:hello", "p-out:derived:hello"), delegateSaw,
                     "the delegate must see both the original t1 delivery and the looped-back p-out "
                             + "delivery, in order — proving the self-consumed record is genuinely "
-                            + "delivered, not dropped or dead-lettered");
+                            + "delivered, not dropped");
 
             // The business record (derived:hello) plus a trailing heartbeat watermark (null value) that
             // the self-loop's own non-emitting p-out-sourced delivery produces — see deliver()'s

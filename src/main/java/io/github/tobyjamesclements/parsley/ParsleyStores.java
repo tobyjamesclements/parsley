@@ -47,11 +47,4 @@ final class ParsleyStores {
                 Serdes.ByteArray(),
                 Serdes.ByteArray());
     }
-
-    static StoreBuilder<KeyValueStore<byte[], byte[]>> orphanIndexStore(String name) {
-        return Stores.keyValueStoreBuilder(
-                Stores.persistentKeyValueStore(name),
-                Serdes.ByteArray(),
-                Serdes.ByteArray());
-    }
 }
