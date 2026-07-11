@@ -148,6 +148,11 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
     // into this SAME node, never as a separate processor node), so the cached ParsleyFrontier's
     // in-memory copy of the persisted state cannot diverge from a concurrent writer — there is none.
     private ParsleyEngine<KIn, VIn> engine;
+    // The completeness as of the task's last committed transaction — the only clock ever published on
+    // the non-transactional epoch-events side channel (see ParsleyCommittedCompleteness). In-band
+    // stamps (forwards, watermark/marker headers) stay live: they ride the same transaction as the
+    // records they stamp and abort with them.
+    private ParsleyCommittedCompleteness commitHook;
     private KeyValueStore<String, byte[]> frontierStore;
     private KeyValueStore<Long, byte[]> bufferStore;
     private KeyValueStore<byte[], byte[]> candidateIndexStore;
@@ -247,6 +252,7 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
         this.bufferStore = context.getStateStore(bufferStoreName);
         this.candidateIndexStore = context.getStateStore(candidateIndexStoreName);
         this.forwardedIndexStore = context.getStateStore(forwardedIndexStoreName);
+        this.commitHook = context.getStateStore(ParsleyStores.commitHookName(frontierStoreName));
 
         boolean restored = frontierStore.get(ParsleyStores.FRONTIER_KEY) != null;
 
@@ -310,12 +316,17 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
         // Initialise stampFrontier from completeness() so the stamping proxy reflects the restored
         // channel-clock state (not just the in-scope frontier) from the first forward onward.
         this.stampFrontier = engine.completeness();
-        // Registers the now-meaningful stampFrontier snapshot so the shared runtime can publish this
+        // Seed the commit hook with the restored completeness (rebuilt from the committed changelog,
+        // durable by definition) and hand it the live supplier it snapshots at each commit-cycle
+        // flush. Every side-channel publication below reads commitHook.committed(), never the live
+        // clock — see ParsleyCommittedCompleteness for why.
+        commitHook.bind(() -> engine().completeness(), engine.completeness());
+        // Registers the committed-completeness snapshot so the shared runtime can publish this
         // member's completeness on its behalf from its own background thread if this task's thread is ever
         // wedged (e.g. sharing a StreamThread with a joiner blocked in awaitJoinCommit) and so can never run
         // pollEpochCoordination() itself. See ParsleyEpochRuntime#registerLocalCompleteness.
         if (epochRuntime != null) {
-            epochRuntime.registerLocalCompleteness(memberId, () -> stampFrontier);
+            epochRuntime.registerLocalCompleteness(memberId, commitHook::committed);
         }
 
         this.stampingContext = new ParsleyProcessorContext<>(
@@ -616,9 +627,9 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
     }
 
     /**
-     * Handles a received epoch-snapshot marker: publishes this node's current completeness frontier to
-     * the coordinator (tagged with the task id) via {@link ParsleyEpochSnapshotPublisher}, so the
-     * coordinator can merge-min the published clocks into the next epoch's lower bounds. The marker is
+     * Handles a received epoch-snapshot marker: publishes this node's committed completeness frontier
+     * ({@link ParsleyCommittedCompleteness}) via {@link ParsleyEpochSnapshotPublisher}, so the log's
+     * fold can merge-min the published clocks into the next epoch's lower bounds. The marker is
      * never delivered to the user delegate and never buffered, but — unlike the earlier
      * coordinator-broadcast model — it is <strong>relayed</strong> downstream on the same key (the
      * leaderless in-band cut propagates edge by edge through the DAG) <em>only when it genuinely taught
@@ -629,7 +640,7 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
      * channel clock.
      */
     private void handleEpochSnapshot(Record<KIn, VIn> record) {
-        snapshotPublisher.publish(memberId, engine().completeness());
+        snapshotPublisher.publish(memberId, commitHook.committed());
         boolean channelAdvanced = advanceChannelClockFromMarker(record);
         if (channelAdvanced) {
             forwardEpochSnapshot(record.key());
@@ -767,12 +778,13 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
         // mid-round re-derives from the log that it owes a publication and re-publishes, without depending
         // on having consumed a one-shot in-band snapshot marker exactly once (the case timeout eviction used
         // to paper over). The per-round guard bounds it to one append per round per task lifetime; a restart
-        // resets the guard, so a lost publish is re-sent. Safe to publish current completeness pre-cut:
-        // completeness is monotonic and the committed floor is a conservative merge-min.
+        // resets the guard, so a lost publish is re-sent. Publishes the committed (never live) completeness
+        // — see ParsleyCommittedCompleteness; staleness is safe pre-cut, since completeness is monotonic
+        // and the committed floor is a conservative merge-min.
         if (runtime.owesPublication(memberId)) {
             long round = runtime.committedEpochId() + 1;
             if (round != lastPublishedRoundEpoch) {
-                snapshotPublisher.publish(memberId, engine().completeness());
+                snapshotPublisher.publish(memberId, commitHook.committed());
                 lastPublishedRoundEpoch = round;
             }
         }
@@ -831,7 +843,7 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
      * lastSeenKey} still {@code null}) relays exactly the same as one that has.
      */
     private void injectSnapshot() {
-        snapshotPublisher.publish(memberId, engine().completeness());
+        snapshotPublisher.publish(memberId, commitHook.committed());
         forwardEpochSnapshot(lastSeenKey);
     }
 

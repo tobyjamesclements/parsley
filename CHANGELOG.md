@@ -6,6 +6,31 @@ All notable changes to this project are documented in this file. The format is b
 
 ## [Unreleased]
 
+### Fixed
+- **Epoch-floor publications could reflect uncommitted state, misclassifying in-epoch records as
+  pre-epoch history for a fresh joiner.** A member's `FrontierPublished` rides the idempotent
+  epoch-events side channel, deliberately outside the task's EOS transaction — but the published clock
+  was read from the live in-memory completeness, which includes deliveries whose changelog writes and
+  forwards sit in the current, uncommitted transaction. A crash before commit rolled those deliveries
+  back while the publication survived, so a committed floor could exceed the member's durable
+  progress. An established member is protected by the window-close rule (the transition settles only
+  once the local frontier dominates the floor), but a fresh joiner settles at the floor *directly*:
+  records the crashed member re-forwards after replay carry below-floor dependencies the joiner
+  strips as "pre-epoch history", releasing them without ordering against causes it also treats as
+  pre-epoch — the ordering hole `ParsleyEpochSnapshotPublisher`'s Javadoc documented as "still open".
+
+  Closed via a new `ParsleyCommittedCompleteness` commit hook: a non-persistent, non-logged
+  `StateStore` registered per stage solely so Kafka Streams invokes its `flush()` in every task commit
+  cycle (the Processor API's only commit signal). Two slots make it crash-safe — a snapshot taken at
+  flush N becomes publishable only at flush N+1, the proof that transaction N committed, so a
+  flush-then-abort discards the optimistic value with the task instance. Every side-channel
+  publication (`handleEpochSnapshot`, the log-driven owed-publication path, `injectSnapshot`, and the
+  runtime's stalled-member auto-publish) now reads `committed()`; in-band stamps (forwards and
+  watermark/marker headers) deliberately stay live, since they ride the task's own transaction and
+  abort with it. The floor becomes at most one commit interval more conservative — always safe, the
+  merge-min direction. Both slots seed from the init-restored completeness (rebuilt from the committed
+  changelog, durable by definition).
+
 ### Changed
 - **Dead code and documentation residue swept out.** `ParsleyClock#missing` (its only production use
   was a computed-then-discarded local; the buffer-hold log line now prints the gating frontier

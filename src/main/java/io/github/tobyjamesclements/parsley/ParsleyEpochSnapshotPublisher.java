@@ -16,13 +16,12 @@ package io.github.tobyjamesclements.parsley;
  * {@link ParsleyEpochRuntime#publishFrontier}, appending a
  * {@link ParsleyEpochEvent.FrontierPublished} to the epoch-events log.
  *
- * <p><strong>Known limitation under {@code exactly_once_v2}, still open:</strong> the published
- * {@code completeness} is read from the in-memory frontier (see {@code ParsleyProcessor}'s
- * {@code snapshotPublisher.publish(memberId, engine().completeness())} calls), which under EOS may
- * momentarily lead the durably-committed frontier store (a crash before the transaction commits reverts
- * it). Because {@code lowerBounds} is the merge-min of published frontiers, a floor could then exceed a
- * node's durable progress and strip a dependency that node still owns after replay. The safe rule is to
- * publish only completeness as of the last Streams commit; that hardening has not been applied yet.
+ * <p><strong>Only committed completeness is ever published.</strong> The epoch-events append rides an
+ * idempotent side-channel producer, deliberately outside the task's EOS transaction — so it would not
+ * roll back with a crashed transaction whose deliveries it reflects. Every publish therefore reads
+ * {@link ParsleyCommittedCompleteness#committed()} — the completeness as of the task's last
+ * <em>committed</em> transaction — never the live in-memory clock; see that class for the two-slot
+ * commit-cycle mechanism and the joiner-floor hazard this closes.
  */
 @FunctionalInterface
 interface ParsleyEpochSnapshotPublisher {

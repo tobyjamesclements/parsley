@@ -103,6 +103,7 @@ final class ParsleyProcessorSupplier<KIn, VIn, KOut, VOut>
         stores.add(ParsleyStores.bufferStore(bufferStoreName));
         stores.add(ParsleyStores.candidateIndexStore(candidateIndexStoreName));
         stores.add(ParsleyStores.forwardedIndexStore(forwardedIndexStoreName));
+        stores.add(ParsleyStores.commitHookStore(ParsleyStores.commitHookName(frontierStoreName)));
         return stores;
     }
 }

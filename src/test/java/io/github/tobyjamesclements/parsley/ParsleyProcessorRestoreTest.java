@@ -78,6 +78,7 @@ class ParsleyProcessorRestoreTest {
         context.addStateStore(bufferStore);
         context.addStateStore(candidateIndexStore);
         context.addStateStore(forwardedIndexStore);
+        context.addStateStore(new ParsleyCommittedCompleteness("frontier-commit-hook"));
 
         processor.init(context);
 

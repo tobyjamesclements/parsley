@@ -55,8 +55,11 @@ class ParsleyProcessorEpochSnapshotTest {
      * advances the channel and the relay fires (clock-invisible markers: a marker that taught nothing
      * new would not relay — see {@link ParsleyProcessor}'s class Javadoc).
      *
-     * Asserts the publisher is called once with the post-delivery completeness (T1@5), the delegate saw
-     * only the business record, and the snapshot marker is relayed on the same key carrying completeness.
+     * Asserts the publisher is called once with the post-delivery, post-commit completeness (T1@5 —
+     * publications carry only committed state, so the test runs two commit-cycle flushes first), the
+     * delegate saw only the business record, and the snapshot marker is relayed on the same key
+     * carrying this node's live completeness (the in-band stamp rides the task's own transaction, so
+     * it stays live, unlike the side-channel publication).
      */
     @Test
     void epochSnapshotMarkerPublishesCompletenessButIsNeverDelivered() {
@@ -88,6 +91,8 @@ class ParsleyProcessorEpochSnapshotTest {
         context.addStateStore(bufferStore);
         context.addStateStore(candidateIndexStore);
         context.addStateStore(forwardedIndexStore);
+        ParsleyCommittedCompleteness commitHook = new ParsleyCommittedCompleteness("frontier-commit-hook");
+        context.addStateStore(commitHook);
         processor.init(context);
 
         // Deliver a business record so this node's completeness advances to T1@5.
@@ -96,6 +101,12 @@ class ParsleyProcessorEpochSnapshotTest {
         deps.add(ParsleyHeader.CAUSAL_DEPENDENCIES, ParsleyClock.empty().toBytes());
         processor.process(new Record<>("k", "v", 0L, deps));
         assertEquals(List.of("v"), processed, "the business record must be delivered to the delegate");
+
+        // Two commit cycles, so the delivery's transaction is provably committed and its completeness
+        // becomes publishable — side-channel publications read only committed state, never the live
+        // clock (see ParsleyCommittedCompleteness).
+        commitHook.flush();
+        commitHook.flush();
 
         // Inject the snapshot marker: a control record with no business payload, carrying completeness
         // this task's t1 channel does not already know, so it genuinely advances the channel.
@@ -110,7 +121,8 @@ class ParsleyProcessorEpochSnapshotTest {
         assertEquals(1, publisher.clocks.size(), "the marker must trigger exactly one frontier publication");
         assertFalse(publisher.members.get(0).isEmpty(), "the publication must be tagged with the task/member id");
         assertEquals(5L, publisher.clocks.get(0).offsetFor(T1_ID, 0),
-                "the published clock must be this node's completeness frontier at the snapshot point (T1@5)");
+                "the published clock must be this node's committed completeness (T1@5, the delivery "
+                        + "whose transaction the two flushes proved committed) — never the live clock");
 
         List<? extends MockProcessorContext.CapturedForward<? extends String, ? extends String>> forwarded =
                 context.forwarded();

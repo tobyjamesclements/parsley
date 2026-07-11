@@ -75,6 +75,7 @@ class ParsleyProcessorEpochBoundaryTest {
         context.addStateStore(bufferStore);
         context.addStateStore(candidateIndexStore);
         context.addStateStore(forwardedIndexStore);
+        context.addStateStore(new ParsleyCommittedCompleteness("frontier-commit-hook"));
         processor.init(context);
 
         // Inject an epoch-boundary marker on t1: a control record carrying the serialised ParsleyEpochBoundary,

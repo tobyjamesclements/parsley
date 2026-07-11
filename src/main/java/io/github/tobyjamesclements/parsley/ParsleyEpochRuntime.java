@@ -132,12 +132,14 @@ final class ParsleyEpochRuntime implements AutoCloseable {
     }
 
     /**
-     * Registers {@code completenessSupplier} as {@code memberId}'s live completeness snapshot, so
-     * {@link #autoPublishStalledLocalMembers()} can publish on its behalf from the runtime thread alone —
-     * without needing {@code memberId}'s own task thread to run {@code pollEpochCoordination()}. Deliberately
-     * separate from {@link #join}: a task calls this only once its engine exists and the snapshot is
-     * meaningful (see {@code ParsleyProcessor#init}), not at join time, when a fresh joiner's snapshot would
-     * still be the empty placeholder and a restarting member's would not yet reflect its restored state.
+     * Registers {@code completenessSupplier} as {@code memberId}'s committed-completeness snapshot
+     * ({@code ParsleyCommittedCompleteness#committed()} — never the live clock, which may reflect an
+     * uncommitted transaction), so {@link #autoPublishStalledLocalMembers()} can publish on its behalf
+     * from the runtime thread alone — without needing {@code memberId}'s own task thread to run
+     * {@code pollEpochCoordination()}. Deliberately separate from {@link #join}: a task calls this only
+     * once its engine exists and the snapshot is meaningful (see {@code ParsleyProcessor#init}), not at
+     * join time, when a fresh joiner's snapshot would still be the empty placeholder and a restarting
+     * member's would not yet reflect its restored state.
      */
     void registerLocalCompleteness(String memberId, Supplier<ParsleyClock> completenessSupplier) {
         localCompletenessSuppliers.put(memberId, completenessSupplier);
@@ -311,11 +313,12 @@ final class ParsleyEpochRuntime implements AutoCloseable {
     }
 
     /**
-     * Publishes a stalled local member's registered completeness snapshot on its behalf — the fix for the
-     * deadlock where a member's own task thread can never run {@code pollEpochCoordination()} because it
-     * shares a Kafka Streams {@code StreamThread} with another task blocked in {@code awaitJoinCommit}'s
-     * unbounded join wait (see BACKLOG.md). This method runs on the runtime's own background thread, which
-     * is distinct from every {@code StreamThread} and so keeps making progress even while one is wedged.
+     * Publishes a stalled local member's registered committed-completeness snapshot on its behalf — the
+     * fix for the deadlock where a member's own task thread can never run {@code pollEpochCoordination()}
+     * because it shares a Kafka Streams {@code StreamThread} with another task blocked in
+     * {@code awaitJoinCommit}'s unbounded join wait. This method runs on the runtime's own background
+     * thread, which is distinct from every {@code StreamThread} and so keeps making progress even while
+     * one is wedged.
      *
      * <p>Safe unconditionally, with no liveness heuristic: completeness only ever advances, and the
      * committed floor is already a conservative merge-min, so publishing a possibly-stale snapshot instead

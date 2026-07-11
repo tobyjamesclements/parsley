@@ -59,7 +59,11 @@ stay distinct):
 
 A round's lifecycle is defined by log position, not by an id in the events. The first
 `SnapshotRequested` after the last `EpochCommitted` opens a round and elects its author as owner. Every
-running member publishes its current completeness. Once all of them have published, the round is
+running member publishes its completeness *as of its last committed Kafka transaction* — never the
+live in-memory clock, which may reflect an uncommitted transaction that a crash would roll back while
+the side-channel publication would not (`ParsleyCommittedCompleteness` observes commit cycles through
+a registered store's flush, two-slot so a flush-then-abort can never leak an optimistic value; the
+floor is merely up to a commit interval more conservative). Once all of them have published, the round is
 complete and the new floor is the per-coordinate `mergeMin` of the published frontiers — the minimum,
 over the members that observed each coordinate, of where they had reached. Applying the resulting
 `EpochCommitted` advances the settled epoch, promotes pending joiners to running members, and clears
