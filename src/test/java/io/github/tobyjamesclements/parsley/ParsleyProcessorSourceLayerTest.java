@@ -341,6 +341,7 @@ class ParsleyProcessorSourceLayerTest {
                     configs -> ADMIN, ParsleyConfig.from(new Properties()), null,
                     ParsleyEpochSnapshotPublisher.NOOP, ParsleyCoordination.forRuntime(runtime));
             this.context = new MockProcessorContext<>();
+            context.setCurrentSystemTimeMs(1L);
             context.addStateStore(frontierStore);
             context.addStateStore(bufferStore);
             context.addStateStore(candidateIndexStore);

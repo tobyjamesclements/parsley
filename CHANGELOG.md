@@ -7,6 +7,23 @@ All notable changes to this project are documented in this file. The format is b
 ## [Unreleased]
 
 ### Fixed
+- **A user-delegate exception during a marker-triggered release was swallowed, permanently losing the
+  released records.** The epoch marker channel-clock path wrapped not just the carried clock's decode
+  but the whole `onWatermark` + delivery in one `catch (Exception)` that logged *"Failed to decode
+  marker completeness … ignoring"* and carried on. By the time the delegate runs, the released
+  records have already left the buffer and advanced the frontier — so swallowing the failure let the
+  task commit past records the delegate never processed (and never redelivers), and even absorbed the
+  engine's own deliberate fail-fast exceptions (poison records, unreachable dependencies) on that
+  path. The catch now covers exactly the decode, mirroring `handleWatermark`; everything after it
+  fails the task, fail-closed.
+- **Protocol markers were produced with timestamp 0.** A watermark/epoch marker's timestamp carries
+  no causal meaning, but it does drive broker time-based retention: a sink segment holding only
+  0-timestamped markers (exactly a marker-only passthrough channel) looked expired the moment it
+  rolled and could be deleted before a slow consumer read it — the same completeness-loss failure the
+  compaction lint exists to prevent. Markers are now stamped with the forwarding task's current wall
+  clock (`context.currentSystemTimeMs()`).
+
+### Fixed
 - **A restart could re-trigger the baseline frontier seed past a still-held record, releasing its
   dependents before it — an effect-before-cause delivery.** `ParsleyFrontier#seedIfFirstSeen` folds
   everything below a coordinate's first-ever-observed offset into the frontier, guarded by an

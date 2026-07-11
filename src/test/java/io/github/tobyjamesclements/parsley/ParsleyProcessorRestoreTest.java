@@ -74,6 +74,7 @@ class ParsleyProcessorRestoreTest {
                 configs -> ADMIN, ParsleyConfig.from(new Properties()), null);
 
         MockProcessorContext<String, String> context = new MockProcessorContext<>();
+        context.setCurrentSystemTimeMs(1L);
         context.addStateStore(frontierStore);
         context.addStateStore(bufferStore);
         context.addStateStore(candidateIndexStore);

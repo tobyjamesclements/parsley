@@ -722,16 +722,22 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
         if (marker == null || marker.value() == null) {
             return false;
         }
+        ParsleyClock frontier;
         try {
-            ParsleyClock frontier = ParsleyClock.fromBytes(marker.value());
-            ParsleyEngine.WatermarkOutcome<KIn, VIn> watermarkOutcome =
-                    engine().onWatermark(topicId, partition, offset, frontier);
-            deliver(watermarkOutcome.outcome().delivered());
-            return watermarkOutcome.channelAdvanced();
+            frontier = ParsleyClock.fromBytes(marker.value());
         } catch (Exception e) {
             log.warn("Failed to decode marker completeness on {}-{}; ignoring", topic, partition, e);
             return false;
         }
+        // Deliberately OUTSIDE the decode catch (mirroring handleWatermark): past this point a failure
+        // is a delivery failure, not a decode failure — onWatermark has already removed any released
+        // records from the buffer and advanced the frontier, so swallowing an exception from the user
+        // delegate (or the engine's own fail-fast paths) would let the task commit past records the
+        // delegate never processed, silently losing them. Fail-closed: let it kill the task.
+        ParsleyEngine.WatermarkOutcome<KIn, VIn> watermarkOutcome =
+                engine().onWatermark(topicId, partition, offset, frontier);
+        deliver(watermarkOutcome.outcome().delivered());
+        return watermarkOutcome.channelAdvanced();
     }
 
     /**
@@ -947,10 +953,11 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
         Headers wm = ParsleyHeader.mutableHeaders();
         wm.add(ParsleyHeader.WATERMARK, new byte[0]);
         wm.add(ParsleyHeader.CAUSAL_DEPENDENCIES, engine().completeness().toBytes());
-        // Use 0L as the watermark timestamp: a watermark's timestamp carries no business meaning —
-        // only its headers matter for causal gating — so 0L is safe in all execution contexts
-        // (MockProcessorContext may not have time initialised).
-        forwardToSinks(new Record<>((KOut) (Object) triggerKey, null, 0L, wm));
+        // Stamped with the current wall clock, never 0L: a marker's timestamp carries no causal
+        // meaning (only its headers do), but it does drive broker time-based retention — a sink
+        // segment holding only 0L-timestamped markers (a marker-only passthrough channel) would look
+        // expired the moment it rolled and be deleted before a slow consumer read it.
+        forwardToSinks(new Record<>((KOut) (Object) triggerKey, null, context.currentSystemTimeMs(), wm));
     }
 
     /**
@@ -966,7 +973,7 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
         Headers marker = ParsleyHeader.mutableHeaders();
         marker.add(ParsleyHeader.EPOCH_SNAPSHOT, new byte[0]);
         marker.add(ParsleyHeader.CAUSAL_DEPENDENCIES, engine().completeness().toBytes());
-        forwardToSinks(new Record<>((KOut) (Object) triggerKey, null, 0L, marker));
+        forwardToSinks(new Record<>((KOut) (Object) triggerKey, null, context.currentSystemTimeMs(), marker));
     }
 
     /**
@@ -980,7 +987,7 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
         Headers marker = ParsleyHeader.mutableHeaders();
         marker.add(ParsleyHeader.EPOCH_BOUNDARY, boundaryBytes);
         marker.add(ParsleyHeader.CAUSAL_DEPENDENCIES, engine().completeness().toBytes());
-        forwardToSinks(new Record<>((KOut) (Object) triggerKey, null, 0L, marker));
+        forwardToSinks(new Record<>((KOut) (Object) triggerKey, null, context.currentSystemTimeMs(), marker));
     }
 
     /**
@@ -1098,9 +1105,15 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
      * Best-effort, per-topic UUID resolution over {@link #sinkTopics} — unlike {@link
      * #additionalTopicInfo}, this always runs, never gated by {@code parsley.topology.validation}: it
      * feeds {@link #engine}'s own-coordinate stripping (see {@link ParsleyEngine}'s Javadoc on {@code
-     * ownSinkTopics}), a correctness mechanism, not a topology-misconfiguration lint. A sink that does
-     * not exist yet is skipped, exactly as {@link #additionalTopicInfo} tolerates — before a sink exists,
-     * nothing could meaningfully depend on it anyway, so there is nothing to strip for it until it does.
+     * ownSinkTopics}), a correctness mechanism, not a topology-misconfiguration lint.
+     *
+     * <p>A sink that does not exist yet is skipped, and — because this resolution runs once, at
+     * {@code init()}, and is never re-attempted — own-coordinate stripping for that topic stays off
+     * for this task instance's whole lifetime, until the next restart re-runs {@code init()}. In a
+     * topology cycle that means a dependency reflecting this node's own not-yet-resolved sink back at
+     * it fails the task fast as "unreachable" (fail-closed, recoverable: the restart re-resolves the
+     * now-existing sink) rather than being wrongly stripped. Nothing can depend on the sink before its
+     * first record exists, so the exposure starts only at first produce and ends at the next init.
      */
     private Set<Uuid> resolveSinkTopicUuids(ParsleyTopicAdmin admin) {
         Set<Uuid> ids = new HashSet<>();
@@ -1112,7 +1125,8 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
                 }
             } catch (Exception e) {
                 log.warn("Could not resolve topic id for sink topic '{}' (it may not exist yet); "
-                        + "skipping own-coordinate stripping for it until it does", topic, e);
+                        + "own-coordinate stripping for it stays off until the next restart re-resolves it",
+                        topic, e);
             }
         }
         return ids;

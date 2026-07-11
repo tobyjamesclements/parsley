@@ -19,6 +19,7 @@ import java.util.Properties;
 import java.util.Set;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
@@ -71,6 +72,7 @@ class ParsleyProcessorEpochBoundaryTest {
                 configs -> ADMIN, ParsleyConfig.from(new Properties()), null);
 
         MockProcessorContext<String, String> context = new MockProcessorContext<>();
+        context.setCurrentSystemTimeMs(1L);
         context.addStateStore(frontierStore);
         context.addStateStore(bufferStore);
         context.addStateStore(candidateIndexStore);
@@ -102,6 +104,83 @@ class ParsleyProcessorEpochBoundaryTest {
                 "the relayed marker keeps the incoming key so it stays on the same partition lane");
         assertTrue(hasHeader(emitted, ParsleyHeader.CAUSAL_DEPENDENCIES),
                 "the relayed marker carries this node's completeness so the downstream clock advances from it");
+        assertEquals(1L, emitted.timestamp(),
+                "the relayed marker must carry the current wall-clock time, never 0L — a 0L-timestamped "
+                        + "marker segment looks expired to broker time-based retention the moment it rolls");
+    }
+
+    /**
+     * A user-delegate failure while delivering a record released by a marker's carried completeness
+     * must fail the task (fail-closed), never be swallowed: by the time the delegate runs, the
+     * released record has already left the buffer and advanced the frontier, so swallowing the
+     * exception would let the task commit past a record the delegate never processed — silently
+     * losing it. Regression test for the over-broad catch in the marker channel-clock path that
+     * logged the delegate's exception as "Failed to decode marker completeness" and carried on.
+     *
+     * Asserts the delegate's exception propagates out of {@code process()} once the boundary marker's
+     * own delivery releases the held business record, and that the release had already removed the
+     * record from the buffer — the state that makes swallowing the failure a permanent loss.
+     */
+    @Test
+    void delegateFailureDuringMarkerTriggeredReleaseFailsTheTaskInsteadOfBeingSwallowed() {
+        Uuid t2Id = Uuid.randomUuid();
+        ParsleyTopicAdmin admin = TestTopicAdmin.of(Map.of("t1", T1_ID, "t2", t2Id));
+        TestKeyValueStore<String, byte[]> frontierStore =
+                new TestKeyValueStore<String, byte[]>(Comparator.naturalOrder(), "frontier");
+        TestKeyValueStore<Long, byte[]> bufferStore =
+                new TestKeyValueStore<Long, byte[]>(Comparator.naturalOrder(), "buffer");
+        TestKeyValueStore<byte[], byte[]> candidateIndexStore =
+                new TestKeyValueStore<byte[], byte[]>(Arrays::compareUnsigned, "candidate-index");
+        TestKeyValueStore<byte[], byte[]> forwardedIndexStore =
+                new TestKeyValueStore<byte[], byte[]>(Arrays::compareUnsigned, "forwarded-index");
+
+        RuntimeException boom = new RuntimeException("delegate failure during marker-triggered release");
+        Processor<String, String, String, String> delegate = new Processor<>() {
+            @Override public void init(ProcessorContext<String, String> context) {}
+            @Override public void process(Record<String, String> record) { throw boom; }
+        };
+        ParsleySerializer<String, String> serializer =
+                new ParsleySerializer<>(new ParsleyResolver<>(t -> Serdes.String(), t -> Serdes.String()));
+        ParsleyProcessor<String, String, String, String> processor = new ParsleyProcessor<>(
+                delegate, serializer,
+                "frontier", "buffer", "candidate-index", "forwarded-index",
+                Set.of("t1", "t2"), Set.of(), List.of(),
+                configs -> admin, ParsleyConfig.from(new Properties()), null);
+
+        MockProcessorContext<String, String> context = new MockProcessorContext<>();
+        context.setCurrentSystemTimeMs(1L);
+        context.addStateStore(frontierStore);
+        context.addStateStore(bufferStore);
+        context.addStateStore(candidateIndexStore);
+        context.addStateStore(forwardedIndexStore);
+        context.addStateStore(new ParsleyCommittedCompleteness("frontier-commit-hook"));
+        processor.init(context);
+
+        // A business record on t2@5 depending on t1@0 is held: t1 has never been observed, so the
+        // delegate is not invoked yet (and so does not throw yet).
+        context.setRecordMetadata("t2", 0, 5);
+        Headers held = ParsleyHeader.mutableHeaders();
+        held.add(ParsleyHeader.CAUSAL_DEPENDENCIES, ParsleyClock.empty().observe(T1_ID, 0, 0).toBytes());
+        processor.process(new Record<>("k", "v", 0L, held));
+        assertEquals(1, bufferStore.approximateNumEntries(), "the t2@5 record must be held on t1@0");
+
+        // An epoch-boundary marker arrives on t1@0. Its own delivery advances the t1 frontier to 0,
+        // releasing the held record into the delegate — which throws.
+        context.setRecordMetadata("t1", 0, 0);
+        ParsleyEpochBoundary boundary = new ParsleyEpochBoundary(1, ParsleyClock.empty().observe(T1_ID, 0, 10));
+        Headers markerHeaders = ParsleyHeader.mutableHeaders();
+        markerHeaders.add(ParsleyHeader.EPOCH_BOUNDARY, boundary.toBytes());
+        markerHeaders.add(ParsleyHeader.CAUSAL_DEPENDENCIES,
+                ParsleyClock.empty().observe(UPSTREAM_ID, 0, 3).toBytes());
+        Record<String, String> marker = new Record<>("k", null, 0L, markerHeaders);
+
+        RuntimeException thrown = assertThrows(RuntimeException.class, () -> processor.process(marker),
+                "the delegate's failure must propagate and fail the task, never be swallowed as a "
+                        + "marker-decode warning");
+        assertEquals(boom, thrown, "the propagated exception must be the delegate's own");
+        assertEquals(0, bufferStore.approximateNumEntries(),
+                "the release had already removed the record from the buffer — the state that makes "
+                        + "swallowing the delegate's failure a permanent record loss");
     }
 
     private static boolean hasHeader(Record<? extends String, ? extends String> record, String key) {

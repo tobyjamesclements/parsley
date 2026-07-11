@@ -87,6 +87,7 @@ class ParsleyProcessorEpochSnapshotTest {
                 configs -> ADMIN, ParsleyConfig.from(new Properties()), null, publisher);
 
         MockProcessorContext<String, String> context = new MockProcessorContext<>();
+        context.setCurrentSystemTimeMs(1L);
         context.addStateStore(frontierStore);
         context.addStateStore(bufferStore);
         context.addStateStore(candidateIndexStore);
