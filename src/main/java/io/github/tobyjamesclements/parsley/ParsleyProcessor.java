@@ -133,7 +133,13 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
     private KeyValueStore<byte[], byte[]> candidateIndexStore;
     private KeyValueStore<byte[], byte[]> forwardedIndexStore;
     private KeyValueStore<byte[], byte[]> orphanIndexStore;
-    private ParsleyEngine<KIn, VIn> engine;
+    // The one-time seed for a fresh ParsleyEpochState (see engine()) — computed once at init() from
+    // whether this task joined an already-established epoch (epochSeedEpochId > 0) or starts fresh at
+    // epoch 0 (0, the sentinel: no real epoch is ever id 0). Only matters for the very first engine()
+    // call after init(): that call's ParsleyFrontier constructor persists whatever it settles at, so
+    // every later engine() call restores the real thing from the store instead, regardless of this seed.
+    private ParsleyClock epochSeedFloor = ParsleyClock.empty();
+    private long epochSeedEpochId;
     private ParsleyMetrics.Wired wiredMetrics;
     // The stamping proxy context handed to the delegate. Held here so deliver() can check the
     // per-record forward count and emit a watermark when the delegate forwarded nothing.
@@ -234,15 +240,8 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
 
         boolean restored = frontierStore.get(ParsleyStores.FRONTIER_KEY) != null;
 
-        ParsleyBufferStore<KIn, VIn> buffer = new RocksBufferStore<>(bufferStore, serializer);
-        ParsleyCandidateIndex candidateIndex = new RocksCandidateIndex(candidateIndexStore);
-        ParsleyForwardedIndex forwardedIndex = new RocksForwardedIndex(forwardedIndexStore);
-        ParsleyOrphanIndex orphanIndex = new RocksOrphanIndex(orphanIndexStore);
-        // The single owner of the persisted causal metadata: loads the frontier clock and channel
-        // clocks from key "f" of the frontier store and rewrites that value on change. The forwarded
-        // and orphan indexes keep their own keyed stores and are injected here.
-        // Resolve epoch coordination from the handle before building the epoch state: build/share the
-        // per-instance runtime (from this task's appConfigs), install the runtime-backed snapshot
+        // Resolve epoch coordination from the handle before computing the epoch-state seed: build/share
+        // the per-instance runtime (from this task's appConfigs), install the runtime-backed snapshot
         // publisher, and join as a member, then block until this member is a running member. That block is
         // called unconditionally — its block-until-running rule decides per case: a fresh joiner or an
         // evicted-then-restarted member (not a running member) blocks until an epoch re-includes it, while
@@ -260,11 +259,14 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
             validateFullMeshCoverage(runtime);
         }
 
-        // The task's epoch state floors gating against the settled epoch. A fresh task that joined an
-        // established epoch settles DIRECTLY at the committed floor F_{k+1}: it has no in-flight prior-
-        // epoch records, so every below-floor replay record is pre-epoch history to strip — no overlap
-        // window. Otherwise it starts fresh at epoch 0; a restored task's state (settled floor plus any
-        // in-progress transition) is loaded from the frontier "f" blob by the ParsleyFrontier constructor.
+        // The seed for engine()'s very first ParsleyEpochState, gating against the settled epoch. A fresh
+        // task that joined an established epoch settles DIRECTLY at the committed floor F_{k+1}: it has
+        // no in-flight prior-epoch records, so every below-floor replay record is pre-epoch history to
+        // strip — no overlap window. Otherwise it starts fresh at epoch 0; a restored task's state
+        // (settled floor plus any in-progress transition) is loaded from the frontier "f" blob by the
+        // ParsleyFrontier constructor the first engine() call below runs — which is why this is only ever
+        // a seed, not held onto beyond that first call (see the epochSeedFloor/epochSeedEpochId field
+        // Javadoc).
         //
         // lastAdoptedEpoch is deliberately left at its default (0) even here: settling epochState
         // directly is purely local (this task has no in-flight prior-epoch records to gate), but
@@ -274,52 +276,29 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
         // has no other way to learn the floor advanced. Re-injecting it locally on this task's own
         // already-settled epochState is a no-op (ParsleyEpochState#onBoundary short-circuits at
         // epochId <= settledEpochId), so retrying costs nothing.
-        ParsleyEpochState epochState;
         if (epochRuntime != null && !restored) {
             // Read the id and its lower bounds together (ParsleyEpochRuntime#committedEpoch), not via two
             // independent volatile reads: a commit landing in between the two would otherwise pair a
             // fresher id with a stale bounds snapshot.
             ParsleyEpochRuntime.CommittedEpoch committed = epochRuntime.committedEpoch();
-            epochState = committed.epochId() > 0
-                    ? new ParsleyEpochState(committed.lowerBounds(), committed.epochId())
-                    : new ParsleyEpochState();
-        } else {
-            epochState = new ParsleyEpochState();
+            this.epochSeedFloor = committed.lowerBounds();
+            this.epochSeedEpochId = committed.epochId();
         }
-        ParsleyFrontier frontier = new ParsleyFrontier(frontierStore, forwardedIndex, orphanIndex, epochState);
 
+        this.wiredMetrics = ParsleyMetrics.wire(context);
+
+        // The first engine() call: constructs the real ParsleyFrontier (restoring from the store if
+        // restored is true), prunes/seeds it to this task's current scope, and persists — so every
+        // subsequent engine() call (a fresh construction each time; see engine()'s Javadoc) restores that
+        // real, already-correct state rather than needing the seed above again.
+        ParsleyEngine<KIn, VIn> engine = engine();
         if (restored) {
-            log.info("Processor initialized [task: {}] — frontier restored: {}", context.taskId(), frontier.snapshot());
+            log.info("Processor initialized [task: {}] — frontier restored: {}", context.taskId(), engine.frontier());
         } else {
             log.info("Processor initialized [task: {}] — frontier empty (fresh start)", context.taskId());
         }
         audit.processorInitialized(context.taskId().toString(), restored);
 
-        this.wiredMetrics = ParsleyMetrics.wire(context);
-
-        // The coordinates this task consumes: a registered input topic, on the partition this task
-        // owns. Streams co-partitions a sub-topology's sources, so the task owns partition
-        // taskId().partition() of every input topic. Derived here, never persisted, so it is
-        // recomputed identically after a rebalance. Used for restore-time pruning — not as a delivery
-        // filter (the gate waits for every channel; see completeness()).
-        Set<Uuid> consumedTopicIds = Set.copyOf(topicUuids.values());
-        int taskPartition = context.taskId().partition();
-        ParsleyClock.CoordinatePredicate inScope = (topicId, partition) ->
-                partition == taskPartition && consumedTopicIds.contains(topicId);
-
-        // Prune restored causal state to the current scope — topic UUIDs change when a topic is
-        // dropped and recreated, leaving stale frontier/channel entries that would pin the completeness
-        // min on a coordinate that can never advance. Then seed an entry for every consumed input
-        // channel so a channel that has not yet advertised anything is present in the min (holding it
-        // down until it does), rather than absent — which would let a record deliver before that
-        // channel confirmed the dependency.
-        frontier.pruneToScope(inScope);
-        for (Uuid topicId : consumedTopicIds) {
-            frontier.channelUpdate(topicId, taskPartition, ParsleyClock.empty());
-        }
-
-        this.engine = new ParsleyEngine<>(frontier, buffer, candidateIndex,
-                wiredMetrics.metrics(), audit, context::currentSystemTimeMs, deadLetterSinkName != null, inScope);
         // Initialise stampFrontier from completeness() so the stamping proxy reflects the restored
         // channel-clock state (not just the in-scope frontier) from the first forward onward.
         this.stampFrontier = engine.completeness();
@@ -343,7 +322,7 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
         restoredDrainSchedule = context.schedule(Duration.ofMillis(1), PunctuationType.WALL_CLOCK_TIME,
                 timestamp -> {
                     restoredDrainSchedule.cancel();
-                    ParsleyEngine.Outcome<KIn, VIn> outcome = engine.drainAfterRestore();
+                    ParsleyEngine.Outcome<KIn, VIn> outcome = engine().drainAfterRestore();
                     deliver(outcome.delivered());
                     deadLetter(outcome.deadLettered());
                 });
@@ -358,7 +337,7 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
         // buffer genuinely being empty. This tick closes that gap within one refresh interval.
         context.schedule(METRICS_REFRESH_INTERVAL, PunctuationType.WALL_CLOCK_TIME,
                 timestamp -> {
-                    engine.reportBufferState();
+                    engine().reportBufferState();
                     updateQuiesceState();
                 });
 
@@ -378,6 +357,68 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
         // Report the restored buffer's drained state once up front, so a task that starts idle with an
         // empty buffer is known-drained to quiesce and to leave() without waiting for the first delivery.
         updateQuiesceState();
+    }
+
+    /**
+     * Builds a fresh {@link ParsleyEngine}, wrapping this task's state stores, for exactly one caller's
+     * use. Called at the start of every operation that touches causal state — never held across calls
+     * in a field — rather than constructed once in {@link #init} and reused for the processor's whole
+     * lifetime.
+     *
+     * <p><strong>Why:</strong> a future passthrough processor node (a genuine multi-app-DAG source this
+     * task's own business processor node does not otherwise consume) shares this task's frontier/buffer
+     * state stores but is a <em>separate</em> {@link Processor} instance with its own {@code init()}
+     * call. {@link ParsleyFrontier} caches its persisted state in private fields, loaded once at
+     * construction and written on change — two long-lived instances wrapping the same store would
+     * silently diverge the instant either side wrote something the other's in-memory copy never saw.
+     * Constructing fresh here instead — every operation re-reads the store's current state and persists
+     * its own changes before returning — means any number of processor nodes sharing these stores always
+     * see each other's latest writes, since Kafka Streams guarantees only one of them ever runs at a time
+     * within a task. This is deliberately the simplest correct thing, accepting the cost of
+     * re-deserialising the frontier blob (and re-running {@link ParsleyFrontier}'s restore-time
+     * forwarded-index sweep) on every call rather than only once per restart — an optimisation to revisit
+     * once the passthrough design this exists for is proven, not before.
+     *
+     * <p>{@link #wiredMetrics}, {@link #audit}, and the {@code epochSeed*} fields must already be set
+     * (by {@link #init}) before this is ever called.
+     */
+    private ParsleyEngine<KIn, VIn> engine() {
+        ParsleyBufferStore<KIn, VIn> buffer = new RocksBufferStore<>(bufferStore, serializer);
+        ParsleyCandidateIndex candidateIndex = new RocksCandidateIndex(candidateIndexStore);
+        ParsleyForwardedIndex forwardedIndex = new RocksForwardedIndex(forwardedIndexStore);
+        ParsleyOrphanIndex orphanIndex = new RocksOrphanIndex(orphanIndexStore);
+        // The single owner of the persisted causal metadata: loads the frontier clock and channel
+        // clocks from key "f" of the frontier store and rewrites that value on change. The forwarded
+        // and orphan indexes keep their own keyed stores and are injected here.
+        ParsleyEpochState epochState = epochSeedEpochId > 0
+                ? new ParsleyEpochState(epochSeedFloor, epochSeedEpochId)
+                : new ParsleyEpochState();
+        ParsleyFrontier frontier = new ParsleyFrontier(frontierStore, forwardedIndex, orphanIndex, epochState);
+
+        // The coordinates this task consumes: a registered input topic, on the partition this task
+        // owns. Streams co-partitions a sub-topology's sources, so the task owns partition
+        // taskId().partition() of every input topic. Derived here, never persisted, so it is
+        // recomputed identically after a rebalance. Used for restore-time pruning — not as a delivery
+        // filter (the gate waits for every channel; see completeness()).
+        Set<Uuid> consumedTopicIds = Set.copyOf(topicUuids.values());
+        int taskPartition = context.taskId().partition();
+        ParsleyClock.CoordinatePredicate inScope = (topicId, partition) ->
+                partition == taskPartition && consumedTopicIds.contains(topicId);
+
+        // Prune restored causal state to the current scope — topic UUIDs change when a topic is
+        // dropped and recreated, leaving stale frontier/channel entries that would pin the completeness
+        // min on a coordinate that can never advance. Then seed an entry for every consumed input
+        // channel so a channel that has not yet advertised anything is present in the min (holding it
+        // down until it does), rather than absent — which would let a record deliver before that
+        // channel confirmed the dependency. Idempotent against an already-pruned/seeded store (the
+        // common case, every call after the first), so this costs a redundant write, never a wrong one.
+        frontier.pruneToScope(inScope);
+        for (Uuid topicId : consumedTopicIds) {
+            frontier.channelUpdate(topicId, taskPartition, ParsleyClock.empty());
+        }
+
+        return new ParsleyEngine<>(frontier, buffer, candidateIndex,
+                wiredMetrics.metrics(), audit, context::currentSystemTimeMs, deadLetterSinkName != null, inScope);
     }
 
     /**
@@ -417,8 +458,8 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
             pollEpochCoordination();
             return;
         }
-        ParsleyClock completenessBefore = engine.completeness();
-        ParsleyEngine.Outcome<KIn, VIn> outcome = engine.onRecord(ingested.get());
+        ParsleyClock completenessBefore = engine().completeness();
+        ParsleyEngine.Outcome<KIn, VIn> outcome = engine().onRecord(ingested.get());
         deliver(outcome.delivered());
         deadLetter(outcome.deadLettered());
         // Advertise this node's progress so downstream channel clocks advance gap-free. A delivered
@@ -427,7 +468,7 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
         // produces neither, so emit a heartbeat watermark — but only when its receipt-time
         // channel-clock update actually advanced completeness, so an unrelated held record does not
         // flood downstream with no-op watermarks.
-        if (outcome.delivered().isEmpty() && !engine.completeness().equals(completenessBefore)) {
+        if (outcome.delivered().isEmpty() && !engine().completeness().equals(completenessBefore)) {
             // Key the heartbeat with the buffered record's own key so it routes to that record's
             // partition, matching where its eventual business output will land.
             forwardWatermark(record.key());
@@ -464,7 +505,7 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
             // boundary that is sound across all input branches. This replaces the old per-record
             // frontier-snapshot-merged-with-inbound-deps approach, which was correct only in
             // single-layer topologies. Downstream nodes receive the sound multi-layer boundary.
-            stampFrontier = engine.completeness();
+            stampFrontier = engine().completeness();
             deliveryMetadata = new ParsleyRecordMetadata(message.topic(), message.partition(), message.offset());
             // User headers + the producer's dependencies only; the source coordinate is surfaced via
             // context.recordMetadata(), and ParsleyProcessorContext re-stamps the frontier on forward.
@@ -482,7 +523,7 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
             }
         }
         deliveryMetadata = null;
-        stampFrontier = engine.completeness();
+        stampFrontier = engine().completeness();
         updateQuiesceState();
     }
 
@@ -564,7 +605,7 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
      * {@link ParsleyCoordination#leave()} can wait for a drained buffer before removing the member.
      */
     private void updateQuiesceState() {
-        boolean empty = engine.bufferSize() == 0;
+        boolean empty = engine().bufferSize() == 0;
         if (quiesce != null) {
             quiesce.setDrained(context.taskId(), quiesce.isQuiesceRequested() && empty);
         }
@@ -633,7 +674,7 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
      * channel clock.
      */
     private void handleEpochSnapshot(Record<KIn, VIn> record) {
-        snapshotPublisher.publish(memberId, engine.completeness());
+        snapshotPublisher.publish(memberId, engine().completeness());
         boolean channelAdvanced = advanceChannelClockFromMarker(record);
         if (channelAdvanced) {
             forwardEpochSnapshot(record.key());
@@ -683,7 +724,7 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
         // (draining anything it releases) before driving the transition, so one record does both.
         boolean channelAdvanced = advanceChannelClockFromMarker(record);
 
-        ParsleyEngine.Outcome<KIn, VIn> outcome = engine.onEpochBoundary(boundary, topicId, partition);
+        ParsleyEngine.Outcome<KIn, VIn> outcome = engine().onEpochBoundary(boundary, topicId, partition);
         deliver(outcome.delivered());
         deadLetter(outcome.deadLettered());
 
@@ -721,7 +762,7 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
                 try {
                     ParsleyClock frontier = ParsleyClock.fromBytes(h.value());
                     ParsleyEngine.WatermarkOutcome<KIn, VIn> watermarkOutcome =
-                            engine.onWatermark(topicId, partition, offset, frontier);
+                            engine().onWatermark(topicId, partition, offset, frontier);
                     deliver(watermarkOutcome.outcome().delivered());
                     deadLetter(watermarkOutcome.outcome().deadLettered());
                     return watermarkOutcome.channelAdvanced();
@@ -772,7 +813,7 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
         }
         // Keep the runtime's drained mirror current even while idle (no deliveries drive updateQuiesceState),
         // so leave() observes a drained buffer promptly. Cheap and self-correcting on each poll tick.
-        runtime.reportDrained(memberId, engine.bufferSize() == 0);
+        runtime.reportDrained(memberId, engine().bufferSize() == 0);
         // Every member — not just source-layer — publishes its completeness for an open round it still owes
         // one for, driven off the folded log. This makes publication restart-safe: a member that restarts
         // mid-round re-derives from the log that it owes a publication and re-publishes, without depending
@@ -783,7 +824,7 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
         if (runtime.owesPublication(memberId)) {
             long round = runtime.committedEpochId() + 1;
             if (round != lastPublishedRoundEpoch) {
-                snapshotPublisher.publish(memberId, engine.completeness());
+                snapshotPublisher.publish(memberId, engine().completeness());
                 lastPublishedRoundEpoch = round;
             }
         }
@@ -842,7 +883,7 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
      * lastSeenKey} still {@code null}) relays exactly the same as one that has.
      */
     private void injectSnapshot() {
-        snapshotPublisher.publish(memberId, engine.completeness());
+        snapshotPublisher.publish(memberId, engine().completeness());
         forwardEpochSnapshot(lastSeenKey);
     }
 
@@ -857,7 +898,7 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
         List<ParsleyMessage<KIn, VIn>> released = new ArrayList<>();
         List<ParsleyEngine.DeadLetter<KIn, VIn>> deadLettered = new ArrayList<>();
         for (Uuid topicId : externalSourceTopicIds) {
-            ParsleyEngine.Outcome<KIn, VIn> outcome = engine.onEpochBoundary(boundary, topicId, partition);
+            ParsleyEngine.Outcome<KIn, VIn> outcome = engine().onEpochBoundary(boundary, topicId, partition);
             released.addAll(outcome.delivered());
             deadLettered.addAll(outcome.deadLettered());
         }
@@ -909,7 +950,7 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
 
         // Update the channel clock and release anything newly satisfied.
         ParsleyEngine.WatermarkOutcome<KIn, VIn> watermarkOutcome =
-                engine.onWatermark(topicId, partition, offset, frontierClock);
+                engine().onWatermark(topicId, partition, offset, frontierClock);
         deliver(watermarkOutcome.outcome().delivered());
         deadLetter(watermarkOutcome.outcome().deadLettered());
 
@@ -950,7 +991,7 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
     private void forwardWatermark(@Nullable KIn triggerKey) {
         Headers wm = ParsleyHeader.mutableHeaders();
         wm.add(ParsleyHeader.WATERMARK, new byte[0]);
-        wm.add(ParsleyHeader.CAUSAL_DEPENDENCIES, engine.completeness().toBytes());
+        wm.add(ParsleyHeader.CAUSAL_DEPENDENCIES, engine().completeness().toBytes());
         // Use 0L as the watermark timestamp: a watermark's timestamp carries no business meaning —
         // only its headers matter for causal gating — so 0L is safe in all execution contexts
         // (MockProcessorContext may not have time initialised).
@@ -969,7 +1010,7 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
     private void forwardEpochSnapshot(@Nullable KIn triggerKey) {
         Headers marker = ParsleyHeader.mutableHeaders();
         marker.add(ParsleyHeader.EPOCH_SNAPSHOT, new byte[0]);
-        marker.add(ParsleyHeader.CAUSAL_DEPENDENCIES, engine.completeness().toBytes());
+        marker.add(ParsleyHeader.CAUSAL_DEPENDENCIES, engine().completeness().toBytes());
         forwardToSinks(new Record<>((KOut) (Object) triggerKey, null, 0L, marker));
     }
 
@@ -983,7 +1024,7 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
     private void forwardEpochBoundary(@Nullable KIn triggerKey, byte[] boundaryBytes) {
         Headers marker = ParsleyHeader.mutableHeaders();
         marker.add(ParsleyHeader.EPOCH_BOUNDARY, boundaryBytes);
-        marker.add(ParsleyHeader.CAUSAL_DEPENDENCIES, engine.completeness().toBytes());
+        marker.add(ParsleyHeader.CAUSAL_DEPENDENCIES, engine().completeness().toBytes());
         forwardToSinks(new Record<>((KOut) (Object) triggerKey, null, 0L, marker));
     }
 
@@ -1077,7 +1118,7 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
         // with nothing durably recording why, and any buffered record depending on this exact offset (or
         // later) is held indefinitely. Route it through the engine so the coordinate is orphaned at this
         // offset and any already-buffered dependent is cascaded, exactly as the buffered-poison path is.
-        ParsleyEngine.Outcome<KIn, VIn> outcome = engine.deadLetterAtIngest(topicId, source.partition(), offset);
+        ParsleyEngine.Outcome<KIn, VIn> outcome = engine().deadLetterAtIngest(topicId, source.partition(), offset);
         deliver(outcome.delivered());
         deadLetter(outcome.deadLettered());
         return Optional.empty();
