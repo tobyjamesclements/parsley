@@ -6,6 +6,7 @@ import org.jspecify.annotations.Nullable;
 
 import java.time.Duration;
 import java.util.Properties;
+import java.util.function.Supplier;
 
 /**
  * The causal application runtime: a Facade (GoF) over the Kafka Streams instance a {@link CausalTopology}
@@ -99,14 +100,19 @@ public final class CausalStreams implements AutoCloseable {
      * through the ordinary delivery path, then, if coordination is configured, permanently decommissions
      * this instance's members from the epoch domain, then stops the underlying {@code KafkaStreams}, then
      * closes the coordination runtime. Idempotent-safe to call even if {@link #start()} was never called.
+     *
+     * <p>The drain wait is unbounded only while draining can actually progress: if the underlying
+     * streams instance leaves {@code RUNNING}/{@code REBALANCING} (it died in {@code ERROR}, or was
+     * already stopped), no task will ever deliver again, so the wait ends and shutdown proceeds — every
+     * held record is changelog-backed and survives to the next start, so nothing is lost by closing an
+     * already-dead instance (see {@link ParsleyQuiesce}: the drain is a stall-avoidance optimisation,
+     * not a correctness requirement).
      */
     @Override
     public void close() {
         if (kafkaStreams.state() != KafkaStreams.State.CREATED) {
             quiesce.requestQuiesce();
-            while (!quiesce.isSafeToClose()) {
-                sleep();
-            }
+            awaitDrain(quiesce, kafkaStreams::state);
         }
         if (coordination != null) {
             coordination.leave();
@@ -114,6 +120,24 @@ public final class CausalStreams implements AutoCloseable {
         kafkaStreams.close();
         if (coordination != null) {
             coordination.close();
+        }
+    }
+
+    /**
+     * Polls until every registered task reports drained ({@link ParsleyQuiesce#isSafeToClose}), or
+     * {@code state} reports the streams instance can no longer drain anything — any state other than
+     * {@code RUNNING} or {@code REBALANCING}, where tasks are gone or dying and
+     * {@code isSafeToClose()} (which requires at least one registered, drained task) could otherwise
+     * never become true, hanging {@code close()} forever on an instance that is already dead.
+     * Package-private for tests; {@link #close()} is the only production caller.
+     */
+    static void awaitDrain(ParsleyQuiesce quiesce, Supplier<KafkaStreams.State> state) {
+        while (!quiesce.isSafeToClose()) {
+            KafkaStreams.State current = state.get();
+            if (current != KafkaStreams.State.RUNNING && current != KafkaStreams.State.REBALANCING) {
+                return;
+            }
+            sleep();
         }
     }
 

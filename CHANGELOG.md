@@ -7,6 +7,15 @@ All notable changes to this project are documented in this file. The format is b
 ## [Unreleased]
 
 ### Fixed
+- **`CausalStreams#close()` hung forever when the underlying streams instance was already dead.** The
+  graceful drain polled `ParsleyQuiesce#isSafeToClose()` unbounded, but that requires at least one
+  registered, currently-drained task — an instance in `ERROR` (every task closed and unregistered), or
+  one that never got tasks assigned, can never satisfy it, so `close()` never returned. The wait now
+  ends as soon as the streams state leaves `RUNNING`/`REBALANCING`: no task can drain any further, and
+  every held record is changelog-backed and survives to the next start, so closing a dead instance
+  loses nothing (the drain is a stall-avoidance optimisation, not a correctness requirement — per
+  `ParsleyQuiesce`'s own contract). The wait loop is extracted as the package-private
+  `CausalStreams#awaitDrain` seam, with tests.
 - **Every engine operation rebuilt the entire causal state — a full buffer scan, a candidate-index
   rewrite, and a frontier-blob re-persist — making each processed record O(buffer-depth).**
   `ParsleyProcessor#engine()` constructed a fresh `ParsleyEngine`/`ParsleyFrontier`/`RocksBufferStore`
