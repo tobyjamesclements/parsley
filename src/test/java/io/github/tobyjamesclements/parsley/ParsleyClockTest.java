@@ -93,39 +93,6 @@ class ParsleyClockTest {
     }
 
     /**
-     * {@code missing} returns an empty clock when the given frontier satisfies all required
-     * dependencies, including the case where the dependencies are themselves empty.
-     *
-     * Asserts that the gap is empty for a satisfied frontier and for empty dependencies.
-     */
-    @Test
-    void missingIsEmptyWhenFrontierSatisfiesDependencies() {
-        ParsleyClock required = ParsleyClock.empty().observe(T1_ID, 0, 3);
-        assertTrue(required.missing(ParsleyClock.empty().observe(T1_ID, 0, 3)).isEmpty(),
-                "gap must be empty when frontier is at exactly the required offset");
-        assertTrue(required.missing(ParsleyClock.empty().observe(T1_ID, 0, 9)).isEmpty(),
-                "gap must be empty when frontier is ahead of the required offset");
-        assertTrue(ParsleyClock.empty().missing(ParsleyClock.empty()).isEmpty(),
-                "gap must be empty when dependencies are empty");
-    }
-
-    /**
-     * {@code missing} reports the per-partition shortfall when the frontier is behind one or more
-     * required offsets; an absent frontier coordinate counts as {@code -1}, so requiring offset {@code n}
-     * against it is a gap of {@code n + 1}.
-     *
-     * Asserts the gap clock records the correct per-partition shortfalls.
-     */
-    @Test
-    void missingReportsPerPartitionShortfall() {
-        ParsleyClock required = ParsleyClock.empty().observe(T1_ID, 0, 5).observe(T2_ID, 0, 2);
-        // T1: required 5, frontier at 1 → gap 4. T2: required 2, frontier absent (-1) → gap 3.
-        ParsleyClock gap = required.missing(ParsleyClock.empty().observe(T1_ID, 0, 1));
-        assertEquals(ParsleyClock.empty().observe(T1_ID, 0, 4).observe(T2_ID, 0, 3), gap,
-                "gap must reflect the per-partition shortfall for each unsatisfied dependency");
-    }
-
-    /**
      * A clock round-trips through its binary wire format.
      *
      * Asserts that deserialising the serialised form produces an equal clock.

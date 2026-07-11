@@ -39,11 +39,6 @@ final class PoisonableBufferStore<K, V> implements ParsleyBufferStore<K, V> {
     }
 
     @Override
-    public List<Entry<K, V>> entries() {
-        return delegate.entries();
-    }
-
-    @Override
     public List<IndexEntry> indexEntries() {
         return delegate.indexEntries();
     }

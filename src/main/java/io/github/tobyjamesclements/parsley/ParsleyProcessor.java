@@ -162,7 +162,9 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
     // The stamping proxy context handed to the delegate. Held here so deliver() can check the
     // per-record forward count and emit a watermark when the delegate forwarded nothing.
     private ParsleyProcessorContext<KOut, VOut> stampingContext;
-    // Read live by the stamping proxy; volatile as belt-and-suspenders (single task thread owns this).
+    // Read live by the stamping proxy on the task thread AND by the epoch runtime's background thread
+    // (registerLocalCompleteness hands it a supplier over this field, so a wedged task's completeness
+    // can still be published on its behalf) — the volatile is load-bearing, not defensive.
     private volatile ParsleyClock stampFrontier = ParsleyClock.empty();
     private volatile @Nullable RecordMetadata deliveryMetadata;
     private Cancellable restoredDrainSchedule;

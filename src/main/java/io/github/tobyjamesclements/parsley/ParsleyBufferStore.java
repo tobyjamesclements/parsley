@@ -8,8 +8,9 @@ import java.util.OptionalLong;
 
 /**
  * The held-record buffer: the single, authoritative store of records whose causal dependencies are
- * not yet satisfied. Entries carry a monotonic insertion sequence, and {@link #entries()} yields
- * them in that order, so iteration reflects causal arrival order.
+ * not yet satisfied. Entries carry a monotonic insertion sequence — since records are admitted in
+ * real-time order on the single owning thread, ascending sequence is equivalently causal arrival
+ * (and {@code bufferedAt}) order.
  *
  * <p>There is no separate in-memory copy: a durable implementation <em>is</em> the buffer, so held
  * records need no rehydration step after a restart — they are simply read back on the next drain.
@@ -60,16 +61,6 @@ interface ParsleyBufferStore<K, V> {
     @Nullable Entry<K, V> get(long sequence);
 
     /**
-     * Returns every buffered entry, in ascending insertion-sequence (causal arrival) order. Since
-     * entries are admitted in real-time order on a single owning thread, this is equivalently
-     * ascending {@code bufferedAt} (buffer-start-time) order — callers that need oldest-first
-     * iteration (e.g. the oldest-buffered-at metrics gauge) can rely on this without a separate index.
-     *
-     * @return the buffered entries; empty if the buffer is empty
-     */
-    List<Entry<K, V>> entries();
-
-    /**
      * Returns the {@link IndexEntry index metadata} for every buffered entry — decoding only the
      * dependency clock, not the record's key/value. Used once at construction to rebuild the candidate
      * index after a restart, immune to user-serde decode failures.
@@ -95,7 +86,7 @@ interface ParsleyBufferStore<K, V> {
     /**
      * Returns the buffer-admission time of the oldest currently-held record — the lowest surviving
      * insertion sequence — or empty if the buffer holds nothing. Relies on insertion sequence order
-     * coinciding with {@code bufferedAt} order (see {@link #entries()}); since that ordering survives
+     * coinciding with {@code bufferedAt} order (see the class Javadoc); since that ordering survives
      * arbitrary removals, implementations can answer this without scanning the buffer.
      *
      * @return the oldest held record's buffer-admission time (epoch millis), or empty if empty

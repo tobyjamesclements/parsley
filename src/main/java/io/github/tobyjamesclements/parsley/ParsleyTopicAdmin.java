@@ -3,7 +3,6 @@ package io.github.tobyjamesclements.parsley;
 import org.apache.kafka.clients.admin.Admin;
 import org.apache.kafka.clients.admin.Config;
 import org.apache.kafka.clients.admin.ConfigEntry;
-import org.apache.kafka.clients.admin.NewTopic;
 import org.apache.kafka.clients.admin.TopicDescription;
 import org.apache.kafka.common.Uuid;
 import org.apache.kafka.common.config.ConfigResource;
@@ -12,15 +11,13 @@ import org.apache.kafka.common.config.TopicConfig;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.Set;
 
 /**
  * A Facade (GoF) narrowing the Kafka Admin operations Parsley performs at startup: resolving input
- * topics' stable UUIDs (the causal identity), reading their partition counts and {@code
- * cleanup.policy} (for the {@code parsley.topology.validation} checks), and creating the outbox
- * topic. Keeping the interface narrow lets tests implement it without the full ~40-method
- * {@link Admin} surface, and lets the processor path resolve UUIDs at {@code init()} from
- * {@link #ofConfigs}.
+ * topics' stable UUIDs (the causal identity) and reading their partition counts and {@code
+ * cleanup.policy} (for the {@code parsley.topology.validation} checks). Keeping the interface narrow
+ * lets tests implement it without the full ~40-method {@link Admin} surface, and lets the processor
+ * path resolve UUIDs at {@code init()} from {@link #ofConfigs}.
  */
 interface ParsleyTopicAdmin extends AutoCloseable {
 
@@ -40,16 +37,6 @@ interface ParsleyTopicAdmin extends AutoCloseable {
      * @return partition counts; must include every requested topic
      */
     Map<String, Integer> partitionCounts(List<String> topics) throws Exception;
-
-    /**
-     * Creates a topic with the given name and partition count. Implementations may silently ignore
-     * this call (e.g. in tests that have no broker), but must not throw if the topic already
-     * exists — callers handle that case themselves.
-     *
-     * @param name       the topic name to create
-     * @param partitions the desired partition count
-     */
-    void createTopic(String name, int partitions) throws Exception;
 
     /**
      * Returns the effective {@code cleanup.policy} for each name in {@code topics} — the topic's own
@@ -83,11 +70,6 @@ interface ParsleyTopicAdmin extends AutoCloseable {
             @Override
             public Map<String, Integer> partitionCounts(List<String> topics) throws Exception {
                 return delegate.partitionCounts(topics);
-            }
-
-            @Override
-            public void createTopic(String name, int partitions) throws Exception {
-                delegate.createTopic(name, partitions);
             }
 
             @Override
@@ -127,11 +109,6 @@ interface ParsleyTopicAdmin extends AutoCloseable {
                 Map<String, Integer> counts = new HashMap<>();
                 descriptions.forEach((topic, desc) -> counts.put(topic, desc.partitions().size()));
                 return counts;
-            }
-
-            @Override
-            public void createTopic(String name, int partitions) throws Exception {
-                admin.createTopics(Set.of(new NewTopic(name, partitions, (short) 1))).all().get();
             }
 
             @Override

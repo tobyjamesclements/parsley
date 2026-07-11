@@ -1017,10 +1017,6 @@ class CausalStreamsTopologyTest {
             }
         }
 
-        @Override
-        public void createTopic(String name, int partitions) {
-            // no broker in tests
-        }
 
         @Override
         public void close() {
@@ -1071,10 +1067,6 @@ class CausalStreamsTopologyTest {
             return policies;
         }
 
-        @Override
-        public void createTopic(String name, int partitions) {
-            // no broker in tests
-        }
 
         @Override
         public void close() {

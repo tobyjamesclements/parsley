@@ -164,7 +164,7 @@ class ParsleyProcessorsAvroTopologyTest {
         ParsleyClock deps = ParsleyClock.empty().observe(PRICES_ID, 0, 0);
         ParsleyMessage<String, SpecificRecord> orderMessage = new ParsleyMessage<>(
                 ORDERS, ORDERS_ID, 0, 0, 0L, "k", new Order("o-1", "ACME", 5), List.of(), deps);
-        store.add(orderMessage, 100L);
+        long seq = store.add(orderMessage, 100L);
 
         // A second store over the same backing bytes, but with a deserializer that always throws —
         // modelling the registry schema for "orders-value" having changed incompatibly since.
@@ -184,7 +184,7 @@ class ParsleyProcessorsAvroTopologyTest {
         RocksBufferStore<String, SpecificRecord> poisonedView = new RocksBufferStore<>(backing, unreadable);
 
         Exception thrown = org.junit.jupiter.api.Assertions.assertThrows(Exception.class,
-                poisonedView::entries, "an undecodable buffered record must surface an exception on decode");
+                () -> poisonedView.get(seq), "an undecodable buffered record must surface an exception on decode");
 
         ParsleyBufferDeserializationException cause = causeOfType(thrown, ParsleyBufferDeserializationException.class);
         assertTrue(cause != null, "the failure must be a typed ParsleyBufferDeserializationException; got " + thrown);

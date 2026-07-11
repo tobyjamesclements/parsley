@@ -37,25 +37,6 @@ final class ParsleyProcessorSupplier<KIn, VIn, KOut, VOut>
     private final @Nullable ParsleyQuiesce quiesce;
     private final @Nullable ParsleyCoordination coordination;
 
-    ParsleyProcessorSupplier(ProcessorSupplier<KIn, VIn, KOut, VOut> userSupplier,
-                                      Function<String, Serde<KIn>> keySerdeByTopic,
-                                      Function<String, Serde<VIn>> valueSerdeByTopic,
-                                      String frontierStoreName,
-                                      String bufferStoreName,
-                                      String candidateIndexStoreName,
-                                      String forwardedIndexStoreName,
-                                      Set<String> topics,
-                                      Set<String> sinkTopics,
-                                      List<String> sinkNodeNames,
-                                      Function<Map<String, Object>, ParsleyTopicAdmin> adminFactory,
-                                      ParsleyConfig config,
-                                      @Nullable ParsleyQuiesce quiesce,
-                                      @Nullable ParsleyCoordination coordination) {
-        this(userSupplier, keySerdeByTopic, valueSerdeByTopic, frontierStoreName, bufferStoreName,
-                candidateIndexStoreName, forwardedIndexStoreName, topics, Set.of(),
-                sinkTopics, sinkNodeNames, adminFactory, config, quiesce, coordination);
-    }
-
     /**
      * @param passthroughTopics a subset of {@code topics} that {@link CausalTopology} wires as extra,
      *                          raw byte[]/byte[] sources into the same processor node — a domain topic

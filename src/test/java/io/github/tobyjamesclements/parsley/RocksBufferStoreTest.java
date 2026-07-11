@@ -32,14 +32,14 @@ class RocksBufferStoreTest {
             new ParsleySerializer<>(new ParsleyResolver<>(topic -> Serdes.String(), topic -> Serdes.String()));
 
     /**
-     * {@code entries()} and {@code indexEntries()} both decode the records held in the backing
-     * store, returning the same sequences, buffer-admission times, and dependency clocks.
+     * {@code get()} and {@code indexEntries()} both decode the records held in the backing store,
+     * returning the same sequences, buffer-admission times, and dependency clocks.
      *
      * Asserts that both methods report the two added records with matching sequence, bufferedAt,
-     * and dependencies, and that {@code entries()} additionally returns the decoded record.
+     * and dependencies, and that {@code get()} additionally returns the decoded record.
      */
     @Test
-    void entriesAndIndexEntriesReadBackThroughTheRealStore() {
+    void getAndIndexEntriesReadBackThroughTheRealStore() {
         RocksBufferStore<String, String> store = new RocksBufferStore<>(newRocksStore(), serializer);
         ParsleyClock depsA = ParsleyClock.empty().observe(T1_ID, 0, 9);
         ParsleyClock depsB = ParsleyClock.empty().observe(T1_ID, 0, 3);
@@ -47,12 +47,10 @@ class RocksBufferStoreTest {
         long seqA = store.add(record(T1, 0, depsA), 100L);
         long seqB = store.add(record(T1, 1, depsB), 200L);
 
-        List<ParsleyBufferStore.Entry<String, String>> entries = store.entries();
-        assertEquals(2, entries.size(), "entries() must return both added records");
-        assertEquals(seqA, entries.get(0).sequence(), "entries() must be ordered by insertion sequence");
-        assertEquals(0L, entries.get(0).record().offset(), "first entry must decode the first added record");
-        assertEquals(depsA, entries.get(0).dependencies(), "first entry must carry its original dependencies");
-        assertEquals(100L, entries.get(0).bufferedAt(), "first entry must carry its bufferedAt");
+        ParsleyBufferStore.Entry<String, String> first = store.get(seqA);
+        assertEquals(0L, first.record().offset(), "the first sequence must decode the first added record");
+        assertEquals(depsA, first.dependencies(), "the first record must carry its original dependencies");
+        assertEquals(100L, first.bufferedAt(), "the first record must carry its bufferedAt");
 
         List<ParsleyBufferStore.IndexEntry> indexEntries = store.indexEntries();
         assertEquals(2, indexEntries.size(), "indexEntries() must return both added records' metadata");
@@ -85,7 +83,7 @@ class RocksBufferStoreTest {
         assertEquals(2, restored.size(), "size must be seeded from the pre-existing entries");
         long newSeq = restored.add(record(T1, 2, ParsleyClock.empty()), 30L);
         assertEquals(10L, newSeq, "the next sequence must continue past the highest pre-existing sequence (9)");
-        assertEquals(3, restored.entries().size(), "all three records must now be present");
+        assertEquals(3, restored.indexEntries().size(), "all three records must now be present");
     }
 
     /**
@@ -95,7 +93,7 @@ class RocksBufferStoreTest {
      * record without blocking startup.
      *
      * Asserts that {@code indexEntries()} does not throw and returns the correct dependencies, while
-     * {@code entries()} (which does decode the value) does throw for the same record.
+     * {@code get()} (which does decode the value) does throw for the same record.
      */
     @Test
     void indexEntriesSurvivesAnUndecodableValue() {
@@ -103,10 +101,10 @@ class RocksBufferStoreTest {
                 new ParsleySerializer<>(new ParsleyResolver<>(topic -> Serdes.String(), topic -> new ThrowingDeserializerSerde()));
         RocksBufferStore<String, String> store = new RocksBufferStore<>(newRocksStore(), poisonSerializer);
         ParsleyClock deps = ParsleyClock.empty().observe(T1_ID, 0, 3);
-        store.add(record(T1, 0, deps), 100L);
+        long seq = store.add(record(T1, 0, deps), 100L);
 
-        assertThrows(ParsleyBufferDeserializationException.class, store::entries,
-                "entries() decodes the value and must fail on a poison record");
+        assertThrows(ParsleyBufferDeserializationException.class, () -> store.get(seq),
+                "get() decodes the value and must fail on a poison record");
 
         List<ParsleyBufferStore.IndexEntry> indexEntries =
                 assertDoesNotThrow(store::indexEntries, "indexEntries() must not touch the value serde");

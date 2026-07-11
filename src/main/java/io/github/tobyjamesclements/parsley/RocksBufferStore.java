@@ -7,7 +7,6 @@ import org.jspecify.annotations.Nullable;
 import java.nio.ByteBuffer;
 import java.util.ArrayList;
 import java.util.Arrays;
-import java.util.Comparator;
 import java.util.List;
 import java.util.OptionalLong;
 
@@ -61,21 +60,6 @@ final class RocksBufferStore<K, V> implements ParsleyBufferStore<K, V> {
         byte[] value = store.get(sequence);
         if (value == null) return null;
         return toEntry(sequence, value);
-    }
-
-    @Override
-    public List<Entry<K, V>> entries() {
-        List<Entry<K, V>> entries = new ArrayList<>(size);
-        try (KeyValueIterator<Long, byte[]> all = store.all()) {
-            while (all.hasNext()) {
-                var kv = all.next();
-                entries.add(toEntry(kv.key, kv.value));
-            }
-        }
-        // Iteration order across store implementations is not guaranteed to be key order, so sort by
-        // sequence explicitly to hand back records in causal arrival order.
-        entries.sort(Comparator.comparingLong(Entry::sequence));
-        return entries;
     }
 
     @Override

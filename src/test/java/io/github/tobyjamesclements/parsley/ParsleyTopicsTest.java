@@ -41,9 +41,6 @@ class ParsleyTopicsTest {
                 return Map.of();
             }
 
-            @Override
-            public void createTopic(String name, int partitions) {
-            }
 
             @Override
             public Map<String, String> cleanupPolicies(List<String> topics) {

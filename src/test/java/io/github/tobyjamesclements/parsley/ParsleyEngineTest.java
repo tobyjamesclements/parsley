@@ -992,7 +992,6 @@ class ParsleyEngineTest {
         int indexEntriesCalls = 0;
         @Override public long add(ParsleyMessage<K, V> record, long bufferedAt) { return delegate.add(record, bufferedAt); }
         @Override public Entry<K, V> get(long sequence) { return delegate.get(sequence); }
-        @Override public List<Entry<K, V>> entries() { return delegate.entries(); }
         @Override public List<IndexEntry> indexEntries() { indexEntriesCalls++; return delegate.indexEntries(); }
         @Override public void remove(long sequence) { delegate.remove(sequence); }
         @Override public int size() { return delegate.size(); }
@@ -1011,7 +1010,6 @@ class ParsleyEngineTest {
         SwallowingRemoveBufferStore(long swallowedSequence) { this.swallowedSequence = swallowedSequence; }
         @Override public long add(ParsleyMessage<K, V> record, long bufferedAt) { return delegate.add(record, bufferedAt); }
         @Override public Entry<K, V> get(long sequence) { return delegate.get(sequence); }
-        @Override public List<Entry<K, V>> entries() { return delegate.entries(); }
         @Override public List<IndexEntry> indexEntries() { return delegate.indexEntries(); }
         @Override public void remove(long sequence) { if (sequence != swallowedSequence) delegate.remove(sequence); }
         @Override public int size() { return delegate.size(); }
@@ -1028,7 +1026,6 @@ class ParsleyEngineTest {
         private final MockBufferStore<K, V> delegate = new MockBufferStore<>();
         @Override public long add(ParsleyMessage<K, V> record, long bufferedAt) { return delegate.add(record, bufferedAt); }
         @Override public Entry<K, V> get(long sequence) { return delegate.get(sequence); }
-        @Override public List<Entry<K, V>> entries() { return delegate.entries(); }
         @Override public List<IndexEntry> indexEntries() {
             List<IndexEntry> reversed = new ArrayList<>(delegate.indexEntries());
             Collections.reverse(reversed);

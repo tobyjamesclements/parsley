@@ -37,21 +37,25 @@ record ParsleyHeader(String key, byte @Nullable [] value) {
     static final String WATERMARK = "_parsley_watermark";
 
     /**
-     * Header marking a record as a Parsley topology epoch-boundary marker. Written by the Topology
-     * Co-ordinator to every input channel; on consuming it a processor adopts the new epoch's lower
-     * bounds into its {@link ParsleyEpochState} (an overlapping-epoch transition). Like a watermark it
-     * carries no business payload and is never delivered to the user delegate or buffered; the value
-     * holds the serialised {@link ParsleyEpochBoundary}. The {@code _parsley_} prefix strips it from user view.
+     * Header marking a record as a Parsley topology epoch-boundary marker. Injected onto a
+     * source-layer task's own sinks from the coordination log ({@code
+     * ParsleyProcessor#adoptAndInjectBoundary}) and relayed edge by edge through the DAG by each
+     * consuming node (leaderless — there is no coordinator process); on consuming it a processor
+     * adopts the new epoch's lower bounds into its {@link ParsleyEpochState} (an overlapping-epoch
+     * transition). Like a watermark it carries no business payload and is never delivered to the user
+     * delegate or buffered; the value holds the serialised {@link ParsleyEpochBoundary}. The
+     * {@code _parsley_} prefix strips it from user view.
      */
     static final String EPOCH_BOUNDARY = "_parsley_epoch_boundary";
 
     /**
-     * Header marking a record as a Parsley topology epoch-snapshot marker — the first marker of the
-     * Mattern two-marker cut. Written by the Topology Co-ordinator to every input channel; on consuming
-     * it a processor publishes its current completeness frontier to the coordinator (see
-     * {@link ParsleyEpochSnapshotPublisher}), which merge-mins the published clocks into the next
-     * epoch's lower bounds. Like a watermark it carries no business payload and is never delivered to
-     * the user delegate or buffered; the {@code _parsley_} prefix strips it from user view.
+     * Header marking a record as a Parsley topology epoch-snapshot marker — the in-band cut that opens
+     * a snapshot round. Injected by a source-layer task when a round opens on the coordination log and
+     * relayed edge by edge through the DAG (leaderless — there is no coordinator process); on consuming
+     * it a processor publishes its current completeness frontier to the shared epoch-events log (see
+     * {@link ParsleyEpochSnapshotPublisher}), whose deterministic fold merge-mins the published clocks
+     * into the next epoch's lower bounds. Like a watermark it carries no business payload and is never
+     * delivered to the user delegate or buffered; the {@code _parsley_} prefix strips it from user view.
      */
     static final String EPOCH_SNAPSHOT = "_parsley_epoch_snapshot";
 

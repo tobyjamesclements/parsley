@@ -18,26 +18,22 @@ class ParsleyBufferStoreTest {
     private final ParsleyBufferStore<String, String> store = new MockBufferStore<>();
 
     /**
-     * Records are returned by {@code entries()} in insertion order, each carrying the
-     * decoded dependencies that were stamped on the record when it was buffered.
+     * {@code add} assigns strictly increasing insertion sequences, and {@code get(sequence)} returns
+     * the buffered record with the dependencies that were stamped on it when it was buffered.
      *
-     * Asserts that entries are returned in insertion order, that source offsets and
-     * dependencies match the originals, and that sequence numbers increase monotonically.
+     * Asserts sequences increase monotonically and each sequence resolves to its own record and
+     * original dependencies.
      */
     @Test
-    void entriesAreReturnedInInsertionOrderWithTheirDependencies() {
-        store.add(bufferedRecord(T1, 0, ParsleyClock.empty().observe(T1_ID, 0, 9)), 0L);
-        store.add(bufferedRecord(T1, 1, ParsleyClock.empty().observe(T1_ID, 0, 3)), 0L);
+    void addAssignsMonotonicSequencesAndGetReturnsEachRecordWithItsDependencies() {
+        long first = store.add(bufferedRecord(T1, 0, ParsleyClock.empty().observe(T1_ID, 0, 9)), 0L);
+        long second = store.add(bufferedRecord(T1, 1, ParsleyClock.empty().observe(T1_ID, 0, 3)), 0L);
 
-        List<ParsleyBufferStore.Entry<String, String>> entries = store.entries();
-
-        assertEquals(2, entries.size(), "store must return both added entries");
-        assertEquals(0L, entries.get(0).record().offset(), "first entry must be the first added record");
+        assertTrue(first < second, "earlier-added record must carry the lower sequence number");
+        assertEquals(0L, store.get(first).record().offset(), "first sequence must resolve to the first record");
         assertEquals(ParsleyClock.empty().observe(T1_ID, 0, 9),
-                entries.get(0).dependencies(), "first entry must carry its original dependencies");
-        assertEquals(1L, entries.get(1).record().offset(), "second entry must be the second added record");
-        assertTrue(entries.get(0).sequence() < entries.get(1).sequence(),
-                "earlier-added entry must carry the lower sequence number");
+                store.get(first).dependencies(), "first record must carry its original dependencies");
+        assertEquals(1L, store.get(second).record().offset(), "second sequence must resolve to the second record");
     }
 
     /**
@@ -49,44 +45,43 @@ class ParsleyBufferStoreTest {
      */
     @Test
     void removeDropsTheEntryAndDecrementsSize() {
-        store.add(bufferedRecord(T1, 0, ParsleyClock.empty().observe(T1_ID, 0, 1)), 0L);
-        store.add(bufferedRecord(T1, 1, ParsleyClock.empty().observe(T1_ID, 0, 5)), 0L);
+        long first = store.add(bufferedRecord(T1, 0, ParsleyClock.empty().observe(T1_ID, 0, 1)), 0L);
+        long second = store.add(bufferedRecord(T1, 1, ParsleyClock.empty().observe(T1_ID, 0, 5)), 0L);
         assertEquals(2, store.size(), "both records must be in the store before removal");
 
-        long firstSeq = store.entries().get(0).sequence();
-        store.remove(firstSeq);
+        store.remove(first);
 
         assertEquals(1, store.size(), "store size must decrement after removal");
-        assertEquals(1L, store.entries().get(0).record().offset(),
-                "removing the first entry must leave the second");
+        assertEquals(null, store.get(first), "the removed entry must be gone");
+        assertEquals(1L, store.get(second).record().offset(), "removing the first entry must leave the second");
     }
 
     /**
      * A freshly created buffer store contains no entries and reports a size of zero.
      *
-     * Asserts that {@code entries()} is empty and {@code size()} returns 0.
+     * Asserts that {@code indexEntries()} is empty and {@code size()} returns 0.
      */
     @Test
     void emptyStoreHasNoEntries() {
-        assertTrue(store.entries().isEmpty(), "new store must have no entries");
+        assertTrue(store.indexEntries().isEmpty(), "new store must have no entries");
         assertEquals(0, store.size(), "new store must report size 0");
     }
 
     /**
      * The {@code bufferedAt} timestamp passed to {@code add} is preserved and returned by both
-     * {@code get} and {@code entries}.
+     * {@code get} and {@code indexEntries}.
      *
      * Asserts that the stored entry's {@code bufferedAt} matches what was passed to {@code add}.
      */
     @Test
-    void bufferedAtRoundTripsThroughAddGetAndEntries() {
+    void bufferedAtRoundTripsThroughAddGetAndIndexEntries() {
         long bufferedAt = 12_345L;
         long seq = store.add(bufferedRecord(T1, 0,
                 ParsleyClock.empty().observe(T1_ID, 0, 1)), bufferedAt);
 
         assertEquals(bufferedAt, store.get(seq).bufferedAt(), "get() must return the bufferedAt passed to add()");
-        assertEquals(bufferedAt, store.entries().get(0).bufferedAt(),
-                "entries() must return the bufferedAt passed to add()");
+        assertEquals(bufferedAt, store.indexEntries().get(0).bufferedAt(),
+                "indexEntries() must return the bufferedAt passed to add()");
     }
 
     /**

@@ -1195,7 +1195,6 @@ class ParsleyProcessorsTopologyTest {
         ParsleyTopicAdmin incomplete = new ParsleyTopicAdmin() {
             @Override public Map<String, Uuid> topicIds(List<String> topics) { return Map.of(); }
             @Override public Map<String, Integer> partitionCounts(List<String> topics) { return Map.of(); }
-            @Override public void createTopic(String name, int partitions) {}
             @Override public Map<String, String> cleanupPolicies(List<String> topics) { return Map.of(); }
             @Override public void close() {}
         };
@@ -1230,7 +1229,6 @@ class ParsleyProcessorsTopologyTest {
                 throw new TimeoutException("no broker reachable");
             }
             @Override public Map<String, Integer> partitionCounts(List<String> topics) { return Map.of(); }
-            @Override public void createTopic(String name, int partitions) {}
             @Override public Map<String, String> cleanupPolicies(List<String> topics) { return Map.of(); }
             @Override public void close() {}
         };

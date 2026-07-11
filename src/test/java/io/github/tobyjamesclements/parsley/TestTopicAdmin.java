@@ -68,11 +68,6 @@ final class TestTopicAdmin implements ParsleyTopicAdmin {
     }
 
     @Override
-    public void createTopic(String name, int partitions) {
-        // no broker in tests
-    }
-
-    @Override
     public Map<String, String> cleanupPolicies(List<String> topics) {
         Map<String, String> policies = new HashMap<>();
         topics.forEach(t -> policies.put(t, cleanupPolicies.getOrDefault(t, "delete")));

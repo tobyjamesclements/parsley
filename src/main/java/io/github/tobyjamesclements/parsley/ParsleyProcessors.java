@@ -15,27 +15,15 @@ import java.util.Set;
 import java.util.function.Function;
 
 /**
- * Factory for {@link ParsleyProcessorSupplier} — the decorating causal processor you drop into a Kafka
- * Streams topology with {@code stream(...).process(...)}.
- *
- * <p>Obtain a {@link Builder} with {@link #builder(ProcessorSupplier)}, declare the buffer store with
- * {@link Builder#addBufferStore(String)}, register a {@link ParsleyBuffer} for every input topic, then
- * call {@link Builder#build()}:
- *
- * <pre>{@code
- * builder.stream(List.of("prices", "orders"), Consumed.with(Serdes.String(), orderSerde))
- *        .process(ParsleyProcessors.builder(userSupplier)
- *                .addBufferStore("parsley")
- *                .addBuffer(new ParsleyBuffer<>("prices", Serdes.String(), orderSerde))
- *                .addBuffer(new ParsleyBuffer<>("orders", Serdes.String(), orderSerde))
- *                .build())
- *        .to("output-topic");
- * }</pre>
+ * Internal factory for {@link ParsleyProcessorSupplier} — the causal decorator {@link CausalTopology}
+ * wires around each stage's user supplier when it assembles the real Kafka Streams topology. Not part
+ * of the public API: user code declares stages through {@link CausalStreamsBuilder}, whose
+ * {@code assemble} pass drives this builder (buffer store namespace, per-topic serdes, sink topics and
+ * node names, quiesce/coordination wiring). Package-private tests also drive it directly to exercise
+ * the decorator without the topology layer.
  *
  * <p>Each input topic's stable UUID is resolved from the broker automatically at startup, so a
  * {@link ParsleyBuffer} only carries the per-topic serdes the buffer round-trips held records with.
- *
- * <p>See {@link ParsleyProcessorSupplier} for the causal guarantee and its preconditions.
  */
 final class ParsleyProcessors {
 

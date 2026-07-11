@@ -6,6 +6,22 @@ All notable changes to this project are documented in this file. The format is b
 
 ## [Unreleased]
 
+### Changed
+- **Dead code and documentation residue swept out.** `ParsleyClock#missing` (its only production use
+  was a computed-then-discarded local; the buffer-hold log line now prints the gating frontier
+  restricted to the record's dependency coordinates instead), `ParsleyBufferStore#entries()` (no
+  production caller — the drain path reads `indexEntries()` + `get()`; tests reworked likewise),
+  `ParsleyTopicAdmin#createTopic` (orphaned when dead-letter topic provisioning was removed; its
+  Javadoc still referenced "the outbox topic"), and an uncalled `ParsleyProcessorSupplier` constructor
+  are deleted. Documentation residue from the retired coordinator-broadcast model is rewritten: the
+  `ParsleyHeader` epoch-marker constants and `ParsleyEpochSnapshotPublisher` no longer describe a
+  "Topology Co-ordinator" writing markers to every channel (the protocol is leaderless — source-layer
+  tasks inject, peers relay, the log's fold decides); `ParsleyProcessors`' class Javadoc no longer
+  reads as public-API documentation with an example no user can write (it is package-private wiring
+  driven by `CausalTopology`); and `ParsleyProcessor#stampFrontier`'s `volatile` is documented as
+  load-bearing (the epoch runtime's background thread reads it via `registerLocalCompleteness`), not
+  "belt-and-suspenders".
+
 ### Fixed
 - **A built `CausalTopology` was silently mutable through handles the user still held.**
   `CausalStreamsBuilder#build()` snapshotted the stage *list* but not the stages: calling

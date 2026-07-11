@@ -206,24 +206,6 @@ final class ParsleyClock {
     }
 
     /**
-     * Returns the causal gap between this clock (treated as dependencies) and {@code frontier}: for
-     * every coordinate this clock requires a higher offset than {@code frontier} has observed, the
-     * result records the <em>shortfall</em> ({@code required − observed}, counting an absent frontier
-     * coordinate as {@code -1} so the gap is {@code required + 1}). Empty exactly when
-     * {@code frontier.dominates(this)}. For diagnostics (buffer-hold logging).
-     */
-    ParsleyClock missing(ParsleyClock frontier) {
-        Map<Uuid, Map<Integer, Long>> gap = new HashMap<>();
-        forEach((topicId, partition, required) -> {
-            long observed = frontier.offsetFor(topicId, partition);
-            if (observed < required) {
-                gap.computeIfAbsent(topicId, k -> new HashMap<>()).put(partition, required - observed);
-            }
-        });
-        return new ParsleyClock(freeze(gap));
-    }
-
-    /**
      * Invokes {@code consumer} once per recorded {@code (topicId, partition, offset)} entry, in no
      * particular order.
      */
