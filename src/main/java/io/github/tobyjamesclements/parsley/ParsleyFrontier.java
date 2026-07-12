@@ -273,15 +273,23 @@ final class ParsleyFrontier {
     }
 
     /**
-     * Records an epoch-boundary marker received on channel {@code (channelTopicId, channelPartition)}
-     * and persists. A no-op unless this frontier's epoch is a live {@link ParsleyEpochState} (tests and
-     * the epoch-0 default hold a static {@link ParsleyEpoch}). See {@link #tryAdvanceEpoch}.
+     * Records an epoch-boundary marker received on channel {@code (channelTopicId, channelPartition)},
+     * persisting when it changed the state. Returns {@code true} if the marker was newly recorded — a
+     * fresh pending transition or a channel not yet seen for the current one (see
+     * {@link ParsleyEpochState#onBoundary}); the relaying caller forwards the marker downstream only on
+     * {@code true}. A no-op returning {@code false} unless this frontier's epoch is a live
+     * {@link ParsleyEpochState} (tests and the epoch-0 default hold a static {@link ParsleyEpoch}). See
+     * {@link #tryAdvanceEpoch}.
      */
-    void recordEpochMarker(long epochId, ParsleyClock lowerBounds, Uuid channelTopicId, int channelPartition) {
+    boolean recordEpochMarker(long epochId, ParsleyClock lowerBounds, Uuid channelTopicId, int channelPartition) {
         if (epoch instanceof ParsleyEpochState state) {
-            state.onBoundary(epochId, lowerBounds, channelTopicId, channelPartition);
-            persist();
+            boolean newlyRecorded = state.onBoundary(epochId, lowerBounds, channelTopicId, channelPartition);
+            if (newlyRecorded) {
+                persist();
+            }
+            return newlyRecorded;
         }
+        return false;
     }
 
     /**

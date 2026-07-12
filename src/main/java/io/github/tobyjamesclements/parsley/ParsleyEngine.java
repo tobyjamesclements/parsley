@@ -266,6 +266,22 @@ final class ParsleyEngine<K, V> {
     }
 
     /**
+     * {@link #onEpochBoundary}'s result: the ordinary {@link Outcome}, plus whether the marker was
+     * <em>newly recorded</em> for its epoch on its source channel. Unlike a watermark — whose relay is
+     * gated on the carried clock teaching the channel something new — a boundary marker must relay on
+     * its channel's first sight of it even when the carried completeness is nothing new (the idle,
+     * quiesced round: the boundary carries the same completeness the preceding snapshot already
+     * advertised). Gating boundary relay on this flag propagates the boundary to every channel exactly
+     * once while a duplicate on an already-seen channel records nothing new and does not relay, so a
+     * cyclic topology still cannot ping-pong it; see {@link ParsleyProcessor}'s marker handlers.
+     *
+     * @param <K> the record key type
+     * @param <V> the record value type
+     */
+    record BoundaryOutcome<K, V>(Outcome<K, V> outcome, boolean markerWasNew) {
+    }
+
+    /**
      * The causal broadcast <em>receive</em> event (see this class's Javadoc): admits one incoming record,
      * delivering it at once if its dependencies are already satisfied, buffering it otherwise.
      *
@@ -329,21 +345,23 @@ final class ParsleyEngine<K, V> {
      * {@link ParsleyEpochState}, then closes the transition window if it is now ready (marker on every
      * channel and the delivered frontier dominating the new floor), draining any records the raised
      * floor releases. Mirrors {@link #onWatermark}. The marker itself is never delivered or buffered;
-     * the caller ({@link ParsleyProcessor}) emits a downstream watermark so the completeness change
-     * propagates, but never re-emits the marker (the coordinator broadcasts it to every channel).
+     * the caller ({@link ParsleyProcessor}) relays the marker downstream so the boundary propagates
+     * edge by edge — but only when it was {@link BoundaryOutcome#markerWasNew() newly recorded} here, so
+     * a cyclic topology cannot ping-pong it.
      *
      * @param boundary        the decoded boundary (epoch id + new lower bounds)
      * @param channelTopicId  the topic UUID of the channel the marker arrived on
      * @param channelPartition the partition of that channel
-     * @return the records released by a resulting window close
+     * @return the records released by a resulting window close, plus whether the marker was newly recorded
      */
-    Outcome<K, V> onEpochBoundary(ParsleyEpochBoundary boundary, Uuid channelTopicId, int channelPartition) {
-        frontier.recordEpochMarker(boundary.epochId(), boundary.lowerBounds(), channelTopicId, channelPartition);
+    BoundaryOutcome<K, V> onEpochBoundary(ParsleyEpochBoundary boundary, Uuid channelTopicId, int channelPartition) {
+        boolean markerWasNew =
+                frontier.recordEpochMarker(boundary.epochId(), boundary.lowerBounds(), channelTopicId, channelPartition);
         List<ParsleyMessage<K, V>> out = new ArrayList<>();
         if (frontier.tryAdvanceEpoch()) {
             drainSatisfied(out);
         }
-        return new Outcome<>(out);
+        return new BoundaryOutcome<>(new Outcome<>(out), markerWasNew);
     }
 
     /**

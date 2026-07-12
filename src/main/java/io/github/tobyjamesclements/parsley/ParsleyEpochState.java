@@ -112,8 +112,14 @@ final class ParsleyEpochState implements ParsleyEpoch {
      * Records an epoch-boundary marker received on one input channel. Monotonic: a marker for an epoch
      * at or below the settled epoch is a stale/duplicate re-delivery and ignored; a marker for a higher
      * epoch than the current pending one supersedes it (nested boundaries collapse to the latest, which
-     * is safe because the floor advances monotonically). Returns {@code true} if this began a new
-     * pending transition (the caller should persist).
+     * is safe because the floor advances monotonically). Returns {@code true} if this marker was
+     * <em>newly recorded</em> — it began a new pending transition, or it added a channel this epoch's
+     * pending transition had not yet seen a marker on. A duplicate marker on a channel already recorded
+     * for the current pending epoch returns {@code false}. The caller persists on {@code true} and, in a
+     * relaying topology, forwards the marker downstream only when it is newly recorded: this is what
+     * stops a cyclic topology from ping-ponging the same marker forever while still guaranteeing every
+     * channel's first sight of the boundary propagates — even when the marker's carried completeness
+     * clock taught the channel nothing new (an idle, quiesced round; see {@link ParsleyProcessor}).
      */
     boolean onBoundary(long epochId, ParsleyClock lowerBounds, Uuid channelTopicId, int channelPartition) {
         if (epochId <= settledEpochId) {
@@ -125,12 +131,13 @@ final class ParsleyEpochState implements ParsleyEpoch {
             began = true;
             log.info("Epoch transition started: epoch {} pending (floor {})", epochId, lowerBounds);
         }
+        boolean channelIsNew = false;
         if (epochId == pending.epochId) {
-            pending.markersSeen.add(new CoordKey(channelTopicId, channelPartition));
+            channelIsNew = pending.markersSeen.add(new CoordKey(channelTopicId, channelPartition));
             log.info("Epoch {} boundary marker received on {}-{} ({} channel(s) seen)",
                     epochId, channelTopicId, channelPartition, pending.markersSeen.size());
         }
-        return began;
+        return began || channelIsNew;
     }
 
     /**

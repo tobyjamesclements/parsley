@@ -20,6 +20,19 @@ All notable changes to this project are documented in this file. The format is b
   stale `ParsleyKafkaEpochTransport` class name in the pom's coverage note is corrected.
 
 ### Fixed
+- **An idle-round epoch transition stalled forever at the second layer.** A relaying stage forwarded a
+  received epoch-boundary marker downstream only when the marker's *carried completeness clock* advanced
+  the channel — the same "clock-invisible markers" gate that (correctly) governs watermark and snapshot
+  relay. But a boundary re-carries the completeness the preceding snapshot already advertised, so on a
+  quiesced round with no traffic the boundary teaches the channel nothing new and was silently not
+  relayed. The downstream then never saw the marker on that channel, its marker-on-every-channel
+  transition window never closed, and the epoch floor never advanced — precisely in the idle,
+  maintenance-window case topology epochs exist for, and unrecoverable (non-source tasks have no
+  log-driven boundary fallback). A boundary now relays on its channel's *first sight* of it regardless
+  of the carried clock (`ParsleyEpochState#onBoundary` reports whether the `(epoch, channel)` marker was
+  newly recorded, surfaced through `ParsleyEngine.BoundaryOutcome#markerWasNew`), while a duplicate on an
+  already-seen channel still records nothing new and does not relay, so a cyclic topology cannot
+  ping-pong it. A boundary is boundary news, not merely clock news.
 - **`CausalStreams#close()` could hang forever on a dead coordinated instance.** The quiesce drain
   wait already ended when the streams instance left `RUNNING`/`REBALANCING`, but the coordination
   decommission's phase-1 drain wait had no such escape: an instance that died in `ERROR` with a

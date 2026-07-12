@@ -183,6 +183,138 @@ class ParsleyProcessorEpochBoundaryTest {
                         + "swallowing the delegate's failure a permanent record loss");
     }
 
+    /**
+     * The idle-round regression for B1: an epoch-boundary marker whose carried completeness the channel
+     * already dominates — the quiesced-maintenance-window case epochs exist for, where the boundary
+     * re-carries the completeness the preceding snapshot already advertised and so teaches the channel
+     * nothing new — must STILL be relayed downstream exactly once on its channel's first sight of it.
+     * Gating the relay on the carried clock alone (as watermark and snapshot relay do) would strand the
+     * transition here forever: the downstream never sees the marker on this channel, so its
+     * marker-on-every-channel window never closes and the floor never advances (silent, permanent).
+     *
+     * <p>Modelled with an empty carried completeness clock — exactly what a topology with zero traffic
+     * during the round produces — so {@code channelAdvanced} is false yet the marker is newly recorded.
+     *
+     * Asserts the delegate never runs, nothing is buffered, and exactly one boundary marker is relayed
+     * on the same key despite the carried completeness advancing nothing.
+     */
+    @Test
+    void idleRoundBoundaryRelaysOnFirstSightEvenWhenItsCarriedCompletenessTeachesNothingNew() {
+        TestKeyValueStore<String, byte[]> frontierStore =
+                new TestKeyValueStore<String, byte[]>(Comparator.naturalOrder(), "frontier");
+        TestKeyValueStore<Long, byte[]> bufferStore =
+                new TestKeyValueStore<Long, byte[]>(Comparator.naturalOrder(), "buffer");
+        TestKeyValueStore<byte[], byte[]> candidateIndexStore =
+                new TestKeyValueStore<byte[], byte[]>(Arrays::compareUnsigned, "candidate-index");
+        TestKeyValueStore<byte[], byte[]> forwardedIndexStore =
+                new TestKeyValueStore<byte[], byte[]>(Arrays::compareUnsigned, "forwarded-index");
+
+        List<String> processed = new ArrayList<>();
+        Processor<String, String, String, String> delegate = new Processor<>() {
+            @Override public void init(ProcessorContext<String, String> context) {}
+            @Override public void process(Record<String, String> record) { processed.add(record.value()); }
+        };
+        ParsleySerializer<String, String> serializer =
+                new ParsleySerializer<>(new ParsleyResolver<>(t -> Serdes.String(), t -> Serdes.String()));
+        ParsleyProcessor<String, String, String, String> processor = new ParsleyProcessor<>(
+                delegate, serializer,
+                "frontier", "buffer", "candidate-index", "forwarded-index",
+                Set.of("t1"), Set.of(), List.of(),
+                configs -> ADMIN, ParsleyConfig.from(new Properties()), null);
+
+        MockProcessorContext<String, String> context = new MockProcessorContext<>();
+        context.setCurrentSystemTimeMs(1L);
+        context.addStateStore(frontierStore);
+        context.addStateStore(bufferStore);
+        context.addStateStore(candidateIndexStore);
+        context.addStateStore(forwardedIndexStore);
+        context.addStateStore(new ParsleyCommittedCompleteness("frontier-commit-hook"));
+        processor.init(context);
+
+        // An epoch-boundary marker on t1 carrying EMPTY completeness: the channel (an empty clock
+        // dominates an empty clock) learns nothing new from it, exactly as on an idle, quiesced round.
+        context.setRecordMetadata("t1", 0, 0);
+        ParsleyEpochBoundary boundary = new ParsleyEpochBoundary(1, ParsleyClock.empty().observe(T1_ID, 0, 10));
+        Headers headers = ParsleyHeader.mutableHeaders();
+        headers.add(ParsleyHeader.EPOCH_BOUNDARY, boundary.toBytes());
+        headers.add(ParsleyHeader.CAUSAL_DEPENDENCIES, ParsleyClock.empty().toBytes());
+        processor.process(new Record<>("k", null, 0L, headers));
+
+        assertTrue(processed.isEmpty(), "the epoch-boundary marker must never reach the user delegate");
+        assertEquals(0, bufferStore.approximateNumEntries(), "the marker must never be buffered");
+
+        List<? extends MockProcessorContext.CapturedForward<? extends String, ? extends String>> forwarded =
+                context.forwarded();
+        assertEquals(1, forwarded.size(),
+                "the boundary must relay on its channel's first sight even when its carried completeness "
+                        + "taught the channel nothing new — otherwise the downstream transition stalls forever");
+        assertTrue(hasHeader(forwarded.get(0).record(), ParsleyHeader.EPOCH_BOUNDARY),
+                "the relayed record must be the boundary marker");
+    }
+
+    /**
+     * Cycle-safety: a duplicate of the same epoch's boundary re-delivered on a channel already recorded
+     * for that pending transition records nothing new and must NOT relay again. This is what keeps a
+     * cyclic topology from ping-ponging the same marker forever once the fix for B1 relays a boundary on
+     * first sight regardless of the carried clock.
+     *
+     * Asserts that after the first boundary relays once, a second delivery of the same boundary on the
+     * same channel produces no further relay.
+     */
+    @Test
+    void aDuplicateBoundaryOnAnAlreadySeenChannelDoesNotRelayAgain() {
+        TestKeyValueStore<String, byte[]> frontierStore =
+                new TestKeyValueStore<String, byte[]>(Comparator.naturalOrder(), "frontier");
+        TestKeyValueStore<Long, byte[]> bufferStore =
+                new TestKeyValueStore<Long, byte[]>(Comparator.naturalOrder(), "buffer");
+        TestKeyValueStore<byte[], byte[]> candidateIndexStore =
+                new TestKeyValueStore<byte[], byte[]>(Arrays::compareUnsigned, "candidate-index");
+        TestKeyValueStore<byte[], byte[]> forwardedIndexStore =
+                new TestKeyValueStore<byte[], byte[]>(Arrays::compareUnsigned, "forwarded-index");
+
+        Processor<String, String, String, String> delegate = new Processor<>() {
+            @Override public void init(ProcessorContext<String, String> context) {}
+            @Override public void process(Record<String, String> record) {}
+        };
+        ParsleySerializer<String, String> serializer =
+                new ParsleySerializer<>(new ParsleyResolver<>(t -> Serdes.String(), t -> Serdes.String()));
+        ParsleyProcessor<String, String, String, String> processor = new ParsleyProcessor<>(
+                delegate, serializer,
+                "frontier", "buffer", "candidate-index", "forwarded-index",
+                Set.of("t1"), Set.of(), List.of(),
+                configs -> ADMIN, ParsleyConfig.from(new Properties()), null);
+
+        MockProcessorContext<String, String> context = new MockProcessorContext<>();
+        context.setCurrentSystemTimeMs(1L);
+        context.addStateStore(frontierStore);
+        context.addStateStore(bufferStore);
+        context.addStateStore(candidateIndexStore);
+        context.addStateStore(forwardedIndexStore);
+        context.addStateStore(new ParsleyCommittedCompleteness("frontier-commit-hook"));
+        processor.init(context);
+
+        ParsleyEpochBoundary boundary = new ParsleyEpochBoundary(1, ParsleyClock.empty().observe(T1_ID, 0, 10));
+
+        // First sight on t1@0: relays (newly recorded).
+        context.setRecordMetadata("t1", 0, 0);
+        Headers first = ParsleyHeader.mutableHeaders();
+        first.add(ParsleyHeader.EPOCH_BOUNDARY, boundary.toBytes());
+        first.add(ParsleyHeader.CAUSAL_DEPENDENCIES, ParsleyClock.empty().toBytes());
+        processor.process(new Record<>("k", null, 0L, first));
+        assertEquals(1, context.forwarded().size(), "the boundary must relay once on its first sight");
+
+        // Same epoch's boundary re-delivered on the same channel (t1@1): records nothing new, must not relay.
+        context.setRecordMetadata("t1", 0, 1);
+        Headers duplicate = ParsleyHeader.mutableHeaders();
+        duplicate.add(ParsleyHeader.EPOCH_BOUNDARY, boundary.toBytes());
+        duplicate.add(ParsleyHeader.CAUSAL_DEPENDENCIES, ParsleyClock.empty().toBytes());
+        processor.process(new Record<>("k", null, 0L, duplicate));
+
+        assertEquals(1, context.forwarded().size(),
+                "a duplicate boundary on an already-seen channel records nothing new and must not relay "
+                        + "again — otherwise a cyclic topology would ping-pong it forever");
+    }
+
     private static boolean hasHeader(Record<? extends String, ? extends String> record, String key) {
         for (Header h : record.headers()) {
             if (key.equals(h.key())) {

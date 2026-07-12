@@ -40,9 +40,9 @@ import java.util.function.Function;
  * otherwise be lost). The frontier-before-forward invariant from {@link ParsleyEngine} is preserved
  * on both the admit and punctuator paths.
  *
- * <p><strong>Clock-invisible markers.</strong> A received watermark or epoch marker
- * ({@link #handleWatermark}, {@link #handleEpochBoundary}, {@link #handleEpochSnapshot}) is relayed
- * downstream only when it genuinely taught this node's channel something it did not already know
+ * <p><strong>Clock-invisible markers.</strong> A received watermark or epoch-snapshot marker
+ * ({@link #handleWatermark}, {@link #handleEpochSnapshot}) is relayed downstream only when it genuinely
+ * taught this node's channel something it did not already know
  * ({@link ParsleyEngine.WatermarkOutcome#channelAdvanced()}, via {@link #advanceChannelClockFromMarker}).
  * A marker's own delivery is never itself treated as a reason to relay further — unlike a genuine
  * business record, whose delivery always unconditionally causes this node to emit something on its own
@@ -53,6 +53,15 @@ import java.util.function.Function;
  * dependency can only ever be created after something real has already been observed, so a marker that
  * taught nothing new could not have just formed a new dependency on that non-event either — skipping
  * the re-emission strands nothing.
+ *
+ * <p>The <strong>epoch-boundary</strong> marker ({@link #handleEpochBoundary}) is the one exception: it
+ * relays on its channel's first sight of the boundary regardless of whether the carried clock advanced
+ * anything ({@link ParsleyEngine.BoundaryOutcome#markerWasNew()} {@code || channelAdvanced}). A boundary
+ * re-carries the completeness the preceding snapshot already taught the channel, so on an idle, quiesced
+ * round it teaches nothing new — but the downstream still needs the marker on this channel to close its
+ * own marker-on-every-channel transition window. The per-epoch, per-channel newly-recorded signal fires
+ * exactly once per channel (a duplicate records nothing new), so a cycle still cannot ping-pong it. A
+ * boundary is boundary news, not merely clock news.
  *
  * <p><strong>Passthrough topics.</strong> {@code passthroughTopics} (a subset of {@code topics}, wired
  * by {@link CausalTopology} from {@code parsley.coordination.domain-topics}) names a coordinated
@@ -651,13 +660,21 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
      * Handles a received epoch-boundary marker: decodes it, records it on its source channel and (if the
      * transition is now ready) closes the epoch window in the engine, delivers any records the raised
      * floor releases, and <strong>relays the marker downstream</strong> on the same key so the boundary
-     * propagates edge by edge through the DAG (the leaderless in-band model) — but only when the marker
-     * genuinely taught this node's channel something new ({@link #advanceChannelClockFromMarker}). A
-     * marker's own delivery is never itself a reason to relay further, or a topology cycle would
-     * ping-pong the same marker forever (clock-invisible markers; see the class Javadoc). The relayed
-     * marker carries this node's completeness, so a single downstream record both adopts the boundary
-     * and advances the channel clock. The marker is never forwarded to the user delegate and never
-     * buffered.
+     * propagates edge by edge through the DAG (the leaderless in-band model). It relays when the marker
+     * was newly recorded for its epoch on this channel ({@link ParsleyEngine.BoundaryOutcome#markerWasNew()})
+     * <em>or</em> its carried completeness taught this channel something new
+     * ({@link #advanceChannelClockFromMarker}).
+     *
+     * <p>Boundary relay cannot gate on the clock signal alone the way watermark and snapshot relay do
+     * (clock-invisible markers; see the class Javadoc). A boundary re-carries the very completeness the
+     * preceding snapshot marker already advertised, so on an idle, quiesced round the boundary teaches
+     * the channel nothing new and {@code channelAdvanced} is false — yet the downstream still needs the
+     * marker on this channel to close its own marker-on-every-channel window. Gating on
+     * {@code markerWasNew} propagates the boundary to every channel exactly once (a duplicate on an
+     * already-seen channel records nothing new and does not relay), so a topology cycle still cannot
+     * ping-pong it. A boundary is boundary news, not merely clock news. The relayed marker carries this
+     * node's completeness, so a single downstream record both adopts the boundary and advances the
+     * channel clock. The marker is never forwarded to the user delegate and never buffered.
      */
     private void handleEpochBoundary(Record<KIn, VIn> record) {
         RecordMetadata meta = requireRecordMetadata();
@@ -686,13 +703,20 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
         // (draining anything it releases) before driving the transition, so one record does both.
         boolean channelAdvanced = advanceChannelClockFromMarker(record);
 
-        ParsleyEngine.Outcome<KIn, VIn> outcome = engine().onEpochBoundary(boundary, topicId, partition);
-        deliver(outcome.delivered());
+        ParsleyEngine.BoundaryOutcome<KIn, VIn> outcome = engine().onEpochBoundary(boundary, topicId, partition);
+        deliver(outcome.outcome().delivered());
 
         // Relay the boundary downstream on the marker's key so it stays on the same partition lane and
-        // every downstream task transitions its owned partitions, only when this marker taught this
-        // channel something new — see the class Javadoc's clock-invisible-markers discussion.
-        if (channelAdvanced) {
+        // every downstream task transitions its owned partitions. Relay when the marker was newly
+        // recorded for its epoch on this channel OR its carried completeness taught this channel
+        // something new. The clock signal alone is not enough: on an idle, quiesced round the boundary
+        // carries the same completeness the preceding snapshot already advertised, so channelAdvanced is
+        // false and gating on it alone would strand the transition at this node forever — the downstream
+        // never sees the marker on this channel, so its marker-on-every-channel window never closes.
+        // markerWasNew fires exactly once per channel per epoch (a duplicate records nothing new), so a
+        // cyclic topology still cannot ping-pong it. See the class Javadoc's clock-invisible-markers
+        // discussion, which governs watermark relay; a boundary is boundary news, not just clock news.
+        if (outcome.markerWasNew() || channelAdvanced) {
             forwardEpochBoundary(record.key(), boundaryBytes);
         }
     }
@@ -863,8 +887,8 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
         int partition = context.taskId().partition();
         List<ParsleyMessage<KIn, VIn>> released = new ArrayList<>();
         for (Uuid topicId : externalSourceTopicIds) {
-            ParsleyEngine.Outcome<KIn, VIn> outcome = engine().onEpochBoundary(boundary, topicId, partition);
-            released.addAll(outcome.delivered());
+            ParsleyEngine.BoundaryOutcome<KIn, VIn> outcome = engine().onEpochBoundary(boundary, topicId, partition);
+            released.addAll(outcome.outcome().delivered());
         }
         deliver(released);
         forwardEpochBoundary(lastSeenKey, boundary.toBytes());

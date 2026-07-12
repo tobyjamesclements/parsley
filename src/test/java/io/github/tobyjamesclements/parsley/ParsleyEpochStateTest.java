@@ -107,6 +107,27 @@ class ParsleyEpochStateTest {
     }
 
     /**
+     * {@code onBoundary} reports whether the marker was <em>newly recorded</em> — the signal the relaying
+     * processor gates its downstream boundary relay on (fixing B1: relay on first sight of the boundary
+     * even when its carried completeness taught the channel nothing new). It is true when a marker begins
+     * a transition and true again for each new channel under that transition, but false for a duplicate
+     * on a channel already seen — so a cyclic topology relays each boundary exactly once per channel and
+     * never ping-pongs it.
+     */
+    @Test
+    void onBoundaryReportsWhetherTheMarkerWasNewlyRecorded() {
+        ParsleyEpochState state = new ParsleyEpochState();
+        ParsleyClock floor = ParsleyClock.empty().observe(T1_ID, 0, 20);
+
+        assertTrue(state.onBoundary(1, floor, T1_ID, 0),
+                "the first marker begins the transition and is newly recorded");
+        assertFalse(state.onBoundary(1, floor, T1_ID, 0),
+                "a duplicate on the same channel records nothing new — the cycle-safety guarantee");
+        assertTrue(state.onBoundary(1, floor, T2_ID, 0),
+                "a marker on a second channel under the same epoch is newly recorded");
+    }
+
+    /**
      * The state round-trips through its {@link ParsleyEpochState#toBytes serialised} form, including an
      * in-progress transition with its pending floor and per-channel markers — so a mid-window restart
      * resumes the transition rather than losing it.
