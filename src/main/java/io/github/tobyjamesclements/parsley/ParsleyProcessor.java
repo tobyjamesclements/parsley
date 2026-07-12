@@ -173,6 +173,11 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
     private ParsleyClock epochSeedFloor = ParsleyClock.empty();
     private long epochSeedEpochId;
     private ParsleyMetrics.Wired wiredMetrics;
+    // Set once delegate.init() has returned, so close() closes the delegate only if it was actually
+    // initialised. init() can throw before delegate.init() (e.g. an interrupted awaitJoinCommit on a
+    // clean shutdown mid-join), after which Streams still calls close(); closing an un-inited delegate
+    // — or dereferencing the still-null wiredMetrics — would mask the real init failure. See close().
+    private boolean delegateInitialized;
     // The stamping proxy context handed to the delegate. Held here so deliver() can check the
     // per-record forward count and emit a watermark when the delegate forwarded nothing.
     private ParsleyProcessorContext<KOut, VOut> stampingContext;
@@ -341,6 +346,7 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
         this.stampingContext = new ParsleyProcessorContext<>(
                 context, () -> stampFrontier, () -> Optional.ofNullable(deliveryMetadata), sinkNodeNames);
         delegate.init(stampingContext);
+        this.delegateInitialized = true;
 
         // Drain any records that became satisfiable between the last committed frontier and the last
         // committed buffer-removal (the at-least-once window) once, against the buffer restored from a
@@ -542,8 +548,19 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
         if (epochRuntime != null) {
             epochRuntime.unregisterMember(memberId);
         }
-        delegate.close();
-        wiredMetrics.close(context.metrics());
+        // init() may have thrown before it finished — most plausibly an interrupted awaitJoinCommit
+        // unwinding a clean shutdown mid-join (see ParsleyCoordination#awaitJoinCommit) — yet Streams
+        // still calls close(). Close only what init() actually set up: closing an un-inited delegate, or
+        // dereferencing the still-null wiredMetrics, would throw here and mask the real init failure with
+        // a spurious NPE. (quiesce/epochRuntime cleanup above is already safe on a partial init: the
+        // quiesce sets no-op on an unregistered id, and epochRuntime is set together with the join it
+        // undoes.)
+        if (delegateInitialized) {
+            delegate.close();
+        }
+        if (wiredMetrics != null) {
+            wiredMetrics.close(context.metrics());
+        }
     }
 
     private void deliver(List<ParsleyMessage<KIn, VIn>> admitted) {

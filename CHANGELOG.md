@@ -20,6 +20,14 @@ All notable changes to this project are documented in this file. The format is b
   stale `ParsleyKafkaEpochTransport` class name in the pom's coverage note is corrected.
 
 ### Fixed
+- **`close()` after an interrupted `init()` NPE'd and masked the real failure.** The unbounded
+  topology-epoch join wait in `init()` is interrupted on a clean shutdown mid-join, which unwinds it with
+  an `IllegalStateException` — but Kafka Streams still calls `close()` on a task whose `init()` threw. The
+  old `close()` unconditionally dereferenced the still-null `wiredMetrics` (NPE) and called `close()` on a
+  delegate it had never initialised, burying the genuine interrupt cause. `close()` now tears down only
+  what `init()` actually set up: it closes the delegate only once `delegate.init()` has returned and the
+  metrics only once they are wired. (The quiesce and epoch-runtime cleanup were already safe on a partial
+  init.)
 - **A marker with a corrupt or absent completeness header permanently gapped the channel frontier.**
   The epoch snapshot and boundary handlers folded a received marker through a path that, on a missing or
   undecodable `parsley-causal-dependencies` header, returned early *without delivering the marker's own
