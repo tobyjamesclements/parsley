@@ -15,11 +15,7 @@ import org.apache.kafka.common.serialization.Serdes;
 import org.apache.kafka.common.serialization.StringDeserializer;
 import org.apache.kafka.common.serialization.StringSerializer;
 import org.apache.kafka.streams.KafkaStreams;
-import org.apache.kafka.streams.StreamsBuilder;
 import org.apache.kafka.streams.StreamsConfig;
-import org.apache.kafka.streams.Topology;
-import org.apache.kafka.streams.kstream.Consumed;
-import org.apache.kafka.streams.kstream.Produced;
 import org.apache.kafka.streams.processor.api.Processor;
 import org.apache.kafka.streams.processor.api.ProcessorContext;
 import org.apache.kafka.streams.processor.api.ProcessorSupplier;
@@ -41,6 +37,7 @@ import java.util.Map;
 import java.util.Properties;
 import java.util.Set;
 import java.util.UUID;
+import java.util.function.UnaryOperator;
 
 import static org.awaitility.Awaitility.await;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -50,6 +47,22 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * coordinated topology blocks until an epoch computed without it commits, then serves</strong>. Modelled
  * the way Kafka Streams actually admits a new node: a redeploy that adds a new stage (a fresh subtopology,
  * with its own task id, so no member-id collision with the running stage).
+ *
+ * <p>The pipeline {@code t1 -> A -> mid -> B -> out} is a linear DAG, so it is <em>not</em> a full mesh:
+ * running member A consumes {@code t1} and produces {@code mid}, and a fresh downstream stage B consumes
+ * {@code mid} while carrying dependencies on {@code t1} it cannot observe. The coordinated domain
+ * ({@code parsley.coordination.domain-topics = t1,mid,out}) makes {@link CausalTopology#assemble}
+ * auto-wire a passthrough source for the one domain topic each stage does not otherwise touch, so every
+ * stage's own subscriptions cover the whole domain and the full-mesh precondition an epoch commits under
+ * ({@link ParsleyEpochLog#isFullMeshSatisfied()}) is satisfied.
+ *
+ * <p>Stage A and stage B run as <strong>separate applications</strong> (distinct {@code application.id}s)
+ * sharing the one epoch-events log — the way Kafka Streams actually admits a new node, and the only way
+ * the domain topic passthrough can wire without colliding with a stage's real source (a single app that
+ * both produced {@code mid} and passthrough-consumed it, or sourced {@code t1} in one subtopology and
+ * passthrough-sourced it in another, would register the same topic twice). Unlike
+ * {@link ParsleyCoordinationMultiAppIT}, which starts both apps together, stage B here joins a domain A
+ * has <em>already</em> established an epoch in, so it exercises the block-until-admitted join path.
  */
 @Testcontainers(disabledWithoutDocker = true)
 class ParsleyCoordinationJoinerIT {
@@ -64,114 +77,92 @@ class ParsleyCoordinationJoinerIT {
     private static final String EPOCH_EVENTS = "epoch-events";
 
     /**
-     * Phase 1 runs a single stage (t1 -> A -> mid) and establishes an epoch with a non-empty floor. Phase
-     * 2 redeploys with a second stage added (mid -> B -> out): B's tasks are fresh, so on init they block
-     * until an epoch that post-dates their join commits (A, still a running member, publishes for it),
-     * then replay {@code mid} from the start and serve {@code out}. Asserts the epoch advances past phase
-     * 1 (B's join drove a new commit) and B serves its sink.
+     * Phase 1 runs stage A alone (t1 -> A -> mid) and establishes an epoch. Phase 2 starts stage B
+     * (mid -> B -> out) as a separate app into the still-running domain: B's task is fresh, so on init it
+     * blocks until an epoch that post-dates its join commits (A, still a running member, publishes for it),
+     * then replays {@code mid} from the start and serves {@code out}. Asserts the epoch advances past
+     * phase 1 (B's join drove a new commit) and B serves its sink.
      */
     @Test
     void aNodeAddedToARunningTopologyBlocksUntilItsEpochCommitsThenServes() throws Exception {
         String bootstrap = kafka.getBootstrapServers();
         createTopics(bootstrap, IN, MID, OUT, EPOCH_EVENTS);
-        String appId = "joiner-it-" + UUID.randomUUID();
+        String appIdA = "joiner-a-" + UUID.randomUUID();
+        String appIdB = "joiner-b-" + UUID.randomUUID();
+        Path stateDirA = Files.createTempDirectory("parsley-joiner-a");
+        Path stateDirB = Files.createTempDirectory("parsley-joiner-b");
 
-        // Phase 1: run stage A alone and establish an epoch (non-empty floor from delivered t1 records).
-        long epochAfterPhase1;
-        ParsleyCoordination coordination1 = ParsleyCoordination.create(EPOCH_EVENTS);
-        Path stateDir1 = Files.createTempDirectory("parsley-joiner-1");
-        try (KafkaStreams streams = new KafkaStreams(stageAOnly(coordination1), streamsConfig(bootstrap, appId, stateDir1))) {
-            streams.start();
-            await().atMost(Duration.ofSeconds(30)).until(() -> streams.state() == KafkaStreams.State.RUNNING);
+        // Stage A runs for the whole test; stage B joins the domain A has already established an epoch in.
+        try (CausalStreams appA = new CausalStreams(stageATopology(), streamsConfig(bootstrap, appIdA, stateDirA))) {
+            appA.start();
+            await().atMost(Duration.ofSeconds(30)).until(() -> appA.state() == KafkaStreams.State.RUNNING);
             try (KafkaProducer<String, String> producer = new KafkaProducer<>(producerConfig(bootstrap))) {
                 for (int i = 0; i < 3; i++) {
                     producer.send(stampEmptyDeps(new ProducerRecord<>(IN, "k", "v" + i))).get();
                 }
             }
-            requestUntilCommitted(coordination1, bootstrap, 1L);
-            requestUntilCommitted(coordination1, bootstrap, 2L);
-            epochAfterPhase1 = highestCommittedEpoch(bootstrap);
-        } finally {
-            coordination1.close();
-        }
-        assertTrue(epochAfterPhase1 >= 2, "phase 1 must establish an epoch B can join into");
+            requestUntilCommitted(appA, bootstrap, 1L);
+            requestUntilCommitted(appA, bootstrap, 2L);
+            long epochAfterPhase1 = highestCommittedEpoch(bootstrap);
+            assertTrue(epochAfterPhase1 >= 2, "phase 1 must establish an epoch B can join into");
 
-        // Phase 2: redeploy with stage B added. A restores (running member); B is a fresh joiner.
-        ParsleyCoordination coordination2 = ParsleyCoordination.create(EPOCH_EVENTS);
-        Path stateDir2 = Files.createTempDirectory("parsley-joiner-2");
-        try (KafkaStreams streams = new KafkaStreams(stageAPlusB(coordination2), streamsConfig(bootstrap, appId, stateDir2))) {
-            streams.start();
-            // Do not await RUNNING: while B's task blocks in init (the joiner wait), the instance stays in
-            // REBALANCING. A runs on its own StreamThread (num.stream.threads=2) and publishes for B's
-            // round, so B's join drives the epoch past where phase 1 left it — that is the unblock signal.
-            await().atMost(Duration.ofSeconds(120))
-                    .until(() -> highestCommittedEpoch(bootstrap) > epochAfterPhase1);
+            // Phase 2: stage B joins as a fresh member of the running domain.
+            try (CausalStreams appB = new CausalStreams(stageBTopology(), streamsConfig(bootstrap, appIdB, stateDirB))) {
+                appB.start();
+                // Do not await RUNNING: while B's task blocks in init (the joiner wait), the instance stays
+                // in REBALANCING. A, still running in its own app, publishes for B's round, so B's join
+                // drives the epoch past where phase 1 left it — that is the unblock signal.
+                await().atMost(Duration.ofSeconds(120))
+                        .until(() -> highestCommittedEpoch(bootstrap) > epochAfterPhase1);
 
-            // Having unblocked and adopted its floor, B replays mid from the start and serves out.
-            assertTrue(awaitSinkServed(bootstrap), "the joined stage B serves its sink after its epoch commits");
-        } finally {
-            coordination2.close();
+                // Having unblocked and adopted its floor, B replays mid from the start and serves out.
+                assertTrue(awaitSinkServed(bootstrap), "the joined stage B serves its sink after its epoch commits");
+            }
         }
     }
 
-    /** Stage A only: t1 -> upper-case -> mid. */
-    private static Topology stageAOnly(ParsleyCoordination coordination) {
-        StreamsBuilder builder = new StreamsBuilder();
-        addStageA(builder, coordination);
+    /** Stage A: t1 -> upper-case -> mid. */
+    private static CausalTopology stageATopology() {
+        CausalStreamsBuilder builder = new CausalStreamsBuilder();
+        builder.stream(IN, Serdes.String(), Serdes.String())
+                .process(mapper(v -> v.toUpperCase(Locale.ROOT)))
+                .to("mid-sink", MID, Serdes.String(), Serdes.String());
         return builder.build();
     }
 
-    /** Stage A plus the newly-added stage B: mid -> prefix -> out. */
-    private static Topology stageAPlusB(ParsleyCoordination coordination) {
-        StreamsBuilder builder = new StreamsBuilder();
-        addStageA(builder, coordination);
-        builder.stream(MID, Consumed.with(Serdes.String(), Serdes.String()))
-                .process(ParsleyProcessorSupplier.builder(prefixer())
-                        .addBufferStore("parsley-b")
-                        .addSource(new ParsleySource<>(MID, Serdes.String(), Serdes.String()))
-                        .withCoordination(coordination)
-                        .build())
-                .to(OUT, Produced.with(Serdes.String(), Serdes.String()));
+    /** Stage B: mid -> prefix -> out. */
+    private static CausalTopology stageBTopology() {
+        CausalStreamsBuilder builder = new CausalStreamsBuilder();
+        builder.stream(MID, Serdes.String(), Serdes.String())
+                .process(mapper(v -> "B:" + v))
+                .to("out-sink", OUT, Serdes.String(), Serdes.String());
         return builder.build();
     }
 
-    private static void addStageA(StreamsBuilder builder, ParsleyCoordination coordination) {
-        builder.stream(IN, Consumed.with(Serdes.String(), Serdes.String()))
-                .process(ParsleyProcessorSupplier.builder(upperCaser())
-                        .addBufferStore("parsley-a")
-                        .addSource(new ParsleySource<>(IN, Serdes.String(), Serdes.String()))
-                        .withCoordination(coordination)
-                        .build())
-                .to(MID, Produced.with(Serdes.String(), Serdes.String()));
-    }
-
-    private static ProcessorSupplier<String, String, String, String> upperCaser() {
+    private static ProcessorSupplier<String, String, String, String> mapper(UnaryOperator<String> fn) {
         return () -> new Processor<>() {
             private ProcessorContext<String, String> ctx;
-            @Override public void init(ProcessorContext<String, String> context) { this.ctx = context; }
-            @Override public void process(Record<String, String> record) {
-                ctx.forward(record.withValue(record.value().toUpperCase(Locale.ROOT)));
+
+            @Override
+            public void init(ProcessorContext<String, String> context) {
+                this.ctx = context;
+            }
+
+            @Override
+            public void process(Record<String, String> record) {
+                ctx.forward(record.withValue(fn.apply(record.value())));
             }
         };
     }
 
-    private static ProcessorSupplier<String, String, String, String> prefixer() {
-        return () -> new Processor<>() {
-            private ProcessorContext<String, String> ctx;
-            @Override public void init(ProcessorContext<String, String> context) { this.ctx = context; }
-            @Override public void process(Record<String, String> record) {
-                ctx.forward(record.withValue("B:" + record.value()));
-            }
-        };
-    }
-
-    private static void requestUntilCommitted(ParsleyCoordination coordination, String bootstrap, long targetEpoch) {
+    /** Requests transitions until the log shows {@code EpochCommitted(targetEpoch)}; requests coalesce. */
+    private static void requestUntilCommitted(CausalStreams streams, String bootstrap, long targetEpoch) {
         await().atMost(Duration.ofSeconds(60)).until(() -> {
             if (highestCommittedEpoch(bootstrap) >= targetEpoch) {
                 return true;
             }
             try {
-                coordination.requestEpochTransition();
+                streams.requestEpochTransition();
             } catch (IllegalStateException notReadyYet) {
                 // No local member has joined/initialised yet; retry on the next tick.
             }
@@ -242,10 +233,12 @@ class ParsleyCoordinationJoinerIT {
         props.put(StreamsConfig.DEFAULT_KEY_SERDE_CLASS_CONFIG, Serdes.String().getClass().getName());
         props.put(StreamsConfig.DEFAULT_VALUE_SERDE_CLASS_CONFIG, Serdes.String().getClass().getName());
         props.put(StreamsConfig.COMMIT_INTERVAL_MS_CONFIG, 200);
-        // Two threads so a blocking joiner task (stage B's init) does not starve the running stage A on
-        // the same thread — A must keep publishing for B's round to commit and unblock B.
-        props.put(StreamsConfig.NUM_STREAM_THREADS_CONFIG, 2);
+        props.put(StreamsConfig.PROCESSING_GUARANTEE_CONFIG, StreamsConfig.EXACTLY_ONCE_V2);
         props.put(StreamsConfig.STATE_DIR_CONFIG, stateDir.toAbsolutePath().toString());
+        props.put(ParsleyConfig.COORDINATION_EPOCH_EVENTS_TOPIC, EPOCH_EVENTS);
+        // The linear DAG is not a full mesh; the coordinated domain auto-wires a passthrough source for
+        // the one domain topic each stage does not otherwise touch, so every stage covers the whole domain.
+        props.put(ParsleyConfig.COORDINATION_DOMAIN_TOPICS, IN + "," + MID + "," + OUT);
         return props;
     }
 
