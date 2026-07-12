@@ -315,6 +315,78 @@ class ParsleyProcessorEpochBoundaryTest {
                         + "again — otherwise a cyclic topology would ping-pong it forever");
     }
 
+    /**
+     * The B4 regression: an epoch-boundary marker whose {@code parsley-causal-dependencies} header is
+     * corrupt (or absent) must still absorb the marker's <em>own offset</em> into the channel frontier,
+     * so a held record depending on that offset is released. The marker occupies a real offset on its
+     * partition; skipping its delivery on a decode failure leaves a permanent gap in the contiguous
+     * absorb walk, stranding every later dependent record on that channel forever. The carried
+     * completeness is treated as empty (it taught nothing), but the offset delivery is unconditional —
+     * the same contract {@code handleWatermark} always honoured and the boundary handler used not to.
+     *
+     * Asserts that a record held on t1@0, then met by a boundary marker on t1@0 carrying a corrupt
+     * completeness header, is delivered to the delegate — proving the marker's own offset was absorbed
+     * despite the decode failure.
+     */
+    @Test
+    void aBoundaryMarkerWithCorruptCompletenessStillAbsorbsItsOwnOffsetAndReleasesHeldRecords() {
+        Uuid t2Id = Uuid.randomUuid();
+        ParsleyTopicAdmin admin = TestTopicAdmin.of(Map.of("t1", T1_ID, "t2", t2Id));
+        TestKeyValueStore<String, byte[]> frontierStore =
+                new TestKeyValueStore<String, byte[]>(Comparator.naturalOrder(), "frontier");
+        TestKeyValueStore<Long, byte[]> bufferStore =
+                new TestKeyValueStore<Long, byte[]>(Comparator.naturalOrder(), "buffer");
+        TestKeyValueStore<byte[], byte[]> candidateIndexStore =
+                new TestKeyValueStore<byte[], byte[]>(Arrays::compareUnsigned, "candidate-index");
+        TestKeyValueStore<byte[], byte[]> forwardedIndexStore =
+                new TestKeyValueStore<byte[], byte[]>(Arrays::compareUnsigned, "forwarded-index");
+
+        List<String> processed = new ArrayList<>();
+        Processor<String, String, String, String> delegate = new Processor<>() {
+            @Override public void init(ProcessorContext<String, String> context) {}
+            @Override public void process(Record<String, String> record) { processed.add(record.value()); }
+        };
+        ParsleySerializer<String, String> serializer =
+                new ParsleySerializer<>(new ParsleyResolver<>(t -> Serdes.String(), t -> Serdes.String()));
+        ParsleyProcessor<String, String, String, String> processor = new ParsleyProcessor<>(
+                delegate, serializer,
+                "frontier", "buffer", "candidate-index", "forwarded-index",
+                Set.of("t1", "t2"), Set.of(), List.of(),
+                configs -> admin, ParsleyConfig.from(new Properties()), null);
+
+        MockProcessorContext<String, String> context = new MockProcessorContext<>();
+        context.setCurrentSystemTimeMs(1L);
+        context.addStateStore(frontierStore);
+        context.addStateStore(bufferStore);
+        context.addStateStore(candidateIndexStore);
+        context.addStateStore(forwardedIndexStore);
+        context.addStateStore(new ParsleyCommittedCompleteness("frontier-commit-hook"));
+        processor.init(context);
+
+        // A business record on t2@5 depending on t1@0 is held: t1 has never been observed.
+        context.setRecordMetadata("t2", 0, 5);
+        Headers held = ParsleyHeader.mutableHeaders();
+        held.add(ParsleyHeader.CAUSAL_DEPENDENCIES, ParsleyClock.empty().observe(T1_ID, 0, 0).toBytes());
+        processor.process(new Record<>("k", "v", 0L, held));
+        assertEquals(1, bufferStore.approximateNumEntries(), "the t2@5 record must be held on t1@0");
+
+        // An epoch-boundary marker arrives on t1@0 with a CORRUPT completeness header. Its carried clock
+        // cannot be decoded, but its own offset (t1@0) must still be absorbed — which satisfies the held
+        // record's t1@0 dependency and releases it.
+        context.setRecordMetadata("t1", 0, 0);
+        ParsleyEpochBoundary boundary = new ParsleyEpochBoundary(1, ParsleyClock.empty().observe(T1_ID, 0, 10));
+        Headers markerHeaders = ParsleyHeader.mutableHeaders();
+        markerHeaders.add(ParsleyHeader.EPOCH_BOUNDARY, boundary.toBytes());
+        markerHeaders.add(ParsleyHeader.CAUSAL_DEPENDENCIES, new byte[]{0x7f, 0x13, 0x37, 0x42});
+        processor.process(new Record<>("k", null, 0L, markerHeaders));
+
+        assertEquals(List.of("v"), processed,
+                "the held record must be released once the marker's own offset is absorbed, even though "
+                        + "the marker's completeness header could not be decoded — a decode failure must "
+                        + "never skip the offset and gap the channel frontier");
+        assertEquals(0, bufferStore.approximateNumEntries(), "the released record must have left the buffer");
+    }
+
     private static boolean hasHeader(Record<? extends String, ? extends String> record, String key) {
         for (Header h : record.headers()) {
             if (key.equals(h.key())) {

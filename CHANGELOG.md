@@ -20,6 +20,15 @@ All notable changes to this project are documented in this file. The format is b
   stale `ParsleyKafkaEpochTransport` class name in the pom's coverage note is corrected.
 
 ### Fixed
+- **A marker with a corrupt or absent completeness header permanently gapped the channel frontier.**
+  The epoch snapshot and boundary handlers folded a received marker through a path that, on a missing or
+  undecodable `parsley-causal-dependencies` header, returned early *without delivering the marker's own
+  offset* into the channel's contiguous frontier. A marker occupies a real offset on its partition, so
+  the gap-free absorb walk stalled below it forever — stranding every later record on that channel that
+  waited on anything. `handleWatermark` already handled the identical failure correctly (empty clock,
+  offset still delivered); the two paths have been unified into one `foldMarkerCompleteness` helper that
+  always absorbs the marker's offset and treats a decode failure as an empty carried clock. The decode
+  failure is contained to the decode; the offset delivery and everything after it stay fail-closed.
 - **An idle-round epoch transition stalled forever at the second layer.** A relaying stage forwarded a
   received epoch-boundary marker downstream only when the marker's *carried completeness clock* advanced
   the channel — the same "clock-invisible markers" gate that (correctly) governs watermark and snapshot

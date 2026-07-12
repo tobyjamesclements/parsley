@@ -43,7 +43,7 @@ import java.util.function.Function;
  * <p><strong>Clock-invisible markers.</strong> A received watermark or epoch-snapshot marker
  * ({@link #handleWatermark}, {@link #handleEpochSnapshot}) is relayed downstream only when it genuinely
  * taught this node's channel something it did not already know
- * ({@link ParsleyEngine.WatermarkOutcome#channelAdvanced()}, via {@link #advanceChannelClockFromMarker}).
+ * ({@link ParsleyEngine.WatermarkOutcome#channelAdvanced()}, via {@link #foldMarkerCompleteness}).
  * A marker's own delivery is never itself treated as a reason to relay further — unlike a genuine
  * business record, whose delivery always unconditionally causes this node to emit something on its own
  * sink (see {@link #deliver}). Gating on data-taught-something rather than on "a record was delivered"
@@ -642,7 +642,7 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
      * never delivered to the user delegate and never buffered, but — unlike the earlier
      * coordinator-broadcast model — it is <strong>relayed</strong> downstream on the same key (the
      * leaderless in-band cut propagates edge by edge through the DAG) <em>only when it genuinely taught
-     * this node's channel something new</em> ({@link #advanceChannelClockFromMarker}) — a marker's own
+     * this node's channel something new</em> ({@link #foldMarkerCompleteness}) — a marker's own
      * delivery is never itself a reason to relay further, or a topology cycle would ping-pong the same
      * marker forever (clock-invisible markers; see the class Javadoc). The relayed marker also carries
      * this node's completeness, so a single record both propagates the cut and advances the downstream
@@ -650,7 +650,7 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
      */
     private void handleEpochSnapshot(Record<KIn, VIn> record) {
         snapshotPublisher.publish(memberId, commitHook.committed());
-        boolean channelAdvanced = advanceChannelClockFromMarker(record);
+        boolean channelAdvanced = foldMarkerCompleteness(record);
         if (channelAdvanced) {
             forwardEpochSnapshot(record.key());
         }
@@ -663,7 +663,7 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
      * propagates edge by edge through the DAG (the leaderless in-band model). It relays when the marker
      * was newly recorded for its epoch on this channel ({@link ParsleyEngine.BoundaryOutcome#markerWasNew()})
      * <em>or</em> its carried completeness taught this channel something new
-     * ({@link #advanceChannelClockFromMarker}).
+     * ({@link #foldMarkerCompleteness}).
      *
      * <p>Boundary relay cannot gate on the clock signal alone the way watermark and snapshot relay do
      * (clock-invisible markers; see the class Javadoc). A boundary re-carries the very completeness the
@@ -700,8 +700,9 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
         }
 
         // A relayed marker carries the upstream node's completeness; adopt it into this channel's clock
-        // (draining anything it releases) before driving the transition, so one record does both.
-        boolean channelAdvanced = advanceChannelClockFromMarker(record);
+        // and absorb the marker's own offset (draining anything either releases) before driving the
+        // transition, so one record does both.
+        boolean channelAdvanced = foldMarkerCompleteness(record);
 
         ParsleyEngine.BoundaryOutcome<KIn, VIn> outcome = engine().onEpochBoundary(boundary, topicId, partition);
         deliver(outcome.outcome().delivered());
@@ -722,44 +723,60 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
     }
 
     /**
-     * If {@code record} (an epoch marker) carries a completeness frontier in its
-     * {@link ParsleyHeader#CAUSAL_DEPENDENCIES} header — as every relayed marker does — advances the
-     * marker channel's clock by that frontier and delivers anything the advance releases. A bare marker
-     * with no completeness header (e.g. a source-layer injection or a test-injected marker) is a no-op.
+     * The one path every received marker — watermark, epoch snapshot, epoch boundary — takes through the
+     * engine's {@link ParsleyEngine#onWatermark channel-clock fold}. It does two independent things, and
+     * the distinction is the crux of correctness here:
+     * <ol>
+     *   <li><strong>Always</strong> delivers the marker's own offset into this channel's contiguous
+     *       frontier (via {@code onWatermark}), releasing anything that offset satisfies. A marker
+     *       occupies a real offset on its partition, so the frontier's gap-free absorb walk must count
+     *       it or it stalls below the marker forever — stranding every later record on that channel that
+     *       waits on anything. This happens even when the completeness header is absent or corrupt.</li>
+     *   <li>Folds the marker's carried completeness (the {@link ParsleyHeader#CAUSAL_DEPENDENCIES}
+     *       header, present on every relayed marker) into the channel clock — the outbound-stamp input,
+     *       never the gate. A missing or undecodable header is treated as an <em>empty</em> clock: the
+     *       marker teaches the channel no new peer progress, but its offset is still absorbed.</li>
+     * </ol>
      *
-     * @return whether the marker's carried clock genuinely taught this channel something it did not
-     *         already know ({@link ParsleyEngine.WatermarkOutcome#channelAdvanced()}) — {@code false}
-     *         for a bare marker or a decode failure, so callers relay a marker's own delivery further
-     *         only when it actually advanced something, never unconditionally (see the class Javadoc's
-     *         clock-invisible-markers discussion).
+     * <p>Treating a decode failure as empty-but-still-delivered (rather than an early return) is what
+     * fixed the bug where a corrupt marker permanently gapped the frontier; watermark and epoch handlers
+     * used to diverge here, and only the watermark path got it right.
+     *
+     * @return whether the carried clock genuinely taught this channel something new
+     *         ({@link ParsleyEngine.WatermarkOutcome#channelAdvanced()}) — {@code false} for an
+     *         unregistered topic, an absent/undecodable header, or a clock this channel already
+     *         dominates. This is the clock-news signal watermark and snapshot relay gate on (see the
+     *         class Javadoc); it is never the offset-delivery signal, which is unconditional.
      */
-    private boolean advanceChannelClockFromMarker(Record<KIn, VIn> record) {
+    private boolean foldMarkerCompleteness(Record<KIn, VIn> record) {
         RecordMetadata meta = requireRecordMetadata();
         String topic = meta.topic();
         int partition = meta.partition();
         long offset = meta.offset();
         Uuid topicId = topicUuids.get(topic);
         if (topicId == null) {
+            // Not expected in a correctly wired topology, but fail safe rather than crash so a
+            // misconfiguration does not fail a healthy task.
+            log.warn("Received marker on unregistered topic '{}'; ignoring", topic);
             return false;
         }
-        Header marker = record.headers().lastHeader(ParsleyHeader.CAUSAL_DEPENDENCIES);
-        if (marker == null || marker.value() == null) {
-            return false;
+        ParsleyClock frontierClock = ParsleyClock.empty();
+        Header dependencies = record.headers().lastHeader(ParsleyHeader.CAUSAL_DEPENDENCIES);
+        if (dependencies != null && dependencies.value() != null) {
+            try {
+                frontierClock = ParsleyClock.fromBytes(dependencies.value());
+            } catch (Exception e) {
+                log.warn("Failed to decode marker completeness on {}-{}; treating as empty",
+                        topic, partition, e);
+            }
         }
-        ParsleyClock frontier;
-        try {
-            frontier = ParsleyClock.fromBytes(marker.value());
-        } catch (Exception e) {
-            log.warn("Failed to decode marker completeness on {}-{}; ignoring", topic, partition, e);
-            return false;
-        }
-        // Deliberately OUTSIDE the decode catch (mirroring handleWatermark): past this point a failure
-        // is a delivery failure, not a decode failure — onWatermark has already removed any released
-        // records from the buffer and advanced the frontier, so swallowing an exception from the user
-        // delegate (or the engine's own fail-fast paths) would let the task commit past records the
-        // delegate never processed, silently losing them. Fail-closed: let it kill the task.
+        // Deliberately OUTSIDE the decode catch: past this point a failure is a delivery failure, not a
+        // decode failure — onWatermark has already advanced the frontier and removed released records
+        // from the buffer, so swallowing an exception from the user delegate (or the engine's own
+        // fail-fast paths) would let the task commit past records the delegate never processed, silently
+        // losing them. Fail-closed: let it kill the task.
         ParsleyEngine.WatermarkOutcome<KIn, VIn> watermarkOutcome =
-                engine().onWatermark(topicId, partition, offset, frontier);
+                engine().onWatermark(topicId, partition, offset, frontierClock);
         deliver(watermarkOutcome.outcome().delivered());
         return watermarkOutcome.channelAdvanced();
     }
@@ -909,42 +926,14 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
      * watermark forever (clock-invisible markers; see the class Javadoc).
      */
     private void handleWatermark(Record<KIn, VIn> record) {
-        RecordMetadata meta = requireRecordMetadata();
-        String topic = meta.topic();
-        int partition = meta.partition();
-        long offset = meta.offset();
-        Uuid topicId = topicUuids.get(topic);
-        if (topicId == null) {
-            // Watermark on an unregistered topic — not expected in a correctly wired topology, but
-            // fail safe rather than crash so a misconfiguration does not fail a healthy task.
-            log.warn("Received watermark on unregistered topic '{}'; ignoring", topic);
-            return;
-        }
-
-        // Decode the completeness frontier carried in the parsley-causal-dependencies header.
-        ParsleyClock frontierClock = ParsleyClock.empty();
-        Header dependencies = record.headers().lastHeader(ParsleyHeader.CAUSAL_DEPENDENCIES);
-        if (dependencies != null && dependencies.value() != null) {
-            try {
-                frontierClock = ParsleyClock.fromBytes(dependencies.value());
-            } catch (Exception e) {
-                log.warn("Failed to decode watermark frontier on {}-{}; treating as empty",
-                        topic, partition, e);
-            }
-        }
-
-        // Update the channel clock and release anything newly satisfied.
-        ParsleyEngine.WatermarkOutcome<KIn, VIn> watermarkOutcome =
-                engine().onWatermark(topicId, partition, offset, frontierClock);
-        deliver(watermarkOutcome.outcome().delivered());
-
-        // Re-emit a watermark downstream only when this one genuinely advanced the channel, so the
+        // Fold the carried completeness and absorb the watermark's own offset (see foldMarkerCompleteness),
+        // then re-emit downstream only when this watermark genuinely advanced the channel, so the
         // completeness boundary still propagates through non-subscribing layers when it carries real
         // news, without ping-ponging a marker that taught this node nothing around a topology cycle.
         // Reuse the incoming watermark's own key: upstream keyed it to route to this partition, so
         // re-emitting under the same key keeps the propagated watermark on the co-partitioned
         // downstream partition.
-        if (watermarkOutcome.channelAdvanced()) {
+        if (foldMarkerCompleteness(record)) {
             forwardWatermark(record.key());
         }
     }
