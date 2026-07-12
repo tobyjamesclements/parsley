@@ -20,6 +20,13 @@ All notable changes to this project are documented in this file. The format is b
   stale `ParsleyKafkaEpochTransport` class name in the pom's coverage note is corrected.
 
 ### Fixed
+- **The epoch-runtime background thread died permanently on any transport exception, losing outbox
+  events.** The drive loop was `while (running) runOnce();` with no guard, so a single transport append
+  or poll throwing on a transient broker blip killed the thread: `bootstrapped` stayed false (every join
+  blocked forever) and no round ever committed — a silent, permanent wedge. Worse, the outbox drain
+  removed an event *before* appending it, so an event whose append threw was lost outright. The loop body
+  now catches, logs, backs off, and retries; and the drain is peek-then-remove, dropping an event only
+  after its append succeeds, so a transient failure loses nothing enqueued.
 - **`CausalStreams#close()` hung forever on an instance that owned zero tasks.** The graceful-shutdown
   drain wait spun until `ParsleyQuiesce#isSafeToClose` reported ready, but that required at least one
   registered task, and an instance with more instances than partitions (or one whose tasks all migrated

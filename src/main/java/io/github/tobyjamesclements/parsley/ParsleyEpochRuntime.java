@@ -39,6 +39,9 @@ final class ParsleyEpochRuntime implements AutoCloseable {
     private static final Logger log = LoggerFactory.getLogger(ParsleyEpochRuntime.class);
 
     private static final Duration POLL_TIMEOUT = Duration.ofMillis(100);
+    // Backoff after a failed drive-loop iteration (a transient transport/broker error). Kept well under
+    // close()'s 5s join timeout so a shutdown landing mid-backoff still stops the loop promptly.
+    private static final Duration ERROR_BACKOFF = Duration.ofSeconds(1);
 
     private final ParsleyEpochTransport transport;
     private final ParsleyEpochLog fold = new ParsleyEpochLog();
@@ -271,7 +274,18 @@ final class ParsleyEpochRuntime implements AutoCloseable {
         Thread t = new Thread(() -> {
             try {
                 while (running) {
-                    runOnce();
+                    try {
+                        runOnce();
+                    } catch (Exception e) {
+                        // A transport append or poll can throw on a transient broker blip. The runtime
+                        // thread must survive it: if it died here, bootstrapped would stay false so every
+                        // join would block forever, and no round would ever commit — a silent, permanent
+                        // wedge. Log, back off, and retry; the transport reconnects on its own, and an
+                        // outbox event whose append threw is still queued (runOnce removes only after a
+                        // successful append), so nothing enqueued is lost.
+                        log.warn("Epoch runtime drive-loop iteration failed; backing off and retrying", e);
+                        backoff();
+                    }
                 }
             } finally {
                 closeTransportQuietly();
@@ -289,9 +303,13 @@ final class ParsleyEpochRuntime implements AutoCloseable {
      * repeatedly.
      */
     void runOnce() {
+        // Peek-then-remove: append the head, and only drop it once the append has succeeded. If append
+        // throws, the event stays queued and is retried on the next iteration rather than being lost —
+        // this thread is the sole consumer, so the element we peeked is still the head when we remove it.
         ParsleyEpochEvent pending;
-        while ((pending = outbox.poll()) != null) {
+        while ((pending = outbox.peek()) != null) {
             transport.append(pending);
+            outbox.poll();
         }
         for (ParsleyEpochEvent event : transport.poll(POLL_TIMEOUT)) {
             fold.apply(event);
@@ -430,6 +448,16 @@ final class ParsleyEpochRuntime implements AutoCloseable {
             Thread.currentThread().interrupt();
         }
         this.thread = null;
+    }
+
+    /** Sleeps out the post-error backoff; an interrupt stops the loop (treated as a shutdown signal). */
+    private void backoff() {
+        try {
+            Thread.sleep(ERROR_BACKOFF.toMillis());
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            running = false;
+        }
     }
 
     private void closeTransportQuietly() {

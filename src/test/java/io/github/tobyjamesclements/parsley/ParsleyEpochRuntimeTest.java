@@ -6,6 +6,8 @@ import org.junit.jupiter.api.Test;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTimeoutPreemptively;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
@@ -365,8 +367,109 @@ class ParsleyEpochRuntimeTest {
                 "B was never appended a Leave — it was unregistered locally, not evicted from the domain");
     }
 
+    /**
+     * B3 (no loss): an outbox intent whose append throws must stay queued and be retried, not be dropped.
+     * {@code runOnce} removes an event only after its append succeeds (peek-then-remove), so a transient
+     * transport failure on append cannot silently lose an enqueued join/request/publication.
+     *
+     * Asserts nothing reaches the log while the append throws, then the retained intent is appended once
+     * the transport recovers.
+     */
+    @Test
+    void anIntentWhoseAppendThrowsIsRetainedAndAppendedOnRetry() {
+        InMemoryEpochTransport.SharedLog log = new InMemoryEpochTransport.SharedLog();
+        FlakyTransport transport = new FlakyTransport(new InMemoryEpochTransport(log), 1, 0);
+        ParsleyEpochRuntime runtime = new ParsleyEpochRuntime(transport);
+        runtime.join("A", Set.of(), Set.of());   // enqueues one JoinRequested intent into the outbox
+
+        assertThrows(RuntimeException.class, runtime::runOnce,
+                "the transient append failure must surface from runOnce");
+        assertEquals(0, log.events().size(),
+                "nothing may reach the log while the append is failing — the intent stays queued");
+
+        runtime.runOnce();   // the transport has recovered
+        assertEquals(1, log.events().size(),
+                "the retained intent must be appended on retry, never lost to the failed append");
+        assertTrue(log.events().get(0) instanceof ParsleyEpochEvent.JoinRequested,
+                "the appended event is the retained join");
+    }
+
+    /**
+     * B3 (thread survival): the runtime's background thread must survive a transient transport failure —
+     * an append or poll throwing on a broker blip — rather than dying and wedging every join forever with
+     * {@code bootstrapped} stuck false. It logs, backs off, and retries, so it still bootstraps and the
+     * enqueued intent still reaches the log.
+     *
+     * Starts the real background thread against a transport that throws once on append and once on poll,
+     * then asserts the runtime bootstraps within a bound and the intent whose first append threw is on the
+     * log (not lost).
+     */
+    @Test
+    void theBackgroundThreadSurvivesTransientTransportFailuresAndStillBootstraps() {
+        InMemoryEpochTransport.SharedLog log = new InMemoryEpochTransport.SharedLog();
+        FlakyTransport transport = new FlakyTransport(new InMemoryEpochTransport(log), 1, 1);
+        ParsleyEpochRuntime runtime = new ParsleyEpochRuntime(transport);
+        runtime.join("A", Set.of(), Set.of());   // an intent that must survive the failing append
+
+        try {
+            runtime.start();
+            assertTimeoutPreemptively(java.time.Duration.ofSeconds(10), () -> {
+                while (!runtime.isBootstrapped()) {
+                    Thread.sleep(20L);
+                }
+            }, "the runtime thread must survive transient transport failures and still bootstrap");
+        } finally {
+            runtime.close();
+        }
+
+        assertTrue(log.events().stream().anyMatch(e -> e instanceof ParsleyEpochEvent.JoinRequested),
+                "the enqueued join whose first append threw must still reach the log, not be lost");
+    }
+
     private static ParsleyEpochRuntime runtimeOver(InMemoryEpochTransport.SharedLog log) {
         return new ParsleyEpochRuntime(new InMemoryEpochTransport(log));
+    }
+
+    /**
+     * A transport that throws on its first {@code appendFailures} append calls and first {@code
+     * pollFailures} poll calls, then delegates — a transient broker blip that later recovers.
+     */
+    private static final class FlakyTransport implements ParsleyEpochTransport {
+        private final ParsleyEpochTransport delegate;
+        private final java.util.concurrent.atomic.AtomicInteger appendFailures;
+        private final java.util.concurrent.atomic.AtomicInteger pollFailures;
+
+        FlakyTransport(ParsleyEpochTransport delegate, int appendFailures, int pollFailures) {
+            this.delegate = delegate;
+            this.appendFailures = new java.util.concurrent.atomic.AtomicInteger(appendFailures);
+            this.pollFailures = new java.util.concurrent.atomic.AtomicInteger(pollFailures);
+        }
+
+        @Override
+        public void append(ParsleyEpochEvent event) {
+            if (appendFailures.getAndDecrement() > 0) {
+                throw new RuntimeException("simulated transport append failure");
+            }
+            delegate.append(event);
+        }
+
+        @Override
+        public java.util.List<ParsleyEpochEvent> poll(java.time.Duration timeout) {
+            if (pollFailures.getAndDecrement() > 0) {
+                throw new RuntimeException("simulated transport poll failure");
+            }
+            return delegate.poll(timeout);
+        }
+
+        @Override
+        public boolean caughtUp() {
+            return delegate.caughtUp();
+        }
+
+        @Override
+        public void close() {
+            delegate.close();
+        }
     }
 
     /** A transport whose {@link #caughtUp()} is controllable, to exercise the bootstrap gate. */
