@@ -20,6 +20,13 @@ All notable changes to this project are documented in this file. The format is b
   stale `ParsleyKafkaEpochTransport` class name in the pom's coverage note is corrected.
 
 ### Fixed
+- **An unreachable-dependency failure mutated engine state before throwing.** `ParsleyEngine.receive`
+  seeded the frontier (`seedIfFirstSeen`, which persists) and ran `propagate` — advancing the frontier
+  and potentially releasing and un-buffering records into a result list — before the fail-closed
+  unreachable-dependency check threw, discarding that result list. Persisted state stayed consistent
+  only under the EOS batch rollback; an in-memory engine (the test doubles) had no rollback and diverged.
+  The check now runs first, before any mutation. It reads only the dependency clock and the settled epoch
+  floor — neither affected by the seed — so this is purely a change to the failure's timing.
 - **`close()` after an interrupted `init()` NPE'd and masked the real failure.** The unbounded
   topology-epoch join wait in `init()` is interrupted on a clean shutdown mid-join, which unwinds it with
   an `IllegalStateException` — but Kafka Streams still calls `close()` on a task whose `init()` threw. The

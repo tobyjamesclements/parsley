@@ -945,6 +945,41 @@ class ParsleyEngineTest {
         assertEquals(0, buffer.size(), "the record must never be added to the buffer");
     }
 
+    /**
+     * The unreachable-dependency check must run <em>before</em> {@code receive} mutates any persisted
+     * state. A first-ever observation of a coordinate seeds the frontier for it ({@code seedIfFirstSeen}
+     * persists, folding the below-first-seen history in), so an unreachable-dependency throw that ran
+     * after the seed would leave the frontier advanced by a record that never delivered — and could have
+     * released and un-buffered other records into a result list the throw then discards. Under EOS the
+     * whole batch rolls back so persisted state stays consistent, but an in-memory engine has no
+     * rollback; failing before the first mutation keeps the two consistent.
+     *
+     * Asserts that after the throw the frontier is still empty — the failing record's first-observation
+     * seed never took effect.
+     */
+    @Test
+    void unreachableDependencyFailsBeforeSeedingTheFrontier() {
+        // T1 and T2 are in scope; T3 is a coordinate this node has no channel for.
+        ParsleyClock.CoordinatePredicate scope = (topicId, partition) ->
+                partition == 0 && (topicId.equals(T1_ID) || topicId.equals(T2_ID));
+        MockBufferStore<String, String> localBuffer = new MockBufferStore<>();
+        ParsleyEngine<String, String> engine = new ParsleyEngine<>(
+                new ParsleyFrontier(ParsleyClock.empty(), new MockForwardedIndex()),
+                localBuffer, new MockCandidateIndex(), ParsleyMetrics.NOOP, System::currentTimeMillis, scope);
+
+        // A first observation of T1 at offset 5 would seed the frontier to T1@4 inside seedIfFirstSeen —
+        // but this record depends on T3, outside scope, so it must fail first and seed nothing.
+        ParsleyClock needsT3 = ParsleyClock.empty().observe(T3_ID, 0, 0);
+
+        assertThrows(ParsleyUnreachableDependencyException.class,
+                () -> engine.receive(incomingRecord(T1, 5, needsT3)),
+                "a dependency on a coordinate outside this node's scope must fail the task");
+        assertEquals(ParsleyClock.empty(), engine.frontier(),
+                "the failing record must not have seeded the frontier — the unreachable check runs "
+                        + "before any state mutation, so an in-memory engine (no EOS rollback) stays consistent");
+        assertEquals(0, localBuffer.size(), "the failing record must never be buffered");
+    }
+
     // --- helpers --------------------------------------------------------------------------------
 
     // These helpers build an engine over an untracked in-memory frontier — completeness() is the node's

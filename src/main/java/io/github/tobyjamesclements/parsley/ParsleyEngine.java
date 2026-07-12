@@ -289,17 +289,24 @@ final class ParsleyEngine<K, V> {
      * @return the records to forward downstream, in order
      */
     Outcome<K, V> receive(ParsleyMessage<K, V> message) {
+        // A record whose dependencies name a coordinate this node has no channel for at all can never
+        // be checked here no matter how long it waits. Fail-closed rather than vacuously satisfied:
+        // this node can prove it cannot check the coordinate, never that the coordinate is irrelevant.
+        // Checked FIRST, before any state mutation: seedIfFirstSeen persists a seeded frontier and
+        // propagate can deliver, persist, and remove records from the buffer, so throwing after them
+        // would leave the frontier advanced and the released records (discarded with the unwound `out`)
+        // gone from the buffer. Under EOS the whole batch rolls back, but an in-memory engine has no
+        // rollback; failing before mutating keeps the persisted state consistent either way. The check
+        // reads only the dependency clock and the settled epoch floor, neither of which seedIfFirstSeen
+        // affects, so hoisting it changes nothing but the failure's timing.
+        if (isUnreachableDependency(message)) {
+            throw failUnreachableDependency(message.topic(), message.topicId(), message.partition(), message.offset());
+        }
+
         List<ParsleyMessage<K, V>> out = new ArrayList<>();
 
         if (frontier.seedIfFirstSeen(message.topicId(), message.partition(), message.offset())) {
             propagate(out, message.topicId(), message.partition());
-        }
-
-        // A record whose dependencies name a coordinate this node has no channel for at all can never
-        // be checked here no matter how long it waits. Fail-closed rather than vacuously satisfied:
-        // this node can prove it cannot check the coordinate, never that the coordinate is irrelevant.
-        if (isUnreachableDependency(message)) {
-            throw failUnreachableDependency(message.topic(), message.topicId(), message.partition(), message.offset());
         }
 
         ParsleyClock deps = effectiveDependencies(message.dependencies(),
