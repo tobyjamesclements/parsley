@@ -101,40 +101,63 @@ final class ParsleyCoordination {
     }
 
     /**
-     * The joiner handshake, called from a task's {@code init()}: a node deployed into an already-running
-     * (coordinated) topology must not begin consuming until an epoch computed <em>without it</em> commits,
-     * so it never drags the floor's min-over-running-members toward its offset-0 position.
+     * The joiner handshake, called from a task's {@code init()}. Its purpose is the <strong>consistent
+     * cut</strong> at the heart of topology epochs, not membership bookkeeping. Kafka replays history: a
+     * node added to a long-running topology begins consuming from offset 0 — logical time far in the past
+     * — and, if it acted on that ancient traffic, would stamp outputs that <em>happen-before</em> the
+     * earliest messages the topology ever agreed on, retroactively forcing every other node to have
+     * mis-delivered. An epoch is a consistent cut, taken whenever the topology changes, that fixes a new
+     * logical time-0 every node (the newcomer included) agrees on: anything a node emits that
+     * happens-before that cut is ignored, and only what happens-before messages <em>within</em> the
+     * current epoch is acted on causally. So a fresh joiner must not begin consuming until the epoch that
+     * establishes its cut — {@code F_{k+1}}, computed with it — has committed and admitted it. Consuming
+     * ahead of that is unsound: it would race past the not-yet-known floor and act on pre-cut history.
      *
      * <p>Waits for the runtime to fold the log to the end ({@link ParsleyEpochRuntime#isBootstrapped()}, so
      * membership is accurate), then blocks until this member is a <strong>running member</strong> — opening
      * a round to drive that commit. This one rule covers every case: a <em>fresh joiner</em> (not yet
-     * running ⇒ block until an epoch computed without it commits and admits it); a <em>restart</em> of an
+     * running ⇒ block until an epoch computed with it commits and admits it); a <em>restart</em> of an
      * existing member (still running on the log — nothing removes it while it is absent ⇒ proceed at once
      * and drain its restored buffer under the unchanged floor); and a <em>cold start</em> (epoch 0, static
      * ⇒ proceed at once).
      *
-     * <p>The block is <strong>unbounded</strong> — there is no join timeout. It never proceeds on an unknown
-     * floor: if the domain cannot yet commit (an existing member is absent), the join simply waits until it
-     * can, exactly as an epoch transition does. A blocked {@code init()} delivers nothing, so waiting is
-     * safe; a clean Kafka Streams shutdown interrupts the wait, which unwinds the block.
+     * <p>The wait runs on the Kafka Streams {@code StreamThread}, so it is <strong>bounded</strong> by
+     * {@code budget} (sized below {@code max.poll.interval.ms} by the caller). An admission that cannot
+     * happen — the domain cannot currently commit because an existing member is down or partitioned —
+     * would otherwise outlive the poll deadline and be silently evicted into a rebalance crash-loop; the
+     * bound turns that into a loud, actionable {@link ParsleyJoinTimeoutException} instead. It still never
+     * proceeds on an unknown floor: it either admits or fails, never guesses. A blocked {@code init()}
+     * delivers nothing, so waiting is safe; a clean Kafka Streams shutdown interrupts the wait, which
+     * unwinds the block.
+     *
+     * @param budget the maximum time to wait before failing with {@link ParsleyJoinTimeoutException}
      */
-    void awaitJoinCommit(ParsleyEpochRuntime runtime, String memberId) {
-        awaitBootstrap(runtime);
+    void awaitJoinCommit(ParsleyEpochRuntime runtime, String memberId, Duration budget) {
+        long deadlineNanos = System.nanoTime() + budget.toNanos();
+        awaitBootstrap(runtime, memberId, budget, deadlineNanos);
 
         // Cold start (epoch 0 is static), or already a running member (a normal restart): no block.
         if (runtime.committedEpochId() == 0 || runtime.isRunningMember(memberId)) {
             return;
         }
         // A fresh joiner: open a round (the running members answer it) and block until a commit promotes
-        // this member to running.
+        // this member to running, or the budget expires.
         runtime.requestSnapshot(memberId);
         while (!runtime.isRunningMember(memberId)) {
+            if (System.nanoTime() >= deadlineNanos) {
+                throw new ParsleyJoinTimeoutException(memberId, budget, "no epoch admitting it committed");
+            }
             sleep();
         }
     }
 
-    private static void awaitBootstrap(ParsleyEpochRuntime runtime) {
+    private static void awaitBootstrap(ParsleyEpochRuntime runtime, String memberId, Duration budget,
+                                       long deadlineNanos) {
         while (!runtime.isBootstrapped()) {
+            if (System.nanoTime() >= deadlineNanos) {
+                throw new ParsleyJoinTimeoutException(memberId, budget,
+                        "the epoch-events log was not folded to its end");
+            }
             sleep();
         }
     }

@@ -1,5 +1,6 @@
 package io.github.tobyjamesclements.parsley;
 
+import org.apache.kafka.clients.consumer.ConsumerConfig;
 import org.apache.kafka.common.TopicPartition;
 import org.apache.kafka.common.Uuid;
 import org.apache.kafka.common.config.TopicConfig;
@@ -90,6 +91,14 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
     private static final Duration METRICS_REFRESH_INTERVAL = Duration.ofSeconds(5);
 
     private static final Duration EPOCH_POLL_INTERVAL = Duration.ofMillis(200);
+
+    // Kafka's default max.poll.interval.ms, used when the app config does not set one explicitly.
+    private static final long DEFAULT_MAX_POLL_INTERVAL_MS = 300_000L;
+    // The topology-epoch join wait (on the StreamThread, in init()) is bounded to this fraction of
+    // max.poll.interval.ms, leaving margin for the rest of init() and the next poll — so an admission
+    // that cannot happen fails loudly (ParsleyJoinTimeoutException) before the broker silently evicts
+    // the consumer into a rebalance crash-loop. See awaitJoinCommit / ParsleyJoinTimeoutException.
+    private static final double JOIN_BUDGET_FRACTION = 0.9;
 
     private final Processor<KIn, VIn, KOut, VOut> delegate;
     private final ParsleySerializer<KIn, VIn> serializer;
@@ -285,7 +294,7 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
             // Declare this member's input channels and sink topics so the fold can derive the DAG-wide
             // source-topic registry; then block until this member is a running member.
             runtime.join(memberId, topics, sinkTopics);
-            coordination.awaitJoinCommit(runtime, memberId);
+            coordination.awaitJoinCommit(runtime, memberId, joinBudget(context.appConfigs()));
             validateFullMeshCoverage(runtime);
         }
 
@@ -1255,6 +1264,27 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
      * has already folded and the runtime has already bootstrapped — {@code runtime.domainTopics()}
      * reflects every member declared on the log as of at least this member's own join.
      */
+    /**
+     * The topology-epoch join wait's time budget: {@link #JOIN_BUDGET_FRACTION} of the effective
+     * {@code max.poll.interval.ms} (Kafka's default when unset), so the wait fails loudly before the
+     * broker would evict this consumer. Leaning on the existing consumer config rather than a new knob —
+     * the poll deadline is exactly the constraint the bound exists to respect.
+     */
+    private static Duration joinBudget(Map<String, Object> appConfigs) {
+        long maxPollMs = DEFAULT_MAX_POLL_INTERVAL_MS;
+        Object configured = appConfigs.get(ConsumerConfig.MAX_POLL_INTERVAL_MS_CONFIG);
+        if (configured instanceof Number number) {
+            maxPollMs = number.longValue();
+        } else if (configured instanceof String text && !text.isBlank()) {
+            try {
+                maxPollMs = Long.parseLong(text.trim());
+            } catch (NumberFormatException ignored) {
+                // Malformed override — fall back to the default rather than fail init on a config typo.
+            }
+        }
+        return Duration.ofMillis((long) (maxPollMs * JOIN_BUDGET_FRACTION));
+    }
+
     private void validateFullMeshCoverage(ParsleyEpochRuntime runtime) {
         ParsleyConfig.ValidationMode mode = config.topologyValidation();
         if (mode == ParsleyConfig.ValidationMode.OFF) {

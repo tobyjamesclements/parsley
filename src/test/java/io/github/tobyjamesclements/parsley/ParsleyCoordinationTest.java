@@ -3,6 +3,7 @@ package io.github.tobyjamesclements.parsley;
 import org.apache.kafka.common.Uuid;
 import org.junit.jupiter.api.Test;
 
+import java.time.Duration;
 import java.util.Set;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -18,6 +19,8 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 class ParsleyCoordinationTest {
 
     private static final Uuid T1 = Uuid.randomUuid();
+    // A join budget large enough that these synchronous, promptly-admitted scenarios never hit it.
+    private static final Duration GENEROUS_BUDGET = Duration.ofSeconds(30);
 
     /**
      * {@link ParsleyCoordination#requestEpochTransition()} attributes the snapshot to a local member and
@@ -79,9 +82,38 @@ class ParsleyCoordinationTest {
         ParsleyCoordination coordination = ParsleyCoordination.forRuntime(runtime);
         runtime.start();
         try {
-            coordination.awaitJoinCommit(runtime, "J");   // returns once bootstrapped; no round, no block
+            coordination.awaitJoinCommit(runtime, "J", GENEROUS_BUDGET);   // returns once bootstrapped; no round, no block
             assertEquals(0L, runtime.committedEpochId(), "a cold start stays at epoch 0 and does not block");
             assertEquals(0L, log.commitCount(), "no epoch was committed by the join at epoch 0");
+        } finally {
+            runtime.close();
+        }
+    }
+
+    /**
+     * B6: the join wait is bounded so it fails loudly instead of hanging (and being silently evicted into
+     * a rebalance crash-loop) when admission cannot complete. A fresh joiner into an established domain
+     * whose only other member cannot be published on its behalf here — so its round can never commit —
+     * must throw {@link ParsleyJoinTimeoutException} once the budget elapses, not block forever.
+     */
+    @Test
+    void awaitJoinCommitFailsFastWhenAdmissionCannotCompleteWithinTheBudget() {
+        InMemoryEpochTransport.SharedLog log = new InMemoryEpochTransport.SharedLog();
+        InMemoryEpochTransport seeder = new InMemoryEpochTransport(log);
+        // An established domain: member M is running at epoch 1, committed without J.
+        seeder.append(new ParsleyEpochEvent.JoinRequested("M", Set.of(), Set.of()));
+        seeder.append(new ParsleyEpochEvent.SnapshotRequested("M"));
+        seeder.append(new ParsleyEpochEvent.EpochCommitted(1, ParsleyClock.empty()));
+
+        ParsleyEpochRuntime runtime = new ParsleyEpochRuntime(new InMemoryEpochTransport(log));
+        ParsleyCoordination coordination = ParsleyCoordination.forRuntime(runtime);
+        runtime.runOnce();   // fold the seeded log: bootstrapped, committedEpochId=1, M running (not local)
+        try {
+            // J is a fresh joiner. No local member can publish M's frontier, so the round J opens can
+            // never commit — the bounded wait must fail fast rather than hang past max.poll.interval.ms.
+            assertThrows(ParsleyJoinTimeoutException.class,
+                    () -> coordination.awaitJoinCommit(runtime, "J", Duration.ofMillis(150)),
+                    "a join that cannot be admitted within the budget must fail loudly, not hang");
         } finally {
             runtime.close();
         }
@@ -181,7 +213,7 @@ class ParsleyCoordinationTest {
         ParsleyCoordination coordination = ParsleyCoordination.forRuntime(runtime);
         runtime.start();
         try {
-            coordination.awaitJoinCommit(runtime, "M");   // M is already running -> returns without blocking
+            coordination.awaitJoinCommit(runtime, "M", GENEROUS_BUDGET);   // M is already running -> returns without blocking
             assertEquals(1L, runtime.committedEpochId(),
                     "a normal restart of a running member neither blocks nor bumps the epoch");
         } finally {
@@ -218,7 +250,7 @@ class ParsleyCoordinationTest {
             // member, so the eventual commit can promote it) then the blocking awaitJoinCommit.
             Thread joiner = new Thread(() -> {
                 runtime.join("J", Set.of(), Set.of());
-                coordination.awaitJoinCommit(runtime, "J");
+                coordination.awaitJoinCommit(runtime, "J", GENEROUS_BUDGET);
             }, "joiner-test");
             joiner.start();
             joiner.join(5000);

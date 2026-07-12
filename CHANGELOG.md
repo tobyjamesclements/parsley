@@ -20,6 +20,17 @@ All notable changes to this project are documented in this file. The format is b
   stale `ParsleyKafkaEpochTransport` class name in the pom's coverage note is corrected.
 
 ### Fixed
+- **An unadmittable topology-epoch join hung `init()` on the StreamThread until the broker evicted it
+  into a rebalance crash-loop.** The joiner handshake must wait for the epoch that establishes its
+  consistent cut (the agreed new logical time-0) to commit before it consumes — consuming ahead is
+  unsound, since the joiner would race past the not-yet-known floor and act on pre-cut history. That wait
+  runs on the Kafka Streams `StreamThread` during `init()`, and was unbounded: if the domain could not
+  commit (an existing member down or partitioned), it silently outlived `max.poll.interval.ms`, the
+  broker evicted the consumer, and `init()` reran — a silent crash-loop. The wait is now bounded to 90%
+  of the effective `max.poll.interval.ms` and fails with a precise `ParsleyJoinTimeoutException` before
+  the broker would evict, telling the operator to raise `max.poll.interval.ms` or investigate why the
+  domain cannot commit. The stale `awaitJoinCommit` Javadoc (which sold a floor-drag rationale) now
+  describes the actual consistent-cut / historical-replay reason.
 - **The epoch-runtime background thread died permanently on any transport exception, losing outbox
   events.** The drive loop was `while (running) runOnce();` with no guard, so a single transport append
   or poll throwing on a transient broker blip killed the thread: `bootstrapped` stayed false (every join

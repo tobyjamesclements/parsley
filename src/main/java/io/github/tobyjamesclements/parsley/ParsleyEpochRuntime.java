@@ -334,7 +334,7 @@ final class ParsleyEpochRuntime implements AutoCloseable {
      * Publishes a stalled local member's registered committed-completeness snapshot on its behalf — the
      * fix for the deadlock where a member's own task thread can never run {@code pollEpochCoordination()}
      * because it shares a Kafka Streams {@code StreamThread} with another task blocked in
-     * {@code awaitJoinCommit}'s unbounded join wait. This method runs on the runtime's own background
+     * {@code awaitJoinCommit}'s (bounded) join wait. This method runs on the runtime's own background
      * thread, which is distinct from every {@code StreamThread} and so keeps making progress even while
      * one is wedged.
      *
