@@ -17,7 +17,7 @@ import java.util.TreeMap;
 /**
  * An in-memory {@link KeyValueStore} double, keyed and ordered by an explicit {@link Comparator} (so
  * it can stand in for either a {@code Long}-keyed or a {@code byte[]}-keyed store). Used to exercise
- * {@link RocksBufferStore} and {@link RocksCandidateIndex} — the real {@link KeyValueStore}-backed
+ * {@link StoreBackedBufferStore} and {@link StoreBackedCandidateIndex} — the real {@link KeyValueStore}-backed
  * implementations — against the actual {@link KeyValueStore} contract (in particular {@code
  * range}'s inclusive-inclusive bounds) without a real RocksDB-backed store.
  */

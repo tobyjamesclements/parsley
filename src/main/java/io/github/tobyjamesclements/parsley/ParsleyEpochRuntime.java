@@ -21,8 +21,8 @@ import java.util.function.Supplier;
  * instance reaches the identical view — round ownership, membership, and the committed lower bounds —
  * with no leader.
  *
- * <p>Modelled on {@link ParsleyQuiesce}: a shared handle the application creates and every participating
- * task registers with (via {@link #join}). A single background thread ({@link #start}) drives the loop;
+ * <p>A shared handle the application creates and every participating task registers with (via
+ * {@link #join}). A single background thread ({@link #start}) drives the loop;
  * task threads only enqueue intents ({@link #join}, {@link #requestSnapshot}, {@link #publishFrontier}),
  * which the runtime thread appends — so the transport's non-thread-safe consumer is only ever touched by
  * the one runtime thread. The loop body {@link #runOnce} is exposed package-private so tests can drive it
@@ -49,13 +49,12 @@ final class ParsleyEpochRuntime implements AutoCloseable {
     // Members whose tasks live on this instance: the runtime folds and commits on their behalf. Written
     // from task threads (join), read by the runtime thread (driveCommit).
     private final Set<String> localMembers = ConcurrentHashMap.newKeySet();
-    // Tracks which local members are currently drained (causal buffer empty), reused from ParsleyQuiesce
-    // rather than a bespoke registered/drained pair — see that class's Javadoc. Always "requested": an
-    // epoch leave cares about drain state unconditionally, never gated on an external request, so
-    // isSafeToClose() here just means "every local member is currently drained". leave() waits on this
-    // before appending its Leave — "only a drained node is excluded". Written by task threads
-    // (reportDrained), read by the caller's leave() thread.
-    private final ParsleyQuiesce localDrainTracker = new ParsleyQuiesce();
+    // Tracks which local members are currently drained (causal buffer empty). An epoch leave cares about
+    // drain state unconditionally, never gated on an external request, so allDrained() here just means
+    // "every local member is currently drained". leave() waits on this before appending its Leave —
+    // "only a drained node is excluded". Written by task threads (reportDrained), read by the caller's
+    // leave() thread.
+    private final ParsleyQuiesceTracker localDrainTracker = new ParsleyQuiesceTracker();
     // A local member's live completeness snapshot, registered once its task's engine exists (see
     // registerLocalCompleteness). Lets the runtime thread publish on a member's behalf when its own task
     // thread cannot run pollEpochCoordination() — see autoPublishStalledLocalMembers.
@@ -110,8 +109,6 @@ final class ParsleyEpochRuntime implements AutoCloseable {
 
     ParsleyEpochRuntime(ParsleyEpochTransport transport) {
         this.transport = transport;
-        // Local drain tracking is always active — see localDrainTracker's own field Javadoc.
-        this.localDrainTracker.requestQuiesce();
     }
 
     /**
@@ -159,7 +156,7 @@ final class ParsleyEpochRuntime implements AutoCloseable {
 
     /** Whether every local member's causal buffer is currently empty — the gate {@code leave()} waits on. */
     boolean allLocalMembersDrained() {
-        return localDrainTracker.isSafeToClose();
+        return localDrainTracker.allDrained();
     }
 
     /** Whether any local member is still a running member on the log — {@code leave()} waits for this to be false after appending Leave. */

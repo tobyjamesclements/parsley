@@ -12,7 +12,7 @@ import java.util.TreeSet;
 /**
  * An in-memory {@link ParsleyForwardedIndex} backed by a per-coordinate {@link TreeSet}. Used in
  * unit tests that exercise {@link ParsleyEngine} without a Kafka state store. Production uses
- * {@link RocksForwardedIndex}.
+ * {@link StoreBackedForwardedIndex}.
  */
 final class MockForwardedIndex implements ParsleyForwardedIndex {
 

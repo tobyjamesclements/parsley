@@ -43,7 +43,7 @@ import static java.nio.charset.StandardCharsets.UTF_8;
  *   <li>{@link #frontierRestore} — O(1) single-key RocksDB read and deserialisation; no parameter
  *       dimension (expected to be effectively constant); run with all {@code bufferSize} values but
  *       only one curve will appear.
- *   <li>{@link #bufferRestore} — O(n) scans to rebuild {@link RocksBufferStore}'s sequence counter
+ *   <li>{@link #bufferRestore} — O(n) scans to rebuild {@link StoreBackedBufferStore}'s sequence counter
  *       and {@link ParsleyEngine}'s candidate-index from existing RocksDB data; varies buffer size n.
  * </ul>
  *
@@ -80,8 +80,8 @@ public class StateRestorationBenchmark {
         };
         StreamsBuilder builder = new StreamsBuilder();
         builder.stream("bench-in", Consumed.with(Serdes.String(), Serdes.String()))
-               .process(ParsleyProcessors.builder(noOp).addBufferStore("parsley")
-                       .addBuffer(new ParsleyBuffer<>("bench-in", Serdes.String(), Serdes.String()))
+               .process(ParsleyProcessorSupplier.builder(noOp).addBufferStore("parsley")
+                       .addSource(new ParsleySource<>("bench-in", Serdes.String(), Serdes.String()))
                        .topicAdmin(TestTopicAdmin.of(java.util.Map.of("bench-in", Uuid.randomUuid())))
                        .build())
                .to("bench-out", Produced.with(Serdes.String(), Serdes.String()));
@@ -110,8 +110,8 @@ public class StateRestorationBenchmark {
         // dependency, as if a crash occurred with that many held records.
         ParsleyEngine<String, String> engine = new ParsleyEngine<>(
                 ParsleyClock.empty(),
-                new RocksBufferStore<>(bufferKV, serializer), new RocksCandidateIndex(waitKV),
-                new RocksForwardedIndex(forwardedKV), ParsleyMetrics.NOOP);
+                new StoreBackedBufferStore<>(bufferKV, serializer), new StoreBackedCandidateIndex(waitKV),
+                new StoreBackedForwardedIndex(forwardedKV), ParsleyMetrics.NOOP);
         for (int i = 0; i < bufferSize; i++) {
             ParsleyClock deps = ParsleyClock.empty().observe(Uuid.randomUuid(), 0, 0L);
             engine.receive(record("bench-" + i, 0, (long) i, deps));
@@ -135,17 +135,17 @@ public class StateRestorationBenchmark {
     }
 
     /**
-     * Simulates buffer restoration on startup: the O(n) scan in {@link RocksBufferStore}'s
+     * Simulates buffer restoration on startup: the O(n) scan in {@link StoreBackedBufferStore}'s
      * constructor (to seed nextSequence and size) plus the O(n) candidate-index rebuild in
-     * {@link ParsleyEngine}'s constructor (one {@link RocksCandidateIndex#index} write per buffered
+     * {@link ParsleyEngine}'s constructor (one {@link StoreBackedCandidateIndex#index} write per buffered
      * record). Together these reproduce the full cost of {@link ParsleyProcessor#init} when
      * non-empty state is found in RocksDB.
      */
     @Benchmark
     public ParsleyEngine<String, String> bufferRestore() {
-        RocksBufferStore<String, String> buf = new RocksBufferStore<>(bufferKV, serializer);
-        RocksCandidateIndex idx = new RocksCandidateIndex(waitKV);
-        RocksForwardedIndex fwd = new RocksForwardedIndex(forwardedKV);
+        StoreBackedBufferStore<String, String> buf = new StoreBackedBufferStore<>(bufferKV, serializer);
+        StoreBackedCandidateIndex idx = new StoreBackedCandidateIndex(waitKV);
+        StoreBackedForwardedIndex fwd = new StoreBackedForwardedIndex(forwardedKV);
         return new ParsleyEngine<>(ParsleyClock.empty(),
                 buf, idx, fwd, ParsleyMetrics.NOOP);
     }

@@ -10,12 +10,12 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * Tests {@link RocksCandidateIndex} — the {@link org.apache.kafka.streams.state.KeyValueStore}-backed
+ * Tests {@link StoreBackedCandidateIndex} — the {@link org.apache.kafka.streams.state.KeyValueStore}-backed
  * {@link ParsleyCandidateIndex} implementation — against a real {@link org.apache.kafka.streams.state.KeyValueStore}
  * (via {@link TestKeyValueStore}), exercising the actual big-endian byte-key range scan rather than
  * {@link MockCandidateIndex}'s in-memory structure.
  */
-class RocksCandidateIndexTest {
+class StoreBackedCandidateIndexTest {
 
     private static final Uuid TOPIC_ID = Uuid.randomUuid();
 
@@ -29,7 +29,7 @@ class RocksCandidateIndexTest {
      */
     @Test
     void indexOnlyStoresUnsatisfiedDependenciesAndFindCandidatesScansTheRealRange() {
-        RocksCandidateIndex index = new RocksCandidateIndex(newRocksStore());
+        StoreBackedCandidateIndex index = new StoreBackedCandidateIndex(newRocksStore());
         ParsleyClock frontier = ParsleyClock.empty().observe(TOPIC_ID, 0, 5);
         ParsleyClock required = ParsleyClock.empty()
                 .observe(TOPIC_ID, 0, 10)   // ahead of the frontier (5) — must be indexed
@@ -58,7 +58,7 @@ class RocksCandidateIndexTest {
      */
     @Test
     void pruneRemovesTheCandidateFromTheRealStore() {
-        RocksCandidateIndex index = new RocksCandidateIndex(newRocksStore());
+        StoreBackedCandidateIndex index = new StoreBackedCandidateIndex(newRocksStore());
         ParsleyClock required = ParsleyClock.empty().observe(TOPIC_ID, 0, 10);
         index.index(7L, required, ParsleyClock.empty());
 
@@ -80,7 +80,7 @@ class RocksCandidateIndexTest {
      */
     @Test
     void findCandidatesIsScopedToItsCoordinate() {
-        RocksCandidateIndex index = new RocksCandidateIndex(newRocksStore());
+        StoreBackedCandidateIndex index = new StoreBackedCandidateIndex(newRocksStore());
         Uuid otherTopicId = Uuid.randomUuid();
         index.index(1L, ParsleyClock.empty().observe(TOPIC_ID, 0, 10), ParsleyClock.empty());
         index.index(2L, ParsleyClock.empty().observe(TOPIC_ID, 1, 10), ParsleyClock.empty());

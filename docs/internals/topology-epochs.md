@@ -141,7 +141,7 @@ intermediate topic marked external, or an external topic left undeclared — and
 wave for that coordinate. Deriving the registry from what every node actually consumes and produces
 removes that class of misconfiguration. Sink topics are declared automatically from
 `CausalStreamsBuilder`/`CausalProcessedStream#to(...)`; internally these become `sinkTopics` passed to
-`ParsleyProcessors.Builder#sinkTopics`.
+`ParsleyProcessorSupplier.Builder#sinkTopics`.
 
 ## Joining a running topology
 

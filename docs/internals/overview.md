@@ -7,7 +7,7 @@ from plain Kafka clients, all backed by a shared internal implementation.
 
 | API | Backed by |
 |---|---|
-| `CausalStreamsBuilder` / `CausalTopology` / `CausalStreams` | `ParsleyProcessors` / `ParsleyProcessorSupplier` / `ParsleyProcessor` (package-private) |
+| `CausalStreamsBuilder` / `CausalTopology` / `CausalStreams` | `ParsleyProcessorSupplier` / `ParsleyProcessor` (package-private) |
 | `CausalDependencies` edge ops (`using` / `observe` / `stamp` / `merge`) | `ParsleyClock` (no wrapper objects); `using`/`builder` resolve topic UUIDs internally, caching each name against a short-lived Kafka admin client opened on first use |
 
 All share a common set of value types and a single causal engine.
@@ -29,7 +29,7 @@ All share a common set of value types and a single causal engine.
 | Class | Role |
 |---|---|
 | `ParsleyTopics` / `KafkaTopics` | Resolves topic names to their stable Kafka UUIDs (through a short-lived Kafka admin client, cached), backing `CausalDependencies`'s `using`/`builder` |
-| `ParsleyBuffer` | One registered causal source: topic name + the serdes the buffer round-trips held records with (the topic's UUID is resolved from the broker) |
+| `ParsleySource` | One registered causal source: topic name + the serdes the buffer round-trips held records with (the topic's UUID is resolved from the broker) |
 | `ParsleyEngine` | Causal buffer engine: classify, buffer, cascade, fail-closed. No eviction, no buffer limit, no timeout |
 | `ParsleyClock` | The one vector clock: node frontier *and* dependency representation, keyed on `(Uuid, int)` primitives |
 | `ParsleyMessage` | Typed engine envelope: source coordinate + dependency clock as fields, user headers separate |
@@ -37,9 +37,9 @@ All share a common set of value types and a single causal engine.
 | `ParsleyProcessor` | Kafka Streams processor wrapping the user processor and driving the engine; emits and consumes protocol watermarks and epoch markers |
 | `ParsleyProcessorSupplier` | Processor factory; registers Parsley's four state stores |
 | `ParsleyProcessorContext` | Stamping proxy: replaces the context given to the user processor; counts business forwards to drive watermark emission |
-| `ParsleyBufferStore` / `RocksBufferStore` | Durable buffer of held records |
-| `ParsleyCandidateIndex` / `RocksCandidateIndex` | Secondary index: coordinate -> candidate record IDs |
-| `ParsleyForwardedIndex` / `RocksForwardedIndex` | Offsets forwarded ahead of the contiguous frontier, so the boundary stays gap-free across restarts |
+| `ParsleyBufferStore` / `StoreBackedBufferStore` | Durable buffer of held records |
+| `ParsleyCandidateIndex` / `StoreBackedCandidateIndex` | Secondary index: coordinate -> candidate record IDs |
+| `ParsleyForwardedIndex` / `StoreBackedForwardedIndex` | Offsets forwarded ahead of the contiguous frontier, so the boundary stays gap-free across restarts |
 | `ParsleyFrontier` | Owns all causal metadata a node persists — the contiguous delivered frontier clock (the delivery gate's clock), the per-input-channel clocks, and `completeness()` (the max-merge of the frontier and every channel's advertised clock — the outbound stamp, never the gate) — self-persisting as the single `"f"` value of the frontier store; holds the forwarded index as a collaborator |
 | `ParsleySerializer` | Binary serde for `ParsleyMessage` (buffer store wire format) |
 
@@ -61,7 +61,7 @@ Causal processor (Streams)
                    dependency is satisfied only by local delivery of the cause, never by a claim
                    advertised on another channel's clock (that feeds only the outbound stamp)
                  satisfied     -> advance frontier, drain cascade
-                 unsatisfied   -> buffer (RocksBufferStore) + index (RocksCandidateIndex)
+                 unsatisfied   -> buffer (StoreBackedBufferStore) + index (StoreBackedCandidateIndex)
                  no header     -> trivially satisfied (empty dependencies)
                  unreachable   -> no channel for this coordinate at all -> fail the task fast
     -> deliver: user processor receives records via ParsleyProcessorContext

@@ -14,7 +14,7 @@ declares one or more causal stages, {@code .build()} produces a
 {@link io.github.tobyjamesclements.parsley.CausalTopology}, and
 {@link io.github.tobyjamesclements.parsley.CausalStreams} is the runtime that wraps the underlying
 {@code KafkaStreams} instance. The low-level processor decorator that powers it,
-{@code ParsleyProcessors}, is package-private internal machinery, not constructed directly.</p>
+{@code ParsleyProcessorSupplier}, is package-private internal machinery, not constructed directly.</p>
 
 <p>A running topology can also evolve — add a stage, replace a stage, recompile — across a leaderless
 epoch boundary: {@link io.github.tobyjamesclements.parsley.CausalStreams#requestEpochTransition()}

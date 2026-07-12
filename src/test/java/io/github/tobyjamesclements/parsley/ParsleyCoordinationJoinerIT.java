@@ -126,9 +126,9 @@ class ParsleyCoordinationJoinerIT {
         StreamsBuilder builder = new StreamsBuilder();
         addStageA(builder, coordination);
         builder.stream(MID, Consumed.with(Serdes.String(), Serdes.String()))
-                .process(ParsleyProcessors.builder(prefixer())
+                .process(ParsleyProcessorSupplier.builder(prefixer())
                         .addBufferStore("parsley-b")
-                        .addBuffer(new ParsleyBuffer<>(MID, Serdes.String(), Serdes.String()))
+                        .addSource(new ParsleySource<>(MID, Serdes.String(), Serdes.String()))
                         .withCoordination(coordination)
                         .build())
                 .to(OUT, Produced.with(Serdes.String(), Serdes.String()));
@@ -137,9 +137,9 @@ class ParsleyCoordinationJoinerIT {
 
     private static void addStageA(StreamsBuilder builder, ParsleyCoordination coordination) {
         builder.stream(IN, Consumed.with(Serdes.String(), Serdes.String()))
-                .process(ParsleyProcessors.builder(upperCaser())
+                .process(ParsleyProcessorSupplier.builder(upperCaser())
                         .addBufferStore("parsley-a")
-                        .addBuffer(new ParsleyBuffer<>(IN, Serdes.String(), Serdes.String()))
+                        .addSource(new ParsleySource<>(IN, Serdes.String(), Serdes.String()))
                         .withCoordination(coordination)
                         .build())
                 .to(MID, Produced.with(Serdes.String(), Serdes.String()));

@@ -24,11 +24,11 @@ All four are created with `Stores.persistentKeyValueStore(...)`, so they are cha
 
 ## `ParsleyProcessor` init sequence
 
-0. Resolve each registered `ParsleyBuffer` topic's stable UUID from the broker via a `ParsleyTopicAdmin` built from `context.appConfigs()` (the topology decorator has no broker config until init), populating the `topicUuids` map. Closed immediately after.
+0. Resolve each registered `ParsleySource` topic's stable UUID from the broker via a `ParsleyTopicAdmin` built from `context.appConfigs()` (the topology decorator has no broker config until init), populating the `topicUuids` map. Closed immediately after.
 1. Retrieve the state stores from the processor context by name.
 2. If topology-epoch coordination is configured: resolve this task's shared `ParsleyEpochRuntime`, join it with this member's declared input channels and sink topics, block until this member is a running member (`awaitJoinCommit`), then run the startup self-check `validateFullMeshCoverage` — fails fast if this member's own declared topics do not cover the domain the coordination log already knows about.
 3. Construct the task's one `ParsleyEngine` (`buildEngine()`, cached for the processor's lifetime — sound because passthrough topics are wired as extra sources into this same node, so no second processor instance ever shares these stores). Its `ParsleyFrontier` loads the frontier clock and channel clocks from the single `"f"` value (empty if absent) and self-persists that value on every change. The restored state is pruned to the current in-scope coordinates, then a channel entry is seeded for every consumed input topic-partition — including any passthrough topic (see below).
-4. Construct `ParsleyEngine` with the `ParsleyFrontier` (which owns the forwarded index and self-persists), a `RocksBufferStore` wrapping the buffer store and a `ParsleySerializer`, and a `RocksCandidateIndex` wrapping the candidate-index store.
+4. Construct `ParsleyEngine` with the `ParsleyFrontier` (which owns the forwarded index and self-persists), a `StoreBackedBufferStore` wrapping the buffer store and a `ParsleySerializer`, and a `StoreBackedCandidateIndex` wrapping the candidate-index store.
 5. Wrap the real context in a `ParsleyProcessorContext` (stamping proxy). Call `delegate.init(wrappedContext)`.
 6. Schedule a self-cancelling, one-shot `WALL_CLOCK_TIME` punctuation that drains any record satisfiable between the last committed frontier and the last committed buffer-removal (`drainAfterRestore()`), run once against the buffer restored from a changelog. Must run as a punctuation, not inline: Kafka Streams has not finished wiring the task's `RecordCollector` until every processor in the topology returns from `init()`, so `forward()` during `init()` throws.
 7. Schedule a periodic metrics-refresh punctuator that also re-pushes this task's quiesce-drained state, so a task whose buffer emptied before `requestQuiesce()` was ever called still reports drained within one tick.
@@ -53,7 +53,7 @@ process(Record<KIn,VIn>)
 
   ingested = ingest(record)
     reads source metadata from context.recordMetadata()
-    resolves topicId from topicUuids map (broker-resolved at init for each registered ParsleyBuffer; throws IllegalStateException if absent)
+    resolves topicId from topicUuids map (broker-resolved at init for each registered ParsleySource; throws IllegalStateException if absent)
     returns ParsleyMessage.from(record, source, offset, topicId)
 
   completenessBefore = engine().completeness()
@@ -104,4 +104,4 @@ All other `ProcessorContext` methods delegate verbatim.
 
 ## State store namespace
 
-The namespace is the stage name `CausalTopology#assemble` derives (or the explicit name passed to `CausalStream#process(name, supplier)`), used internally as `ParsleyProcessors.Builder#addBufferStore(name)`. Use a unique namespace per stage within a topology that contains more than one. The store names are embedded in the changelog topic names, so they must be stable across deployments.
+The namespace is the stage name `CausalTopology#assemble` derives (or the explicit name passed to `CausalStream#process(name, supplier)`), used internally as `ParsleyProcessorSupplier.Builder#addBufferStore(name)`. Use a unique namespace per stage within a topology that contains more than one. The store names are embedded in the changelog topic names, so they must be stable across deployments.

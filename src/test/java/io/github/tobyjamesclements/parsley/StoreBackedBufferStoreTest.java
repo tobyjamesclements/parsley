@@ -18,12 +18,12 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
 /**
- * Tests {@link RocksBufferStore} — the {@link org.apache.kafka.streams.state.KeyValueStore}-backed
+ * Tests {@link StoreBackedBufferStore} — the {@link org.apache.kafka.streams.state.KeyValueStore}-backed
  * {@link ParsleyBufferStore} implementation — against a real {@link KeyValueStore} (via
  * {@link TestKeyValueStore}), distinct from {@link ParsleyBufferStoreTest}, which exercises the same
  * contract against the purely in-memory {@link MockBufferStore}.
  */
-class RocksBufferStoreTest {
+class StoreBackedBufferStoreTest {
 
     private static final TopicPartition T1 = new TopicPartition("t1", 0);
     private static final Uuid T1_ID = Uuid.randomUuid();
@@ -40,7 +40,7 @@ class RocksBufferStoreTest {
      */
     @Test
     void getAndIndexEntriesReadBackThroughTheRealStore() {
-        RocksBufferStore<String, String> store = new RocksBufferStore<>(newRocksStore(), serializer);
+        StoreBackedBufferStore<String, String> store = new StoreBackedBufferStore<>(newRocksStore(), serializer);
         ParsleyClock depsA = ParsleyClock.empty().observe(T1_ID, 0, 9);
         ParsleyClock depsB = ParsleyClock.empty().observe(T1_ID, 0, 3);
 
@@ -63,7 +63,7 @@ class RocksBufferStoreTest {
     }
 
     /**
-     * Constructing a {@code RocksBufferStore} over a backing store that already holds records (as
+     * Constructing a {@code StoreBackedBufferStore} over a backing store that already holds records (as
      * after a restart, restored from the changelog) seeds the insertion-sequence counter and size
      * from what is already there, rather than starting from zero and risking a sequence collision.
      *
@@ -78,7 +78,7 @@ class RocksBufferStoreTest {
         backing.put(5L, packed(record(T1, 0, ParsleyClock.empty()), 10L));
         backing.put(9L, packed(record(T1, 1, ParsleyClock.empty()), 20L));
 
-        RocksBufferStore<String, String> restored = new RocksBufferStore<>(backing, serializer);
+        StoreBackedBufferStore<String, String> restored = new StoreBackedBufferStore<>(backing, serializer);
 
         assertEquals(2, restored.size(), "size must be seeded from the pre-existing entries");
         long newSeq = restored.add(record(T1, 2, ParsleyClock.empty()), 30L);
@@ -99,7 +99,7 @@ class RocksBufferStoreTest {
     void indexEntriesSurvivesAnUndecodableValue() {
         ParsleySerializer<String, String> poisonSerializer =
                 new ParsleySerializer<>(new ParsleyResolver<>(topic -> Serdes.String(), topic -> new ThrowingDeserializerSerde()));
-        RocksBufferStore<String, String> store = new RocksBufferStore<>(newRocksStore(), poisonSerializer);
+        StoreBackedBufferStore<String, String> store = new StoreBackedBufferStore<>(newRocksStore(), poisonSerializer);
         ParsleyClock deps = ParsleyClock.empty().observe(T1_ID, 0, 3);
         long seq = store.add(record(T1, 0, deps), 100L);
 
@@ -124,7 +124,7 @@ class RocksBufferStoreTest {
         ParsleyProcessorsTopologyTest.SpyStringSerde valueSpy = new ParsleyProcessorsTopologyTest.SpyStringSerde();
         ParsleySerializer<String, String> spySerializer =
                 new ParsleySerializer<>(new ParsleyResolver<>(topic -> Serdes.String(), topic -> valueSpy));
-        RocksBufferStore<String, String> store = new RocksBufferStore<>(newRocksStore(), spySerializer);
+        StoreBackedBufferStore<String, String> store = new StoreBackedBufferStore<>(newRocksStore(), spySerializer);
 
         store.add(record(T1, 0, ParsleyClock.empty()), 100L);
 

@@ -29,7 +29,7 @@ A protocol watermark is a record with a null value, keyed with the triggering re
 
 ## Buffer record (`ParsleySerializer` v3)
 
-The `{ns}-buffer` state store value has two layers: `RocksBufferStore` prepends the buffer-admission
+The `{ns}-buffer` state store value has two layers: `StoreBackedBufferStore` prepends the buffer-admission
 time to the `ParsleySerializer`-encoded record.
 
 ```
@@ -85,7 +85,7 @@ The `{ns}-candidate-index` store maps coordinate+offset+recordId to an empty pre
 ## State store names and serdes
 
 The namespace is the stage name `CausalTopology#assemble` derives (or an explicit name from
-`CausalStream#process(name, supplier)`), used internally as `ParsleyProcessors.builder(...).addBufferStore(name)`.
+`CausalStream#process(name, supplier)`), used internally as `ParsleyProcessorSupplier.builder(...).addBufferStore(name)`.
 
 | Store | Key serde | Value serde | Purpose |
 |---|---|---|---|
@@ -119,7 +119,7 @@ its own keyed store (`{ns}-forwarded-index`): it is growable and order-sensitive
 
 Topic UUIDs are not derived or guessed. They are resolved from the broker through `AdminClient`. The
 processor resolves them at `init()` from the task's `appConfigs()` for every topic registered as a
-`ParsleyBuffer` on `ParsleyProcessors.builder(...)`. If a registered topic does not exist on the
+`ParsleySource` on `ParsleyProcessorSupplier.builder(...)`. If a registered topic does not exist on the
 broker, resolution fails fast with `IllegalStateException` rather than falling back to a guess.
 
 The real UUID Kafka assigned to the topic is what's used. A topic deleted and recreated with the

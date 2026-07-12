@@ -90,9 +90,9 @@ class ParsleyProcessorsAvroTopologyTest {
         ProcessorSupplier<String, SpecificRecord, String, SpecificRecord> user = capturing();
         StreamsBuilder builder = new StreamsBuilder();
         builder.stream(List.of(PRICES, ORDERS), Consumed.with(Serdes.String(), avro))
-                .process(ParsleyProcessors.builder(user)
+                .process(ParsleyProcessorSupplier.builder(user)
                         .addBufferStore("parsley")
-                        .addBuffers(List.of(PRICES, ORDERS), Serdes.String(), avro)
+                        .addSources(List.of(PRICES, ORDERS), Serdes.String(), avro)
                         .topicAdmin(TestTopicAdmin.of(Map.of(PRICES, PRICES_ID, ORDERS, ORDERS_ID)))
                         .build());
         Topology topology = builder.build();
@@ -138,14 +138,14 @@ class ParsleyProcessorsAvroTopologyTest {
      * typed {@link ParsleyBufferDeserializationException} (a {@link RuntimeException}, so the JVM is
      * never crashed) rather than dropping the record.
      *
-     * <p>Exercised directly against {@link RocksBufferStore} with the real {@link SpecificAvroSerde}
+     * <p>Exercised directly against {@link StoreBackedBufferStore} with the real {@link SpecificAvroSerde}
      * (genuine Confluent wire bytes, schema registered under {@code orders-value}), rather than
      * through a full topology: a record's own declared dependency is folded into its own channel
      * before its own gate check runs, so under single-witness merge it always proves itself
      * immediately — there is no longer a way to force a record to sit genuinely buffered via a normal
      * record's own dependency at the topology level. Constructing the buffered entry directly still
      * exercises the exact same encode/decode path
-     * ({@code RocksBufferStore} + {@code ParsleySerializer} + real Avro wire bytes) that a genuinely
+     * ({@code StoreBackedBufferStore} + {@code ParsleySerializer} + real Avro wire bytes) that a genuinely
      * buffered record would have gone through, including the writer-schema-id extraction in the
      * exception.
      *
@@ -159,7 +159,7 @@ class ParsleyProcessorsAvroTopologyTest {
         ParsleySerializer<String, SpecificRecord> writable =
                 new ParsleySerializer<>(new ParsleyResolver<>(topic -> Serdes.String(), topic -> avro));
         KeyValueStore<Long, byte[]> backing = new TestKeyValueStore<Long, byte[]>(java.util.Comparator.naturalOrder());
-        RocksBufferStore<String, SpecificRecord> store = new RocksBufferStore<>(backing, writable);
+        StoreBackedBufferStore<String, SpecificRecord> store = new StoreBackedBufferStore<>(backing, writable);
 
         ParsleyClock deps = ParsleyClock.empty().observe(PRICES_ID, 0, 0);
         ParsleyMessage<String, SpecificRecord> orderMessage = new ParsleyMessage<>(
@@ -181,7 +181,7 @@ class ParsleyProcessorsAvroTopologyTest {
         };
         ParsleySerializer<String, SpecificRecord> unreadable =
                 new ParsleySerializer<>(new ParsleyResolver<>(topic -> Serdes.String(), topic -> undecodableOnRead));
-        RocksBufferStore<String, SpecificRecord> poisonedView = new RocksBufferStore<>(backing, unreadable);
+        StoreBackedBufferStore<String, SpecificRecord> poisonedView = new StoreBackedBufferStore<>(backing, unreadable);
 
         Exception thrown = org.junit.jupiter.api.Assertions.assertThrows(Exception.class,
                 () -> poisonedView.get(seq), "an undecodable buffered record must surface an exception on decode");

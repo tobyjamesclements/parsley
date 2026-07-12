@@ -56,7 +56,7 @@ final class ParsleyCoordination {
      * produces is an external source (so a stage consuming one self-initiates the wave and adopts that
      * coordinate's floor from the log). Sink topics are declared automatically from
      * {@code CausalStreamsBuilder}/{@code CausalProcessedStream#to(...)}, which {@code CausalTopology}
-     * passes through to {@code ParsleyProcessors.Builder#sinkTopics(...)}.
+     * passes through to {@code ParsleyProcessorSupplier.Builder#sinkTopics(...)}.
      *
      * <p>An epoch transition blocks — unbounded — until every running member has published; a member is
      * removed from the domain only by an explicit {@link #leave()}, never automatically, since only a

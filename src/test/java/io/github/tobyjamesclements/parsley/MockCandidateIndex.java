@@ -14,7 +14,7 @@ import java.util.TreeMap;
 /**
  * An in-memory {@link ParsleyCandidateIndex} backed by a nested {@link TreeMap}. Used in unit tests that
  * exercise {@link ParsleyEngine} without a Kafka state store. Production uses
- * {@link RocksCandidateIndex}.
+ * {@link StoreBackedCandidateIndex}.
  */
 final class MockCandidateIndex implements ParsleyCandidateIndex {
 

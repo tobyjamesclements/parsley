@@ -7,6 +7,19 @@ All notable changes to this project are documented in this file. The format is b
 ## [Unreleased]
 
 ### Changed
+- **Internal class/API naming cleanup (no behaviour change).** Package-private renames only; no public
+  API surface is affected. The changelog-backed store implementations `RocksBufferStore` /
+  `RocksCandidateIndex` / `RocksForwardedIndex` — not RocksDB-specific (they run over any Kafka
+  `KeyValueStore`, in-memory ones included) — become `StoreBackedBufferStore` /
+  `StoreBackedCandidateIndex` / `StoreBackedForwardedIndex`. The source-registration record
+  `ParsleyBuffer` becomes `ParsleySource` (it registers a source topic + serdes; it is not a buffer,
+  and the old name collided with `ParsleyBufferStore`, the real buffer); its builder methods
+  `addBuffer` / `addBuffers` become `addSource` / `addSources`. `ParsleyQuiesce`'s epoch-drain second
+  role is split out into a dedicated, lighter `ParsleyQuiesceTracker` (no shutdown-arming;
+  `allDrained()` reflects drain state alone), leaving `ParsleyQuiesce` solely the `CausalStreams`
+  graceful-shutdown gate. The builder-only holder `ParsleyProcessors` is folded into
+  `ParsleyProcessorSupplier.builder(...)` / `ParsleyProcessorSupplier.Builder`, removing a class.
+  Internal design docs and `overview.html` updated to match.
 - **Internal marker-forward and completeness naming cleanup (no behaviour change).** The triplicate
   `forwardWatermark`/`forwardEpochSnapshot`/`forwardEpochBoundary` in `ParsleyProcessor` collapse to one
   `forwardMarker(header, value, key)`; the misleadingly-named `stampFrontier` field (and

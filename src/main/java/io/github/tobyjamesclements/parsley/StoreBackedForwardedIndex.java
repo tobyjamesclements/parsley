@@ -23,14 +23,14 @@ import java.util.List;
  * reflects natural numeric order. A range scan of the form "coordinate C, offset &gt; N" becomes
  * {@code store.range(key(C, N + 1), key(C, Long.MAX_VALUE))}.
  */
-final class RocksForwardedIndex implements ParsleyForwardedIndex {
+final class StoreBackedForwardedIndex implements ParsleyForwardedIndex {
 
     private static final byte[] PRESENT = new byte[0];
     private static final int KEY_SIZE = 28;
 
     private final KeyValueStore<byte[], byte[]> store;
 
-    RocksForwardedIndex(KeyValueStore<byte[], byte[]> store) {
+    StoreBackedForwardedIndex(KeyValueStore<byte[], byte[]> store) {
         this.store = store;
     }
 

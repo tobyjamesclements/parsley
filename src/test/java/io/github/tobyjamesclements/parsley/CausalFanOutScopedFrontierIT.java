@@ -239,9 +239,9 @@ class CausalFanOutScopedFrontierIT {
     private static Topology scopedTopology(String shared, String unique, String out, String namespace) {
         StreamsBuilder builder = new StreamsBuilder();
         builder.stream(List.of(shared, unique), Consumed.with(Serdes.String(), Serdes.String()))
-                .process(ParsleyProcessors.builder(upperCaser())
+                .process(ParsleyProcessorSupplier.builder(upperCaser())
                         .addBufferStore(namespace)
-                        .addBuffers(List.of(shared, unique), Serdes.String(), Serdes.String())
+                        .addSources(List.of(shared, unique), Serdes.String(), Serdes.String())
                         .build())
                 .to(out, Produced.with(Serdes.String(), Serdes.String()));
         return builder.build();

@@ -91,9 +91,9 @@ class CausalReconvergenceTopologyTest {
     private static Topology fanInTopology() {
         StreamsBuilder builder = new StreamsBuilder();
         builder.stream(List.of(T_FAST, T_SLOW, T_ANC), Consumed.with(Serdes.String(), Serdes.String()))
-                .process(ParsleyProcessors.builder(upperCaser())
+                .process(ParsleyProcessorSupplier.builder(upperCaser())
                         .addBufferStore("fanin")
-                        .addBuffers(List.of(T_FAST, T_SLOW, T_ANC), Serdes.String(), Serdes.String())
+                        .addSources(List.of(T_FAST, T_SLOW, T_ANC), Serdes.String(), Serdes.String())
                         .topicAdmin(FAN_IN_ADMIN)
                         .build())
                 .to("out", Produced.with(Serdes.String(), Serdes.String()));
@@ -107,9 +107,9 @@ class CausalReconvergenceTopologyTest {
     private static Topology filterTopology() {
         StreamsBuilder builder = new StreamsBuilder();
         builder.stream(List.of(T1), Consumed.with(Serdes.String(), Serdes.String()))
-                .process(ParsleyProcessors.builder(filter())
+                .process(ParsleyProcessorSupplier.builder(filter())
                         .addBufferStore("filter")
-                        .addBuffer(new ParsleyBuffer<>(T1, Serdes.String(), Serdes.String()))
+                        .addSource(new ParsleySource<>(T1, Serdes.String(), Serdes.String()))
                         .topicAdmin(SINGLE_ADMIN)
                         .build())
                 .to("out", Produced.with(Serdes.String(), Serdes.String()));

@@ -269,7 +269,7 @@ class CausalStreamsTopologyTest {
     /**
      * Assembling a stage whose {@code userSupplier} is already a package-private
      * {@code ParsleyProcessorSupplier} rejects it — the double-wrap guard lives in
-     * {@code ParsleyProcessors#builder}, which {@link CausalTopology#assemble} composes internally, so
+     * {@code ParsleyProcessorSupplier#builder}, which {@link CausalTopology#assemble} composes internally, so
      * this proves the protection is inherited rather than needing a second, separate check in the
      * public builder.
      *
@@ -278,9 +278,9 @@ class CausalStreamsTopologyTest {
     @Test
     void assembleRejectsAnAlreadyDecoratedSupplier() {
         ParsleyProcessorSupplier<String, String, String, String> alreadyDecorated =
-                ParsleyProcessors.builder(upperCaser())
+                ParsleyProcessorSupplier.builder(upperCaser())
                         .addBufferStore("parsley")
-                        .addBuffer(new ParsleyBuffer<>("t1", Serdes.String(), Serdes.String()))
+                        .addSource(new ParsleySource<>("t1", Serdes.String(), Serdes.String()))
                         .build();
 
         CausalStreamsBuilder builder = new CausalStreamsBuilder();

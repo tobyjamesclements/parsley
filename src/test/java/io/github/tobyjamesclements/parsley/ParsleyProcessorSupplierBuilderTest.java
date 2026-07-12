@@ -17,7 +17,7 @@ import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-class ParsleyProcessorsTest {
+class ParsleyProcessorSupplierBuilderTest {
 
     private static final ProcessorSupplier<String, String, String, String> USER =
             () -> new Processor<>() {
@@ -28,31 +28,31 @@ class ParsleyProcessorsTest {
     private static final String TOPOLOGY_VALIDATION = "parsley.topology.validation";
 
     /**
-     * {@code ParsleyProcessors.Builder.build()} requires a buffer store to be declared via
+     * {@code ParsleyProcessorSupplier.Builder.build()} requires a buffer store to be declared via
      * {@code addBufferStore(name)} before the processor supplier can be constructed.
      *
      * Asserts that {@code IllegalStateException} is thrown when no buffer store was declared.
      */
     @Test
     void buildFailsWithoutBufferStore() {
-        ParsleyProcessors.Builder<String, String, String, String> b = ParsleyProcessors.builder(USER)
-                .addBuffer(new ParsleyBuffer<>("t1", Serdes.String(), Serdes.String()));
+        ParsleyProcessorSupplier.Builder<String, String, String, String> b = ParsleyProcessorSupplier.builder(USER)
+                .addSource(new ParsleySource<>("t1", Serdes.String(), Serdes.String()));
         assertThrows(IllegalStateException.class, b::build,
                 "build() must throw when addBufferStore(name) was not called");
     }
 
     /**
-     * {@code ParsleyProcessors.Builder.build()} requires at least one {@link ParsleyBuffer} to be
+     * {@code ParsleyProcessorSupplier.Builder.build()} requires at least one {@link ParsleySource} to be
      * registered before the processor supplier can be constructed.
      *
      * Asserts that {@code IllegalStateException} is thrown when no buffer has been added.
      */
     @Test
     void buildRequiresABuffer() {
-        ParsleyProcessors.Builder<String, String, String, String> b =
+        ParsleyProcessorSupplier.Builder<String, String, String, String> b =
                 builderWith();
         assertThrows(IllegalStateException.class, b::build,
-                "build() must throw when no ParsleyBuffer has been registered");
+                "build() must throw when no ParsleySource has been registered");
     }
 
     /**
@@ -66,7 +66,7 @@ class ParsleyProcessorsTest {
     void buildsAValidSupplier() {
         ParsleyProcessorSupplier<String, String, String, String> supplier =
                 builderWith()
-                        .addBuffer(new ParsleyBuffer<>("t1", Serdes.String(), Serdes.String()))
+                        .addSource(new ParsleySource<>("t1", Serdes.String(), Serdes.String()))
                         .build();
         assertNotNull(supplier, "build() must return a non-null supplier");
         assertNotNull(supplier.get(), "supplier.get() must return a non-null processor");
@@ -81,9 +81,9 @@ class ParsleyProcessorsTest {
     @Test
     void addBufferStoreSetsNamespace() {
         ParsleyProcessorSupplier<String, String, String, String> supplier =
-                (ParsleyProcessorSupplier<String, String, String, String>) ParsleyProcessors.builder(USER)
+                (ParsleyProcessorSupplier<String, String, String, String>) ParsleyProcessorSupplier.builder(USER)
                         .addBufferStore("t1")
-                        .addBuffer(new ParsleyBuffer<>("t1", Serdes.String(), Serdes.String()))
+                        .addSource(new ParsleySource<>("t1", Serdes.String(), Serdes.String()))
                         .build();
 
         Set<String> storeNames = supplier.stores().stream()
@@ -108,7 +108,7 @@ class ParsleyProcessorsTest {
     void withConfigKeyValueOverridesDefault() {
         ParsleyProcessorSupplier<String, String, String, String> supplier =
                 (ParsleyProcessorSupplier<String, String, String, String>) builderWith()
-                        .addBuffer(new ParsleyBuffer<>("t1", Serdes.String(), Serdes.String()))
+                        .addSource(new ParsleySource<>("t1", Serdes.String(), Serdes.String()))
                         .withConfig(TOPOLOGY_VALIDATION, "strict")
                         .build();
         assertEquals(ParsleyConfig.ValidationMode.STRICT, supplier.config().topologyValidation(),
@@ -125,7 +125,7 @@ class ParsleyProcessorsTest {
     void defaultConfigUsesWarnValidation() {
         ParsleyProcessorSupplier<String, String, String, String> supplier =
                 (ParsleyProcessorSupplier<String, String, String, String>) builderWith()
-                        .addBuffer(new ParsleyBuffer<>("t1", Serdes.String(), Serdes.String()))
+                        .addSource(new ParsleySource<>("t1", Serdes.String(), Serdes.String()))
                         .build();
         assertEquals(ParsleyConfig.ValidationMode.WARN, supplier.config().topologyValidation(),
                 "the default topology-validation mode is 'warn'");
@@ -141,7 +141,7 @@ class ParsleyProcessorsTest {
     void withConfigsMapAndPropertiesApplied() {
         ParsleyProcessorSupplier<String, String, String, String> fromMap =
                 (ParsleyProcessorSupplier<String, String, String, String>) builderWith()
-                        .addBuffer(new ParsleyBuffer<>("t1", Serdes.String(), Serdes.String()))
+                        .addSource(new ParsleySource<>("t1", Serdes.String(), Serdes.String()))
                         .withConfigs(Map.of(TOPOLOGY_VALIDATION, "strict"))
                         .build();
         assertEquals(ParsleyConfig.ValidationMode.STRICT, fromMap.config().topologyValidation(),
@@ -151,7 +151,7 @@ class ParsleyProcessorsTest {
         props.setProperty(TOPOLOGY_VALIDATION, "strict");
         ParsleyProcessorSupplier<String, String, String, String> fromProps =
                 (ParsleyProcessorSupplier<String, String, String, String>) builderWith()
-                        .addBuffer(new ParsleyBuffer<>("t2", Serdes.String(), Serdes.String()))
+                        .addSource(new ParsleySource<>("t2", Serdes.String(), Serdes.String()))
                         .withConfig(props)
                         .build();
         assertEquals(ParsleyConfig.ValidationMode.STRICT, fromProps.config().topologyValidation(),
@@ -159,7 +159,7 @@ class ParsleyProcessorsTest {
     }
 
     /**
-     * {@code ParsleyProcessors.builder(...)} rejects a {@code userSupplier} that is already a
+     * {@code ParsleyProcessorSupplier.builder(...)} rejects a {@code userSupplier} that is already a
      * {@link ParsleyProcessorSupplier} — decorating an already-decorated supplier would buffer and
      * stamp every record twice, nested, silently corrupting the frontier.
      *
@@ -169,11 +169,11 @@ class ParsleyProcessorsTest {
     void builderRejectsAnAlreadyDecoratedSupplier() {
         ParsleyProcessorSupplier<String, String, String, String> alreadyDecorated =
                 builderWith()
-                        .addBuffer(new ParsleyBuffer<>("t1", Serdes.String(), Serdes.String()))
+                        .addSource(new ParsleySource<>("t1", Serdes.String(), Serdes.String()))
                         .build();
 
         IllegalArgumentException e = assertThrows(IllegalArgumentException.class,
-                () -> ParsleyProcessors.builder(alreadyDecorated),
+                () -> ParsleyProcessorSupplier.builder(alreadyDecorated),
                 "builder(...) must reject an already-decorated supplier");
         assertTrue(e.getMessage().contains("ParsleyProcessorSupplier"),
                 "the message must name the double-decoration: " + e.getMessage());
@@ -181,7 +181,7 @@ class ParsleyProcessorsTest {
 
     // --- helpers --------------------------------------------------------------------------------
 
-    private static ParsleyProcessors.Builder<String, String, String, String> builderWith() {
-        return ParsleyProcessors.builder(USER).addBufferStore("parsley");
+    private static ParsleyProcessorSupplier.Builder<String, String, String, String> builderWith() {
+        return ParsleyProcessorSupplier.builder(USER).addBufferStore("parsley");
     }
 }

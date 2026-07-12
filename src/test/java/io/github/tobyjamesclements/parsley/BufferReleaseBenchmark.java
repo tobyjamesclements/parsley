@@ -42,7 +42,7 @@ import static java.nio.charset.StandardCharsets.UTF_8;
  * Measures the cost of scanning and releasing buffered records when the causal frontier advances.
  *
  * <p>Three operations are benchmarked independently, each with its own @Param dimension and its
- * own pre-populated {@link RocksBufferStore} / {@link RocksCandidateIndex} backed by a
+ * own pre-populated {@link StoreBackedBufferStore} / {@link StoreBackedCandidateIndex} backed by a
  * {@link TopologyTestDriver}-managed RocksDB instance:
  * <ul>
  *   <li>{@link #bufferSize} — O(log n) candidate-index lookup; varies buffer size {@code n}, fixes k=1, r=1
@@ -101,9 +101,9 @@ public class BufferReleaseBenchmark {
                                                        ParsleySerializer<String, String> serializer) {
         return new ParsleyEngine<>(
                 ParsleyClock.empty(),
-                new RocksBufferStore<>(bufferKV, serializer),
-                new RocksCandidateIndex(waitKV),
-                new RocksForwardedIndex(forwardedKV),
+                new StoreBackedBufferStore<>(bufferKV, serializer),
+                new StoreBackedCandidateIndex(waitKV),
+                new StoreBackedForwardedIndex(forwardedKV),
                 ParsleyMetrics.NOOP);
     }
 
@@ -130,8 +130,8 @@ public class BufferReleaseBenchmark {
         };
         StreamsBuilder builder = new StreamsBuilder();
         builder.stream("bench-in", Consumed.with(Serdes.String(), Serdes.String()))
-               .process(ParsleyProcessors.builder(noOp).addBufferStore("parsley")
-                       .addBuffer(new ParsleyBuffer<>("bench-in", Serdes.String(), Serdes.String()))
+               .process(ParsleyProcessorSupplier.builder(noOp).addBufferStore("parsley")
+                       .addSource(new ParsleySource<>("bench-in", Serdes.String(), Serdes.String()))
                        .topicAdmin(TestTopicAdmin.of(java.util.Map.of("bench-in", topicId("bench-in"))))
                        .build())
                .to("bench-out", Produced.with(Serdes.String(), Serdes.String()));

@@ -143,9 +143,9 @@ class CausalProcessorAvroIT {
         Serde<SpecificRecord> avro = avroValueSerde(registryUrl);
         StreamsBuilder builder = new StreamsBuilder();
         builder.stream(List.of(PRICES, ORDERS), Consumed.with(Serdes.String(), avro))
-                .process(ParsleyProcessors.builder(passthrough())
+                .process(ParsleyProcessorSupplier.builder(passthrough())
                         .addBufferStore("parsley")
-                        .addBuffers(List.of(PRICES, ORDERS), Serdes.String(), avro)
+                        .addSources(List.of(PRICES, ORDERS), Serdes.String(), avro)
                         .build())
                 .to(OUT, Produced.with(Serdes.String(), avro));
         return builder.build();

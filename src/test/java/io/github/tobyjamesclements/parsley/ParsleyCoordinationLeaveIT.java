@@ -173,9 +173,9 @@ class ParsleyCoordinationLeaveIT {
                                   java.util.function.UnaryOperator<String> fn) {
         StreamsBuilder builder = new StreamsBuilder();
         builder.stream(IN, Consumed.with(Serdes.String(), Serdes.String()))
-                .process(ParsleyProcessors.builder(mapper(fn))
+                .process(ParsleyProcessorSupplier.builder(mapper(fn))
                         .addBufferStore(namespace)
-                        .addBuffer(new ParsleyBuffer<>(IN, Serdes.String(), Serdes.String()))
+                        .addSource(new ParsleySource<>(IN, Serdes.String(), Serdes.String()))
                         .withCoordination(coordination)
                         .build())
                 .to(OUT, Produced.with(Serdes.String(), Serdes.String()));

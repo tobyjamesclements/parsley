@@ -92,8 +92,8 @@ public final class CausalTopology {
     private <KIn, VIn, KOut, VOut> void assembleStage(
             Topology topology, ParsleyStageSpec<KIn, VIn, KOut, VOut> stage, String name, ParsleyConfig config,
             DefaultSerdes defaults, ParsleyQuiesce quiesce, @Nullable ParsleyCoordination coordination) {
-        Map<String, ParsleyBuffer<KIn, VIn>> sources = new LinkedHashMap<>();
-        stage.sources.forEach((topic, source) -> sources.put(topic, new ParsleyBuffer<>(topic,
+        Map<String, ParsleySource<KIn, VIn>> sources = new LinkedHashMap<>();
+        stage.sources.forEach((topic, source) -> sources.put(topic, new ParsleySource<>(topic,
                 source.keySerde() != null ? source.keySerde() : defaults.key(),
                 source.valueSerde() != null ? source.valueSerde() : defaults.value())));
 
@@ -113,9 +113,9 @@ public final class CausalTopology {
             passthroughTopics = Set.of();
         }
 
-        ParsleyProcessors.Builder<KIn, VIn, KOut, VOut> causalBuilder = ParsleyProcessors.builder(stage.userSupplier)
+        ParsleyProcessorSupplier.Builder<KIn, VIn, KOut, VOut> causalBuilder = ParsleyProcessorSupplier.builder(stage.userSupplier)
                 .addBufferStore(name)
-                .addBuffers(sources.values())
+                .addSources(sources.values())
                 .declareTopics(passthroughTopics)
                 .config(config)
                 .sinkTopics(sinkTopics)
@@ -132,7 +132,7 @@ public final class CausalTopology {
         String processorName = name + "-processor";
         String[] sourceNames = new String[sources.size() + passthroughTopics.size()];
         int i = 0;
-        for (ParsleyBuffer<KIn, VIn> buffer : sources.values()) {
+        for (ParsleySource<KIn, VIn> buffer : sources.values()) {
             String sourceName = name + "-source-" + buffer.topic();
             topology.addSource(sourceName,
                     buffer.keySerde().deserializer(), buffer.valueSerde().deserializer(), buffer.topic());

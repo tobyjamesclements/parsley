@@ -428,9 +428,9 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
      * from {@link #init}; {@link #wiredMetrics} and the {@code epochSeed*} fields must already be set.
      */
     private ParsleyEngine<KIn, VIn> buildEngine() {
-        ParsleyBufferStore<KIn, VIn> buffer = new RocksBufferStore<>(bufferStore, serializer);
-        ParsleyCandidateIndex candidateIndex = new RocksCandidateIndex(candidateIndexStore);
-        ParsleyForwardedIndex forwardedIndex = new RocksForwardedIndex(forwardedIndexStore);
+        ParsleyBufferStore<KIn, VIn> buffer = new StoreBackedBufferStore<>(bufferStore, serializer);
+        ParsleyCandidateIndex candidateIndex = new StoreBackedCandidateIndex(candidateIndexStore);
+        ParsleyForwardedIndex forwardedIndex = new StoreBackedForwardedIndex(forwardedIndexStore);
         // The single owner of the persisted causal metadata: loads the frontier clock and channel
         // clocks from key "f" of the frontier store and rewrites that value on change. The forwarded
         // index keeps its own keyed store and is injected here.
@@ -1048,8 +1048,8 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
         Uuid topicId = topicUuids.get(topic);
         if (topicId == null) {
             throw new IllegalStateException(
-                    "no ParsleyBuffer registered for topic '" + topic
-                            + "'; call addBuffer(...) on the ParsleyProcessors builder for every input topic");
+                    "no ParsleySource registered for topic '" + topic
+                            + "'; call addSource(...) on the ParsleyProcessorSupplier builder for every input topic");
         }
         try {
             return ParsleyMessage.from(record, source, meta.offset(), topicId);

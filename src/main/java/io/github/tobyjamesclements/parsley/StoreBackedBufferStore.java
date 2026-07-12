@@ -23,14 +23,14 @@ import java.util.OptionalLong;
  * @param <K> the record key type
  * @param <V> the record value type
  */
-final class RocksBufferStore<K, V> implements ParsleyBufferStore<K, V> {
+final class StoreBackedBufferStore<K, V> implements ParsleyBufferStore<K, V> {
 
     private final KeyValueStore<Long, byte[]> store;
     private final ParsleySerializer<K, V> serializer;
     private long nextSequence;
     private int size;
 
-    RocksBufferStore(KeyValueStore<Long, byte[]> store, ParsleySerializer<K, V> serializer) {
+    StoreBackedBufferStore(KeyValueStore<Long, byte[]> store, ParsleySerializer<K, V> serializer) {
         this.store = store;
         this.serializer = serializer;
         // Seed the sequence past anything that survived a previous run, and count what is held, in a

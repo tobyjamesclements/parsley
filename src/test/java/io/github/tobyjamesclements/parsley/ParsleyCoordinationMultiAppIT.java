@@ -56,7 +56,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * a domain topic only the other side touches.
  *
  * <p>{@link #bJoiningAnIncompleteMeshFailsClosedAtStartup} proves the fail-closed side of this, over the
- * low-level {@link ParsleyProcessors} API with no {@code parsley.coordination.domain-topics} configured:
+ * low-level {@link ParsleyProcessorSupplier} API with no {@code parsley.coordination.domain-topics} configured:
  * B's own startup self-check ({@code ParsleyProcessor#validateFullMeshCoverage}) must fail closed the
  * moment it joins an epoch where A has already declared {@code t1}. {@link
  * #domainTopicsAutoWiresPassthroughSoBothAppsRunAndDeliverEndToEnd} proves the other side: with {@code
@@ -353,9 +353,9 @@ class ParsleyCoordinationMultiAppIT {
     private static Topology stageA(ParsleyCoordination coordination) {
         StreamsBuilder builder = new StreamsBuilder();
         builder.stream(IN, Consumed.with(Serdes.String(), Serdes.String()))
-                .process(ParsleyProcessors.builder(mapper(v -> v.toUpperCase(Locale.ROOT)))
+                .process(ParsleyProcessorSupplier.builder(mapper(v -> v.toUpperCase(Locale.ROOT)))
                         .addBufferStore("parsley-a")
-                        .addBuffer(new ParsleyBuffer<>(IN, Serdes.String(), Serdes.String()))
+                        .addSource(new ParsleySource<>(IN, Serdes.String(), Serdes.String()))
                         .withCoordination(coordination)
                         .build())
                 .to(MID, Produced.with(Serdes.String(), Serdes.String()));
@@ -365,9 +365,9 @@ class ParsleyCoordinationMultiAppIT {
     private static Topology stageB(ParsleyCoordination coordination) {
         StreamsBuilder builder = new StreamsBuilder();
         builder.stream(MID, Consumed.with(Serdes.String(), Serdes.String()))
-                .process(ParsleyProcessors.builder(mapper(v -> "B:" + v))
+                .process(ParsleyProcessorSupplier.builder(mapper(v -> "B:" + v))
                         .addBufferStore("parsley-b")
-                        .addBuffer(new ParsleyBuffer<>(MID, Serdes.String(), Serdes.String()))
+                        .addSource(new ParsleySource<>(MID, Serdes.String(), Serdes.String()))
                         .withCoordination(coordination)
                         .build())
                 .to(OUT, Produced.with(Serdes.String(), Serdes.String()));

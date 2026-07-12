@@ -10,12 +10,12 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * Tests {@link RocksForwardedIndex} — the {@link org.apache.kafka.streams.state.KeyValueStore}-backed
+ * Tests {@link StoreBackedForwardedIndex} — the {@link org.apache.kafka.streams.state.KeyValueStore}-backed
  * {@link ParsleyForwardedIndex} implementation — against a real {@link org.apache.kafka.streams.state.KeyValueStore}
  * (via {@link TestKeyValueStore}), exercising the actual big-endian byte-key range scan rather than
  * {@link MockForwardedIndex}'s in-memory structure.
  */
-class RocksForwardedIndexTest {
+class StoreBackedForwardedIndexTest {
 
     private static final Uuid TOPIC_ID = Uuid.randomUuid();
 
@@ -29,7 +29,7 @@ class RocksForwardedIndexTest {
      */
     @Test
     void forwardedAfterScansTheRealRangeAscendingAndExcludesAtOrBelowTheFrontier() {
-        RocksForwardedIndex index = new RocksForwardedIndex(newRocksStore());
+        StoreBackedForwardedIndex index = new StoreBackedForwardedIndex(newRocksStore());
         index.mark(TOPIC_ID, 0, 6);
         index.mark(TOPIC_ID, 0, 8);
         index.mark(TOPIC_ID, 0, 7);
@@ -49,7 +49,7 @@ class RocksForwardedIndexTest {
      */
     @Test
     void unmarkRemovesTheOffsetFromTheRealStore() {
-        RocksForwardedIndex index = new RocksForwardedIndex(newRocksStore());
+        StoreBackedForwardedIndex index = new StoreBackedForwardedIndex(newRocksStore());
         index.mark(TOPIC_ID, 0, 5);
 
         assertEquals(List.of(5L), index.forwardedAfter(TOPIC_ID, 0, 0),
@@ -72,7 +72,7 @@ class RocksForwardedIndexTest {
      */
     @Test
     void forwardedAfterAndUnmarkAreScopedToTheirCoordinateWithNoOverDeletion() {
-        RocksForwardedIndex index = new RocksForwardedIndex(newRocksStore());
+        StoreBackedForwardedIndex index = new StoreBackedForwardedIndex(newRocksStore());
         Uuid otherTopicId = Uuid.randomUuid();
         index.mark(TOPIC_ID, 0, 5);
         index.mark(TOPIC_ID, 1, 5);
@@ -102,7 +102,7 @@ class RocksForwardedIndexTest {
      */
     @Test
     void pruneAtOrBelowDeletesOnlyAtOrBelowTheWatermarkNeverTheNextCandidateAbove() {
-        RocksForwardedIndex index = new RocksForwardedIndex(newRocksStore());
+        StoreBackedForwardedIndex index = new StoreBackedForwardedIndex(newRocksStore());
         index.mark(TOPIC_ID, 0, 3);
         index.mark(TOPIC_ID, 0, 5);
         index.mark(TOPIC_ID, 0, 6); // watermark + 1: must survive the prune

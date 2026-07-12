@@ -5,20 +5,15 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
- * Coordinates graceful shutdown across a registered set of causal tasks or members, identified by an
- * opaque string id — a Kafka Streams {@code TaskId}'s string form for {@link CausalStreams}, or an
- * epoch member id (see {@link ParsleyEpochRuntime}). {@code CausalStreams} owns one {@code ParsleyQuiesce}
+ * Coordinates graceful shutdown across a registered set of causal tasks, identified by an opaque string
+ * id — a Kafka Streams {@code TaskId}'s string form. {@code CausalStreams} owns one {@code ParsleyQuiesce}
  * internally: every participating task registers with it at {@code init()}, and
  * {@code CausalStreams#close()} calls {@link #requestQuiesce()} then polls {@link #isSafeToClose()}
  * before stopping the underlying {@code KafkaStreams} — so a clean shutdown never strands a
  * causally-held record. There is no public handle; this is purely an internal shutdown mechanism.
  *
- * <p>{@link ParsleyEpochRuntime} reuses this same class for an unrelated but structurally identical
- * need — tracking which of its local members are currently drained, so {@link ParsleyCoordination#leave()}
- * waits until every local member is drained before removing it from the epoch domain. There, quiesce is
- * requested unconditionally at construction (an epoch leave always cares about drain state, never gated
- * on an external request), so {@link #isSafeToClose()} degenerates to "every registered member is
- * currently drained".
+ * <p>For the structurally similar but unrelated epoch-leave drain gate (no shutdown arming), see the
+ * lighter {@link ParsleyQuiesceTracker}.
  *
  * <p>A task registered with a {@code ParsleyQuiesce} keeps processing normally after
  * {@link #requestQuiesce()} — nothing about how it delivers or forwards records changes. It only

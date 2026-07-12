@@ -160,9 +160,9 @@ class ParsleyCoordinationLeaveDrainIT {
     private static Topology stageX(ParsleyCoordination coordination) {
         StreamsBuilder builder = new StreamsBuilder();
         builder.stream(List.of(PREREQ, IN), Consumed.with(Serdes.String(), Serdes.String()))
-                .process(ParsleyProcessors.builder(upperCaser())
+                .process(ParsleyProcessorSupplier.builder(upperCaser())
                         .addBufferStore("parsley-x")
-                        .addBuffers(List.of(PREREQ, IN), Serdes.String(), Serdes.String())
+                        .addSources(List.of(PREREQ, IN), Serdes.String(), Serdes.String())
                         .withCoordination(coordination)
                         .build())
                 .to(OUT, Produced.with(Serdes.String(), Serdes.String()));
@@ -178,9 +178,9 @@ class ParsleyCoordinationLeaveDrainIT {
     private static Topology stageY(ParsleyCoordination coordination) {
         StreamsBuilder builder = new StreamsBuilder();
         builder.stream(List.of(PREREQ, IN), Consumed.with(Serdes.String(), Serdes.String()))
-                .process(ParsleyProcessors.builder(lowerCaser())
+                .process(ParsleyProcessorSupplier.builder(lowerCaser())
                         .addBufferStore("parsley-y")
-                        .addBuffers(List.of(PREREQ, IN), Serdes.String(), Serdes.String())
+                        .addSources(List.of(PREREQ, IN), Serdes.String(), Serdes.String())
                         .withCoordination(coordination)
                         .build())
                 .to(OUT, Produced.with(Serdes.String(), Serdes.String()));

@@ -91,8 +91,8 @@ class ParsleyProcessorsSinkPropagationIT {
 
         StreamsBuilder builder = new StreamsBuilder();
         builder.stream(IN, Consumed.with(Serdes.String(), Serdes.String()))
-                .process(ParsleyProcessors.builder(user).addBufferStore("parsley")
-                        .addBuffer(new ParsleyBuffer<>(IN, Serdes.String(), Serdes.String()))
+                .process(ParsleyProcessorSupplier.builder(user).addBufferStore("parsley")
+                        .addSource(new ParsleySource<>(IN, Serdes.String(), Serdes.String()))
                         .build())
                 .to(OUT, Produced.with(Serdes.String(), Serdes.String()));
 

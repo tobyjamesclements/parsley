@@ -10,7 +10,7 @@ import java.util.TreeMap;
  * An in-memory {@link ParsleyBufferStore} backed by a {@link TreeMap} keyed by insertion sequence. Used
  * where buffer durability is not required — unit tests that exercise the {@link ParsleyEngine}
  * without a Kafka state store, and to stand in for a restored buffer in tests. Production uses
- * {@link RocksBufferStore}.
+ * {@link StoreBackedBufferStore}.
  *
  * @param <K> the record key type
  * @param <V> the record value type

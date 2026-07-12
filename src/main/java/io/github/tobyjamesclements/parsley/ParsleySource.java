@@ -8,7 +8,7 @@ import java.util.Objects;
  * Registers one causal source: a topic name paired with the serdes Parsley's buffer uses to
  * (de)serialise records held from that topic.
  *
- * <p>Supply one per input topic to {@link ParsleyProcessors.Builder#addBuffer}. The topic's stable
+ * <p>Supply one per input topic to {@link ParsleyProcessorSupplier.Builder#addSource}. The topic's stable
  * UUID is resolved from the broker automatically, so a buffer only carries what the DSL cannot — the
  * per-topic serdes the buffer store round-trips held records with.
  *
@@ -23,9 +23,9 @@ import java.util.Objects;
  * @param <K>        the key type
  * @param <V>        the value type
  */
-record ParsleyBuffer<K, V>(String topic, Serde<K> keySerde, Serde<V> valueSerde) {
+record ParsleySource<K, V>(String topic, Serde<K> keySerde, Serde<V> valueSerde) {
 
-    ParsleyBuffer {
+    ParsleySource {
         Objects.requireNonNull(topic, "topic must not be null");
         Objects.requireNonNull(keySerde, "keySerde must not be null");
         Objects.requireNonNull(valueSerde, "valueSerde must not be null");

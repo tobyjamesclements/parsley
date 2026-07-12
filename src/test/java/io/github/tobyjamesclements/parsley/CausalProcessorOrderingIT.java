@@ -80,9 +80,9 @@ class CausalProcessorOrderingIT {
 
         StreamsBuilder builder = new StreamsBuilder();
         builder.stream(List.of(PREREQ, IN), Consumed.with(Serdes.String(), Serdes.String()))
-                .process(ParsleyProcessors.builder(upperCaser())
+                .process(ParsleyProcessorSupplier.builder(upperCaser())
                         .addBufferStore("parsley")
-                        .addBuffers(List.of(PREREQ, IN), Serdes.String(), Serdes.String())
+                        .addSources(List.of(PREREQ, IN), Serdes.String(), Serdes.String())
                         .build())
                 .to(OUT, Produced.with(Serdes.String(), Serdes.String()));
 
