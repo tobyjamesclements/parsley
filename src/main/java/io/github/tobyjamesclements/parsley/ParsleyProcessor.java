@@ -190,10 +190,13 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
     // The stamping proxy context handed to the delegate. Held here so deliver() can check the
     // per-record forward count and emit a watermark when the delegate forwarded nothing.
     private ParsleyProcessorContext<KOut, VOut> stampingContext;
-    // Read live by the stamping proxy on the task thread AND by the epoch runtime's background thread
-    // (registerLocalCompleteness hands it a supplier over this field, so a wedged task's completeness
-    // can still be published on its behalf) — the volatile is load-bearing, not defensive.
-    private volatile ParsleyClock stampFrontier = ParsleyClock.empty();
+    // The completeness clock stamped onto every record the delegate forwards (see
+    // ParsleyProcessorContext). Read live by the stamping proxy at forward time and confined to the
+    // task thread — both the delegate's forwards and its punctuator fires run on the StreamThread, so
+    // no cross-thread visibility is needed. The epoch runtime's off-thread publication of a wedged
+    // task's completeness rides a separate channel (commitHook::committed via registerLocalCompleteness,
+    // whose own volatiles carry it across threads), not this field.
+    private ParsleyClock stampCompleteness = ParsleyClock.empty();
     private volatile @Nullable RecordMetadata deliveryMetadata;
     private Cancellable restoredDrainSchedule;
 
@@ -336,9 +339,9 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
             log.info("Processor initialized [task: {}] — frontier empty (fresh start)", context.taskId());
         }
 
-        // Initialise stampFrontier from completeness() so the stamping proxy reflects the restored
+        // Initialise stampCompleteness from completeness() so the stamping proxy reflects the restored
         // channel-clock state (not just the in-scope frontier) from the first forward onward.
-        this.stampFrontier = engine.completeness();
+        this.stampCompleteness = engine.completeness();
         // Seed the commit hook with the restored completeness (rebuilt from the committed changelog,
         // durable by definition) and hand it the live supplier it snapshots at each commit-cycle
         // flush. Every side-channel publication below reads commitHook.committed(), never the live
@@ -353,7 +356,7 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
         }
 
         this.stampingContext = new ParsleyProcessorContext<>(
-                context, () -> stampFrontier, () -> Optional.ofNullable(deliveryMetadata), sinkNodeNames);
+                context, () -> stampCompleteness, () -> Optional.ofNullable(deliveryMetadata), sinkNodeNames);
         delegate.init(stampingContext);
         this.delegateInitialized = true;
 
@@ -521,7 +524,7 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
             // partition, matching where its eventual business output will land — except a passthrough
             // record, whose own key is not a genuine KIn/KOut value; lastSeenKey routes just as well
             // (ParsleyMarkerPartition ignores the key for routing regardless).
-            forwardWatermark(passthrough ? lastSeenKey : record.key());
+            forwardMarker(ParsleyHeader.WATERMARK, new byte[0], passthrough ? lastSeenKey : record.key());
         }
         // A source-layer task also checks the coordination log after each record, so a round that opened
         // (or an epoch that committed) is acted on promptly without waiting for the wall-clock tick.
@@ -578,7 +581,7 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
             // boundary that is sound across all input branches. This replaces the old per-record
             // frontier-snapshot-merged-with-inbound-deps approach, which was correct only in
             // single-layer topologies. Downstream nodes receive the sound multi-layer boundary.
-            stampFrontier = engine().completeness();
+            stampCompleteness = engine().completeness();
             deliveryMetadata = new ParsleyRecordMetadata(message.topic(), message.partition(), message.offset());
             if (passthroughTopics.contains(message.topic())) {
                 // A passthrough message never reaches the delegate — its key/value are raw bytes, not a
@@ -590,7 +593,7 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
                 // record depending on this coordinate) through the real delegate below, on that message's
                 // own turn through this same loop — every released message is routed by its own topic,
                 // never by whichever message triggered the drain.
-                forwardWatermark(lastSeenKey);
+                forwardMarker(ParsleyHeader.WATERMARK, new byte[0], lastSeenKey);
             } else {
                 // User headers + the producer's dependencies only; the source coordinate is surfaced via
                 // context.recordMetadata(), and ParsleyProcessorContext re-stamps the frontier on forward.
@@ -604,12 +607,12 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
                 if (stampingContext.forwardCount() == 0) {
                     // Reuse the delivered record's key so the stand-in watermark routes to the same
                     // partition its business output would have.
-                    forwardWatermark(message.key());
+                    forwardMarker(ParsleyHeader.WATERMARK, new byte[0], message.key());
                 }
             }
         }
         deliveryMetadata = null;
-        stampFrontier = engine().completeness();
+        stampCompleteness = engine().completeness();
         updateQuiesceState();
     }
 
@@ -678,7 +681,7 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
         snapshotPublisher.publish(memberId, commitHook.committed());
         boolean channelAdvanced = foldMarkerCompleteness(record);
         if (channelAdvanced) {
-            forwardEpochSnapshot(record.key());
+            forwardMarker(ParsleyHeader.EPOCH_SNAPSHOT, new byte[0], record.key());
         }
     }
 
@@ -744,7 +747,7 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
         // cyclic topology still cannot ping-pong it. See the class Javadoc's clock-invisible-markers
         // discussion, which governs watermark relay; a boundary is boundary news, not just clock news.
         if (outcome.markerWasNew() || channelAdvanced) {
-            forwardEpochBoundary(record.key(), boundaryBytes);
+            forwardMarker(ParsleyHeader.EPOCH_BOUNDARY, boundaryBytes, record.key());
         }
     }
 
@@ -917,7 +920,7 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
      */
     private void injectSnapshot() {
         snapshotPublisher.publish(memberId, commitHook.committed());
-        forwardEpochSnapshot(lastSeenKey);
+        forwardMarker(ParsleyHeader.EPOCH_SNAPSHOT, new byte[0], lastSeenKey);
     }
 
     /**
@@ -934,7 +937,7 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
             released.addAll(outcome.outcome().delivered());
         }
         deliver(released);
-        forwardEpochBoundary(lastSeenKey, boundary.toBytes());
+        forwardMarker(ParsleyHeader.EPOCH_BOUNDARY, boundary.toBytes(), lastSeenKey);
     }
 
     /**
@@ -960,73 +963,49 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
         // re-emitting under the same key keeps the propagated watermark on the co-partitioned
         // downstream partition.
         if (foldMarkerCompleteness(record)) {
-            forwardWatermark(record.key());
+            forwardMarker(ParsleyHeader.WATERMARK, new byte[0], record.key());
         }
     }
 
     /**
-     * Forwards a protocol watermark carrying this node's current {@link ParsleyEngine#completeness()
-     * completeness frontier} to every business sink ({@link #sinkNodeNames} — never a zero-arg
-     * broadcast, so a sibling child node with an incompatible type never receives one; see
-     * {@link ParsleyProcessorContext}), keyed with {@code triggerKey} — the key of the input record that
-     * triggered this emission, carried
+     * Forwards a protocol marker — a watermark ({@link ParsleyHeader#WATERMARK}), an epoch-snapshot
+     * marker ({@link ParsleyHeader#EPOCH_SNAPSHOT}), or an epoch-boundary marker
+     * ({@link ParsleyHeader#EPOCH_BOUNDARY}) — carrying this node's current
+     * {@link ParsleyEngine#completeness() completeness} in the {@link ParsleyHeader#CAUSAL_DEPENDENCIES}
+     * header, so one record both signals the marker and advances the downstream channel clock. The
+     * marker type is set by {@code markerHeader} (with {@code markerValue}: an empty array for a
+     * watermark or snapshot, the encoded boundary for an epoch boundary).
+     *
+     * <p>Sent to every business sink ({@link #sinkNodeNames} — never a zero-arg broadcast, so a sibling
+     * child node with an incompatible type never receives one; see {@link ParsleyProcessorContext}),
+     * keyed with {@code triggerKey} — the key of the input record that triggered this emission, carried
      * through as informational wire content, not for routing: {@link ParsleyMarkerPartition} (set by
-     * {@link #forwardToSinks}) routes the watermark to this task's own owned partition regardless of
+     * {@link #forwardToSinks}) routes the marker to this task's own owned partition regardless of
      * {@code triggerKey}, including when it is {@code null} — so a downstream task's channel clock for
      * that partition always advances across a sink boundary, never dependent on a business key having
      * been observed yet.
      *
-     * <p>The watermark carries a null value and is distinguished from a business tombstone by the
-     * {@link ParsleyHeader#WATERMARK} header; downstream Parsley consumers skip it by that header, not
-     * by its key. It bypasses the business-forward counter in {@link ParsleyProcessorContext} (it is
-     * forwarded through the raw context, not the stamping proxy) so it does not prevent watermark
-     * emission for a genuinely non-emitting delegate invocation, and its frontier header is written
-     * here directly rather than by the proxy.
+     * <p>The marker carries a null value and is distinguished from a business tombstone by its
+     * {@code markerHeader}; downstream Parsley consumers skip it by that header, not by its key. It
+     * bypasses the business-forward counter in {@link ParsleyProcessorContext} (it is forwarded through
+     * the raw context, not the stamping proxy) so it does not prevent watermark emission for a
+     * genuinely non-emitting delegate invocation, and its completeness header is written here directly
+     * rather than by the proxy.
      *
      * <p>The {@code KIn}-to-{@code KOut} cast is sound under the co-partitioning contract: a causal
      * processor must not change the key across the node (doing so reshards the causally-related
      * events), so the input and output key types coincide.
      */
     @SuppressWarnings({"NullAway", "unchecked"}) // null value by design; KIn==KOut under the co-partitioning contract
-    private void forwardWatermark(@Nullable KIn triggerKey) {
-        Headers wm = ParsleyHeader.mutableHeaders();
-        wm.add(ParsleyHeader.WATERMARK, new byte[0]);
-        wm.add(ParsleyHeader.CAUSAL_DEPENDENCIES, engine().completeness().toBytes());
+    private void forwardMarker(String markerHeader, byte[] markerValue, @Nullable KIn triggerKey) {
+        Headers headers = ParsleyHeader.mutableHeaders();
+        headers.add(markerHeader, markerValue);
+        headers.add(ParsleyHeader.CAUSAL_DEPENDENCIES, engine().completeness().toBytes());
         // Stamped with the current wall clock, never 0L: a marker's timestamp carries no causal
         // meaning (only its headers do), but it does drive broker time-based retention — a sink
         // segment holding only 0L-timestamped markers (a marker-only passthrough channel) would look
         // expired the moment it rolled and be deleted before a slow consumer read it.
-        forwardToSinks(new Record<>((KOut) (Object) triggerKey, null, context.currentSystemTimeMs(), wm));
-    }
-
-    /**
-     * Relays an epoch-snapshot marker to every business sink, keyed with {@code triggerKey} — carried
-     * through as informational wire content only, not for routing (see {@link #forwardWatermark} for the
-     * routing rationale, the {@code KIn}-to-{@code KOut} cast, the targeted-forwarding rationale, and the
-     * null-value / null-key handling — identical here). The marker also carries this node's current
-     * completeness in the {@link ParsleyHeader#CAUSAL_DEPENDENCIES} header, so one record both propagates
-     * the cut and advances the downstream channel clock.
-     */
-    @SuppressWarnings({"NullAway", "unchecked"}) // null value by design; KIn==KOut under the co-partitioning contract
-    private void forwardEpochSnapshot(@Nullable KIn triggerKey) {
-        Headers marker = ParsleyHeader.mutableHeaders();
-        marker.add(ParsleyHeader.EPOCH_SNAPSHOT, new byte[0]);
-        marker.add(ParsleyHeader.CAUSAL_DEPENDENCIES, engine().completeness().toBytes());
-        forwardToSinks(new Record<>((KOut) (Object) triggerKey, null, context.currentSystemTimeMs(), marker));
-    }
-
-    /**
-     * Relays an epoch-boundary marker (carrying the unchanged {@code boundaryBytes}: the same epochId +
-     * lowerBounds everywhere) to every business sink, keyed with {@code triggerKey} — informational only,
-     * not for routing. Also carries this node's completeness so the downstream channel clock advances
-     * from the same record. See {@link #forwardWatermark} for the routing/cast/targeted-forward rationale.
-     */
-    @SuppressWarnings({"NullAway", "unchecked"}) // null value by design; KIn==KOut under the co-partitioning contract
-    private void forwardEpochBoundary(@Nullable KIn triggerKey, byte[] boundaryBytes) {
-        Headers marker = ParsleyHeader.mutableHeaders();
-        marker.add(ParsleyHeader.EPOCH_BOUNDARY, boundaryBytes);
-        marker.add(ParsleyHeader.CAUSAL_DEPENDENCIES, engine().completeness().toBytes());
-        forwardToSinks(new Record<>((KOut) (Object) triggerKey, null, context.currentSystemTimeMs(), marker));
+        forwardToSinks(new Record<>((KOut) (Object) triggerKey, null, context.currentSystemTimeMs(), headers));
     }
 
     /**

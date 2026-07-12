@@ -22,7 +22,7 @@ import java.util.function.Supplier;
 
 /**
  * A Decorator (GoF) over the real {@link ProcessorContext} handed to a decorating causal processor's
- * delegate, stamping the current causal frontier onto every forwarded record's headers and
+ * delegate, stamping the current causal completeness onto every forwarded record's headers and
  * delegating everything else verbatim.
  *
  * <p>This is what makes outgoing messages causally stamped without the user stamping anything by
@@ -30,10 +30,10 @@ import java.util.function.Supplier;
  * {@link Record}'s headers onto the produced {@code ProducerRecord}, so dependencies stamped here
  * ride the headers all the way to the output topic.
  *
- * <p>The frontier is read <strong>live</strong> through a {@link Supplier} at stamp time, so a
- * forward during record admission sees the post-admit frontier and a forward from a punctuator sees
- * the frontier as of fire time. Stamping is idempotent — any existing
- * {@link ParsleyHeader#CAUSAL_DEPENDENCIES} header is removed before the current frontier is written — and never
+ * <p>The completeness is read <strong>live</strong> through a {@link Supplier} at stamp time, so a
+ * forward during record admission sees the post-admit completeness and a forward from a punctuator
+ * sees the completeness as of fire time. Stamping is idempotent — any existing
+ * {@link ParsleyHeader#CAUSAL_DEPENDENCIES} header is removed before the current completeness is written — and never
  * mutates the incoming record's headers (a fresh header set is built and applied via
  * {@link Record#withHeaders}).
  *
@@ -47,7 +47,7 @@ import java.util.function.Supplier;
  * one child of any kind.
  *
  * <p>Note: scheduled punctuators forward through this same proxy, so their forwards are stamped with
- * no special-casing. Punctuators must only <em>read</em> the frontier (never advance it), which
+ * no special-casing. Punctuators must only <em>read</em> the completeness (never advance it), which
  * preserves the engine's persist-frontier-before-forward invariant on the punctuator path.
  *
  * @param <KOut> the forwarded key type
@@ -56,7 +56,7 @@ import java.util.function.Supplier;
 final class ParsleyProcessorContext<KOut, VOut> implements ProcessorContext<KOut, VOut> {
 
     private final ProcessorContext<KOut, VOut> delegate;
-    private final Supplier<ParsleyClock> frontier;
+    private final Supplier<ParsleyClock> completeness;
     private final Supplier<Optional<RecordMetadata>> deliveredMetadata;
     // Every business sink this stage declared, or empty to fall back to the plain broadcast forward()
     // Kafka Streams itself provides. Non-empty only when a second, incompatibly-typed child has been
@@ -68,11 +68,11 @@ final class ParsleyProcessorContext<KOut, VOut> implements ProcessorContext<KOut
     private int forwardCount = 0;
 
     ParsleyProcessorContext(ProcessorContext<KOut, VOut> delegate,
-                             Supplier<ParsleyClock> frontier,
+                             Supplier<ParsleyClock> completeness,
                              Supplier<Optional<RecordMetadata>> deliveredMetadata,
                              List<String> sinkNodeNames) {
         this.delegate = delegate;
-        this.frontier = frontier;
+        this.completeness = completeness;
         this.deliveredMetadata = deliveredMetadata;
         this.sinkNodeNames = sinkNodeNames;
     }
@@ -115,7 +115,7 @@ final class ParsleyProcessorContext<KOut, VOut> implements ProcessorContext<KOut
     }
 
     private <K extends KOut, V extends VOut> Record<K, V> stamp(Record<K, V> record) {
-        Headers stamped = ParsleyHeader.replacingDependencies(record.headers(), frontier.get().toBytes());
+        Headers stamped = ParsleyHeader.replacingDependencies(record.headers(), completeness.get().toBytes());
         return record.withHeaders(stamped);
     }
 

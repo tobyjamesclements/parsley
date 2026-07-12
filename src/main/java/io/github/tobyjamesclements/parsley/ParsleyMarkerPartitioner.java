@@ -12,8 +12,8 @@ import java.util.Set;
  * own owned partition —
  * {@link ParsleyMarkerPartition#get()} — instead of whatever the wrapped partitioner would compute from
  * the marker's key. {@link CausalTopology} installs one of these on every sink a stage declares, in place
- * of {@code stage.partitioner} directly, so a marker forward — {@code forwardWatermark}/{@code
- * forwardEpochSnapshot}/{@code forwardEpochBoundary} in {@link ParsleyProcessor}, all funnelled through
+ * of {@code stage.partitioner} directly, so a marker forward — {@code forwardMarker} in
+ * {@link ParsleyProcessor}, funnelled through
  * {@code forwardToSinks} — always reaches the correct partition, never depending on a business key being
  * available ({@code lastSeenKey} non-null) or on the wrapped partitioner happening to preserve the
  * co-partitioning contract for a marker's borrowed key.

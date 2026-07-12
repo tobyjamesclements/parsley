@@ -7,6 +7,13 @@ All notable changes to this project are documented in this file. The format is b
 ## [Unreleased]
 
 ### Changed
+- **Internal marker-forward and completeness naming cleanup (no behaviour change).** The triplicate
+  `forwardWatermark`/`forwardEpochSnapshot`/`forwardEpochBoundary` in `ParsleyProcessor` collapse to one
+  `forwardMarker(header, value, key)`; the misleadingly-named `stampFrontier` field (and
+  `ParsleyProcessorContext`'s `frontier` constructor parameter) become `stampCompleteness`/`completeness`,
+  since the stamped clock is the node's completeness, not its delivery frontier. The field's stale
+  "read off-thread by the epoch runtime" comment is corrected — it is task-thread-confined (the
+  off-thread publication rides `commitHook::committed`), so the field is no longer needlessly `volatile`.
 - **Documentation drift swept.** `ParsleyEpochBoundary` no longer credits a "Topology Co-ordinator"
   (the protocol is leaderless: source-layer tasks inject, peers relay); `ParsleyEpochEvent` counts
   its five events (not four) and, with `ParsleyEpochLog`/`ParsleyEpochSnapshotPublisher`, describes
