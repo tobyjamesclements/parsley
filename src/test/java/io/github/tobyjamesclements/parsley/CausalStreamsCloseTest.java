@@ -10,30 +10,51 @@ import static org.junit.jupiter.api.Assertions.assertTimeoutPreemptively;
 
 /**
  * Tests for {@link CausalStreams#awaitDrain}: the graceful-shutdown drain wait is unbounded only
- * while draining can actually progress. An instance whose streams died in {@code ERROR} (every task
- * closed and unregistered, so {@link ParsleyQuiesce#isSafeToClose} — which requires at least one
- * registered, drained task — can never become true) must not hang {@code close()} forever: held
- * records are changelog-backed and survive to the next start regardless.
+ * while draining can actually progress and there is something to drain. An instance whose streams died
+ * in {@code ERROR} with a still-held record (its task cannot deliver again) must not hang forever, and
+ * neither must an instance that sits {@code RUNNING} owning zero tasks — held records are
+ * changelog-backed and survive to the next start regardless.
  */
 class CausalStreamsCloseTest {
 
     private static final Duration TEST_TIMEOUT = Duration.ofSeconds(5);
 
     /**
-     * A dead streams instance (ERROR, all tasks closed and unregistered) ends the drain wait instead
-     * of hanging forever on a quiesce that can never report safe-to-close.
+     * A dead streams instance (ERROR) with a registered task that never drained ends the drain wait via
+     * the dead-instance escape rather than hanging forever: the task can never deliver again, so
+     * {@link ParsleyQuiesce#isSafeToClose} can never become true, but the ERROR state ends the wait.
      */
     @Test
     void drainWaitEndsWhenTheStreamsInstanceIsDead() {
         ParsleyQuiesce quiesce = new ParsleyQuiesce();
         quiesce.requestQuiesce();
-        // No task registered — exactly the state after every task of a dead instance unregistered on
-        // close; isSafeToClose() is permanently false.
+        // A registered, still-undrained task: isSafeToClose() is permanently false, so only the
+        // dead-instance (ERROR) escape can end the wait.
+        quiesce.register("0_0");
 
         assertTimeoutPreemptively(TEST_TIMEOUT,
                 () -> CausalStreams.awaitDrain(quiesce, () -> KafkaStreams.State.ERROR),
-                "awaitDrain must return promptly when the streams instance is in ERROR — no task can "
-                        + "ever drain again, so waiting on isSafeToClose() would hang forever");
+                "awaitDrain must return promptly when the streams instance is in ERROR — the registered "
+                        + "task can never drain again, so waiting on isSafeToClose() would hang forever");
+    }
+
+    /**
+     * B2 regression: an instance that owns no tasks (more instances than partitions, or every task
+     * migrated away — each unregisters on its own close) sits {@code RUNNING}, so the dead-instance
+     * escape never fires, yet has no registered task that could ever report drained. It must still close
+     * at once: there is nothing buffered to strand.
+     */
+    @Test
+    void drainWaitReturnsImmediatelyOnARunningInstanceWithZeroRegisteredTasks() {
+        ParsleyQuiesce quiesce = new ParsleyQuiesce();
+        quiesce.requestQuiesce();
+        // No task ever registered, and the instance is healthy (RUNNING) — the pre-fix hang.
+
+        assertTimeoutPreemptively(TEST_TIMEOUT,
+                () -> CausalStreams.awaitDrain(quiesce, () -> KafkaStreams.State.RUNNING),
+                "awaitDrain must return at once on a RUNNING instance with zero registered tasks — it "
+                        + "holds nothing to strand, so it must not spin forever waiting for a task that "
+                        + "will never exist");
     }
 
     /**

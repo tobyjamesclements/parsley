@@ -15,18 +15,24 @@ class ParsleyQuiesceTest {
     private static final String TASK_1 = "0_1";
 
     /**
-     * With no task ever registered, {@code isSafeToClose} must never report {@code true} — an empty
-     * registered set would otherwise vacuously satisfy "every registered task is drained".
+     * With no task ever registered, {@code isSafeToClose} tracks the quiesce request alone: false until
+     * requested, true once requested. An instance that owns no tasks (more instances than partitions, or
+     * every task migrated away) holds nothing that could be stranded, so it is trivially safe to close —
+     * requiring a registered task here would hang {@link CausalStreams#close()} forever on such an
+     * instance (the B2 regression).
      *
-     * Asserts {@code isSafeToClose} is false both before and after requesting quiesce.
+     * Asserts {@code isSafeToClose} is false before requesting quiesce and true after, with no task
+     * registered.
      */
     @Test
-    void isSafeToCloseIsFalseWithNoRegisteredTasks() {
+    void isSafeToCloseWithNoRegisteredTasksTracksOnlyTheQuiesceRequest() {
         ParsleyQuiesce quiesce = new ParsleyQuiesce();
-        assertFalse(quiesce.isSafeToClose(), "no task has registered yet");
+        assertFalse(quiesce.isSafeToClose(), "quiesce not requested yet, so not safe to close");
 
         quiesce.requestQuiesce();
-        assertFalse(quiesce.isSafeToClose(), "still no registered task, even after requesting quiesce");
+        assertTrue(quiesce.isSafeToClose(),
+                "no registered task can strand nothing — a zero-task instance is safe once quiesce is "
+                        + "requested, rather than hanging close() forever");
     }
 
     /**

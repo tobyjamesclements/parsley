@@ -62,13 +62,17 @@ final class ParsleyQuiesce {
 
     /**
      * Whether it is safe to call {@code KafkaStreams#close} without stranding causally-buffered
-     * work: quiesce has been requested, at least one task is registered, and every registered task's
-     * buffer is currently empty.
+     * work: quiesce has been requested and every registered task's buffer is currently empty. An
+     * instance with <em>no</em> registered tasks (more instances than partitions, or every task
+     * migrated away — each task unregisters on its own {@code close()}) is trivially safe: it holds
+     * nothing that could be stranded. Requiring a registered task here instead would hang
+     * {@link CausalStreams#close()}'s drain wait forever on such an instance, which stays {@code RUNNING}
+     * (so the dead-instance escape never fires) yet can never report a registered task drained.
      *
-     * @return {@code true} if every registered task is drained and quiesce was requested
+     * @return {@code true} once quiesce was requested and every registered task (possibly none) is drained
      */
     boolean isSafeToClose() {
-        return requested.get() && !registered.isEmpty() && drained.containsAll(registered);
+        return requested.get() && drained.containsAll(registered);
     }
 
     /** Registers a member, called by {@link ParsleyProcessor#init}. */

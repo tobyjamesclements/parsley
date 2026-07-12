@@ -129,10 +129,12 @@ public final class CausalStreams implements AutoCloseable {
     /**
      * Polls until every registered task reports drained ({@link ParsleyQuiesce#isSafeToClose}), or
      * {@code state} reports the streams instance can no longer drain anything — any state other than
-     * {@code RUNNING} or {@code REBALANCING}, where tasks are gone or dying and
-     * {@code isSafeToClose()} (which requires at least one registered, drained task) could otherwise
-     * never become true, hanging {@code close()} forever on an instance that is already dead.
-     * Package-private for tests; {@link #close()} is the only production caller.
+     * {@code RUNNING} or {@code REBALANCING}, where tasks are gone or dying and a task's buffer could
+     * otherwise never report drained, hanging {@code close()} forever on an instance that is already
+     * dead. An instance with zero registered tasks is safe to close at once (nothing to strand; see
+     * {@link ParsleyQuiesce#isSafeToClose}), so this returns immediately rather than spinning while it
+     * sits {@code RUNNING} with no task that could ever drain. Package-private for tests; {@link #close()}
+     * is the only production caller.
      */
     static void awaitDrain(ParsleyQuiesce quiesce, Supplier<KafkaStreams.State> state) {
         while (!quiesce.isSafeToClose()) {

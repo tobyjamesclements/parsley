@@ -20,6 +20,14 @@ All notable changes to this project are documented in this file. The format is b
   stale `ParsleyKafkaEpochTransport` class name in the pom's coverage note is corrected.
 
 ### Fixed
+- **`CausalStreams#close()` hung forever on an instance that owned zero tasks.** The graceful-shutdown
+  drain wait spun until `ParsleyQuiesce#isSafeToClose` reported ready, but that required at least one
+  registered task, and an instance with more instances than partitions (or one whose tasks all migrated
+  away, each unregistering on its own close) sits `RUNNING` with none — so the dead-instance escape never
+  fired and the wait never ended. `isSafeToClose` now treats an empty registration set as trivially safe:
+  an instance holding no task can strand nothing. The epoch-leave drain wait that reuses the same tracker
+  is unaffected — it only evaluates readiness after a local member has joined (so the set is non-empty
+  there).
 - **An unreachable-dependency failure mutated engine state before throwing.** `ParsleyEngine.receive`
   seeded the frontier (`seedIfFirstSeen`, which persists) and ran `propagate` — advancing the frontier
   and potentially releasing and un-buffering records into a result list — before the fail-closed
