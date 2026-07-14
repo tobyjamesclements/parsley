@@ -10,6 +10,7 @@ import org.apache.kafka.clients.consumer.KafkaConsumer;
 import org.apache.kafka.clients.producer.KafkaProducer;
 import org.apache.kafka.clients.producer.ProducerConfig;
 import org.apache.kafka.clients.producer.ProducerRecord;
+import org.apache.kafka.common.serialization.ByteArrayDeserializer;
 import org.apache.kafka.common.serialization.Serdes;
 import org.apache.kafka.common.serialization.StringDeserializer;
 import org.apache.kafka.common.serialization.StringSerializer;
@@ -33,6 +34,7 @@ import org.testcontainers.utility.DockerImageName;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Duration;
+import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
@@ -202,19 +204,21 @@ class ParsleyCoordinationMultiAppIT {
         Path stateA = Files.createTempDirectory("parsley-cycle-a");
         Path stateB = Files.createTempDirectory("parsley-cycle-b");
 
-        CausalStreamsBuilder aBuilder = new CausalStreamsBuilder();
-        aBuilder.stream(List.of(IN, fromB), Serdes.String(), Serdes.String())
+        CausalTopology aTopology = new CausalStreamsBuilder()
+                .stream(List.of(IN, fromB), Serdes.String(), Serdes.String())
                 .process(cycleStage("t1", "A:"))
-                .to("from-a-sink", fromA, Serdes.String(), Serdes.String());
-        CausalStreamsBuilder bBuilder = new CausalStreamsBuilder();
-        bBuilder.stream(fromA, Serdes.String(), Serdes.String())
+                .to("from-a-sink", fromA, Serdes.String(), Serdes.String())
+                .build();
+        CausalTopology bTopology = new CausalStreamsBuilder()
+                .stream(fromA, Serdes.String(), Serdes.String())
                 .process(cycleStage(null, "B:"))
-                .to("from-b-sink", fromB, Serdes.String(), Serdes.String());
+                .to("from-b-sink", fromB, Serdes.String(), Serdes.String())
+                .build();
 
         Properties domainConfig = cycleConfig(IN + "," + fromA + "," + fromB);
-        try (CausalStreams appA = new CausalStreams(aBuilder.build(),
+        try (CausalStreams appA = new CausalStreams(aTopology,
                      causalStreamsConfig(bootstrap, appIdA, stateA, domainConfig));
-             CausalStreams appB = new CausalStreams(bBuilder.build(),
+             CausalStreams appB = new CausalStreams(bTopology,
                      causalStreamsConfig(bootstrap, appIdB, stateB, domainConfig))) {
             appA.start();
             appB.start();
@@ -227,6 +231,87 @@ class ParsleyCoordinationMultiAppIT {
 
             assertTrue(awaitServedOn(bootstrap, fromB, "B:A:hello"),
                     "a record produced to t1 must flow all the way around the cycle to from-b");
+        }
+    }
+
+    /**
+     * A node <strong>joins a running cycle</strong>, an epoch admits it, and the cycle then carries on
+     * serving across a further, explicit epoch boundary — the cyclic counterpart of the linear join in
+     * {@code ParsleyCoordinationJoinerIT}.
+     *
+     * <p>Phase 1 brings up the absorbing side A ({@code t1, from-b -> from-a}) alone — it trivially covers
+     * the whole so-far domain (it consumes {@code t1} and {@code from-b} and produces {@code from-a}) — and
+     * drives it to a non-zero epoch, since a cold domain treats every join as static and opens no round.
+     * Phase 2 starts the closing side B ({@code from-a -> from-b}): B's fresh
+     * task blocks until the epoch computed <em>with</em> it commits — A, still running, publishes for the
+     * round — promoting B to a running member and closing the cycle. A record produced to {@code t1} then
+     * flows all the way around ({@code t1 -> A -> from-a -> B -> from-b -> A}, where A absorbs the return
+     * leg), proving the joined cycle serves. Phase 3 evolves the running two-node cycle through an explicit
+     * {@link CausalStreams#requestEpochTransition()} and shows a second record still serves across the new
+     * boundary. No business record is produced before B joins, so {@code from-a} is empty at the cut and the
+     * join scoping never depends on replaying pre-cut cycle history.
+     *
+     * Asserts the log commits an epoch admitting B, then a strictly later epoch after the explicit
+     * transition, and a record produced to {@code t1} both before and after that transition reaches
+     * {@code from-b} around the cycle.
+     */
+    @Test
+    void aNodeJoiningACycleIsAdmittedByANewEpochAndTheCycleCarriesOn() throws Exception {
+        String bootstrap = kafka.getBootstrapServers();
+        String fromA = "from-a";
+        String fromB = "from-b";
+        createTopics(bootstrap, IN, fromA, fromB, EPOCH_EVENTS);
+        String runId = UUID.randomUUID().toString().substring(0, 8);
+        Path stateA = Files.createTempDirectory("parsley-join-cycle-a");
+        Path stateB = Files.createTempDirectory("parsley-join-cycle-b");
+
+        CausalTopology aTopology = new CausalStreamsBuilder()
+                .stream(List.of(IN, fromB), Serdes.String(), Serdes.String())
+                .process(cycleStage("t1", "A:"))
+                .to("from-a-sink", fromA, Serdes.String(), Serdes.String())
+                .build();
+        CausalTopology bTopology = new CausalStreamsBuilder()
+                .stream(fromA, Serdes.String(), Serdes.String())
+                .process(cycleStage(null, "B:"))
+                .to("from-b-sink", fromB, Serdes.String(), Serdes.String())
+                .build();
+
+        Properties domainConfig = cycleConfig(IN + "," + fromA + "," + fromB);
+        try (CausalStreams appA = new CausalStreams(aTopology,
+                     causalStreamsConfig(bootstrap, "join-cycle-a-" + runId, stateA, domainConfig));
+             CausalStreams appB = new CausalStreams(bTopology,
+                     causalStreamsConfig(bootstrap, "join-cycle-b-" + runId, stateB, domainConfig))) {
+            // Phase 1: the absorbing side runs alone and is driven to a non-zero epoch, so there is a
+            // committed epoch for B to join into (a cold committedEpochId==0 domain treats every join as
+            // static, opening no round).
+            appA.start();
+            await().atMost(Duration.ofSeconds(60)).until(() -> appA.state() == KafkaStreams.State.RUNNING);
+            requestUntilCommitted(appA, bootstrap, 2L);
+            long epochAfterPhase1 = latestCommittedEpoch(bootstrap);
+
+            // Phase 2: the closing side joins; its fresh task blocks until the epoch computed with it commits,
+            // driving the epoch past where phase 1 left it — that admits B and closes the cycle. Do not await
+            // RUNNING: a blocked joiner keeps its instance in REBALANCING, so the epoch advancing is the
+            // unblock signal (A, still running in its own app, publishes for B's round).
+            appB.start();
+            await().atMost(Duration.ofSeconds(120)).until(() -> latestCommittedEpoch(bootstrap) > epochAfterPhase1);
+            long epochAdmittingB = latestCommittedEpoch(bootstrap);
+
+            try (KafkaProducer<String, String> producer = new KafkaProducer<>(producerConfig(bootstrap))) {
+                producer.send(stampEmptyDeps(new ProducerRecord<>(IN, "k", "hello"))).get();
+            }
+            assertTrue(awaitServedOn(bootstrap, fromB, "B:A:hello"),
+                    "once B has joined and been admitted, a record must flow around the closed cycle to from-b");
+
+            // Phase 3: evolve the running two-node cycle through a further, explicit epoch transition and
+            // confirm it keeps serving across the new boundary.
+            requestUntilCommitted(appA, bootstrap, epochAdmittingB + 1);
+
+            try (KafkaProducer<String, String> producer = new KafkaProducer<>(producerConfig(bootstrap))) {
+                producer.send(stampEmptyDeps(new ProducerRecord<>(IN, "k", "world"))).get();
+            }
+            assertTrue(awaitServedOn(bootstrap, fromB, "B:A:world"),
+                    "the cycle must keep serving after an explicit epoch transition over the running members");
         }
     }
 
@@ -287,19 +372,19 @@ class ParsleyCoordinationMultiAppIT {
     }
 
     private static CausalTopology stageATopology() {
-        CausalStreamsBuilder builder = new CausalStreamsBuilder();
-        builder.stream(IN, Serdes.String(), Serdes.String())
+        return new CausalStreamsBuilder()
+                .stream(IN, Serdes.String(), Serdes.String())
                 .process(mapper(v -> v.toUpperCase(Locale.ROOT)))
-                .to("mid-sink", MID, Serdes.String(), Serdes.String());
-        return builder.build();
+                .to("mid-sink", MID, Serdes.String(), Serdes.String())
+                .build();
     }
 
     private static CausalTopology stageBTopology() {
-        CausalStreamsBuilder builder = new CausalStreamsBuilder();
-        builder.stream(MID, Serdes.String(), Serdes.String())
+        return new CausalStreamsBuilder()
+                .stream(MID, Serdes.String(), Serdes.String())
                 .process(mapper(v -> "B:" + v))
-                .to("out-sink", OUT, Serdes.String(), Serdes.String());
-        return builder.build();
+                .to("out-sink", OUT, Serdes.String(), Serdes.String())
+                .build();
     }
 
     private static Properties causalStreamsConfig(String bootstrap, String appId, Path stateDir) {
@@ -314,6 +399,57 @@ class ParsleyCoordinationMultiAppIT {
         props.put(ParsleyConfig.COORDINATION_EPOCH_EVENTS_TOPIC, EPOCH_EVENTS);
         props.put(ParsleyConfig.COORDINATION_DOMAIN_TOPICS, IN + "," + MID + "," + OUT);
         return props;
+    }
+
+    /**
+     * Requests epoch transitions on {@code app} until the log shows a commit at or beyond {@code target}.
+     * A single request may race the round or coalesce into an already-open one, so it retries each tick —
+     * the same pattern {@code ParsleyCoordinationIT} uses.
+     */
+    private static void requestUntilCommitted(CausalStreams app, String bootstrap, long target) {
+        await().atMost(Duration.ofSeconds(90)).until(() -> {
+            if (latestCommittedEpoch(bootstrap) >= target) {
+                return true;
+            }
+            try {
+                app.requestEpochTransition();
+            } catch (IllegalStateException notReadyYet) {
+                // No local member has initialised coordination yet; retry on the next tick.
+            }
+            return false;
+        });
+    }
+
+    /** The highest committed epoch id on the log, or {@code 0} if none has committed yet. */
+    private static long latestCommittedEpoch(String bootstrap) {
+        long max = 0;
+        for (ParsleyEpochEvent event : readEpochEvents(bootstrap)) {
+            if (event instanceof ParsleyEpochEvent.EpochCommitted committed) {
+                max = Math.max(max, committed.epochId());
+            }
+        }
+        return max;
+    }
+
+    /** Reads the whole epoch-events log from the beginning and decodes every record. */
+    private static List<ParsleyEpochEvent> readEpochEvents(String bootstrap) {
+        List<ParsleyEpochEvent> events = new ArrayList<>();
+        Map<String, Object> config = Map.of(
+                ConsumerConfig.BOOTSTRAP_SERVERS_CONFIG, bootstrap,
+                ConsumerConfig.GROUP_ID_CONFIG, "epoch-reader-" + UUID.randomUUID(),
+                ConsumerConfig.AUTO_OFFSET_RESET_CONFIG, "earliest",
+                ConsumerConfig.KEY_DESERIALIZER_CLASS_CONFIG, ByteArrayDeserializer.class.getName(),
+                ConsumerConfig.VALUE_DESERIALIZER_CLASS_CONFIG, ByteArrayDeserializer.class.getName());
+        try (KafkaConsumer<byte[], byte[]> consumer = new KafkaConsumer<>(config)) {
+            consumer.subscribe(List.of(EPOCH_EVENTS));
+            long deadline = System.currentTimeMillis() + 2000;
+            while (System.currentTimeMillis() < deadline) {
+                for (ConsumerRecord<byte[], byte[]> record : consumer.poll(Duration.ofMillis(200))) {
+                    events.add(ParsleyEpochEvent.fromBytes(record.value()));
+                }
+            }
+        }
+        return events;
     }
 
     private static ProducerRecord<String, String> stampEmptyDeps(ProducerRecord<String, String> record) {

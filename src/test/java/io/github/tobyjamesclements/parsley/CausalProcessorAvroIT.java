@@ -19,12 +19,7 @@ import org.apache.kafka.common.serialization.Serde;
 import org.apache.kafka.common.serialization.Serdes;
 import org.apache.kafka.common.serialization.StringDeserializer;
 import org.apache.kafka.common.serialization.StringSerializer;
-import org.apache.kafka.streams.KafkaStreams;
-import org.apache.kafka.streams.StreamsBuilder;
 import org.apache.kafka.streams.StreamsConfig;
-import org.apache.kafka.streams.Topology;
-import org.apache.kafka.streams.kstream.Consumed;
-import org.apache.kafka.streams.kstream.Produced;
 import org.apache.kafka.streams.processor.api.Processor;
 import org.apache.kafka.streams.processor.api.ProcessorContext;
 import org.apache.kafka.streams.processor.api.ProcessorSupplier;
@@ -107,7 +102,7 @@ class CausalProcessorAvroIT {
         Order order = new Order("o-buf", "ACME", 10);
         Price price = new Price("ACME", 99.0);
 
-        try (KafkaStreams streams = new KafkaStreams(
+        try (CausalStreams streams = new CausalStreams(
                 topology(registryUrl), streamsConfig(bootstrap, registryUrl))) {
             streams.start();
 
@@ -139,16 +134,13 @@ class CausalProcessorAvroIT {
         }
     }
 
-    private static Topology topology(String registryUrl) {
+    private static CausalTopology topology(String registryUrl) {
         Serde<SpecificRecord> avro = avroValueSerde(registryUrl);
-        StreamsBuilder builder = new StreamsBuilder();
-        builder.stream(List.of(PRICES, ORDERS), Consumed.with(Serdes.String(), avro))
-                .process(ParsleyProcessorSupplier.builder(passthrough())
-                        .addBufferStore("parsley")
-                        .addSources(List.of(PRICES, ORDERS), Serdes.String(), avro)
-                        .build())
-                .to(OUT, Produced.with(Serdes.String(), avro));
-        return builder.build();
+        return new CausalStreamsBuilder()
+                .stream(List.of(PRICES, ORDERS), Serdes.String(), avro)
+                .process(passthrough())
+                .to(OUT, Serdes.String(), avro)
+                .build();
     }
 
     private static ProcessorSupplier<String, SpecificRecord, String, SpecificRecord> passthrough() {
@@ -195,6 +187,7 @@ class CausalProcessorAvroIT {
         config.put(StreamsConfig.DEFAULT_KEY_SERDE_CLASS_CONFIG, Serdes.String().getClass().getName());
         config.put(StreamsConfig.DEFAULT_VALUE_SERDE_CLASS_CONFIG, SpecificAvroSerde.class.getName());
         config.put(StreamsConfig.COMMIT_INTERVAL_MS_CONFIG, 200);
+        config.put(StreamsConfig.PROCESSING_GUARANTEE_CONFIG, StreamsConfig.EXACTLY_ONCE_V2);
         config.put("schema.registry.url", registryUrl);
         config.put("specific.avro.reader", true);
         return config;

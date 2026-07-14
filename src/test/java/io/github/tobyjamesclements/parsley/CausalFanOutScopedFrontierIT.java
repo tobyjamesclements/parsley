@@ -14,12 +14,7 @@ import org.apache.kafka.common.serialization.ByteArrayDeserializer;
 import org.apache.kafka.common.serialization.Serdes;
 import org.apache.kafka.common.serialization.StringDeserializer;
 import org.apache.kafka.common.serialization.StringSerializer;
-import org.apache.kafka.streams.KafkaStreams;
-import org.apache.kafka.streams.StreamsBuilder;
 import org.apache.kafka.streams.StreamsConfig;
-import org.apache.kafka.streams.Topology;
-import org.apache.kafka.streams.kstream.Consumed;
-import org.apache.kafka.streams.kstream.Produced;
 import org.apache.kafka.streams.processor.api.Processor;
 import org.apache.kafka.streams.processor.api.ProcessorContext;
 import org.apache.kafka.streams.processor.api.ProcessorSupplier;
@@ -170,9 +165,9 @@ class CausalFanOutScopedFrontierIT {
 
         // Two independent applications: each reads the shared topic plus its own unique topic, into
         // its own buffer-store namespace, forwarding to its own output topic.
-        KafkaStreams streamsA = new KafkaStreams(
+        CausalStreams streamsA = new CausalStreams(
                 scopedTopology(SHARED, A_ONLY, A_OUT, "alpha"), streamsConfig(bootstrap));
-        KafkaStreams streamsB = new KafkaStreams(
+        CausalStreams streamsB = new CausalStreams(
                 scopedTopology(SHARED, B_ONLY, B_OUT, "beta"), streamsConfig(bootstrap));
         try (streamsA; streamsB) {
             streamsA.start();
@@ -236,15 +231,12 @@ class CausalFanOutScopedFrontierIT {
      * buffer-store namespace and forwarding to {@code out}. Each processor's frontier is scoped to
      * exactly these two source topics.
      */
-    private static Topology scopedTopology(String shared, String unique, String out, String namespace) {
-        StreamsBuilder builder = new StreamsBuilder();
-        builder.stream(List.of(shared, unique), Consumed.with(Serdes.String(), Serdes.String()))
-                .process(ParsleyProcessorSupplier.builder(upperCaser())
-                        .addBufferStore(namespace)
-                        .addSources(List.of(shared, unique), Serdes.String(), Serdes.String())
-                        .build())
-                .to(out, Produced.with(Serdes.String(), Serdes.String()));
-        return builder.build();
+    private static CausalTopology scopedTopology(String shared, String unique, String out, String namespace) {
+        return new CausalStreamsBuilder()
+                .stream(List.of(shared, unique), Serdes.String(), Serdes.String())
+                .process(namespace, upperCaser())
+                .to(out, Serdes.String(), Serdes.String())
+                .build();
     }
 
     /** A user processor that forwards each value upper-cased, so output values are distinguishable. */
@@ -285,6 +277,7 @@ class CausalFanOutScopedFrontierIT {
         props.put(StreamsConfig.DEFAULT_KEY_SERDE_CLASS_CONFIG, Serdes.String().getClass().getName());
         props.put(StreamsConfig.DEFAULT_VALUE_SERDE_CLASS_CONFIG, Serdes.String().getClass().getName());
         props.put(StreamsConfig.COMMIT_INTERVAL_MS_CONFIG, 200);
+        props.put(StreamsConfig.PROCESSING_GUARANTEE_CONFIG, StreamsConfig.EXACTLY_ONCE_V2);
         return props;
     }
 
