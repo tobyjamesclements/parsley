@@ -75,11 +75,11 @@ class CausalTopologyPassthroughTest {
         ParsleyCoordination coordination = ParsleyCoordination.forRuntime(runtime);
         runtime.runOnce();
 
-        CausalStreamsBuilder builder = new CausalStreamsBuilder();
-        builder.stream("t1", Serdes.String(), Serdes.String())
+        Topology topology = new CausalStreamsBuilder().topicAdmin(ADMIN)
+                .stream("t1", Serdes.String(), Serdes.String())
                 .process(delegate)
-                .to("out-sink", "out", Serdes.String(), Serdes.String());
-        Topology topology = builder.topicAdmin(ADMIN).build().assemble(config(), new ParsleyQuiesce(), coordination);
+                .to("out-sink", "out", Serdes.String(), Serdes.String())
+                .build().assemble(config(), new ParsleyQuiesce(), coordination);
 
         try (TopologyTestDriver driver = new TopologyTestDriver(topology, config())) {
             TestInputTopic<String, String> t1 =

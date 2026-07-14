@@ -188,11 +188,11 @@ class ParsleyCoordinationMultiInstanceIT {
     }
 
     private static CausalTopology topology() {
-        CausalStreamsBuilder builder = new CausalStreamsBuilder();
-        builder.stream(IN, Serdes.String(), Serdes.String())
+        return new CausalStreamsBuilder()
+                .stream(IN, Serdes.String(), Serdes.String())
                 .process(upperCaser())
-                .to("out-sink", OUT, Serdes.String(), Serdes.String());
-        return builder.build();
+                .to("out-sink", OUT, Serdes.String(), Serdes.String())
+                .build();
     }
 
     private static ProcessorSupplier<String, String, String, String> upperCaser() {

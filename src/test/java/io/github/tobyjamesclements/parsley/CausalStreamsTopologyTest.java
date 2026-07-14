@@ -250,6 +250,29 @@ class CausalStreamsTopologyTest {
     }
 
     /**
+     * A causal topology is exactly one stage. The public fluent chain cannot express a second stage at all
+     * (there is no {@code process}/{@code stream} on {@link CausalProcessedStream} and no public
+     * {@code build()} on the builder); this covers the one runtime-reachable path — a second
+     * {@code process(...)} on the same builder — which is rejected so extra stages go into separate
+     * applications.
+     *
+     * Asserts an {@link IllegalStateException} explaining the one-stage-per-topology rule.
+     */
+    @Test
+    void aBuilderRejectsASecondStage() {
+        CausalStreamsBuilder builder = new CausalStreamsBuilder();
+        builder.stream("t1", Serdes.String(), Serdes.String())
+                .process(upperCaser())
+                .to("out-sink", "out", Serdes.String(), Serdes.String());
+
+        IllegalStateException e = assertThrows(IllegalStateException.class,
+                () -> builder.stream("t2", Serdes.String(), Serdes.String()).process(upperCaser()),
+                "a second process(...) on the same builder must be rejected — one stage per topology");
+        assertEquals(true, e.getMessage().contains("exactly one stage"),
+                "message must explain the one-stage-per-topology rule");
+    }
+
+    /**
      * {@link CausalStream#merge} rejects two streams declaring the same topic: merging would silently
      * pick one stream's serdes over the other's (last-write-wins), a bug every time.
      *

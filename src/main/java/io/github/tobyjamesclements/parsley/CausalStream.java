@@ -66,7 +66,9 @@ public final class CausalStream<K, V> {
      * @return a {@link CausalProcessedStream} to declare this stage's sink(s) on
      */
     public <KOut, VOut> CausalProcessedStream<KOut, VOut> process(ProcessorSupplier<K, V, KOut, VOut> supplier) {
-        return owner.addStage(new ParsleyStageSpec<>(null, sources, supplier));
+        ParsleyStageSpec<K, V, KOut, VOut> spec = new ParsleyStageSpec<>(null, sources, supplier);
+        owner.registerStage(spec);
+        return new CausalProcessedStream<>(owner, spec);
     }
 
     /**
@@ -83,6 +85,8 @@ public final class CausalStream<K, V> {
     public <KOut, VOut> CausalProcessedStream<KOut, VOut> process(
             String name, ProcessorSupplier<K, V, KOut, VOut> supplier) {
         Objects.requireNonNull(name, "name must not be null");
-        return owner.addStage(new ParsleyStageSpec<>(name, sources, supplier));
+        ParsleyStageSpec<K, V, KOut, VOut> spec = new ParsleyStageSpec<>(name, sources, supplier);
+        owner.registerStage(spec);
+        return new CausalProcessedStream<>(owner, spec);
     }
 }

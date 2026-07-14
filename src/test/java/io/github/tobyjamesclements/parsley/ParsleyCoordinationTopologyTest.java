@@ -54,11 +54,11 @@ class ParsleyCoordinationTopologyTest {
         // round is opened and init proceeds once bootstrapped.
         runtime.runOnce();
 
-        CausalStreamsBuilder builder = new CausalStreamsBuilder();
-        builder.stream("t1", Serdes.String(), Serdes.String())
+        Topology topology = new CausalStreamsBuilder().topicAdmin(ADMIN)
+                .stream("t1", Serdes.String(), Serdes.String())
                 .process(upperCaser())
-                .to("out-sink", "out", Serdes.String(), Serdes.String());
-        Topology topology = builder.topicAdmin(ADMIN).build()
+                .to("out-sink", "out", Serdes.String(), Serdes.String())
+                .build()
                 .assemble(config(), new ParsleyQuiesce(), coordination);
 
         try (TopologyTestDriver driver = new TopologyTestDriver(topology, config())) {

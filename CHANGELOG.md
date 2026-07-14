@@ -7,6 +7,15 @@ All notable changes to this project are documented in this file. The format is b
 ## [Unreleased]
 
 ### Changed
+- **A causal topology declares exactly one stage, enforced at compile time.** `CausalStreamsBuilder` no
+  longer accumulates stages: the fluent chain `stream(...).process(...).to(...)` now terminates in
+  `CausalProcessedStream.build()` rather than a `build()` on the builder (the builder keeps only a
+  package-private `build()` as an internal seam). There is no public term to open a second stage, and a
+  second `process(...)` on one builder is rejected, so a topology is exactly one causal stage — matching the
+  node model, where a causal node is one Parsley task (one stage on one partition). A multi-stage causal
+  pipeline is deployed as multiple applications, each one stage, sharing a coordination log. Existing
+  single-stage code is unaffected apart from calling `.build()` at the end of the chain instead of on the
+  builder.
 - **Internal class/API naming cleanup (no behaviour change).** Package-private renames only; no public
   API surface is affected. The changelog-backed store implementations `RocksBufferStore` /
   `RocksCandidateIndex` / `RocksForwardedIndex` — not RocksDB-specific (they run over any Kafka

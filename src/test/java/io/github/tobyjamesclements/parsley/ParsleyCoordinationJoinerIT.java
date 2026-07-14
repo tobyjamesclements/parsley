@@ -123,20 +123,20 @@ class ParsleyCoordinationJoinerIT {
 
     /** Stage A: t1 -> upper-case -> mid. */
     private static CausalTopology stageATopology() {
-        CausalStreamsBuilder builder = new CausalStreamsBuilder();
-        builder.stream(IN, Serdes.String(), Serdes.String())
+        return new CausalStreamsBuilder()
+                .stream(IN, Serdes.String(), Serdes.String())
                 .process(mapper(v -> v.toUpperCase(Locale.ROOT)))
-                .to("mid-sink", MID, Serdes.String(), Serdes.String());
-        return builder.build();
+                .to("mid-sink", MID, Serdes.String(), Serdes.String())
+                .build();
     }
 
     /** Stage B: mid -> prefix -> out. */
     private static CausalTopology stageBTopology() {
-        CausalStreamsBuilder builder = new CausalStreamsBuilder();
-        builder.stream(MID, Serdes.String(), Serdes.String())
+        return new CausalStreamsBuilder()
+                .stream(MID, Serdes.String(), Serdes.String())
                 .process(mapper(v -> "B:" + v))
-                .to("out-sink", OUT, Serdes.String(), Serdes.String());
-        return builder.build();
+                .to("out-sink", OUT, Serdes.String(), Serdes.String())
+                .build();
     }
 
     private static ProcessorSupplier<String, String, String, String> mapper(UnaryOperator<String> fn) {

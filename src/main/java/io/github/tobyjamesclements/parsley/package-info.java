@@ -30,8 +30,8 @@
  * <h2>Entry point</h2>
  * Three roles mirroring Kafka Streams — {@code StreamsBuilder} / {@code Topology} / {@code KafkaStreams}:
  * <ul>
- *   <li>{@link io.github.tobyjamesclements.parsley.CausalStreamsBuilder} &mdash; declare one or more causal
- *       stages: {@code stream(...)} one or more source topics, {@code .process(supplier)} to bind them to a
+ *   <li>{@link io.github.tobyjamesclements.parsley.CausalStreamsBuilder} &mdash; declare the one causal
+ *       stage: {@code stream(...)} one or more source topics, {@code .process(supplier)} to bind them to a
  *       causal-decorated processor, {@code .to(...)} to declare its sink(s); {@code .build()} produces a
  *       {@link io.github.tobyjamesclements.parsley.CausalTopology}</li>
  *   <li>{@link io.github.tobyjamesclements.parsley.CausalTopology} &mdash; the built causal topology, ready

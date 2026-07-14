@@ -16,11 +16,11 @@ import java.util.function.Supplier;
  * application:
  *
  * <pre>{@code
- * CausalStreamsBuilder builder = new CausalStreamsBuilder();
- * builder.stream("orders", Serdes.String(), orderSerde)
- *        .process(new EnrichmentProcessorSupplier())
- *        .to("orders.enriched", Serdes.String(), enrichedSerde);
- * CausalTopology topology = builder.build();
+ * CausalTopology topology = new CausalStreamsBuilder()
+ *         .stream("orders", Serdes.String(), orderSerde)
+ *         .process(new EnrichmentProcessorSupplier())
+ *         .to("orders.enriched", Serdes.String(), enrichedSerde)
+ *         .build();
  *
  * CausalStreams causalStreams = new CausalStreams(topology, props);
  * causalStreams.start();
