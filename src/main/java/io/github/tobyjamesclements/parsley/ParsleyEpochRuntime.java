@@ -68,6 +68,15 @@ final class ParsleyEpochRuntime implements AutoCloseable {
     // Runtime-thread-only: the full-mesh state as of the last runOnce, so logMeshInsufficiencyTransitions
     // logs only on a true→false or false→true edge, not on every 100ms poll while blocked.
     private boolean lastMeshSatisfied = true;
+    // Runtime-thread-only: the running members an open round has been blocked on, and for how many
+    // consecutive polls the same set has persisted, so logBlockedRoundTransitions can distinguish a genuine
+    // stall (the set frozen for BLOCKED_ROUND_WARN_POLLS) from the healthy case where members publish within
+    // a poll or two of a round opening (the set shrinks each poll). A logging debounce only — it decides
+    // nothing about correctness or when to commit.
+    private Set<String> lastBlockedOnMembers = Set.of();
+    private int blockedPollStreak;
+    private boolean warnedBlockedRound;
+    private static final int BLOCKED_ROUND_WARN_POLLS = 50; // ~5s at POLL_TIMEOUT — a stall, not a healthy wait
     // Read/written by the runtime thread alone in autoPublishStalledLocalMembers, but removed from by
     // unregisterMember, which task threads call (via ParsleyProcessor#close). Concurrent, like every other
     // member-keyed collection here, for that cross-thread write.
@@ -322,6 +331,7 @@ final class ParsleyEpochRuntime implements AutoCloseable {
         externalSourceTopicsAsOfPreviousCommitMirror = fold.externalSourceTopicsAsOfPreviousCommit();
         domainTopicsMirror = fold.domainTopics();
         logMeshInsufficiencyTransitions();
+        logBlockedRoundTransitions();
         bootstrapped = transport.caughtUp();
         driveCommit();
         autoPublishStalledLocalMembers();
@@ -391,6 +401,45 @@ final class ParsleyEpochRuntime implements AutoCloseable {
                     + "member's own subscriptions cover the whole domain: {}", meshInsufficientMembers);
         } else {
             log.info("Domain is a full mesh again — epoch rounds can complete");
+        }
+    }
+
+    /**
+     * Logs (at {@code WARN}) when an open round has been blocked on the same running members failing to
+     * publish for {@link #BLOCKED_ROUND_WARN_POLLS} consecutive polls — a genuine stall, most often a
+     * member that is down or one that is mis-meshed and crash-looping in {@code init} without ever
+     * publishing — and (at {@code INFO}) when the stall clears. Unlike a mesh insufficiency, a member
+     * stuck unpublished may leave the mesh check satisfied (nothing re-declares it), so this is the only
+     * domain-side signal for that wedge. Debounced by the poll streak: a round healthily waits for its
+     * members' first publications for a poll or two after opening (the outstanding set shrinks each poll),
+     * so only a set frozen across the whole streak is reported, and the edge is logged once, not every poll.
+     * The recovery INFO fires whenever a round that had warned reaches full publication, even if it cleared
+     * incrementally (the outstanding set shrinking member by member resets the streak but not the warning).
+     */
+    private void logBlockedRoundTransitions() {
+        Set<String> blockedOn = fold.isRoundOpen() ? fold.unpublishedRunningMembers() : Set.of();
+        if (blockedOn.isEmpty()) {
+            if (warnedBlockedRound) {
+                log.info("Epoch round is no longer blocked — every running member has published");
+                warnedBlockedRound = false;
+            }
+            lastBlockedOnMembers = Set.of();
+            blockedPollStreak = 0;
+            return;
+        }
+        if (blockedOn.equals(lastBlockedOnMembers)) {
+            blockedPollStreak++;
+        } else {
+            // The outstanding set changed — members are still publishing, so this is progress, not a stall.
+            lastBlockedOnMembers = blockedOn;
+            blockedPollStreak = 1;
+            return;
+        }
+        if (blockedPollStreak == BLOCKED_ROUND_WARN_POLLS) { // fire exactly once, on the edge into "stalled"
+            log.warn("Epoch round {} has been blocked for ~{}ms: these running members have not published "
+                    + "their completeness and may be down, or mis-meshed and crash-looping in init: {}",
+                    fold.nextEpochId(), BLOCKED_ROUND_WARN_POLLS * POLL_TIMEOUT.toMillis(), blockedOn);
+            warnedBlockedRound = true;
         }
     }
 

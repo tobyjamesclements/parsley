@@ -294,10 +294,25 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
             ParsleyEpochRuntime runtime = coordination.runtimeFor(context.appConfigs());
             this.epochRuntime = runtime;
             this.snapshotPublisher = runtime::publishFrontier;
+            // One join budget shared across both waits below — a second, independent deadline could add up
+            // to well over max.poll.interval.ms and let the broker silently evict this consumer mid-block.
+            Duration joinBudget = joinBudget(context.appConfigs());
+            long joinDeadlineNanos = System.nanoTime() + joinBudget.toNanos();
+            // Fold the log to its end FIRST so runtime.domainTopics() is accurate, then validate this
+            // member's own full-mesh coverage BEFORE it declares itself. A mis-meshed member must never
+            // append a JoinRequested: if it did, the round that excludes pending joiners from its mesh
+            // check would promote it to a running member that can never be meshed, wedging every future
+            // epoch round for the whole domain (and it would crash-loop, never publishing). Rejecting it
+            // here instead crash-loops it in isolation, leaving the shared domain untouched.
+            coordination.awaitBootstrap(runtime, memberId, joinBudget, joinDeadlineNanos);
+            validateFullMeshCoverage(runtime);
             // Declare this member's input channels and sink topics so the fold can derive the DAG-wide
             // source-topic registry; then block until this member is a running member.
             runtime.join(memberId, topics, sinkTopics);
-            coordination.awaitJoinCommit(runtime, memberId, joinBudget(context.appConfigs()));
+            coordination.awaitJoinCommit(runtime, memberId, joinBudget, joinDeadlineNanos);
+            // Re-validate after admission as a loud, at-startup diagnostic: a concurrent domain-expanding
+            // join folding during this member's own (potentially long) join wait can still promote it
+            // mis-meshed. Surfacing that here beats discovering it record by record on the data path.
             validateFullMeshCoverage(runtime);
         }
 
@@ -1246,9 +1261,17 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
      * data-path crash loop discovering it record by record, or every round silently hanging forever.
      * {@code off} is still honoured as an explicit, deliberate opt-out.
      *
-     * <p>Called immediately after {@link ParsleyCoordination#awaitJoinCommit}, so this member's own join
-     * has already folded and the runtime has already bootstrapped — {@code runtime.domainTopics()}
-     * reflects every member declared on the log as of at least this member's own join.
+     * <p>Called twice from {@code init}. The <strong>first</strong> call runs <em>before</em> {@link
+     * ParsleyEpochRuntime#join} — after {@link ParsleyCoordination#awaitBootstrap}, so {@code
+     * runtime.domainTopics()} already reflects every member declared on the log at bootstrap — so a
+     * mis-meshed member is rejected before it appends a {@link ParsleyEpochEvent.JoinRequested} and can be
+     * promoted into a running member that permanently wedges every epoch round (see {@link
+     * ParsleyEpochLog#isFullMeshSatisfied()}). This member's own declaration is verdict-neutral: it only
+     * adds domain topics this member itself covers, which the coverage subtraction removes either way, so
+     * the pre-declaration check reaches the same verdict as one run after the join folds. The
+     * <strong>second</strong> call runs after {@link ParsleyCoordination#awaitJoinCommit} admits it, purely
+     * as a loud at-startup diagnostic for the residual race where a concurrent domain-expanding join folds
+     * during this member's own join wait and promotes it mis-meshed anyway.
      */
     /**
      * The topology-epoch join wait's time budget: {@link #JOIN_BUDGET_FRACTION} of the effective

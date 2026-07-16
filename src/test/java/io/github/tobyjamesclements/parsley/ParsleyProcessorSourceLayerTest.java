@@ -20,6 +20,7 @@ import java.util.Properties;
 import java.util.Set;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
@@ -33,6 +34,51 @@ class ParsleyProcessorSourceLayerTest {
 
     private static final Uuid T1_ID = Uuid.randomUuid();
     private static final ParsleyTopicAdmin ADMIN = TestTopicAdmin.of(Map.of("t1", T1_ID));
+
+    /**
+     * The validate-before-declare wedge: a member whose own declared subscriptions do not cover the
+     * coordinated domain is rejected in {@code init} <em>before</em> it appends a {@link
+     * ParsleyEpochEvent.JoinRequested}, so it never becomes a pending joiner. Were it to declare, the
+     * round that admits it excludes pending joiners from its full-mesh check ({@link
+     * ParsleyEpochLog#isFullMeshSatisfied()}) and would promote it into a running member that can never be
+     * meshed — permanently wedging every future epoch round for the whole domain, while the member itself
+     * crash-looped in init without ever publishing. Rejecting it before it declares crash-loops it in
+     * isolation and leaves the shared log carrying no declaration from it.
+     */
+    @Test
+    void aMisMeshedMemberIsRejectedBeforeItDeclaresItself() {
+        InMemoryEpochTransport.SharedLog log = new InMemoryEpochTransport.SharedLog();
+        ParsleyEpochRuntime runtime = new ParsleyEpochRuntime(new InMemoryEpochTransport(log));
+        runtime.runOnce();   // marks the runtime bootstrapped before init() validates against the domain
+
+        // An existing member X consuming t1 and producing "extra" makes the coordinated domain {t1, extra}.
+        InMemoryEpochTransport seeder = new InMemoryEpochTransport(log);
+        seeder.append(new ParsleyEpochEvent.JoinRequested("X", Set.of("t1"), Set.of("extra")));
+        runtime.runOnce();   // fold X so runtime.domainTopics() = {t1, extra} before the Fixture's init
+
+        // The Fixture's processor consumes only t1 (no sink), so it cannot see "extra" — it is mis-meshed
+        // against the domain. Its init must fail BEFORE it declares itself, not join and then be promoted.
+        IllegalStateException thrown = assertThrows(IllegalStateException.class, () -> new Fixture(runtime),
+                "a member that cannot cover the coordinated domain must fail its init before declaring");
+        assertTrue(thrown.getMessage().contains("extra"),
+                "the failure names the uncovered domain topic: " + thrown.getMessage());
+
+        // Flush the runtime's outbox: runtime.join enqueues a JoinRequested there, not straight to the log,
+        // so this drains any the failed init left behind. This is what makes the assertion load-bearing —
+        // the pre-fix ordering (join then validate) would have enqueued the mis-meshed member's join before
+        // throwing, and this runOnce would surface it on the log; validate-before-declare enqueues nothing.
+        runtime.runOnce();
+
+        // The distinguishing property of validate-BEFORE-declare: the mis-meshed member left NO
+        // JoinRequested on the shared log, so it never became a pending joiner that a commit could promote
+        // into a running member that can never be meshed — which would wedge every future epoch round.
+        List<String> declaredMembers = log.events().stream()
+                .filter(ParsleyEpochEvent.JoinRequested.class::isInstance)
+                .map(e -> ((ParsleyEpochEvent.JoinRequested) e).memberId())
+                .toList();
+        assertEquals(List.of("X"), declaredMembers,
+                "only the pre-existing member X is declared; the rejected member appended no JoinRequested");
+    }
 
     /**
      * A source-layer task, on seeing an open snapshot round in the log, publishes its completeness to the

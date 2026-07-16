@@ -180,8 +180,13 @@ final class ParsleyEpochLog {
 
     /**
      * Whether every <em>running</em> member's own declared subscriptions cover the whole domain — full
-     * mesh. Pending joiners are excluded: a joiner's own insufficiency is caught by its own startup
-     * self-check (see {@code ParsleyProcessor#init}) rather than blocking every other member's round.
+     * mesh. Pending joiners are excluded, which is sound because a member's full-mesh coverage is
+     * validated <em>before</em> it declares itself (see {@code ParsleyProcessor#init}): a mis-meshed member
+     * never appends a {@link ParsleyEpochEvent.JoinRequested}, so every member that reaches the pending set
+     * has already been shown to cover the domain and will still cover it once this commit promotes it.
+     * Excluding pending joiners is also what keeps a bad joiner from wedging the domain: were the check to
+     * gate on pending members too, a mis-meshed joiner that then timed out would leave its declaration on
+     * the log (nothing but a {@link ParsleyEpochEvent.Leave} removes it) and block every commit forever.
      * Consulted by {@link #isRoundComplete()} — an epoch must never commit, and so never seed a newly
      * required subscriber's floor, while any running member cannot actually see the full domain.
      */

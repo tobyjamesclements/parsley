@@ -60,6 +60,17 @@ All notable changes to this project are documented in this file. The format is b
   stale `ParsleyKafkaEpochTransport` class name in the pom's coverage note is corrected.
 
 ### Fixed
+- **A mis-meshed topology-epoch member could be promoted, then wedge every future epoch round for the
+  whole domain.** A member's full-mesh self-coverage (its own declared inputs and sinks covering the
+  coordinated domain) was validated only *after* it had already declared itself and been promoted to a
+  running member. Because the round's mesh check excludes pending joiners, a member that could not cover
+  the domain was admitted anyway, then crash-looped in `init` without ever publishing — leaving the domain
+  permanently unable to complete a round (the mesh check now failed on the running member, and it stayed
+  forever in the unpublished set). Coverage is now validated *before* the member declares itself: a
+  mis-configured member fails fast in isolation and never appends a join, so it can never be promoted into
+  a domain-wedging running member. The join wait and the bootstrap wait now share one deadline so their sum
+  stays within the single join budget rather than risking a silent mid-block consumer eviction, and the
+  runtime logs a warning when a round stalls on running members that have not published.
 - **The contiguous frontier now tracks a transactionally-produced input across EOS commit markers.** Under
   the required `exactly_once_v2`, a `read_committed` consumer never returns the offsets occupied by
   transaction commit/abort markers or aborted-transaction records, so a causal stage sees permanent holes

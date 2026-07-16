@@ -132,8 +132,7 @@ final class ParsleyCoordination {
      *
      * @param budget the maximum time to wait before failing with {@link ParsleyJoinTimeoutException}
      */
-    void awaitJoinCommit(ParsleyEpochRuntime runtime, String memberId, Duration budget) {
-        long deadlineNanos = System.nanoTime() + budget.toNanos();
+    void awaitJoinCommit(ParsleyEpochRuntime runtime, String memberId, Duration budget, long deadlineNanos) {
         awaitBootstrap(runtime, memberId, budget, deadlineNanos);
 
         // Cold start (epoch 0 is static), or already a running member (a normal restart): no block.
@@ -151,8 +150,27 @@ final class ParsleyCoordination {
         }
     }
 
-    private static void awaitBootstrap(ParsleyEpochRuntime runtime, String memberId, Duration budget,
-                                       long deadlineNanos) {
+    /**
+     * Convenience for a standalone join wait that owns the whole budget (no preceding {@link
+     * #awaitBootstrap} sharing a deadline). {@code ParsleyProcessor#init} does not use this — it computes
+     * one deadline and threads it through both waits so their sum stays within the single budget.
+     */
+    void awaitJoinCommit(ParsleyEpochRuntime runtime, String memberId, Duration budget) {
+        awaitJoinCommit(runtime, memberId, budget, System.nanoTime() + budget.toNanos());
+    }
+
+    /**
+     * Blocks until the runtime has folded the epoch-events log to its end ({@link
+     * ParsleyEpochRuntime#isBootstrapped()}), so {@link ParsleyEpochRuntime#domainTopics()} and membership
+     * are accurate — the caller in {@code ParsleyProcessor#init} waits on this <em>before</em> validating
+     * its own full-mesh coverage and declaring itself, so a mis-meshed member is caught before it ever
+     * appends a {@link ParsleyEpochEvent.JoinRequested}. Shares the caller's single {@code deadlineNanos}
+     * with the subsequent {@link #awaitJoinCommit} so the two waits together never exceed the one join
+     * budget (a second, independent budget could overrun {@code max.poll.interval.ms} and get the consumer
+     * silently evicted mid-block).
+     */
+    void awaitBootstrap(ParsleyEpochRuntime runtime, String memberId, Duration budget,
+                        long deadlineNanos) {
         while (!runtime.isBootstrapped()) {
             if (System.nanoTime() >= deadlineNanos) {
                 throw new ParsleyJoinTimeoutException(memberId, budget,
