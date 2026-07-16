@@ -28,6 +28,17 @@ import java.util.function.Function;
  * declares stages through {@link CausalStreamsBuilder}, whose {@code assemble} pass drives that builder
  * (buffer store namespace, per-topic serdes, sink topics and node names, quiesce/coordination wiring);
  * package-private tests also drive it directly to exercise the decorator without the topology layer.
+ *
+ * <p><strong>Data-loss precondition (low-level use).</strong> The engine's skip-bridge
+ * ({@link ParsleyFrontier#bridge}) treats an offset the consumer never returned as a transaction marker,
+ * which is only sound if the consumer can never silently jump forward over lost records. The high-level
+ * path ({@link CausalStreamsBuilder} → {@link CausalTopology} → {@link CausalStreams}) guarantees this by
+ * declaring every source with {@code AutoOffsetReset.none()} and pre-seeding first-start offsets (see
+ * {@link ParsleyOffsetSeeder}). A topology assembled directly from this supplier — bypassing {@code
+ * CausalStreams} — must apply the same {@code none()} reset and offset seeding to its causal sources, or a
+ * retention/{@code deleteRecords} jump past a lagging consumer will be folded as markers and deliver
+ * records before their causes. Only exception handlers are the concern that {@link CausalTopology#assemble}
+ * rejects centrally; this reset/seeding requirement is not enforceable from inside the processor.
  */
 final class ParsleyProcessorSupplier<KIn, VIn, KOut, VOut>
         implements ProcessorSupplier<KIn, VIn, KOut, VOut> {

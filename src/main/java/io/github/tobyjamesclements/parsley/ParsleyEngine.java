@@ -309,6 +309,15 @@ final class ParsleyEngine<K, V> {
             propagate(out, message.topicId(), message.partition());
         }
 
+        // Bridge the offsets a read_committed consumer skipped on this channel below this record — a
+        // transaction marker or aborted record no business record will ever fill — so the contiguous walk
+        // does not wedge at the hole (ParsleyFrontier.bridge). If it advanced the frontier, cascade: a held
+        // record may have been waiting on exactly a bridged offset, and this node's held branch below runs
+        // no propagate of its own.
+        if (frontier.bridge(message.topicId(), message.partition(), message.offset())) {
+            propagate(out, message.topicId(), message.partition());
+        }
+
         ParsleyClock deps = effectiveDependencies(message.dependencies(),
                 message.topicId(), message.partition(), message.offset());
 
@@ -489,6 +498,14 @@ final class ParsleyEngine<K, V> {
         ParsleyClock strippedFrontierClock = advertised(frontierClock);
 
         if (frontier.seedIfFirstSeen(sourceTopicId, sourcePartition, offset)) {
+            propagate(out, sourceTopicId, sourcePartition);
+        }
+
+        // A watermark's own channel is transactional too (Parsley forwards it under EOS), so it carries the
+        // same commit-marker holes; bridge them before delivering the marker's own offset. Bridging touches
+        // only the frontier and forwarded index, never the channels map, so channelAdvanced below is
+        // unaffected by it.
+        if (frontier.bridge(sourceTopicId, sourcePartition, offset)) {
             propagate(out, sourceTopicId, sourcePartition);
         }
 

@@ -1,11 +1,18 @@
 package io.github.tobyjamesclements.parsley;
 
 import org.apache.kafka.streams.KafkaStreams;
+import org.apache.kafka.streams.StreamsConfig;
 import org.apache.kafka.streams.Topology;
+import org.apache.kafka.streams.TopologyDescription;
+import org.apache.kafka.streams.errors.StreamsUncaughtExceptionHandler;
 import org.jspecify.annotations.Nullable;
 
 import java.time.Duration;
+import java.util.HashMap;
+import java.util.LinkedHashSet;
+import java.util.Map;
 import java.util.Properties;
+import java.util.Set;
 import java.util.function.Supplier;
 
 /**
@@ -48,6 +55,13 @@ public final class CausalStreams implements AutoCloseable {
     private final KafkaStreams kafkaStreams;
     private final ParsleyQuiesce quiesce;
     private final @Nullable ParsleyCoordination coordination;
+    // Everything the pre-start offset seeding needs, captured at construction: the consumer group id
+    // (application.id), every causal source topic to seed (business and passthrough alike, read off the
+    // assembled topology), and the admin configuration to reach the broker. See seedSourceOffsets().
+    private final @Nullable String applicationId;
+    private final Set<String> sourceTopics;
+    private final Set<String> changelogTopics;
+    private final Map<String, Object> adminConfigs;
 
     /**
      * Assembles {@code topology} into a real Kafka Streams topology and wraps a {@code KafkaStreams}
@@ -61,6 +75,48 @@ public final class CausalStreams implements AutoCloseable {
         this.coordination = coordinationFrom(props);
         Topology assembled = topology.assemble(props, quiesce, coordination);
         this.kafkaStreams = new KafkaStreams(assembled, props);
+        this.applicationId = props.getProperty(StreamsConfig.APPLICATION_ID_CONFIG);
+        this.sourceTopics = sourceTopicsOf(assembled);
+        this.changelogTopics = changelogTopicsOf(assembled, applicationId);
+        this.adminConfigs = new HashMap<>();
+        props.forEach((key, value) -> adminConfigs.put(String.valueOf(key), value));
+    }
+
+    /** Every source topic the assembled topology consumes — the causal sources to seed before start. */
+    private static Set<String> sourceTopicsOf(Topology assembled) {
+        Set<String> topics = new LinkedHashSet<>();
+        for (TopologyDescription.Subtopology subtopology : assembled.describe().subtopologies()) {
+            for (TopologyDescription.Node node : subtopology.nodes()) {
+                if (node instanceof TopologyDescription.Source source && source.topicSet() != null) {
+                    topics.addAll(source.topicSet());
+                }
+            }
+        }
+        return topics;
+    }
+
+    /**
+     * The exact changelog topic names for this application's state stores — the marker of surviving causal
+     * state the offset seeder checks for. Derived from the assembled topology's actual store names
+     * ({@code <application.id>-<store>-changelog}), not a name prefix, so an unrelated application whose id
+     * merely shares this one's prefix (e.g. {@code orders} vs {@code orders-enrichment}) cannot be mistaken
+     * for this application's own state.
+     */
+    private static Set<String> changelogTopicsOf(Topology assembled, @Nullable String applicationId) {
+        if (applicationId == null || applicationId.isEmpty()) {
+            return Set.of();
+        }
+        Set<String> changelogs = new LinkedHashSet<>();
+        for (TopologyDescription.Subtopology subtopology : assembled.describe().subtopologies()) {
+            for (TopologyDescription.Node node : subtopology.nodes()) {
+                if (node instanceof TopologyDescription.Processor processor) {
+                    for (String store : processor.stores()) {
+                        changelogs.add(applicationId + "-" + store + "-changelog");
+                    }
+                }
+            }
+        }
+        return changelogs;
     }
 
     private static @Nullable ParsleyCoordination coordinationFrom(Properties props) {
@@ -70,14 +126,44 @@ public final class CausalStreams implements AutoCloseable {
         return epochEventsTopic == null ? null : ParsleyCoordination.create(epochEventsTopic);
     }
 
-    /** Starts the underlying {@code KafkaStreams} instance. */
+    /**
+     * Seeds any un-committed causal source offset for a genuine first start, then starts the underlying
+     * {@code KafkaStreams} instance. The seeding runs first, and before the group is joined, so a first
+     * start does not trip the {@code AutoOffsetReset.none()} every causal source is declared with; a real
+     * out-of-range offset (data loss) is deliberately left to fail fast under {@code none()}. Seeding
+     * failures — surviving state with a missing offset, an absent source topic, or an unreachable broker —
+     * abort the start loudly (see {@link ParsleyOffsetSeeder}).
+     */
     public void start() {
+        seedSourceOffsets();
         kafkaStreams.start();
+    }
+
+    private void seedSourceOffsets() {
+        if (applicationId == null || applicationId.isEmpty() || sourceTopics.isEmpty()) {
+            return;
+        }
+        try (ParsleySeedAdmin admin = ParsleySeedAdmin.ofConfigs(adminConfigs)) {
+            ParsleyOffsetSeeder.seed(admin, applicationId, sourceTopics, changelogTopics);
+        } catch (RuntimeException e) {
+            throw e;
+        } catch (Exception e) {
+            throw new IllegalStateException("failed to seed causal source offsets before starting '"
+                    + applicationId + "'", e);
+        }
     }
 
     /** The underlying {@code KafkaStreams} instance's current state. */
     public KafkaStreams.State state() {
         return kafkaStreams.state();
+    }
+
+    /**
+     * Sets the handler invoked when a stream thread dies from an uncaught exception, delegating to the
+     * underlying {@code KafkaStreams}. Set it before {@link #start()}.
+     */
+    public void setUncaughtExceptionHandler(StreamsUncaughtExceptionHandler handler) {
+        kafkaStreams.setUncaughtExceptionHandler(handler);
     }
 
     /**

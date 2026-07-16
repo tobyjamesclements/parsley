@@ -2,6 +2,7 @@ package io.github.tobyjamesclements.parsley;
 
 import org.apache.kafka.common.serialization.Serde;
 import org.apache.kafka.common.serialization.Serdes;
+import org.apache.kafka.streams.AutoOffsetReset;
 import org.apache.kafka.streams.StreamsConfig;
 import org.apache.kafka.streams.Topology;
 import org.apache.kafka.streams.processor.StreamPartitioner;
@@ -48,6 +49,7 @@ public final class CausalTopology {
      */
     Topology assemble(Properties props, ParsleyQuiesce quiesce, @Nullable ParsleyCoordination coordination) {
         requireExactlyOnce(props);
+        requireFailClosedExceptionHandlers(props);
         ParsleyConfig config = resolveConfig(props);
         DefaultSerdes defaults = new DefaultSerdes(props);
         String applicationId = props.getProperty(StreamsConfig.APPLICATION_ID_CONFIG);
@@ -87,6 +89,58 @@ public final class CausalTopology {
                     + "torn-write window that write ordering alone can only narrow, never eliminate, under "
                     + "at-least-once");
         }
+    }
+
+    /**
+     * Requires that no Kafka Streams exception handler is configured to <em>skip</em> a record —
+     * unconditionally, never gated by {@code parsley.topology.validation}, because a skipping handler is a
+     * causal-correctness hazard, not a topology-shape lint (the same footing as {@link #requireExactlyOnce}
+     * and {@code ParsleyProcessor}'s compacted-source guard).
+     *
+     * <p>The skip-bridge ({@link ParsleyFrontier#bridge}) treats an offset the consumer never returned as a
+     * transaction marker or aborted record. A {@code LogAndContinue} deserialization handler, or a
+     * continue-mode {@code processing.exception.handler}, drops a real record <em>after</em> the consumer
+     * returned it — including, for the processing handler, {@code ParsleyProcessor}'s own deliberate
+     * fail-closed throws (poison record, unreachable dependency, unresolvable clock). The bridge would then
+     * fold that dropped offset as if it were a marker and release a dependent before its cause: a silent
+     * causal-order violation, where the fail-closed default would instead stall (safe). Both handlers
+     * default to the fail variant, so only an explicit misconfiguration is rejected here. A custom handler
+     * is allowed — but must be fail-closed for causal delivery to hold.
+     */
+    private static void requireFailClosedExceptionHandlers(Properties props) {
+        rejectSkippingHandler(props, StreamsConfig.DESERIALIZATION_EXCEPTION_HANDLER_CLASS_CONFIG,
+                "LogAndContinueExceptionHandler");
+        rejectSkippingHandler(props, StreamsConfig.DEFAULT_DESERIALIZATION_EXCEPTION_HANDLER_CLASS_CONFIG,
+                "LogAndContinueExceptionHandler");
+        rejectSkippingHandler(props, StreamsConfig.PROCESSING_EXCEPTION_HANDLER_CLASS_CONFIG,
+                "LogAndContinueProcessingExceptionHandler");
+    }
+
+    private static void rejectSkippingHandler(Properties props, String configKey, String skippingHandlerClass) {
+        // Resolve the effective value exactly as Kafka Streams does (Utils.propsToMap): the top-layer value
+        // if present, otherwise the value resolved through the Properties defaults layer. The raw get()
+        // covers a Class-typed value that getProperty() would ignore; the getProperty() fallback covers a
+        // String supplied only in a defaults layer (which Streams honours via propertyNames(), so it must
+        // not slip past). Mirroring Kafka's own get-then-getProperty precedence — rather than OR-ing both —
+        // means this never rejects a config Streams would run safely, e.g. a fail-closed Class in the top
+        // layer shadowing a skipping String in defaults.
+        Object effective = props.get(configKey) != null ? props.get(configKey) : props.getProperty(configKey);
+        if (namesHandler(effective, skippingHandlerClass)) {
+            throw new IllegalStateException(configKey + " is set to a record-skipping handler ("
+                    + skippingHandlerClass + "): it skips records, which is unsafe for causal delivery — the "
+                    + "skip-bridge treats an offset the consumer never returned as a transaction marker, so a "
+                    + "handler that drops a real record (or swallows Parsley's own fail-closed throws) would "
+                    + "let a dependent be delivered before its cause. Use a fail-closed handler (the default), "
+                    + "or a custom handler that always fails.");
+        }
+    }
+
+    private static boolean namesHandler(@Nullable Object configured, String handlerClass) {
+        if (configured == null) {
+            return false;
+        }
+        String className = configured instanceof Class<?> clazz ? clazz.getName() : String.valueOf(configured);
+        return className.endsWith(handlerClass);
     }
 
     private <KIn, VIn, KOut, VOut> void assembleStage(
@@ -132,9 +186,20 @@ public final class CausalTopology {
         String processorName = name + "-processor";
         String[] sourceNames = new String[sources.size() + passthroughTopics.size()];
         int i = 0;
+        // Every causal source — business and passthrough alike — is declared with AutoOffsetReset.none()
+        // so Kafka Streams never silently resets a partition whose committed offset has fallen out of
+        // range (retention or deleteRecords outrunning a lagging consumer). Such a reset would jump the
+        // consumer forward over real committed records, and the skip-bridge (ParsleyFrontier.bridge)
+        // would fold those lost records as if they were transaction markers — releasing dependents before
+        // their causes (a silent causal-order violation). With none() the consumer fails fast at fetch
+        // instead, before any jumped record is delivered, so the bridge needs no runtime log-start check.
+        // A genuine first start (no committed offset) is handled by CausalStreams' pre-start seeding, which
+        // commits the log-start offset so none() does not trip on absence. Passthrough sources are NOT
+        // exempt: they are finite-retention business topics of peer apps (the eternal epoch-events log is a
+        // side-channel raw consumer, not a Streams source), equally exposed to the jump.
         for (ParsleySource<KIn, VIn> buffer : sources.values()) {
             String sourceName = name + "-source-" + buffer.topic();
-            topology.addSource(sourceName,
+            topology.addSource(AutoOffsetReset.none(), sourceName,
                     buffer.keySerde().deserializer(), buffer.valueSerde().deserializer(), buffer.topic());
             sourceNames[i++] = sourceName;
         }
@@ -143,7 +208,7 @@ public final class CausalTopology {
             // Raw byte[]/byte[] regardless of this stage's own KIn/VIn — a passthrough topic's value
             // schema is unrelated to this stage's business types. ParsleyProcessor recognises it by its
             // own source topic and never hands it to the delegate; see its class Javadoc.
-            topology.addSource(sourceName,
+            topology.addSource(AutoOffsetReset.none(), sourceName,
                     Serdes.ByteArray().deserializer(), Serdes.ByteArray().deserializer(), passthroughTopic);
             sourceNames[i++] = sourceName;
         }

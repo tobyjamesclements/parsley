@@ -9,7 +9,10 @@ import org.apache.kafka.streams.StreamsConfig;
 import org.apache.kafka.streams.TestInputTopic;
 import org.apache.kafka.streams.TestOutputTopic;
 import org.apache.kafka.streams.Topology;
+import org.apache.kafka.streams.TopologyDescription;
 import org.apache.kafka.streams.TopologyTestDriver;
+import org.apache.kafka.streams.errors.LogAndContinueExceptionHandler;
+import org.apache.kafka.streams.errors.LogAndContinueProcessingExceptionHandler;
 import org.apache.kafka.streams.errors.StreamsException;
 import org.apache.kafka.streams.processor.StreamPartitioner;
 import org.apache.kafka.streams.processor.api.Processor;
@@ -30,6 +33,7 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Properties;
+import java.util.HashSet;
 import java.util.Set;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -317,6 +321,107 @@ class CausalStreamsTopologyTest {
                 "assemble() must reject an already-decorated supplier");
         assertTrue(e.getMessage().contains("ParsleyProcessorSupplier"),
                 "the message must name the double-decoration: " + e.getMessage());
+    }
+
+    /**
+     * A record-skipping {@code deserialization.exception.handler} ({@code LogAndContinue}) is rejected at
+     * assemble, unconditionally — a dropped record leaves a consumer-visible hole the skip-bridge would
+     * fold as a marker, delivering a dependent before its cause. Exercises the {@code Class}-valued config
+     * form.
+     */
+    @Test
+    void assembleRejectsASkippingDeserializationExceptionHandler() {
+        CausalStreamsBuilder builder = new CausalStreamsBuilder();
+        builder.stream("t1", Serdes.String(), Serdes.String())
+                .process(upperCaser())
+                .to("out-sink", "out", Serdes.String(), Serdes.String());
+        CausalTopology topology = builder.topicAdmin(ADMIN).build();
+        Properties props = config();
+        props.put(StreamsConfig.DESERIALIZATION_EXCEPTION_HANDLER_CLASS_CONFIG,
+                LogAndContinueExceptionHandler.class);
+
+        IllegalStateException e = assertThrows(IllegalStateException.class,
+                () -> topology.assemble(props, new ParsleyQuiesce(), null),
+                "assemble() must reject a record-skipping deserialization handler");
+        assertTrue(e.getMessage().contains("skips records"),
+                "the message must explain the skip hazard: " + e.getMessage());
+    }
+
+    /**
+     * A continue-mode {@code processing.exception.handler} is rejected at assemble, unconditionally — it
+     * would swallow Parsley's own fail-closed throws, converting a safe stall into a silent violation.
+     * Exercises the {@code String}-valued (class-name) config form.
+     */
+    @Test
+    void assembleRejectsASkippingProcessingExceptionHandler() {
+        CausalStreamsBuilder builder = new CausalStreamsBuilder();
+        builder.stream("t1", Serdes.String(), Serdes.String())
+                .process(upperCaser())
+                .to("out-sink", "out", Serdes.String(), Serdes.String());
+        CausalTopology topology = builder.topicAdmin(ADMIN).build();
+        Properties props = config();
+        props.put(StreamsConfig.PROCESSING_EXCEPTION_HANDLER_CLASS_CONFIG,
+                LogAndContinueProcessingExceptionHandler.class.getName());
+
+        IllegalStateException e = assertThrows(IllegalStateException.class,
+                () -> topology.assemble(props, new ParsleyQuiesce(), null),
+                "assemble() must reject a record-skipping processing handler");
+        assertTrue(e.getMessage().contains("skips records"),
+                "the message must explain the skip hazard: " + e.getMessage());
+    }
+
+    /**
+     * A record-skipping handler supplied through a {@link Properties} <em>defaults</em> layer is still
+     * rejected. Kafka Streams honours that layer (it reads props via {@code propertyNames()}), so a check
+     * that only did a plain {@code Hashtable} {@code get()} would miss it and let the app run with a
+     * skipping handler — the exact silent-violation path the guard exists to close.
+     */
+    @Test
+    void assembleRejectsASkippingHandlerSuppliedThroughAPropertiesDefaultsLayer() {
+        CausalStreamsBuilder builder = new CausalStreamsBuilder();
+        builder.stream("t1", Serdes.String(), Serdes.String())
+                .process(upperCaser())
+                .to("out-sink", "out", Serdes.String(), Serdes.String());
+        CausalTopology topology = builder.topicAdmin(ADMIN).build();
+
+        Properties defaults = new Properties();
+        defaults.setProperty(StreamsConfig.DESERIALIZATION_EXCEPTION_HANDLER_CLASS_CONFIG,
+                LogAndContinueExceptionHandler.class.getName());
+        Properties props = new Properties(defaults);   // skipping handler only in the defaults layer
+        config().forEach(props::put);                   // base config (incl. EOS) in the top layer
+
+        IllegalStateException e = assertThrows(IllegalStateException.class,
+                () -> topology.assemble(props, new ParsleyQuiesce(), null),
+                "a skipping handler in a Properties defaults layer must still be rejected");
+        assertTrue(e.getMessage().contains("record-skipping handler"),
+                "the message must explain the skip hazard: " + e.getMessage());
+    }
+
+    /**
+     * The assembled topology exposes the frontier state store (which carries {@code highestReceived}) on
+     * its processor node, so {@code ParsleyOffsetSeeder}'s surviving-state guard can see its changelog and
+     * refuse to seed over stale causal state. If a future Kafka change stopped reporting the store in
+     * {@code describe()}, {@code CausalStreams.changelogTopicsOf} would silently omit it and the guard
+     * would false-negative — the exact silent-violation direction — so this pins the property.
+     */
+    @Test
+    void theAssembledTopologyExposesTheFrontierStoreForTheSurvivingStateGuard() {
+        CausalStreamsBuilder builder = new CausalStreamsBuilder();
+        builder.stream("t1", Serdes.String(), Serdes.String())
+                .process(upperCaser())
+                .to("out-sink", "out", Serdes.String(), Serdes.String());
+        Topology topology = assemble(builder, ADMIN);
+
+        Set<String> stores = new HashSet<>();
+        topology.describe().subtopologies().forEach(subtopology -> subtopology.nodes().forEach(node -> {
+            if (node instanceof TopologyDescription.Processor processor) {
+                stores.addAll(processor.stores());
+            }
+        }));
+        assertTrue(stores.stream().anyMatch(store -> store.endsWith("-frontier")),
+                "the processor must expose its frontier store (holding highestReceived) in describe(), or "
+                        + "the surviving-state guard could not detect it and would seed over stale causal "
+                        + "state: " + stores);
     }
 
     /**
@@ -823,6 +928,38 @@ class CausalStreamsTopologyTest {
     }
 
     /**
+     * A causal <em>source</em> topic whose {@code cleanup.policy} includes {@code compact} fails startup
+     * unconditionally — even under {@code parsley.topology.validation=off}, which disables every other
+     * topology check. The skip-bridge treats a consumer-visible hole as a transaction marker, but log
+     * compaction can punch the same hole by removing a real committed record, so a compacted source cannot
+     * be consumed causally at all. This is a correctness guard, not a topology lint, so it is never gated
+     * by the validation switch.
+     *
+     * Asserts driver construction throws (wrapping an {@link IllegalStateException} naming the source and
+     * its cleanup.policy) despite validation being off.
+     */
+    @Test
+    void compactedSourceCleanupPolicyFailsStartupEvenUnderValidationOff() throws IOException {
+        ParsleyTopicAdmin compactedSource = TestTopicAdmin.of(
+                Map.of("t1", T1_ID), Map.of(), Map.of("t1", "compact"));
+        Properties props = config();
+        props.put(ParsleyConfig.TOPOLOGY_VALIDATION, "off");
+        CausalStreamsBuilder builder = new CausalStreamsBuilder();
+        builder.stream("t1", Serdes.String(), Serdes.String())
+                .process(upperCaser())
+                .to("out-sink", "out", Serdes.String(), Serdes.String());
+        Topology topology = assemble(builder, compactedSource, props);
+
+        StreamsException thrown = assertThrows(StreamsException.class,
+                () -> new TopologyTestDriver(topology, config(tempStateDir())),
+                "a compacted source must fail startup even under validation=off — the guard is unconditional");
+        assertEquals(IllegalStateException.class, thrown.getCause().getClass(),
+                "the wrapped cause must be the unconditional source-compaction guard");
+        assertTrue(thrown.getCause().getMessage().contains("causal source topic 't1'"),
+                "the message must name the compacted source: " + thrown.getCause().getMessage());
+    }
+
+    /**
      * A sink whose partition count cannot be resolved must not mask a genuine partition-count
      * mismatch on a DIFFERENT sink in the same stage: each sink is checked independently, so one
      * not-yet-created sink cannot hide another sink's real misconfiguration, even under strict
@@ -1083,8 +1220,12 @@ class CausalStreamsTopologyTest {
 
         @Override
         public Map<String, String> cleanupPolicies(List<String> topics) {
-            // cleanupPolicies is only ever called for sink topics — never for registered inputs.
-            sinkCleanupPolicyCalls++;
+            // cleanupPolicies is called for source topics too now (the unconditional compacted-source
+            // guard), so — mirroring partitionCounts above — only a call whose topics are not all known
+            // inputs is a sink-validation call; the source guard's call over the inputs is not counted.
+            if (!topicIds.keySet().containsAll(topics)) {
+                sinkCleanupPolicyCalls++;
+            }
             Map<String, String> policies = new HashMap<>();
             topics.forEach(t -> policies.put(t, "delete"));
             return policies;

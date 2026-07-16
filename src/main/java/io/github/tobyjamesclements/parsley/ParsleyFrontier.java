@@ -22,7 +22,7 @@ import java.util.Set;
  * of all causal metadata a node persists (the held-record buffer and its candidate index are a
  * separate concern).
  *
- * <p>Two structures fold into one durable value here, stored as a single {@code "f"} key-value pair
+ * <p>Three structures fold into one durable value here, stored as a single {@code "f"} key-value pair
  * in the frontier state store (loaded once at construction, rewritten on change, read from memory):
  * <ul>
  *   <li>the <strong>contiguous frontier clock</strong> — the highest offset delivered without a gap
@@ -31,7 +31,11 @@ import java.util.Set;
  *       the dependencies advertised on it (max-merged). {@link #completeness()} is the frontier clock
  *       max-merged with every channel's advertised view — the <em>outbound stamp</em>, carrying
  *       transitive ancestry downstream. The delivery gate itself checks the contiguous frontier alone
- *       (see {@link ParsleyEngine}); an advertised claim never substitutes for local delivery.
+ *       (see {@link ParsleyEngine}); an advertised claim never substitutes for local delivery; and
+ *   <li>the <strong>highest-received offsets</strong> — for each input channel, the highest offset ever
+ *       physically received, so {@link #bridge} can tell a consumer-skipped offset (a transaction marker
+ *       or aborted record the {@code read_committed} consumer never returns) from an offset still to
+ *       arrive, and cross the former without stalling the contiguous walk.
  * </ul>
  *
  * <p>The <strong>forwarded-offset index</strong> is <em>not</em> in the {@code "f"} blob: it is a
@@ -49,6 +53,13 @@ final class ParsleyFrontier {
     private ParsleyClock frontier;
     // Per input channel (topicId, partition) -> the dependencies advertised on it (max-merged).
     private final Map<CoordKey, ParsleyClock> channels = new HashMap<>();
+    // Per input channel (topicId, partition) -> the highest offset ever physically received on it. Persisted
+    // in the "f" blob (part of the EOS transaction, so exact across restart) and consulted by bridge(): the
+    // open interval between the previous highest and a newly-received offset was skipped by the
+    // read_committed consumer, so it can only hold transaction markers or aborted-transaction records, never
+    // an in-flight or held business record. An absent entry means the channel has never been received on —
+    // its baseline is seedIfFirstSeen's concern, not a gap to bridge.
+    private final Map<CoordKey, Long> highestReceived = new HashMap<>();
     // Coordinates observed at least once; guards the one-time baseline seed in seedIfFirstSeen.
     private final Set<CoordKey> seenCoordinates = new HashSet<>();
     private final ParsleyForwardedIndex forwardedIndex;
@@ -193,6 +204,93 @@ final class ParsleyFrontier {
             return;
         }
         forwardedIndex.mark(topicId, partition, offset);
+        absorbContiguous(topicId, partition, watermark);
+    }
+
+    /**
+     * Bridges the offsets a {@code read_committed} consumer skipped between the previous highest received
+     * offset on {@code (topicId, partition)} and {@code receivedOffset} — a transaction commit/abort marker
+     * or an aborted-transaction data record, none of which the consumer ever returns — so the contiguous
+     * walk can cross the hole they would otherwise wedge it at (a marker sits at a real offset that no
+     * business record ever fills). Called once per received record, <em>before</em> that record's own
+     * delivery, on every channel the engine advances a frontier on ({@link ParsleyEngine#receive} and
+     * {@link ParsleyEngine#onWatermark}). Returns {@code true} if the contiguous frontier advanced — the
+     * caller must then cascade ({@link ParsleyEngine#propagate}), since a held record may have been waiting
+     * on exactly a bridged offset.
+     *
+     * <p><strong>Soundness.</strong> Kafka delivers a partition strictly in offset order, so once
+     * {@code receivedOffset} has arrived every lower offset that would ever be returned to this consumer
+     * already has been. An offset in {@code (highestReceived, receivedOffset)} was therefore skipped
+     * permanently — a transaction marker, an aborted record, or a protocol record the engine consumed but
+     * deliberately did not record as a delivery (a boundary marker on an early-return path) — never a
+     * business record still in flight, and never a <em>held</em> business record (a held record was
+     * received, so it is in the buffer and its offset is at or below {@code highestReceived}, outside the
+     * bridged interval). None of these is a cause any dependent awaits, so folding them is safe. A marker carries no
+     * dependencies, so bridging one advances no channel clock and forwards nothing — it only lets the walk
+     * proceed. The interval is skipped, not the record at {@code receivedOffset} itself, which the caller
+     * delivers or holds by the ordinary gate.
+     *
+     * <p><strong>First sighting.</strong> An absent {@code highestReceived} entry means the channel has
+     * never been received on: the baseline below {@code receivedOffset} is {@link #seedIfFirstSeen}'s
+     * concern (finite retention, a fresh consumer group), not a gap. So the first call bridges nothing,
+     * records {@code receivedOffset} as the highest received, and returns {@code false}. A
+     * {@code receivedOffset} at or below the recorded highest is an at-least-once replay: a strict no-op.
+     *
+     * <p>The epoch floor is honoured exactly as {@link #deliver} honours it: a skipped offset below the
+     * coordinate's {@code startsAt} is not marked (an out-of-domain position must not enter the forwarded
+     * index or advance the causal frontier). The <em>data-loss</em> guard — distinguishing a marker gap
+     * from a retention/{@code deleteRecords} jump that would drop real committed records below the log-start
+     * offset — is the caller's responsibility, since only it can see the partition's log-start (see
+     * {@link ParsleyEngine}); this method assumes the interval it is handed is a genuine skip.
+     */
+    boolean bridge(Uuid topicId, int partition, long receivedOffset) {
+        CoordKey key = new CoordKey(topicId, partition);
+        Long prev = highestReceived.get(key);
+        if (prev == null) {
+            highestReceived.put(key, receivedOffset);
+            persist();
+            return false;
+        }
+        if (receivedOffset <= prev) {
+            return false;
+        }
+        long watermark = frontier.offsetFor(topicId, partition);
+        long startsAt = epoch.startsAt(topicId, partition);
+        // Fast path: the frontier is caught up to the previous highest received (watermark == prev), so no
+        // held record sits in the skipped run — it is contiguous from the frontier and, being all
+        // consumer-skipped, all markers. Fold it straight into the frontier without O(gap) forwarded-index
+        // writes; a large aborted transaction could otherwise mark hundreds of thousands of offsets inside
+        // one EOS transaction, risking the transaction timeout and a crash-loop on legal input. The
+        // in-domain guard (prev + 1 >= startsAt) keeps a below-floor offset out of the frontier — and holds
+        // whenever watermark == prev, since a seeded coordinate's watermark never sits below startsAt - 1.
+        if (watermark == prev && prev + 1 >= startsAt) {
+            frontier = frontier.observe(topicId, partition, receivedOffset - 1);
+            highestReceived.put(key, receivedOffset);
+            persist();
+            return frontier.offsetFor(topicId, partition) > watermark;
+        }
+        // Slow path: a held record may sit between the frontier and the previous highest received, so mark
+        // the skipped offsets and let the contiguous walk absorb only the run now reachable (it stops at the
+        // held record). Below-floor and at-or-below-watermark offsets are not marked, mirroring deliver().
+        for (long skipped = prev + 1; skipped < receivedOffset; skipped++) {
+            if (skipped < startsAt || skipped <= watermark) {
+                continue;
+            }
+            forwardedIndex.mark(topicId, partition, skipped);
+        }
+        highestReceived.put(key, receivedOffset);
+        absorbContiguous(topicId, partition, watermark);
+        return frontier.offsetFor(topicId, partition) > watermark;
+    }
+
+    /**
+     * Walks the longest run of consecutive forwarded offsets on {@code (topicId, partition)} now achievable
+     * from {@code watermark}, advances the contiguous frontier by it, persists, and only then prunes the
+     * absorbed forwarded-index entries. Shared by {@link #deliver} (which marks one offset first) and
+     * {@link #bridge} (which marks a whole skipped run first). The persist-before-prune order is
+     * load-bearing — see {@link #deliver}'s Javadoc.
+     */
+    private void absorbContiguous(Uuid topicId, int partition, long watermark) {
         long extended = watermark;
         List<Long> absorbed = new ArrayList<>();
         for (long candidate : forwardedIndex.forwardedAfter(topicId, partition, watermark)) {
@@ -370,6 +468,10 @@ final class ParsleyFrontier {
         frontier = frontier.retaining(inScope);
         channels.keySet().removeIf(key -> !inScope.test(key.topicId(), key.partition()));
         channels.replaceAll((key, clock) -> clock.retaining(inScope));
+        // A retired/recreated coordinate must also leave the highest-received map, or its dead CoordKey
+        // would be re-serialised into the "f" blob on every persist forever. No misapplication is possible
+        // (a recreated topic has a new UUID, hence a new key), but the leak contradicts the scope prune.
+        highestReceived.keySet().removeIf(key -> !inScope.test(key.topicId(), key.partition()));
         persist();
     }
 
@@ -380,13 +482,17 @@ final class ParsleyFrontier {
     }
 
     /**
-     * Serialises the frontier clock, channel clocks, and epoch state into the single {@code "f"} value:
-     * {@code [frontier-len:4][frontier bytes][channel-count:4]} then per channel
+     * Serialises the frontier clock, channel clocks, epoch state, and highest-received offsets into the
+     * single {@code "f"} value: {@code [frontier-len:4][frontier bytes][channel-count:4]} then per channel
      * {@code [topicId MSB:8][topicId LSB:8][partition:4][clock-len:4][clock bytes]}, then
      * {@code [epoch-present:1]} and, when the epoch is a live {@link ParsleyEpochState},
-     * {@code [epoch-len:4][epoch bytes]}. The epoch state is persisted so a mid-transition restart —
-     * which resumes past the already-consumed boundary marker — resumes the pending window rather than
-     * losing it (which would leave the transition unable to close).
+     * {@code [epoch-len:4][epoch bytes]}, then {@code [highest-received-count:4]} and per channel
+     * {@code [topicId MSB:8][topicId LSB:8][partition:4][offset:8]}. The epoch state is persisted so a
+     * mid-transition restart — which resumes past the already-consumed boundary marker — resumes the
+     * pending window rather than losing it (which would leave the transition unable to close). The
+     * highest-received offsets are persisted so {@link #bridge}'s skip detection is exact across a restart
+     * (the map is written inside the same EOS transaction as the frontier and forwarded index), rather than
+     * reconstructed and possibly having to re-bridge already-forwarded offsets.
      */
     private byte[] toBytes() {
         try (ByteArrayOutputStream baos = new ByteArrayOutputStream();
@@ -403,6 +509,12 @@ final class ParsleyFrontier {
                 ParsleyByteUtils.writeBytes(dos, state.toBytes());
             } else {
                 dos.writeBoolean(false);
+            }
+            dos.writeInt(highestReceived.size());
+            for (Map.Entry<CoordKey, Long> entry : highestReceived.entrySet()) {
+                ParsleyByteUtils.writeUuid(dos, entry.getKey().topicId());
+                dos.writeInt(entry.getKey().partition());
+                dos.writeLong(entry.getValue());
             }
             dos.flush();
             return baos.toByteArray();
@@ -430,6 +542,19 @@ final class ParsleyFrontier {
                 // never wrote them, so this branch is not reached for those.
                 if (epoch instanceof ParsleyEpochState state) {
                     state.restore(e);
+                }
+            }
+            // The highest-received section is likewise optional and trailing: a blob written before it
+            // existed simply ends after the epoch flag, leaving the map empty — every channel then reads as
+            // a first sighting on its next record (no bridge, records the offset), which self-heals on the
+            // following gap. A live blob carries the exact per-channel highest received.
+            if (dis.available() > 0) {
+                int highestReceivedCount = dis.readInt();
+                for (int i = 0; i < highestReceivedCount; i++) {
+                    Uuid topicId = ParsleyByteUtils.readUuid(dis);
+                    int partition = dis.readInt();
+                    long offset = dis.readLong();
+                    highestReceived.put(new CoordKey(topicId, partition), offset);
                 }
             }
         } catch (IOException e) {

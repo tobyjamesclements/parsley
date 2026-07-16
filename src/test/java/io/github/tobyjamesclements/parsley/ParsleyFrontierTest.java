@@ -289,6 +289,144 @@ class ParsleyFrontierTest {
                 "completeness reflects the delivered position with no flooring applied");
     }
 
+    // --- bridge(): crossing consumer-skipped (EOS marker / aborted-txn) offsets --------------------
+    //
+    // A read_committed consumer never returns a transaction commit/abort marker or an aborted record,
+    // so a transactionally-produced topic's log rec@0,1,2,MARKER@3,rec@4,5,6 reaches the consumer as
+    // offsets 0,1,2,4,5,6 with a permanent hole at 3. bridge() marks such skipped offsets so the
+    // contiguous walk crosses them instead of wedging at the first hole. Each helper call models one
+    // receive: bridge() then, for a deliverable record, deliver().
+
+    /** Models receive of a deliverable record: bridge the channel below it, then deliver it. */
+    private static void receiveAndDeliver(ParsleyFrontier frontier, Uuid topicId, int partition, long offset) {
+        frontier.bridge(topicId, partition, offset);
+        frontier.deliver(topicId, partition, offset);
+    }
+
+    /**
+     * The contiguous frontier tracks a transactionally-produced input across a commit-marker hole: given
+     * the consumer-visible sequence 0,1,2,4,5,6 (offset 3 skipped), the frontier reaches 6, not stalling
+     * at 2 the way the raw {@code +1} walk would. This is the frontier-level analogue of the EOS
+     * frontier-density integration repro.
+     */
+    @Test
+    void bridgeCrossesAConsumerSkippedOffsetSoTheContiguousWalkReachesTheEnd() {
+        ParsleyFrontier frontier = new ParsleyFrontier(ParsleyClock.empty(), new MockForwardedIndex());
+
+        for (long offset : new long[] {0, 1, 2, 4, 5, 6}) {   // 3 is a commit marker the consumer skips
+            receiveAndDeliver(frontier, T1_ID, 0, offset);
+        }
+
+        assertEquals(6L, frontier.snapshot().offsetFor(T1_ID, 0),
+                "the frontier must advance past the skipped marker offset 3 to cover all delivered "
+                        + "records (0,1,2,4,5,6); a stall at 2 is the density bug");
+    }
+
+    /**
+     * bridge() returns {@code true} exactly when it advanced the contiguous frontier — the signal the
+     * engine uses to decide whether to cascade. Crossing a marker that unblocks the walk returns true; a
+     * first sighting and an at-least-once replay both return false.
+     */
+    @Test
+    void bridgeReturnsTrueOnlyWhenItAdvancesTheFrontier() {
+        ParsleyFrontier frontier = new ParsleyFrontier(ParsleyClock.empty(), new MockForwardedIndex());
+
+        assertFalse(frontier.bridge(T1_ID, 0, 0),
+                "the first sighting of a channel bridges nothing (its baseline is the seed's concern)");
+        frontier.deliver(T1_ID, 0, 0);
+        receiveAndDeliver(frontier, T1_ID, 0, 1);
+        receiveAndDeliver(frontier, T1_ID, 0, 2);
+
+        assertTrue(frontier.bridge(T1_ID, 0, 4),
+                "bridging the marker at 3 (frontier at 2) advances the frontier to 3 — the walk crosses "
+                        + "the hole — so it must return true to trigger a cascade");
+        assertEquals(3L, frontier.snapshot().offsetFor(T1_ID, 0),
+                "the frontier advances to the marker offset itself once crossed; the real record at 4 is "
+                        + "delivered separately");
+        assertFalse(frontier.bridge(T1_ID, 0, 4),
+                "a repeat bridge at an already-received offset is an at-least-once replay: a no-op");
+    }
+
+    /**
+     * bridge() never advances the frontier past a still-held business record: the walk's contiguity is
+     * the protecting invariant. With offset 2 received but not yet delivered (held), bridging a later
+     * marker at 3 marks the marker but the frontier stays at 1 — 2 blocks the walk. Only once 2 is
+     * delivered does the frontier absorb 2 and the bridged 3 together.
+     */
+    @Test
+    void bridgeDoesNotAdvancePastAHeldBusinessRecord() {
+        ParsleyFrontier frontier = new ParsleyFrontier(ParsleyClock.empty(), new MockForwardedIndex());
+
+        receiveAndDeliver(frontier, T1_ID, 0, 0);
+        receiveAndDeliver(frontier, T1_ID, 0, 1);
+        // Record at 2 is received (bridge records it) but HELD — deliver() is not called for it.
+        frontier.bridge(T1_ID, 0, 2);
+        // Record at 4 arrives; offset 3 between the held 2 and 4 is a marker.
+        assertFalse(frontier.bridge(T1_ID, 0, 4),
+                "bridging 3 must not advance the frontier while 2 is still held");
+        assertEquals(1L, frontier.snapshot().offsetFor(T1_ID, 0),
+                "the held record at 2 blocks the walk; the frontier stays at 1 despite the bridged marker");
+
+        // Once the held 2 is delivered, the walk absorbs 2 and the previously-bridged 3 in one run.
+        frontier.deliver(T1_ID, 0, 2);
+        assertEquals(3L, frontier.snapshot().offsetFor(T1_ID, 0),
+                "delivering the held 2 lets the walk absorb 2 and the bridged marker 3 together");
+    }
+
+    /**
+     * The bridge fast path folds a large consumer-skipped run (e.g. a big aborted transaction) straight
+     * into the frontier without marking each skipped offset in the forwarded index — so a huge gap costs
+     * O(1) index work, not O(gap), which could otherwise blow the EOS transaction. It applies whenever the
+     * frontier is caught up to the previous highest received (no held record sits in the run), so the whole
+     * run is contiguous markers.
+     */
+    @Test
+    void bridgeFastPathFoldsALargeSkippedRunWithoutMarkingEachOffset() {
+        MockForwardedIndex forwardedIndex = new MockForwardedIndex();
+        ParsleyFrontier frontier = new ParsleyFrontier(ParsleyClock.empty(), forwardedIndex);
+
+        receiveAndDeliver(frontier, T1_ID, 0, 0);          // frontier and highest-received both at 0
+
+        // A record at 1_000_000 with the entire (0, 1_000_000) run consumer-skipped (a large aborted txn).
+        assertTrue(frontier.bridge(T1_ID, 0, 1_000_000L),
+                "bridging a large skipped run must advance the frontier");
+        assertEquals(999_999L, frontier.snapshot().offsetFor(T1_ID, 0),
+                "the whole skipped run folds into the frontier, up to just below the received offset");
+        assertTrue(forwardedIndex.forwardedAfter(T1_ID, 0, -1L).isEmpty(),
+                "the fast path must mark none of the skipped offsets in the forwarded index — O(1), not O(gap)");
+    }
+
+    /**
+     * The per-channel highest-received offset persists in the {@code "f"} blob, so bridge()'s skip
+     * detection is exact across a restart: after reloading a frontier that had received up to offset 4,
+     * a record arriving at 6 (offset 5 a marker) is correctly bridged rather than misread as a first
+     * sighting. Without persisting the highest-received offset the reloaded frontier would treat 6 as a
+     * first sighting, bridge nothing, and stall at 4.
+     */
+    @Test
+    void highestReceivedPersistsSoBridgeStaysExactAcrossRestart() {
+        TestKeyValueStore<String, byte[]> store =
+                new TestKeyValueStore<String, byte[]>(Comparator.naturalOrder(), "frontier");
+        ParsleyFrontier original = new ParsleyFrontier(store, new MockForwardedIndex());
+        for (long offset : new long[] {0, 1, 2, 4}) {   // 3 skipped; highest received becomes 4
+            receiveAndDeliver(original, T1_ID, 0, offset);
+        }
+        assertEquals(4L, original.snapshot().offsetFor(T1_ID, 0), "precondition: frontier reached 4 before restart");
+
+        // Reload from the same store: the highest-received map restores from the "f" blob alone.
+        ParsleyFrontier restored = new ParsleyFrontier(store, new MockForwardedIndex());
+
+        // A record at 6 arrives (offset 5 a marker). Because highest-received restored as 4, the gap at
+        // 5 is recognised and bridged.
+        assertTrue(restored.bridge(T1_ID, 0, 6),
+                "the restored highest-received (4) lets bridge recognise the marker gap at 5 and advance");
+        assertEquals(5L, restored.snapshot().offsetFor(T1_ID, 0),
+                "the frontier crosses the bridged marker 5; a first-sighting misread would have stalled at 4");
+        restored.deliver(T1_ID, 0, 6);
+        assertEquals(6L, restored.snapshot().offsetFor(T1_ID, 0),
+                "delivering the real record at 6 then advances the frontier to 6");
+    }
+
     // --- Cross-store tear regression (BACKLOG.md: torn changelog flush under at-least-once) --------
     //
     // The forwarded index and the frontier's "f" blob are two separate changelog-backed stores with

@@ -7,6 +7,17 @@ All notable changes to this project are documented in this file. The format is b
 ## [Unreleased]
 
 ### Changed
+- **Causal sources are consumed with `auto.offset.reset=none`, and their first-start offsets are seeded
+  before start.** The frontier skip-bridge (see Fixed) treats an offset the consumer never returned as a
+  transaction marker, which is only sound if the consumer can never silently jump forward over lost
+  records — retention or `deleteRecords` outrunning a lagging consumer. Every causal source is now declared
+  with `AutoOffsetReset.none()`, so Kafka Streams fails the task fast on an out-of-range committed offset
+  instead of resetting over the loss. To keep a genuine first start working under `none()`,
+  `CausalStreams.start()` seeds each source partition's log-start offset before the group is joined,
+  refusing to seed when surviving causal state (a changelog topic) shows the missing offset is expiry
+  rather than a true first start. A compacted source topic, and a record-skipping deserialization or
+  processing exception handler, are also rejected at assembly, since both punch the same consumer-visible
+  holes the bridge would misread as markers.
 - **A causal topology declares exactly one stage, enforced at compile time.** `CausalStreamsBuilder` no
   longer accumulates stages: the fluent chain `stream(...).process(...).to(...)` now terminates in
   `CausalProcessedStream.build()` rather than a `build()` on the builder (the builder keeps only a
@@ -49,6 +60,16 @@ All notable changes to this project are documented in this file. The format is b
   stale `ParsleyKafkaEpochTransport` class name in the pom's coverage note is corrected.
 
 ### Fixed
+- **The contiguous frontier now tracks a transactionally-produced input across EOS commit markers.** Under
+  the required `exactly_once_v2`, a `read_committed` consumer never returns the offsets occupied by
+  transaction commit/abort markers or aborted-transaction records, so a causal stage sees permanent holes
+  in a transactional input's offsets. The contiguous frontier walk required strictly consecutive offsets,
+  so it stalled at the first marker hole: every completeness stamp under-reported that input, and any
+  record depending on a post-marker offset deadlocked. The engine now bridges a consumer-skipped offset —
+  sound because Kafka delivers a partition strictly in offset order, so a gap below a just-received offset
+  is permanently a marker or aborted record, never a business record still in flight and never a held one —
+  folding it into the frontier so the walk crosses it. The per-channel highest-received offset is persisted
+  in the frontier store, so the skip detection is exact across a restart.
 - **An unadmittable topology-epoch join hung `init()` on the StreamThread until the broker evicted it
   into a rebalance crash-loop.** The joiner handshake must wait for the epoch that establishes its
   consistent cut (the agreed new logical time-0) to commit before it consumes — consuming ahead is

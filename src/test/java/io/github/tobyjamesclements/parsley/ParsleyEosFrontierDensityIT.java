@@ -23,7 +23,6 @@ import org.apache.kafka.streams.processor.api.Processor;
 import org.apache.kafka.streams.processor.api.ProcessorContext;
 import org.apache.kafka.streams.processor.api.ProcessorSupplier;
 import org.apache.kafka.streams.processor.api.Record;
-import org.junit.jupiter.api.Disabled;
 import org.junit.jupiter.api.Test;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
@@ -73,14 +72,6 @@ class ParsleyEosFrontierDensityIT {
      * cover all six records. A stall at offset 2 confirms the EOS frontier-density bug.
      */
     @Test
-    @Disabled("KNOWN BUG (confirmed 2026-07-14): the contiguous frontier stalls at the first EOS "
-            + "commit-marker hole on a transactionally-produced topic. A read_committed consumer sees "
-            + "src offsets 0,1,2,4,5,6 (marker at 3); all six records are delivered, but the frontier's src "
-            + "entry caps at 2 and every output stamp under-reports src as 2 instead of 6. Consequences: "
-            + "understated completeness (downstream may under-gate) and a permanent deadlock for any record "
-            + "depending on a post-marker offset. Fix: fold consumer-skipped (marker) offsets into the "
-            + "frontier on receive (per-partition ordering proves a skipped offset is never a business "
-            + "record). Remove @Disabled once fixed.")
     void frontierTracksATransactionallyProducedInputAcrossCommitMarkers() throws Exception {
         String bootstrap = kafka.getBootstrapServers();
         createTopics(bootstrap, SRC, OUT);

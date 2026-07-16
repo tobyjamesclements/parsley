@@ -1096,11 +1096,17 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
         Map<String, Uuid> resolved;
         Map<String, Integer> partitionCounts;
         Map<String, String> cleanupPolicies;
+        Map<String, String> sourceCleanupPolicies;
         try (ParsleyTopicAdmin admin = adminFactory.apply(context.appConfigs())) {
             resolved = admin.topicIds(topicList);
             partitionCounts = new HashMap<>(admin.partitionCounts(topicList));
             partitionCounts.putAll(additionalTopicInfo(admin, "partition count", ParsleyTopicAdmin::partitionCounts));
             cleanupPolicies = additionalTopicInfo(admin, "cleanup.policy", ParsleyTopicAdmin::cleanupPolicies);
+            // Source cleanup.policy is resolved separately, over the input topics (which must already
+            // exist), and always — never gated by parsley.topology.validation — because a compacted
+            // source is a correctness hazard for the skip-bridge, not a topology lint (see
+            // validateSourcesNotCompacted).
+            sourceCleanupPolicies = admin.cleanupPolicies(topicList);
             this.sinkTopicUuids = resolveSinkTopicUuids(admin);
         } catch (Exception e) {
             throw new IllegalStateException(
@@ -1114,6 +1120,7 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
         }
         // Validate outside the resolve try/catch so a strict-mode failure surfaces as itself rather
         // than being wrapped as a broker-reachability error.
+        validateSourcesNotCompacted(sourceCleanupPolicies);
         validatePartitionParity(partitionCounts);
         validateCleanupPolicy(cleanupPolicies);
         return resolved;
@@ -1296,6 +1303,39 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
      * can be removed from the log before a slow consumer reads it — silently losing the completeness
      * frontier it carried. {@code compact,delete} is equally unsafe: compaction still runs.
      */
+    /**
+     * Fails the task, unconditionally, when a causal <em>source</em> topic has {@code cleanup.policy}
+     * including {@code compact}. Unlike {@link #validateCleanupPolicy} (a sink lint, gated by {@code
+     * parsley.topology.validation}), this is a correctness guard on the skip-bridge and is never gated —
+     * same precedent as {@link #resolveSinkTopicUuids}. The bridge ({@link ParsleyFrontier#bridge}) treats
+     * an offset a {@code read_committed} consumer skipped as a transaction marker or aborted record and
+     * folds it into the contiguous frontier. Log compaction breaks that premise: it removes a real,
+     * committed mid-log record, leaving exactly the same consumer-visible hole a marker would — so the
+     * bridge would advance the frontier past a record that was never delivered, releasing a dependent
+     * before its cause (a silent causal-order violation). A compacted source therefore cannot be consumed
+     * causally at all; the only safe response is to refuse at startup. {@code compact,delete} is equally
+     * unsafe: compaction still runs.
+     *
+     * <p>This is a <strong>startup</strong> check: it reads {@code cleanup.policy} once at {@code init()}.
+     * Flipping a running source topic to {@code compact} (via {@code kafka-configs --alter}) is not caught
+     * here — it punches consumer-visible holes with no fetch error, so it must be avoided operationally.
+     */
+    private void validateSourcesNotCompacted(Map<String, String> sourceCleanupPolicies) {
+        for (Map.Entry<String, String> entry : sourceCleanupPolicies.entrySet()) {
+            String policy = entry.getValue();
+            if (policy == null || !policy.contains(TopicConfig.CLEANUP_POLICY_COMPACT)) {
+                continue;
+            }
+            throw new IllegalStateException("causal source topic '" + entry.getKey()
+                    + "' has cleanup.policy=" + policy + "; a compacted source can drop a real committed "
+                    + "mid-log record, leaving the same consumer-visible hole a transaction marker does, "
+                    + "which the skip-bridge would cross — releasing a dependent before its cause. Set "
+                    + "cleanup.policy=delete on any topic consumed by a causal stage. This check is not "
+                    + "governed by parsley.topology.validation because it guards causal correctness, not "
+                    + "topology hygiene.");
+        }
+    }
+
     private void validateCleanupPolicy(Map<String, String> cleanupPolicies) {
         ParsleyConfig.ValidationMode mode = config.topologyValidation();
         if (mode == ParsleyConfig.ValidationMode.OFF) {
