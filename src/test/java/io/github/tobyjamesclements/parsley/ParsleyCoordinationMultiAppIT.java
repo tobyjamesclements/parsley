@@ -155,9 +155,10 @@ class ParsleyCoordinationMultiAppIT {
         String appIdB = "dag-b-domain-" + runId;
         Path stateA = Files.createTempDirectory("parsley-dag-a-domain");
         Path stateB = Files.createTempDirectory("parsley-dag-b-domain");
+        Properties roster = memberApps(appIdA, appIdB);
 
-        try (CausalStreams appA = new CausalStreams(stageATopology(), causalStreamsConfig(bootstrap, appIdA, stateA));
-             CausalStreams appB = new CausalStreams(stageBTopology(), causalStreamsConfig(bootstrap, appIdB, stateB))) {
+        try (CausalStreams appA = new CausalStreams(stageATopology(), causalStreamsConfig(bootstrap, appIdA, stateA, roster));
+             CausalStreams appB = new CausalStreams(stageBTopology(), causalStreamsConfig(bootstrap, appIdB, stateB, roster))) {
             appA.start();
             appB.start();
             await().atMost(Duration.ofSeconds(60)).until(() -> appA.state() == KafkaStreams.State.RUNNING);
@@ -216,6 +217,7 @@ class ParsleyCoordinationMultiAppIT {
                 .build();
 
         Properties domainConfig = cycleConfig(IN + "," + fromA + "," + fromB);
+        domainConfig.put(ParsleyConfig.COORDINATION_MEMBER_APPS, appIdA + "," + appIdB);
         try (CausalStreams appA = new CausalStreams(aTopology,
                      causalStreamsConfig(bootstrap, appIdA, stateA, domainConfig));
              CausalStreams appB = new CausalStreams(bTopology,
@@ -235,28 +237,23 @@ class ParsleyCoordinationMultiAppIT {
     }
 
     /**
-     * A node <strong>joins a running cycle</strong>, an epoch admits it, and the cycle then carries on
-     * serving across a further, explicit epoch boundary — the cyclic counterpart of the linear join in
+     * A cyclic founding cohort {@code {A,B}} seals genesis together, then the running cycle carries on
+     * serving across a further, explicit epoch boundary — the cyclic counterpart of the linear cohort in
      * {@code ParsleyCoordinationJoinerIT}.
      *
-     * <p>Phase 1 brings up the absorbing side A ({@code t1, from-b -> from-a}) alone — it trivially covers
-     * the whole so-far domain (it consumes {@code t1} and {@code from-b} and produces {@code from-a}) — and
-     * drives it to a non-zero epoch, since a cold domain treats every join as static and opens no round.
-     * Phase 2 starts the closing side B ({@code from-a -> from-b}): B's fresh
-     * task blocks until the epoch computed <em>with</em> it commits — A, still running, publishes for the
-     * round — promoting B to a running member and closing the cycle. A record produced to {@code t1} then
-     * flows all the way around ({@code t1 -> A -> from-a -> B -> from-b -> A}, where A absorbs the return
-     * leg), proving the joined cycle serves. Phase 3 evolves the running two-node cycle through an explicit
-     * {@link CausalStreams#requestEpochTransition()} and shows a second record still serves across the new
-     * boundary. No business record is produced before B joins, so {@code from-a} is empty at the cut and the
-     * join scoping never depends on replaying pre-cut cycle history.
+     * <p>Both the absorbing side A ({@code t1, from-b -> from-a}) and the closing side B ({@code from-a ->
+     * from-b}) declare the founding roster {@code {A,B}} and come up together, each consuming at the empty
+     * genesis floor; genesis does not commit until both founders have declared their full task set, then it
+     * seals the cut over the whole cohort and closes the cycle. A record produced to {@code t1} flows all
+     * the way around ({@code t1 -> A -> from-a -> B -> from-b -> A}, where A absorbs the return leg). The
+     * running cycle is then evolved through an explicit {@link CausalStreams#requestEpochTransition()} and a
+     * second record still serves across the new boundary.
      *
-     * Asserts the log commits an epoch admitting B, then a strictly later epoch after the explicit
-     * transition, and a record produced to {@code t1} both before and after that transition reaches
-     * {@code from-b} around the cycle.
+     * Asserts genesis commits over the whole cohort, a record produced to {@code t1} reaches {@code from-b}
+     * around the cycle, and a second record still serves after a later explicit epoch transition.
      */
     @Test
-    void aNodeJoiningACycleIsAdmittedByANewEpochAndTheCycleCarriesOn() throws Exception {
+    void aCyclicCohortSealsGenesisTogetherAndCarriesOnAcrossAnEpochTransition() throws Exception {
         String bootstrap = kafka.getBootstrapServers();
         String fromA = "from-a";
         String fromB = "from-b";
@@ -276,36 +273,33 @@ class ParsleyCoordinationMultiAppIT {
                 .to("from-b-sink", fromB, Serdes.String(), Serdes.String())
                 .build();
 
+        String appIdA = "join-cycle-a-" + runId;
+        String appIdB = "join-cycle-b-" + runId;
         Properties domainConfig = cycleConfig(IN + "," + fromA + "," + fromB);
+        domainConfig.put(ParsleyConfig.COORDINATION_MEMBER_APPS, appIdA + "," + appIdB);
         try (CausalStreams appA = new CausalStreams(aTopology,
-                     causalStreamsConfig(bootstrap, "join-cycle-a-" + runId, stateA, domainConfig));
+                     causalStreamsConfig(bootstrap, appIdA, stateA, domainConfig));
              CausalStreams appB = new CausalStreams(bTopology,
-                     causalStreamsConfig(bootstrap, "join-cycle-b-" + runId, stateB, domainConfig))) {
-            // Phase 1: the absorbing side runs alone and is driven to a non-zero epoch, so there is a
-            // committed epoch for B to join into (a cold committedEpochId==0 domain treats every join as
-            // static, opening no round).
+                     causalStreamsConfig(bootstrap, appIdB, stateB, domainConfig))) {
+            // The cyclic cohort {A,B} seals genesis together: both founders come up and consume at the empty
+            // genesis floor, and genesis does not commit until both have declared their full task set — then
+            // it seals the cut over the whole cohort and the closed cycle serves.
             appA.start();
-            await().atMost(Duration.ofSeconds(60)).until(() -> appA.state() == KafkaStreams.State.RUNNING);
-            requestUntilCommitted(appA, bootstrap, 2L);
-            long epochAfterPhase1 = latestCommittedEpoch(bootstrap);
-
-            // Phase 2: the closing side joins; its fresh task blocks until the epoch computed with it commits,
-            // driving the epoch past where phase 1 left it — that admits B and closes the cycle. Do not await
-            // RUNNING: a blocked joiner keeps its instance in REBALANCING, so the epoch advancing is the
-            // unblock signal (A, still running in its own app, publishes for B's round).
             appB.start();
-            await().atMost(Duration.ofSeconds(120)).until(() -> latestCommittedEpoch(bootstrap) > epochAfterPhase1);
-            long epochAdmittingB = latestCommittedEpoch(bootstrap);
+            await().atMost(Duration.ofSeconds(60)).until(() -> appA.state() == KafkaStreams.State.RUNNING);
+            await().atMost(Duration.ofSeconds(60)).until(() -> appB.state() == KafkaStreams.State.RUNNING);
+            await().atMost(Duration.ofSeconds(90)).until(() -> latestCommittedEpoch(bootstrap) >= 1L);
 
             try (KafkaProducer<String, String> producer = new KafkaProducer<>(producerConfig(bootstrap))) {
                 producer.send(stampEmptyDeps(new ProducerRecord<>(IN, "k", "hello"))).get();
             }
             assertTrue(awaitServedOn(bootstrap, fromB, "B:A:hello"),
-                    "once B has joined and been admitted, a record must flow around the closed cycle to from-b");
+                    "once genesis seals the cyclic cohort, a record must flow around the closed cycle to from-b");
 
-            // Phase 3: evolve the running two-node cycle through a further, explicit epoch transition and
-            // confirm it keeps serving across the new boundary.
-            requestUntilCommitted(appA, bootstrap, epochAdmittingB + 1);
+            // Evolve the running two-node cycle through a further, explicit epoch transition and confirm it
+            // keeps serving across the new boundary.
+            long epochBeforeTransition = latestCommittedEpoch(bootstrap);
+            requestUntilCommitted(appA, bootstrap, epochBeforeTransition + 1);
 
             try (KafkaProducer<String, String> producer = new KafkaProducer<>(producerConfig(bootstrap))) {
                 producer.send(stampEmptyDeps(new ProducerRecord<>(IN, "k", "world"))).get();
@@ -339,6 +333,14 @@ class ParsleyCoordinationMultiAppIT {
     private static Properties cycleConfig(String domainTopics) {
         Properties props = new Properties();
         props.put(ParsleyConfig.COORDINATION_DOMAIN_TOPICS, domainTopics);
+        return props;
+    }
+
+    /** The {@code parsley.coordination.member-apps} roster as an overlay {@link Properties} — the
+     * authoritative membership every app in a multi-app domain must declare identically. */
+    private static Properties memberApps(String... appIds) {
+        Properties props = new Properties();
+        props.put(ParsleyConfig.COORDINATION_MEMBER_APPS, String.join(",", appIds));
         return props;
     }
 

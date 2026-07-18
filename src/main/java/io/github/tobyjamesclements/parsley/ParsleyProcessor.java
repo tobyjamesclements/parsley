@@ -159,6 +159,12 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
     // "0_0" is a different node); the application.id prefix disambiguates them, while two instances of the
     // same app share it (they are the same logical member, only one live at a time).
     private String memberId = "";
+    // This task's app id (application.id, or "" in a test context) and its app's total task count —
+    // resolved at init(). The app id is carried explicitly on the log (not string-parsed from memberId);
+    // the task total drives the genesis cohort barrier and the app-level pre-declaration of every sibling
+    // task of this app (see ParsleyEpochRuntime#join).
+    private String appId = "";
+    private int taskTotal = 1;
 
     private ProcessorContext<KOut, VOut> context;
     // The task's one engine, built once at init() over the task's state stores. Exactly one Processor
@@ -272,6 +278,7 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
     @Override
     public void init(ProcessorContext<KOut, VOut> context) {
         this.context = context;
+        this.appId = appId(context);
         this.memberId = memberId(context);
         this.topicUuids = resolveTopicUuids(context);
         this.frontierStore = context.getStateStore(frontierStoreName);
@@ -294,22 +301,36 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
             ParsleyEpochRuntime runtime = coordination.runtimeFor(context.appConfigs());
             this.epochRuntime = runtime;
             this.snapshotPublisher = runtime::publishFrontier;
+            // This member's view of the authoritative member-app roster (defaults to this app alone when
+            // member-apps is unset), and every task member of this app for app-level pre-declaration.
+            Set<String> rosterView = coordinationRosterView();
+            Set<String> appTaskMembers = appTaskMemberIds();
+            // Insurance: this task's own member id must be among the siblings it pre-declares, or it would
+            // declare its app's cohort without itself and never be promoted. Holds for every task-id shape
+            // CausalStreams produces (appId/subtopology_partition); a mismatch is an unexpected topology.
+            if (!appTaskMembers.contains(memberId)) {
+                throw new IllegalStateException("this task's member id '" + memberId + "' is not among its "
+                        + "app's derived task members " + appTaskMembers + " (unexpected task-id format)");
+            }
             // One join budget shared across both waits below — a second, independent deadline could add up
             // to well over max.poll.interval.ms and let the broker silently evict this consumer mid-block.
             Duration joinBudget = joinBudget(context.appConfigs());
             long joinDeadlineNanos = System.nanoTime() + joinBudget.toNanos();
             // Fold the log to its end FIRST so runtime.domainTopics() is accurate, then validate this
             // member's own full-mesh coverage BEFORE it declares itself. A mis-meshed member must never
-            // append a JoinRequested: if it did, the round that excludes pending joiners from its mesh
-            // check would promote it to a running member that can never be meshed, wedging every future
-            // epoch round for the whole domain (and it would crash-loop, never publishing). Rejecting it
-            // here instead crash-loops it in isolation, leaving the shared domain untouched.
+            // append a JoinRequested: if it did, a round could promote it to a running member that can
+            // never be meshed, wedging every future epoch round for the whole domain (and it would
+            // crash-loop, never publishing). Rejecting it here crash-loops it in isolation instead.
             coordination.awaitBootstrap(runtime, memberId, joinBudget, joinDeadlineNanos);
             validateFullMeshCoverage(runtime);
-            // Declare this member's input channels and sink topics so the fold can derive the DAG-wide
-            // source-topic registry; then block until this member is a running member.
-            runtime.join(memberId, topics, sinkTopics);
-            coordination.awaitJoinCommit(runtime, memberId, joinBudget, joinDeadlineNanos);
+            // Declare this app's whole task set (app-level pre-declaration: the cohort barrier needs every
+            // task of the app present to commit, but inits run serially on the StreamThread and a joiner
+            // blocks here — so declaring only this task could deadlock a sibling's init; see
+            // ParsleyEpochRuntime#join), carrying this member's topics, roster view, and task total. Then
+            // block until an epoch admits this member (a founder consumes at the empty genesis floor
+            // without blocking; only a post-genesis joiner blocks — see awaitJoinCommit).
+            runtime.join(memberId, appId, appTaskMembers, topics, sinkTopics, rosterView, taskTotal);
+            coordination.awaitJoinCommit(runtime, memberId, appId, joinBudget, joinDeadlineNanos);
             // Re-validate after admission as a loud, at-startup diagnostic: a concurrent domain-expanding
             // join folding during this member's own (potentially long) join wait can still promote it
             // mis-meshed. Surfacing that here beats discovering it record by record on the data path.
@@ -333,12 +354,18 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
         // already-settled epochState is a no-op (ParsleyEpochState#onBoundary short-circuits at
         // epochId <= settledEpochId), so retrying costs nothing.
         if (epochRuntime != null && !restored) {
-            // Read the id and its lower bounds together (ParsleyEpochRuntime#committedEpoch), not via two
-            // independent volatile reads: a commit landing in between the two would otherwise pair a
-            // fresher id with a stale bounds snapshot.
-            ParsleyEpochRuntime.CommittedEpoch committed = epochRuntime.committedEpoch();
-            this.epochSeedFloor = committed.lowerBounds();
-            this.epochSeedEpochId = committed.epochId();
+            // Read this member's OWN admission cut — the epoch+floor of the commit that promoted it — not
+            // the current committed floor. A fresh joiner admitted at epoch k re-adopts F_k and strips its
+            // pre-cut prefix; a genesis founder re-adopts the empty genesis floor and strips nothing. This
+            // matters on a stateless restart (an EOS abort before the member's first commit): re-adopting
+            // its own cut avoids stripping genesis-era history it never skipped, or a joiner adopting a
+            // since-advanced floor. A member with no admission floor yet — a genesis founder still
+            // consuming before genesis commits — keeps the default empty epoch-0 seed.
+            ParsleyEpochRuntime.CommittedEpoch admission = epochRuntime.admissionFloor(memberId);
+            if (admission != null) {
+                this.epochSeedFloor = admission.lowerBounds();
+                this.epochSeedEpochId = admission.epochId();
+            }
         }
 
         this.wiredMetrics = ParsleyMetrics.wire(context);
@@ -494,9 +521,68 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
      * Falls back to the bare task id when no {@code application.id} is configured (e.g. a test context).
      */
     private String memberId(ProcessorContext<KOut, VOut> context) {
-        Object applicationId = context.appConfigs().get(StreamsConfig.APPLICATION_ID_CONFIG);
+        String app = appId(context);
         String task = context.taskId().toString();
-        return (applicationId == null || applicationId.toString().isEmpty()) ? task : applicationId + "/" + task;
+        return app.isEmpty() ? task : app + "/" + task;
+    }
+
+    /** This task's {@code application.id}, or {@code ""} when none is configured (e.g. a test context). */
+    private String appId(ProcessorContext<KOut, VOut> context) {
+        Object applicationId = context.appConfigs().get(StreamsConfig.APPLICATION_ID_CONFIG);
+        return applicationId == null ? "" : applicationId.toString();
+    }
+
+    /**
+     * This member's view of the authoritative member-app roster: the configured {@code
+     * parsley.coordination.member-apps}, or a single-app roster of this app's own id when unset. Always
+     * contains this app's own id — a member excluded from its own roster is a misconfiguration that fails
+     * startup rather than silently never being admitted. Read from {@code appConfigs()} (like {@code
+     * application.id}), so it flows uniformly through the deployment props whether the topology is built
+     * through {@code CausalStreams} or the low-level {@code ParsleyProcessorSupplier}.
+     */
+    private Set<String> coordinationRosterView() {
+        Object configured = context.appConfigs().get(ParsleyConfig.COORDINATION_MEMBER_APPS);
+        Set<String> roster = new HashSet<>();
+        if (configured != null) {
+            for (String app : configured.toString().split(",")) {
+                String trimmed = app.trim();
+                if (!trimmed.isEmpty()) {
+                    roster.add(trimmed);
+                }
+            }
+        }
+        if (roster.isEmpty()) {
+            // Fall back to the Parsley-config surface (a parsley.properties classpath resource, or the
+            // low-level supplier's own config) so member-apps honours the same layering as every other
+            // parsley.coordination.* key, not just the Streams deployment props.
+            roster.addAll(config.coordinationMemberApps());
+        }
+        if (roster.isEmpty()) {
+            return Set.of(appId);
+        }
+        if (!roster.contains(appId)) {
+            throw new IllegalStateException("this application.id '" + appId + "' is not listed in its own "
+                    + ParsleyConfig.COORDINATION_MEMBER_APPS + " roster " + roster
+                    + "; every member app must include itself in the roster");
+        }
+        return Set.copyOf(roster);
+    }
+
+    /**
+     * Every task member id of this app — {@code appId/<subtopology>_0 .. appId/<subtopology>_{taskTotal-1}}
+     * (bare {@code <subtopology>_N} with no app id) — declared together at join so the genesis cohort
+     * barrier completes while only this task blocks (app-level pre-declaration; see {@link
+     * ParsleyEpochRuntime#join}). All of an app's tasks share one subtopology under the single-stage
+     * constraint, so they differ only by partition.
+     */
+    private Set<String> appTaskMemberIds() {
+        int subtopology = context.taskId().subtopology();
+        Set<String> members = new HashSet<>();
+        for (int partition = 0; partition < taskTotal; partition++) {
+            String taskId = subtopology + "_" + partition;
+            members.add(appId.isEmpty() ? taskId : appId + "/" + taskId);
+        }
+        return members;
     }
 
     @Override
@@ -861,6 +947,21 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
         if (runtime == null) {
             return;
         }
+        // Continuous roster check: once genesis has committed, a task that is not a running member is one
+        // the agreed roster excluded — e.g. a would-be founder that consumed via the genesis short-circuit
+        // (which does not block) and passed its one-time admissibility check while the roster was still
+        // unsettled, then lost the vote. It is already delivering, so a one-time init check cannot catch
+        // it; fail it loudly here rather than let it run on forever, uncoordinated, at the pre-genesis
+        // floor (a silent fail-open). A legitimately-blocked joiner is not polling yet, so it is unaffected;
+        // and a member this instance is gracefully leaving is skipped — its Leave dropping it from the
+        // running set is expected, not an eviction, and faulting its still-draining task would (under EOS)
+        // abort the tail it just drained (see ParsleyEpochRuntime#isLeaving).
+        if (runtime.committedEpochId() > 0 && !runtime.isRunningMember(memberId) && !runtime.isLeaving(memberId)) {
+            throw new IllegalStateException("member '" + memberId + "' is not in the committed epoch roster "
+                    + runtime.committedRoster() + "; its application.id is not an agreed member of the "
+                    + "coordinated domain. Failing fast (fail-closed) — add it to every app's "
+                    + ParsleyConfig.COORDINATION_MEMBER_APPS + " and redeploy to admit it.");
+        }
         // Keep the runtime's drained mirror current even while idle (no deliveries drive updateQuiesceState),
         // so leave() observes a drained buffer promptly. Cheap and self-correcting on each poll tick.
         runtime.reportDrained(memberId, engine().bufferSize() == 0);
@@ -1114,7 +1215,17 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
         Map<String, String> sourceCleanupPolicies;
         try (ParsleyTopicAdmin admin = adminFactory.apply(context.appConfigs())) {
             resolved = admin.topicIds(topicList);
-            partitionCounts = new HashMap<>(admin.partitionCounts(topicList));
+            Map<String, Integer> sourcePartitionCounts = admin.partitionCounts(topicList);
+            // This app's total task count for the (single-stage) subtopology is the max partition count
+            // over all its source topics — business and passthrough alike, since a passthrough is wired as
+            // an extra source into this same node. It is the N in this app's task members appId/0_0..0_{N-1},
+            // which the cohort barrier waits for in full and which app-level pre-declaration declares.
+            int max = 1;
+            for (int count : sourcePartitionCounts.values()) {
+                max = Math.max(max, count);
+            }
+            this.taskTotal = max;
+            partitionCounts = new HashMap<>(sourcePartitionCounts);
             partitionCounts.putAll(additionalTopicInfo(admin, "partition count", ParsleyTopicAdmin::partitionCounts));
             cleanupPolicies = additionalTopicInfo(admin, "cleanup.policy", ParsleyTopicAdmin::cleanupPolicies);
             // Source cleanup.policy is resolved separately, over the input topics (which must already
@@ -1256,8 +1367,8 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
      * Escalated to a hard failure even under the default {@code warn} — mirroring {@link
      * #validatePartitionParity}'s coordination precedent — since this member could later be asked to
      * gate a record on a coordinate it can never see (fail-closed in {@link ParsleyEngine}, not silently
-     * satisfied), and an incomplete mesh also blocks every epoch round from ever completing (see {@link
-     * ParsleyEpochLog#isFullMeshSatisfied()}). Surfacing this loudly at startup is better than a
+     * satisfied), and an incomplete mesh also blocks every epoch round from ever completing (see the mesh conjunct of {@link
+     * ParsleyEpochLog#evaluateCommit()}). Surfacing this loudly at startup is better than a
      * data-path crash loop discovering it record by record, or every round silently hanging forever.
      * {@code off} is still honoured as an explicit, deliberate opt-out.
      *
@@ -1265,8 +1376,8 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
      * ParsleyEpochRuntime#join} — after {@link ParsleyCoordination#awaitBootstrap}, so {@code
      * runtime.domainTopics()} already reflects every member declared on the log at bootstrap — so a
      * mis-meshed member is rejected before it appends a {@link ParsleyEpochEvent.JoinRequested} and can be
-     * promoted into a running member that permanently wedges every epoch round (see {@link
-     * ParsleyEpochLog#isFullMeshSatisfied()}). This member's own declaration is verdict-neutral: it only
+     * promoted into a running member that permanently wedges every epoch round (see the mesh conjunct of {@link
+     * ParsleyEpochLog#evaluateCommit()}). This member's own declaration is verdict-neutral: it only
      * adds domain topics this member itself covers, which the coverage subtraction removes either way, so
      * the pre-declaration check reaches the same verdict as one run after the join folds. The
      * <strong>second</strong> call runs after {@link ParsleyCoordination#awaitJoinCommit} admits it, purely

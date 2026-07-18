@@ -80,18 +80,34 @@ final class ParsleyConfig {
      */
     static final String COORDINATION_DOMAIN_TOPICS = "parsley.coordination.domain-topics";
 
+    /**
+     * {@code parsley.coordination.member-apps} — the comma-separated set of every {@code application.id}
+     * that is a causal node in this coordinated domain. It is the authoritative domain membership, and
+     * must be declared identically by every participating app: the genesis cohort barrier waits until
+     * every listed app's full task set has declared before committing genesis (so no founder is left
+     * behind and later mis-admitted at a non-empty floor), and after genesis a roster change is admitted
+     * only once every committed member has re-declared the new roster. Apps that declare incompatible
+     * rosters refuse to commit or admit until the configs agree (fail-closed for progress; the domain
+     * keeps delivering under the last floor). Only meaningful alongside {@link
+     * #COORDINATION_EPOCH_EVENTS_TOPIC}. When absent, an app defaults to a single-app roster of its own
+     * {@code application.id} — a lone causal node coordinates trivially; a multi-app domain must set this.
+     */
+    static final String COORDINATION_MEMBER_APPS = "parsley.coordination.member-apps";
+
     /** How {@link #TOPOLOGY_VALIDATION} reacts to a detectable topology misconfiguration. */
     enum ValidationMode { OFF, WARN, STRICT }
 
     private final ValidationMode topologyValidation;
     private final @Nullable String coordinationEpochEventsTopic;
     private final Set<String> coordinationDomainTopics;
+    private final Set<String> coordinationMemberApps;
 
     private ParsleyConfig(ValidationMode topologyValidation, @Nullable String coordinationEpochEventsTopic,
-                          Set<String> coordinationDomainTopics) {
+                          Set<String> coordinationDomainTopics, Set<String> coordinationMemberApps) {
         this.topologyValidation = topologyValidation;
         this.coordinationEpochEventsTopic = coordinationEpochEventsTopic;
         this.coordinationDomainTopics = coordinationDomainTopics;
+        this.coordinationMemberApps = coordinationMemberApps;
     }
 
     /** How to react to a detectable topology misconfiguration at startup. */
@@ -107,6 +123,13 @@ final class ParsleyConfig {
     /** The full coordinated domain's topic set, or empty if topology-epoch coordination is not configured. */
     Set<String> coordinationDomainTopics() {
         return coordinationDomainTopics;
+    }
+
+    /** The authoritative member-app roster (every {@code application.id} in the domain), or empty when
+     * {@link #COORDINATION_MEMBER_APPS} is not configured — the caller then defaults to a single-app
+     * roster of the app's own id. */
+    Set<String> coordinationMemberApps() {
+        return coordinationMemberApps;
     }
 
     /** Loads from the {@code parsley.properties} classpath resource, or defaults if it is absent. */
@@ -143,22 +166,32 @@ final class ParsleyConfig {
                     + COORDINATION_EPOCH_EVENTS_TOPIC + " is not; domain-topics only has meaning "
                     + "under topology-epoch coordination");
         }
-        return new ParsleyConfig(validationMode(props), resolvedEpochEventsTopic, domainTopics);
+        Set<String> memberApps = commaSeparated(props, COORDINATION_MEMBER_APPS);
+        if (resolvedEpochEventsTopic == null && !memberApps.isEmpty()) {
+            throw new IllegalStateException(COORDINATION_MEMBER_APPS + " is set but "
+                    + COORDINATION_EPOCH_EVENTS_TOPIC + " is not; member-apps only has meaning "
+                    + "under topology-epoch coordination");
+        }
+        return new ParsleyConfig(validationMode(props), resolvedEpochEventsTopic, domainTopics, memberApps);
     }
 
     private static Set<String> domainTopics(Properties props) {
-        String value = props.getProperty(COORDINATION_DOMAIN_TOPICS);
+        return commaSeparated(props, COORDINATION_DOMAIN_TOPICS);
+    }
+
+    private static Set<String> commaSeparated(Properties props, String key) {
+        String value = props.getProperty(key);
         if (value == null || value.isBlank()) {
             return Set.of();
         }
-        Set<String> topics = new LinkedHashSet<>();
-        for (String topic : value.split(",")) {
-            String trimmed = topic.trim();
+        Set<String> items = new LinkedHashSet<>();
+        for (String item : value.split(",")) {
+            String trimmed = item.trim();
             if (!trimmed.isEmpty()) {
-                topics.add(trimmed);
+                items.add(trimmed);
             }
         }
-        return Set.copyOf(topics);
+        return Set.copyOf(items);
     }
 
     private static ValidationMode validationMode(Properties props) {

@@ -6,6 +6,23 @@ All notable changes to this project are documented in this file. The format is b
 
 ## [Unreleased]
 
+### Added
+- **Genesis cohort barrier and an authoritative member-app roster for topology-epoch coordination.** A
+  coordinated domain now always establishes a committed *genesis* epoch — a consistent cut with an empty
+  floor — rather than running uncoordinated until the first explicit transition. Genesis does not commit
+  until the whole founding cohort has declared (every app in the roster, present with its full task set),
+  so no founder is left behind and later mis-admitted at a non-empty floor (which would strip a fan-out
+  coordinate's genesis-era records — a silent effect-before-cause). A new required-for-multi-app config,
+  `parsley.coordination.member-apps`, lists every `application.id` in the domain; it is the authoritative
+  membership, declared identically by every app. After genesis, a roster change is admitted only once
+  every committed member has re-declared the new roster (redeploy the incumbents naming the newcomer);
+  apps that declare incompatible rosters refuse to commit or admit until the configs agree (fail-closed
+  for progress — the domain keeps delivering under the last floor). When unset, an app defaults to a
+  single-app roster of its own id, so a lone causal node coordinates with no extra configuration. Founders
+  do not block at genesis (the empty floor is safe to consume from immediately); every later join blocks
+  until an epoch computed with it commits. The epoch-events wire format changed (new record tags); a domain
+  coordinated by an older Parsley must reset its epoch-events topic, which is safe before genesis commits.
+
 ### Changed
 - **Causal sources are consumed with `auto.offset.reset=none`, and their first-start offsets are seeded
   before start.** The frontier skip-bridge (see Fixed) treats an offset the consumer never returned as a

@@ -5,8 +5,8 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.time.Duration;
-import java.util.HashMap;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Queue;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
@@ -49,6 +49,11 @@ final class ParsleyEpochRuntime implements AutoCloseable {
     // Members whose tasks live on this instance: the runtime folds and commits on their behalf. Written
     // from task threads (join), read by the runtime thread (driveCommit).
     private final Set<String> localMembers = ConcurrentHashMap.newKeySet();
+    // Local members this instance is gracefully decommissioning (leaveLocalMembers appended their Leave).
+    // The continuous roster check must not fault a member that left voluntarily once its Leave folds and
+    // drops it from the running set — that would dirty-close a still-draining task and, under EOS, abort
+    // its already-drained tail. Written by the leave() thread, read by task threads (the roster check).
+    private final Set<String> leavingMembers = ConcurrentHashMap.newKeySet();
     // Tracks which local members are currently drained (causal buffer empty). An epoch leave cares about
     // drain state unconditionally, never gated on an external request, so allDrained() here just means
     // "every local member is currently drained". leave() waits on this before appending its Leave —
@@ -65,9 +70,12 @@ final class ParsleyEpochRuntime implements AutoCloseable {
     // Runtime-thread-only: the epoch we have already appended a commit for, so this node appends each
     // round's EpochCommitted exactly once (the commit round-trips through the log and advances the fold).
     private long lastCommitAppendedFor;
-    // Runtime-thread-only: the full-mesh state as of the last runOnce, so logMeshInsufficiencyTransitions
-    // logs only on a true→false or false→true edge, not on every 100ms poll while blocked.
-    private boolean lastMeshSatisfied = true;
+    // Runtime-thread-only: the roster-agreement state as of the last runOnce, so
+    // logRosterAgreementTransitions logs only on a state-change edge, not on every 100ms poll.
+    private ParsleyEpochLog.RosterAgreement lastRosterAgreement = ParsleyEpochLog.RosterAgreement.AGREE;
+    // Runtime-thread-only: the last "round open but not committable" reason logged, so
+    // logCohortWaitingTransitions fires only when the reason changes.
+    private Optional<String> lastCohortWaitingReason = Optional.empty();
     // Runtime-thread-only: the running members an open round has been blocked on, and for how many
     // consecutive polls the same set has persisted, so logBlockedRoundTransitions can distinguish a genuine
     // stall (the set frozen for BLOCKED_ROUND_WARN_POLLS) from the healthy case where members publish within
@@ -112,6 +120,21 @@ final class ParsleyEpochRuntime implements AutoCloseable {
     // ParsleyEpochLog#externalSourceTopicsAsOfPreviousCommit for what this is and why it replaced a
     // per-task in-memory cache.
     private volatile Set<String> externalSourceTopicsAsOfPreviousCommitMirror = Set.of();
+    // Mirror of the fold's committed app-id roster — the authoritative membership after genesis. Read by
+    // the continuous roster check and the join gate from task threads.
+    private volatile Set<String> committedRosterMirror = Set.of();
+    // Mirror of the fold's currently-admissible apps (committed members + those every voter has named),
+    // so the join waiter can fail a never-admissible app fast from its own thread.
+    private volatile Set<String> admissibleAppsMirror = Set.of();
+    // Mirror of the fold's per-member admission floors, so a restarting task reads its own admission cut
+    // from its own thread (see the seed in ParsleyProcessor#init and ParsleyEpochLog#admissionFloors).
+    private volatile Map<String, CommittedEpoch> admissionFloorsMirror = Map.of();
+    // Mirror of the fold's roster-agreement state, for edge-triggered diagnostics only.
+    private volatile ParsleyEpochLog.RosterAgreement rosterAgreementMirror = ParsleyEpochLog.RosterAgreement.AGREE;
+    // Set once if the fold hits a permanent wire-format incompatibility. The drive loop then stops and
+    // every coordination wait surfaces this, rather than backing off forever (which reads as a misleading
+    // bootstrap timeout at every join).
+    private volatile @Nullable ParsleyIncompatibleEpochLogException fatalError;
 
     private volatile boolean running;
     private @Nullable Thread thread;
@@ -126,10 +149,23 @@ final class ParsleyEpochRuntime implements AutoCloseable {
      * channels it consumes) and {@code sinkTopics} (the topics it produces) for the DAG-wide source-topic
      * registry (see {@link #externalSourceTopics()}).
      */
-    void join(String memberId, Set<String> inputTopics, Set<String> sinkTopics) {
+    void join(String memberId, String appId, Set<String> siblingMemberIds, Set<String> inputTopics,
+              Set<String> sinkTopics, Set<String> rosterView, int taskTotal) {
         localMembers.add(memberId);
         localDrainTracker.register(memberId);
-        outbox.add(new ParsleyEpochEvent.JoinRequested(memberId, Set.copyOf(inputTopics), Set.copyOf(sinkTopics)));
+        Set<String> inputs = Set.copyOf(inputTopics);
+        Set<String> sinks = Set.copyOf(sinkTopics);
+        Set<String> roster = Set.copyOf(rosterView);
+        // App-level pre-declaration: declare every one of this app's task members, not just this task's.
+        // The cohort barrier needs all N tasks present to commit, but a joiner blocks in init and inits
+        // run serially on the StreamThread — so if a task declared only itself, task 0_1's init could
+        // never run while 0_0 blocks, and the cohort would never complete (a deadlock in a correctly
+        // configured domain). Declaring all siblings here — deterministic member ids, identical
+        // topics/roster/total, LWW-idempotent across instances — lets the cohort complete while only this
+        // task blocks. Only this task is registered as a LOCAL member (it alone lives on this instance).
+        for (String sibling : siblingMemberIds) {
+            outbox.add(new ParsleyEpochEvent.JoinRequested(sibling, appId, inputs, sinks, roster, taskTotal));
+        }
     }
 
     /** Stops treating {@code memberId} as local (its task left this instance, e.g. a rebalance). Does not append a log event. */
@@ -203,6 +239,7 @@ final class ParsleyEpochRuntime implements AutoCloseable {
      */
     void leaveLocalMembers() {
         for (String member : localMembers) {
+            leavingMembers.add(member);   // mark BEFORE the Leave folds, so the roster check never faults it
             outbox.add(new ParsleyEpochEvent.Leave(member));
         }
     }
@@ -210,6 +247,42 @@ final class ParsleyEpochRuntime implements AutoCloseable {
     /** Whether {@code memberId} is currently a running member (folded from the log) — the join block waits on this. */
     boolean isRunningMember(String memberId) {
         return runningMembersMirror.contains(memberId);
+    }
+
+    /** Whether {@code memberId} is a local member this instance is gracefully decommissioning — the
+     * continuous roster check skips it, so a voluntary leave does not self-fault the still-draining task. */
+    boolean isLeaving(String memberId) {
+        return leavingMembers.contains(memberId);
+    }
+
+    /** The app-id membership the last commit established (empty before genesis) — the authoritative domain
+     * membership, consulted by the continuous roster check in {@code ParsleyProcessor}. */
+    Set<String> committedRoster() {
+        return committedRosterMirror;
+    }
+
+    /** Whether {@code appId} is admissible right now (a committed member, or named in every voter's roster
+     * view) — consulted by the join waiter to fail a never-admissible app fast rather than block. */
+    boolean isAppAdmissible(String appId) {
+        return admissibleAppsMirror.contains(appId);
+    }
+
+    /** The current roster-agreement state — read by the join waiter to explain a timeout under a roster
+     * conflict or a change in flight. */
+    ParsleyEpochLog.RosterAgreement rosterAgreement() {
+        return rosterAgreementMirror;
+    }
+
+    /** {@code memberId}'s admission cut, or {@code null} if it has never been promoted (a genesis founder
+     * still consuming before genesis commits) — the floor a stateless restart re-seeds from. */
+    @Nullable CommittedEpoch admissionFloor(String memberId) {
+        return admissionFloorsMirror.get(memberId);
+    }
+
+    /** The permanent wire-format incompatibility that stopped the runtime, or {@code null} while healthy —
+     * surfaced by the coordination waits as a loud failure instead of a misleading bootstrap timeout. */
+    @Nullable ParsleyIncompatibleEpochLogException fatalError() {
+        return fatalError;
     }
 
     /** The topology's external source topics, derived DAG-wide from every declared member's declaration. */
@@ -282,6 +355,16 @@ final class ParsleyEpochRuntime implements AutoCloseable {
                 while (running) {
                     try {
                         runOnce();
+                    } catch (ParsleyIncompatibleEpochLogException e) {
+                        // A wire-format incompatibility (a pre-cohort or corrupt epoch-events record) never
+                        // heals on its own — retrying forever would just look like a bootstrap timeout at
+                        // every join. Record it, stop the loop, and let each coordination wait surface it
+                        // as a loud, actionable failure. Fail-closed: no coordination proceeds.
+                        log.error("Epoch-events log is incompatible with this binary; stopping the epoch "
+                                + "runtime (fail-closed). Reset the epoch-events topic (safe before genesis "
+                                + "has committed) and restart the domain.", e);
+                        fatalError = e;
+                        running = false;
                     } catch (Exception e) {
                         // A transport append or poll can throw on a transient broker blip. The runtime
                         // thread must survive it: if it died here, bootstrapped would stay false so every
@@ -319,19 +402,37 @@ final class ParsleyEpochRuntime implements AutoCloseable {
         }
         for (ParsleyEpochEvent event : transport.poll(POLL_TIMEOUT)) {
             fold.apply(event);
-            if (event instanceof ParsleyEpochEvent.EpochCommitted commit && commit.epochId() > committedEpoch.epochId()) {
-                committedEpoch = new CommittedEpoch(commit.epochId(), commit.lowerBounds());
-                log.debug("Epoch {} committed with lower bounds {}", commit.epochId(), commit.lowerBounds());
-            }
         }
+        // Mirror write ORDER is load-bearing for two cross-thread reads (volatile release/acquire makes a
+        // reader that sees a later mirror also see every earlier one):
+        //   - admissionFloors + roster BEFORE runningMembers: a task that reads isRunningMember==true (in
+        //     awaitJoinCommit) then reads its admission floor (the seed in ParsleyProcessor#init) must not
+        //     see a stale (null) floor and seed at ∅ — that would strip pre-cut history it never skipped.
+        //   - runningMembers BEFORE committedEpoch: the continuous roster check reads committedEpochId>0
+        //     then !isRunningMember; observing the new epoch with a stale running set would spuriously
+        //     fault a member the very commit that advanced the epoch just promoted.
+        // So: fold-derived membership/floors first, then runningMembers, then committedEpoch last.
         roundOpen = fold.isRoundOpen();
-        runningMembersMirror = fold.runningMembers();
         unpublishedMembersMirror = fold.unpublishedRunningMembers();
         externalSourceTopicsMirror = fold.externalSourceTopics();
         externalSourceTopicsAsOfPreviousCommitMirror = fold.externalSourceTopicsAsOfPreviousCommit();
         domainTopicsMirror = fold.domainTopics();
-        logMeshInsufficiencyTransitions();
+        committedRosterMirror = fold.committedRoster();
+        admissibleAppsMirror = fold.admissibleApps();
+        admissionFloorsMirror = fold.admissionFloorsSnapshot();
+        rosterAgreementMirror = fold.rosterAgreement();
+        runningMembersMirror = fold.runningMembers();
+        // Drive the committed-epoch snapshot from the fold, not the raw commit event: a commit event can be
+        // rejected on apply, so only an actual advance of the fold's committed epoch counts. Written LAST
+        // (after runningMembers) for the roster-check ordering above.
+        if (fold.committedEpochId() > committedEpoch.epochId()) {
+            committedEpoch = new CommittedEpoch(fold.committedEpochId(), fold.committedLowerBounds());
+            log.debug("Epoch {} committed with lower bounds {} and roster {}",
+                    fold.committedEpochId(), fold.committedLowerBounds(), fold.committedRoster());
+        }
+        logRosterAgreementTransitions();
         logBlockedRoundTransitions();
+        logCohortWaitingTransitions();
         bootstrapped = transport.caughtUp();
         driveCommit();
         autoPublishStalledLocalMembers();
@@ -377,30 +478,47 @@ final class ParsleyEpochRuntime implements AutoCloseable {
     }
 
     /**
-     * Logs (at {@code WARN}) when the domain stops being a full mesh — some running member's own
-     * declared subscriptions no longer cover every domain topic, which blocks every round from ever
-     * completing until it is fixed — and (at {@code INFO}) when it recovers. Logged only on the
-     * true→false / false→true edge, not on every 100ms poll while the condition persists, so a
-     * long-blocked round does not flood the log.
+     * Logs (edge-triggered, {@code WARN}) when the open round cannot commit for a reason other than
+     * running members not having published (which {@link #logBlockedRoundTransitions} reports): a
+     * diverging roster, a cohort still short of a roster app's full task set, or an unmet mesh. This is
+     * the only signal for a genesis or roster change that waits forever — a never-deployed roster app, or
+     * a task-count undercount that manifests as "the round never commits". See {@link
+     * ParsleyEpochLog#whyRoundNotCommittable()}.
      */
-    private void logMeshInsufficiencyTransitions() {
-        boolean meshSatisfied = fold.isFullMeshSatisfied();
-        if (meshSatisfied == lastMeshSatisfied) {
+    private void logCohortWaitingTransitions() {
+        Optional<String> reason = fold.whyRoundNotCommittable();
+        if (reason.equals(lastCohortWaitingReason)) {
             return;
         }
-        lastMeshSatisfied = meshSatisfied;
-        if (!meshSatisfied) {
-            Map<String, Set<String>> meshInsufficientMembers = new HashMap<>();
-            for (String memberId : fold.runningMembers()) {
-                Set<String> missing = fold.missingSubscriptions(memberId);
-                if (!missing.isEmpty()) {
-                    meshInsufficientMembers.put(memberId, missing);
-                }
-            }
-            log.warn("Domain is no longer a full mesh — every epoch round is blocked until every running "
-                    + "member's own subscriptions cover the whole domain: {}", meshInsufficientMembers);
-        } else {
-            log.info("Domain is a full mesh again — epoch rounds can complete");
+        lastCohortWaitingReason = reason;
+        reason.ifPresent(r -> log.warn("Epoch round {} is open but cannot commit yet: {}",
+                fold.nextEpochId(), r));
+    }
+
+    /**
+     * Logs (edge-triggered) when the member-app roster stops agreeing — {@code WARN} for CONVERGING (a
+     * roster change in flight: some apps declare the new roster, some the old) and {@code ERROR} for
+     * CONFLICT (incompatible rosters, or an app's task totals disagreeing) — and {@code INFO} when it
+     * agrees again. Under either non-agreeing state no epoch commits and no member is admitted, but the
+     * domain keeps delivering under the last committed floor, so this is a diagnostic, not a data-plane
+     * fault. Logged only on a state-change edge so a long-lived state does not flood the log.
+     */
+    private void logRosterAgreementTransitions() {
+        ParsleyEpochLog.RosterAgreement agreement = fold.rosterAgreement();
+        if (agreement == lastRosterAgreement) {
+            return;
+        }
+        lastRosterAgreement = agreement;
+        switch (agreement) {
+            case CONVERGING -> log.warn("Member-app roster is converging — a roster change is in flight; no "
+                    + "epoch commits until every app declares the same roster. Committed roster: {}",
+                    fold.committedRoster());
+            case CONFLICT -> log.error("Member-app roster CONFLICT — apps declare incompatible rosters, or an "
+                    + "app's task totals disagree. No epoch commits and no admissions until the configs agree; "
+                    + "the domain keeps delivering under the last committed floor. Committed roster: {}",
+                    fold.committedRoster());
+            case AGREE -> log.info("Member-app roster agrees — epoch rounds can commit. Committed roster: {}",
+                    fold.committedRoster());
         }
     }
 
@@ -444,13 +562,12 @@ final class ParsleyEpochRuntime implements AutoCloseable {
     }
 
     /**
-     * Collect → commit, leaderless: once an open round is complete (every running member has published),
-     * <em>any</em> node with a local member appends the {@code EpochCommitted}. The {@link
-     * ParsleyEpochLog#proposeCommit() merge-min} is a deterministic function of the published frontiers,
-     * so every node computes the identical commit, and dedup-by-{@code epochId} makes the concurrent
-     * appends idempotent — there is no single owner to fail (a gone owner cannot freeze the epoch). Guarded
-     * so this node appends each round's commit at most once; the commit is read back through the log and
-     * folded like any other event.
+     * Collect → commit, leaderless: once an open round is committable, <em>any</em> node with a local
+     * member appends the {@code EpochCommitted}. The {@link ParsleyEpochLog#evaluateCommit() unified
+     * commit decision} is a deterministic function of the folded log, so every node computes the identical
+     * commit, and dedup-by-{@code epochId} makes the concurrent appends idempotent — there is no single
+     * owner to fail (a gone owner cannot freeze the epoch). Guarded so this node appends each round's
+     * commit at most once; the commit is read back through the log and re-validated by the fold on apply.
      *
      * <p>A round with an outstanding (unpublished) member simply stays open until that member publishes or
      * is evicted via an explicit {@link ParsleyEpochEvent.Leave} — there is no automatic exclusion. Only a
@@ -459,20 +576,29 @@ final class ParsleyEpochRuntime implements AutoCloseable {
      * default.
      */
     private void driveCommit() {
-        // Never commit before the whole startup backlog is folded: committedEpochId would be stale and
-        // the round would be decided against a topology this runtime has not yet fully observed.
-        if (!bootstrapped || !fold.isRoundOpen() || !fold.isRoundComplete()) {
+        // If a commit we appended was rejected by the fold (a conflicting event folded in after we read
+        // the state), clear the append-once latch for that epoch so it can be re-proposed once the fold
+        // is committable again. Without this a single-app domain — or every node at genesis, which all
+        // race to propose — would latch on the rejected epoch and never re-commit it.
+        long rejected = fold.consumeLastRejectedCommitEpoch();
+        if (rejected != -1 && rejected == lastCommitAppendedFor) {
+            lastCommitAppendedFor = rejected - 1;
+        }
+        // Never commit before the whole startup backlog is folded: the decision would be made against a
+        // topology this runtime has not yet fully observed. Only nodes with a local member commit, to
+        // bound the duplicate appends.
+        if (!bootstrapped || localMembers.isEmpty()) {
             return;
         }
-        // Only nodes with skin in the game (a local member) commit, to bound the duplicate appends.
-        if (localMembers.isEmpty()) {
+        Optional<ParsleyEpochEvent.EpochCommitted> commit = fold.evaluateCommit();
+        if (commit.isEmpty()) {
             return;
         }
-        long epochToCommit = fold.nextEpochId();
+        long epochToCommit = commit.get().epochId();
         if (epochToCommit <= lastCommitAppendedFor) {
             return;
         }
-        transport.append(fold.proposeCommit());
+        transport.append(commit.get());
         lastCommitAppendedFor = epochToCommit;
     }
 

@@ -132,22 +132,62 @@ final class ParsleyCoordination {
      *
      * @param budget the maximum time to wait before failing with {@link ParsleyJoinTimeoutException}
      */
-    void awaitJoinCommit(ParsleyEpochRuntime runtime, String memberId, Duration budget, long deadlineNanos) {
+    void awaitJoinCommit(ParsleyEpochRuntime runtime, String memberId, String appId, Duration budget,
+                         long deadlineNanos) {
         awaitBootstrap(runtime, memberId, budget, deadlineNanos);
 
-        // Cold start (epoch 0 is static), or already a running member (a normal restart): no block.
-        if (runtime.committedEpochId() == 0 || runtime.isRunningMember(memberId)) {
+        // Genesis: a founder does NOT block. The genesis floor is empty by construction, so consuming from
+        // the start is safe — genesis is a new logical time-0, so there is no pre-cut history to race past
+        // (unlike a post-genesis joiner, whose non-empty floor is not yet known). Open the genesis round so
+        // the cohort barrier (in the fold) can drive it to a commit, then return. The barrier holds genesis
+        // open until the whole configured cohort has declared, so every founder — however slow to start —
+        // inits during this empty-floor window; only after genesis commits is a later arrival a joiner.
+        if (runtime.committedEpochId() == 0) {
+            runtime.requestSnapshot(memberId);
             return;
         }
-        // A fresh joiner: open a round (the running members answer it) and block until a commit promotes
-        // this member to running, or the budget expires.
-        runtime.requestSnapshot(memberId);
+        // A normal restart: still a running member on the log — proceed at once under the unchanged floor.
+        if (runtime.isRunningMember(memberId)) {
+            return;
+        }
+        // A post-genesis joiner: block until an epoch computed with it commits and admits it. A round is
+        // opened on this member's behalf only while its app is admissible (a committed member, or named by
+        // every committed member's roster view) and no round is already open — so a not-yet-acknowledged
+        // app (a rogue, or an add whose incumbents have not all redeployed yet) waits without churning the
+        // domain through no-change commits, and becomes admittable the moment the committed members name it.
+        long lastRequestedForEpoch = -1;
         while (!runtime.isRunningMember(memberId)) {
+            surfaceFatalError(runtime);
             if (System.nanoTime() >= deadlineNanos) {
-                throw new ParsleyJoinTimeoutException(memberId, budget, "no epoch admitting it committed");
+                throw new ParsleyJoinTimeoutException(memberId, budget, joinTimeoutReason(runtime, appId));
+            }
+            // Open a round on this member's behalf only while admissible and none is open — and at most
+            // once per committed epoch, so the ~20ms retry loop does not enqueue a burst of coalescing
+            // SnapshotRequested duplicates on the eternal log while the round-open state folds back.
+            if (runtime.isAppAdmissible(appId) && !runtime.isRoundOpen()
+                    && runtime.committedEpochId() != lastRequestedForEpoch) {
+                runtime.requestSnapshot(memberId);
+                lastRequestedForEpoch = runtime.committedEpochId();
             }
             sleep();
         }
+    }
+
+    /** Why a join wait timed out — an inadmissible app (not an agreed roster member), a roster conflict or
+     * change in flight (no epoch can commit), or simply an admission that did not happen in time. */
+    private static String joinTimeoutReason(ParsleyEpochRuntime runtime, String appId) {
+        if (!runtime.isAppAdmissible(appId)) {
+            return "application '" + appId + "' is not an agreed member of the committed roster "
+                    + runtime.committedRoster() + " (add it to every member app's "
+                    + ParsleyConfig.COORDINATION_MEMBER_APPS + " and redeploy to admit it)";
+        }
+        return switch (runtime.rosterAgreement()) {
+            case CONFLICT -> "the member-app roster is in conflict (apps declare incompatible rosters, or an "
+                    + "app's task totals disagree) — no epoch can commit until the configs agree";
+            case CONVERGING -> "a member-app roster change is in flight — no epoch commits until every app "
+                    + "declares the same roster";
+            case AGREE -> "no epoch admitting it committed in time";
+        };
     }
 
     /**
@@ -155,8 +195,18 @@ final class ParsleyCoordination {
      * #awaitBootstrap} sharing a deadline). {@code ParsleyProcessor#init} does not use this — it computes
      * one deadline and threads it through both waits so their sum stays within the single budget.
      */
-    void awaitJoinCommit(ParsleyEpochRuntime runtime, String memberId, Duration budget) {
-        awaitJoinCommit(runtime, memberId, budget, System.nanoTime() + budget.toNanos());
+    void awaitJoinCommit(ParsleyEpochRuntime runtime, String memberId, String appId, Duration budget) {
+        awaitJoinCommit(runtime, memberId, appId, budget, System.nanoTime() + budget.toNanos());
+    }
+
+    /** Surfaces a permanent epoch-log incompatibility (a wire-format mismatch) that stopped the runtime as
+     * a loud failure, rather than letting the wait silently burn its whole budget and time out. */
+    private static void surfaceFatalError(ParsleyEpochRuntime runtime) {
+        ParsleyIncompatibleEpochLogException fatal = runtime.fatalError();
+        if (fatal != null) {
+            throw new IllegalStateException(
+                    "topology-epoch coordination cannot proceed: " + fatal.getMessage(), fatal);
+        }
     }
 
     /**
@@ -172,6 +222,7 @@ final class ParsleyCoordination {
     void awaitBootstrap(ParsleyEpochRuntime runtime, String memberId, Duration budget,
                         long deadlineNanos) {
         while (!runtime.isBootstrapped()) {
+            surfaceFatalError(runtime);
             if (System.nanoTime() >= deadlineNanos) {
                 throw new ParsleyJoinTimeoutException(memberId, budget,
                         "the epoch-events log was not folded to its end");
@@ -261,6 +312,12 @@ final class ParsleyCoordination {
         // from the running set, so the departure is durable on the log before we proceed.
         runtime.leaveLocalMembers();
         while (runtime.hasRunningLocalMembers()) {
+            if (runtime.fatalError() != null) {
+                log.warn("Abandoning the epoch-domain decommission: the epoch runtime has halted on a "
+                        + "wire-format incompatibility, so the Leave can never fold. Members stay in the "
+                        + "domain (as after a crash) and resume on the next compatible start.");
+                return;
+            }
             sleep();
         }
         // Phase 3 — re-settle: request a new epoch over the remaining members (this node already excluded)

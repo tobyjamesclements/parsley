@@ -93,8 +93,9 @@ class ParsleyCoordinationLeaveDrainIT {
         Path stateX = Files.createTempDirectory("parsley-leave-drain-x");
         Path stateY = Files.createTempDirectory("parsley-leave-drain-y");
 
-        KafkaStreams appX = new KafkaStreams(stageX(coordinationX), streamsConfig(bootstrap, appIdX, stateX));
-        KafkaStreams appY = new KafkaStreams(stageY(coordinationY), streamsConfig(bootstrap, appIdY, stateY));
+        String roster = appIdX + "," + appIdY;
+        KafkaStreams appX = new KafkaStreams(stageX(coordinationX), streamsConfig(bootstrap, appIdX, stateX, roster));
+        KafkaStreams appY = new KafkaStreams(stageY(coordinationY), streamsConfig(bootstrap, appIdY, stateY, roster));
         Thread leaver = null;
         try {
             appX.start();
@@ -281,6 +282,12 @@ class ParsleyCoordinationLeaveDrainIT {
             }
             return false;
         }
+    }
+
+    private static Properties streamsConfig(String bootstrap, String appId, Path stateDir, String memberApps) {
+        Properties props = streamsConfig(bootstrap, appId, stateDir);
+        props.put(ParsleyConfig.COORDINATION_MEMBER_APPS, memberApps);
+        return props;
     }
 
     private static Properties streamsConfig(String bootstrap, String appId, Path stateDir) {

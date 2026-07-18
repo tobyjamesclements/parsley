@@ -2,284 +2,531 @@ package io.github.tobyjamesclements.parsley;
 
 import org.jspecify.annotations.Nullable;
 
+import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
 
 /**
  * The deterministic fold over the {@code epoch-events} log — the heart of the leaderless epoch protocol.
  * Every node applies the log's events in total order through an instance of this class and, because the
  * fold is a pure function of the ordered events, they all agree on round ownership, membership, round
- * completeness, and the committed {@code lowerBounds} without any leader or lock.
+ * completeness, the committed {@code lowerBounds}, and the committed member-app roster without any leader
+ * or lock.
  *
- * <p>Round lifecycle (a "round" is defined by log position, not by any id in the events):
- * <ul>
- *   <li>The first {@link ParsleyEpochEvent.SnapshotRequested} after the last {@link ParsleyEpochEvent.EpochCommitted}
- *       <strong>opens</strong> the round and elects its author as {@linkplain #roundOwner() owner};
- *       later requests (and joins) while the round is open <strong>coalesce</strong> into it.
- *   <li>Running members publish ({@link ParsleyEpochEvent.FrontierPublished}); the round is
- *       {@linkplain #isRoundComplete() complete} once every running member has published.
- *   <li>Any node with a local member then commits {@link #proposeCommit()} = {@code (nextEpochId,
- *       mergeMin(published))} — deterministic, so every node computes the identical commit and
- *       dedup-by-{@code epochId} absorbs concurrent appends; applying the resulting
- *       {@link ParsleyEpochEvent.EpochCommitted} advances the settled epoch, promotes
- *       pending joiners to running, and clears the round.
- * </ul>
+ * <p><strong>Genesis cohort barrier.</strong> The first commit (genesis) establishes a new logical
+ * time-0: its floor is empty by construction (an empty running set folds to an empty {@link
+ * ParsleyClock}), so a founder admitted at genesis strips nothing and sees full history in causal order.
+ * Genesis does not commit until the whole founding cohort has declared — every app in the agreed roster
+ * present with its full task set — so no founder is left behind and later mis-admitted at a non-empty
+ * floor (which would strip a fan-out coordinate's genesis-era records: silent effect-before-cause).
  *
- * <p>Membership: a {@link ParsleyEpochEvent.JoinRequested} member is <em>pending</em> until the next commit,
- * then <em>running</em>. Running members are the ones whose publication a round waits for and whose
- * frontiers are folded into {@code lowerBounds}; a joiner (blocked, not yet consuming) publishes nothing
- * and does not constrain the cut. A {@link ParsleyEpochEvent.Leave} removes a member — appended only by a
- * graceful, explicit decommission; there is no automatic eviction. Each {@link ParsleyEpochEvent.JoinRequested}
- * also declares the member's input/sink topics, from
- * which {@link #externalSourceTopics()} derives the DAG-wide source-topic registry.
+ * <p><strong>Roster is authoritative membership.</strong> Each {@link ParsleyEpochEvent.JoinRequested}
+ * carries the declaring node's view of the complete member-app roster and its app's total task count. A
+ * round commits only when the <em>voters</em> — all declarers before genesis, the committed-roster apps
+ * after — unanimously agree on one roster {@code R_new}, every app in {@code R_new} not already committed
+ * is cohort-complete (all its tasks declared, count matched), every running member has published, and the
+ * mesh holds over {@code R_new}. It then promotes only pending joiners whose app is in {@code R_new}. A
+ * newcomer the committed members have not named simply waits, un-admitted, without disturbing the
+ * committed epoch (which keeps delivering under its floor). This single predicate — {@link
+ * #evaluateCommit()} — is the source of truth for both proposing a commit and validating one on apply, so
+ * a conflicting event that folds in just before a commit makes every node reject that commit identically.
  *
  * <p>Not thread-safe: a single consumer thread applies the log in order.
  */
 final class ParsleyEpochLog {
 
-    private long committedEpochId;                             // last committed epoch; 0 = none yet
-    // The last committed epoch's lowerBounds — consulted by proposeCommit to clamp the next round's
-    // mergeMin so a per-coordinate floor can never regress across epochs (see proposeCommit's Javadoc).
+    private long committedEpochId;                             // last committed epoch; 0 = pre-genesis
     private ParsleyClock committedLowerBounds = ParsleyClock.empty();
+    // The app-id membership the last commit established — authoritative membership after genesis. Empty
+    // before genesis. Voters (post-genesis) and the admission gate are computed against this.
+    private Set<String> committedRoster = Set.of();
     private final Set<String> runningMembers = new HashSet<>();
     private final Set<String> pendingJoiners = new HashSet<>();
     private @Nullable String roundOwner;                       // non-null iff a round is open
     private final Map<String, ParsleyClock> publications = new HashMap<>();  // current round only
-    // Each declared member's input/sink topics — the DAG-wide source-topic registry. Keyed by memberId,
-    // populated on JoinRequested (pending or running), removed on Leave; persists across commits.
-    private final Map<String, MemberTopology> declarations = new HashMap<>();
-    // A two-slot shift register of externalSourceTopics() snapshots, taken at each commit: "current" is
-    // the registry as of the most recent commit, "previous" as of the one before that. Gives every node —
-    // including one that only just started and has no other memory — a purely log-derived answer to "what
-    // was external one commit ago", the exact set a departing topic's outgoing self-adopter needs to give
-    // it one more adoption cycle (see ParsleyProcessor#pollEpochCoordination's handoff grace period). Not
-    // task-local, unlike the field this replaced: every node computes the same value from the same log.
+    // Every declared member's declaration, keyed by memberId, LWW on re-declaration. Folded
+    // UNCONDITIONALLY (a non-roster app's declaration is kept, then filtered at each use against the
+    // roster relevant to that use) — folding-time exclusion would discard a legitimately-joining app's
+    // declaration before its roster is agreed and wedge every add. Removed on Leave.
+    private final Map<String, Declaration> declarations = new HashMap<>();
+    // Each member's admission epoch+floor, written at promotion — the cut it was admitted at. A member
+    // that restarts with no local state (e.g. an EOS abort before its first commit) re-seeds from this,
+    // not from a constant floor, so an aborted fresh joiner re-adopts its own non-empty cut rather than
+    // acting on pre-cut history at an empty floor. Removed on Leave.
+    private final Map<String, ParsleyEpochRuntime.CommittedEpoch> admissionFloors = new HashMap<>();
+    // Registry snapshot shift register (see externalSourceTopicsAsOfPreviousCommit).
     private Set<String> previousCommitExternalSourceTopics = Set.of();
     private Set<String> currentCommitExternalSourceTopics = Set.of();
+    // The epoch id of the most recent commit event this fold REJECTED on apply (invalid against the
+    // current state). Read once by the runtime to clear its append-once latch so the round can be
+    // re-proposed; -1 when the last commit applied cleanly.
+    private long lastRejectedCommitEpoch = -1;
 
-    /** A member's declared input channels (topics it consumes) and sink topics (topics it produces). */
-    record MemberTopology(Set<String> inputTopics, Set<String> sinkTopics) {}
+    /** A member's declaration: its app id, the channels it consumes, the topics it produces, its view of
+     * the complete member-app roster, and its app's total task count. */
+    record Declaration(String appId, Set<String> inputTopics, Set<String> sinkTopics,
+                       Set<String> rosterView, int taskTotal) {}
 
     /** Applies one event in log order, updating the folded state. */
     void apply(ParsleyEpochEvent event) {
         switch (event) {
             case ParsleyEpochEvent.JoinRequested e -> {
-                // A member already running does not re-join; otherwise it is pending until the next commit.
                 if (!runningMembers.contains(e.memberId())) {
                     pendingJoiners.add(e.memberId());
                 }
-                // Record its declared topology for the source-topic registry (structural, so it counts as
-                // soon as declared — pending or running — see externalSourceTopics()).
-                declarations.put(e.memberId(), new MemberTopology(e.inputTopics(), e.sinkTopics()));
+                declarations.put(e.memberId(), new Declaration(
+                        e.appId(), e.inputTopics(), e.sinkTopics(), e.rosterView(), e.taskTotal()));
             }
             case ParsleyEpochEvent.SnapshotRequested e -> {
-                // First request after the last commit opens the round and elects the owner; the rest
-                // coalesce (a round is already open).
                 if (roundOwner == null) {
                     roundOwner = e.memberId();
                 }
             }
             case ParsleyEpochEvent.FrontierPublished e -> {
-                // A publication counts only for the open round and only from a running member; a stray
-                // publication (no round, or from a not-yet-running joiner) is ignored. Last write wins.
                 if (roundOwner != null && runningMembers.contains(e.memberId())) {
                     publications.put(e.memberId(), e.completeness());
                 }
             }
             case ParsleyEpochEvent.Leave e -> {
-                // Remove the member from the domain — always a graceful, explicit decommission; there is
-                // no automatic eviction of a silent member. Dropping it from the open round's publications
-                // keeps the completeness check honest (a
-                // left member is no longer awaited). Idempotent: a Leave for a non-member is a no-op.
                 runningMembers.remove(e.memberId());
                 pendingJoiners.remove(e.memberId());
                 publications.remove(e.memberId());
                 declarations.remove(e.memberId());
+                admissionFloors.remove(e.memberId());
             }
-            case ParsleyEpochEvent.EpochCommitted e -> {
-                // Dedup by epochId: the first commit for an epoch is authoritative; a stale or duplicate
-                // one (owner-plus-takeover, or a re-append) is ignored. Without this guard a duplicate
-                // EpochCommitted(E+1) landing after round N+1 has opened would wrongly clear that round.
-                if (e.epochId() <= committedEpochId) {
-                    break;
-                }
-                // Shift the registry snapshot register before adopting the commit: "current" (as of the
-                // commit that just settled) becomes "previous", and a fresh snapshot is taken now — after
-                // every declaration up to and including this log position has already folded, exactly
-                // mirroring what a running node's own live view would have shown right up to this commit.
-                previousCommitExternalSourceTopics = currentCommitExternalSourceTopics;
-                currentCommitExternalSourceTopics = externalSourceTopics();
-                // Adopt the commit: advance the settled epoch and its floor, promote joiners, close the round.
-                committedEpochId = e.epochId();
-                committedLowerBounds = e.lowerBounds();
-                runningMembers.addAll(pendingJoiners);
-                pendingJoiners.clear();
-                publications.clear();
-                roundOwner = null;
-            }
+            case ParsleyEpochEvent.EpochCommitted e -> applyCommit(e);
         }
     }
 
-    /** The last committed epoch id ({@code 0} before any commit). */
-    long committedEpochId() {
-        return committedEpochId;
-    }
-
-    /** The epoch id a commit of the current round would carry (strictly increasing). */
-    long nextEpochId() {
-        return committedEpochId + 1;
-    }
-
-    /** Whether a snapshot round is currently open (a request has opened it, no commit yet). */
-    boolean isRoundOpen() {
-        return roundOwner != null;
-    }
-
-    /** The current round's owner (the elected coordinator), or {@code null} if no round is open. */
-    @Nullable String roundOwner() {
-        return roundOwner;
-    }
-
-    /** The members counted in the current cut (joined and committed in a prior epoch). */
-    Set<String> runningMembers() {
-        return Set.copyOf(runningMembers);
-    }
-
     /**
-     * Every topic any declared member (pending or running) consumes or produces — {@code ∪inputTopics ∪
-     * sinkTopics} — the domain a full mesh must cover. Unlike {@link #externalSourceTopics()} this does
-     * not subtract sinks: a topic one member only produces is still part of the domain a <em>different</em>
-     * member consuming it must be able to see, and {@link #missingSubscriptions} needs the whole domain to
-     * compute what a given member is missing.
+     * Adopts an {@link ParsleyEpochEvent.EpochCommitted} only if it is valid against the fold state at
+     * this exact log position — {@link #evaluateCommit()} must produce the identical decision (same epoch
+     * id and roster). A commit that a conflicting event (folded in after its proposer read the state)
+     * has invalidated is <em>rejected</em>: the epoch does not advance, no member is promoted, and the
+     * round stays open. The floor is taken from the event, not recomputed: a floor built from published
+     * frontiers and clamped monotonically is always a safe (possibly conservative) cut, so only the
+     * roster/cohort decision needs re-validation, not the exact floor value.
      */
-    Set<String> domainTopics() {
-        Set<String> domain = new HashSet<>();
-        for (MemberTopology declaration : declarations.values()) {
-            domain.addAll(declaration.inputTopics());
-            domain.addAll(declaration.sinkTopics());
+    private void applyCommit(ParsleyEpochEvent.EpochCommitted e) {
+        if (e.epochId() <= committedEpochId) {
+            return;                                            // dedup: stale or duplicate commit
         }
-        return domain;
+        Optional<ParsleyEpochEvent.EpochCommitted> decision = evaluateCommit();
+        boolean valid = decision.isPresent()
+                && decision.get().epochId() == e.epochId()
+                && decision.get().committedRoster().equals(e.committedRoster());
+        if (!valid) {
+            lastRejectedCommitEpoch = e.epochId();             // signal the runtime to clear its latch
+            return;
+        }
+        lastRejectedCommitEpoch = -1;
+        previousCommitExternalSourceTopics = currentCommitExternalSourceTopics;
+        currentCommitExternalSourceTopics = externalSourceTopics();
+        committedEpochId = e.epochId();
+        committedLowerBounds = e.lowerBounds();
+        committedRoster = Set.copyOf(e.committedRoster());
+        // Promote only pending joiners whose app is in the newly-committed roster; record each promoted
+        // member's admission cut so a later stateless restart re-adopts it (see admissionFloors).
+        ParsleyEpochRuntime.CommittedEpoch admittedAt =
+                new ParsleyEpochRuntime.CommittedEpoch(e.epochId(), e.lowerBounds());
+        Set<String> promoted = new HashSet<>();
+        for (String member : pendingJoiners) {
+            Declaration declaration = declarations.get(member);
+            if (declaration != null && committedRoster.contains(declaration.appId())) {
+                promoted.add(member);
+                admissionFloors.put(member, admittedAt);
+            }
+        }
+        runningMembers.addAll(promoted);
+        pendingJoiners.removeAll(promoted);
+        publications.clear();
+        roundOwner = null;
+    }
+
+    // ---- derived membership / roster views -------------------------------------------------------
+
+    /** Every app id that currently has at least one declared member. */
+    private Set<String> declaredApps() {
+        Set<String> apps = new HashSet<>();
+        for (Declaration declaration : declarations.values()) {
+            apps.add(declaration.appId());
+        }
+        return apps;
+    }
+
+    /** The apps whose roster views count toward agreement: the committed-roster apps that still have a
+     * live declaration (a departed member's vote drops when its last Leave folds), or all declared apps
+     * before genesis / when every committed member has left (the zero-voter fallback). */
+    private Set<String> votingApps() {
+        Set<String> declared = declaredApps();
+        if (committedEpochId == 0) {
+            return declared;
+        }
+        Set<String> voters = new HashSet<>(committedRoster);
+        voters.retainAll(declared);
+        return voters.isEmpty() ? declared : voters;
+    }
+
+    /** The roster the voters unanimously declared, or {@code null} if they do not agree (a change in
+     * flight, or a genuine misconfig — both refuse to commit; the distinction is only diagnostic). */
+    private @Nullable Set<String> unanimousRoster() {
+        Set<String> voters = votingApps();
+        Set<String> common = null;
+        for (Declaration declaration : declarations.values()) {
+            if (!voters.contains(declaration.appId())) {
+                continue;
+            }
+            if (common == null) {
+                common = declaration.rosterView();
+            } else if (!common.equals(declaration.rosterView())) {
+                return null;
+            }
+        }
+        return common;
+    }
+
+    /** Whether {@code app} has declared its full task set — every one of its {@code taskTotal} tasks. */
+    private boolean isAppCohortComplete(String app) {
+        int declared = 0;
+        int total = -1;
+        for (Declaration declaration : declarations.values()) {
+            if (declaration.appId().equals(app)) {
+                declared++;
+                total = declaration.taskTotal();
+            }
+        }
+        return total >= 0 && declared == total;
     }
 
     /**
-     * The domain topics {@code memberId} has declared neither as an input nor a sink of its own — empty
-     * means this member's own subscriptions fully cover the domain. A member not (yet) declared at all is
-     * treated as missing every domain topic.
+     * Whether the declarations of the apps in {@code scope} carry a cohort contradiction that makes a
+     * commit unsafe: two tasks of one app disagreeing on the task total (partition-count instability
+     * mid-roll), or a task whose partition index is {@code >=} its app's declared total (proof of an
+     * undercount — a task that could never legitimately exist under that total). Either means a
+     * genesis/growth commit could seal a roster while a real task is still missing, so it refuses to
+     * commit. <strong>Scoped</strong> to the apps a commit actually depends on (the new roster plus the
+     * committed members): an inconsistent declaration from a rogue app no committed member has named must
+     * not freeze the domain — it just waits. Recomputed from current state, so it self-heals once a
+     * rolling re-declaration completes.
      */
-    Set<String> missingSubscriptions(String memberId) {
-        MemberTopology declaration = declarations.get(memberId);
-        Set<String> missing = new HashSet<>(domainTopics());
-        if (declaration != null) {
+    private boolean hasCohortConflict(Set<String> scope) {
+        Map<String, Integer> totalByApp = new HashMap<>();
+        for (Map.Entry<String, Declaration> entry : declarations.entrySet()) {
+            Declaration declaration = entry.getValue();
+            if (!scope.contains(declaration.appId())) {
+                continue;
+            }
+            Integer seen = totalByApp.put(declaration.appId(), declaration.taskTotal());
+            if (seen != null && seen != declaration.taskTotal()) {
+                return true;                                   // same-app task totals disagree
+            }
+            int partition = partitionIndex(entry.getKey());
+            if (partition >= 0 && partition >= declaration.taskTotal()) {
+                return true;                                   // task index beyond the declared total
+            }
+        }
+        return false;
+    }
+
+    /** The apps a commit depends on: the proposed new roster plus the current committed members. */
+    private Set<String> cohortScope(Set<String> rNew) {
+        Set<String> scope = new HashSet<>(rNew);
+        scope.addAll(committedRoster);
+        return scope;
+    }
+
+    /** The partition index encoded in a {@code appId/subtopology_partition} member id, or {@code -1} if
+     * it cannot be parsed (a malformed or app-id-less id — ignored for the index invariant, never a throw
+     * that would break fold determinism). */
+    private static int partitionIndex(String memberId) {
+        int slash = memberId.lastIndexOf('/');
+        String taskId = slash >= 0 ? memberId.substring(slash + 1) : memberId;
+        int underscore = taskId.lastIndexOf('_');
+        if (underscore < 0) {
+            return -1;
+        }
+        try {
+            return Integer.parseInt(taskId.substring(underscore + 1));
+        } catch (NumberFormatException e) {
+            return -1;
+        }
+    }
+
+    // ---- the unified commit predicate ------------------------------------------------------------
+
+    /**
+     * The commit to append for the currently-open round, or empty if it is not (yet) committable — the
+     * single source of truth for both proposing a commit ({@link ParsleyEpochRuntime#driveCommit}) and
+     * validating one on apply ({@link #applyCommit}). A round is committable iff: a round is open; the
+     * voters unanimously agree on one roster {@code R_new}; there is no cohort contradiction; every app
+     * in {@code R_new} not already committed is cohort-complete; every running member has published; and
+     * the mesh holds over {@code R_new}. The floor is {@code mergeMin(publications)} clamped monotonically
+     * against the last committed floor — empty at genesis (no running members, no publications).
+     */
+    Optional<ParsleyEpochEvent.EpochCommitted> evaluateCommit() {
+        if (roundOwner == null) {
+            return Optional.empty();
+        }
+        Set<String> rNew = unanimousRoster();
+        if (rNew == null || hasCohortConflict(cohortScope(rNew))) {
+            return Optional.empty();
+        }
+        for (String app : rNew) {
+            if (!committedRoster.contains(app) && !isAppCohortComplete(app)) {
+                return Optional.empty();                       // a new app's cohort is not yet complete
+            }
+        }
+        if (!publications.keySet().containsAll(runningMembers)) {
+            return Optional.empty();
+        }
+        if (!isMeshSatisfied(rNew)) {
+            return Optional.empty();
+        }
+        ParsleyClock lowerBounds = null;
+        for (ParsleyClock published : publications.values()) {
+            lowerBounds = (lowerBounds == null) ? published : lowerBounds.mergeMin(published);
+        }
+        ParsleyClock floor = (lowerBounds == null ? ParsleyClock.empty() : lowerBounds).merge(committedLowerBounds);
+        return Optional.of(new ParsleyEpochEvent.EpochCommitted(nextEpochId(), floor, Set.copyOf(rNew)));
+    }
+
+    /** Whether every member whose app is in {@code roster} covers the whole domain that roster spans —
+     * full mesh over {@code roster}. An epoch must never commit while any member that will be running
+     * under it cannot see the full domain. */
+    private boolean isMeshSatisfied(Set<String> roster) {
+        Set<String> domain = domainOf(roster);
+        for (Declaration declaration : declarations.values()) {
+            if (!roster.contains(declaration.appId())) {
+                continue;
+            }
+            Set<String> missing = new HashSet<>(domain);
             missing.removeAll(declaration.inputTopics());
             missing.removeAll(declaration.sinkTopics());
-        }
-        return missing;
-    }
-
-    /**
-     * Whether every <em>running</em> member's own declared subscriptions cover the whole domain — full
-     * mesh. Pending joiners are excluded, which is sound because a member's full-mesh coverage is
-     * validated <em>before</em> it declares itself (see {@code ParsleyProcessor#init}): a mis-meshed member
-     * never appends a {@link ParsleyEpochEvent.JoinRequested}, so every member that reaches the pending set
-     * has already been shown to cover the domain and will still cover it once this commit promotes it.
-     * Excluding pending joiners is also what keeps a bad joiner from wedging the domain: were the check to
-     * gate on pending members too, a mis-meshed joiner that then timed out would leave its declaration on
-     * the log (nothing but a {@link ParsleyEpochEvent.Leave} removes it) and block every commit forever.
-     * Consulted by {@link #isRoundComplete()} — an epoch must never commit, and so never seed a newly
-     * required subscriber's floor, while any running member cannot actually see the full domain.
-     */
-    boolean isFullMeshSatisfied() {
-        for (String memberId : runningMembers) {
-            if (!missingSubscriptions(memberId).isEmpty()) {
+            if (!missing.isEmpty()) {
                 return false;
             }
         }
         return true;
     }
 
-    /**
-     * The topology's external source topics, derived DAG-wide from every declared member:
-     * {@code ∪inputTopics − ∪sinkTopics}. A topic some member consumes but no member produces is an
-     * external entry point — no in-band epoch marker ever reaches it, so a stage consuming one must
-     * self-initiate the wave and adopt that coordinate's floor from the log. Derived over all declared
-     * members (pending or running), so source-layer identity is correct from the very first round.
-     */
-    Set<String> externalSourceTopics() {
-        Set<String> external = new HashSet<>();
-        for (MemberTopology declaration : declarations.values()) {
-            external.addAll(declaration.inputTopics());
+    private Set<String> domainOf(Set<String> roster) {
+        Set<String> domain = new HashSet<>();
+        for (Declaration declaration : declarations.values()) {
+            if (roster.contains(declaration.appId())) {
+                domain.addAll(declaration.inputTopics());
+                domain.addAll(declaration.sinkTopics());
+            }
         }
-        for (MemberTopology declaration : declarations.values()) {
-            external.removeAll(declaration.sinkTopics());
+        return domain;
+    }
+
+    // ---- admission gate (consulted by the join waiter and the continuous roster check) -----------
+
+    /** The apps admissible right now: the committed members, plus every app named in EVERY voting
+     * member's current roster view (the committed members have unanimously acknowledged it). When there
+     * are no voters (genesis with nothing declared, or every committed member has left) every declared
+     * app is admissible. Consulted — via the runtime's mirror, from the join waiter's task thread — to
+     * fail a never-admissible app fast instead of burning its join budget; a newcomer no committed member
+     * has named yet is not in the set and simply waits. */
+    Set<String> admissibleApps() {
+        Set<String> admissible = new HashSet<>(committedRoster);
+        Set<String> voters = votingApps();
+        if (voters.isEmpty()) {
+            admissible.addAll(declaredApps());
+            return admissible;
         }
-        return external;
+        Set<String> named = null;
+        for (Declaration declaration : declarations.values()) {
+            if (voters.contains(declaration.appId())) {
+                named = (named == null) ? new HashSet<>(declaration.rosterView())
+                        : intersect(named, declaration.rosterView());
+            }
+        }
+        if (named != null) {
+            admissible.addAll(named);
+        }
+        return admissible;
+    }
+
+    private static Set<String> intersect(Set<String> a, Set<String> b) {
+        Set<String> result = new HashSet<>(a);
+        result.retainAll(b);
+        return result;
+    }
+
+    /** The app-id membership the last commit established (empty before genesis). */
+    Set<String> committedRoster() {
+        return committedRoster;
+    }
+
+    /** A snapshot of every member's admission cut (see {@link #admissionFloors}) — mirrored by the
+     * runtime so a restarting task can read its own admission floor from its own thread. */
+    Map<String, ParsleyEpochRuntime.CommittedEpoch> admissionFloorsSnapshot() {
+        return Map.copyOf(admissionFloors);
+    }
+
+    /** Consumes (read-once, resetting to {@code -1}) the epoch id of the last commit event this fold
+     * rejected as invalid, or {@code -1} if none is pending — read by the runtime to clear its
+     * append-once latch exactly once per rejection, so it re-proposes at most one commit rather than
+     * re-appending a duplicate on every poll until the re-append round-trips. */
+    long consumeLastRejectedCommitEpoch() {
+        long rejected = lastRejectedCommitEpoch;
+        lastRejectedCommitEpoch = -1;
+        return rejected;
     }
 
     /**
-     * {@link #externalSourceTopics()} as it stood immediately after the commit <em>before</em> the most
-     * recent one — {@code Set.of()} before two commits have happened. A departing topic's outgoing
-     * self-adopter unions this with the current live registry to give that topic exactly one more
-     * adoption cycle after its declaring producer's join folds it out of the live view: since a member's
-     * {@link ParsleyEpochEvent.JoinRequested} always folds before the commit that admits it, the previous
-     * commit's snapshot still includes a topic that departs as part of the very round that commit closes.
-     * Purely derived from this log's own fold, so — unlike a per-task in-memory cache — every node
-     * (including one that just started, with no other memory) computes the identical answer.
+     * A human-readable reason an open round is not committable — for edge-triggered diagnostics only —
+     * or empty when there is no round, the round is committable, or the sole blocker is running members
+     * that have not yet published (which {@code ParsleyEpochRuntime#logBlockedRoundTransitions} reports
+     * with its own stall debounce). Names the failing conjunct of {@link #evaluateCommit()} — a diverging
+     * roster, a cohort still short of an app's task total, or an unmet mesh — so a genesis or roster
+     * change that waits forever waits <em>loudly</em> (the only signal for an undercount or a never-
+     * deployed roster app).
      */
+    Optional<String> whyRoundNotCommittable() {
+        if (roundOwner == null || evaluateCommit().isPresent()) {
+            return Optional.empty();
+        }
+        Set<String> rNew = unanimousRoster();
+        if (rNew == null) {
+            return Optional.of("member-app roster does not agree among voters " + votingApps()
+                    + " (a roster change in flight, or incompatible configs)");
+        }
+        if (hasCohortConflict(cohortScope(rNew))) {
+            return Optional.of("cohort conflict: an app's task totals disagree, or a task index exceeds its "
+                    + "app's declared total (partition-count instability)");
+        }
+        for (String app : rNew) {
+            if (!committedRoster.contains(app) && !isAppCohortComplete(app)) {
+                return Optional.of("cohort incomplete: roster app '" + app + "' has not declared its full "
+                        + "task set — waiting for every task of '" + app + "' to join");
+            }
+        }
+        if (!publications.keySet().containsAll(runningMembers)) {
+            return Optional.empty();                           // unpublished-running is logged elsewhere
+        }
+        if (!isMeshSatisfied(rNew)) {
+            return Optional.of("full mesh not satisfied over roster " + rNew
+                    + " — some member's subscriptions do not cover the whole domain " + domainOf(rNew));
+        }
+        return Optional.of("round not committable");
+    }
+
+    // ---- diagnostics ----------------------------------------------------------------------------
+
+    /** The roster-agreement state, for logging only (never a commit decision): AGREE when the voters
+     * declare one roster, CONVERGING when their views form a chain under subset (a change in flight),
+     * CONFLICT when they are incomparable (a genuine misconfig) or a cohort contradiction exists. */
+    RosterAgreement rosterAgreement() {
+        Set<String> voters = votingApps();
+        Set<String> scope = new HashSet<>(voters);
+        scope.addAll(committedRoster);
+        if (hasCohortConflict(scope)) {
+            return RosterAgreement.CONFLICT;
+        }
+        List<Set<String>> views = new ArrayList<>();
+        for (Declaration declaration : declarations.values()) {
+            if (voters.contains(declaration.appId())) {
+                views.add(declaration.rosterView());
+            }
+        }
+        if (views.isEmpty()) {
+            return RosterAgreement.AGREE;
+        }
+        Set<String> first = views.get(0);
+        boolean allEqual = true;
+        for (Set<String> view : views) {
+            if (!view.equals(first)) {
+                allEqual = false;
+                break;
+            }
+        }
+        if (allEqual) {
+            return RosterAgreement.AGREE;
+        }
+        for (Set<String> a : views) {
+            for (Set<String> b : views) {
+                if (!a.containsAll(b) && !b.containsAll(a)) {
+                    return RosterAgreement.CONFLICT;
+                }
+            }
+        }
+        return RosterAgreement.CONVERGING;
+    }
+
+    /** The roster-agreement states, for edge-triggered logging. */
+    enum RosterAgreement { AGREE, CONVERGING, CONFLICT }
+
+    // ---- accessors used by the runtime / mirrors -------------------------------------------------
+
+    long committedEpochId() {
+        return committedEpochId;
+    }
+
+    ParsleyClock committedLowerBounds() {
+        return committedLowerBounds;
+    }
+
+    long nextEpochId() {
+        return committedEpochId + 1;
+    }
+
+    boolean isRoundOpen() {
+        return roundOwner != null;
+    }
+
+    @Nullable String roundOwner() {
+        return roundOwner;
+    }
+
+    Set<String> runningMembers() {
+        return Set.copyOf(runningMembers);
+    }
+
+    /** Every topic any member in the effective roster (committed after genesis, all declared before)
+     * consumes or produces — the domain a joining task self-checks its coverage against. */
+    Set<String> domainTopics() {
+        return domainOf(effectiveRoster());
+    }
+
+    /** The effective roster for data-plane views: the committed roster after genesis, all declared apps
+     * before it. */
+    private Set<String> effectiveRoster() {
+        return committedEpochId == 0 ? declaredApps() : committedRoster;
+    }
+
+    /** The topology's external source topics over the effective roster — {@code ∪inputTopics −
+     * ∪sinkTopics}. A topic some member consumes but none produces is an external entry point. */
+    Set<String> externalSourceTopics() {
+        Set<String> roster = effectiveRoster();
+        Set<String> inputs = new HashSet<>();
+        Set<String> sinks = new HashSet<>();
+        for (Declaration declaration : declarations.values()) {
+            if (roster.contains(declaration.appId())) {
+                inputs.addAll(declaration.inputTopics());
+                sinks.addAll(declaration.sinkTopics());
+            }
+        }
+        inputs.removeAll(sinks);
+        return inputs;
+    }
+
     Set<String> externalSourceTopicsAsOfPreviousCommit() {
         return previousCommitExternalSourceTopics;
     }
 
-    /** Whether {@code memberId} is currently a running member — the join block waits until this is true. */
     boolean isRunningMember(String memberId) {
         return runningMembers.contains(memberId);
     }
 
-    /** The running members that have not yet published for the open round — the reason a round is not yet complete; no automatic eviction, the round simply waits until each has published or an explicit {@link ParsleyEpochEvent.Leave} removes it. */
     Set<String> unpublishedRunningMembers() {
         Set<String> outstanding = new HashSet<>(runningMembers);
         outstanding.removeAll(publications.keySet());
         return outstanding;
-    }
-
-    /**
-     * Whether the open round is complete — every running member has published its frontier, and every
-     * running member's own subscriptions cover the full domain ({@link #isFullMeshSatisfied()}) — so the
-     * owner may commit. Always {@code false} when no round is open. A round with no running members
-     * (e.g. the very first join into an empty topology) is vacuously complete. The full-mesh conjunct is
-     * unconditional, never bypassable by a validation mode: an epoch must never commit — and so never
-     * seed a newly required subscriber's floor — while any running member cannot actually see the whole
-     * domain, since the completeness it publishes would then be unsound for coordinates it never
-     * observes.
-     */
-    boolean isRoundComplete() {
-        return roundOwner != null && publications.keySet().containsAll(runningMembers) && isFullMeshSatisfied();
-    }
-
-    /**
-     * The commit to append for the now-complete round: {@code (nextEpochId, lowerBounds)}
-     * where {@code lowerBounds} is the {@link ParsleyClock#mergeMin} fold of the published frontiers —
-     * per coordinate, the minimum over the members that observed it (a member without a coordinate does
-     * not constrain it) — then clamped per coordinate to never regress below the previously committed
-     * floor via {@link ParsleyClock#merge} (the per-coordinate maximum): a member admitted mid-round that
-     * consumes from {@code earliest} publishes completeness far behind the current floor, and the raw
-     * {@code mergeMin} would otherwise drag a shared coordinate's floor backwards on promotion. Clamping
-     * here, once, keeps the floor honestly monotonic for every consumer instead of requiring each one to
-     * guard against a regression that should never have been possible in the first place. With no
-     * publications this is an empty clock (no coordinate bounded), i.e. the epoch-0 floor.
-     *
-     * @throws IllegalStateException if the round is not complete
-     */
-    ParsleyEpochEvent.EpochCommitted proposeCommit() {
-        if (!isRoundComplete()) {
-            throw new IllegalStateException("cannot commit: round not open or not all running members published");
-        }
-        ParsleyClock lowerBounds = null;
-        for (ParsleyClock published : publications.values()) {
-            lowerBounds = (lowerBounds == null) ? published : lowerBounds.mergeMin(published);
-        }
-        ParsleyClock proposed = lowerBounds == null ? ParsleyClock.empty() : lowerBounds;
-        return new ParsleyEpochEvent.EpochCommitted(nextEpochId(), proposed.merge(committedLowerBounds));
     }
 }

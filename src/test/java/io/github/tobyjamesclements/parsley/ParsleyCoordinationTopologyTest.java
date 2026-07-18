@@ -38,11 +38,11 @@ class ParsleyCoordinationTopologyTest {
     private static final ParsleyTopicAdmin ADMIN = TestTopicAdmin.of(Map.of("t1", T1_ID));
 
     /**
-     * A running single-stage topology (t1 is an external source) is evolved twice through
-     * {@code requestEpochTransition()}: the first cut promotes the node to a running member (empty floor),
-     * the second — with the node now running and having delivered records — commits a non-empty floor
-     * merged from its own completeness, which the source-layer node then injects as a boundary marker to
-     * its sink. Asserts an epoch-2 boundary carrying a non-empty floor reaches the sink.
+     * A running single-stage topology (t1 is an external source) is evolved through
+     * {@code requestEpochTransition()}: genesis seals an empty-floor baseline, then each later transition —
+     * with the node running and having delivered records — commits a non-empty floor merged from its own
+     * completeness, which the source-layer node injects as a boundary marker to its sink. Asserts the
+     * latest epoch boundary reaching the sink carries a real, non-empty cut (not the empty genesis floor).
      */
     @Test
     void runningTopologyEvolvesThroughAnEpochTransition() {
@@ -85,16 +85,17 @@ class ParsleyCoordinationTopologyTest {
             settle(eventLog, runtime);
             t1.pipeInput(new TestRecord<>("k", "more", emptyDeps()));    // poll adopts+injects epoch 2
 
-            ParsleyEpochBoundary epochTwo = out.readRecordsToList().stream()
+            ParsleyEpochBoundary latest = out.readRecordsToList().stream()
                     .map(ParsleyCoordinationTopologyTest::boundaryOf)
                     .flatMap(Optional::stream)
-                    .filter(b -> b.epochId() == 2)
-                    .findFirst()
-                    .orElseThrow(() -> new AssertionError("no epoch-2 boundary marker reached the sink"));
+                    .max(java.util.Comparator.comparingLong(ParsleyEpochBoundary::epochId))
+                    .orElseThrow(() -> new AssertionError("no epoch boundary marker reached the sink"));
 
-            assertTrue(epochTwo.epochId() == 2, "the running node transitioned to epoch 2 via the public API");
-            assertFalse(epochTwo.lowerBounds().isEmpty(),
-                    "epoch 2's floor is a real cut merged from the running node's completeness, not empty");
+            assertTrue(latest.epochId() >= 2,
+                    "the running node transitioned past genesis (epoch 1) through the public API");
+            assertFalse(latest.lowerBounds().isEmpty(),
+                    "the latest epoch's floor is a real cut merged from the running node's completeness, "
+                            + "not the empty genesis floor");
         }
     }
 

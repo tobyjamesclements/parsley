@@ -91,8 +91,11 @@ class CausalTopologyPassthroughTest {
             settle(eventLog, runtime);   // fold the task's join — must not throw (full-mesh self-check passes)
 
             // A t1 record depending on passthrough1@0 — nothing has arrived on that channel yet, so it holds.
+            // Asserted on the delegate (the real business-delivery signal): the raw sink queue also carries
+            // the genesis epoch-boundary marker this node self-injects, which is not a business delivery.
             t1.pipeInput(new TestRecord<>("k", "gated", dependsOn(PASSTHROUGH_ID, 0)));
-            assertEquals(0, out.getQueueSize(), "a t1 record depending on an unseen passthrough1 offset must hold");
+            assertEquals(List.of(), delegateSaw,
+                    "a t1 record depending on an unseen passthrough1 offset must hold, not reach the delegate");
 
             // A genuine record arrives on the passthrough topic. Its own delivery releases the held t1
             // record too (same shared buffer/candidate-index, same single processor node) — that record

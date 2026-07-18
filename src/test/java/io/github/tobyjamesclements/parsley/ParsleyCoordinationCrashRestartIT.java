@@ -98,8 +98,9 @@ class ParsleyCoordinationCrashRestartIT {
         Path stateY = Files.createTempDirectory("parsley-crash-y");
         Path stateX1 = Files.createTempDirectory("parsley-crash-x1");
 
-        KafkaStreams appY = new KafkaStreams(stageY(coordinationY), streamsConfig(bootstrap, appIdY, stateY));
-        KafkaStreams appX = new KafkaStreams(stageX(coordinationX1), streamsConfig(bootstrap, appIdX, stateX1));
+        String roster = appIdX + "," + appIdY;
+        KafkaStreams appY = new KafkaStreams(stageY(coordinationY), streamsConfig(bootstrap, appIdY, stateY, roster));
+        KafkaStreams appX = new KafkaStreams(stageX(coordinationX1), streamsConfig(bootstrap, appIdX, stateX1, roster));
         ParsleyCoordination coordinationX2 = ParsleyCoordination.create(EPOCH_EVENTS);
         KafkaStreams appXRestarted = null;
         try {
@@ -139,7 +140,7 @@ class ParsleyCoordinationCrashRestartIT {
             // Restart X (same application id, so it restores its buffer changelog; fresh local state dir). It is
             // still a running member, so it resumes immediately.
             Path stateX2 = Files.createTempDirectory("parsley-crash-x2");
-            appXRestarted = new KafkaStreams(stageX(coordinationX2), streamsConfig(bootstrap, appIdX, stateX2));
+            appXRestarted = new KafkaStreams(stageX(coordinationX2), streamsConfig(bootstrap, appIdX, stateX2, roster));
             appXRestarted.start();
             KafkaStreams restarted = appXRestarted;
             await().atMost(Duration.ofSeconds(90)).pollInterval(Duration.ofSeconds(1)).until(() -> {
@@ -293,6 +294,12 @@ class ParsleyCoordinationCrashRestartIT {
             }
             return false;
         }
+    }
+
+    private static Properties streamsConfig(String bootstrap, String appId, Path stateDir, String memberApps) {
+        Properties props = streamsConfig(bootstrap, appId, stateDir);
+        props.put(ParsleyConfig.COORDINATION_MEMBER_APPS, memberApps);
+        return props;
     }
 
     private static Properties streamsConfig(String bootstrap, String appId, Path stateDir) {

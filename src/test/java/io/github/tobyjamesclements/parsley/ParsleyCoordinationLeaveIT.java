@@ -93,10 +93,11 @@ class ParsleyCoordinationLeaveIT {
         Path stateA = Files.createTempDirectory("parsley-leave-a");
         Path stateB = Files.createTempDirectory("parsley-leave-b");
 
+        String roster = appIdA + "," + appIdB;
         KafkaStreams appA = new KafkaStreams(
-                stage(coordinationA, "parsley-a", v -> "A:" + v), streamsConfig(bootstrap, appIdA, stateA));
+                stage(coordinationA, "parsley-a", v -> "A:" + v), streamsConfig(bootstrap, appIdA, stateA, roster));
         KafkaStreams appB = new KafkaStreams(
-                stage(coordinationB, "parsley-b", v -> "B:" + v), streamsConfig(bootstrap, appIdB, stateB));
+                stage(coordinationB, "parsley-b", v -> "B:" + v), streamsConfig(bootstrap, appIdB, stateB, roster));
         KafkaStreams appBRestarted = null;
         ParsleyCoordination coordinationBRestarted = null;
         try {
@@ -133,7 +134,7 @@ class ParsleyCoordinationLeaveIT {
             // blocked round finally commits.
             coordinationBRestarted = ParsleyCoordination.create(EPOCH_EVENTS);
             appBRestarted = new KafkaStreams(stage(coordinationBRestarted, "parsley-b", v -> "B:" + v),
-                    streamsConfig(bootstrap, appIdB, stateB));
+                    streamsConfig(bootstrap, appIdB, stateB, roster));
             appBRestarted.start();
             ParsleyCoordination coordB = coordinationBRestarted;
             await().atMost(Duration.ofSeconds(90)).until(() -> {
@@ -244,6 +245,12 @@ class ParsleyCoordinationLeaveIT {
     private static ProducerRecord<String, String> stampEmptyDeps(ProducerRecord<String, String> record) {
         record.headers().add(ParsleyHeader.CAUSAL_DEPENDENCIES, ParsleyClock.empty().toBytes());
         return record;
+    }
+
+    private static Properties streamsConfig(String bootstrap, String appId, Path stateDir, String memberApps) {
+        Properties props = streamsConfig(bootstrap, appId, stateDir);
+        props.put(ParsleyConfig.COORDINATION_MEMBER_APPS, memberApps);
+        return props;
     }
 
     private static Properties streamsConfig(String bootstrap, String appId, Path stateDir) {

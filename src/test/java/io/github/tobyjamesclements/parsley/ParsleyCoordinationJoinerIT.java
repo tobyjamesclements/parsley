@@ -40,29 +40,31 @@ import java.util.UUID;
 import java.util.function.UnaryOperator;
 
 import static org.awaitility.Awaitility.await;
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * End-to-end proof, against a real broker, that a node <strong>deployed into a running, already-
- * coordinated topology blocks until an epoch computed without it commits, then serves</strong>. Modelled
- * the way Kafka Streams actually admits a new node: a redeploy that adds a new stage (a fresh subtopology,
- * with its own task id, so no member-id collision with the running stage).
+ * End-to-end proof, against a real broker, of the <strong>genesis cohort barrier</strong>: a coordinated
+ * topology whose founding roster is {@code {A,B}} does not seal genesis until <em>both</em> founders have
+ * declared, even though A comes up first and consumes at the empty genesis floor. Modelled with each stage
+ * as its own application (a fresh subtopology, its own task id, so no member-id collision).
  *
  * <p>The pipeline {@code t1 -> A -> mid -> B -> out} is a linear DAG, so it is <em>not</em> a full mesh:
- * running member A consumes {@code t1} and produces {@code mid}, and a fresh downstream stage B consumes
- * {@code mid} while carrying dependencies on {@code t1} it cannot observe. The coordinated domain
+ * stage A consumes {@code t1} and produces {@code mid}, and stage B consumes {@code mid} while carrying
+ * dependencies on {@code t1} it cannot observe. The coordinated domain
  * ({@code parsley.coordination.domain-topics = t1,mid,out}) makes {@link CausalTopology#assemble}
  * auto-wire a passthrough source for the one domain topic each stage does not otherwise touch, so every
- * stage's own subscriptions cover the whole domain and the full-mesh precondition an epoch commits under
- * ({@link ParsleyEpochLog#isFullMeshSatisfied()}) is satisfied.
+ * stage's own subscriptions cover the whole domain — the full-mesh precondition a commit requires (the
+ * mesh conjunct of {@link ParsleyEpochLog#evaluateCommit()}).
  *
  * <p>Stage A and stage B run as <strong>separate applications</strong> (distinct {@code application.id}s)
  * sharing the one epoch-events log — the way Kafka Streams actually admits a new node, and the only way
  * the domain topic passthrough can wire without colliding with a stage's real source (a single app that
  * both produced {@code mid} and passthrough-consumed it, or sourced {@code t1} in one subtopology and
- * passthrough-sourced it in another, would register the same topic twice). Unlike
- * {@link ParsleyCoordinationMultiAppIT}, which starts both apps together, stage B here joins a domain A
- * has <em>already</em> established an epoch in, so it exercises the block-until-admitted join path.
+ * passthrough-sourced it in another, would register the same topic twice). Both apps declare the same
+ * founding member-app roster {@code {A,B}}, so this exercises the genesis cohort barrier: A comes up first
+ * and consumes at the empty genesis floor, but genesis does not seal until B — the other founder — has
+ * also declared its full task set.
  */
 @Testcontainers(disabledWithoutDocker = true)
 class ParsleyCoordinationJoinerIT {
@@ -77,23 +79,25 @@ class ParsleyCoordinationJoinerIT {
     private static final String EPOCH_EVENTS = "epoch-events";
 
     /**
-     * Phase 1 runs stage A alone (t1 -> A -> mid) and establishes an epoch. Phase 2 starts stage B
-     * (mid -> B -> out) as a separate app into the still-running domain: B's task is fresh, so on init it
-     * blocks until an epoch that post-dates its join commits (A, still a running member, publishes for it),
-     * then replays {@code mid} from the start and serves {@code out}. Asserts the epoch advances past
-     * phase 1 (B's join drove a new commit) and B serves its sink.
+     * The genesis cohort barrier, end-to-end. Both stages declare the founding roster {@code {A,B}}. Stage A
+     * comes up first and consumes {@code t1} at the empty genesis floor, producing to {@code mid} — but
+     * genesis must NOT seal while founder B is still absent (sealing it early would leave B to be admitted
+     * later at a non-empty floor and skip the genesis-era {@code mid} records). Once stage B starts and
+     * declares its full task set, the cohort is complete, genesis commits, and B replays {@code mid} from
+     * the start and serves {@code out}. Asserts no epoch commits while A is alone, then genesis commits once
+     * B has joined the cohort and B serves its sink.
      */
     @Test
-    void aNodeAddedToARunningTopologyBlocksUntilItsEpochCommitsThenServes() throws Exception {
+    void genesisWaitsForTheWholeFoundingCohortBeforeSealing() throws Exception {
         String bootstrap = kafka.getBootstrapServers();
         createTopics(bootstrap, IN, MID, OUT, EPOCH_EVENTS);
         String appIdA = "joiner-a-" + UUID.randomUUID();
         String appIdB = "joiner-b-" + UUID.randomUUID();
+        String roster = appIdA + "," + appIdB;
         Path stateDirA = Files.createTempDirectory("parsley-joiner-a");
         Path stateDirB = Files.createTempDirectory("parsley-joiner-b");
 
-        // Stage A runs for the whole test; stage B joins the domain A has already established an epoch in.
-        try (CausalStreams appA = new CausalStreams(stageATopology(), streamsConfig(bootstrap, appIdA, stateDirA))) {
+        try (CausalStreams appA = new CausalStreams(stageATopology(), streamsConfig(bootstrap, appIdA, stateDirA, roster))) {
             appA.start();
             await().atMost(Duration.ofSeconds(30)).until(() -> appA.state() == KafkaStreams.State.RUNNING);
             try (KafkaProducer<String, String> producer = new KafkaProducer<>(producerConfig(bootstrap))) {
@@ -101,22 +105,20 @@ class ParsleyCoordinationJoinerIT {
                     producer.send(stampEmptyDeps(new ProducerRecord<>(IN, "k", "v" + i))).get();
                 }
             }
-            requestUntilCommitted(appA, bootstrap, 1L);
-            requestUntilCommitted(appA, bootstrap, 2L);
-            long epochAfterPhase1 = highestCommittedEpoch(bootstrap);
-            assertTrue(epochAfterPhase1 >= 2, "phase 1 must establish an epoch B can join into");
 
-            // Phase 2: stage B joins as a fresh member of the running domain.
-            try (CausalStreams appB = new CausalStreams(stageBTopology(), streamsConfig(bootstrap, appIdB, stateDirB))) {
+            // The barrier: genesis must not seal while founder B is still absent from the cohort. A alone
+            // is a running founder consuming at the empty floor, but its cohort {A,B} is not yet complete.
+            Thread.sleep(5000);
+            assertEquals(0L, highestCommittedEpoch(bootstrap),
+                    "genesis must wait for the whole founding cohort — B has not declared yet");
+
+            // B joins the founding cohort: the cohort is now complete, so genesis seals.
+            try (CausalStreams appB = new CausalStreams(stageBTopology(), streamsConfig(bootstrap, appIdB, stateDirB, roster))) {
                 appB.start();
-                // Do not await RUNNING: while B's task blocks in init (the joiner wait), the instance stays
-                // in REBALANCING. A, still running in its own app, publishes for B's round, so B's join
-                // drives the epoch past where phase 1 left it — that is the unblock signal.
                 await().atMost(Duration.ofSeconds(120))
-                        .until(() -> highestCommittedEpoch(bootstrap) > epochAfterPhase1);
-
-                // Having unblocked and adopted its floor, B replays mid from the start and serves out.
-                assertTrue(awaitSinkServed(bootstrap), "the joined stage B serves its sink after its epoch commits");
+                        .until(() -> highestCommittedEpoch(bootstrap) >= 1L);   // genesis seals with the full cohort
+                assertTrue(awaitSinkServed(bootstrap),
+                        "once the cohort completes and genesis seals, B replays mid and serves out");
             }
         }
     }
@@ -153,21 +155,6 @@ class ParsleyCoordinationJoinerIT {
                 ctx.forward(record.withValue(fn.apply(record.value())));
             }
         };
-    }
-
-    /** Requests transitions until the log shows {@code EpochCommitted(targetEpoch)}; requests coalesce. */
-    private static void requestUntilCommitted(CausalStreams streams, String bootstrap, long targetEpoch) {
-        await().atMost(Duration.ofSeconds(60)).until(() -> {
-            if (highestCommittedEpoch(bootstrap) >= targetEpoch) {
-                return true;
-            }
-            try {
-                streams.requestEpochTransition();
-            } catch (IllegalStateException notReadyYet) {
-                // No local member has joined/initialised yet; retry on the next tick.
-            }
-            return false;
-        });
     }
 
     private static long highestCommittedEpoch(String bootstrap) {
@@ -224,6 +211,12 @@ class ParsleyCoordinationJoinerIT {
     private static ProducerRecord<String, String> stampEmptyDeps(ProducerRecord<String, String> record) {
         record.headers().add(ParsleyHeader.CAUSAL_DEPENDENCIES, ParsleyClock.empty().toBytes());
         return record;
+    }
+
+    private static Properties streamsConfig(String bootstrap, String appId, Path stateDir, String memberApps) {
+        Properties props = streamsConfig(bootstrap, appId, stateDir);
+        props.put(ParsleyConfig.COORDINATION_MEMBER_APPS, memberApps);
+        return props;
     }
 
     private static Properties streamsConfig(String bootstrap, String appId, Path stateDir) {
