@@ -21,7 +21,7 @@
       
       
       <link rel="icon" href="../../assets/images/favicon.png">
-      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.6">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.7">
     
     
       
@@ -29,7 +29,7 @@
       
     
     
-      <link rel="stylesheet" href="../../assets/stylesheets/main.484c7ddc.min.css">
+      <link rel="stylesheet" href="../../assets/stylesheets/main.ec1eaa64.min.css">
       
         
         <link rel="stylesheet" href="../../assets/stylesheets/palette.ab4e12ef.min.css">
@@ -428,34 +428,6 @@
     
   
     Configuration
-  
-
-    
-  </span>
-  
-  
-
-      </a>
-    </li>
-  
-
-              
-            
-              
-                
-  
-  
-  
-  
-    <li class="md-nav__item">
-      <a href="../../audit-logging/" class="md-nav__link">
-        
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    Audit logging
   
 
     
@@ -941,10 +913,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#onrecord-algorithm" class="md-nav__link">
+  <a href="#receive-algorithm" class="md-nav__link">
     <span class="md-ellipsis">
       
-        onRecord() algorithm
+        receive() algorithm
       
     </span>
   </a>
@@ -963,41 +935,13 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#eviction" class="md-nav__link">
+  <a href="#fail-closed-failure-model" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Eviction
+        Fail-closed failure model
       
     </span>
   </a>
-  
-    <nav class="md-nav" aria-label="Eviction">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#evictoverflow-size-limit" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        evictOverflow() — size limit
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#evictexpired-duration-limit" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        evictExpired() — duration limit
-      
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
   
 </li>
       
@@ -1163,10 +1107,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#onrecord-algorithm" class="md-nav__link">
+  <a href="#receive-algorithm" class="md-nav__link">
     <span class="md-ellipsis">
       
-        onRecord() algorithm
+        receive() algorithm
       
     </span>
   </a>
@@ -1185,41 +1129,13 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#eviction" class="md-nav__link">
+  <a href="#fail-closed-failure-model" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Eviction
+        Fail-closed failure model
       
     </span>
   </a>
-  
-    <nav class="md-nav" aria-label="Eviction">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#evictoverflow-size-limit" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        evictOverflow() — size limit
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#evictexpired-duration-limit" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        evictExpired() — duration limit
-      
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
   
 </li>
       
@@ -1277,51 +1193,58 @@
 
 
 <h1 id="the-engine">The engine</h1>
-<p><code>ParsleyEngine&lt;K,V&gt;</code> is the core of the causal guarantee. It classifies incoming records, manages the causal frontier and the held-record buffer, cascades releases as the frontier advances, and enforces buffer limits.</p>
+<p><code>ParsleyEngine&lt;K,V&gt;</code> is the core of the causal guarantee — the receive-and-deliver half of the classic
+causal broadcast algorithm (see <a href="../causal-consistency/">causal consistency model</a>). It classifies
+incoming records, manages the causal frontier and the held-record buffer, cascades releases as the
+frontier advances, and fails the task fast on any dependency it can prove will never be satisfiable.
+There is no eviction, no buffer limit, and no timeout: a record whose dependencies are not yet satisfied
+stays buffered until they are, however long that takes — the buffer is a changelog-backed state store, so
+it spills to disk rather than growing in memory.</p>
 <h2 id="engine-algorithm-at-a-glance">Engine algorithm, at a glance</h2>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>onRecord(record):
-<a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>    channelAdvanced = !channelClock(record.channel).dominates(record.dependencies)
-<a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a>    channelStore.update(record.channel, record.dependencies)  # receipt-time: record the branch&#39;s
-<a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a>                                                               # proven completeness before gating
-<a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a>    frontier.seedIfFirstSeen(record.coordinate)        # one-time per coordinate, folds in
-<a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a>                                                        # everything below the first-seen offset
-<a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a>    deps = record.dependencies.withoutSelfReference()  # strip the record&#39;s own offset only
+<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>receive(record):
+<a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>    frontier.seedIfFirstSeen(record.coordinate)        # one-time per coordinate, folds in
+<a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a>                                                        # everything below the first-seen offset
+<a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a>
+<a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a>    if isUnreachableDependency(record):                # a dependency names a coordinate this node has
+<a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a>        throw ParsleyUnreachableDependencyException    #   no input channel for at all: fail-closed,
+<a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a>                                                        #   never vacuously satisfied
 <a id="__codelineno-0-8" name="__codelineno-0-8" href="#__codelineno-0-8"></a>
-<a id="__codelineno-0-9" name="__codelineno-0-9" href="#__codelineno-0-9"></a>    if completeness().dominates(deps):                 # the gate: every input channel has confirmed
-<a id="__codelineno-0-10" name="__codelineno-0-10" href="#__codelineno-0-10"></a>                                                        #   every depended coordinate
-<a id="__codelineno-0-11" name="__codelineno-0-11" href="#__codelineno-0-11"></a>        frontier.deliver(record.coordinate)            # advance frontier, self-persist &quot;f&quot;
-<a id="__codelineno-0-12" name="__codelineno-0-12" href="#__codelineno-0-12"></a>        out.add(record)
-<a id="__codelineno-0-13" name="__codelineno-0-13" href="#__codelineno-0-13"></a>        propagate(record.coordinate)                   # cascade releases (see below)
-<a id="__codelineno-0-14" name="__codelineno-0-14" href="#__codelineno-0-14"></a>    else:
-<a id="__codelineno-0-15" name="__codelineno-0-15" href="#__codelineno-0-15"></a>        buffer.add(record)                             # hold until satisfied
-<a id="__codelineno-0-16" name="__codelineno-0-16" href="#__codelineno-0-16"></a>        candidateIndex.index(record, deps, completeness())
-<a id="__codelineno-0-17" name="__codelineno-0-17" href="#__codelineno-0-17"></a>        if buffer.size() &gt;= sizeLimit:
-<a id="__codelineno-0-18" name="__codelineno-0-18" href="#__codelineno-0-18"></a>            out.addAll(evictOverflow())                # bring buffer back under the limit
-<a id="__codelineno-0-19" name="__codelineno-0-19" href="#__codelineno-0-19"></a>
-<a id="__codelineno-0-20" name="__codelineno-0-20" href="#__codelineno-0-20"></a>    if channelAdvanced and channelStore.size() &gt; 1:    # a fan-in branch advanced: re-scan, since a
-<a id="__codelineno-0-21" name="__codelineno-0-21" href="#__codelineno-0-21"></a>        out.addAll(drainSatisfied())                   # channel advance can lift completeness for held records
-<a id="__codelineno-0-22" name="__codelineno-0-22" href="#__codelineno-0-22"></a>    return out
-<a id="__codelineno-0-23" name="__codelineno-0-23" href="#__codelineno-0-23"></a>
-<a id="__codelineno-0-24" name="__codelineno-0-24" href="#__codelineno-0-24"></a>onWatermark(channel, carriedFrontier):
-<a id="__codelineno-0-25" name="__codelineno-0-25" href="#__codelineno-0-25"></a>    channelStore.update(channel, carriedFrontier)      # advance the source channel&#39;s clock
-<a id="__codelineno-0-26" name="__codelineno-0-26" href="#__codelineno-0-26"></a>    return drainSatisfied()                             # release records the new completeness permits
-<a id="__codelineno-0-27" name="__codelineno-0-27" href="#__codelineno-0-27"></a>
-<a id="__codelineno-0-28" name="__codelineno-0-28" href="#__codelineno-0-28"></a>evictOverflow() / evictExpired():
-<a id="__codelineno-0-29" name="__codelineno-0-29" href="#__codelineno-0-29"></a>    candidates = oldest/expired buffered entries
-<a id="__codelineno-0-30" name="__codelineno-0-30" href="#__codelineno-0-30"></a>    evictOrFail(candidates):
-<a id="__codelineno-0-31" name="__codelineno-0-31" href="#__codelineno-0-31"></a>        if failOnEvictionLimit:
-<a id="__codelineno-0-32" name="__codelineno-0-32" href="#__codelineno-0-32"></a>            throw ParsleyBufferEvictionLimitException  # candidates remain buffered
-<a id="__codelineno-0-33" name="__codelineno-0-33" href="#__codelineno-0-33"></a>        else:
-<a id="__codelineno-0-34" name="__codelineno-0-34" href="#__codelineno-0-34"></a>            evictSequences(candidates)                 # force-forward out of causal order,
-<a id="__codelineno-0-35" name="__codelineno-0-35" href="#__codelineno-0-35"></a>                                                         # cascading via propagate per release
+<a id="__codelineno-0-9" name="__codelineno-0-9" href="#__codelineno-0-9"></a>    deps = effectiveDependencies(record.dependencies)  # strip self-cycle, this node&#39;s own sink
+<a id="__codelineno-0-10" name="__codelineno-0-10" href="#__codelineno-0-10"></a>                                                        # coordinates, and any below-epoch-floor entry
+<a id="__codelineno-0-11" name="__codelineno-0-11" href="#__codelineno-0-11"></a>
+<a id="__codelineno-0-12" name="__codelineno-0-12" href="#__codelineno-0-12"></a>    if frontier.dominates(deps):                       # the gate: this node has ITSELF delivered
+<a id="__codelineno-0-13" name="__codelineno-0-13" href="#__codelineno-0-13"></a>                                                        #   every depended coordinate — a peer&#39;s claim
+<a id="__codelineno-0-14" name="__codelineno-0-14" href="#__codelineno-0-14"></a>                                                        #   never substitutes for local delivery
+<a id="__codelineno-0-15" name="__codelineno-0-15" href="#__codelineno-0-15"></a>        frontier.deliver(record.coordinate)            # advance frontier, self-persist &quot;f&quot;
+<a id="__codelineno-0-16" name="__codelineno-0-16" href="#__codelineno-0-16"></a>        channelStore.update(record.channel, deps&#39;)     # stamp-only fold (deps minus own-sink coords)
+<a id="__codelineno-0-17" name="__codelineno-0-17" href="#__codelineno-0-17"></a>        out.add(record)
+<a id="__codelineno-0-18" name="__codelineno-0-18" href="#__codelineno-0-18"></a>        propagate(record.coordinate)                   # cascade releases (see below)
+<a id="__codelineno-0-19" name="__codelineno-0-19" href="#__codelineno-0-19"></a>    else:
+<a id="__codelineno-0-20" name="__codelineno-0-20" href="#__codelineno-0-20"></a>        buffer.add(record)                             # hold until satisfied (no limit, no timeout)
+<a id="__codelineno-0-21" name="__codelineno-0-21" href="#__codelineno-0-21"></a>        candidateIndex.index(record, deps, frontier)
+<a id="__codelineno-0-22" name="__codelineno-0-22" href="#__codelineno-0-22"></a>
+<a id="__codelineno-0-23" name="__codelineno-0-23" href="#__codelineno-0-23"></a>    if frontier.tryAdvanceEpoch():                      # a delivery can close a pending epoch
+<a id="__codelineno-0-24" name="__codelineno-0-24" href="#__codelineno-0-24"></a>        out.addAll(drainSatisfied())                    #   transition window; see topology-epochs.md
+<a id="__codelineno-0-25" name="__codelineno-0-25" href="#__codelineno-0-25"></a>    return out
+<a id="__codelineno-0-26" name="__codelineno-0-26" href="#__codelineno-0-26"></a>
+<a id="__codelineno-0-27" name="__codelineno-0-27" href="#__codelineno-0-27"></a>onWatermark(channel, offset, carriedFrontier):
+<a id="__codelineno-0-28" name="__codelineno-0-28" href="#__codelineno-0-28"></a>    channelAdvanced = !channelClock(channel).dominates(carriedFrontier&#39;)   # own-sink coords stripped
+<a id="__codelineno-0-29" name="__codelineno-0-29" href="#__codelineno-0-29"></a>    channelStore.update(channel, carriedFrontier&#39;)     # stamp-only: feeds completeness(), not the gate
+<a id="__codelineno-0-30" name="__codelineno-0-30" href="#__codelineno-0-30"></a>    frontier.deliver(channel, offset)                   # the marker&#39;s OWN offset genuinely delivered
+<a id="__codelineno-0-31" name="__codelineno-0-31" href="#__codelineno-0-31"></a>    propagate(channel)                                  # releases via the frontier advance alone
+<a id="__codelineno-0-32" name="__codelineno-0-32" href="#__codelineno-0-32"></a>    if frontier.tryAdvanceEpoch(): drainSatisfied()
+<a id="__codelineno-0-33" name="__codelineno-0-33" href="#__codelineno-0-33"></a>    return (delivered, channelAdvanced)                 # caller relays downstream only if genuinely new
 </code></pre></div>
-<p><code>completeness()</code> is the per-coordinate minimum across every input channel (<code>ParsleyClock.intersectMin</code>):
-a record is deliverable only once every channel has confirmed every coordinate it depends on. See the
-<a href="../causal-consistency/">causal consistency model</a> for why the gate is strict and the topology contract
-it implies.</p>
-<p>Each piece is covered in its own section below: <a href="#onrecord-algorithm"><code>onRecord()</code> algorithm</a>
+<p>The gate is <code>frontier.dominates(effectiveDependencies)</code>: this node's own contiguous delivered
+frontier must cover every depended coordinate. <code>completeness()</code> — the frontier max-merged with every
+input channel's advertised dependencies (<code>ParsleyClock.merge</code>) — is the <em>outbound stamp</em>, carrying
+transitive ancestry downstream where each receiver's own gate verifies it locally; it never releases
+anything here. See the <a href="../causal-consistency/">causal consistency model</a> for why local delivery is
+required and the topology contract it implies.</p>
+<p>Each piece is covered in its own section below: <a href="#receive-algorithm"><code>receive()</code> algorithm</a>
 for admission, <a href="#propagation-cascade-propagate">Propagation cascade</a> for the cascade, and
-<a href="#eviction">Eviction</a> for the fail/continue policy split.</p>
+<a href="#fail-closed-failure-model">Fail-closed failure model</a> for the three ways a record can prove itself
+unsatisfiable.</p>
 <h2 id="key-state">Key state</h2>
 <table>
 <thead>
@@ -1335,12 +1258,12 @@ for admission, <a href="#propagation-cascade-propagate">Propagation cascade</a> 
 <tr>
 <td><code>frontier</code></td>
 <td><code>ParsleyFrontier</code></td>
-<td>All causal state: contiguous frontier clock, per-input-channel clocks, <code>completeness()</code>, forwarded-offset index, and baseline seeding — self-persisting as the single <code>"f"</code> value. Channel clocks are the dependencies advertised on each <code>(topicId, partition)</code> this node consumes, seeded at registration so silent channels are present in the completeness fold</td>
+<td>All causal state: contiguous frontier clock, per-input-channel clocks, <code>completeness()</code>, forwarded-offset index, epoch floor, and baseline seeding — self-persisting as the single <code>"f"</code> value. Channel clocks are the dependencies advertised on each <code>(topicId, partition)</code> this node consumes, seeded at registration for bookkeeping even though a silent channel contributes nothing to the completeness merge</td>
 </tr>
 <tr>
 <td><code>buffer</code></td>
 <td><code>ParsleyBufferStore&lt;K,V&gt;</code></td>
-<td>Durable set of held records</td>
+<td>Durable set of held records — unbounded, no eviction</td>
 </tr>
 <tr>
 <td><code>candidateIndex</code></td>
@@ -1348,113 +1271,107 @@ for admission, <a href="#propagation-cascade-propagate">Propagation cascade</a> 
 <td>Secondary index: coordinate -&gt; candidate record IDs</td>
 </tr>
 <tr>
-<td><code>sizeLimit</code></td>
-<td><code>int</code></td>
-<td>Buffer depth at which eviction triggers</td>
+<td><code>inScope</code></td>
+<td><code>ParsleyClock.CoordinatePredicate</code></td>
+<td>Coordinates this node could ever genuinely confirm (a registered input channel, on the partition this task owns). A dependency outside it fails the task fast rather than being treated as satisfied</td>
 </tr>
 <tr>
-<td><code>evictionInterval</code></td>
-<td><code>Duration</code></td>
-<td>Optional interval for time-based eviction</td>
+<td><code>ownSinkTopics</code></td>
+<td><code>ParsleyClock.CoordinatePredicate</code></td>
+<td>Coordinates for a topic this node itself produces; stripped from any inbound dependency or marker clock before the gate</td>
 </tr>
 </tbody>
 </table>
-<p><code>ParsleyFrontier</code> owns the three Lamport operations: <code>isDeliverable(deps)</code> (the delivery
-predicate), <code>deliver(coordinate, callback)</code> (advance the frontier and notify), and
-<code>seedIfFirstSeen(coordinate)</code> (establish the baseline for a newly observed coordinate).</p>
-<p><code>channelStore</code> backs the delivery gate and the node's outbound stamp. <code>completeness()</code> is the
-per-coordinate minimum across every input channel (<code>ParsleyClock.intersectMin</code>): each channel
-contributes the dependencies it has advertised plus its own contiguous delivered position, and a
-coordinate any channel has not observed is absent from the result. The single gate is
-<code>completeness().dominates(deps.withoutSelfReference())</code> — a record is delivered only once every input
-channel has confirmed every coordinate it depends on. The same <code>completeness()</code> stamps forwarded
-records and protocol watermarks. See the <a href="../causal-consistency/">causal consistency model</a> for why the
-gate is strict and the topology contract it implies.</p>
-<h2 id="onrecord-algorithm"><code>onRecord()</code> algorithm</h2>
+<p><code>ParsleyFrontier</code> owns the causal state and the Lamport operations: <code>completeness()</code> (the delivery
+predicate's input), <code>deliver(coordinate)</code> (advance the frontier and notify), and
+<code>seedIfFirstSeen(coordinate)</code> (establish the baseline for a newly observed coordinate) — plus, when
+topology-epoch coordination is configured, the per-coordinate epoch floor (see
+<a href="../topology-epochs/">topology epochs</a>).</p>
+<p><code>channelStore</code> backs the node's outbound stamp. <code>completeness()</code> is this node's own frontier
+max-merged with every input channel's advertised dependencies (<code>ParsleyClock.merge</code>): each channel
+contributes the dependencies it has advertised, so transitive ancestry — a coordinate an upstream
+channel delivered that this node may not itself consume — flows through to downstream receivers,
+whose own gates verify it against their own delivery history. The delivery gate here is
+<code>frontier.dominates(effectiveDependencies(deps))</code> — this node's own contiguous frontier, exclusively;
+an advertised claim never substitutes for local delivery of the cause. The same <code>completeness()</code>
+stamps forwarded records and protocol watermarks. See the
+<a href="../causal-consistency/">causal consistency model</a> for the soundness argument and the topology
+contract it implies.</p>
+<h2 id="receive-algorithm"><code>receive()</code> algorithm</h2>
 <ol>
 <li>The dependency clock is decoded once at the boundary (<code>ParsleyMessage.from</code>): a missing header
-   (logged at <code>DEBUG</code>) becomes an empty, vacuously satisfied clock. An undecodable header is handled
-   by <code>ParsleyProcessor.onUnresolvableClock()</code> before the engine is called: under the default <code>fail</code>
-   policy the task is failed fast; under <code>continue</code> the clock is replaced with <code>ParsleyClock.empty()</code>
-   (logged at <code>WARN</code>) and the engine receives it as vacuously satisfied. Either way, the engine
-   always receives a typed <code>ParsleyClock</code>.</li>
-<li>Update the source channel's clock with the record's dependencies, at receipt time, before the gate. This is how a channel advertises its progress: a record's carried frontier is its branch's proven completeness the moment it arrives, regardless of whether this node has delivered the record yet. Recording it here lets <code>completeness()</code> advance as soon as a channel advertises a coordinate, and prevents a mutual deadlock between two sibling records that each depend on a shared ancestor. Whether this advanced the channel is remembered for step 6.</li>
-<li>Strip the self-cycle from the dependencies. A <code>(topicId, partition)</code> entry whose required offset equals the record's own source offset on that coordinate is removed (<code>ParsleyClock.without</code>), so a record never blocks on its own position. This is the <em>only</em> dependency preprocessing — there is no in-scope filtering.</li>
-<li>Apply the gate: <code>completeness().dominates(deps)</code>. <code>completeness()</code> is the per-coordinate minimum across every input channel, so a coordinate is satisfied only when every channel has confirmed it. If it passes: advance frontier, add the record to output, call <code>propagate()</code>.</li>
-<li>Otherwise: add record to buffer (assigned an insertion sequence and a <code>bufferedAt</code> timestamp), index its unsatisfied coordinates (those <code>completeness()</code> does not yet cover) in the candidate index. If buffer depth &gt;= <code>sizeLimit</code>, call <code>evictOverflow()</code>.</li>
-<li>If the receipt-time channel update in step 2 advanced this channel <em>and</em> the node has more than one input channel, run <code>drainSatisfied()</code> — a full-buffer re-scan — to release any held record the lifted completeness now permits. This release is not reachable through the candidate index that drives <code>propagate()</code> (which keys on frontier advances). A single-channel node's completeness is its own frontier, fully covered by <code>propagate</code>, so it skips this.</li>
+   becomes an empty, vacuously satisfied clock. An undecodable header is handled by
+   <code>ParsleyProcessor.onUnresolvableClock()</code> before the engine is called — the task fails fast
+   (<code>ParsleyClockResolutionException</code>); a record is never forwarded on an unknown premise. The
+   engine always receives a typed <code>ParsleyClock</code>.</li>
+<li>Seed the frontier if this is the coordinate's first sighting (<code>seedIfFirstSeen</code> — consumption need
+   not start at offset 0), cascading any releases the seed enables.</li>
+<li>Check reachability: if any of the record's declared coordinates (after preprocessing) names a topic-partition <code>inScope</code> rejects, the engine cannot ever confirm it no matter how long it waits. Fail-closed rather than vacuously satisfied — throw <code>ParsleyUnreachableDependencyException</code>, never buffer, never treat as satisfied.</li>
+<li>Compute <code>effectiveDependencies</code>: strip the self-cycle (a <code>(topicId, partition)</code> entry whose required offset equals the record's own source offset — <code>ParsleyClock.without</code>), strip any coordinate this node itself produces (<code>ownSinkTopics</code>), and strip anything below the current topology-epoch floor (<code>ParsleyClock.strippedBelow</code>; a no-op when epoch coordination is off). This is the only dependency preprocessing.</li>
+<li>Apply the gate: <code>frontier.dominates(effectiveDependencies)</code> — this node's own contiguous delivered frontier must cover every depended coordinate; a claim advertised on another channel never substitutes for local delivery. If it passes: advance the frontier, fold the record's dependencies (own-sink coordinates stripped) into its channel's clock — a stamp-only update feeding <code>completeness()</code>, made only at genuine gated delivery so the stamp never carries a claim from a record that was not actually forwarded — add the record to output, and call <code>propagate()</code>.</li>
+<li>Otherwise: add the record to the buffer (assigned an insertion sequence and a <code>bufferedAt</code> timestamp, no size or time limit) and index its coordinates unsatisfied by the frontier in the candidate index.</li>
+<li>If this delivery advanced the frontier past a pending epoch-transition boundary, <code>frontier.tryAdvanceEpoch()</code> closes the window and drains anything the raised floor releases. See <a href="../topology-epochs/">topology epochs</a>.</li>
 </ol>
-<p>A missing header, or an undecodable one under <code>continue</code> policy, becomes an empty dependency clock,
-which <code>completeness().dominates</code> satisfies trivially (step 4). It never reaches the buffer. The
-frontier still advances on these records, so buffered records waiting on that coordinate are not
-permanently stalled.</p>
+<p>A missing header becomes an empty dependency clock, which the gate satisfies trivially (step 5). It
+never reaches the buffer. The frontier still advances on these records, so buffered records waiting
+on that coordinate are not permanently stalled.</p>
 <h2 id="propagation-cascade-propagate">Propagation cascade (<code>propagate</code>)</h2>
 <p>When the frontier advances on coordinate <code>C</code>, <code>propagate</code> uses a worklist algorithm to cascade
 releases without scanning the full buffer. This is Lamport's transitivity rule in code: if A → B
 and A has been delivered, B can now be delivered; and if B → C, C follows in the same pass.</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>toScan = {C}
 <a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a>while toScan not empty:
-<a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a>  for each coordinate in toScan:
-<a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a>    candidates = candidateIndex.findCandidates(topicId, partition, newOffset)
-<a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a>    for each candidate:
-<a id="__codelineno-1-6" name="__codelineno-1-6" href="#__codelineno-1-6"></a>      entry = buffer.get(candidate.recordId)
-<a id="__codelineno-1-7" name="__codelineno-1-7" href="#__codelineno-1-7"></a>      if entry == null: prune stale index entry, skip
-<a id="__codelineno-1-8" name="__codelineno-1-8" href="#__codelineno-1-8"></a>      if frontier.isDeliverable(entry.dependencies.without(self)):
-<a id="__codelineno-1-9" name="__codelineno-1-9" href="#__codelineno-1-9"></a>        releasable.add(entry)
-<a id="__codelineno-1-10" name="__codelineno-1-10" href="#__codelineno-1-10"></a>  toScan = {}
-<a id="__codelineno-1-11" name="__codelineno-1-11" href="#__codelineno-1-11"></a>  for each releasable entry:
-<a id="__codelineno-1-12" name="__codelineno-1-12" href="#__codelineno-1-12"></a>    buffer.remove(sequence)
-<a id="__codelineno-1-13" name="__codelineno-1-13" href="#__codelineno-1-13"></a>    frontier.deliver(entry&#39;s source coordinate)
-<a id="__codelineno-1-14" name="__codelineno-1-14" href="#__codelineno-1-14"></a>    toScan.add(entry&#39;s source coordinate)
-<a id="__codelineno-1-15" name="__codelineno-1-15" href="#__codelineno-1-15"></a>    output.add(entry.record)
+<a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a>  nextScan = {}
+<a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a>  for each coordinate in toScan:
+<a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a>    candidates = candidateIndex.findCandidates(topicId, partition, frontierOffset)
+<a id="__codelineno-1-6" name="__codelineno-1-6" href="#__codelineno-1-6"></a>    for each candidate:
+<a id="__codelineno-1-7" name="__codelineno-1-7" href="#__codelineno-1-7"></a>      entry = buffer.get(candidate.recordId)
+<a id="__codelineno-1-8" name="__codelineno-1-8" href="#__codelineno-1-8"></a>      if entry == null: prune stale index entry, skip
+<a id="__codelineno-1-9" name="__codelineno-1-9" href="#__codelineno-1-9"></a>      if isUnreachableDependency(entry): throw ParsleyUnreachableDependencyException
+<a id="__codelineno-1-10" name="__codelineno-1-10" href="#__codelineno-1-10"></a>      if frontier.dominates(effectiveDependencies(entry.dependencies)):
+<a id="__codelineno-1-11" name="__codelineno-1-11" href="#__codelineno-1-11"></a>        frontier.deliver(entry&#39;s source coordinate)     # committed the moment it is decided,
+<a id="__codelineno-1-12" name="__codelineno-1-12" href="#__codelineno-1-12"></a>        channelStore.update(entry&#39;s channel, deps&#39;)     #   never staged for a later batch step
+<a id="__codelineno-1-13" name="__codelineno-1-13" href="#__codelineno-1-13"></a>        buffer.remove(sequence)
+<a id="__codelineno-1-14" name="__codelineno-1-14" href="#__codelineno-1-14"></a>        nextScan.add(entry&#39;s source coordinate)
+<a id="__codelineno-1-15" name="__codelineno-1-15" href="#__codelineno-1-15"></a>        output.add(entry.record)
+<a id="__codelineno-1-16" name="__codelineno-1-16" href="#__codelineno-1-16"></a>  toScan = nextScan
 </code></pre></div>
 <p>Each iteration finds records whose dependencies are now met after the most recent frontier advances. Those releases can in turn advance the frontier on further coordinates, triggering additional releases. The loop terminates when no new records become satisfiable.</p>
-<p>Wait-index entries for records that have already been released or evicted are discovered and pruned lazily during this scan rather than eagerly on removal.</p>
-<h2 id="eviction">Eviction</h2>
-<p>Both eviction paths select a subset of <code>buffer.entries()</code> (oldest-first by insertion sequence,
-equivalently by <code>bufferedAt</code>) and hand it to a shared <code>evictEntries()</code> helper. For each selected entry:</p>
-<ol>
-<li>Log the eviction at <code>WARN</code> with the causal gap (<code>required.missing(frontier)</code>) and call
-   <code>metrics.recordViolation()</code>.</li>
-<li>Remove from buffer and candidate index.</li>
-<li>Advance the frontier at the entry's source coordinate and add the record to the forward list.
-   Eviction never drops or diverts a record. It delivers the record out of causal order instead.</li>
-</ol>
-<h3 id="evictoverflow-size-limit"><code>evictOverflow()</code> — size limit</h3>
-<p>Called inline from <code>onRecord()</code> once buffer depth reaches <code>sizeLimit</code>. It evicts only the oldest
-<code>buffer.size() - sizeLimit + 1</code> entries, which is just enough to bring the buffer back under the
-limit, and leaves younger records held. In the common case, where depth is checked after every single
-admission, this evicts exactly one record per overflow and slides the window forward.</p>
-<p>A second call site exists in <code>ParsleyProcessor.init()</code>, to enforce the limit once against a buffer
-restored from a changelog after a restart. This matters after a reconfiguration that lowers
-<code>ofSize(...)</code> before restarting, because the restored buffer can legitimately hold more entries than
-the new limit allows, and the inline check above only runs on the next admission, which may never
-come. This cannot happen synchronously inside <code>init()</code>. Kafka Streams does not finish wiring the
-task's <code>RecordCollector</code> until every processor in the topology returns from <code>init()</code>, so forwarding a
-<code>FORWARD_UNSAFE</code> eviction at that point throws an NPE. Instead, <code>init()</code> schedules a self-cancelling,
-one-shot <code>WALL_CLOCK_TIME</code> punctuation that calls <code>evictOverflow()</code> on its first firing and cancels
-itself immediately after. The formula does not depend on <em>when</em> it is called, so the same method
-serves both call sites without change. If a new record is admitted via the inline path before the
-punctuation fires, that path's own overflow check already restores the invariant, and the
-punctuation's subsequent call is a no-op.</p>
-<h3 id="evictexpired-duration-limit"><code>evictExpired()</code> — duration limit</h3>
-<p>Called by the processor's wall-clock punctuator at the configured interval. Walks <code>buffer.entries()</code>
-from the oldest, evicting every entry whose <code>bufferedAt</code> is older than <code>now - duration</code>, and stops
-at the first entry that hasn't aged out yet (everything after it is younger still). A no-op when no
-duration limit is configured.</p>
-<p>The causal gap logged for each eviction (<code>required.missing(frontier)</code>) encodes the shortfall,
-not the absolute required offset: each coordinate's value in the gap clock is <code>required - observed</code>
-at eviction time.</p>
+<p>Stale index entries for records that have already been released are discovered and pruned lazily during this scan rather than eagerly on removal.</p>
+<h2 id="fail-closed-failure-model">Fail-closed failure model</h2>
+<p>There is no diversion sink and no partial-forwarding fallback: any record this engine can prove is
+unsatisfiable unconditionally fails the owning Streams task, which Kafka Streams then retries or an
+operator recovers from — never forwarded on an unproven causal premise, never silently discarded.
+Three distinct failures, each with its own exception:</p>
+<ul>
+<li><strong>An unreachable dependency</strong> (<code>ParsleyUnreachableDependencyException</code>) — a record's declared
+  dependencies name a coordinate this node has no input channel for at all (an undeclared topic, or a
+  partition a different task instance owns). The engine can prove it can never check the coordinate,
+  never that the coordinate is genuinely irrelevant, so it is fail-closed rather than vacuous —
+  checked in <code>receive()</code> before buffering and again in <code>propagate()</code>/<code>drainSatisfied()</code> for a record
+  buffered by an older binary version that predates the check.</li>
+<li><strong>A poisoned buffered record</strong> (<code>ParsleyBufferDeserializationException</code>) — a held record's key or
+  value can no longer be deserialised on the forward path (typically an incompatible Schema Registry
+  change while the record was buffered). The engine deserialises only once a record is proven
+  deliverable, so a held, undecodable record that is <em>not</em> yet releasable never surfaces this — it
+  only fires on an actual forward attempt. The record remains in the buffer changelog for recovery
+  once the schema is fixed or rolled back.</li>
+<li><strong>An unresolvable dependency header</strong> (<code>ParsleyClockResolutionException</code>) — handled by
+  <code>ParsleyProcessor</code> before the engine is ever called (see step 1 of the <code>receive()</code> algorithm above);
+  unconditionally fails the task, never forwarded on an unknown premise.</li>
+</ul>
+<p>All three are logged with metadata only — coordinate, dependency clock, header keys, payload
+lengths — never the payload bytes themselves.</p>
 <h2 id="frontier-persistence-ordering">Frontier persistence ordering</h2>
 <p><code>ParsleyFrontier</code> self-persists its single <code>"f"</code> value inside <code>deliver()</code> (and <code>seedIfFirstSeen()</code>), before control returns to the engine and the record is added to the output list. This ordering guarantees that the changelog write for the frontier advance is durable before the record reaches the user processor. There is no separate callback: the frontier owns its persistence.</p>
 <h2 id="buffer-store">Buffer store</h2>
 <p><code>ParsleyBufferStore&lt;K,V&gt;</code> is an interface with two implementations:</p>
 <ul>
-<li><strong><code>RocksBufferStore</code></strong> (production): wraps a <code>KeyValueStore&lt;Long, byte[]&gt;</code> backed by RocksDB and changelog-replicated. On construction, it makes a single pass over all existing keys to seed the monotonic <code>nextSequence</code> counter and the <code>size</code> field. No separate rehydration step is needed: the store is the buffer.</li>
+<li><strong><code>StoreBackedBufferStore</code></strong> (production): wraps a <code>KeyValueStore&lt;Long, byte[]&gt;</code> backed by RocksDB and changelog-replicated. On construction, it makes a single pass over all existing keys to seed the monotonic <code>nextSequence</code> counter and the <code>size</code> field. No separate rehydration step is needed: the store is the buffer.</li>
 <li><strong><code>MockBufferStore</code></strong> (tests): wraps a <code>TreeMap&lt;Long, ParsleyMessage&lt;K,V&gt;&gt;</code> with equivalent semantics.</li>
 </ul>
 <h2 id="candidate-index">Candidate index</h2>
-<p><code>ParsleyCandidateIndex</code> is backed by <code>RocksCandidateIndex</code>, which wraps a <code>KeyValueStore&lt;byte[], byte[]&gt;</code>. The 36-byte composite key (topicId + partition + requiredOffset + recordId) sorts lexicographically in RocksDB, enabling a bounded range scan to find all records waiting on a given coordinate up to the new frontier offset.</p>
+<p><code>ParsleyCandidateIndex</code> is backed by <code>StoreBackedCandidateIndex</code>, which wraps a <code>KeyValueStore&lt;byte[], byte[]&gt;</code>. The 36-byte composite key (topicId + partition + requiredOffset + recordId) sorts lexicographically in RocksDB, enabling a bounded range scan to find all records waiting on a given coordinate up to the new frontier offset.</p>
 <p>The store value is always an empty byte array (<code>PRESENT</code> marker). The key encodes everything needed to find and validate a candidate.</p>
 <p>On engine construction, if the buffer is non-empty (restart recovery), the engine makes a single pass over all buffer entries to populate the candidate index. This rebuilds the secondary index from the authoritative buffer state.</p>
 
@@ -1555,7 +1472,7 @@ at eviction time.</p>
       <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.top", "navigation.footer", "search.highlight", "content.code.copy"], "search": "../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": {"default": "latest", "provider": "mike"}}</script>
     
     
-      <script src="../../assets/javascripts/bundle.79ae519e.min.js"></script>
+      <script src="../../assets/javascripts/bundle.d7400e89.min.js"></script>
       
     
   </body>

@@ -21,7 +21,7 @@
       
       
       <link rel="icon" href="../../assets/images/favicon.png">
-      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.6">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.7">
     
     
       
@@ -29,7 +29,7 @@
       
     
     
-      <link rel="stylesheet" href="../../assets/stylesheets/main.484c7ddc.min.css">
+      <link rel="stylesheet" href="../../assets/stylesheets/main.ec1eaa64.min.css">
       
         
         <link rel="stylesheet" href="../../assets/stylesheets/palette.ab4e12ef.min.css">
@@ -428,34 +428,6 @@
     
   
     Configuration
-  
-
-    
-  </span>
-  
-  
-
-      </a>
-    </li>
-  
-
-              
-            
-              
-                
-  
-  
-  
-  
-    <li class="md-nav__item">
-      <a href="../../audit-logging/" class="md-nav__link">
-        
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    Audit logging
   
 
     
@@ -1229,7 +1201,7 @@ encoding.</p>
 <h2 id="_parsley_watermark-header-protocol-watermark"><code>_parsley_watermark</code> header (protocol watermark)</h2>
 <p>A protocol watermark is a record with a null value, keyed with the triggering record's key, carrying two headers: <code>_parsley_watermark</code> (an empty-byte marker) and <code>parsley-causal-dependencies</code> (the emitting node's completeness frontier, encoded exactly as above). A node emits one in place of a business record when a delivered input produced no downstream output, so completeness still propagates through non-emitting layers. The key is reused so the watermark routes to the same partition the record's business output would; consumers identify it by the header, never by its key. Consumers identify a watermark by the presence of the <code>_parsley_watermark</code> header (<code>CausalDependencies.isWatermark</code>); a non-Parsley consumer sees a tombstone-shaped record and should skip it.</p>
 <h2 id="buffer-record-parsleyserializer-v3">Buffer record (<code>ParsleySerializer</code> v3)</h2>
-<p>The <code>{ns}-buffer</code> state store value has two layers: <code>RocksBufferStore</code> prepends the buffer-admission
+<p>The <code>{ns}-buffer</code> state store value has two layers: <code>StoreBackedBufferStore</code> prepends the buffer-admission
 time to the <code>ParsleySerializer</code>-encoded record.</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>[bufferedAt    :8]   wall-clock time (epoch millis) the record was admitted to the buffer
 <a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a>[ParsleySerializer v3 payload, below]
@@ -1259,10 +1231,10 @@ which is distinct from the outer <code>bufferedAt</code> and written independent
 <a id="__codelineno-2-18" name="__codelineno-2-18" href="#__codelineno-2-18"></a>[value-len     :4]   -1 if value is null
 <a id="__codelineno-2-19" name="__codelineno-2-19" href="#__codelineno-2-19"></a>[value         :value-len]
 </code></pre></div>
-<p><code>ParsleyEngine</code>'s startup index rebuild and the duration-based eviction scan decode only the outer
-<code>bufferedAt</code> and the <code>deps</code> field, through <code>ParsleySerializer.deserializeDependencies</code>, and never the
-key or value bytes. A record whose user serde can no longer decode it therefore does not block either
-path.</p>
+<p><code>ParsleyEngine</code>'s startup index rebuild decodes only the outer <code>bufferedAt</code> and the <code>deps</code> field,
+through <code>ParsleySerializer.deserializeIndexMetadata</code>, and never the key or value bytes. A record whose
+user serde can no longer decode it therefore does not block restore or the drain scan — it only fails
+once actually forwarded, via <code>ParsleySerializer.deserialize</code>.</p>
 <h2 id="candidate-index-key">Candidate-index key</h2>
 <p>The <code>{ns}-candidate-index</code> store maps coordinate+offset+recordId to an empty presence marker. The 36-byte key uses big-endian encoding throughout so that RocksDB lexicographic ordering produces a range scan for all records waiting on a given coordinate up to a given offset.</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>[topicId MSB    :8]
@@ -1272,7 +1244,8 @@ path.</p>
 <a id="__codelineno-3-5" name="__codelineno-3-5" href="#__codelineno-3-5"></a>[recordId       :8]   buffer insertion sequence
 </code></pre></div>
 <h2 id="state-store-names-and-serdes">State store names and serdes</h2>
-<p>The namespace is the <code>name</code> passed to <code>ParsleyProcessors.builder(...).addBufferStore(name, limit)</code>.</p>
+<p>The namespace is the stage name <code>CausalTopology#assemble</code> derives (or an explicit name from
+<code>CausalStream#process(name, supplier)</code>), used internally as <code>ParsleyProcessorSupplier.builder(...).addBufferStore(name)</code>.</p>
 <table>
 <thead>
 <tr>
@@ -1319,14 +1292,15 @@ change; the changelog dedups repeated puts by key per commit):</p>
 </code></pre></div>
 <p>The frontier clock is the node's contiguous delivered frontier. Each channel clock is the dependencies
 advertised on that input channel <code>(topicId, partition)</code>, max-merged over the records and watermarks
-received on it. <code>completeness()</code> — the per-coordinate minimum across all input channels (each channel's
-advertised dependencies plus its own contiguous delivered position) — is computed from this value in
-memory. The forwarded-offset index stays its own keyed store (<code>{ns}-forwarded-index</code>): it is growable
-and order-sensitive, so folding it into <code>"f"</code> would increase Rocks I/O.</p>
+received on it. <code>completeness()</code> — the max-merge of the frontier clock and every channel's advertised
+clock, so a single genuine witness to a coordinate is enough, with no requirement that every channel
+independently corroborate it — is computed from this value in memory. The forwarded-offset index stays
+its own keyed store (<code>{ns}-forwarded-index</code>): it is growable and order-sensitive, so folding it into
+<code>"f"</code> would increase Rocks I/O.</p>
 <h2 id="topic-uuids">Topic UUIDs</h2>
 <p>Topic UUIDs are not derived or guessed. They are resolved from the broker through <code>AdminClient</code>. The
 processor resolves them at <code>init()</code> from the task's <code>appConfigs()</code> for every topic registered as a
-<code>ParsleyBuffer</code> on <code>ParsleyProcessors.builder(...)</code>. If a registered topic does not exist on the
+<code>ParsleySource</code> on <code>ParsleyProcessorSupplier.builder(...)</code>. If a registered topic does not exist on the
 broker, resolution fails fast with <code>IllegalStateException</code> rather than falling back to a guess.</p>
 <p>The real UUID Kafka assigned to the topic is what's used. A topic deleted and recreated with the
 same name gets a new UUID, so records stamped against the old incarnation correctly fail to satisfy
@@ -1435,7 +1409,7 @@ consistently wherever that topic's identity is referenced.</p>
       <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.top", "navigation.footer", "search.highlight", "content.code.copy"], "search": "../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": {"default": "latest", "provider": "mike"}}</script>
     
     
-      <script src="../../assets/javascripts/bundle.79ae519e.min.js"></script>
+      <script src="../../assets/javascripts/bundle.d7400e89.min.js"></script>
       
     
   </body>

@@ -11,7 +11,7 @@
       
       
       
-        <link rel="prev" href="../audit-logging/">
+        <link rel="prev" href="../configuration/">
       
       
         <link rel="next" href="../performance/">
@@ -21,7 +21,7 @@
       
       
       <link rel="icon" href="../assets/images/favicon.png">
-      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.6">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.7">
     
     
       
@@ -29,7 +29,7 @@
       
     
     
-      <link rel="stylesheet" href="../assets/stylesheets/main.484c7ddc.min.css">
+      <link rel="stylesheet" href="../assets/stylesheets/main.ec1eaa64.min.css">
       
         
         <link rel="stylesheet" href="../assets/stylesheets/palette.ab4e12ef.min.css">
@@ -447,34 +447,6 @@
                 
   
   
-  
-  
-    <li class="md-nav__item">
-      <a href="../audit-logging/" class="md-nav__link">
-        
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    Audit logging
-  
-
-    
-  </span>
-  
-  
-
-      </a>
-    </li>
-  
-
-              
-            
-              
-                
-  
-  
     
   
   
@@ -550,10 +522,10 @@
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
-  <a href="#phase-1-introduce-parsley-processors-and-tolerate-unstamped-producers" class="md-nav__link">
+  <a href="#phase-1-introduce-a-causal-topology-and-tolerate-unstamped-producers" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Phase 1: introduce Parsley processors and tolerate unstamped producers
+        Phase 1: introduce a causal topology and tolerate unstamped producers
       
     </span>
   </a>
@@ -1096,10 +1068,10 @@
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
-  <a href="#phase-1-introduce-parsley-processors-and-tolerate-unstamped-producers" class="md-nav__link">
+  <a href="#phase-1-introduce-a-causal-topology-and-tolerate-unstamped-producers" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Phase 1: introduce Parsley processors and tolerate unstamped producers
+        Phase 1: introduce a causal topology and tolerate unstamped producers
       
     </span>
   </a>
@@ -1168,19 +1140,20 @@
 <p>Adopting Parsley in a cluster where some producers do not yet stamp the
 <code>parsley-causal-dependencies</code> header requires no special configuration. A record with a missing
 header is treated as having an empty, vacuously satisfied dependency set and is forwarded immediately.
-Because such a record is never buffered, the eviction policy never applies to it, so there is no
-migration setting to choose and nothing to tighten later.</p>
+Because such a record is never buffered, there is no migration setting to choose and nothing to
+tighten later.</p>
 <h2 id="recommended-migration-strategy">Recommended migration strategy</h2>
-<h3 id="phase-1-introduce-parsley-processors-and-tolerate-unstamped-producers">Phase 1: introduce Parsley processors and tolerate unstamped producers</h3>
-<p>Turn on <code>ParsleyProcessors</code> against the full topic set immediately. Records from producers that do not
-yet stamp the <code>parsley-causal-dependencies</code> header pass straight through, unbuffered, because their
-empty dependency set is vacuously satisfied. Records that already arrive stamped are held until their
-dependencies are satisfied. The two kinds of producer coexist on the same topics without any
-configuration distinguishing them.</p>
+<h3 id="phase-1-introduce-a-causal-topology-and-tolerate-unstamped-producers">Phase 1: introduce a causal topology and tolerate unstamped producers</h3>
+<p>Build the topology with <code>CausalStreamsBuilder</code> against the full topic set immediately. Records from
+producers that do not yet stamp the <code>parsley-causal-dependencies</code> header pass straight through,
+unbuffered, because their empty dependency set is vacuously satisfied. Records that already arrive
+stamped are held until their dependencies are satisfied. The two kinds of producer coexist on the same
+topics without any configuration distinguishing them.</p>
 <h3 id="phase-2-migrate-producers-one-service-at-a-time">Phase 2: migrate producers one service at a time</h3>
-<p>Have each producer stamp its records with <code>CausalDependencies.stamp</code>, one service at a time. As a
-service migrates, its records start arriving with a valid header and are held until their
-dependencies are satisfied. The remaining unmigrated services continue to pass through unbuffered.</p>
+<p>Have each producer stamp its records — accumulate a <code>CausalDependencies</code> with <code>using</code>/<code>observe</code> (or
+<code>builder</code>/<code>require</code>) and attach it with <code>.stamp(record)</code> — one service at a time. As a service
+migrates, its records start arriving with a valid header and are held until their dependencies are
+satisfied. The remaining unmigrated services continue to pass through unbuffered.</p>
 <p>To track migration progress, inspect the <code>parsley-causal-dependencies</code> header directly on records
 from a given topic, for example with a side consumer or a temporary log. A topic with no producers
 left stamping it has fully adopted the guarantee.</p>
@@ -1193,11 +1166,10 @@ records.</p>
 <li>A record with no header still feeds the frontier exactly like any other delivery. Records buffered
   downstream of a still-unmigrated producer therefore catch up once that coordinate's gap closes, and
   they are not permanently stalled.</li>
-<li>A present but undecodable header indicates a genuine bug rather than a migration artefact. Under
-  the default <code>fail</code> policy it logs at <code>ERROR</code> and fails the task. Under <code>continue</code> it logs at
-  <code>WARN</code> and forwards the record with empty dependencies. Alert on it separately from missing-header
-  records, because it indicates corruption rather than an unmigrated producer. See
-  <a href="../configuration/#unresolvable-clock-fail-fast-or-forward-empty">Configuration: unresolvable clock</a>.</li>
+<li>A present but undecodable header indicates a genuine bug rather than a migration artefact — it
+  unconditionally fails the task at <code>ERROR</code>, never forwards the record on an unknown premise. Alert on
+  it separately from missing-header records, because it indicates corruption rather than an unmigrated
+  producer. See <a href="../troubleshooting/">Troubleshooting</a>.</li>
 </ul>
 
 
@@ -1234,7 +1206,7 @@ records.</p>
       <nav class="md-footer__inner md-grid" aria-label="Footer" >
         
           
-          <a href="../audit-logging/" class="md-footer__link md-footer__link--prev" aria-label="Previous: Audit logging">
+          <a href="../configuration/" class="md-footer__link md-footer__link--prev" aria-label="Previous: Configuration">
             <div class="md-footer__button md-icon">
               
               <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
@@ -1244,7 +1216,7 @@ records.</p>
                 Previous
               </span>
               <div class="md-ellipsis">
-                Audit logging
+                Configuration
               </div>
             </div>
           </a>
@@ -1297,7 +1269,7 @@ records.</p>
       <script id="__config" type="application/json">{"annotate": null, "base": "..", "features": ["navigation.top", "navigation.footer", "search.highlight", "content.code.copy"], "search": "../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": {"default": "latest", "provider": "mike"}}</script>
     
     
-      <script src="../assets/javascripts/bundle.79ae519e.min.js"></script>
+      <script src="../assets/javascripts/bundle.d7400e89.min.js"></script>
       
     
   </body>

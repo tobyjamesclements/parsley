@@ -21,7 +21,7 @@
       
       
       <link rel="icon" href="../../assets/images/favicon.png">
-      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.6">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.7">
     
     
       
@@ -29,7 +29,7 @@
       
     
     
-      <link rel="stylesheet" href="../../assets/stylesheets/main.484c7ddc.min.css">
+      <link rel="stylesheet" href="../../assets/stylesheets/main.ec1eaa64.min.css">
       
         
         <link rel="stylesheet" href="../../assets/stylesheets/palette.ab4e12ef.min.css">
@@ -428,34 +428,6 @@
     
   
     Configuration
-  
-
-    
-  </span>
-  
-  
-
-      </a>
-    </li>
-  
-
-              
-            
-              
-                
-  
-  
-  
-  
-    <li class="md-nav__item">
-      <a href="../../audit-logging/" class="md-nav__link">
-        
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    Audit logging
   
 
     
@@ -1232,10 +1204,12 @@ since delivered.</p>
 <strong>epoch</strong> defines a floor per <code>(topicId, partition)</code> coordinate. History below the floor is pre-epoch:
 it feeds state but does not participate in causal time. A node deployed into a running topology adopts
 the current floor, replays its inputs from the start with everything below the floor stripped, and so
-never pins the shared frontier down. The whole mechanism is opt-in through
-<a href="../../streams/#evolving-a-running-topology"><code>ParsleyCoordination</code></a>; without it a topology runs in
+never pins the shared frontier down. The whole mechanism is opt-in through setting
+<code>parsley.coordination.epoch-events-topic</code>, described from the user's side in
+<a href="../../streams/#evolving-a-running-topology">Evolving a running topology</a>; without it a topology runs in
 <strong>epoch 0</strong>, whose floor is 0 everywhere, and behaves exactly as a topology with no epoch machinery at
-all.</p>
+all. Internally, <code>CausalStreams</code> owns a <code>ParsleyCoordination</code> handle over the configured topic — it is
+not user-constructed.</p>
 <h2 id="the-floored-clock">The floored clock</h2>
 <p>Each epoch <code>k</code> defines a floor <code>n_k</code> per coordinate; epoch 0 is floor 0 everywhere. There is one rule
 applied every epoch: a dependency <strong>below the floor is ignored</strong> (it cannot have happened in this
@@ -1291,7 +1265,11 @@ stay distinct):</p>
 </table>
 <p>A round's lifecycle is defined by log position, not by an id in the events. The first
 <code>SnapshotRequested</code> after the last <code>EpochCommitted</code> opens a round and elects its author as owner. Every
-running member publishes its current completeness. Once all of them have published, the round is
+running member publishes its completeness <em>as of its last committed Kafka transaction</em> — never the
+live in-memory clock, which may reflect an uncommitted transaction that a crash would roll back while
+the side-channel publication would not (<code>ParsleyCommittedCompleteness</code> observes commit cycles through
+a registered store's flush, two-slot so a flush-then-abort can never leak an optimistic value; the
+floor is merely up to a commit interval more conservative). Once all of them have published, the round is
 complete and the new floor is the per-coordinate <code>mergeMin</code> of the published frontiers — the minimum,
 over the members that observed each coordinate, of where they had reached. Applying the resulting
 <code>EpochCommitted</code> advances the settled epoch, promotes pending joiners to running members, and clears
@@ -1308,14 +1286,15 @@ not an instant.</p>
 <p><code>ParsleyEpochState</code> sits above <code>ParsleyFrontier</code> and holds the settled floor plus, while a transition
 is open, the pending next floor and the set of channels on which its opening marker has been seen. The
 window opens on the first epoch marker and becomes engaged once that marker has arrived on every input
-channel (a Chandy-Lamport cut across the node's inputs). It closes once the node's completeness
-dominates the pending floor, at which point the pending floor is promoted to settled. The effective
+channel (a Chandy-Lamport cut across the node's inputs). It closes once the node's own contiguous
+frontier dominates the pending floor — everything below the new floor has been delivered <em>here</em>, so
+the old epoch is provably drained locally; a channel's advertised claim that a peer delivered it is
+never proof — at which point the pending floor is promoted to settled. The effective
 floor stays at the previous epoch's value for the whole window, so a record written under the old epoch
 is still gated correctly while the new floor is being adopted. This state lives in the frontier's
 persisted blob, so a restart in the middle of a transition resumes it.</p>
-<p>The transition is invisible in the data plane. A node's outgoing stamp is its delivered frontier, which
-equals its completeness, carried unfloored; only the epoch-events log ever sees the received frontiers
-and the decided floor.</p>
+<p>The transition is invisible in the data plane. A node's outgoing stamp is its completeness clock,
+carried unfloored; only the epoch-events log ever sees the received frontiers and the decided floor.</p>
 <h2 id="in-band-markers">In-band markers</h2>
 <p>The floor reaches each coordinate in the data plane, not through the log. Two control records ride the
 topics alongside business records, each identified by a header: an <strong>epoch snapshot</strong> marker (the
@@ -1325,9 +1304,11 @@ it to its children on the same key, so it stays on its partition lane end to end
 covered because every upstream task relays. A marker is never delivered to the user delegate.</p>
 <p>A node consuming a marker also advances: the relayed marker carries the node's own completeness, so one
 record both drives the transition and advances the downstream channel clock. This reuses the machinery
-that already propagates watermarks edge by edge through the DAG. Because the causal contract forbids a
-node from consuming both a topic and a topic derived from it, the topology is a DAG, and marker fan-in
-at a join reuses the same "seen on every channel" rule as the overlapping transition.</p>
+that already propagates watermarks edge by edge through the topology — relayed further only when the
+receiving channel's clock genuinely advanced, never unconditionally. That gate is what keeps a topology
+with a genuine cycle (a stage that also consumes something derived from its own output) from
+ping-ponging the same marker forever: once a node has already folded a marker's carried clock and it
+teaches the node nothing new, relay stops there instead of looping.</p>
 <h2 id="the-source-topic-registry">The source-topic registry</h2>
 <p>External producers — plain Kafka clients, or any system outside the topology — emit no epoch markers.
 A stage consuming such a topic will therefore never receive a marker on that channel in-band, so it must
@@ -1349,8 +1330,9 @@ members join.</p>
 source topic names. A hand-written declaration could silently disagree with the real topology — a genuine
 intermediate topic marked external, or an external topic left undeclared — and either mistake breaks the
 wave for that coordinate. Deriving the registry from what every node actually consumes and produces
-removes that class of misconfiguration. On the high-level API sinks are declared automatically by
-<code>addSink(...)</code>; on the low-level decorator they are declared with <code>ParsleyProcessors.Builder.sinkTopics(...)</code>.</p>
+removes that class of misconfiguration. Sink topics are declared automatically from
+<code>CausalStreamsBuilder</code>/<code>CausalProcessedStream#to(...)</code>; internally these become <code>sinkTopics</code> passed to
+<code>ParsleyProcessorSupplier.Builder#sinkTopics</code>.</p>
 <h2 id="joining-a-running-topology">Joining a running topology</h2>
 <p>A node deployed into an already-running topology must not begin consuming until an epoch computed
 <strong>without it</strong> commits. Its sub-topology resets to earliest and would replay from offset 0, so if it
@@ -1387,22 +1369,26 @@ causes — the violation the whole design exists to prevent. A member that parti
 protects its own un-drained work automatically, because its frontier pulls the <code>mergeMin</code> floor down below
 its buffered dependencies.</p>
 <p>The cost is that a crashed member blocks the next epoch <em>transition</em> — and therefore any new join — until
-it returns. Ongoing processing in the current epoch is unaffected; only topology evolution waits. How an
-absent member is handled is <code>ParsleyMembershipStrategy</code>; the only strategy today, <code>blockUntilDrained()</code>,
-never excludes. Richer strategies — recovery, buffer hand-off, or an operator-driven forced exclusion that
-dead-letters the stranded buffer — could reintroduce a pluggable seam here, but nothing needs one yet.</p>
+it returns. Ongoing processing in the current epoch is unaffected; only topology evolution waits. Block
+until drained, never evict, is the only membership behavior — it is hardcoded, not a pluggable strategy.</p>
 <p>Because a round needs every member's publication to commit, publication is driven off the folded log, not
 off a one-shot in-band marker: any member that observes a round it has not yet published to publishes its
 current completeness. A member that restarts mid-round re-derives from the log that it owes a publication
 and re-publishes, so a lost publication cannot deadlock the round.</p>
 <h2 id="deployment">Deployment</h2>
 <p>The coordination is entirely optional and requires no separate process. A domain needs one
-single-partition epoch-events log topic, shared by every participating application, and each application
-registers a <code>ParsleyCoordination</code> over that topic with its causal builders. Without a handle a topology
-runs in epoch 0. Because a Kafka Streams application must run one topology on every instance, a
-zero-downtime rolling topology change is not a Streams capability; a genuine new stage is a redeploy. The
-epochs machinery is what lets that redeploy re-enter causal time cleanly rather than replaying obsolete
-history into the shared frontier. See
+single-partition epoch-events log topic, shared by every participating application, named via
+<code>parsley.coordination.epoch-events-topic</code> in the <code>Properties</code> each application passes to its
+<code>CausalStreams</code>. Without that key a topology runs in epoch 0. Because a Kafka Streams application must
+run one topology on every instance, a zero-downtime rolling topology change is not a Streams capability;
+a genuine new stage is a redeploy. The epochs machinery is what lets that redeploy re-enter causal time
+cleanly rather than replaying obsolete history into the shared frontier.</p>
+<p>Coordination also requires every running member's declared inputs and sinks to jointly cover the full
+coordinated domain — <code>ParsleyEpochLog#isFullMeshSatisfied()</code> is a conjunct of <code>isRoundComplete()</code>, so a
+round cannot commit while any running member has a gap. <code>parsley.coordination.domain-topics</code> plus
+auto-wired passthrough sources (see <code>CausalTopology#assemble</code>) let a stage cover a domain topic it does
+not otherwise consume or produce, without a redundant business subscription — this is what makes a
+genuinely cyclic topology coordinate correctly. See
 <a href="../../streams/#evolving-a-running-topology">Evolving a running topology</a> for the user-facing API.</p>
 
 
@@ -1502,7 +1488,7 @@ history into the shared frontier. See
       <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.top", "navigation.footer", "search.highlight", "content.code.copy"], "search": "../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": {"default": "latest", "provider": "mike"}}</script>
     
     
-      <script src="../../assets/javascripts/bundle.79ae519e.min.js"></script>
+      <script src="../../assets/javascripts/bundle.d7400e89.min.js"></script>
       
     
   </body>

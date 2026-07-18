@@ -21,7 +21,7 @@
       
       
       <link rel="icon" href="../assets/images/favicon.png">
-      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.6">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.7">
     
     
       
@@ -29,7 +29,7 @@
       
     
     
-      <link rel="stylesheet" href="../assets/stylesheets/main.484c7ddc.min.css">
+      <link rel="stylesheet" href="../assets/stylesheets/main.ec1eaa64.min.css">
       
         
         <link rel="stylesheet" href="../assets/stylesheets/palette.ab4e12ef.min.css">
@@ -532,34 +532,6 @@
     
   
     Configuration
-  
-
-    
-  </span>
-  
-  
-
-      </a>
-    </li>
-  
-
-              
-            
-              
-                
-  
-  
-  
-  
-    <li class="md-nav__item">
-      <a href="../audit-logging/" class="md-nav__link">
-        
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    Audit logging
   
 
     
@@ -1182,10 +1154,10 @@ the dependency in your <code>pom.xml</code>.</p>
 default repository, which is already in every Maven setup, covers real releases.</p>
 <p><code>parsley</code> pulls in <code>kafka-streams</code> and <code>kafka-clients</code> transitively.</p>
 <h2 id="ordering-records-causally">Ordering records causally</h2>
-<p>Parsley delivers records in causal order inside a Kafka Streams topology. Wrap your own processor
-with <code>ParsleyProcessors</code>, and it holds any record whose dependencies have not yet been observed,
-releasing the record once the frontier catches up. See <a href="../streams/">Streams integration</a> for the full
-setup.</p>
+<p>Parsley delivers records in causal order inside a Kafka Streams topology. Declare your topology with
+<code>CausalStreamsBuilder</code>, binding your own processor to a causal-decorated stage with <code>.process(...)</code>,
+and it holds any record whose dependencies have not yet been observed, releasing the record once the
+frontier catches up. See <a href="../streams/">Streams integration</a> for the full setup.</p>
 <h2 id="stamping-causal-context-onto-produced-records">Stamping causal context onto produced records</h2>
 <p>At the edges of a topology, where plain Kafka producers feed records in, a node has no Parsley engine
 maintaining a frontier for it, so it maintains one itself. A <code>CausalDependencies</code> value is that
@@ -1332,7 +1304,7 @@ responsibility.</p>
       <script id="__config" type="application/json">{"annotate": null, "base": "..", "features": ["navigation.top", "navigation.footer", "search.highlight", "content.code.copy"], "search": "../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": {"default": "latest", "provider": "mike"}}</script>
     
     
-      <script src="../assets/javascripts/bundle.79ae519e.min.js"></script>
+      <script src="../assets/javascripts/bundle.d7400e89.min.js"></script>
       
     
   </body>

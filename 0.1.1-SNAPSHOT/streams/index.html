@@ -21,7 +21,7 @@
       
       
       <link rel="icon" href="../assets/images/favicon.png">
-      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.6">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.7">
     
     
       
@@ -29,7 +29,7 @@
       
     
     
-      <link rel="stylesheet" href="../assets/stylesheets/main.484c7ddc.min.css">
+      <link rel="stylesheet" href="../assets/stylesheets/main.ec1eaa64.min.css">
       
         
         <link rel="stylesheet" href="../assets/stylesheets/palette.ab4e12ef.min.css">
@@ -454,10 +454,10 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
-  <a href="#building-a-causal-processor" class="md-nav__link">
+  <a href="#building-a-causal-topology" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Building a causal processor
+        Building a causal topology
       
     </span>
   </a>
@@ -487,10 +487,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#the-high-level-api-causalstreams" class="md-nav__link">
+  <a href="#restart-and-recovery" class="md-nav__link">
     <span class="md-ellipsis">
       
-        The high-level API: CausalStreams
+        Restart and recovery
       
     </span>
   </a>
@@ -502,17 +502,6 @@
     <span class="md-ellipsis">
       
         Evolving a running topology
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#restart-and-recovery" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Restart and recovery
       
     </span>
   </a>
@@ -554,34 +543,6 @@
     
   
     Configuration
-  
-
-    
-  </span>
-  
-  
-
-      </a>
-    </li>
-  
-
-              
-            
-              
-                
-  
-  
-  
-  
-    <li class="md-nav__item">
-      <a href="../audit-logging/" class="md-nav__link">
-        
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    Audit logging
   
 
     
@@ -1100,10 +1061,10 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
-  <a href="#building-a-causal-processor" class="md-nav__link">
+  <a href="#building-a-causal-topology" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Building a causal processor
+        Building a causal topology
       
     </span>
   </a>
@@ -1133,10 +1094,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#the-high-level-api-causalstreams" class="md-nav__link">
+  <a href="#restart-and-recovery" class="md-nav__link">
     <span class="md-ellipsis">
       
-        The high-level API: CausalStreams
+        Restart and recovery
       
     </span>
   </a>
@@ -1148,17 +1109,6 @@
     <span class="md-ellipsis">
       
         Evolving a running topology
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#restart-and-recovery" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Restart and recovery
       
     </span>
   </a>
@@ -1197,46 +1147,43 @@
 
 
 <h1 id="streams-integration">Streams integration</h1>
-<p><code>ParsleyProcessors</code> wraps a standard Kafka Streams <code>Processor</code> so that its state-store reads, its
-writes, and its <code>forward</code> calls all execute behind the causal guarantee. The wrapping is transparent,
-and nothing extra is required on egress, because Streams sinks carry the stamped header out to the
-topic.</p>
-<p><code>CausalStreams</code> builds on top of <code>ParsleyProcessors</code> and owns the surrounding topology — see
-<a href="#the-high-level-api-causalstreams">The high-level API: CausalStreams</a> below for when to reach for it
-instead.</p>
-<h2 id="building-a-causal-processor">Building a causal processor</h2>
-<p>Write an ordinary <code>Processor&lt;K, V, KOut, VOut&gt;</code> and wrap its supplier with <code>ParsleyProcessors.builder</code>.</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="n">ProcessorSupplier</span><span class="o">&lt;</span><span class="n">String</span><span class="p">,</span><span class="w"> </span><span class="n">Order</span><span class="p">,</span><span class="w"> </span><span class="n">String</span><span class="p">,</span><span class="w"> </span><span class="n">Enriched</span><span class="o">&gt;</span><span class="w"> </span><span class="n">user</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">new</span><span class="w"> </span><span class="n">ProcessorSupplier</span><span class="o">&lt;&gt;</span><span class="p">()</span><span class="w"> </span><span class="p">{</span>
-<a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="w">    </span><span class="kd">public</span><span class="w"> </span><span class="n">Processor</span><span class="o">&lt;</span><span class="n">String</span><span class="p">,</span><span class="w"> </span><span class="n">Order</span><span class="p">,</span><span class="w"> </span><span class="n">String</span><span class="p">,</span><span class="w"> </span><span class="n">Enriched</span><span class="o">&gt;</span><span class="w"> </span><span class="nf">get</span><span class="p">()</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="k">return</span><span class="w"> </span><span class="k">new</span><span class="w"> </span><span class="n">EnrichOrder</span><span class="p">();</span><span class="w"> </span><span class="p">}</span>
-<a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a><span class="w">    </span><span class="kd">public</span><span class="w"> </span><span class="n">Set</span><span class="o">&lt;</span><span class="n">StoreBuilder</span><span class="o">&lt;?&gt;&gt;</span><span class="w"> </span><span class="nf">stores</span><span class="p">()</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="k">return</span><span class="w"> </span><span class="n">Set</span><span class="p">.</span><span class="na">of</span><span class="p">(</span><span class="n">pricesStateBuilder</span><span class="p">);</span><span class="w"> </span><span class="p">}</span><span class="w">  </span><span class="c1">// your own stores</span>
-<a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a><span class="p">};</span>
-<a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a>
-<a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a><span class="n">ParsleyProcessorSupplier</span><span class="o">&lt;</span><span class="n">String</span><span class="p">,</span><span class="w"> </span><span class="n">Order</span><span class="p">,</span><span class="w"> </span><span class="n">String</span><span class="p">,</span><span class="w"> </span><span class="n">Enriched</span><span class="o">&gt;</span><span class="w"> </span><span class="n">causal</span><span class="w"> </span><span class="o">=</span>
-<a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a><span class="w">        </span><span class="n">ParsleyProcessors</span><span class="p">.</span><span class="na">builder</span><span class="p">(</span><span class="n">user</span><span class="p">)</span>
-<a id="__codelineno-0-8" name="__codelineno-0-8" href="#__codelineno-0-8"></a><span class="w">                </span><span class="p">.</span><span class="na">addBufferStore</span><span class="p">(</span><span class="s">&quot;parsley&quot;</span><span class="p">,</span><span class="w"> </span><span class="n">CausalBufferLimit</span><span class="p">.</span><span class="na">ofDuration</span><span class="p">(</span><span class="n">limit</span><span class="p">))</span>
-<a id="__codelineno-0-9" name="__codelineno-0-9" href="#__codelineno-0-9"></a><span class="w">                </span><span class="p">.</span><span class="na">addBuffers</span><span class="p">(</span><span class="n">List</span><span class="p">.</span><span class="na">of</span><span class="p">(</span><span class="s">&quot;prices&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;orders&quot;</span><span class="p">),</span><span class="w"> </span><span class="n">Serdes</span><span class="p">.</span><span class="na">String</span><span class="p">(),</span><span class="w"> </span><span class="n">orderSerde</span><span class="p">)</span>
-<a id="__codelineno-0-10" name="__codelineno-0-10" href="#__codelineno-0-10"></a><span class="w">                </span><span class="p">.</span><span class="na">build</span><span class="p">();</span>
-<a id="__codelineno-0-11" name="__codelineno-0-11" href="#__codelineno-0-11"></a>
-<a id="__codelineno-0-12" name="__codelineno-0-12" href="#__codelineno-0-12"></a><span class="n">builder</span><span class="p">.</span><span class="na">stream</span><span class="p">(</span><span class="n">List</span><span class="p">.</span><span class="na">of</span><span class="p">(</span><span class="s">&quot;prices&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;orders&quot;</span><span class="p">),</span><span class="w"> </span><span class="n">Consumed</span><span class="p">.</span><span class="na">with</span><span class="p">(</span><span class="n">Serdes</span><span class="p">.</span><span class="na">String</span><span class="p">(),</span><span class="w"> </span><span class="n">orderSerde</span><span class="p">))</span>
-<a id="__codelineno-0-13" name="__codelineno-0-13" href="#__codelineno-0-13"></a><span class="w">       </span><span class="p">.</span><span class="na">process</span><span class="p">(</span><span class="n">causal</span><span class="p">)</span>
-<a id="__codelineno-0-14" name="__codelineno-0-14" href="#__codelineno-0-14"></a><span class="w">       </span><span class="p">.</span><span class="na">to</span><span class="p">(</span><span class="s">&quot;output-topic&quot;</span><span class="p">);</span>
+<p><code>CausalStreamsBuilder</code>, <code>CausalTopology</code>, and <code>CausalStreams</code> are three roles mirroring Kafka Streams'
+own <code>StreamsBuilder</code>, <code>Topology</code>, and <code>KafkaStreams</code>. Declare one or more causal stages on the builder,
+build the topology, then hand it to a <code>CausalStreams</code> runtime.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="n">CausalStreamsBuilder</span><span class="w"> </span><span class="n">builder</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">new</span><span class="w"> </span><span class="n">CausalStreamsBuilder</span><span class="p">();</span>
+<a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>
+<a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a><span class="n">builder</span><span class="p">.</span><span class="na">stream</span><span class="p">(</span><span class="n">List</span><span class="p">.</span><span class="na">of</span><span class="p">(</span><span class="s">&quot;prices&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;orders&quot;</span><span class="p">),</span><span class="w"> </span><span class="n">Serdes</span><span class="p">.</span><span class="na">String</span><span class="p">(),</span><span class="w"> </span><span class="n">orderSerde</span><span class="p">)</span>
+<a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a><span class="w">       </span><span class="p">.</span><span class="na">process</span><span class="p">(</span><span class="k">new</span><span class="w"> </span><span class="n">EnrichOrderSupplier</span><span class="p">())</span>
+<a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a><span class="w">       </span><span class="p">.</span><span class="na">to</span><span class="p">(</span><span class="s">&quot;enriched-output&quot;</span><span class="p">,</span><span class="w"> </span><span class="n">Serdes</span><span class="p">.</span><span class="na">String</span><span class="p">(),</span><span class="w"> </span><span class="n">enrichedSerde</span><span class="p">);</span>
+<a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a>
+<a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a><span class="n">CausalTopology</span><span class="w"> </span><span class="n">topology</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">builder</span><span class="p">.</span><span class="na">build</span><span class="p">();</span>
+<a id="__codelineno-0-8" name="__codelineno-0-8" href="#__codelineno-0-8"></a>
+<a id="__codelineno-0-9" name="__codelineno-0-9" href="#__codelineno-0-9"></a><span class="n">CausalStreams</span><span class="w"> </span><span class="n">causalStreams</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">new</span><span class="w"> </span><span class="n">CausalStreams</span><span class="p">(</span><span class="n">topology</span><span class="p">,</span><span class="w"> </span><span class="n">props</span><span class="p">);</span>
+<a id="__codelineno-0-10" name="__codelineno-0-10" href="#__codelineno-0-10"></a><span class="n">causalStreams</span><span class="p">.</span><span class="na">start</span><span class="p">();</span>
+<a id="__codelineno-0-11" name="__codelineno-0-11" href="#__codelineno-0-11"></a><span class="n">Runtime</span><span class="p">.</span><span class="na">getRuntime</span><span class="p">().</span><span class="na">addShutdownHook</span><span class="p">(</span><span class="k">new</span><span class="w"> </span><span class="n">Thread</span><span class="p">(</span><span class="n">causalStreams</span><span class="p">::</span><span class="n">close</span><span class="p">));</span>
 </code></pre></div>
-<p><code>addBufferStore(name, limit)</code> declares the buffer state store. The <code>name</code> is the state-store
-namespace described below, and <code>limit</code> is the eviction trigger. This mirrors how Kafka Streams names
-and sizes a store in one place.</p>
-<p>Each input topic is registered as a <code>ParsleyBuffer</code> carrying the serdes that the buffer uses to round-
-trip held records. The topic's stable UUID is resolved from the broker automatically at startup. When
-a topic needs its own serdes, for example a topic carrying a different Avro type, register it with
-<code>.addBuffer(ParsleyBuffer.of(topic, keySerde, valueSerde))</code> once per topic instead of using the shared
-<code>addBuffers(topics, key, value)</code> convenience.</p>
-<p>Parsley's own configuration is supplied on the builder the same way Kafka Streams configuration is,
-through <code>.withConfig(key, value)</code>, <code>.withConfigs(Map)</code>, or <code>.withConfig(Properties)</code>. It is overlaid
-on top of any <code>parsley.properties</code> classpath resource. For example:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="w">        </span><span class="p">.</span><span class="na">withConfig</span><span class="p">(</span><span class="s">&quot;parsley.buffer.deserialization.failure.policy&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;continue&quot;</span><span class="p">)</span>
-</code></pre></div>
-<p>Parsley registers its own internal state stores, the causal buffer and the frontier store, alongside
-any stores declared by your <code>ProcessorSupplier.stores()</code>. You never interact with these stores
-directly.</p>
+<h2 id="building-a-causal-topology">Building a causal topology</h2>
+<p><code>stream(...)</code> registers one or more source topics as a stage's inputs. Multiple input topics are the
+norm — a single <code>stream(topics, keySerde, valueSerde)</code> call fans several co-partitioned topics sharing
+one serde pair into a single stage. To combine topics that were declared with different serdes, call
+<code>stream(...)</code> once per serde group and combine the results with <code>CausalStream#merge</code>. Key/value serdes
+can be omitted (<code>stream(topic)</code>, <code>to(topic)</code>), deferring to the runtime's <code>default.key.serde</code>/
+<code>default.value.serde</code> — the same convention <code>KStream</code> uses.</p>
+<p><code>process(supplier)</code> binds a stage's sources to your processor supplier — an ordinary
+<code>ProcessorSupplier&lt;KIn, VIn, KOut, VOut&gt;</code>. Its declared state stores are unioned with Parsley's own
+internal stores (the causal buffer, frontier, candidate index, and forwarded index); you never
+interact with Parsley's stores directly. The stage's name, which becomes the causal buffer's state-store
+namespace and hence its changelog topic names, is auto-derived from <code>application.id</code> and declaration
+order unless you name it explicitly with <code>process(name, supplier)</code> — give it a stable name if the
+topology might be reordered later.</p>
+<p><code>to(topic)</code> declares a sink. A stage may declare more than one; <code>withPartitioner</code> applies one
+<code>StreamPartitioner</code> uniformly across every sink the stage declares (default: Kafka's own key-hash
+partitioner) so causal sinks in the same stage never drift onto different partitioners. The partitioner
+must read only the key, never the value — a protocol watermark carries a null value and reuses its
+triggering record's key, so a value-based partitioner cannot route it.</p>
+<p>Unlike the Kafka Streams DSL, sources and sinks here take plain key/value <code>Serde</code>s rather than
+<code>Consumed</code>/<code>Produced</code>: neither exposes its serdes for reading back, and Parsley's causal buffer needs
+the real <code>Serde</code> to round-trip a held record across a restart.</p>
 <h2 id="preconditions">Preconditions</h2>
 <p>The guarantee holds subject to the conditions below. They apply across the whole processor, not per
 record, and Parsley cannot verify most of them, so treat them as a contract on how the topology is
@@ -1248,8 +1195,7 @@ on the same partition on every topic. Parsley evaluates dependencies only agains
 task owns, so a topology that is not partitioned this way evaluates the completeness frontier against
 an incomplete partition set. An advanced user may partition by a coarser function of the key with a
 custom <code>StreamPartitioner</code>, for example by hashing a <code>tenant</code> prefix out of a <code>tenant:order</code> key, as
-long as that partitioner reads the key rather than the value. A partitioner that reads the value
-cannot route a protocol watermark, which carries no value; put the correlation in the key instead.</p>
+long as that partitioner reads the key rather than the value.</p>
 <p><strong>Do not change the key across a causal processor.</strong> The key selects the partition, so changing it
 moves a record to a different shard and breaks co-partitioning for everything downstream. Key-changing
 operations such as a <code>groupBy</code> or a join on a derived key belong outside the causally related segment.</p>
@@ -1264,160 +1210,109 @@ records selectively to some named children and not others, the children that rec
 separately watermarked, so keep a causal processor's forwarding uniform across its children.</p>
 <p><strong>Watermark-bearing topics must not be compacted.</strong> A protocol watermark has a null value, so log
 compaction treats it as a tombstone and may delete it before a slow consumer reads it, dropping the
-completeness signal. Set <code>cleanup.policy=delete</code> on any topic that carries watermarks, which is any
-output topic of a causal processor. Parsley does not manage this topic configuration at this level.</p>
-<p><strong>Choose your delivery guarantee.</strong> Parsley stamps each record with its own dependencies, so a
-redelivered record re-evaluates identically against the frontier. At-least-once processing is
-therefore safe, and exactly-once (<code>processing.guarantee=exactly_once_v2</code>) is a choice you make for
-delivery deduplication, not a requirement of the causal guarantee.</p>
-<p>A single causal stage that reads its sources and forwards to its outputs is sound on its own. A
-multi-stage pipeline, where one causal processor's output topic is consumed by another causal
-processor, relies on the key being preserved through each stage so that a stage's watermark routes to
-the same partition its business records do. This is why the key must not change across a node.</p>
+completeness signal. Set <code>cleanup.policy=delete</code> on any sink topic of a causal stage. <code>CausalTopology</code>
+checks this for you at startup; see <a href="#startup-validation">Startup validation</a>.</p>
+<p><strong>Every branch into a node must see every coordinate that node's records depend on.</strong> A node is
+delivered a record only once its own contiguous frontier — the positions it has itself delivered —
+dominates that record's dependencies; another channel's advertised claim never substitutes for local
+delivery. There is no "this dependency is out of scope, treat it as satisfied" fallback: a dependency
+naming a coordinate this node has no input channel for fails the task. In particular, a topology-epoch-coordinated deployment must ensure
+every member's declared inputs and sinks jointly cover the full coordinated domain; see
+<a href="#evolving-a-running-topology">Evolving a running topology</a> for how <code>parsley.coordination.domain-topics</code>
+and auto-wired passthrough sources satisfy that without a redundant business subscription.</p>
+<p><strong><code>processing.guarantee=exactly_once_v2</code> is required.</strong> Parsley's crash-safety reasoning narrows an
+at-least-once torn-write window across the buffer, frontier, and forwarded-index changelogs to a benign
+tear direction, but only exactly-once-v2's transactional commit closes it completely. <code>CausalTopology</code>
+fails startup with <code>IllegalStateException</code> if this is not set — it is not a delivery-guarantee choice
+you make independently of the causal guarantee, it is required by it.</p>
 <h2 id="startup-validation">Startup validation</h2>
 <p><code>parsley.topology.validation</code> controls how a causal processor reacts at startup to a detectable
-topology misconfiguration. The default <code>warn</code> logs a mismatch and continues, <code>strict</code> fails the task
-fast, and <code>off</code> disables the checks. A bare <code>ParsleyProcessors</code> decorator only ever sees its own
-registered input topics, so it can check one precondition: that they share a partition count. A
-<code>CausalStreams</code> stage owns its sinks too, so it widens the same check to also cover sink partition
-counts and each sink's <code>cleanup.policy</code> — see
-<a href="#the-high-level-api-causalstreams">The high-level API: CausalStreams</a> below. See
-<a href="../configuration/">Configuration</a> for the full key reference.</p>
-<p>The guarantee holds for every record delivered in causal order. When a held record's dependencies are
-still not satisfied and the configured <code>CausalBufferLimit</code> fires, the outcome depends on
-<code>parsley.buffer.eviction.failure.policy</code>. Under the default <code>fail</code> policy, Parsley fails the task and
-leaves the record buffered for retry. Under <code>continue</code>, the record is forwarded out of causal order.
-In both cases the firing is logged with the causal gap and counted by a metric rather than signalled
-on the record. See <a href="../configuration/">Configuration</a> for the policy, and register a <code>CausalAudit</code>
-(see <a href="../audit-logging/">Audit logging</a>) to receive this event, and every other causal-buffering
-event, as a per-record callback instead of a log line.</p>
-<h2 id="the-high-level-api-causalstreams">The high-level API: CausalStreams</h2>
-<p><code>CausalStreams</code> is the topology-owning entry point: it builds the <code>Topology</code> itself — sources,
-processor, and sinks — around the same <code>ParsleyProcessors</code> decorator, rather than handing you a
-<code>ParsleyProcessorSupplier</code> to drop into a <code>StreamsBuilder</code> you wire yourself. It composes the
-decorator; it does not reimplement the causal engine.</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="n">ParsleyQuiesce</span><span class="w"> </span><span class="n">quiesce</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">ParsleyQuiesce</span><span class="p">.</span><span class="na">create</span><span class="p">();</span>
-<a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a>
-<a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a><span class="n">Topology</span><span class="w"> </span><span class="n">topology</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">CausalStreams</span><span class="p">.</span><span class="na">builder</span><span class="p">(</span><span class="n">userSupplier</span><span class="p">)</span>
-<a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a><span class="w">        </span><span class="p">.</span><span class="na">addBufferStore</span><span class="p">(</span><span class="s">&quot;parsley&quot;</span><span class="p">,</span><span class="w"> </span><span class="n">CausalBufferLimit</span><span class="p">.</span><span class="na">ofDuration</span><span class="p">(</span><span class="n">limit</span><span class="p">))</span>
-<a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a><span class="w">        </span><span class="p">.</span><span class="na">addSource</span><span class="p">(</span><span class="n">ParsleyBuffer</span><span class="p">.</span><span class="na">of</span><span class="p">(</span><span class="s">&quot;prices&quot;</span><span class="p">,</span><span class="w"> </span><span class="n">Serdes</span><span class="p">.</span><span class="na">String</span><span class="p">(),</span><span class="w"> </span><span class="n">priceSerde</span><span class="p">))</span>
-<a id="__codelineno-2-6" name="__codelineno-2-6" href="#__codelineno-2-6"></a><span class="w">        </span><span class="p">.</span><span class="na">addSource</span><span class="p">(</span><span class="n">ParsleyBuffer</span><span class="p">.</span><span class="na">of</span><span class="p">(</span><span class="s">&quot;orders&quot;</span><span class="p">,</span><span class="w"> </span><span class="n">Serdes</span><span class="p">.</span><span class="na">String</span><span class="p">(),</span><span class="w"> </span><span class="n">orderSerde</span><span class="p">))</span>
-<a id="__codelineno-2-7" name="__codelineno-2-7" href="#__codelineno-2-7"></a><span class="w">        </span><span class="p">.</span><span class="na">addSink</span><span class="p">(</span><span class="s">&quot;enriched-sink&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;enriched-output&quot;</span><span class="p">,</span><span class="w"> </span><span class="n">Serdes</span><span class="p">.</span><span class="na">String</span><span class="p">(),</span><span class="w"> </span><span class="n">enrichedSerde</span><span class="p">)</span>
-<a id="__codelineno-2-8" name="__codelineno-2-8" href="#__codelineno-2-8"></a><span class="w">        </span><span class="p">.</span><span class="na">withQuiesce</span><span class="p">(</span><span class="n">quiesce</span><span class="p">)</span>
-<a id="__codelineno-2-9" name="__codelineno-2-9" href="#__codelineno-2-9"></a><span class="w">        </span><span class="p">.</span><span class="na">build</span><span class="p">();</span>
-<a id="__codelineno-2-10" name="__codelineno-2-10" href="#__codelineno-2-10"></a>
-<a id="__codelineno-2-11" name="__codelineno-2-11" href="#__codelineno-2-11"></a><span class="n">KafkaStreams</span><span class="w"> </span><span class="n">streams</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">new</span><span class="w"> </span><span class="n">KafkaStreams</span><span class="p">(</span><span class="n">topology</span><span class="p">,</span><span class="w"> </span><span class="n">props</span><span class="p">);</span>
-<a id="__codelineno-2-12" name="__codelineno-2-12" href="#__codelineno-2-12"></a><span class="n">streams</span><span class="p">.</span><span class="na">start</span><span class="p">();</span>
-</code></pre></div>
-<p>Reach for <code>CausalStreams</code> instead of the low-level decorator whenever a stage needs a guarantee that
-requires owning the sinks, which the decorator structurally cannot do on its own:</p>
-<ul>
-<li><strong>A uniform sink partitioner.</strong> <code>Builder#withPartitioner</code> applies one <code>StreamPartitioner</code> to every
-  sink the stage declares (default: Kafka's own key-hash partitioner), so causal sinks in the same
-  stage can never drift onto different partitioners — a real risk once a topology has more than one
-  sink and only some calls remember to set a custom one. The partitioner must read only the key,
-  never the value, for the same reason as the <a href="#preconditions">shard precondition</a> above: a protocol
-  watermark carries no value to read.</li>
-<li><strong>Co-partitioning validation across sinks.</strong> <code>parsley.topology.validation</code> (see
-  <a href="#startup-validation">Startup validation</a>) folds sink partition counts into the same parity check
-  it runs on inputs, and checks each sink's <code>cleanup.policy</code> for <code>compact</code> — a protocol watermark is
-  a null-value record wire-indistinguishable from a compaction tombstone, so a compacted
-  watermark-bearing topic can silently drop the completeness signal before a slow consumer reads it.
-  Each sink is resolved independently, so one sink that does not exist yet never masks a genuine
-  misconfiguration on a different sink in the same stage, even under <code>strict</code>.</li>
-<li><strong>Path integrity by construction.</strong> A stage <code>CausalStreams</code> builds is exactly sources → one
-  causal-decorated processor → sinks. There is no method on the builder that inserts a plain,
-  non-Parsley node in between, so a hop that would silently drop the causal-dependencies header, or
-  swallow a non-emitting invocation without a watermark, cannot be constructed through this API.</li>
-<li><strong>Coordinated graceful shutdown.</strong> Register a <code>ParsleyQuiesce</code> with <code>Builder#withQuiesce</code>, call
-  <code>requestQuiesce()</code> from your own shutdown path, then poll <code>isSafeToClose()</code> before calling
-  <code>KafkaStreams#close</code>. A registered task keeps processing exactly as it does without quiesce — it
-  only reports itself drained once its buffer empties through the ordinary delivery path, never by
-  fabricating completeness. This is a stall-avoidance optimization, not a correctness requirement:
-  every held record is already changelog-backed and survives an ungraceful stop regardless of
-  whether quiesce was ever requested.</li>
-<li><strong>A double-wrap guard.</strong> Passing an already-decorated <code>ParsleyProcessorSupplier</code> back into
-  <code>ParsleyProcessors.builder(...)</code> (which <code>CausalStreams</code> calls internally) throws immediately,
-  rather than silently building a nested double-decoration that would buffer and stamp every record
-  twice.</li>
-</ul>
-<p>Everything under <a href="#preconditions">Preconditions</a> still applies unchanged — <code>CausalStreams</code> manages
-more of the topology for you, but the causal guarantee itself has the same requirements either way.</p>
-<h2 id="evolving-a-running-topology">Evolving a running topology</h2>
-<p>A causal topology sometimes has to change while it runs: add a stage, replace a stage, or recompile
-one. A new stage subscribes to its inputs from the earliest offset and replays them from the start, and
-the causal frontier is a minimum across every node, so a node replaying from offset 0 drags that minimum
-down and un-strips history the other nodes had long since delivered. <code>ParsleyCoordination</code> lets a
-topology cross a well-defined <strong>epoch boundary</strong> so a new node adopts the current floor and replays with
-pre-epoch history stripped, rather than pulling the shared frontier back to the beginning of time.</p>
-<p>Create one handle over a shared single-partition epoch-events log topic, register it with every
-participating stage through <code>withCoordination</code> on either builder, and close it from your shutdown path.
-The shape mirrors <a href="#the-high-level-api-causalstreams"><code>ParsleyQuiesce</code></a>.</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="n">ParsleyCoordination</span><span class="w"> </span><span class="n">coordination</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">ParsleyCoordination</span><span class="p">.</span><span class="na">create</span><span class="p">(</span><span class="s">&quot;parsley-epoch-events&quot;</span><span class="p">);</span>
-<a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a>
-<a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a><span class="n">Topology</span><span class="w"> </span><span class="n">topology</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">CausalStreams</span><span class="p">.</span><span class="na">builder</span><span class="p">(</span><span class="n">userSupplier</span><span class="p">)</span>
-<a id="__codelineno-3-4" name="__codelineno-3-4" href="#__codelineno-3-4"></a><span class="w">        </span><span class="p">.</span><span class="na">addBufferStore</span><span class="p">(</span><span class="s">&quot;parsley&quot;</span><span class="p">,</span><span class="w"> </span><span class="n">CausalBufferLimit</span><span class="p">.</span><span class="na">ofDuration</span><span class="p">(</span><span class="n">limit</span><span class="p">))</span>
-<a id="__codelineno-3-5" name="__codelineno-3-5" href="#__codelineno-3-5"></a><span class="w">        </span><span class="p">.</span><span class="na">addSource</span><span class="p">(</span><span class="n">ParsleyBuffer</span><span class="p">.</span><span class="na">of</span><span class="p">(</span><span class="s">&quot;prices&quot;</span><span class="p">,</span><span class="w"> </span><span class="n">Serdes</span><span class="p">.</span><span class="na">String</span><span class="p">(),</span><span class="w"> </span><span class="n">priceSerde</span><span class="p">))</span>
-<a id="__codelineno-3-6" name="__codelineno-3-6" href="#__codelineno-3-6"></a><span class="w">        </span><span class="p">.</span><span class="na">addSink</span><span class="p">(</span><span class="s">&quot;enriched-sink&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;enriched-output&quot;</span><span class="p">,</span><span class="w"> </span><span class="n">Serdes</span><span class="p">.</span><span class="na">String</span><span class="p">(),</span><span class="w"> </span><span class="n">enrichedSerde</span><span class="p">)</span>
-<a id="__codelineno-3-7" name="__codelineno-3-7" href="#__codelineno-3-7"></a><span class="w">        </span><span class="p">.</span><span class="na">withCoordination</span><span class="p">(</span><span class="n">coordination</span><span class="p">)</span>
-<a id="__codelineno-3-8" name="__codelineno-3-8" href="#__codelineno-3-8"></a><span class="w">        </span><span class="p">.</span><span class="na">build</span><span class="p">();</span>
-<a id="__codelineno-3-9" name="__codelineno-3-9" href="#__codelineno-3-9"></a>
-<a id="__codelineno-3-10" name="__codelineno-3-10" href="#__codelineno-3-10"></a><span class="n">KafkaStreams</span><span class="w"> </span><span class="n">streams</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">new</span><span class="w"> </span><span class="n">KafkaStreams</span><span class="p">(</span><span class="n">topology</span><span class="p">,</span><span class="w"> </span><span class="n">props</span><span class="p">);</span>
-<a id="__codelineno-3-11" name="__codelineno-3-11" href="#__codelineno-3-11"></a><span class="n">streams</span><span class="p">.</span><span class="na">start</span><span class="p">();</span>
-<a id="__codelineno-3-12" name="__codelineno-3-12" href="#__codelineno-3-12"></a><span class="c1">// ... to evolve the running topology through a boundary:</span>
-<a id="__codelineno-3-13" name="__codelineno-3-13" href="#__codelineno-3-13"></a><span class="n">coordination</span><span class="p">.</span><span class="na">requestEpochTransition</span><span class="p">();</span>
-<a id="__codelineno-3-14" name="__codelineno-3-14" href="#__codelineno-3-14"></a><span class="c1">// ... in shutdown, after streams.close():</span>
-<a id="__codelineno-3-15" name="__codelineno-3-15" href="#__codelineno-3-15"></a><span class="n">coordination</span><span class="p">.</span><span class="na">close</span><span class="p">();</span>
-</code></pre></div>
-<p>The topology's <strong>external source topics</strong> — the entry points produced by systems outside the topology,
-on which no epoch marker ever arrives — are derived from the log, not configured. Every stage declares
-its input channels and its sink topics when it joins, and a topic some member consumes but no member
-produces is an external source. On the high-level builder the sinks are taken from <code>addSink(...)</code>
-automatically; on the low-level <code>ParsleyProcessors</code> decorator, declare them with
-<code>ParsleyProcessors.Builder#sinkTopics</code>. There is nothing else to configure per application, and no source
-topic list to keep in sync by hand.</p>
-<p>The coordination is <strong>leaderless</strong>: there is no coordinator process to deploy. Every application instance
-folds the shared epoch-events log identically and agrees on each epoch's floor, which then propagates
-<strong>in-band</strong> through the topology so every stage adopts it. A few operational consequences follow.</p>
-<ul>
-<li><strong>Entirely optional.</strong> Without a <code>ParsleyCoordination</code> a topology runs in epoch 0, exactly as a
-  topology with no epoch machinery. Registering a handle is the only thing that turns it on.</li>
-<li><strong>A new node blocks until it is admitted.</strong> A stage deployed into an already-running topology waits at
-  startup — for an unbounded time, with no timeout — until an epoch computed without it commits, then
-  adopts that floor and replays its inputs with pre-epoch history stripped. It never proceeds on an unknown
-  floor: if the domain cannot yet commit (an existing member is absent) the join simply waits. Because a
-  Streams application runs one topology on every instance, adding a stage is a redeploy; this is what lets
-  that redeploy re-enter causal time cleanly.</li>
-<li><strong>A transition blocks until every member has published (no eviction).</strong> A member that is absent —
-  crashed, or briefly gone during a restart — is <em>waited for</em>, for an unbounded time, rather than evicted.
-  Evicting it and committing a floor without it could strand records it still holds below that floor and
-  release them before their causes, so the transition holds until the member returns and publishes. This
-  trades reconfiguration liveness for causal safety: a crashed member blocks the next <em>transition</em> (and
-  any new join) until it returns, though ongoing current-epoch processing is unaffected. A clean
-  decommission calls <code>coordination.leave()</code>; a plain restart calls neither <code>leave()</code> nor anything else, so
-  the member stays in the domain and returns. How an absent member is handled is an internal seam with one
-  built-in strategy today: block until drained, never evict.</li>
-</ul>
-<p><code>requestEpochTransition()</code> opens a boundary across the currently-running nodes from any instance. The full
-protocol — the floored clock, the leaderless log fold, the in-band markers, and the source-topic registry —
-is described in <a href="../internals/topology-epochs/">Topology epochs</a>.</p>
+topology misconfiguration: the causal topics not sharing a partition count, and, for a stage's sink
+topics, a <code>cleanup.policy</code> that includes <code>compact</code>. The default <code>warn</code> logs a mismatch and continues,
+<code>strict</code> fails the task fast, and <code>off</code> disables the checks. Each sink is resolved independently, so
+one sink that does not exist yet never masks a genuine misconfiguration on a different sink in the same
+stage, even under <code>strict</code>. See <a href="../configuration/">Configuration</a> for the full key reference.</p>
 <h2 id="restart-and-recovery">Restart and recovery</h2>
-<p>The causal buffer and the frontier are kept in durable state stores. On a restart or a rebalance the
-following happens.</p>
+<p>The causal buffer and the frontier are kept in durable, changelog-backed state stores. On a restart or
+a rebalance the following happens.</p>
 <ul>
 <li>The frontier is restored to the position it held before shutdown, which is the frontier at which
   the last forwarded record was confirmed.</li>
 <li>Held records are re-evaluated against the restored frontier. No re-fetch from the broker is
   required.</li>
 </ul>
+<h2 id="evolving-a-running-topology">Evolving a running topology</h2>
+<p>A causal topology sometimes has to change while it runs: add a stage, replace a stage, or recompile
+one. A new stage subscribes to its inputs from the earliest offset and replays them from the start, and
+the causal frontier is a merge across every node, so a node replaying from offset 0 would otherwise drag
+pre-epoch history into the shared frontier. Topology-epoch coordination lets a topology cross a
+well-defined <strong>epoch boundary</strong> so a new node adopts the current floor and replays with pre-epoch
+history stripped, instead.</p>
+<p>Turn it on by setting <code>parsley.coordination.epoch-events-topic</code> in the <code>props</code> passed to
+<code>CausalStreams</code>; <code>application.id</code> supplies the epoch member identity. <code>CausalStreams</code> owns the
+coordination runtime for you — there is no separate handle to construct or register.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="n">Properties</span><span class="w"> </span><span class="n">props</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">new</span><span class="w"> </span><span class="n">Properties</span><span class="p">();</span>
+<a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a><span class="n">props</span><span class="p">.</span><span class="na">put</span><span class="p">(</span><span class="n">StreamsConfig</span><span class="p">.</span><span class="na">APPLICATION_ID_CONFIG</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;enrichment-service&quot;</span><span class="p">);</span>
+<a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a><span class="n">props</span><span class="p">.</span><span class="na">put</span><span class="p">(</span><span class="s">&quot;parsley.coordination.epoch-events-topic&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;parsley-epoch-events&quot;</span><span class="p">);</span>
+<a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a>
+<a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a><span class="n">CausalStreams</span><span class="w"> </span><span class="n">causalStreams</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">new</span><span class="w"> </span><span class="n">CausalStreams</span><span class="p">(</span><span class="n">topology</span><span class="p">,</span><span class="w"> </span><span class="n">props</span><span class="p">);</span>
+<a id="__codelineno-1-6" name="__codelineno-1-6" href="#__codelineno-1-6"></a><span class="n">causalStreams</span><span class="p">.</span><span class="na">start</span><span class="p">();</span>
+<a id="__codelineno-1-7" name="__codelineno-1-7" href="#__codelineno-1-7"></a><span class="c1">// ... to evolve the running topology through a boundary, from any instance:</span>
+<a id="__codelineno-1-8" name="__codelineno-1-8" href="#__codelineno-1-8"></a><span class="n">causalStreams</span><span class="p">.</span><span class="na">requestEpochTransition</span><span class="p">();</span>
+<a id="__codelineno-1-9" name="__codelineno-1-9" href="#__codelineno-1-9"></a><span class="c1">// ... in shutdown:</span>
+<a id="__codelineno-1-10" name="__codelineno-1-10" href="#__codelineno-1-10"></a><span class="n">causalStreams</span><span class="p">.</span><span class="na">close</span><span class="p">();</span><span class="w"> </span><span class="c1">// drains, then leaves the coordination domain, then stops KafkaStreams</span>
+</code></pre></div>
+<p>The topology's <strong>external source topics</strong> — the entry points produced by systems outside the topology,
+on which no epoch marker ever arrives — are derived from the shared log, not configured. Every stage
+declares its input channels and sink topics when it joins, and a topic some member consumes but no
+member produces is an external source.</p>
+<p>Coordination also enforces a stricter contract: every running member's own subscriptions must jointly
+cover the whole coordinated domain (every member's inputs and sinks), or the epoch round cannot commit.
+A genuine multi-stage pipeline — app A produces a topic only app B consumes — requires each member to
+also cover the topics only a sibling touches. Set <code>parsley.coordination.domain-topics</code> (comma-separated,
+the full coordinated domain) so <code>CausalTopology</code> auto-wires, for each stage, a passthrough source for
+any domain topic that stage does not otherwise consume or produce: it flows through the ordinary
+delivery gate, contributing to the frontier, but is never handed to your processor. This is what
+makes a genuinely cyclic topology (A produces to B, B produces back to A) coordinate correctly, without
+a redundant business subscription on either side.</p>
+<p>The coordination is <strong>leaderless</strong>: there is no coordinator process to deploy. Every application
+instance folds the shared epoch-events log identically and agrees on each epoch's floor, which then
+propagates <strong>in-band</strong> through the topology so every stage adopts it. A few operational consequences
+follow.</p>
+<ul>
+<li><strong>Entirely optional.</strong> Without <code>parsley.coordination.epoch-events-topic</code> a topology runs in epoch 0,
+  exactly as a topology with no epoch machinery.</li>
+<li><strong>A new node blocks until it is admitted.</strong> A stage deployed into an already-running topology waits at
+  startup — for an unbounded time, with no timeout — until an epoch computed without it commits, then
+  adopts that floor and replays its inputs with pre-epoch history stripped. It never proceeds on an
+  unknown floor: if the domain cannot yet commit (an existing member is absent) the join simply waits.</li>
+<li><strong>A transition blocks until every member has published (no eviction).</strong> A member that is absent —
+  crashed, or briefly gone during a restart — is <em>waited for</em>, for an unbounded time, rather than
+  evicted. Evicting it and committing a floor without it could strand records it still holds below that
+  floor and release them before their causes, so the transition holds until the member returns and
+  publishes. This trades reconfiguration liveness for causal safety: a crashed member blocks the next
+  <em>transition</em> (and any new join) until it returns, though ongoing current-epoch processing is
+  unaffected. There is one hardcoded membership behavior — block until drained, never evict — it is not
+  a pluggable policy. A clean decommission happens automatically inside <code>CausalStreams#close()</code>, which
+  drains the node's buffer before leaving the domain; a plain restart rejoins as a fresh member and
+  waits to be re-admitted.</li>
+</ul>
+<p><code>requestEpochTransition()</code> opens a boundary across the currently-running nodes from any instance. The
+full protocol — the floored clock, the leaderless log fold, the in-band markers, and the full-mesh
+validation — is described in <a href="../internals/topology-epochs/">Topology epochs</a>.</p>
 <h2 id="operating-notes">Operating notes</h2>
 <ul>
 <li>A causal processor only helps when records arrive from multiple partitions concurrently, whether
   from multiple topics or from multiple partitions on one instance. With a single partition from a
   single topic, Kafka already provides total order and Parsley only adds overhead.</li>
-<li>Sustained buffer growth, meaning records being held without release, suggests a lagging partition
-  or a co-partitioning problem. Each limit firing is logged with the causal gap, which identifies the
-  specific coordinate that was missing at the time.</li>
+<li>Sustained buffer growth, meaning records being held without release, suggests a lagging partition or
+  a co-partitioning problem. The <code>buffer-depth</code> and <code>buffer-oldest-buffered-at-ms</code> gauges (see
+  <a href="../configuration/">Configuration</a>) track it, and each held record's debug-level <code>Holding</code> log line
+  identifies the specific coordinate still missing at the time.</li>
+<li>The causal buffer is unbounded: a record with an unsatisfied dependency waits, spilling to disk,
+  rather than being forced out of causal order. There is no configuration that trades causal order for
+  liveness. Monitor buffer depth in production — an unbounded buffer means a genuinely stuck dependency
+  (for example, a producing topic that was deleted) grows without limit rather than being dropped.</li>
 </ul>
 
 
@@ -1517,7 +1412,7 @@ following happens.</p>
       <script id="__config" type="application/json">{"annotate": null, "base": "..", "features": ["navigation.top", "navigation.footer", "search.highlight", "content.code.copy"], "search": "../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": {"default": "latest", "provider": "mike"}}</script>
     
     
-      <script src="../assets/javascripts/bundle.79ae519e.min.js"></script>
+      <script src="../assets/javascripts/bundle.d7400e89.min.js"></script>
       
     
   </body>

@@ -21,7 +21,7 @@
       
       
       <link rel="icon" href="../../assets/images/favicon.png">
-      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.6">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.7">
     
     
       
@@ -29,7 +29,7 @@
       
     
     
-      <link rel="stylesheet" href="../../assets/stylesheets/main.484c7ddc.min.css">
+      <link rel="stylesheet" href="../../assets/stylesheets/main.ec1eaa64.min.css">
       
         
         <link rel="stylesheet" href="../../assets/stylesheets/palette.ab4e12ef.min.css">
@@ -428,34 +428,6 @@
     
   
     Configuration
-  
-
-    
-  </span>
-  
-  
-
-      </a>
-    </li>
-  
-
-              
-            
-              
-                
-  
-  
-  
-  
-    <li class="md-nav__item">
-      <a href="../../audit-logging/" class="md-nav__link">
-        
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    Audit logging
   
 
     
@@ -880,17 +852,6 @@
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
-  <a href="#the-completeness-frontier" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        The completeness frontier
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
   <a href="#the-delivery-gate" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -902,10 +863,21 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#why-every-channel-must-confirm" class="md-nav__link">
+  <a href="#the-completeness-clock-the-outbound-stamp" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Why every channel must confirm
+        The completeness clock (the outbound stamp)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#why-local-delivery-is-required" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Why local delivery is required
       
     </span>
   </a>
@@ -1197,17 +1169,6 @@
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
-  <a href="#the-completeness-frontier" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        The completeness frontier
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
   <a href="#the-delivery-gate" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1219,10 +1180,21 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#why-every-channel-must-confirm" class="md-nav__link">
+  <a href="#the-completeness-clock-the-outbound-stamp" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Why every channel must confirm
+        The completeness clock (the outbound stamp)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#why-local-delivery-is-required" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Why local delivery is required
       
     </span>
   </a>
@@ -1348,108 +1320,125 @@ whose dependency clocks include a coordinate for T2, an intermediate topic it ha
 will receive, every event its dependency clocks reference. Kafka's subscription model does not
 provide this for free — the processor will never receive T2's messages, so it cannot satisfy a
 dependency on T2 through its own delivery.</p>
-<p>Parsley's response is to <strong>require total visibility of the topology</strong> rather than weaken the
-guarantee. The delivery rule is strict: a record is delivered only once <em>every</em> input channel has
-confirmed <em>every</em> coordinate the record depends on. For that to be answerable, the topology must
-route every depended-upon coordinate through every input branch of the node (the
-<a href="#the-topology-contract">topology contract</a>). The alternative — scoping a coordinate out when the
-node does not consume it, treating it as vacuously satisfied — is unsound: it lets a node deliver a
-record before a sibling branch confirms a shared ancestor, and lets a lagging or recovering branch
-later introduce an earlier-ordered record after the fact. Parsley does not scope; it waits for every
-channel.</p>
+<p>Parsley's response is to <strong>require every coordinate a message could ever depend on to be reachable
+to this node</strong> — every dependency a record can carry must name a topic-partition this node itself
+consumes — rather than weaken the guarantee. Parsley does not scope a coordinate out when this node
+happens not to consume it — that would be unsound, since a coordinate no channel here can ever
+observe is never satisfiable. And it does not accept a <em>claim</em> in place of a delivery: a peer's
+advertised clock saying "K reached k over there" is never a substitute for this node having delivered
+K up to k itself — see <a href="#why-local-delivery-is-required">why local delivery is required</a>.</p>
 <h2 id="parsleys-algorithm">Parsley's algorithm</h2>
 <blockquote>
-<p>A record is delivered only once every input channel has confirmed every coordinate the record
-depends on.</p>
+<p>A record is delivered once this node's own contiguous delivered frontier dominates every
+coordinate the record depends on. A dependency is satisfied only by this node having itself
+delivered the cause; a claim advertised on another channel never substitutes for local delivery.</p>
 </blockquote>
-<h3 id="the-completeness-frontier">The completeness frontier</h3>
-<p>For each coordinate, the <strong>completeness frontier</strong> is the greatest offset that every input channel
-has confirmed. It is the per-coordinate minimum across all input channels
-(<code>ParsleyClock.intersectMin</code>), computed in <code>ParsleyEngine.completeness()</code>. Each channel contributes:</p>
-<ul>
-<li>the dependencies its records and watermarks have advertised (the pairwise-max over what it has
-  seen on that channel), and</li>
-<li>its own contiguous delivered position — the <code>ParsleyFrontier</code> offset for the channel's own
-  coordinate.</li>
-</ul>
-<p>A coordinate that any input channel has <strong>not</strong> observed is absent from the completeness frontier
-entirely: it is not confirmed by all branches, so a dependency on it is not yet satisfiable. Channels
-are seeded at registration, so a silent channel holds the minimum down rather than being absent from
-the fold.</p>
 <h3 id="the-delivery-gate">The delivery gate</h3>
-<p>A record is delivered when the completeness frontier dominates its dependency clock, with only the
-record's own self-cycle removed (a record never waits on its own offset). That is the entire gate,
-<code>ParsleyEngine.isDeliverable()</code>:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="n">completeness</span><span class="p">().</span><span class="na">dominates</span><span class="p">(</span><span class="n">deps</span><span class="p">.</span><span class="na">withoutSelfReference</span><span class="p">())</span>
+<p>A record is delivered when this node's own contiguous frontier dominates its dependency clock, with
+only the record's own self-cycle removed (a record never waits on its own offset). That is the
+entire gate, <code>ParsleyEngine.isDeliverable()</code>:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="n">frontier</span><span class="p">().</span><span class="na">dominates</span><span class="p">(</span><span class="n">deps</span><span class="p">.</span><span class="na">withoutSelfReference</span><span class="p">())</span>
 </code></pre></div>
-<p>There is no in-scope filtering and no vacuously-satisfied dependency. A dependency on coordinate K is
-satisfied only when every input channel has advertised K to at least the required offset; until then
-the record is buffered. Forwarded records and protocol watermarks are stamped with this same
-completeness frontier (<code>ParsleyProcessor</code> reads <code>engine.completeness()</code>).</p>
-<h3 id="why-every-channel-must-confirm">Why every channel must confirm</h3>
-<p>The protocol cannot prove that a causally-earlier message will not later arrive on some other input
-channel until that channel has advertised past the dependency. A channel that is behind — or crashed
-and recovering — is exactly the case where, on catching up, it emits records that belong earlier in
-the order. Holding a record until every channel confirms its dependencies is therefore the guarantee
-working, not a stall. This is strictly stronger than the happened-before minimum, and it is what lets
-Parsley enforce a transitive ordering (<code>T1 → ... → T3</code>) at a node that does not consume the
-intermediate topics — provided the contract below is met.</p>
+<p>There is no vacuously-satisfied dependency. A dependency on coordinate K is satisfied once this
+node's own K channel has contiguously delivered up to the required offset; until then the record is
+buffered.</p>
+<h3 id="the-completeness-clock-the-outbound-stamp">The completeness clock (the outbound stamp)</h3>
+<p>The <strong>completeness clock</strong> is this node's own delivered frontier, max-merged with every input
+channel's advertised dependencies (<code>ParsleyClock.merge</code>), computed in <code>ParsleyFrontier.completeness()</code>.
+Each channel contributes the dependencies its records and watermarks have advertised (the pairwise-max
+over what it has seen on that channel). Forwarded records and protocol watermarks are stamped with
+this clock (<code>ParsleyProcessor</code> reads <code>engine.completeness()</code>): it carries <em>transitive ancestry</em> — a
+coordinate an upstream node delivered that this node's stamp must keep advertising — downstream,
+where each receiving node's own gate verifies every coordinate it names against its own delivery
+history. The stamp is how facts travel; the gate is where they are proven, locally, before anything
+is released on them.</p>
+<p>A dependency naming a coordinate this node has <strong>no channel for at all</strong> — not merely one that hasn't
+advertised yet, but one structurally outside this node's own registered inputs — is a different case
+from an ordinary unsatisfied dependency, and is not treated as either: it fails the task fast rather
+than being buffered forever or silently admitted. This node can prove it has no way to confirm such a
+coordinate, never that the coordinate is genuinely irrelevant — so guessing either way (waiting forever
+with no way to ever succeed, or delivering on an unproven premise) is unsound. See
+<a href="#the-topology-contract">Independent inputs</a> for why this arises and how to fix the topology instead
+of relying on this fail-closed behavior as a substitute.</p>
+<h3 id="why-local-delivery-is-required">Why local delivery is required</h3>
+<p>This is the Birman-Schiper-Stephenson CBCAST delivery condition, instantiated on Kafka's own
+<code>(topicId, partition)</code> coordinates: in BSS, a process delivers a message only once <em>its own</em>
+delivered vector covers the message's timestamp — the condition is over the receiver's own delivery
+history, never over what a peer reports having delivered. The distinction matters because the
+guarantee Parsley makes is about the <em>order this node's processor observes events in</em>, not merely
+about whether an event exists somewhere. "K reached offset k" being true at some peer does not mean
+this node's delegate has processed K@k yet: if a claim carried on a sibling channel could satisfy the
+gate, a record caused by K@k could reach the delegate before K@k itself does on this node's own K
+subscription — an effect delivered before its cause, to a processor subscribed to both. So the gate
+checks the local frontier exclusively, and an advertised claim is only ever <em>carried</em> (in the
+outbound stamp) for downstream nodes to verify against their own frontiers in turn.</p>
+<p>What the model still requires is that every coordinate a node's messages could ever depend on be
+consumed by that node — see the <a href="#the-topology-contract">topology contract</a>. That is both a liveness
+requirement (this node must eventually deliver the fact locally) and the reason the fail-closed
+unreachable-dependency check exists (a coordinate this node never consumes could never be proven
+here at all).</p>
 <h3 id="the-topology-contract">The topology contract</h3>
-<p>Because every input channel must confirm a declared coordinate, the topology must be built so that
-<strong>every input branch of a node observes (consumes and watermarks) every coordinate any branch's
-records depend on.</strong> This is the metadata overhead of causal consistency without built-in total
-visibility, placed on topology construction rather than hidden in the engine. Two consequences:</p>
+<p>Every coordinate any of a node's dependency clocks could ever name must be reachable to that node
+through <strong>at least one</strong> input channel — directly, or transitively through a channel that has itself
+genuinely observed it. This is the metadata overhead of causal consistency without built-in total
+visibility, placed on topology construction rather than hidden in the engine.</p>
 <ul>
-<li><strong>Independent inputs.</strong> A node joining unrelated sources will hold a record depending on a
-  coordinate that a sibling input never observes (its channel never confirms that coordinate, so the
-  completeness minimum never includes it). To make such a record deliverable, route the coordinate
-  through every input branch — have each branch consume and pass it through, emitting watermarks even
+<li><strong>Independent inputs.</strong> A node joining unrelated sources can receive a record depending on a
+  coordinate no input channel of this node ever observes — nothing here can ever confirm it, so the
+  completeness clock never includes it. Rather than buffer such a record forever (an undiagnosable,
+  permanent stall) or admit it on the unproven assumption that the coordinate is irrelevant, this fails
+  the task fast immediately. To make such a record genuinely deliverable, route the coordinate through
+  some input branch instead — have it consume and pass the coordinate through, emitting watermarks even
   when it runs no business logic.</li>
-<li><strong>No ancestor with its own descendant.</strong> A node must not consume both a topic <code>T</code> and a topic
-  derived from <code>T</code>. The <code>T</code> channel can never confirm the derived topic — <code>T</code> records are produced
-  before the derived records exist — so a dependency on the derived topic is never satisfied. Consume
-  only the derived topic; the ancestor's progress arrives transitively through the derived topic's
-  completeness stamp.</li>
+<li><strong>Consuming both an ancestor and its own descendant is fine.</strong> A node may consume both a topic <code>T</code>
+  and a topic derived from <code>T</code>. A descendant record's dependency on <code>T</code> is satisfied by the node's
+  own <code>T</code> channel delivering up to it — the ordinary gate, no special case; the descendant's stamp
+  carrying <code>T</code>'s progress transitively matters only for the node's own outbound stamp, never for its
+  gate. (An earlier version of this contract forbade this pattern; that restriction was a consequence
+  of the retired intersection-based gate, not a fundamental limit — see the changelog.)</li>
 </ul>
 <h3 id="protocol-watermarks-heartbeats">Protocol watermarks (heartbeats)</h3>
-<p>The completeness minimum advances only as channels advertise progress, so a node must keep
-advertising even when it produces no business output. A consumed message that yields no business
-record — a filter that drops it, a record held in the buffer, a not-yet-ready aggregate — emits a
-<em>protocol watermark</em>: a record with a null value, marked with the <code>_parsley_watermark</code> header,
-carrying the node's current completeness frontier (emitted when a held record advances completeness,
+<p>The completeness stamp advances only as this node's own frontier or its channels advertise progress,
+so a node must keep advertising even when it produces no business output. A consumed message that
+yields no business record — a filter that drops it, a record held in the buffer, a not-yet-ready
+aggregate — emits a <em>protocol watermark</em>: a record with a null value, marked with the
+<code>_parsley_watermark</code> header, carrying the node's current completeness frontier (emitted when a held
+record advances completeness,
 or when a delivered record produces no forward). The watermark is keyed with the triggering record's
 key so it routes to the same partition that record's business output would, which keeps completeness
 propagation correct across a sink boundary; it is identified by the header, never by its key. A
-downstream node folds the carried frontier into
-that source channel's clock and re-runs its drain, then re-emits its own watermark, so progress
-propagates contiguously through layers that produce no business records. Parsley's own processors
+downstream node delivers the watermark's <em>own offset</em> on its source channel — advancing that
+channel's contiguous frontier exactly like a business record's own coordinate, which is what can
+release held records — and folds the carried frontier into that channel's advertised clock, feeding
+its own outbound stamp (never its gate). It then re-emits its own watermark only when the carried
+clock taught it something new, so progress propagates contiguously through layers that produce no
+business records without ping-ponging around a cycle. Parsley's own processors
 consume watermarks internally (<code>ParsleyProcessor</code> / <code>ParsleyEngine.onWatermark</code>); a plain Kafka
 client folds them into its running frontier with <code>CausalDependencies.observe</code> while skipping them as
 business records, which it detects with <code>CausalDependencies.isWatermark</code>.</p>
 <h3 id="each-channels-own-coordinate-is-a-contiguous-boundary">Each channel's own coordinate is a contiguous boundary</h3>
-<p>A channel's contribution for its own coordinate is a <em>contiguous</em> delivered boundary, not a running
+<p>The frontier's value for each coordinate is a <em>contiguous</em> delivered boundary, not a running
 maximum: the highest offset delivered on that channel without a gap. A later record on a partition
 can be forwarded before an earlier record still held on the same partition; the boundary only
-advances past the held record's position once that record is itself delivered (by release or
-eviction). This matters because completeness feeds the <code>dominates</code> check: if a channel's own
-coordinate jumped over a gap, a record waiting on an offset inside the gap would be released on
-bookkeeping alone, without the record at that offset having been delivered. The contiguous boundary
-ensures completeness reflects actual delivery history, not observed-but-undelivered offsets. (It is
-distinct from the <em>protocol watermark</em> records above, which carry a completeness frontier between
-nodes.)</p>
+advances past the held record's position once that record is itself delivered. This matters because
+the frontier is exactly what the <code>dominates</code> gate checks: if a coordinate jumped over a gap, a
+record waiting on an offset inside the gap would be released on bookkeeping alone, without the
+record at that offset having been delivered. The contiguous boundary ensures the gate reflects
+actual delivery history, not observed-but-undelivered offsets. (It is distinct from the <em>protocol
+watermark</em> records above, which carry a completeness frontier between nodes.)</p>
 <h2 id="violations">Violations</h2>
-<p>Eviction is the only path that breaks Lamport's happened-before guarantee. Under the default
-policy (<code>parsley.buffer.eviction.failure.policy = fail</code>), the engine throws rather than deliver
-a record whose dependencies are not met, and the task restarts. No violation reaches downstream.</p>
-<p>Under the <code>continue</code> policy, the record is delivered out of causal order. Its outgoing stamp
-carries the node's completeness frontier at eviction time, which does not dominate the evicted
-record's declared dependencies. Downstream nodes receiving that stamp may release records they would
-otherwise have held. The violation is transitive. The <code>continue</code> policy is an explicit trade of
-Lamport's guarantee for availability under a full buffer; it is logged, metered, and documented
-as a deliberate choice.</p>
-<p>The distinction between <code>fail</code> and <code>continue</code> maps directly onto the consistency-availability
-trade-off described in the CAP theorem and in the causal consistency literature. The default
-takes the consistency side.</p>
+<p>There is no path that breaks Lamport's happened-before guarantee. Delivery is unconditionally
+fail-closed: there is no eviction and no configuration that trades causal order for availability. A
+record whose dependencies are proven impossible to satisfy — an undecodable payload or dependencies
+header, or a dependency naming a coordinate this node has no channel for (see
+<a href="#the-topology-contract">the topology contract</a>) — fails the task fast rather than being delivered out
+of order or dropped. The engine throws, the task restarts, and the record stays in the buffer changelog
+for recovery. No violation ever reaches downstream.</p>
+<p>This takes the consistency side of the trade-off described in the CAP theorem and in the causal
+consistency literature unconditionally: Parsley has no policy knob that spends causal order for
+liveness. A genuinely stuck dependency (a lagging partition, a co-partitioning gap, a producing topic
+that was deleted) shows up as unbounded buffer growth or a fail-closed task restart, never as a silent
+reordering — see <a href="../../troubleshooting/">Troubleshooting</a>.</p>
 
 
 
@@ -1548,7 +1537,7 @@ takes the consistency side.</p>
       <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.top", "navigation.footer", "search.highlight", "content.code.copy"], "search": "../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": {"default": "latest", "provider": "mike"}}</script>
     
     
-      <script src="../../assets/javascripts/bundle.79ae519e.min.js"></script>
+      <script src="../../assets/javascripts/bundle.d7400e89.min.js"></script>
       
     
   </body>

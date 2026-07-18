@@ -14,14 +14,14 @@
         <link rel="prev" href="../streams/">
       
       
-        <link rel="next" href="../audit-logging/">
+        <link rel="next" href="../migration/">
       
       
         
       
       
       <link rel="icon" href="../assets/images/favicon.png">
-      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.6">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.7">
     
     
       
@@ -29,7 +29,7 @@
       
     
     
-      <link rel="stylesheet" href="../assets/stylesheets/main.484c7ddc.min.css">
+      <link rel="stylesheet" href="../assets/stylesheets/main.ec1eaa64.min.css">
       
         
         <link rel="stylesheet" href="../assets/stylesheets/palette.ab4e12ef.min.css">
@@ -482,71 +482,10 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
-  <a href="#buffer-limits" class="md-nav__link">
+  <a href="#causal-delivery-has-exactly-two-dispositions" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Buffer limits
-      
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="Buffer limits">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#size-limit" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Size limit
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#duration-limit" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Duration limit
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#first-of-composite" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        First-of (composite)
-      
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#eviction-fail-fast-or-forward-anyway" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Eviction: fail fast, or forward anyway
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#unresolvable-clock-fail-fast-or-forward-empty" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Unresolvable clock: fail fast, or forward empty
+        Causal delivery has exactly two dispositions
       
     </span>
   </a>
@@ -575,38 +514,21 @@
   
 </li>
       
+        <li class="md-nav__item">
+  <a href="#metrics" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Metrics
+      
+    </span>
+  </a>
+  
+</li>
+      
     </ul>
   
 </nav>
       
-    </li>
-  
-
-              
-            
-              
-                
-  
-  
-  
-  
-    <li class="md-nav__item">
-      <a href="../audit-logging/" class="md-nav__link">
-        
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    Audit logging
-  
-
-    
-  </span>
-  
-  
-
-      </a>
     </li>
   
 
@@ -1117,71 +1039,10 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
-  <a href="#buffer-limits" class="md-nav__link">
+  <a href="#causal-delivery-has-exactly-two-dispositions" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Buffer limits
-      
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="Buffer limits">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#size-limit" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Size limit
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#duration-limit" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Duration limit
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#first-of-composite" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        First-of (composite)
-      
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#eviction-fail-fast-or-forward-anyway" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Eviction: fail fast, or forward anyway
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#unresolvable-clock-fail-fast-or-forward-empty" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Unresolvable clock: fail fast, or forward empty
+        Causal delivery has exactly two dispositions
       
     </span>
   </a>
@@ -1210,6 +1071,17 @@
   
 </li>
       
+        <li class="md-nav__item">
+  <a href="#metrics" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Metrics
+      
+    </span>
+  </a>
+  
+</li>
+      
     </ul>
   
 </nav>
@@ -1231,82 +1103,24 @@
 
 
 <h1 id="configuration">Configuration</h1>
-<h2 id="buffer-limits">Buffer limits</h2>
-<p>A <code>CausalBufferLimit</code> bounds how large or how long-lived the causal buffer may grow before it fires.
-What firing actually does, whether it evicts the record or fails the task fast, is governed by
-<a href="#eviction-fail-fast-or-forward-anyway"><code>parsley.buffer.eviction.failure.policy</code></a> below. This section
-describes when each kind of limit fires.</p>
-<h3 id="size-limit">Size limit</h3>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="n">CausalBufferLimit</span><span class="p">.</span><span class="na">ofSize</span><span class="p">(</span><span class="mi">500</span><span class="p">)</span><span class="w">  </span><span class="c1">// fires once the buffer holds at least 500 records</span>
-</code></pre></div>
-<p>The size limit fires synchronously during <code>process()</code>, in the same call that pushes the buffer over
-the limit. It acts on only the oldest records needed to bring the buffer back under the limit, which
-is typically one record per call. Younger buffered records are left alone.</p>
-<p>The limit is also enforced once at startup, against whatever buffer was restored from the changelog.
-Lowering the limit and restarting therefore acts on the oldest excess records immediately, rather
-than waiting for new traffic to retrigger the inline check above. This enforcement happens shortly
-after startup, and not necessarily before the very first record. The buffer cannot stay over the
-limit either way, because a record admitted in that window trips the inline check above instead.</p>
-<h3 id="duration-limit">Duration limit</h3>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="n">CausalBufferLimit</span><span class="p">.</span><span class="na">ofDuration</span><span class="p">(</span><span class="n">Duration</span><span class="p">.</span><span class="na">ofSeconds</span><span class="p">(</span><span class="mi">30</span><span class="p">))</span>
-</code></pre></div>
-<p>The duration limit fires on a scheduled basis. The processor calls <code>evictExpired()</code> at the configured
-interval, which acts only on the records that have individually aged past <code>duration</code> and leaves
-younger records held. Parsley wires this schedule automatically when you use <code>ParsleyProcessors</code>.</p>
-<h3 id="first-of-composite">First-of (composite)</h3>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="n">CausalBufferLimit</span><span class="p">.</span><span class="na">first</span><span class="p">(</span>
-<a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="w">    </span><span class="n">CausalBufferLimit</span><span class="p">.</span><span class="na">ofSize</span><span class="p">(</span><span class="mi">1000</span><span class="p">),</span>
-<a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a><span class="w">    </span><span class="n">CausalBufferLimit</span><span class="p">.</span><span class="na">ofDuration</span><span class="p">(</span><span class="n">Duration</span><span class="p">.</span><span class="na">ofSeconds</span><span class="p">(</span><span class="mi">60</span><span class="p">))</span>
-<a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a><span class="p">)</span>
-</code></pre></div>
-<p>The first-of limit fires when the first of several limits fires. Use it to combine a size cap with a
-time-based backstop.</p>
-<hr />
-<h2 id="eviction-fail-fast-or-forward-anyway">Eviction: fail fast, or forward anyway</h2>
-<p>When the configured <code>CausalBufferLimit</code> fires before a held record's dependencies are satisfied,
-<code>parsley.buffer.eviction.failure.policy</code> decides what happens.</p>
-<ul>
-<li><strong><code>fail</code></strong> (the default) fails the task fast and leaves the candidate records buffered, rather than
-  deliver them out of causal order. This trades availability for consistency. The records are retried
-  on the next attempt, which is after a restart or once the limit or backlog eases.</li>
-<li><strong><code>continue</code></strong> never drops or diverts a record. The configured limit evicts the oldest qualifying records and delivers them
-  anyway, out of causal order. Eviction still feeds the frontier exactly like a normal delivery, so
-  once the evicted record's coordinate closes its gap, buffered records waiting on it catch up in the
-  same step and are not permanently stalled.</li>
-</ul>
-<p>Either way, Parsley logs the event at <code>WARN</code> or <code>ERROR</code> with the causal gap, which is the
-per-coordinate shortfall between what was required and what the frontier had observed. It also counts
-the event through its eviction metric, or its eviction-limit-exceeded metric under the <code>fail</code> policy.
-Register a <code>CausalAudit</code> (see <a href="../audit-logging/">Audit logging</a>) to receive <code>recordViolation</code> or
-<code>recordEvictionLimitExceeded</code> as a per-record callback.</p>
-<hr />
-<h2 id="unresolvable-clock-fail-fast-or-forward-empty">Unresolvable clock: fail fast, or forward empty</h2>
-<p>A record's causal dependencies travel in its <code>parsley-causal-dependencies</code> header. When that header is
-present but cannot be decoded into a clock, a corrupt or truncated header, or one written in an
-unsupported wire version, <code>parsley.clock.resolution.failure.policy</code> decides what happens at ingest.</p>
-<ul>
-<li><strong><code>fail</code></strong> (the default) fails the task fast rather than forward the record on an unknown premise.
-  The record was never buffered and its source offset is not committed past it, so it is reprocessed
-  on the next attempt, which is after a restart or once the upstream is fixed.</li>
-<li><strong><code>continue</code></strong> treats the unresolvable header as empty (vacuously satisfied) and forwards the record
-  immediately. This is best-effort. It is lossy of causal premises:
-  because the frontier is a high-water mark, forwarding on empty dependencies can let the record, and
-  its dependents, be delivered ahead of a premise the corrupt header actually carried.</li>
-</ul>
-<p>Either way the occurrence is surfaced operationally. Parsley logs it at <code>ERROR</code> (<code>fail</code>) or <code>WARN</code>
-(<code>continue</code>) with the source coordinate, counts it through its clock-resolution-error metric, and
-under <code>continue</code> also counts a violation.</p>
+<h2 id="causal-delivery-has-exactly-two-dispositions">Causal delivery has exactly two dispositions</h2>
+<p>A record is either <strong>forwarded</strong> once its dependencies are satisfied, or stays <strong>buffered</strong> —
+unbounded, changelog-backed — while they are not. There is no configuration that trades causal safety
+for liveness, no eviction, and no third disposition: a record whose dependencies are proven impossible
+(an undecodable payload or dependencies header, or a dependency naming a coordinate this node has no
+input channel for) unconditionally fails the task. See <a href="../troubleshooting/">Troubleshooting</a> for what
+that looks like operationally and how to recover from it.</p>
 <hr />
 <h2 id="header-size">Header size</h2>
 <p>The serialised <code>parsley-causal-dependencies</code> header is <code>5 + 28 × entries</code> bytes. It counts against
 Kafka's record-size limit (<code>message.max.bytes</code> and <code>max.request.size</code>, around 1 MB by default), and
 there is no separate header budget.</p>
 <ul>
-<li><strong>Automatic Streams stamping</strong> stamps the per-task frontier, which is bounded by the number of
-  source topics in the subtopology, at one partition per topic per task. This stays small under
-  normal topologies.</li>
+<li><strong>Automatic Streams stamping</strong> stamps the node's completeness frontier, which is bounded by the
+  number of source topics in the subtopology, at one partition per topic per task. This stays small
+  under normal topologies.</li>
 <li><strong><code>CausalDependencies.fromRecord(trigger)</code></strong> carries only the partitions the upstream producer
-  depended on. This is the recommended way to propagate causal context.</li>
+  depended on. This is the recommended way to propagate causal context from a plain Kafka client.</li>
 <li><strong>A manually built <code>CausalDependencies</code></strong> is as wide as the coordinates you <code>require(...)</code>. Watch
   this on records that legitimately depend on many topic-partitions.</li>
 </ul>
@@ -1317,34 +1131,32 @@ guarantee. Keep the relevant-partition count within your record-size budget.</p>
 <p>Parsley reads its own behaviour from a <code>parsley.properties</code> resource on the classpath. This is kept
 separate from Kafka Streams configuration because these behaviours have no Streams equivalent. An
 absent file, or an absent key, falls back to the defaults below.</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="c1"># How a held record that can no longer be deserialised on the forward path is handled</span>
-<a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a><span class="c1"># (for example, an incompatible Schema Registry change while the record was buffered).</span>
-<a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a><span class="c1">#   fail     (default) fails fast; the record stays in the buffer changelog for recovery</span>
-<a id="__codelineno-3-4" name="__codelineno-3-4" href="#__codelineno-3-4"></a><span class="c1">#   continue           drops the record (logged and counted) and keeps processing</span>
-<a id="__codelineno-3-5" name="__codelineno-3-5" href="#__codelineno-3-5"></a><span class="na">parsley.buffer.deserialization.failure.policy</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s">fail</span>
-<a id="__codelineno-3-6" name="__codelineno-3-6" href="#__codelineno-3-6"></a>
-<a id="__codelineno-3-7" name="__codelineno-3-7" href="#__codelineno-3-7"></a><span class="c1"># How a CausalBufferLimit firing (eviction) is handled.</span>
-<a id="__codelineno-3-8" name="__codelineno-3-8" href="#__codelineno-3-8"></a><span class="c1">#   fail     (default) fails fast; the candidate records stay buffered rather than be</span>
-<a id="__codelineno-3-9" name="__codelineno-3-9" href="#__codelineno-3-9"></a><span class="c1">#                      delivered out of causal order, which trades availability for consistency</span>
-<a id="__codelineno-3-10" name="__codelineno-3-10" href="#__codelineno-3-10"></a><span class="c1">#   continue           evicts and forwards the records anyway, out of causal order</span>
-<a id="__codelineno-3-11" name="__codelineno-3-11" href="#__codelineno-3-11"></a><span class="c1">#                      (logged and counted)</span>
-<a id="__codelineno-3-12" name="__codelineno-3-12" href="#__codelineno-3-12"></a><span class="na">parsley.buffer.eviction.failure.policy</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s">fail</span>
-<a id="__codelineno-3-13" name="__codelineno-3-13" href="#__codelineno-3-13"></a>
-<a id="__codelineno-3-14" name="__codelineno-3-14" href="#__codelineno-3-14"></a><span class="c1"># How an inbound record whose causal-dependencies header cannot be decoded is handled at ingest</span>
-<a id="__codelineno-3-15" name="__codelineno-3-15" href="#__codelineno-3-15"></a><span class="c1"># (for example, a corrupt or truncated header, or one in an unsupported wire version).</span>
-<a id="__codelineno-3-16" name="__codelineno-3-16" href="#__codelineno-3-16"></a><span class="c1">#   fail     (default) fails fast; the record is reprocessed on restart rather than forwarded</span>
-<a id="__codelineno-3-17" name="__codelineno-3-17" href="#__codelineno-3-17"></a><span class="c1">#                      on an unknown premise</span>
-<a id="__codelineno-3-18" name="__codelineno-3-18" href="#__codelineno-3-18"></a><span class="c1">#   continue           forwards the record with empty (vacuously satisfied) dependencies,</span>
-<a id="__codelineno-3-19" name="__codelineno-3-19" href="#__codelineno-3-19"></a><span class="c1">#                      out of causal order (logged and counted as a violation)</span>
-<a id="__codelineno-3-20" name="__codelineno-3-20" href="#__codelineno-3-20"></a><span class="na">parsley.clock.resolution.failure.policy</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s">fail</span>
-<a id="__codelineno-3-21" name="__codelineno-3-21" href="#__codelineno-3-21"></a>
-<a id="__codelineno-3-22" name="__codelineno-3-22" href="#__codelineno-3-22"></a><span class="c1"># How a causal processor reacts at startup to a detectable topology misconfiguration: the causal</span>
-<a id="__codelineno-3-23" name="__codelineno-3-23" href="#__codelineno-3-23"></a><span class="c1"># input topics not sharing a partition count (co-partitioning impossible), and, for a CausalStreams</span>
-<a id="__codelineno-3-24" name="__codelineno-3-24" href="#__codelineno-3-24"></a><span class="c1"># stage, its sink topics&#39; partition counts and cleanup.policy too.</span>
-<a id="__codelineno-3-25" name="__codelineno-3-25" href="#__codelineno-3-25"></a><span class="c1">#   warn     (default) logs the mismatch and continues</span>
-<a id="__codelineno-3-26" name="__codelineno-3-26" href="#__codelineno-3-26"></a><span class="c1">#   strict             fails the task fast at startup</span>
-<a id="__codelineno-3-27" name="__codelineno-3-27" href="#__codelineno-3-27"></a><span class="c1">#   off                disables the checks</span>
-<a id="__codelineno-3-28" name="__codelineno-3-28" href="#__codelineno-3-28"></a><span class="na">parsley.topology.validation</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s">warn</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="c1"># How a causal processor reacts at startup to a detectable topology misconfiguration: the causal</span>
+<a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="c1"># input topics not sharing a partition count (co-partitioning impossible), and, for a</span>
+<a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a><span class="c1"># CausalStreamsBuilder stage, its sink topics&#39; partition counts and cleanup.policy too.</span>
+<a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a><span class="c1">#   warn     (default) logs the mismatch and continues</span>
+<a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a><span class="c1">#   strict             fails the task fast at startup</span>
+<a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a><span class="c1">#   off                disables the checks</span>
+<a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a><span class="na">parsley.topology.validation</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s">warn</span>
+<a id="__codelineno-0-8" name="__codelineno-0-8" href="#__codelineno-0-8"></a>
+<a id="__codelineno-0-9" name="__codelineno-0-9" href="#__codelineno-0-9"></a><span class="c1"># The shared, single-partition epoch-events log topic name. Set this to turn on topology-epoch</span>
+<a id="__codelineno-0-10" name="__codelineno-0-10" href="#__codelineno-0-10"></a><span class="c1"># coordination for a CausalStreams runtime. Absent (the default), a topology runs in epoch 0 exactly</span>
+<a id="__codelineno-0-11" name="__codelineno-0-11" href="#__codelineno-0-11"></a><span class="c1"># as without coordination: no epoch-events log, no coordination thread.</span>
+<a id="__codelineno-0-12" name="__codelineno-0-12" href="#__codelineno-0-12"></a><span class="c1">#</span>
+<a id="__codelineno-0-13" name="__codelineno-0-13" href="#__codelineno-0-13"></a><span class="c1"># The topic must exist with EXACTLY ONE partition and must retain its full history: every instance</span>
+<a id="__codelineno-0-14" name="__codelineno-0-14" href="#__codelineno-0-14"></a><span class="c1"># replays the log from the beginning on startup, so use cleanup.policy=delete with retention.ms=-1 —</span>
+<a id="__codelineno-0-15" name="__codelineno-0-15" href="#__codelineno-0-15"></a><span class="c1"># finite retention or compaction silently erases membership and epoch history. Both are validated at</span>
+<a id="__codelineno-0-16" name="__codelineno-0-16" href="#__codelineno-0-16"></a><span class="c1"># startup (the partition count, the cleanup policy, and the retention), failing fast on a topic that</span>
+<a id="__codelineno-0-17" name="__codelineno-0-17" href="#__codelineno-0-17"></a><span class="c1"># could ever lose events the fold needs.</span>
+<a id="__codelineno-0-18" name="__codelineno-0-18" href="#__codelineno-0-18"></a><span class="c1"># parsley.coordination.epoch-events-topic = parsley-epoch-events</span>
+<a id="__codelineno-0-19" name="__codelineno-0-19" href="#__codelineno-0-19"></a>
+<a id="__codelineno-0-20" name="__codelineno-0-20" href="#__codelineno-0-20"></a><span class="c1"># The comma-separated set of every topic in the coordinated domain (every member&#39;s inputs and sinks,</span>
+<a id="__codelineno-0-21" name="__codelineno-0-21" href="#__codelineno-0-21"></a><span class="c1"># external sources included). Only meaningful alongside parsley.coordination.epoch-events-topic; set</span>
+<a id="__codelineno-0-22" name="__codelineno-0-22" href="#__codelineno-0-22"></a><span class="c1"># it so CausalTopology auto-wires a passthrough source for any domain topic a stage does not otherwise</span>
+<a id="__codelineno-0-23" name="__codelineno-0-23" href="#__codelineno-0-23"></a><span class="c1"># consume or produce, letting that stage&#39;s declared subscriptions cover the full domain without a</span>
+<a id="__codelineno-0-24" name="__codelineno-0-24" href="#__codelineno-0-24"></a><span class="c1"># redundant business subscription. Required for a topology with a genuine cycle. See</span>
+<a id="__codelineno-0-25" name="__codelineno-0-25" href="#__codelineno-0-25"></a><span class="c1"># Evolving a running topology in streams.md.</span>
+<a id="__codelineno-0-26" name="__codelineno-0-26" href="#__codelineno-0-26"></a><span class="c1"># parsley.coordination.domain-topics = prices,orders,enriched-output</span>
 </code></pre></div>
 <table>
 <thead>
@@ -1356,52 +1168,88 @@ absent file, or an absent key, falls back to the defaults below.</p>
 </thead>
 <tbody>
 <tr>
-<td><code>parsley.buffer.deserialization.failure.policy</code></td>
-<td><code>fail</code></td>
-<td><code>fail</code>, <code>continue</code></td>
-</tr>
-<tr>
-<td><code>parsley.buffer.eviction.failure.policy</code></td>
-<td><code>fail</code></td>
-<td><code>fail</code>, <code>continue</code></td>
-</tr>
-<tr>
-<td><code>parsley.clock.resolution.failure.policy</code></td>
-<td><code>fail</code></td>
-<td><code>fail</code>, <code>continue</code></td>
-</tr>
-<tr>
 <td><code>parsley.topology.validation</code></td>
 <td><code>warn</code></td>
 <td><code>off</code>, <code>warn</code>, <code>strict</code></td>
 </tr>
+<tr>
+<td><code>parsley.coordination.epoch-events-topic</code></td>
+<td>(unset)</td>
+<td>a topic name</td>
+</tr>
+<tr>
+<td><code>parsley.coordination.domain-topics</code></td>
+<td>(unset)</td>
+<td>comma-separated topic names</td>
+</tr>
 </tbody>
 </table>
-<p><code>parsley.buffer.deserialization.failure.policy = continue</code> is best-effort and lossy. See
-<a href="../troubleshooting/">Troubleshooting</a> for the full semantics, including why it is not mapped from
-Streams' <code>deserialization.exception.handler</code>. A durable quarantine and operator-triggered redelivery
-is planned to supersede it.</p>
-<p><code>parsley.buffer.eviction.failure.policy = fail</code> means that a sustained causal gap, where a dependency
-never arrives, repeatedly fails the task once the buffer limit is reached, rather than ever deliver
-out of order. Set it to <code>continue</code> if availability matters more than strict causal order for your use
-case.</p>
-<p><code>parsley.clock.resolution.failure.policy = fail</code> means that a record carrying a corrupt
-causal-dependencies header fails the task rather than be forwarded on unknown premises. Set it to
-<code>continue</code> to forward such a record with empty dependencies, best-effort, accepting that this is
-lossy of causal order.</p>
 <p><code>parsley.topology.validation = warn</code> logs a prominent warning at startup when the causal input topics
 do not share a partition count, which makes co-partitioning impossible, and lets the task start. This
 is visible without breaking a deployment that already ran with the mismatch. Set it to <code>strict</code> to
-fail the task fast instead, or <code>off</code> to skip the checks. A bare <code>ParsleyProcessors</code> decorator only
-ever sees its own registered input topics, so that partition-count parity check is all it can run. A
-<code>CausalStreams</code> stage owns its sinks too, so the same key widens to fold sink partition counts into
-the parity check and to check each sink's <code>cleanup.policy</code> for <code>compact</code> (a protocol watermark is a
-null-value record wire-indistinguishable from a compaction tombstone). Each sink is resolved
-independently, so one sink that does not exist yet never masks a genuine misconfiguration on a
-different sink in the same stage, even under <code>strict</code>; both sink-side checks are skipped entirely
-(no admin round-trip) when validation is <code>off</code>. See
-<a href="../streams/#the-high-level-api-causalstreams">The high-level API: CausalStreams</a> and the
-<a href="../streams/#preconditions">Streams integration preconditions</a> for the full contract.</p>
+fail the task fast instead, or <code>off</code> to skip the checks. <code>CausalTopology</code>-assembled stages also fold
+their sink topics' partition counts into the same parity check and check each sink's <code>cleanup.policy</code>
+for <code>compact</code> (a protocol watermark is a null-value record wire-indistinguishable from a compaction
+tombstone). Each sink is resolved independently, so one sink that does not exist yet never masks a
+genuine misconfiguration on a different sink in the same stage, even under <code>strict</code>; both sink-side
+checks are skipped entirely (no admin round-trip) when validation is <code>off</code>. Under topology-epoch
+coordination, a sink partition-count mismatch always escalates to a hard failure regardless of this
+setting — a crash loop is the actual failure mode a warning would otherwise hide. See
+<a href="../streams/#startup-validation">Streams integration</a> and its
+<a href="../streams/#preconditions">preconditions</a> for the full contract.</p>
+<p><code>parsley.coordination.epoch-events-topic</code> and <code>parsley.coordination.domain-topics</code> are read directly
+from the <code>Properties</code> passed to <code>new CausalStreams(topology, props)</code> — see
+<a href="../streams/#evolving-a-running-topology">Evolving a running topology</a>.</p>
+<h2 id="metrics">Metrics</h2>
+<p>Parsley wires a handful of Kafka Streams <code>Sensor</code>s per task, under the <code>stream-parsley-metrics</code> group:</p>
+<table>
+<thead>
+<tr>
+<th>Sensor</th>
+<th>Kind</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>records-buffered</code></td>
+<td>rate/total</td>
+<td>Records admitted into the causal buffer (held, not yet delivered).</td>
+</tr>
+<tr>
+<td><code>records-released</code></td>
+<td>rate/total</td>
+<td>Records released from the buffer once their dependencies were satisfied.</td>
+</tr>
+<tr>
+<td><code>deserialization-errors</code></td>
+<td>rate/total</td>
+<td>Records that failed to deserialise on the forward path.</td>
+</tr>
+<tr>
+<td><code>clock-resolution-errors</code></td>
+<td>rate/total</td>
+<td>Records whose <code>parsley-causal-dependencies</code> header could not be decoded.</td>
+</tr>
+<tr>
+<td><code>unreachable-dependency-errors</code></td>
+<td>rate/total</td>
+<td>Records naming a dependency this node has no input channel for.</td>
+</tr>
+<tr>
+<td><code>buffer-depth</code></td>
+<td>gauge</td>
+<td>Current number of records held in the causal buffer.</td>
+</tr>
+<tr>
+<td><code>buffer-oldest-buffered-at-ms</code></td>
+<td>gauge</td>
+<td>Timestamp the oldest currently-held record was buffered at.</td>
+</tr>
+</tbody>
+</table>
+<p>Any non-zero rate on the three error sensors, or sustained growth in <code>buffer-depth</code>, is worth alerting
+on — see <a href="../troubleshooting/">Troubleshooting</a>.</p>
 
 
 
@@ -1454,13 +1302,13 @@ different sink in the same stage, even under <code>strict</code>; both sink-side
         
         
           
-          <a href="../audit-logging/" class="md-footer__link md-footer__link--next" aria-label="Next: Audit logging">
+          <a href="../migration/" class="md-footer__link md-footer__link--next" aria-label="Next: Migration">
             <div class="md-footer__title">
               <span class="md-footer__direction">
                 Next
               </span>
               <div class="md-ellipsis">
-                Audit logging
+                Migration
               </div>
             </div>
             <div class="md-footer__button md-icon">
@@ -1500,7 +1348,7 @@ different sink in the same stage, even under <code>strict</code>; both sink-side
       <script id="__config" type="application/json">{"annotate": null, "base": "..", "features": ["navigation.top", "navigation.footer", "search.highlight", "content.code.copy"], "search": "../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": {"default": "latest", "provider": "mike"}}</script>
     
     
-      <script src="../assets/javascripts/bundle.79ae519e.min.js"></script>
+      <script src="../assets/javascripts/bundle.d7400e89.min.js"></script>
       
     
   </body>

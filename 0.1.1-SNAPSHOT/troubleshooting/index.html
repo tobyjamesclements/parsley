@@ -21,7 +21,7 @@
       
       
       <link rel="icon" href="../assets/images/favicon.png">
-      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.6">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.7">
     
     
       
@@ -29,7 +29,7 @@
       
     
     
-      <link rel="stylesheet" href="../assets/stylesheets/main.484c7ddc.min.css">
+      <link rel="stylesheet" href="../assets/stylesheets/main.ec1eaa64.min.css">
       
         
         <link rel="stylesheet" href="../assets/stylesheets/palette.ab4e12ef.min.css">
@@ -448,34 +448,6 @@
   
   
     <li class="md-nav__item">
-      <a href="../audit-logging/" class="md-nav__link">
-        
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    Audit logging
-  
-
-    
-  </span>
-  
-  
-
-      </a>
-    </li>
-  
-
-              
-            
-              
-                
-  
-  
-  
-  
-    <li class="md-nav__item">
       <a href="../migration/" class="md-nav__link">
         
   
@@ -671,10 +643,10 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#recovery-under-the-default-fail-fast-policy" class="md-nav__link">
+  <a href="#recovery" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Recovery under the default fail-fast policy
+        Recovery
       
     </span>
   </a>
@@ -694,6 +666,39 @@
         
       </ul>
     </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#an-inbound-records-causal-dependencies-header-cannot-be-decoded" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        An inbound record's causal-dependencies header cannot be decoded
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#a-record-depends-on-a-coordinate-this-node-has-no-input-channel-for" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        A record depends on a coordinate this node has no input channel for
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#sustained-buffer-growth" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Sustained buffer growth
+      
+    </span>
+  </a>
   
 </li>
       
@@ -1096,10 +1101,10 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#recovery-under-the-default-fail-fast-policy" class="md-nav__link">
+  <a href="#recovery" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Recovery under the default fail-fast policy
+        Recovery
       
     </span>
   </a>
@@ -1119,6 +1124,39 @@
         
       </ul>
     </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#an-inbound-records-causal-dependencies-header-cannot-be-decoded" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        An inbound record's causal-dependencies header cannot be decoded
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#a-record-depends-on-a-coordinate-this-node-has-no-input-channel-for" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        A record depends on a coordinate this node has no input channel for
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#sustained-buffer-growth" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Sustained buffer growth
+      
+    </span>
+  </a>
   
 </li>
       
@@ -1145,60 +1183,30 @@
 <h1 id="troubleshooting">Troubleshooting</h1>
 <h2 id="a-held-record-can-no-longer-be-deserialised-poison-record">A held record can no longer be deserialised (poison record)</h2>
 <p>Parsley persists records whose causal dependencies are not yet satisfied to a changelog-backed buffer
-store, serialised with the <code>ParsleyBuffer</code> serdes. When such a record is later forwarded, whether on
-drain or on limit-driven eviction, Parsley deserialises it with that serde. If the serde now fails,
-most often because of a Schema Registry change while the record was buffered, the record is a poison
-record.</p>
+store, serialised with the <code>ParsleySource</code> serdes. When such a record is later forwarded, Parsley
+deserialises it with that serde. If the serde now fails, most often because of a Schema Registry change
+while the record was buffered, the record is a poison record.</p>
 <p>The Avro and Schema Registry case is worth spelling out. The Confluent wire format embeds the writer
 schema id in the bytes, and decode fetches the writer schema by that id. Registering an incompatible
 new version on its own therefore does not break a buffered record. Decode fails only when the writer
 schema id is hard-deleted, when the redeployed reader schema is incompatible, or when the
 deserializer resolves against the subject's latest schema.</p>
 <h3 id="what-parsley-does">What Parsley does</h3>
-<p>The behaviour is set by <code>parsley.properties</code>. This is a Parsley-specific config surface and is not
-mapped from Streams' exception handlers, because dropping a buffered record has causal-frontier
-consequences that a source-record skip does not.</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="c1"># parsley.properties (on the classpath)</span>
-<a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="na">parsley.buffer.deserialization.failure.policy</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s">fail   # or: continue</span>
-</code></pre></div>
-<table>
-<thead>
-<tr>
-<th><code>parsley.buffer.deserialization.failure.policy</code></th>
-<th>Behaviour on a poison record</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td><code>fail</code> (the default)</td>
-<td>Fail fast. The Streams client shuts down, and the record stays in the buffer changelog for recovery.</td>
-</tr>
-<tr>
-<td><code>continue</code></td>
-<td>Skip. The record is dropped, logged, and counted as a violation, and processing continues.</td>
-</tr>
-</tbody>
-</table>
-<blockquote>
-<p>The <code>continue</code> policy is best-effort and lossy in this first version. The dropped record's contents
-are gone for good. Its coordinate is still accounted for, exactly like an eviction, so dropping it
-closes the gap it sat in. A dependent of the dropped record, meaning one that named its exact
-coordinate, is then later delivered as satisfied even though the contents of its premise were never
-delivered to anyone. Prefer <code>fail</code> unless you specifically need liveness over correctness. A durable
-quarantine store with operator-triggered redelivery is planned to supersede <code>continue</code>.</p>
-</blockquote>
-<p>In both cases the following hold.</p>
+<p>Delivery is unconditionally fail-closed: there is no configuration that trades causal safety for
+liveness, and no third disposition besides forward or buffer. A poison record always fails the task
+fast — the record is never dropped and never forwarded on an unproven premise.</p>
 <ul>
-<li>The JVM is never crashed. The error is a <code>RuntimeException</code> that is fatal only to the task.</li>
+<li>The JVM is never crashed. The error is a <code>RuntimeException</code> that is fatal only to the task, which
+  Kafka Streams restarts.</li>
 <li>Startup is never blocked. Index restore decodes only Parsley's own framing and never your serde, so
   a poison record can be restored and only fails when it is actually forwarded.</li>
 <li>An <code>ERROR</code> line is logged with the held record's metadata, and never with the payload bytes.</li>
 </ul>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>Buffered record could not be deserialised (deserialization handler = fail); failing fast.
-<a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a>It remains in the buffer changelog for recovery. held record orders-0@42 (topicId C3o…, ts 178…);
-<a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a>schema id: 1; dependencies: ParsleyClock{Wvr…-0@0}; header keys: [...]; key bytes: 1; value bytes: 15
+<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>Buffered record could not be deserialised; failing fast (fail-closed). It remains in the buffer
+<a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>changelog for recovery. held record orders-0@42 (topicId C3o…, ts 178…) (writer schema id 1);
+<a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a>dependencies: ParsleyClock{Wvr…-0@0}; header keys: [...]; key bytes: 1; value bytes: 15
 </code></pre></div>
-<h3 id="recovery-under-the-default-fail-fast-policy">Recovery under the default fail-fast policy</h3>
+<h3 id="recovery">Recovery</h3>
 <ol>
 <li>Read the <code>ERROR</code> line. It names the source coordinate (<code>orders-0@42</code>) and the writer schema id
    that can no longer be decoded.</li>
@@ -1209,19 +1217,49 @@ quarantine store with operator-triggered redelivery is planned to supersede <cod
    normally.</li>
 </ol>
 <p>To inspect the exact bytes, read them from the buffer's changelog topic
-<code>{applicationId}-{storeName}-buffer-changelog</code>, where the default <code>storeName</code> is <code>parsley</code>, with a
-console consumer. Parsley never logs the payload itself.</p>
-<p>If the record is genuinely unrecoverable and you need liveness, set
-<code>parsley.buffer.deserialization.failure.policy = continue</code> and restart. Parsley then drops the poison
-record, logs it, counts it as a violation, and continues, accepting the lossiness noted above.</p>
+<code>{applicationId}-{storeName}-buffer-changelog</code>, where <code>storeName</code> is the stage's name, with a console
+consumer. Parsley never logs the payload itself.</p>
 <h3 id="do-not-use-streams-exception-handlers-for-this">Do not use Streams' exception handlers for this</h3>
 <p>Setting <code>processing.exception.handler=CONTINUE</code> does not help. Streams routes the failure through that
 handler, but its <code>CONTINUE</code> mode skips the innocent record currently being processed, which is the
 record whose arrival triggered the drain, rather than the buffered poison record. The poison record
 stays, the next trigger hits it again, and the application sheds healthy records in a livelock. The
 <code>deserialization.exception.handler</code> (<code>LogAndContinue</code>) does not apply either, because it covers
-source-topic consumption rather than records decoded from Parsley's state store. Use
-<code>parsley.buffer.deserialization.failure.policy</code> instead.</p>
+source-topic consumption rather than records decoded from Parsley's state store. There is no Parsley
+config to set instead — recovery is always the schema-fix-and-restart path above.</p>
+<hr />
+<h2 id="an-inbound-records-causal-dependencies-header-cannot-be-decoded">An inbound record's causal-dependencies header cannot be decoded</h2>
+<p>A record's causal dependencies travel in its <code>parsley-causal-dependencies</code> header. When that header is
+present but cannot be decoded into a clock — a corrupt or truncated header, or one written in an
+unsupported wire version — Parsley fails the task fast at ingest rather than forward the record on an
+unknown premise. The record was never buffered and its source offset is not committed past it, so it is
+reprocessed on the next attempt, after a restart or once the upstream is fixed.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>Unresolvable causal-dependencies header on orders-0 @42; failing fast (fail-closed). ...
+</code></pre></div>
+<p>Recovery is the same shape as the poison-record case: fix or roll back whatever upstream change
+produced the undecodable header, then restart.</p>
+<hr />
+<h2 id="a-record-depends-on-a-coordinate-this-node-has-no-input-channel-for">A record depends on a coordinate this node has no input channel for</h2>
+<p>Parsley cannot silently treat an unreachable dependency as satisfied — it can only prove it has no way
+to check it, never that the coordinate is genuinely irrelevant. A dependency naming an undeclared
+topic, or a partition a different task instance owns, fails the task fast:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>orders-0 @42 depends on a coordinate this node has no channel for; failing fast (fail-closed). The
+<a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a>record was not forwarded and is reprocessed on restart.
+</code></pre></div>
+<p>This usually means the topology is missing a subscription: either a genuine bug (the producer stamped
+a dependency on a topic this stage never registered), or, under topology-epoch coordination, a stage
+that does not cover the full coordinated domain — see
+<a href="../configuration/"><code>parsley.coordination.domain-topics</code></a> and
+<a href="../streams/#evolving-a-running-topology">Evolving a running topology</a> for wiring a passthrough source
+to cover it without a redundant business subscription.</p>
+<hr />
+<h2 id="sustained-buffer-growth">Sustained buffer growth</h2>
+<p>If <code>buffer-depth</code> (see <a href="../configuration/#metrics">Configuration</a>) grows without bound instead of
+draining, a dependency is genuinely stuck — a lagging partition, a co-partitioning problem, or a
+producing topic that was deleted. The buffer is unconditionally unbounded, so a stuck dependency
+accumulates records rather than being evicted or dropped. Each held record's debug-level <code>Holding</code> log
+line identifies the specific coordinate still missing at the time; correlate it against the lagging
+topic-partition's own consumer lag.</p>
 
 
 
@@ -1320,7 +1358,7 @@ source-topic consumption rather than records decoded from Parsley's state store.
       <script id="__config" type="application/json">{"annotate": null, "base": "..", "features": ["navigation.top", "navigation.footer", "search.highlight", "content.code.copy"], "search": "../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": {"default": "latest", "provider": "mike"}}</script>
     
     
-      <script src="../assets/javascripts/bundle.79ae519e.min.js"></script>
+      <script src="../assets/javascripts/bundle.d7400e89.min.js"></script>
       
     
   </body>

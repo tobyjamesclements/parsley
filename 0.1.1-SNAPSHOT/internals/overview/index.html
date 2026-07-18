@@ -21,7 +21,7 @@
       
       
       <link rel="icon" href="../../assets/images/favicon.png">
-      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.6">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.7">
     
     
       
@@ -29,7 +29,7 @@
       
     
     
-      <link rel="stylesheet" href="../../assets/stylesheets/main.484c7ddc.min.css">
+      <link rel="stylesheet" href="../../assets/stylesheets/main.ec1eaa64.min.css">
       
         
         <link rel="stylesheet" href="../../assets/stylesheets/palette.ab4e12ef.min.css">
@@ -428,34 +428,6 @@
     
   
     Configuration
-  
-
-    
-  </span>
-  
-  
-
-      </a>
-    </li>
-  
-
-              
-            
-              
-                
-  
-  
-  
-  
-    <li class="md-nav__item">
-      <a href="../../audit-logging/" class="md-nav__link">
-        
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    Audit logging
   
 
     
@@ -1167,9 +1139,10 @@
 
 
 <h1 id="internals-overview">Internals overview</h1>
-<p>Parsley is built around one public entry point — the Streams causal processor — plus stateless edge
-operations for stamping and propagating dependencies from plain Kafka clients, all backed by a shared
-internal implementation.</p>
+<p>Parsley is built around one public, topology-level entry point — <code>CausalStreamsBuilder</code> /
+<code>CausalTopology</code> / <code>CausalStreams</code>, three roles mirroring Kafka Streams' own <code>StreamsBuilder</code> /
+<code>Topology</code> / <code>KafkaStreams</code> — plus stateless edge operations for stamping and propagating dependencies
+from plain Kafka clients, all backed by a shared internal implementation.</p>
 <table>
 <thead>
 <tr>
@@ -1179,8 +1152,8 @@ internal implementation.</p>
 </thead>
 <tbody>
 <tr>
-<td><code>ParsleyProcessorSupplier</code></td>
-<td><code>ParsleyProcessor</code></td>
+<td><code>CausalStreamsBuilder</code> / <code>CausalTopology</code> / <code>CausalStreams</code></td>
+<td><code>ParsleyProcessorSupplier</code> / <code>ParsleyProcessor</code> (package-private)</td>
 </tr>
 <tr>
 <td><code>CausalDependencies</code> edge ops (<code>using</code> / <code>observe</code> / <code>stamp</code> / <code>merge</code>)</td>
@@ -1200,16 +1173,24 @@ internal implementation.</p>
 </thead>
 <tbody>
 <tr>
+<td><code>CausalStreamsBuilder</code></td>
+<td>Declares one or more causal stages: <code>stream(...)</code> source topics, <code>.process(supplier)</code>, <code>.to(...)</code> sink(s); <code>.build()</code> produces a <code>CausalTopology</code></td>
+</tr>
+<tr>
+<td><code>CausalStream</code> / <code>CausalProcessedStream</code></td>
+<td>Fluent intermediate types <code>CausalStreamsBuilder</code> returns while declaring a stage (<code>merge</code>, <code>process</code>, <code>to</code>, <code>withPartitioner</code>)</td>
+</tr>
+<tr>
+<td><code>CausalTopology</code></td>
+<td>The built, immutable topology specification; <code>assemble(props, quiesce, coordination)</code> produces the real Kafka Streams <code>Topology</code></td>
+</tr>
+<tr>
+<td><code>CausalStreams</code></td>
+<td>The runtime: wraps the underlying <code>KafkaStreams</code> instance, owns graceful causal drain on <code>close()</code> and, when configured, topology-epoch coordination</td>
+</tr>
+<tr>
 <td><code>CausalDependencies</code></td>
 <td>Public facade over a <code>ParsleyClock</code>: the causal requirements stamped onto each record, plus the <code>using</code>/<code>observe</code>/<code>stamp</code>/<code>merge</code> edge operations and <code>isWatermark</code> for skipping protocol watermarks on the consumer side</td>
-</tr>
-<tr>
-<td><code>ParsleyBuffer</code></td>
-<td>Registers one causal source on the processor builder: topic name + the serdes the buffer round-trips held records with (the topic's UUID is resolved from the broker)</td>
-</tr>
-<tr>
-<td><code>CausalBufferLimit</code></td>
-<td>When to evict held records: <code>ofDuration</code>, <code>ofSize</code>, <code>first</code></td>
 </tr>
 </tbody>
 </table>
@@ -1227,8 +1208,12 @@ internal implementation.</p>
 <td>Resolves topic names to their stable Kafka UUIDs (through a short-lived Kafka admin client, cached), backing <code>CausalDependencies</code>'s <code>using</code>/<code>builder</code></td>
 </tr>
 <tr>
+<td><code>ParsleySource</code></td>
+<td>One registered causal source: topic name + the serdes the buffer round-trips held records with (the topic's UUID is resolved from the broker)</td>
+</tr>
+<tr>
 <td><code>ParsleyEngine</code></td>
-<td>Causal buffer engine: classify, buffer, cascade, evict</td>
+<td>Causal buffer engine: classify, buffer, cascade, fail-closed. No eviction, no buffer limit, no timeout</td>
 </tr>
 <tr>
 <td><code>ParsleyClock</code></td>
@@ -1244,7 +1229,7 @@ internal implementation.</p>
 </tr>
 <tr>
 <td><code>ParsleyProcessor</code></td>
-<td>Kafka Streams processor wrapping the user processor and driving the engine; emits and consumes protocol watermarks</td>
+<td>Kafka Streams processor wrapping the user processor and driving the engine; emits and consumes protocol watermarks and epoch markers</td>
 </tr>
 <tr>
 <td><code>ParsleyProcessorSupplier</code></td>
@@ -1255,20 +1240,20 @@ internal implementation.</p>
 <td>Stamping proxy: replaces the context given to the user processor; counts business forwards to drive watermark emission</td>
 </tr>
 <tr>
-<td><code>ParsleyBufferStore</code> / <code>RocksBufferStore</code></td>
+<td><code>ParsleyBufferStore</code> / <code>StoreBackedBufferStore</code></td>
 <td>Durable buffer of held records</td>
 </tr>
 <tr>
-<td><code>ParsleyCandidateIndex</code> / <code>RocksCandidateIndex</code></td>
+<td><code>ParsleyCandidateIndex</code> / <code>StoreBackedCandidateIndex</code></td>
 <td>Secondary index: coordinate -&gt; candidate record IDs</td>
 </tr>
 <tr>
-<td><code>ParsleyForwardedIndex</code> / <code>RocksForwardedIndex</code></td>
+<td><code>ParsleyForwardedIndex</code> / <code>StoreBackedForwardedIndex</code></td>
 <td>Offsets forwarded ahead of the contiguous frontier, so the boundary stays gap-free across restarts</td>
 </tr>
 <tr>
 <td><code>ParsleyFrontier</code></td>
-<td>Owns all causal metadata a node persists — the contiguous delivered frontier clock, the per-input-channel clocks, and <code>completeness()</code> (the per-coordinate min across all input channels) — self-persisting as the single <code>"f"</code> value of the frontier store; holds the forwarded index as a collaborator</td>
+<td>Owns all causal metadata a node persists — the contiguous delivered frontier clock (the delivery gate's clock), the per-input-channel clocks, and <code>completeness()</code> (the max-merge of the frontier and every channel's advertised clock — the outbound stamp, never the gate) — self-persisting as the single <code>"f"</code> value of the frontier store; holds the forwarded index as a collaborator</td>
 </tr>
 <tr>
 <td><code>ParsleySerializer</code></td>
@@ -1285,23 +1270,25 @@ internal implementation.</p>
 <a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a>
 <a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a>Causal processor (Streams)
 <a id="__codelineno-0-8" name="__codelineno-0-8" href="#__codelineno-0-8"></a>  ParsleyProcessor.process(record)
-<a id="__codelineno-0-9" name="__codelineno-0-9" href="#__codelineno-0-9"></a>    -&gt; watermark? -&gt; ParsleyEngine.onWatermark(): advance channel clock, drain, re-emit
+<a id="__codelineno-0-9" name="__codelineno-0-9" href="#__codelineno-0-9"></a>    -&gt; watermark/epoch marker? -&gt; advance channel clock, drain, relay onward only if it genuinely advanced
 <a id="__codelineno-0-10" name="__codelineno-0-10" href="#__codelineno-0-10"></a>    -&gt; ingest: wrap in ParsleyMessage, embed source coordinates
-<a id="__codelineno-0-11" name="__codelineno-0-11" href="#__codelineno-0-11"></a>    -&gt; gate:   ParsleyEngine.onRecord()
-<a id="__codelineno-0-12" name="__codelineno-0-12" href="#__codelineno-0-12"></a>                 completeness().dominates(deps) — every input channel has confirmed every
-<a id="__codelineno-0-13" name="__codelineno-0-13" href="#__codelineno-0-13"></a>                   depended coordinate (per-coordinate min across all input channels)
-<a id="__codelineno-0-14" name="__codelineno-0-14" href="#__codelineno-0-14"></a>                 satisfied   -&gt; advance frontier, drain cascade
-<a id="__codelineno-0-15" name="__codelineno-0-15" href="#__codelineno-0-15"></a>                 unsatisfied -&gt; buffer (RocksBufferStore) + index (RocksCandidateIndex)
-<a id="__codelineno-0-16" name="__codelineno-0-16" href="#__codelineno-0-16"></a>                 no header   -&gt; trivially satisfied (empty dependencies)
-<a id="__codelineno-0-17" name="__codelineno-0-17" href="#__codelineno-0-17"></a>    -&gt; deliver: user processor receives records via ParsleyProcessorContext
-<a id="__codelineno-0-18" name="__codelineno-0-18" href="#__codelineno-0-18"></a>                forwarded records carry the node&#39;s completeness frontier
-<a id="__codelineno-0-19" name="__codelineno-0-19" href="#__codelineno-0-19"></a>                an input that emits no business record -&gt; a protocol watermark instead
-<a id="__codelineno-0-20" name="__codelineno-0-20" href="#__codelineno-0-20"></a>                (Streams sinks carry the header out to the output topic)
+<a id="__codelineno-0-11" name="__codelineno-0-11" href="#__codelineno-0-11"></a>    -&gt; gate:   ParsleyEngine.receive()
+<a id="__codelineno-0-12" name="__codelineno-0-12" href="#__codelineno-0-12"></a>                 frontier.dominates(deps) — this node&#39;s own contiguous delivered frontier; a
+<a id="__codelineno-0-13" name="__codelineno-0-13" href="#__codelineno-0-13"></a>                   dependency is satisfied only by local delivery of the cause, never by a claim
+<a id="__codelineno-0-14" name="__codelineno-0-14" href="#__codelineno-0-14"></a>                   advertised on another channel&#39;s clock (that feeds only the outbound stamp)
+<a id="__codelineno-0-15" name="__codelineno-0-15" href="#__codelineno-0-15"></a>                 satisfied     -&gt; advance frontier, drain cascade
+<a id="__codelineno-0-16" name="__codelineno-0-16" href="#__codelineno-0-16"></a>                 unsatisfied   -&gt; buffer (StoreBackedBufferStore) + index (StoreBackedCandidateIndex)
+<a id="__codelineno-0-17" name="__codelineno-0-17" href="#__codelineno-0-17"></a>                 no header     -&gt; trivially satisfied (empty dependencies)
+<a id="__codelineno-0-18" name="__codelineno-0-18" href="#__codelineno-0-18"></a>                 unreachable   -&gt; no channel for this coordinate at all -&gt; fail the task fast
+<a id="__codelineno-0-19" name="__codelineno-0-19" href="#__codelineno-0-19"></a>    -&gt; deliver: user processor receives records via ParsleyProcessorContext
+<a id="__codelineno-0-20" name="__codelineno-0-20" href="#__codelineno-0-20"></a>                forwarded records carry the node&#39;s completeness frontier
+<a id="__codelineno-0-21" name="__codelineno-0-21" href="#__codelineno-0-21"></a>                an input that emits no business record -&gt; a protocol watermark instead
+<a id="__codelineno-0-22" name="__codelineno-0-22" href="#__codelineno-0-22"></a>                (Streams sinks carry the header out to the output topic)
 </code></pre></div>
 <h2 id="further-reading">Further reading</h2>
 <ul>
 <li><a href="../wire-format/">Wire format</a> — binary layouts for all headers and state stores</li>
-<li><a href="../engine/">The engine</a> — buffer, candidate index, drain cascade, eviction</li>
+<li><a href="../engine/">The engine</a> — buffer, candidate index, drain cascade, fail-closed delivery</li>
 <li><a href="../streams/">Streams integration</a> — processor init, state store wiring, stamping proxy</li>
 </ul>
 
@@ -1402,7 +1389,7 @@ internal implementation.</p>
       <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.top", "navigation.footer", "search.highlight", "content.code.copy"], "search": "../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": {"default": "latest", "provider": "mike"}}</script>
     
     
-      <script src="../../assets/javascripts/bundle.79ae519e.min.js"></script>
+      <script src="../../assets/javascripts/bundle.d7400e89.min.js"></script>
       
     
   </body>

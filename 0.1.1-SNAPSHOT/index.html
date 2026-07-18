@@ -19,7 +19,7 @@
       
       
       <link rel="icon" href="assets/images/favicon.png">
-      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.6">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.7">
     
     
       
@@ -27,7 +27,7 @@
       
     
     
-      <link rel="stylesheet" href="assets/stylesheets/main.484c7ddc.min.css">
+      <link rel="stylesheet" href="assets/stylesheets/main.ec1eaa64.min.css">
       
         
         <link rel="stylesheet" href="assets/stylesheets/palette.ab4e12ef.min.css">
@@ -517,34 +517,6 @@
     
   
     Configuration
-  
-
-    
-  </span>
-  
-  
-
-      </a>
-    </li>
-  
-
-              
-            
-              
-                
-  
-  
-  
-  
-    <li class="md-nav__item">
-      <a href="audit-logging/" class="md-nav__link">
-        
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    Audit logging
   
 
     
@@ -1152,16 +1124,16 @@ consumer compares those dependencies against its own frontier, which is the set 
 already delivered on each partition. If the frontier already satisfies the dependencies, the record
 is forwarded immediately. If it does not, the record is held in a causal buffer until the frontier
 catches up.</p>
-<p>If the frontier never catches up and the configured <code>CausalBufferLimit</code> fires, the outcome is
-governed by <code>parsley.buffer.eviction.failure.policy</code>. By default this policy is <code>fail</code>: Parsley fails
-the task and leaves the record in the buffer for retry, which preserves causal order at the cost of
-availability. Setting the policy to <code>continue</code> instead forwards the held record out of causal order
-once the limit fires. Either way, the event is logged with the causal gap and counted by a metric.
-Register a <code>CausalAudit</code> to receive it as a per-record callback. The
-<a href="configuration/">Configuration</a> page describes the policy in full.</p>
+<p>The causal buffer is unbounded — there is no configuration that trades causal order for liveness. A
+record whose dependencies are proven impossible to satisfy (an undecodable payload or dependencies
+header, or a dependency naming a coordinate this node has no channel for) unconditionally fails the
+task rather than being delivered out of order. The <a href="troubleshooting/">Troubleshooting</a> page covers
+recovery, and <a href="configuration/">Configuration</a> covers the resulting metrics.</p>
 <h2 id="public-api">Public API</h2>
-<p>The library is a single jar built around two entry points and a set of edge operations. They share a
-common vocabulary of value types.</p>
+<p>The library is a single jar built around one topology-level entry point and a set of edge operations.
+They share a common vocabulary of value types. Everything else — the processor decorator, the buffer,
+graceful-shutdown quiesce, epoch coordination — is internal machinery <code>CausalStreams</code> composes for you;
+there is no low-level public entry point to build a topology around by hand.</p>
 <table>
 <thead>
 <tr>
@@ -1171,20 +1143,12 @@ common vocabulary of value types.</p>
 </thead>
 <tbody>
 <tr>
-<td><code>ParsleyProcessorSupplier</code></td>
-<td>Wraps a Kafka Streams <code>Processor</code> behind the causal guarantee. The low-level entry point: you build and own the surrounding topology.</td>
+<td><code>CausalStreamsBuilder</code> / <code>CausalTopology</code></td>
+<td>Declare a causal topology — one or more stages, each a set of source topics feeding a processor and forwarding to sink(s) — the same way <code>StreamsBuilder</code>/<code>Topology</code> declare a plain Kafka Streams one.</td>
 </tr>
 <tr>
 <td><code>CausalStreams</code></td>
-<td>Owns the topology itself — sources, processor, and sinks — around the same causal guarantee, composing <code>ParsleyProcessorSupplier</code> internally. The high-level entry point, for guarantees that require owning the sinks (a uniform sink partitioner, co-partitioning validation across sinks, coordinated graceful shutdown).</td>
-</tr>
-<tr>
-<td><code>ParsleyQuiesce</code></td>
-<td>Coordinates graceful shutdown across every causal task in one application instance, registered with either entry point.</td>
-</tr>
-<tr>
-<td><code>ParsleyCoordination</code></td>
-<td>Coordinates evolving a running topology across an epoch boundary, so a new or replaced stage adopts the current floor instead of dragging pre-epoch history into causal time. Leaderless and optional, registered with either entry point.</td>
+<td>The runtime: wraps the underlying <code>KafkaStreams</code> instance around the causal guarantee. Owns graceful causal drain on <code>close()</code> and, when <code>parsley.coordination.epoch-events-topic</code> is configured, leaderless topology-epoch coordination — evolve a running topology through an epoch boundary with <code>requestEpochTransition()</code>.</td>
 </tr>
 <tr>
 <td><code>CausalDependencies.using</code> / <code>observe</code> / <code>stamp</code> / <code>merge</code></td>
@@ -1194,14 +1158,11 @@ common vocabulary of value types.</p>
 </table>
 <h2 id="where-to-go-next">Where to go next</h2>
 <ul>
-<li><a href="concepts/">Concepts</a> covers causal dependencies, the frontier, the buffer, and how eviction is
-  handled.</li>
+<li><a href="concepts/">Concepts</a> covers causal dependencies, the frontier, and the buffer.</li>
 <li><a href="getting-started/">Getting started</a> covers installation and stamping causal context at the edge.</li>
-<li><a href="streams/">Streams integration</a> covers wrapping a <code>Processor</code>, <code>CausalStreams</code>, the
+<li><a href="streams/">Streams integration</a> covers building a topology with <code>CausalStreamsBuilder</code>, the
   preconditions, and recovery.</li>
-<li><a href="configuration/">Configuration</a> covers buffer limits, the eviction and deserialization policies,
-  and header size.</li>
-<li><a href="audit-logging/">Audit logging</a> covers routing per-record causal events to your own audit trail.</li>
+<li><a href="configuration/">Configuration</a> covers the remaining <code>parsley.*</code> keys, header size, and metrics.</li>
 <li><a href="api/">API reference</a> is the full Javadoc.</li>
 </ul>
 
@@ -1286,7 +1247,7 @@ common vocabulary of value types.</p>
       <script id="__config" type="application/json">{"annotate": null, "base": ".", "features": ["navigation.top", "navigation.footer", "search.highlight", "content.code.copy"], "search": "assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": {"default": "latest", "provider": "mike"}}</script>
     
     
-      <script src="assets/javascripts/bundle.79ae519e.min.js"></script>
+      <script src="assets/javascripts/bundle.d7400e89.min.js"></script>
       
     
   </body>
