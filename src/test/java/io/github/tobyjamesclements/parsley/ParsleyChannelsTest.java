@@ -324,7 +324,7 @@ class ParsleyChannelsTest {
 
     /**
      * bridge() returns {@code true} exactly when it advanced the contiguous frontier — the signal the
-     * engine uses to decide whether to cascade. Crossing a marker that unblocks the walk returns true; a
+     * core uses to decide whether to cascade. Crossing a marker that unblocks the walk returns true; a
      * first sighting and an at-least-once replay both return false.
      */
     @Test

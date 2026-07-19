@@ -14,7 +14,7 @@ import java.util.OptionalLong;
  *
  * <p>There is no separate in-memory copy: a durable implementation <em>is</em> the buffer, so held
  * records need no rehydration step after a restart — they are simply read back on the next drain.
- * The {@link ParsleyEngine} drives the buffer through this interface and is agnostic to whether it is
+ * The {@link ParsleyCausalBroadcast} drives the buffer through this interface and is agnostic to whether it is
  * purely in-memory (tests) or backed by a changelog-replicated Kafka store (production).
  *
  * @param <K> the record key type

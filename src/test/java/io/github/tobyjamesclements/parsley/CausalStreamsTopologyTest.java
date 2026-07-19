@@ -1040,7 +1040,7 @@ class CausalStreamsTopologyTest {
     /**
      * A corrupted {@code parsley-causal-dependencies} header fails the whole assembled topology closed —
      * proving the fail-closed model collapses correctly through the full stack ({@link
-     * CausalStreamsBuilder} → {@link CausalTopology} → real {@link Topology}), not just at the engine
+     * CausalStreamsBuilder} → {@link CausalTopology} → real {@link Topology}), not just at the core
      * unit-test level. There is no dead-letter sink to divert to: an undecodable header always crashes
      * the task.
      *
@@ -1075,7 +1075,7 @@ class CausalStreamsTopologyTest {
      * Regression test for BACKLOG.md's write-ordering-overclaim finding: {@link CausalTopology#assemble}
      * requires {@code processing.guarantee=exactly_once_v2} unconditionally — never gated by {@code
      * parsley.topology.validation}, unlike the partition-count/cleanup-policy checks above — since the
-     * crash-safety reasoning throughout {@code ParsleyEngine}/{@code ParsleyChannels} (a torn write always
+     * crash-safety reasoning throughout {@code ParsleyCausalBroadcast}/{@code ParsleyChannels} (a torn write always
      * lands on the benign side) only holds without exception under exactly-once's transactional
      * multi-store commit.
      *

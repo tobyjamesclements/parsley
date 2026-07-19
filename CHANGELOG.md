@@ -7,6 +7,17 @@ All notable changes to this project are documented in this file. The format is b
 ## [Unreleased]
 
 ### Changed (internal)
+- **The L2 causal-broadcast module is named: `ParsleyEngine` becomes `ParsleyCausalBroadcast`.** Third
+  structural step of the three-protocol redesign (T1.2b, decisions D5 and O4). The class is the
+  receive/deliver core of Birman–Schiper–Stephenson causal broadcast, so it now carries that name,
+  presented in the Cachin–Guerraoui–Rodrigues module style with a new `broadcast(record)` request —
+  the timestamp-assignment half of BSS `broadcast(m)`, attaching the completeness stamp read live at
+  stamp time. `broadcast()` is the **single stamping site**: the delegate-facing stamping proxy
+  (`ParsleyProcessorContext`) and the protocol-marker path (`forwardMarker`) both route through it,
+  collapsing the two previously independent stamping sites (snapshot-field vs live-completeness,
+  which coincided only because a delegate's forwards never mutate completeness) into one structural
+  equivalence; the `stampCompleteness` snapshot field is deleted. Stamp content is unchanged until
+  Phase 2 adds `ownOutputs`. Behaviour-identical; no public API or wire format changes.
 - **Dependency-clock normalisation is a single L1 step: `ParsleyChannels.normalize`.** Second
   structural step of the three-protocol redesign (T1.2, decision D3). The self-cycle removal and the
   below-floor strip relocate from the engine's per-gate preprocessing (`effectiveDependencies`) into

@@ -85,7 +85,7 @@ class ParsleyProcessorRestoreTest {
 
         // A record whose only dependency (T1_ID/0@5) is exactly satisfied by the restored frontier
         // — it must be forwarded immediately rather than buffered, which would not be possible if
-        // init() had started the engine from an empty frontier. Offset 10 avoids the self-ref strip.
+        // init() had started the core from an empty frontier. Offset 10 avoids the self-ref strip.
         context.setRecordMetadata("t1", 0, 10);
         Headers headers = ParsleyHeader.mutableHeaders();
         headers.add(ParsleyHeader.CAUSAL_DEPENDENCIES, restoredFrontier.toBytes());

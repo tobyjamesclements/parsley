@@ -8,7 +8,7 @@ import org.apache.kafka.common.Uuid;
  * after the record was buffered (e.g. the writer schema id was deleted, or a redeployed reader
  * schema is incompatible).
  *
- * <p>{@link ParsleyEngine} fails the task fast: the offending entry stays in the buffer store (the
+ * <p>{@link ParsleyCausalBroadcast} fails the task fast: the offending entry stays in the buffer store (the
  * forward path deserialises before it removes), so the record is preserved for recovery once the
  * registry is fixed or rolled back. This is a {@link RuntimeException}, fatal only to the owning
  * Streams task, never crashing the JVM; the index-restore path does not deserialise key/value, so a

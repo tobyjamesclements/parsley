@@ -11,7 +11,7 @@ import java.util.TreeSet;
 
 /**
  * An in-memory {@link ParsleyForwardedIndex} backed by a per-coordinate {@link TreeSet}. Used in
- * unit tests that exercise {@link ParsleyEngine} without a Kafka state store. Production uses
+ * unit tests that exercise {@link ParsleyCausalBroadcast} without a Kafka state store. Production uses
  * {@link StoreBackedForwardedIndex}.
  */
 final class MockForwardedIndex implements ParsleyForwardedIndex {

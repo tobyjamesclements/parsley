@@ -11,7 +11,7 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * The engine's typed envelope: a record together with the causal metadata Parsley needs, all as
+ * The causal-broadcast core's typed envelope: a record together with the causal metadata Parsley needs, all as
  * typed fields rather than re-parsed headers. {@code headers} holds the user's headers only — the
  * source coordinate ({@code topic}/{@code topicId}/{@code partition}/{@code offset}) and the causal
  * {@code dependencies} are first-class fields. They are written as typed framing fields (never

@@ -1,6 +1,7 @@
 package io.github.tobyjamesclements.parsley;
 
 import org.apache.kafka.common.Uuid;
+import org.apache.kafka.streams.processor.api.Record;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -13,20 +14,37 @@ import java.util.Set;
 import java.util.function.LongSupplier;
 
 /**
- * The causal buffering engine.
+ * <strong>L2 — causal broadcast: the CBCAST receive/deliver core.</strong> The causal delivery
+ * algorithm of Birman–Schiper–Stephenson (ISIS CBCAST), over the reliable FIFO channels
+ * {@link ParsleyChannels} adapts Kafka topic-partitions into. Presented in the CGR module style
+ * ({@code package-info} states the two Parsley-wide deviations from the textbook presentation —
+ * pulled indications, and the sender's clock increment performed by the broker's offset assignment,
+ * which is why {@link #broadcast} attaches a stamp but cannot include the record's own coordinate):
  *
- * <p><strong>Vocabulary.</strong> This class is the receive-and-deliver half of the classic causal
- * broadcast algorithm (Birman-Schiper-Stephenson CBCAST; see {@link #completeness()}) — broadcast itself
- * is layered underneath, not reimplemented here. <em>Broadcast</em> is Kafka's own {@code
- * ProducerRecord}/{@code context.forward()} (a partition's total order and replication are already a
- * reliable-broadcast substrate) plus the causal-metadata attachment classic algorithms add atop plain
- * broadcast ({@link CausalDependencies#stamp} at the edge, {@link ParsleyProcessorContext} internally).
- * <em>Receive</em> is {@link #receive}: a record arrives on an input channel and is either delivered at
- * once or buffered until it can be. <em>Deliver</em> is {@link ParsleyChannels#delivered} — where the
+ * <pre>
+ * requests:   broadcast(record) → stamped record       attach the outbound vector timestamp (the
+ *                                                      BSS timestamp-assignment half; the underlying
+ *                                                      point-to-point send is Kafka's produce)
+ *             receive(message) → Outcome               the BSS receive: gate → deliver-or-hold →
+ *                                                      cascade; the returned ordered list IS the
+ *                                                      deliver() indication
+ * queries:    completeness() → ParsleyVectorClock      the outbound stamp's clock
+ *             frontier() → ParsleyVectorClock          the delivered vector VT(p)
+ * properties: I1 (causal delivery — a record reaches the delegate only after every dependency has
+ *             been locally, contiguously delivered; no timeout, no eviction), I2 (stamp transitive
+ *             completeness — the stamp dominates the dependency clocks of every delivered event),
+ *             I9 (unconditional merge, stamp-side)
+ * </pre>
+ *
+ * <p><em>Receive</em> is {@link #receive}: a record arrives on an input channel and is either delivered
+ * at once or buffered until it can be. <em>Deliver</em> is {@link ParsleyChannels#delivered} — where the
  * causal-order guarantee is actually granted, surfaced here via {@link Outcome} and handed to the user's
- * delegate by {@code ParsleyProcessor#deliver}. {@link #onWatermark} and {@code ParsleyProcessor}'s
- * epoch-marker handlers sit on top of this algorithm as a liveness/coordination layer — protocol
- * extensions, not part of the CBCAST core.
+ * delegate by {@code ParsleyProcessor#deliver}. <em>Broadcast</em> is {@link #broadcast}: the single
+ * stamping site every outbound record — a delegate's business forward and a protocol marker alike —
+ * passes through; the send itself is Kafka's own {@code ProducerRecord}/{@code context.forward()} (a
+ * partition's total order and replication are already a reliable-broadcast substrate). {@link
+ * #onWatermark} and {@code ParsleyProcessor}'s epoch-marker handlers sit on top of this algorithm as a
+ * liveness/coordination layer — protocol extensions, not part of the CBCAST core.
  *
  * <p>The processor feeds incoming records to {@link #receive} and forwards the returned records
  * downstream, in order. Delivery is strictly fail-closed: a record is forwarded only after its
@@ -41,7 +59,7 @@ import java.util.function.LongSupplier;
  * valid or silently discarded. There is no diversion sink: this is the single, simple failure model —
  * any error is a hard stop, never a partial or best-effort continuation.
  *
- * <p><strong>The frontier is a contiguous watermark, not a running max.</strong> The engine does
+ * <p><strong>The frontier is a contiguous watermark, not a running max.</strong> This class does
  * not head-of-line block: a later-offset record on a partition may forward before an earlier one
  * still held on the same partition. So a coordinate's frontier offset must only ever advance once
  * every offset up to it has actually been forwarded — never past a gap, or a record elsewhere
@@ -53,16 +71,16 @@ import java.util.function.LongSupplier;
  *
  * <p><strong>A coordinate's first offset need not be 0.</strong> Kafka delivers a partition's
  * records strictly in increasing offset order, but retention, compaction, or a fresh consumer group
- * can all mean the first offset this engine ever observes for a coordinate is well past 0. {@link
+ * can all mean the first offset this node ever observes for a coordinate is well past 0. {@link
  * ParsleyChannels#seedIfFirstSeen} folds everything below the first-ever-observed offset into the
- * frontier the moment it's seen, so it is treated as outside the engine's purview rather than an
+ * frontier the moment it's seen, so it is treated as outside this module's purview rather than an
  * unfillable hole — without that, the contiguous walk above could never advance past {@code -1} for
  * such a coordinate.
  *
  * <p><strong>Frontier persistence ordering:</strong> {@link ParsleyChannels} self-persists its
  * single {@code "f"} value on every advance — inside {@link ParsleyChannels#delivered} and
- * {@link ParsleyChannels#seedIfFirstSeen}, before control returns to the engine and the record is
- * added to the out-bound list — so the frontier is persisted before the record leaves the engine.
+ * {@link ParsleyChannels#seedIfFirstSeen}, before control returns to this class and the record is
+ * added to the out-bound list — so the frontier is persisted before the record leaves this class.
  * For the same reason, every release path calls {@link ParsleyChannels#delivered} (and {@link
  * ParsleyChannels#channelUpdate}) <em>before</em> removing the record from {@link #buffer}: the
  * buffer and the frontier/forwarded-index are separate changelog topics with no cross-store
@@ -71,7 +89,7 @@ import java.util.function.LongSupplier;
  * at-least-once duplicate) and never the reverse, which would strand that coordinate's frontier
  * permanently.
  *
- * <p><strong>Drain algorithm:</strong> the engine uses a {@link ParsleyCandidateIndex} to avoid a full
+ * <p><strong>Drain algorithm:</strong> this class uses a {@link ParsleyCandidateIndex} to avoid a full
  * buffer scan on every frontier advance. When a coordinate advances, only records indexed on
  * that coordinate are checked for causal satisfaction. The cascade repeats for each newly
  * released record's source coordinate. A record is only ever released once this check — against
@@ -81,9 +99,9 @@ import java.util.function.LongSupplier;
  * @param <K> the record key type
  * @param <V> the record value type
  */
-final class ParsleyEngine<K, V> {
+final class ParsleyCausalBroadcast<K, V> {
 
-    private static final Logger log = LoggerFactory.getLogger(ParsleyEngine.class);
+    private static final Logger log = LoggerFactory.getLogger(ParsleyCausalBroadcast.class);
 
     private final ParsleyBufferStore<K, V> buffer;
     private final ParsleyCandidateIndex candidateIndex;
@@ -130,7 +148,7 @@ final class ParsleyEngine<K, V> {
     // forwarded index. Production and restart-style callers pass a pre-built ParsleyChannels to the
     // full constructor below (so channel + frontier state can be shared/persisted). ---
 
-    ParsleyEngine(ParsleyVectorClock initialFrontier,
+    ParsleyCausalBroadcast(ParsleyVectorClock initialFrontier,
                  ParsleyBufferStore<K, V> buffer,
                  ParsleyCandidateIndex candidateIndex,
                  ParsleyForwardedIndex forwardedIndex,
@@ -138,7 +156,7 @@ final class ParsleyEngine<K, V> {
         this(initialFrontier, buffer, candidateIndex, forwardedIndex, metrics, System::currentTimeMillis);
     }
 
-    ParsleyEngine(ParsleyVectorClock initialFrontier,
+    ParsleyCausalBroadcast(ParsleyVectorClock initialFrontier,
                  ParsleyBufferStore<K, V> buffer,
                  ParsleyCandidateIndex candidateIndex,
                  ParsleyForwardedIndex forwardedIndex,
@@ -149,13 +167,13 @@ final class ParsleyEngine<K, V> {
     }
 
     /**
-     * As {@link #ParsleyEngine(ParsleyChannels, ParsleyBufferStore, ParsleyCandidateIndex,
+     * As {@link #ParsleyCausalBroadcast(ParsleyChannels, ParsleyBufferStore, ParsleyCandidateIndex,
      * ParsleyMetrics, LongSupplier, ParsleyVectorClock.CoordinatePredicate,
      * ParsleyVectorClock.CoordinatePredicate) the full constructor}, with every coordinate in scope and
      * nothing treated as this node's own sink — for callers/tests that do not need to exercise
      * per-task partition scoping or own-coordinate stripping.
      */
-    ParsleyEngine(ParsleyChannels channels,
+    ParsleyCausalBroadcast(ParsleyChannels channels,
                  ParsleyBufferStore<K, V> buffer,
                  ParsleyCandidateIndex candidateIndex,
                  ParsleyMetrics metrics,
@@ -165,12 +183,12 @@ final class ParsleyEngine<K, V> {
     }
 
     /**
-     * As {@link #ParsleyEngine(ParsleyChannels, ParsleyBufferStore, ParsleyCandidateIndex,
+     * As {@link #ParsleyCausalBroadcast(ParsleyChannels, ParsleyBufferStore, ParsleyCandidateIndex,
      * ParsleyMetrics, LongSupplier, ParsleyVectorClock.CoordinatePredicate,
      * ParsleyVectorClock.CoordinatePredicate) the full constructor}, with nothing ever treated as this node's
      * own sink — for callers/tests that do not need to exercise own-coordinate stripping.
      */
-    ParsleyEngine(ParsleyChannels channels,
+    ParsleyCausalBroadcast(ParsleyChannels channels,
                  ParsleyBufferStore<K, V> buffer,
                  ParsleyCandidateIndex candidateIndex,
                  ParsleyMetrics metrics,
@@ -191,7 +209,7 @@ final class ParsleyEngine<K, V> {
      *                      inbound dependency or marker clock before every gate check — see this
      *                      field's own Javadoc for the soundness argument.
      */
-    ParsleyEngine(ParsleyChannels channels,
+    ParsleyCausalBroadcast(ParsleyChannels channels,
                  ParsleyBufferStore<K, V> buffer,
                  ParsleyCandidateIndex candidateIndex,
                  ParsleyMetrics metrics,
@@ -212,7 +230,7 @@ final class ParsleyEngine<K, V> {
         // a coordinate whose only prior activity is a still-held record (frontier entry absent —
         // possible only when that record sits at offset 0, whose seed is a no-op) would re-trigger
         // the baseline seed and fold the held record's offset into the frontier as "outside the
-        // engine's purview" — releasing records that depend on it before it has ever been delivered
+        // module's purview" — releasing records that depend on it before it has ever been delivered
         // (an effect-before-cause delivery). Seeding at the lowest held offset reproduces exactly
         // what the first in-run sighting did: marks the coordinate seen, and never seeds past a held
         // record. Out-of-scope coordinates are skipped — a held record on one fails the drain fast
@@ -244,7 +262,7 @@ final class ParsleyEngine<K, V> {
     }
 
     /**
-     * The engine's per-call result: every record released for delivery, in order.
+     * The per-call receive result: every record released for delivery, in order.
      *
      * @param <K> the record key type
      * @param <V> the record value type
@@ -296,7 +314,7 @@ final class ParsleyEngine<K, V> {
         // Checked FIRST, before any state mutation: seedIfFirstSeen persists a seeded frontier and
         // propagate can deliver, persist, and remove records from the buffer, so throwing after them
         // would leave the frontier advanced and the released records (discarded with the unwound `out`)
-        // gone from the buffer. Under EOS the whole batch rolls back, but an in-memory engine has no
+        // gone from the buffer. Under EOS the whole batch rolls back, but an in-memory instance has no
         // rollback; failing before mutating keeps the persisted state consistent either way. The check
         // reads only the dependency clock and the settled epoch floor, neither of which seedIfFirstSeen
         // affects, so hoisting it changes nothing but the failure's timing.
@@ -554,6 +572,33 @@ final class ParsleyEngine<K, V> {
      */
     ParsleyVectorClock completeness() {
         return channels.completeness();
+    }
+
+    /**
+     * The causal broadcast <em>broadcast</em> request (see the class Javadoc's module box): stamps
+     * {@code record} with this node's current outbound vector timestamp — {@link #completeness()},
+     * read live at stamp time — replacing any {@link ParsleyHeader#CAUSAL_DEPENDENCIES} header already
+     * present. The send itself is not performed here (it is Kafka's produce, via {@code
+     * context.forward()}); in Birman–Schiper–Stephenson terms this is the timestamp-assignment half of
+     * {@code broadcast(m)}, and the sender's own clock increment is the broker's offset assignment,
+     * learned only asynchronously — which is why the stamp cannot include the record's own coordinate
+     * ({@code package-info} states this Parsley-wide deviation once).
+     *
+     * <p>This is the <strong>single stamping site</strong> for every outbound record: a delegate's
+     * business forwards ({@link ParsleyProcessorContext#forward}) and {@code ParsleyProcessor}'s
+     * protocol markers both route through here, so the stamp's content cannot diverge between the two
+     * paths by construction. Phase 2 (D2) extends the stamp to {@code completeness ∪ ownOutputs} by
+     * changing only this method's clock source.
+     *
+     * @param record the outbound record to stamp; its headers are not mutated (a fresh header set is
+     *               built and applied via {@link Record#withHeaders})
+     * @param <KOut> the outbound key type
+     * @param <VOut> the outbound value type
+     * @return the same record with the stamp header attached
+     */
+    <KOut, VOut> Record<KOut, VOut> broadcast(Record<KOut, VOut> record) {
+        return record.withHeaders(
+                ParsleyHeader.replacingDependencies(record.headers(), completeness().toBytes()));
     }
 
     /**

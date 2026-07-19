@@ -249,7 +249,7 @@ class ParsleyProcessorsTopologyTest {
 
     /**
      * A record whose dependencies are not yet satisfied is buffered. When the satisfying record
-     * arrives, the engine releases the buffered record through the delegate in causal order.
+     * arrives, the core releases the buffered record through the delegate in causal order.
      *
      * <p>The buffer store must hold the record while it is waiting and be empty after drain.
      *
@@ -565,7 +565,7 @@ class ParsleyProcessorsTopologyTest {
     // itself immediately — there is no longer a way to force genuine buffering via a normal record's
     // own dependency at this level. The property itself (serde resolved by source topic, not the
     // changelog name) is still real and still matters (schema-registry Avro subjects depend on it);
-    // it now has a direct, lower-level test that doesn't depend on genuine engine-level buffering:
+    // it now has a direct, lower-level test that doesn't depend on genuine core-level buffering:
     // StoreBackedBufferStoreTest.addResolvesTheValueSerdeUsingTheRecordsSourceTopic.
 
     /**
@@ -867,7 +867,7 @@ class ParsleyProcessorsTopologyTest {
      * <h2>Why materialization is required</h2>
      * Without {@code .to("t4")} the chain is fused: {@code recordMetadata().topic()} in proc2
      * returns the original Kafka source topic, so every forwarded record's dep includes its own
-     * source coordinate — stripped at engine admission. With materialization, t4 records have
+     * source coordinate — stripped at core admission. With materialization, t4 records have
      * source {@code T4_ID} and deps {@code {T2_ID@x, T3_ID@y}}: no self-reference at all, and
      * the causal ordering across two layers is preserved.
      *
@@ -1096,7 +1096,7 @@ class ParsleyProcessorsTopologyTest {
                     "sidecar must be in proc2's buffer");
 
             // "t1"@0 arrives: proc1 admits it, stamps frontier {T1_ID@0}, fuses to proc2.
-            // proc2's engine strips the self-dep → admits → frontier has T1_ID@0 → sidecar drains.
+            // proc2's core strips the self-dep → admits → frontier has T1_ID@0 → sidecar drains.
             t1.pipeInput(new TestRecord<>("k", "t1-val", depsHeader(CausalDependencies.empty())));
 
             assertEquals(0, storeSize(driver.getKeyValueStore("node2-buffer")),

@@ -60,7 +60,7 @@ final class ParsleyEpochRuntime implements AutoCloseable {
     // "only a drained node is excluded". Written by task threads (reportDrained), read by the caller's
     // leave() thread.
     private final ParsleyQuiesceTracker localDrainTracker = new ParsleyQuiesceTracker();
-    // A local member's live completeness snapshot, registered once its task's engine exists (see
+    // A local member's live completeness snapshot, registered once its task's causal-broadcast core exists (see
     // registerLocalCompleteness). Lets the runtime thread publish on a member's behalf when its own task
     // thread cannot run pollEpochCoordination() — see autoPublishStalledLocalMembers.
     private final Map<String, Supplier<ParsleyVectorClock>> localCompletenessSuppliers = new ConcurrentHashMap<>();
@@ -182,7 +182,7 @@ final class ParsleyEpochRuntime implements AutoCloseable {
      * uncommitted transaction), so {@link #autoPublishStalledLocalMembers()} can publish on its behalf
      * from the runtime thread alone — without needing {@code memberId}'s own task thread to run
      * {@code pollEpochCoordination()}. Deliberately separate from {@link #join}: a task calls this only
-     * once its engine exists and the snapshot is meaningful (see {@code ParsleyProcessor#init}), not at
+     * once its causal-broadcast core exists and the snapshot is meaningful (see {@code ParsleyProcessor#init}), not at
      * join time, when a fresh joiner's snapshot would still be the empty placeholder and a restarting
      * member's would not yet reflect its restored state.
      */

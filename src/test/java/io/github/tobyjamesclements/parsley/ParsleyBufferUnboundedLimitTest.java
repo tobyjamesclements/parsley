@@ -32,7 +32,7 @@ class ParsleyBufferUnboundedLimitTest {
     @Test
     void unboundedLimitNeverEvictsAndReleasesInCausalOrderWhenDependenciesSatisfied() {
         MockBufferStore<String, String> buffer = new MockBufferStore<>();
-        ParsleyEngine<String, String> engine = new ParsleyEngine<>(
+        ParsleyCausalBroadcast<String, String> causalBroadcast = new ParsleyCausalBroadcast<>(
                 ParsleyVectorClock.empty(),
                 buffer, new MockCandidateIndex(), new MockForwardedIndex(), ParsleyMetrics.NOOP,
                 System::currentTimeMillis);
@@ -40,14 +40,14 @@ class ParsleyBufferUnboundedLimitTest {
         List<ParsleyMessage<String, String>> out = new ArrayList<>();
         ParsleyVectorClock needsT1 = ParsleyVectorClock.empty().observe(T1_ID, 0, 4);
         for (long offset = 0; offset < 5; offset++) {
-            out.addAll(engine.receive(message(T2, offset, T2_ID, needsT1)).delivered());
+            out.addAll(causalBroadcast.receive(message(T2, offset, T2_ID, needsT1)).delivered());
         }
 
         assertEquals(5, buffer.size(), "all five records must be held — no eviction must have occurred");
         assertEquals(List.of(), out, "no record must be forwarded before the dependency is satisfied");
 
         for (long offset = 0; offset < 5; offset++) {
-            out.addAll(engine.receive(message(T1, offset, T1_ID, ParsleyVectorClock.empty())).delivered());
+            out.addAll(causalBroadcast.receive(message(T1, offset, T1_ID, ParsleyVectorClock.empty())).delivered());
         }
 
         assertEquals(0, buffer.size(), "buffer must be empty after the dependency is satisfied");

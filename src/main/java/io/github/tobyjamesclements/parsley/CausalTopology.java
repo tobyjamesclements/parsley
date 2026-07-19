@@ -70,7 +70,7 @@ public final class CausalTopology {
      * parsley.topology.validation}, since this is a correctness requirement, not a topology-shape lint.
      *
      * <p>Parsley's crash-safety reasoning (the frontier-before-buffer-removal write ordering throughout
-     * {@code ParsleyEngine}/{@code ParsleyChannels}) narrows an at-least-once torn-write window to a
+     * {@code ParsleyCausalBroadcast}/{@code ParsleyChannels}) narrows an at-least-once torn-write window to a
      * benign tear direction, but two separate changelog topics still have no cross-store atomicity under
      * at-least-once: a crash during the commit-time flush can, rarely, ack one topic's batch and lose the
      * other's. Exactly-once-v2 wraps every state-store changelog write, every produced record, and the

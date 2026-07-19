@@ -44,7 +44,7 @@ import static java.nio.charset.StandardCharsets.UTF_8;
  *       dimension (expected to be effectively constant); run with all {@code bufferSize} values but
  *       only one curve will appear.
  *   <li>{@link #bufferRestore} — O(n) scans to rebuild {@link StoreBackedBufferStore}'s sequence counter
- *       and {@link ParsleyEngine}'s candidate-index from existing RocksDB data; varies buffer size n.
+ *       and {@link ParsleyCausalBroadcast}'s candidate-index from existing RocksDB data; varies buffer size n.
  * </ul>
  *
  * <p>State is pre-populated once at {@code Level.Trial} and held read-only by the benchmark
@@ -108,15 +108,15 @@ public class StateRestorationBenchmark {
 
         // Pre-populate the buffer store with bufferSize records, each with an unsatisfied
         // dependency, as if a crash occurred with that many held records.
-        ParsleyEngine<String, String> engine = new ParsleyEngine<>(
+        ParsleyCausalBroadcast<String, String> causalBroadcast = new ParsleyCausalBroadcast<>(
                 ParsleyVectorClock.empty(),
                 new StoreBackedBufferStore<>(bufferKV, serializer), new StoreBackedCandidateIndex(waitKV),
                 new StoreBackedForwardedIndex(forwardedKV), ParsleyMetrics.NOOP);
         for (int i = 0; i < bufferSize; i++) {
             ParsleyVectorClock deps = ParsleyVectorClock.empty().observe(Uuid.randomUuid(), 0, 0L);
-            engine.receive(record("bench-" + i, 0, (long) i, deps));
+            causalBroadcast.receive(record("bench-" + i, 0, (long) i, deps));
         }
-        // Discard the engine; benchmark methods will reconstruct it from RocksDB.
+        // Discard the core; benchmark methods will reconstruct it from RocksDB.
     }
 
     @TearDown(Level.Trial)
@@ -137,16 +137,16 @@ public class StateRestorationBenchmark {
     /**
      * Simulates buffer restoration on startup: the O(n) scan in {@link StoreBackedBufferStore}'s
      * constructor (to seed nextSequence and size) plus the O(n) candidate-index rebuild in
-     * {@link ParsleyEngine}'s constructor (one {@link StoreBackedCandidateIndex#index} write per buffered
+     * {@link ParsleyCausalBroadcast}'s constructor (one {@link StoreBackedCandidateIndex#index} write per buffered
      * record). Together these reproduce the full cost of {@link ParsleyProcessor#init} when
      * non-empty state is found in RocksDB.
      */
     @Benchmark
-    public ParsleyEngine<String, String> bufferRestore() {
+    public ParsleyCausalBroadcast<String, String> bufferRestore() {
         StoreBackedBufferStore<String, String> buf = new StoreBackedBufferStore<>(bufferKV, serializer);
         StoreBackedCandidateIndex idx = new StoreBackedCandidateIndex(waitKV);
         StoreBackedForwardedIndex fwd = new StoreBackedForwardedIndex(forwardedKV);
-        return new ParsleyEngine<>(ParsleyVectorClock.empty(),
+        return new ParsleyCausalBroadcast<>(ParsleyVectorClock.empty(),
                 buf, idx, fwd, ParsleyMetrics.NOOP);
     }
 

@@ -238,7 +238,7 @@ class CausalDependenciesEdgeOpsTest {
      * {@code observe} folds a watermark's carried completeness frontier into the accumulator but never
      * its own position: a watermark is protocol metadata occupying an offset with no business payload,
      * so counting that offset would force downstream to wait on a record that delivers nothing. This
-     * mirrors how a Parsley engine folds a received watermark.
+     * mirrors how a Parsley causal-broadcast core folds a received watermark.
      *
      * Asserts that observing a watermark on {@code orders@99} carrying {@code prices@4} yields exactly
      * {@code prices@4} — the carried frontier, with no {@code orders} coordinate from the watermark's

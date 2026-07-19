@@ -9,7 +9,7 @@ import java.util.List;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 
 /**
- * Tests for {@link ParsleyEngine#completeness()}: this node's own frontier max-merged with every
+ * Tests for {@link ParsleyCausalBroadcast#completeness()}: this node's own frontier max-merged with every
  * input channel's advertised dependencies.
  *
  * <p>Each channel contributes the dependencies its records have advertised (the pairwise-max over
@@ -20,7 +20,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
  * since they are this node's own proven delivery history, not something any channel needs to confirm.
  *
  * <p>Genuine confirmation still matters: a channel only advertises a dependency once a record
- * carrying it has actually, gatedly delivered through that channel (see {@link ParsleyEngineTest} for
+ * carrying it has actually, gatedly delivered through that channel (see {@link ParsleyCausalBroadcastTest} for
  * the delivery gate itself — every record is checked against this node's current, already-proven
  * state, never against a stamp the same record just supplied). Several tests here pre-establish
  * channel state directly via
@@ -32,13 +32,13 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
  * advances; the cross-channel combination is also a max (not a min) so a single genuine witness is
  * never held back by a sibling channel that simply hasn't mentioned the same coordinate.
  */
-class ParsleyEngineCompletenessTest {
+class ParsleyCausalBroadcastCompletenessTest {
 
     private static final TopicPartition T1 = new TopicPartition("t1", 0);
     private static final TopicPartition T2 = new TopicPartition("t2", 0);
     private static final Uuid T1_ID = Uuid.randomUuid();
     private static final Uuid T2_ID = Uuid.randomUuid();
-    // T3 is a shared ancestor: not consumed by the fan-in engine, but referenced in deps.
+    // T3 is a shared ancestor: not consumed by the fan-in core, but referenced in deps.
     private static final Uuid T3_ID = Uuid.randomUuid();
     // T4 is a coordinate unique to one branch (appears only in T1 records).
     private static final Uuid T4_ID = Uuid.randomUuid();
@@ -73,9 +73,9 @@ class ParsleyEngineCompletenessTest {
         frontier.channelUpdate(T1_ID, 0, clock(T3_ID, 5));
         deliverSequentially(frontier, T2_ID, 7);
         frontier.channelUpdate(T2_ID, 0, clock(T3_ID, 3));
-        ParsleyEngine<String, String> engine = engineOver(frontier, SCOPE);
+        ParsleyCausalBroadcast<String, String> causalBroadcast = causalBroadcastOver(frontier, SCOPE);
 
-        ParsleyVectorClock completeness = engine.completeness();
+        ParsleyVectorClock completeness = causalBroadcast.completeness();
 
         assertEquals(5L, completeness.offsetFor(T3_ID, 0),
                 "T3 (shared ancestor) must appear at the maximum across branches: max(5,3)=5 — a "
@@ -100,9 +100,9 @@ class ParsleyEngineCompletenessTest {
         frontier.channelUpdate(T1_ID, 0, clock(T3_ID, 5).observe(T4_ID, 0, 2));
         deliverSequentially(frontier, T2_ID, 7);
         frontier.channelUpdate(T2_ID, 0, clock(T3_ID, 3));
-        ParsleyEngine<String, String> engine = engineOver(frontier, SCOPE);
+        ParsleyCausalBroadcast<String, String> causalBroadcast = causalBroadcastOver(frontier, SCOPE);
 
-        ParsleyVectorClock completeness = engine.completeness();
+        ParsleyVectorClock completeness = causalBroadcast.completeness();
 
         assertEquals(2L, completeness.offsetFor(T4_ID, 0),
                 "T4 (advertised by only one channel) must still be included — a single genuine "
@@ -129,16 +129,16 @@ class ParsleyEngineCompletenessTest {
                 (topicId, partition) -> partition == 0 && topicId.equals(T1_ID);
         ParsleyChannels frontier = newFrontier();
         deliverSequentially(frontier, T1_ID, 1);
-        ParsleyEngine<String, String> engine = engineOver(frontier, singleScope);
+        ParsleyCausalBroadcast<String, String> causalBroadcast = causalBroadcastOver(frontier, singleScope);
 
         // First genuine delivery on the T1 channel advertises T3 at 3.
         frontier.channelUpdate(T1_ID, 0, clock(T3_ID, 3));
-        assertEquals(3L, engine.completeness().offsetFor(T3_ID, 0),
+        assertEquals(3L, causalBroadcast.completeness().offsetFor(T3_ID, 0),
                 "completeness after the first genuine delivery must report T3 at 3");
 
         // A second genuine delivery on the same channel advertises a higher T3 value.
         frontier.channelUpdate(T1_ID, 0, clock(T3_ID, 7));
-        assertEquals(7L, engine.completeness().offsetFor(T3_ID, 0),
+        assertEquals(7L, causalBroadcast.completeness().offsetFor(T3_ID, 0),
                 "completeness after the second delivery must rise to T3=7, not remain pinned at 3 "
                         + "(per-channel max ensures the channel clock advances, not a running min)");
     }
@@ -159,7 +159,7 @@ class ParsleyEngineCompletenessTest {
         firstFrontier.channelUpdate(T1_ID, 0, clock(T3_ID, 5));
         deliverSequentially(firstFrontier, T2_ID, 7);
         firstFrontier.channelUpdate(T2_ID, 0, clock(T3_ID, 3));
-        ParsleyEngine<String, String> first = engineOver(firstFrontier, SCOPE);
+        ParsleyCausalBroadcast<String, String> first = causalBroadcastOver(firstFrontier, SCOPE);
 
         ParsleyVectorClock completenessBeforeRestart = first.completeness();
 
@@ -180,9 +180,9 @@ class ParsleyEngineCompletenessTest {
      */
     @Test
     void completenessEqualsOwnFrontierWhenNoChannelClocksRecorded() {
-        ParsleyEngine<String, String> engine = fanInEngine();
+        ParsleyCausalBroadcast<String, String> causalBroadcast = fanInCausalBroadcast();
 
-        assertEquals(engine.frontier(), engine.completeness(),
+        assertEquals(causalBroadcast.frontier(), causalBroadcast.completeness(),
                 "completeness must equal the node's own frontier when no channel clocks have been recorded");
     }
 
@@ -195,9 +195,9 @@ class ParsleyEngineCompletenessTest {
      * need the identical proof first, which is exactly the mutual-deadlock shape a genuine, direct
      * witness (here, this node's own third channel directly consuming T3) breaks.
      *
-     * <p>T3 must be in scope here (this specific engine directly consumes T1, T2, <em>and</em> T3) —
+     * <p>T3 must be in scope here (this specific core directly consumes T1, T2, <em>and</em> T3) —
      * a dependency on a coordinate outside scope entirely is a different, fail-closed case (see
-     * {@link ParsleyEngineTest}), not vacuous satisfaction, and would defeat the point of this test
+     * {@link ParsleyCausalBroadcastTest}), not vacuous satisfaction, and would defeat the point of this test
      * either way (a thrown T1@0 rather than a genuinely held one).
      *
      * Asserts T1@0 depending on T3@5 is held (no genuine witness anywhere yet), then releases once a
@@ -211,19 +211,19 @@ class ParsleyEngineCompletenessTest {
         frontier.channelUpdate(T1_ID, 0, ParsleyVectorClock.empty());
         frontier.channelUpdate(T2_ID, 0, ParsleyVectorClock.empty());
         frontier.channelUpdate(T3_ID, 0, ParsleyVectorClock.empty());
-        ParsleyEngine<String, String> engine = engineOver(frontier, scopeIncludingAncestor);
+        ParsleyCausalBroadcast<String, String> causalBroadcast = causalBroadcastOver(frontier, scopeIncludingAncestor);
         TopicPartition t3 = new TopicPartition("t3", 0);
 
         // T1@0 depends on shared ancestor T3@5 — nothing has genuinely proven T3@5 yet, so it is held.
-        List<ParsleyMessage<String, String>> out1 = engine.receive(record(T1, 0, T1_ID, clock(T3_ID, 5))).delivered();
+        List<ParsleyMessage<String, String>> out1 = causalBroadcast.receive(record(T1, 0, T1_ID, clock(T3_ID, 5))).delivered();
         assertEquals(List.of(), out1, "T1@0 must be held: no channel has genuinely proven T3@5 yet");
 
         // A real T3 record, genuinely and contiguously delivered up to offset 5, is the direct witness
         // that releases the held T1@0.
         for (long offset = 0; offset < 5; offset++) {
-            engine.receive(record(t3, offset, T3_ID, ParsleyVectorClock.empty()));
+            causalBroadcast.receive(record(t3, offset, T3_ID, ParsleyVectorClock.empty()));
         }
-        List<ParsleyMessage<String, String>> out2 = engine.receive(record(t3, 5, T3_ID, ParsleyVectorClock.empty())).delivered();
+        List<ParsleyMessage<String, String>> out2 = causalBroadcast.receive(record(t3, 5, T3_ID, ParsleyVectorClock.empty())).delivered();
         assertEquals(2, out2.size(),
                 "T3@5 delivers genuinely and releases the held T1@0, which depended on exactly that");
     }
@@ -242,13 +242,13 @@ class ParsleyEngineCompletenessTest {
         // Single-input node consuming only T1.
         ParsleyVectorClock.CoordinatePredicate t1Only =
                 (topicId, partition) -> partition == 0 && topicId.equals(T1_ID);
-        ParsleyEngine<String, String> engine = engineOver(newFrontier(), t1Only);
+        ParsleyCausalBroadcast<String, String> causalBroadcast = causalBroadcastOver(newFrontier(), t1Only);
 
-        assertEquals(1, engine.receive(record(T1, 0, T1_ID, ParsleyVectorClock.empty())).delivered().size(),
+        assertEquals(1, causalBroadcast.receive(record(T1, 0, T1_ID, ParsleyVectorClock.empty())).delivered().size(),
                 "T1@0 with no dependencies delivers immediately");
         // T1@1 depends on T1@0 — an earlier offset of its own topic (intra-topic), already genuinely
         // delivered above.
-        assertEquals(1, engine.receive(record(T1, 1, T1_ID, clock(T1_ID, 0))).delivered().size(),
+        assertEquals(1, causalBroadcast.receive(record(T1, 1, T1_ID, clock(T1_ID, 0))).delivered().size(),
                 "an intra-topic dependency (on the record's own topic) is satisfied immediately");
     }
 
@@ -264,12 +264,12 @@ class ParsleyEngineCompletenessTest {
         ParsleyChannels frontier = newFrontier();
         frontier.channelUpdate(T1_ID, 0, ParsleyVectorClock.empty());
         frontier.channelUpdate(T2_ID, 0, ParsleyVectorClock.empty());
-        ParsleyEngine<String, String> engine = engineOver(frontier, SCOPE);
+        ParsleyCausalBroadcast<String, String> causalBroadcast = causalBroadcastOver(frontier, SCOPE);
 
-        List<ParsleyMessage<String, String>> out1 = engine.receive(record(T1, 0, T1_ID, clock(T2_ID, 0))).delivered();
+        List<ParsleyMessage<String, String>> out1 = causalBroadcast.receive(record(T1, 0, T1_ID, clock(T2_ID, 0))).delivered();
         assertEquals(List.of(), out1, "T1@0 must be held: T2 has not genuinely delivered anything yet");
 
-        List<ParsleyMessage<String, String>> out2 = engine.receive(record(T2, 0, T2_ID, ParsleyVectorClock.empty())).delivered();
+        List<ParsleyMessage<String, String>> out2 = causalBroadcast.receive(record(T2, 0, T2_ID, ParsleyVectorClock.empty())).delivered();
         assertEquals(2, out2.size(),
                 "T2@0 delivers genuinely and releases the held T1@0, which depended on exactly that");
     }
@@ -287,15 +287,15 @@ class ParsleyEngineCompletenessTest {
         }
     }
 
-    private ParsleyEngine<String, String> engineOver(ParsleyChannels frontier,
+    private ParsleyCausalBroadcast<String, String> causalBroadcastOver(ParsleyChannels frontier,
                                                      ParsleyVectorClock.CoordinatePredicate scope) {
-        return new ParsleyEngine<>(frontier, buffer,
+        return new ParsleyCausalBroadcast<>(frontier, buffer,
                 new MockCandidateIndex(), ParsleyMetrics.NOOP,
                 System::currentTimeMillis, scope);
     }
 
-    private ParsleyEngine<String, String> fanInEngine() {
-        return engineOver(newFrontier(), SCOPE);
+    private ParsleyCausalBroadcast<String, String> fanInCausalBroadcast() {
+        return causalBroadcastOver(newFrontier(), SCOPE);
     }
 
     private static ParsleyMessage<String, String> record(TopicPartition tp, long offset,

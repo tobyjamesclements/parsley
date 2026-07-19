@@ -73,7 +73,7 @@ public class HeaderEvaluationBenchmark {
 
     /**
      * Compares the parsed dependencies against the local frontier to determine admissibility, as
-     * happens in {@link ParsleyEngine#receive}.
+     * happens in {@link ParsleyCausalBroadcast#receive}.
      */
     @Benchmark
     public boolean dominanceCheck() {

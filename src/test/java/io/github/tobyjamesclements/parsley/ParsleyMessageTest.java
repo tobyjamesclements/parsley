@@ -14,7 +14,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
  * Tests {@link ParsleyMessage}'s build/encode/decode helpers — the boundary that turns Kafka records
- * and headers into the typed engine envelope and back.
+ * and headers into the typed core envelope and back.
  */
 class ParsleyMessageTest {
 

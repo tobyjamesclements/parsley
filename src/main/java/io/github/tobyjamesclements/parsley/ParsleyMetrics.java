@@ -12,7 +12,7 @@ import java.util.Map;
 import java.util.OptionalLong;
 
 /**
- * Callback interface through which {@link ParsleyEngine} reports observable events. Every causal
+ * Callback interface through which {@link ParsleyCausalBroadcast} reports observable events. Every causal
  * processor node wires a {@link #wire} backed implementation; callers that do not need metrics
  * receive {@link #NOOP}.
  */

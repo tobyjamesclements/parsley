@@ -1,6 +1,5 @@
 package io.github.tobyjamesclements.parsley;
 
-import org.apache.kafka.common.header.Headers;
 import org.apache.kafka.common.serialization.Serde;
 import org.apache.kafka.streams.StreamsMetrics;
 import org.apache.kafka.streams.processor.Cancellable;
@@ -30,12 +29,13 @@ import java.util.function.Supplier;
  * {@link Record}'s headers onto the produced {@code ProducerRecord}, so dependencies stamped here
  * ride the headers all the way to the output topic.
  *
- * <p>The completeness is read <strong>live</strong> through a {@link Supplier} at stamp time, so a
- * forward during record admission sees the post-admit completeness and a forward from a punctuator
- * sees the completeness as of fire time. Stamping is idempotent — any existing
- * {@link ParsleyHeader#CAUSAL_DEPENDENCIES} header is removed before the current completeness is written — and never
- * mutates the incoming record's headers (a fresh header set is built and applied via
- * {@link Record#withHeaders}).
+ * <p>The stamp itself is attached by {@link ParsleyCausalBroadcast#broadcast} — the single stamping
+ * site every outbound record passes through, protocol markers included — which reads the completeness
+ * <strong>live</strong> at stamp time, so a forward during record admission sees the post-admit
+ * completeness and a forward from a punctuator sees the completeness as of fire time. Stamping is
+ * idempotent — any existing {@link ParsleyHeader#CAUSAL_DEPENDENCIES} header is replaced, never
+ * accumulated — and never mutates the incoming record's headers (a fresh header set is built and
+ * applied via {@link Record#withHeaders}).
  *
  * <p><strong>The one-arg {@link #forward(Record)} targets every name in {@code sinkNodeNames}
  * explicitly — it never broadcasts.</strong> A stage's processor node may have more than one child
@@ -48,7 +48,7 @@ import java.util.function.Supplier;
  *
  * <p>Note: scheduled punctuators forward through this same proxy, so their forwards are stamped with
  * no special-casing. Punctuators must only <em>read</em> the completeness (never advance it), which
- * preserves the engine's persist-frontier-before-forward invariant on the punctuator path.
+ * preserves the causal-broadcast core's persist-frontier-before-forward invariant on the punctuator path.
  *
  * @param <KOut> the forwarded key type
  * @param <VOut> the forwarded value type
@@ -56,7 +56,10 @@ import java.util.function.Supplier;
 final class ParsleyProcessorContext<KOut, VOut> implements ProcessorContext<KOut, VOut> {
 
     private final ProcessorContext<KOut, VOut> delegate;
-    private final Supplier<ParsleyVectorClock> completeness;
+    // The L2 module whose broadcast() request attaches the stamp. Wildcard-typed: its generics are the
+    // stage's INPUT key/value types, irrelevant to stamping this context's outbound KOut/VOut records
+    // (broadcast() is generic per record).
+    private final ParsleyCausalBroadcast<?, ?> broadcast;
     private final Supplier<Optional<RecordMetadata>> deliveredMetadata;
     // Every business sink this stage declared, or empty to fall back to the plain broadcast forward()
     // Kafka Streams itself provides. Non-empty only when a second, incompatibly-typed child has been
@@ -68,11 +71,11 @@ final class ParsleyProcessorContext<KOut, VOut> implements ProcessorContext<KOut
     private int forwardCount = 0;
 
     ParsleyProcessorContext(ProcessorContext<KOut, VOut> delegate,
-                             Supplier<ParsleyVectorClock> completeness,
+                             ParsleyCausalBroadcast<?, ?> broadcast,
                              Supplier<Optional<RecordMetadata>> deliveredMetadata,
                              List<String> sinkNodeNames) {
         this.delegate = delegate;
-        this.completeness = completeness;
+        this.broadcast = broadcast;
         this.deliveredMetadata = deliveredMetadata;
         this.sinkNodeNames = sinkNodeNames;
     }
@@ -115,8 +118,7 @@ final class ParsleyProcessorContext<KOut, VOut> implements ProcessorContext<KOut
     }
 
     private <K extends KOut, V extends VOut> Record<K, V> stamp(Record<K, V> record) {
-        Headers stamped = ParsleyHeader.replacingDependencies(record.headers(), completeness.get().toBytes());
-        return record.withHeaders(stamped);
+        return broadcast.broadcast(record);
     }
 
     // --- everything below delegates verbatim to the real context ---

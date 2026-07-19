@@ -56,7 +56,7 @@ import java.util.Set;
  *       the dependencies advertised on it (max-merged). {@link #completeness()} is the frontier clock
  *       max-merged with every channel's advertised view — the <em>outbound stamp</em>, carrying
  *       transitive ancestry downstream. The delivery gate itself checks the contiguous frontier alone
- *       (see {@link ParsleyEngine}); an advertised claim never substitutes for local delivery; and
+ *       (see {@link ParsleyCausalBroadcast}); an advertised claim never substitutes for local delivery; and
  *   <li>the <strong>highest-received offsets</strong> — for each input channel, the highest offset ever
  *       physically received, so {@link #bridge} can tell a consumer-skipped offset (a transaction marker
  *       or aborted record the {@code read_committed} consumer never returns) from an offset still to
@@ -70,7 +70,7 @@ import java.util.Set;
  * <p>Core operations: {@link #completeness()} (the delivery boundary), {@link #delivered} (advance the
  * contiguous frontier for a delivered record), {@link #seedIfFirstSeen} (establish the baseline the
  * first time a coordinate is observed, since consumption need not start at offset 0), and the channel
- * accessors. {@link ParsleyEngine} enforces causal transitivity (the cascade after each delivery) and
+ * accessors. {@link ParsleyCausalBroadcast} enforces causal transitivity (the cascade after each delivery) and
  * owns the buffer around these operations.
  */
 final class ParsleyChannels {
@@ -212,7 +212,7 @@ final class ParsleyChannels {
      * <p>View-only: never rewrites recorded state or the outbound stamp ({@link #completeness()} is
      * computed separately). The gate re-normalises on every evaluation rather than caching the result
      * at receive time, because the epoch floor can rise while a record is held (a closing epoch
-     * transition strips a held record's below-floor dependencies — the drain {@link ParsleyEngine}
+     * transition strips a held record's below-floor dependencies — the drain {@link ParsleyCausalBroadcast}
      * runs after {@link #tryAdvanceEpoch} depends on that re-evaluation); once T3.2 removes the
      * floor clause, the result is a pure function of the raw clock and the source coordinate.
      */
@@ -248,7 +248,7 @@ final class ParsleyChannels {
      * channel's advertised dependencies. This is the <em>outbound stamp</em> — the boundary this node
      * advertises downstream, carrying transitive ancestry (coordinates a channel has advertised that
      * this node may not itself have delivered yet) for each receiver's own gate to verify locally. It
-     * is <em>not</em> the delivery gate: the gate ({@link ParsleyEngine}) checks {@link #frontier()}
+     * is <em>not</em> the delivery gate: the gate ({@link ParsleyCausalBroadcast}) checks {@link #frontier()}
      * alone, so an advertised claim can never release a record here ahead of local delivery of its
      * cause. With no channel clocks recorded, this is exactly the node's own frontier.
      *
@@ -280,11 +280,11 @@ final class ParsleyChannels {
      * above it. This "always" is literal: {@link CausalTopology#assemble} requires {@code
      * processing.guarantee=exactly_once_v2} unconditionally, so the frontier write and the forwarded-index
      * prune are part of one Kafka transaction — a crash cannot tear one from the other at all, not merely
-     * "usually toward" the benign side (see {@link ParsleyEngine}'s class Javadoc for the fuller version
+     * "usually toward" the benign side (see {@link ParsleyCausalBroadcast}'s class Javadoc for the fuller version
      * of this note).
      *
      * <p>A <em>below-floor</em> delivery ({@code offset < startsAt}) is a no-op on the causal frontier:
-     * the record still feeds state and is forwarded by the engine, but an out-of-domain offset must not
+     * the record still feeds state and is forwarded by the causal-broadcast core, but an out-of-domain offset must not
      * advance the causal frontier (it stays at the epoch origin until an in-domain offset is delivered)
      * nor enter the forwarded index. Under {@link ParsleyEpoch#NONE} every offset is in-domain.
      *
@@ -314,15 +314,15 @@ final class ParsleyChannels {
      * business record ever fills). The name is a coinage: no literature analog — the mechanism exists
      * only because Kafka's EOS commit markers occupy offsets. Called once per received record,
      * <em>before</em> that record's own
-     * delivery, on every channel the engine advances a frontier on ({@link ParsleyEngine#receive} and
-     * {@link ParsleyEngine#onWatermark}). Returns {@code true} if the contiguous frontier advanced — the
-     * caller must then cascade ({@link ParsleyEngine#propagate}), since a held record may have been waiting
+     * delivery, on every channel the causal-broadcast core advances a frontier on ({@link ParsleyCausalBroadcast#receive} and
+     * {@link ParsleyCausalBroadcast#onWatermark}). Returns {@code true} if the contiguous frontier advanced — the
+     * caller must then cascade ({@link ParsleyCausalBroadcast#propagate}), since a held record may have been waiting
      * on exactly a bridged offset.
      *
      * <p><strong>Soundness.</strong> Kafka delivers a partition strictly in offset order, so once
      * {@code receivedOffset} has arrived every lower offset that would ever be returned to this consumer
      * already has been. An offset in {@code (highestReceived, receivedOffset)} was therefore skipped
-     * permanently — a transaction marker, an aborted record, or a protocol record the engine consumed but
+     * permanently — a transaction marker, an aborted record, or a protocol record the causal-broadcast core consumed but
      * deliberately did not record as a delivery (a boundary marker on an early-return path) — never a
      * business record still in flight, and never a <em>held</em> business record (a held record was
      * received, so it is in the buffer and its offset is at or below {@code highestReceived}, outside the
@@ -342,7 +342,7 @@ final class ParsleyChannels {
      * index or advance the causal frontier). The <em>data-loss</em> guard — distinguishing a marker gap
      * from a retention/{@code deleteRecords} jump that would drop real committed records below the log-start
      * offset — is the caller's responsibility, since only it can see the partition's log-start (see
-     * {@link ParsleyEngine}); this method assumes the interval it is handed is a genuine skip.
+     * {@link ParsleyCausalBroadcast}); this method assumes the interval it is handed is a genuine skip.
      */
     boolean bridge(Uuid topicId, int partition, long receivedOffset) {
         CoordKey key = new CoordKey(topicId, partition);
@@ -411,11 +411,11 @@ final class ParsleyChannels {
      * floored to the epoch origin. The name is a coinage: no literature analog — the mechanism exists
      * only because Kafka retention means a channel's history need not begin at its first offset.
      * The first offset seen need not be 0 (finite retention, fresh consumer
-     * group); anything below it is outside the engine's purview, not an unfillable gap, so folding
+     * group); anything below it is outside the causal-broadcast core's purview, not an unfillable gap, so folding
      * {@code offset - 1} into the frontier lets the contiguous walk start there. Returns {@code true} if
      * a seed was applied (the caller should then cascade). The coordinate is marked seen on the first
      * call even if the record is held, so a later record cannot re-trigger the seed and skip the
-     * still-held earlier one. The seen-set is in-memory only; {@link ParsleyEngine}'s constructor
+     * still-held earlier one. The seen-set is in-memory only; {@link ParsleyCausalBroadcast}'s constructor
      * replays this call for every restored held record's source coordinate (at its lowest held
      * offset) so the guard survives a restart.
      *
@@ -500,14 +500,14 @@ final class ParsleyChannels {
      * — promoting {@code F_e} to the settled floor and persisting. Returns {@code true} if it advanced
      * (the caller should then re-drain, since a raised floor can strip a held replay record's
      * below-floor dependencies). A no-op with no live {@link ParsleyEpochState} or no ready transition.
-     * Called after every engine operation that can advance the frontier.
+     * Called after every causal-broadcast operation that can advance the frontier.
      *
      * <p>The dominance check deliberately uses the frontier, not {@link #completeness()}: the window
      * closing is the proof that everything below {@code F_e} has been delivered <em>here</em>, and a
      * channel's advertised claim that a peer delivered it is no such proof — closing on completeness
      * would let the raised floor strip a held e-1 record's dependencies before this node had actually
      * delivered them, releasing it out of causal order (the same hearsay hole the delivery gate
-     * closes; see {@link ParsleyEngine#isDeliverable}).
+     * closes; see {@link ParsleyCausalBroadcast#isDeliverable}).
      *
      * <p>{@code F_e} is the DAG-wide committed floor — the {@code mergeMin} of every member's published
      * completeness — so it can carry coordinates for topics downstream of (or parallel to) this node
@@ -561,10 +561,10 @@ final class ParsleyChannels {
      * topology would otherwise be re-advertised downstream forever, where every receiver's gate fails
      * it fast as an unreachable dependency (a permanent crash loop regenerated from this store on
      * every restart). The prune is safe because a live advertised coordinate is always in scope here:
-     * every stage channels its whole causal ancestry (the full-mesh/ancestry contract the engine's
+     * every stage channels its whole causal ancestry (the full-mesh/ancestry contract the causal-broadcast core's
      * fail-closed unreachable check enforces), upstream stamps are co-partitioned onto this task's
      * own partition, and this node's own sink coordinates were already stripped before folding
-     * ({@code ParsleyEngine#advertised}) — so an out-of-scope entry inside a channel clock can only
+     * ({@code ParsleyCausalBroadcast#advertised}) — so an out-of-scope entry inside a channel clock can only
      * be a retired or recreated coordinate, never live transitive ancestry.
      */
     void pruneToScope(ParsleyVectorClock.CoordinatePredicate inScope) {

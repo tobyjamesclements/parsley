@@ -37,7 +37,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * ancestor with its own descendant", {@code docs/internals/causal-consistency.md}) — the tightest possible
  * shape of it: a single node directly self-consuming its own sink.
  *
- * <p>This also exercises {@link ParsleyEngine}'s own-coordinate stripping ({@code ownSinkTopics}):
+ * <p>This also exercises {@link ParsleyCausalBroadcast}'s own-coordinate stripping ({@code ownSinkTopics}):
  * without it, a node observing its own watermark reflected back to it would never converge (every
  * received copy carries a fresh, ever-advancing self-position), a genuine infinite-loop bug this test
  * caught during development. Under max-merge this works because a node's own registered channel for the
@@ -98,7 +98,7 @@ class CausalCyclicTopologyTest {
                         .addBufferStore("parsley")
                         .addSource(new ParsleySource<>("t1", Serdes.String(), Serdes.String()))
                         .addSource(new ParsleySource<>("p-out", Serdes.String(), Serdes.String()))
-                        // Required for ParsleyEngine's own-coordinate stripping (see ParsleyEngine's
+                        // Required for ParsleyCausalBroadcast's own-coordinate stripping (see ParsleyCausalBroadcast's
                         // ownSinkTopics Javadoc): without this declaration, P has no way to recognise
                         // "p-out" as its own produced coordinate, and a self-consumed watermark carrying
                         // its own ever-advancing position would never converge.

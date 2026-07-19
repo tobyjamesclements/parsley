@@ -43,7 +43,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * the same record just supplied — so a fan-in record depending on a shared ancestor genuinely holds
  * until some channel has actually, gatedly delivered up to the required offset. A dependency on a
  * coordinate this node has no channel for at all is a different, fail-closed case (see
- * {@link ParsleyEngineTest}), not a shortcut for genuine reconvergence — so the shared
+ * {@link ParsleyCausalBroadcastTest}), not a shortcut for genuine reconvergence — so the shared
  * ancestor here ({@code anc}) is a real, directly-consumed third input, not an out-of-scope one.
  *
  * <p>These tests cover:
@@ -282,7 +282,7 @@ class CausalReconvergenceTopologyTest {
     // sharedAncestorDependencyHeldUntilGenuineWitnessThenStampedWithMax above covers held-then-released
     // reconvergence via the shared ancestor's own channel. A mutual-deadlock construction (two sibling
     // records each depending on the other's not-yet-confirmed claim) is not sound to build: per
-    // ParsleyEngineCompletenessTest's fanInRecordHeldUntilAGenuineWitnessProvesTheSharedAncestor, using
+    // ParsleyCausalBroadcastCompletenessTest's fanInRecordHeldUntilAGenuineWitnessProvesTheSharedAncestor, using
     // one sibling's own unconfirmed claim as the "witness" for the other is circular, not a genuine
     // reconvergence proof — a real, independent witness (here, anc's own channel) is required instead.
 
@@ -290,12 +290,12 @@ class CausalReconvergenceTopologyTest {
      * Watermark propagation — a non-subscribing relay layer re-emits received watermarks, so a
      * grandchild node's completeness advances even when no business record flows on that path.
      *
-     * <p>This is tested at the {@link ParsleyEngine} level over a channel-tracking {@link
-     * ParsleyChannels}: after {@link ParsleyEngine#onWatermark} is called with a frontier carrying an
-     * ancestor coordinate, {@link ParsleyEngine#completeness()} must reflect it. This proves the
+     * <p>This is tested at the {@link ParsleyCausalBroadcast} level over a channel-tracking {@link
+     * ParsleyChannels}: after {@link ParsleyCausalBroadcast#onWatermark} is called with a frontier carrying an
+     * ancestor coordinate, {@link ParsleyCausalBroadcast#completeness()} must reflect it. This proves the
      * channel clock is updated by the watermark receipt, which is the mechanism that enables inductive
      * propagation through non-subscribing layers. Also asserts {@link
-     * ParsleyEngine.WatermarkOutcome#channelAdvanced()} reports {@code true} — the signal {@link
+     * ParsleyCausalBroadcast.WatermarkOutcome#channelAdvanced()} reports {@code true} — the signal {@link
      * ParsleyProcessor} gates further relay on (clock-invisible markers; see its class Javadoc) — since
      * this watermark genuinely taught the channel something it did not already know.
      *
@@ -309,19 +309,19 @@ class CausalReconvergenceTopologyTest {
                 partition == 0 && topicId.equals(T1_ID);
         MockBufferStore<String, String> buffer = new MockBufferStore<>();
 
-        ParsleyEngine<String, String> engine = new ParsleyEngine<>(
+        ParsleyCausalBroadcast<String, String> causalBroadcast = new ParsleyCausalBroadcast<>(
                 new ParsleyChannels(ParsleyVectorClock.empty(), new MockForwardedIndex()),
                 buffer, new MockCandidateIndex(), ParsleyMetrics.NOOP,
                 System::currentTimeMillis);
 
         // Before any watermark, completeness has no ANC coordinate.
-        assertEquals(-1L, engine.completeness().offsetFor(ANC_ID, 0),
+        assertEquals(-1L, causalBroadcast.completeness().offsetFor(ANC_ID, 0),
                 "completeness must not know ANC before any watermark arrives");
 
         // Receive a watermark at T1/0 offset 0, carrying {ANC@5}.
         ParsleyVectorClock watermarkFrontier = ParsleyVectorClock.empty().observe(ANC_ID, 0, 5);
-        ParsleyEngine.WatermarkOutcome<String, String> watermarkOutcome =
-                engine.onWatermark(T1_ID, 0, 0, watermarkFrontier);
+        ParsleyCausalBroadcast.WatermarkOutcome<String, String> watermarkOutcome =
+                causalBroadcast.onWatermark(T1_ID, 0, 0, watermarkFrontier);
         List<ParsleyMessage<String, String>> released = watermarkOutcome.outcome().delivered();
 
         // No records were buffered, so nothing is released.
@@ -331,7 +331,7 @@ class CausalReconvergenceTopologyTest {
                 "the channel knew nothing before, so this watermark must report a genuine advance");
 
         // The channel clock for T1/0 now knows ANC@5, which must appear in completeness().
-        assertEquals(5L, engine.completeness().offsetFor(ANC_ID, 0),
+        assertEquals(5L, causalBroadcast.completeness().offsetFor(ANC_ID, 0),
                 "completeness must rise to ANC@5 after the watermark advances the channel clock");
     }
 

@@ -19,7 +19,7 @@ import java.util.Objects;
  * it, keyed by the topic's Kafka UUID so that topic deletion and recreation produce a different
  * identity even when the name is reused.
  *
- * <p>It serves two roles, distinguished only by how the engine uses it:
+ * <p>It serves two roles, distinguished only by how the causal-broadcast core uses it:
  * <ul>
  *   <li>as the node <em>frontier</em> — the highest offset the causal processor has admitted on each
  *       coordinate ({@link #observe} advances it);
@@ -132,10 +132,10 @@ final class ParsleyVectorClock {
      * clock down to the coordinates currently in scope after a topic UUID change or scope narrowing
      * ({@link ParsleyChannels#pruneToScope}) — never used to silently drop a coordinate this node
      * merely has no channel for from an inbound record's own dependency clock: a dependency naming a
-     * coordinate outside scope is not something to silently drop, see {@link ParsleyEngine}'s
+     * coordinate outside scope is not something to silently drop, see {@link ParsleyCausalBroadcast}'s
      * fail-closed handling of that case. The one narrower, different exception is {@link
-     * ParsleyEngine#effectiveDependencies}/{@code onWatermark} stripping a node's own produced
-     * coordinates specifically — see {@code ParsleyEngine#ownSinkTopics}'s Javadoc for why that is
+     * ParsleyCausalBroadcast#effectiveDependencies}/{@code onWatermark} stripping a node's own produced
+     * coordinates specifically — see {@code ParsleyCausalBroadcast#ownSinkTopics}'s Javadoc for why that is
      * sound rather than a relaxation of this rule.
      */
     ParsleyVectorClock retaining(CoordinatePredicate inScope) {

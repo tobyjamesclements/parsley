@@ -184,7 +184,7 @@ class ParsleyCoordinationMultiAppIT {
      * terminates after one round trip.
      *
      * <p>This is the headline capability the whole max-merge redesign (PR1) plus clock-invisible markers
-     * (PR2) plus passthrough auto-wiring (PR5) plus {@link ParsleyEngine}'s own-coordinate stripping
+     * (PR2) plus passthrough auto-wiring (PR5) plus {@link ParsleyCausalBroadcast}'s own-coordinate stripping
      * (added during this same PR6 verification pass, after a {@link TopologyTestDriver} single-node
      * self-loop test — see {@code CausalCyclicTopologyTest} — caught a genuine infinite watermark loop)
      * together exist to enable: a topology where a node consumes both an ancestor and its own descendant,

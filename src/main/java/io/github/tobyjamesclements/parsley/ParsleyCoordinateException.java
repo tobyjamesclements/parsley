@@ -5,7 +5,7 @@ import org.jspecify.annotations.Nullable;
 
 /**
  * Shared base for a Parsley exception anchored to a single source coordinate — the {@code (topic,
- * topicId, partition, offset)} quartet every fail-closed engine exception carries for operator
+ * topicId, partition, offset)} quartet every fail-closed causal-broadcast exception carries for operator
  * diagnostics. Modelled on Kafka's own {@code org.apache.kafka.common.errors.ApiException} family: a
  * common base carrying the fields every subtype needs, with each subclass contributing only what is
  * specific to its own failure (a {@code details()} diagnostic string, raw undecodable bytes, and so on).

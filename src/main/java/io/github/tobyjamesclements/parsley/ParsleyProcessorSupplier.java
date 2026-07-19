@@ -29,7 +29,7 @@ import java.util.function.Function;
  * (buffer store namespace, per-topic serdes, sink topics and node names, quiesce/coordination wiring);
  * package-private tests also drive it directly to exercise the decorator without the topology layer.
  *
- * <p><strong>Data-loss precondition (low-level use).</strong> The engine's skip-bridge
+ * <p><strong>Data-loss precondition (low-level use).</strong> The causal-broadcast core's skip-bridge
  * ({@link ParsleyChannels#bridge}) treats an offset the consumer never returned as a transaction marker,
  * which is only sound if the consumer can never silently jump forward over lost records. The high-level
  * path ({@link CausalStreamsBuilder} → {@link CausalTopology} → {@link CausalStreams}) guarantees this by

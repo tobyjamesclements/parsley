@@ -34,17 +34,17 @@ import java.util.function.Function;
  * fail-closed — there is no eviction, buffer limit, or timeout that forwards a record ahead of its
  * dependencies. Every record that is delivered reaches {@code delegate.process(...)} exactly once,
  * and the state reads/writes the delegate performs and every record it forwards are causally ordered;
- * forwards are stamped with the current frontier by a {@link ParsleyProcessorContext}.
+ * forwards are stamped by a {@link ParsleyProcessorContext} via {@link ParsleyCausalBroadcast#broadcast}.
  *
  * <p>Held records are persisted to a changelog-backed buffer store and restored on {@code init}, so
  * they survive a restart (a buffered record's source offset is committed past it, so it would
- * otherwise be lost). The frontier-before-forward invariant from {@link ParsleyEngine} is preserved
+ * otherwise be lost). The frontier-before-forward invariant from {@link ParsleyCausalBroadcast} is preserved
  * on both the admit and punctuator paths.
  *
  * <p><strong>Clock-invisible markers.</strong> A received watermark or epoch-snapshot marker
  * ({@link #handleWatermark}, {@link #handleEpochSnapshot}) is relayed downstream only when it genuinely
  * taught this node's channel something it did not already know
- * ({@link ParsleyEngine.WatermarkOutcome#channelAdvanced()}, via {@link #foldMarkerCompleteness}).
+ * ({@link ParsleyCausalBroadcast.WatermarkOutcome#channelAdvanced()}, via {@link #foldMarkerCompleteness}).
  * A marker's own delivery is never itself treated as a reason to relay further — unlike a genuine
  * business record, whose delivery always unconditionally causes this node to emit something on its own
  * sink (see {@link #delivered}). Gating on data-taught-something rather than on "a record was delivered"
@@ -57,7 +57,7 @@ import java.util.function.Function;
  *
  * <p>The <strong>epoch-boundary</strong> marker ({@link #handleEpochBoundary}) is the one exception: it
  * relays on its channel's first sight of the boundary regardless of whether the carried clock advanced
- * anything ({@link ParsleyEngine.BoundaryOutcome#markerWasNew()} {@code || channelAdvanced}). A boundary
+ * anything ({@link ParsleyCausalBroadcast.BoundaryOutcome#markerWasNew()} {@code || channelAdvanced}). A boundary
  * re-carries the completeness the preceding snapshot already taught the channel, so on an idle, quiesced
  * round it teaches nothing new — but the downstream still needs the marker on this channel to close its
  * own marker-on-every-channel transition window. The per-epoch, per-channel newly-recorded signal fires
@@ -72,7 +72,7 @@ import java.util.function.Function;
  * deserialised as raw {@code byte[]}/{@code byte[]} (never the stage's own {@code KIn}/{@code VIn} —
  * a passthrough topic's value schema is unrelated to this stage's business types). {@link #process}
  * and {@link #delivered} recognise it by its own source topic (never a header) and route it through the
- * ordinary {@link ParsleyEngine} gate exactly like any other channel, but skip {@code delegate.process}
+ * ordinary {@link ParsleyCausalBroadcast} gate exactly like any other channel, but skip {@code delegate.process}
  * for it specifically, emitting a watermark instead. Critically, this check is per <em>released</em>
  * message, not per triggering record: a passthrough record's own delivery can, as a side effect of the
  * shared buffer/candidate-index, release an unrelated held business record in the very same batch — that
@@ -138,7 +138,7 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
     // has no broker config until then). Used by ingest() to stamp each record's causal identity.
     private Map<String, Uuid> topicUuids = Map.of();
     // This stage's own sink topics' UUIDs, best-effort resolved at init() (see resolveSinkTopicUuids) —
-    // fed to engine() so ParsleyEngine can strip a node's own produced coordinates from any inbound
+    // fed to causalBroadcast() so ParsleyCausalBroadcast can strip a node's own produced coordinates from any inbound
     // dependency/marker clock. Never used to route or gate an inbound record by itself.
     private Set<Uuid> sinkTopicUuids = Set.of();
 
@@ -167,11 +167,11 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
     private int taskTotal = 1;
 
     private ProcessorContext<KOut, VOut> context;
-    // The task's one engine, built once at init() over the task's state stores. Exactly one Processor
+    // The task's one causal-broadcast core, built once at init() over the task's state stores. Exactly one Processor
     // instance ever touches these stores within a task (passthrough topics are wired as extra sources
     // into this SAME node, never as a separate processor node), so the cached ParsleyChannels's
     // in-memory copy of the persisted state cannot diverge from a concurrent writer — there is none.
-    private ParsleyEngine<KIn, VIn> engine;
+    private ParsleyCausalBroadcast<KIn, VIn> causalBroadcast;
     // The completeness as of the task's last committed transaction — the only clock ever published on
     // the non-transactional epoch-events side channel (see ParsleyCommittedCompleteness). In-band
     // stamps (forwards, watermark/marker headers) stay live: they ride the same transaction as the
@@ -181,9 +181,9 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
     private KeyValueStore<Long, byte[]> bufferStore;
     private KeyValueStore<byte[], byte[]> candidateIndexStore;
     private KeyValueStore<byte[], byte[]> forwardedIndexStore;
-    // The one-time seed for a fresh ParsleyEpochState (see buildEngine()) — computed once at init()
+    // The one-time seed for a fresh ParsleyEpochState (see buildCausalBroadcast()) — computed once at init()
     // from whether this task joined an already-established epoch (epochSeedEpochId > 0) or starts
-    // fresh at epoch 0 (0, the sentinel: no real epoch is ever id 0). Consumed by buildEngine()'s one
+    // fresh at epoch 0 (0, the sentinel: no real epoch is ever id 0). Consumed by buildCausalBroadcast()'s one
     // ParsleyEpochState construction; a restored task's real state overrides it from the "f" blob.
     private ParsleyVectorClock epochSeedFloor = ParsleyVectorClock.empty();
     private long epochSeedEpochId;
@@ -194,15 +194,13 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
     // — or dereferencing the still-null wiredMetrics — would mask the real init failure. See close().
     private boolean delegateInitialized;
     // The stamping proxy context handed to the delegate. Held here so deliver() can check the
-    // per-record forward count and emit a watermark when the delegate forwarded nothing.
+    // per-record forward count and emit a watermark when the delegate forwarded nothing. The stamp
+    // itself comes from causalBroadcast.broadcast() — the single stamping site, read live at forward
+    // time — confined to the task thread (both the delegate's forwards and its punctuator fires run on
+    // the StreamThread). The epoch runtime's off-thread publication of a wedged task's completeness
+    // rides a separate channel (commitHook::committed via registerLocalCompleteness, whose own
+    // volatiles carry it across threads), never the live clock.
     private ParsleyProcessorContext<KOut, VOut> stampingContext;
-    // The completeness clock stamped onto every record the delegate forwards (see
-    // ParsleyProcessorContext). Read live by the stamping proxy at forward time and confined to the
-    // task thread — both the delegate's forwards and its punctuator fires run on the StreamThread, so
-    // no cross-thread visibility is needed. The epoch runtime's off-thread publication of a wedged
-    // task's completeness rides a separate channel (commitHook::committed via registerLocalCompleteness,
-    // whose own volatiles carry it across threads), not this field.
-    private ParsleyVectorClock stampCompleteness = ParsleyVectorClock.empty();
     private volatile @Nullable RecordMetadata deliveryMetadata;
     private Cancellable restoredDrainSchedule;
 
@@ -337,12 +335,12 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
             validateFullMeshCoverage(runtime);
         }
 
-        // The seed for buildEngine()'s ParsleyEpochState, gating against the settled epoch. A fresh
+        // The seed for buildCausalBroadcast()'s ParsleyEpochState, gating against the settled epoch. A fresh
         // task that joined an established epoch settles DIRECTLY at the committed floor F_{k+1}: it has
         // no in-flight prior-epoch records, so every below-floor replay record is pre-epoch history to
         // strip — no overlap window. Otherwise it starts fresh at epoch 0; a restored task's state
         // (settled floor plus any in-progress transition) is loaded from the frontier "f" blob by the
-        // ParsleyChannels constructor buildEngine() runs below — which is why this is only ever a
+        // ParsleyChannels constructor buildCausalBroadcast() runs below — which is why this is only ever a
         // seed (see the epochSeedFloor/epochSeedEpochId field Javadoc).
         //
         // lastAdoptedEpoch is deliberately left at its default (0) even here: settling epochState
@@ -370,25 +368,22 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
 
         this.wiredMetrics = ParsleyMetrics.wire(context);
 
-        // Build the task's one engine: constructs the real ParsleyChannels (restoring from the store if
+        // Build the task's one causal-broadcast core: constructs the real ParsleyChannels (restoring from the store if
         // restored is true), prunes/seeds it to this task's current scope, and persists. Cached for the
-        // processor's whole lifetime — see buildEngine().
-        this.engine = buildEngine();
-        ParsleyEngine<KIn, VIn> engine = this.engine;
+        // processor's whole lifetime — see buildCausalBroadcast().
+        this.causalBroadcast = buildCausalBroadcast();
+        ParsleyCausalBroadcast<KIn, VIn> causalBroadcast = this.causalBroadcast;
         if (restored) {
-            log.info("Processor initialized [task: {}] — frontier restored: {}", context.taskId(), engine.frontier());
+            log.info("Processor initialized [task: {}] — frontier restored: {}", context.taskId(), causalBroadcast.frontier());
         } else {
             log.info("Processor initialized [task: {}] — frontier empty (fresh start)", context.taskId());
         }
 
-        // Initialise stampCompleteness from completeness() so the stamping proxy reflects the restored
-        // channel-clock state (not just the in-scope frontier) from the first forward onward.
-        this.stampCompleteness = engine.completeness();
         // Seed the commit hook with the restored completeness (rebuilt from the committed changelog,
         // durable by definition) and hand it the live supplier it snapshots at each commit-cycle
         // flush. Every side-channel publication below reads commitHook.committed(), never the live
         // clock — see ParsleyCommittedCompleteness for why.
-        commitHook.bind(() -> engine().completeness(), engine.completeness());
+        commitHook.bind(() -> causalBroadcast().completeness(), causalBroadcast.completeness());
         // Registers the committed-completeness snapshot so the shared runtime can publish this
         // member's completeness on its behalf from its own background thread if this task's thread is ever
         // wedged (e.g. sharing a StreamThread with a joiner blocked in awaitJoinCommit) and so can never run
@@ -398,7 +393,7 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
         }
 
         this.stampingContext = new ParsleyProcessorContext<>(
-                context, () -> stampCompleteness, () -> Optional.ofNullable(deliveryMetadata), sinkNodeNames);
+                context, causalBroadcast, () -> Optional.ofNullable(deliveryMetadata), sinkNodeNames);
         delegate.init(stampingContext);
         this.delegateInitialized = true;
 
@@ -410,7 +405,7 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
         restoredDrainSchedule = context.schedule(Duration.ofMillis(1), PunctuationType.WALL_CLOCK_TIME,
                 timestamp -> {
                     restoredDrainSchedule.cancel();
-                    ParsleyEngine.Outcome<KIn, VIn> outcome = engine().drainAfterRestore();
+                    ParsleyCausalBroadcast.Outcome<KIn, VIn> outcome = causalBroadcast().drainAfterRestore();
                     deliver(outcome.delivered());
                 });
 
@@ -424,7 +419,7 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
         // buffer genuinely being empty. This tick closes that gap within one refresh interval.
         context.schedule(METRICS_REFRESH_INTERVAL, PunctuationType.WALL_CLOCK_TIME,
                 timestamp -> {
-                    engine().reportBufferState();
+                    causalBroadcast().reportBufferState();
                     updateQuiesceState();
                 });
 
@@ -447,29 +442,29 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
     }
 
     /**
-     * The task's one {@link ParsleyEngine}, built by {@link #buildEngine()} at {@code init()} and
+     * The task's one {@link ParsleyCausalBroadcast}, built by {@link #buildCausalBroadcast()} at {@code init()} and
      * cached for the processor's whole lifetime.
      *
      * <p>Caching is sound because exactly one {@link Processor} instance ever touches this task's
      * causal state stores: passthrough topics are wired as extra <em>sources into this same processor
      * node</em> ({@link CausalTopology}), never as a separate processor node sharing the stores. (An
-     * earlier design anticipated such a separate node and rebuilt the engine — a full buffer scan,
+     * earlier design anticipated such a separate node and rebuilt the core — a full buffer scan,
      * candidate re-index, and frontier-blob re-persist — at the top of every operation to keep two
      * hypothetical instances coherent; that made every operation O(buffer-depth) for a sharer that was
      * never built.)
      */
-    private ParsleyEngine<KIn, VIn> engine() {
-        return engine;
+    private ParsleyCausalBroadcast<KIn, VIn> causalBroadcast() {
+        return causalBroadcast;
     }
 
     /**
-     * Builds the engine over this task's state stores: constructs the {@link ParsleyChannels}
+     * Builds the causal-broadcast core over this task's state stores: constructs the {@link ParsleyChannels}
      * (restoring the frontier clock, channel clocks, and epoch state from the {@code "f"} blob when
      * present), prunes restored state to this task's current scope, seeds a channel entry for every
      * consumed input, and wires the buffer, candidate index, and forwarded index. Called exactly once,
      * from {@link #init}; {@link #wiredMetrics} and the {@code epochSeed*} fields must already be set.
      */
-    private ParsleyEngine<KIn, VIn> buildEngine() {
+    private ParsleyCausalBroadcast<KIn, VIn> buildCausalBroadcast() {
         ParsleyBufferStore<KIn, VIn> buffer = new StoreBackedBufferStore<>(bufferStore, serializer);
         ParsleyCandidateIndex candidateIndex = new StoreBackedCandidateIndex(candidateIndexStore);
         ParsleyForwardedIndex forwardedIndex = new StoreBackedForwardedIndex(forwardedIndexStore);
@@ -504,12 +499,12 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
         }
 
         // This stage's own sink topics — never a delivery-scope concern (inScope, above), but fed to
-        // the engine so it can strip a node's own produced coordinates from any inbound dependency or
-        // marker clock; see ParsleyEngine's Javadoc on ownSinkTopics for why this is sound.
+        // the core so it can strip a node's own produced coordinates from any inbound dependency or
+        // marker clock; see ParsleyCausalBroadcast's Javadoc on ownSinkTopics for why this is sound.
         Set<Uuid> ownSinkTopicIds = sinkTopicUuids;
         ParsleyVectorClock.CoordinatePredicate ownSinkTopics = (topicId, partition) -> ownSinkTopicIds.contains(topicId);
 
-        return new ParsleyEngine<>(channels, buffer, candidateIndex,
+        return new ParsleyCausalBroadcast<>(channels, buffer, candidateIndex,
                 wiredMetrics.metrics(), context::currentSystemTimeMs, inScope, ownSinkTopics);
     }
 
@@ -611,8 +606,8 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
             lastSeenKey = record.key();
         }
         ParsleyMessage<KIn, VIn> ingested = ingest(record);
-        ParsleyVectorClock completenessBefore = engine().completeness();
-        ParsleyEngine.Outcome<KIn, VIn> outcome = engine().receive(ingested);
+        ParsleyVectorClock completenessBefore = causalBroadcast().completeness();
+        ParsleyCausalBroadcast.Outcome<KIn, VIn> outcome = causalBroadcast().receive(ingested);
         deliver(outcome.delivered());
         // Advertise this node's progress so downstream channel clocks advance gap-free. A delivered
         // record advertises through its business output's completeness stamp — or, if the delegate
@@ -620,7 +615,7 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
         // produces neither, so emit a heartbeat watermark — but only when receiving it genuinely
         // advanced completeness (a coordinate's first sighting seeds the frontier), so an unrelated
         // held record does not flood downstream with no-op watermarks.
-        if (outcome.delivered().isEmpty() && !engine().completeness().equals(completenessBefore)) {
+        if (outcome.delivered().isEmpty() && !causalBroadcast().completeness().equals(completenessBefore)) {
             // Key the heartbeat with the buffered record's own key so it routes to that record's
             // partition, matching where its eventual business output will land — except a passthrough
             // record, whose own key is not a genuine KIn/KOut value; lastSeenKey routes just as well
@@ -678,11 +673,10 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
 
     private void deliver(List<ParsleyMessage<KIn, VIn>> admitted) {
         for (ParsleyMessage<KIn, VIn> message : admitted) {
-            // The stamp is the node's completeness frontier — the per-channel-min-then-frontier-max
-            // boundary that is sound across all input branches. This replaces the old per-record
-            // frontier-snapshot-merged-with-inbound-deps approach, which was correct only in
-            // single-layer topologies. Downstream nodes receive the sound multi-layer boundary.
-            stampCompleteness = engine().completeness();
+            // Every forward the delegate makes for this message is stamped live by
+            // causalBroadcast.broadcast() — the node's completeness at forward time, sound across all
+            // input branches (never a per-record frontier-snapshot merged with inbound deps, which was
+            // correct only in single-layer topologies).
             deliveryMetadata = new ParsleyRecordMetadata(message.topic(), message.partition(), message.offset());
             if (passthroughTopics.contains(message.topic())) {
                 // A passthrough message never reaches the delegate — its key/value are raw bytes, not a
@@ -713,7 +707,6 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
             }
         }
         deliveryMetadata = null;
-        stampCompleteness = engine().completeness();
         updateQuiesceState();
     }
 
@@ -727,7 +720,7 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
      * {@link ParsleyCoordination#leave()} can wait for a drained buffer before removing the member.
      */
     private void updateQuiesceState() {
-        boolean empty = engine().bufferSize() == 0;
+        boolean empty = causalBroadcast().bufferSize() == 0;
         if (quiesce != null) {
             quiesce.setDrained(context.taskId().toString(), quiesce.isQuiesceRequested() && empty);
         }
@@ -788,10 +781,10 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
 
     /**
      * Handles a received epoch-boundary marker: decodes it, records it on its source channel and (if the
-     * transition is now ready) closes the epoch window in the engine, delivers any records the raised
+     * transition is now ready) closes the epoch window in the causal-broadcast core, delivers any records the raised
      * floor releases, and <strong>relays the marker downstream</strong> on the same key so the boundary
      * propagates edge by edge through the DAG (the leaderless in-band model). It relays when the marker
-     * was newly recorded for its epoch on this channel ({@link ParsleyEngine.BoundaryOutcome#markerWasNew()})
+     * was newly recorded for its epoch on this channel ({@link ParsleyCausalBroadcast.BoundaryOutcome#markerWasNew()})
      * <em>or</em> its carried completeness taught this channel something new
      * ({@link #foldMarkerCompleteness}).
      *
@@ -834,7 +827,7 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
         // transition, so one record does both.
         boolean channelAdvanced = foldMarkerCompleteness(record);
 
-        ParsleyEngine.BoundaryOutcome<KIn, VIn> outcome = engine().onEpochBoundary(boundary, topicId, partition);
+        ParsleyCausalBroadcast.BoundaryOutcome<KIn, VIn> outcome = causalBroadcast().onEpochBoundary(boundary, topicId, partition);
         deliver(outcome.outcome().delivered());
 
         // Relay the boundary downstream on the marker's key so it stays on the same partition lane and
@@ -854,7 +847,7 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
 
     /**
      * The one path every received marker — watermark, epoch snapshot, epoch boundary — takes through the
-     * engine's {@link ParsleyEngine#onWatermark channel-clock fold}. It does two independent things, and
+     * core's {@link ParsleyCausalBroadcast#onWatermark channel-clock fold}. It does two independent things, and
      * the distinction is the crux of correctness here:
      * <ol>
      *   <li><strong>Always</strong> delivers the marker's own offset into this channel's contiguous
@@ -873,7 +866,7 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
      * used to diverge here, and only the watermark path got it right.
      *
      * @return whether the carried clock genuinely taught this channel something new
-     *         ({@link ParsleyEngine.WatermarkOutcome#channelAdvanced()}) — {@code false} for an
+     *         ({@link ParsleyCausalBroadcast.WatermarkOutcome#channelAdvanced()}) — {@code false} for an
      *         unregistered topic, an absent/undecodable header, or a clock this channel already
      *         dominates. This is the clock-news signal watermark and snapshot relay gate on (see the
      *         class Javadoc); it is never the offset-delivery signal, which is unconditional.
@@ -902,11 +895,11 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
         }
         // Deliberately OUTSIDE the decode catch: past this point a failure is a delivery failure, not a
         // decode failure — onWatermark has already advanced the frontier and removed released records
-        // from the buffer, so swallowing an exception from the user delegate (or the engine's own
+        // from the buffer, so swallowing an exception from the user delegate (or the core's own
         // fail-fast paths) would let the task commit past records the delegate never processed, silently
         // losing them. Fail-closed: let it kill the task.
-        ParsleyEngine.WatermarkOutcome<KIn, VIn> watermarkOutcome =
-                engine().onWatermark(topicId, partition, offset, frontierClock);
+        ParsleyCausalBroadcast.WatermarkOutcome<KIn, VIn> watermarkOutcome =
+                causalBroadcast().onWatermark(topicId, partition, offset, frontierClock);
         deliver(watermarkOutcome.outcome().delivered());
         return watermarkOutcome.channelAdvanced();
     }
@@ -964,7 +957,7 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
         }
         // Keep the runtime's drained mirror current even while idle (no deliveries drive updateQuiesceState),
         // so leave() observes a drained buffer promptly. Cheap and self-correcting on each poll tick.
-        runtime.reportDrained(memberId, engine().bufferSize() == 0);
+        runtime.reportDrained(memberId, causalBroadcast().bufferSize() == 0);
         // Every member — not just source-layer — publishes its completeness for an open round it still owes
         // one for, driven off the folded log. This makes publication restart-safe: a member that restarts
         // mid-round re-derives from the log that it owes a publication and re-publishes, without depending
@@ -1049,7 +1042,7 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
         int partition = context.taskId().partition();
         List<ParsleyMessage<KIn, VIn>> released = new ArrayList<>();
         for (Uuid topicId : externalSourceTopicIds) {
-            ParsleyEngine.BoundaryOutcome<KIn, VIn> outcome = engine().onEpochBoundary(boundary, topicId, partition);
+            ParsleyCausalBroadcast.BoundaryOutcome<KIn, VIn> outcome = causalBroadcast().onEpochBoundary(boundary, topicId, partition);
             released.addAll(outcome.outcome().delivered());
         }
         deliver(released);
@@ -1087,7 +1080,7 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
      * Forwards a protocol marker — a watermark ({@link ParsleyHeader#WATERMARK}), an epoch-snapshot
      * marker ({@link ParsleyHeader#EPOCH_SNAPSHOT}), or an epoch-boundary marker
      * ({@link ParsleyHeader#EPOCH_BOUNDARY}) — carrying this node's current
-     * {@link ParsleyEngine#completeness() completeness} in the {@link ParsleyHeader#CAUSAL_DEPENDENCIES}
+     * {@link ParsleyCausalBroadcast#completeness() completeness} in the {@link ParsleyHeader#CAUSAL_DEPENDENCIES}
      * header, so one record both signals the marker and advances the downstream channel clock. The
      * marker type is set by {@code markerHeader} (with {@code markerValue}: an empty array for a
      * watermark or snapshot, the encoded boundary for an epoch boundary).
@@ -1105,8 +1098,9 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
      * {@code markerHeader}; downstream Parsley consumers skip it by that header, not by its key. It
      * bypasses the business-forward counter in {@link ParsleyProcessorContext} (it is forwarded through
      * the raw context, not the stamping proxy) so it does not prevent watermark emission for a
-     * genuinely non-emitting delegate invocation, and its completeness header is written here directly
-     * rather than by the proxy.
+     * genuinely non-emitting delegate invocation. Its completeness header is attached by the same
+     * {@link ParsleyCausalBroadcast#broadcast} request that stamps business forwards — the single
+     * stamping site — so a marker's stamp and a business record's stamp cannot diverge by construction.
      *
      * <p>The {@code KIn}-to-{@code KOut} cast is sound under the co-partitioning contract: a causal
      * processor must not change the key across the node (doing so reshards the causally-related
@@ -1116,12 +1110,12 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
     private void forwardMarker(String markerHeader, byte[] markerValue, @Nullable KIn triggerKey) {
         Headers headers = ParsleyHeader.mutableHeaders();
         headers.add(markerHeader, markerValue);
-        headers.add(ParsleyHeader.CAUSAL_DEPENDENCIES, engine().completeness().toBytes());
         // Stamped with the current wall clock, never 0L: a marker's timestamp carries no causal
         // meaning (only its headers do), but it does drive broker time-based retention — a sink
         // segment holding only 0L-timestamped markers (a marker-only passthrough channel) would look
         // expired the moment it rolled and be deleted before a slow consumer read it.
-        forwardToSinks(new Record<>((KOut) (Object) triggerKey, null, context.currentSystemTimeMs(), headers));
+        forwardToSinks(causalBroadcast().broadcast(
+                new Record<>((KOut) (Object) triggerKey, null, context.currentSystemTimeMs(), headers)));
     }
 
     /**
@@ -1155,7 +1149,7 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
     }
 
     /**
-     * Decodes {@code record} into a {@link ParsleyMessage}, ready for {@link ParsleyEngine#receive}.
+     * Decodes {@code record} into a {@link ParsleyMessage}, ready for {@link ParsleyCausalBroadcast#receive}.
      */
     private ParsleyMessage<KIn, VIn> ingest(Record<KIn, VIn> record) {
         RecordMetadata meta = requireRecordMetadata();
@@ -1255,7 +1249,7 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
     /**
      * Best-effort, per-topic UUID resolution over {@link #sinkTopics} — unlike {@link
      * #additionalTopicInfo}, this always runs, never gated by {@code parsley.topology.validation}: it
-     * feeds {@link #engine}'s own-coordinate stripping (see {@link ParsleyEngine}'s Javadoc on {@code
+     * feeds {@link #causalBroadcast}'s own-coordinate stripping (see {@link ParsleyCausalBroadcast}'s Javadoc on {@code
      * ownSinkTopics}), a correctness mechanism, not a topology-misconfiguration lint.
      *
      * <p>A sink that does not exist yet is skipped, and — because this resolution runs once, at
@@ -1366,7 +1360,7 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
      * shared epoch-events log consumes or produces a topic this member neither consumes nor produces.
      * Escalated to a hard failure even under the default {@code warn} — mirroring {@link
      * #validatePartitionParity}'s coordination precedent — since this member could later be asked to
-     * gate a record on a coordinate it can never see (fail-closed in {@link ParsleyEngine}, not silently
+     * gate a record on a coordinate it can never see (fail-closed in {@link ParsleyCausalBroadcast}, not silently
      * satisfied), and an incomplete mesh also blocks every epoch round from ever completing (see the mesh conjunct of {@link
      * ParsleyEpochLog#evaluateCommit()}). Surfacing this loudly at startup is better than a
      * data-path crash loop discovering it record by record, or every round silently hanging forever.

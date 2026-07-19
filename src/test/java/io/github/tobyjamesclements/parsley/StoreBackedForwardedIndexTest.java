@@ -21,7 +21,7 @@ class StoreBackedForwardedIndexTest {
 
     /**
      * {@code forwardedAfter} returns marked offsets for a coordinate strictly greater than the given
-     * frontier offset, in ascending order — exactly the range {@link ParsleyEngine} needs to walk a
+     * frontier offset, in ascending order — exactly the range {@link ParsleyCausalBroadcast} needs to walk a
      * contiguous run forward.
      *
      * Asserts offsets at or below the frontier are excluded, and offsets above it are returned

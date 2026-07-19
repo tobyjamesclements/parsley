@@ -10,7 +10,7 @@
  *       those dependencies, then delivers it — so a topology of Kafka Streams processors sees causally
  *       related events across topics in the order they actually happened, not merely in per-partition
  *       order. The classic broadcast/receive/deliver vocabulary and where each lives in this package is
- *       spelled out in {@link io.github.tobyjamesclements.parsley.ParsleyEngine}'s Javadoc. See {@link
+ *       spelled out in {@link io.github.tobyjamesclements.parsley.ParsleyCausalBroadcast}'s Javadoc. See {@link
  *       io.github.tobyjamesclements.parsley.CausalDependencies} for the wire contract and the edge
  *       operations below for talking to a Parsley topology from plain Kafka clients.</li>
  *   <li><strong>Topology epochs.</strong> A running, coordinated topology can evolve — a stage added,

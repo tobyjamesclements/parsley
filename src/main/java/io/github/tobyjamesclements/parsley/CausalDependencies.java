@@ -182,7 +182,7 @@ public final class CausalDependencies {
      * {@code (topic, partition, offset)}.
      *
      * <p>This is the consumer-side frontier accumulator. A node consuming with a plain Kafka client
-     * has no Parsley engine maintaining a frontier for it, so it maintains one here: bind a resolver
+     * has no Parsley causal-broadcast core maintaining a frontier for it, so it maintains one here: bind a resolver
      * once with {@link #using(Properties)}, {@code observe(record)} every record you consume, and
      * {@link #stamp(ProducerRecord) stamp} the result onto every record you produce, so downstream
      * consumers wait until they have observed everything this node did. A one-to-one relay is
@@ -195,9 +195,9 @@ public final class CausalDependencies {
      * only the completeness frontier it carries is unioned in — its own {@code (topic, partition,
      * offset)} is <em>not</em>, because a watermark is metadata occupying an offset with no business
      * payload, and folding that offset would force downstream to wait on a record that delivers
-     * nothing. This mirrors how a Parsley engine folds a received watermark
-     * ({@code ParsleyEngine.onWatermark}), so a plain-client session advances across a service that
-     * emitted only watermarks on this path while staying consistent with engine-side frontiers. The
+     * nothing. This mirrors how a Parsley causal-broadcast core folds a received watermark
+     * ({@code ParsleyCausalBroadcast.onWatermark}), so a plain-client session advances across a service that
+     * emitted only watermarks on this path while staying consistent with core-side frontiers. The
      * watermark itself must not be surfaced to application code as a business record; gate that with
      * {@link #isWatermark(ConsumerRecord)}.
      *
@@ -306,7 +306,7 @@ public final class CausalDependencies {
         return header == null ? Optional.empty() : Optional.of(fromBytes(header.value()));
     }
 
-    /** The backing clock; the engine works in {@link ParsleyVectorClock} directly. */
+    /** The backing clock; the causal-broadcast core works in {@link ParsleyVectorClock} directly. */
     ParsleyVectorClock clock() {
         return clock;
     }

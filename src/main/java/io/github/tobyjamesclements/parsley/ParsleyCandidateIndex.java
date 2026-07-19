@@ -9,7 +9,7 @@ import java.util.List;
  *
  * <p>When a record is buffered, its unsatisfied coordinates (those where the required offset exceeds
  * the current frontier) are indexed here. When the frontier advances on coordinate C, {@link
- * #findCandidates} returns the records waiting on C so the engine can check them for full causal
+ * #findCandidates} returns the records waiting on C so the causal-broadcast core can check them for full causal
  * satisfaction without scanning the entire buffer.
  *
  * <p>The index is <em>not</em> the source of truth: the buffer store and the current frontier are
