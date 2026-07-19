@@ -4,7 +4,7 @@ import org.apache.kafka.common.Uuid;
 
 /**
  * Thrown at ingest when an inbound record's {@code parsley-causal-dependencies} header is present but
- * cannot be decoded into a {@link ParsleyClock} — a corrupt or truncated header, or one written in an
+ * cannot be decoded into a {@link ParsleyVectorClock} — a corrupt or truncated header, or one written in an
  * unsupported wire version.
  *
  * <p>The record's key and value were already deserialised fine by Kafka Streams before ingest ever runs
@@ -16,12 +16,12 @@ import org.apache.kafka.common.Uuid;
  * <p>{@link #details()} carries the source coordinate and the encoded header length for an operator
  * log — never the payload bytes themselves.
  */
-final class ParsleyClockResolutionException extends ParsleyCoordinateException {
+final class ParsleyVectorClockResolutionException extends ParsleyCoordinateException {
 
     private final byte[] encodedDependencies;
     private final String details;
 
-    ParsleyClockResolutionException(String topic, Uuid topicId, int partition, long offset,
+    ParsleyVectorClockResolutionException(String topic, Uuid topicId, int partition, long offset,
                                     byte[] encodedDependencies, String details, Throwable cause) {
         super("failed to resolve the causal-dependencies header on " + topic + "-" + partition + "@" + offset
                 + "; the record was not forwarded", cause, topic, topicId, partition, offset);

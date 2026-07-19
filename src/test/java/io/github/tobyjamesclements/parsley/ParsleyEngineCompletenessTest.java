@@ -13,7 +13,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
  * input channel's advertised dependencies.
  *
  * <p>Each channel contributes the dependencies its records have advertised (the pairwise-max over
- * records on that channel). {@code completeness()} is {@link ParsleyClock#merge}, not an
+ * records on that channel). {@code completeness()} is {@link ParsleyVectorClock#merge}, not an
  * intersection: a coordinate counts the moment <em>any</em> channel has genuinely advertised it —
  * there is no requirement that every one of a node's channels independently repeat the same
  * confirmation. A node's own directly-consumed coordinates (part of the frontier) are always present,
@@ -24,7 +24,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
  * the delivery gate itself — every record is checked against this node's current, already-proven
  * state, never against a stamp the same record just supplied). Several tests here pre-establish
  * channel state directly via
- * {@link ParsleyFrontier#channelUpdate}/{@link ParsleyFrontier#deliver}, standing in for "some record
+ * {@link ParsleyChannels#channelUpdate}/{@link ParsleyChannels#delivered}, standing in for "some record
  * already, genuinely delivered this" so the merge logic itself can be tested in isolation from gate
  * timing.
  *
@@ -45,7 +45,7 @@ class ParsleyEngineCompletenessTest {
 
     // The node consumes T1 and T2; T3/T4 are upstream ancestors carried in deps, out of this node's
     // own scope (it has no channel for them) — genuinely unreachable, not merely unconfirmed yet.
-    private static final ParsleyClock.CoordinatePredicate SCOPE = (topicId, partition) ->
+    private static final ParsleyVectorClock.CoordinatePredicate SCOPE = (topicId, partition) ->
             partition == 0 && (topicId.equals(T1_ID) || topicId.equals(T2_ID));
 
     private final MockBufferStore<String, String> buffer = new MockBufferStore<>();
@@ -68,14 +68,14 @@ class ParsleyEngineCompletenessTest {
      */
     @Test
     void fanInCompleteness_reportsSharedAncestorAtMaxAcrossBranches() {
-        ParsleyFrontier frontier = newFrontier();
+        ParsleyChannels frontier = newFrontier();
         deliverSequentially(frontier, T1_ID, 10);
         frontier.channelUpdate(T1_ID, 0, clock(T3_ID, 5));
         deliverSequentially(frontier, T2_ID, 7);
         frontier.channelUpdate(T2_ID, 0, clock(T3_ID, 3));
         ParsleyEngine<String, String> engine = engineOver(frontier, SCOPE);
 
-        ParsleyClock completeness = engine.completeness();
+        ParsleyVectorClock completeness = engine.completeness();
 
         assertEquals(5L, completeness.offsetFor(T3_ID, 0),
                 "T3 (shared ancestor) must appear at the maximum across branches: max(5,3)=5 — a "
@@ -95,14 +95,14 @@ class ParsleyEngineCompletenessTest {
      */
     @Test
     void coordinateOnOnlyOneChannelIsIncludedSingleWitnessSuffices() {
-        ParsleyFrontier frontier = newFrontier();
+        ParsleyChannels frontier = newFrontier();
         deliverSequentially(frontier, T1_ID, 10);
         frontier.channelUpdate(T1_ID, 0, clock(T3_ID, 5).observe(T4_ID, 0, 2));
         deliverSequentially(frontier, T2_ID, 7);
         frontier.channelUpdate(T2_ID, 0, clock(T3_ID, 3));
         ParsleyEngine<String, String> engine = engineOver(frontier, SCOPE);
 
-        ParsleyClock completeness = engine.completeness();
+        ParsleyVectorClock completeness = engine.completeness();
 
         assertEquals(2L, completeness.offsetFor(T4_ID, 0),
                 "T4 (advertised by only one channel) must still be included — a single genuine "
@@ -115,7 +115,7 @@ class ParsleyEngineCompletenessTest {
      * A channel's clock is a per-channel <em>max</em> across every record genuinely delivered through
      * it, not a running minimum — the guard against a running-min regression: if it were a minimum, the
      * first genuine delivery's low T3 value would pin completeness there forever. Two genuine
-     * deliveries are pre-established directly via {@link ParsleyFrontier#channelUpdate} (standing in
+     * deliveries are pre-established directly via {@link ParsleyChannels#channelUpdate} (standing in
      * for two records having actually, gatedly delivered through the T1 channel in sequence, the second
      * carrying a higher T3 value than the first — see the class Javadoc on pre-establishing genuine
      * channel state directly).
@@ -125,9 +125,9 @@ class ParsleyEngineCompletenessTest {
      */
     @Test
     void singleInputRelayCompletenessRisesToLatestDeps() {
-        ParsleyClock.CoordinatePredicate singleScope =
+        ParsleyVectorClock.CoordinatePredicate singleScope =
                 (topicId, partition) -> partition == 0 && topicId.equals(T1_ID);
-        ParsleyFrontier frontier = newFrontier();
+        ParsleyChannels frontier = newFrontier();
         deliverSequentially(frontier, T1_ID, 1);
         ParsleyEngine<String, String> engine = engineOver(frontier, singleScope);
 
@@ -144,7 +144,7 @@ class ParsleyEngineCompletenessTest {
     }
 
     /**
-     * After a simulated restart — a new {@link ParsleyFrontier} over the same changelog-backed store —
+     * After a simulated restart — a new {@link ParsleyChannels} over the same changelog-backed store —
      * {@code completeness()} returns an identical result to the pre-restart value, without replaying
      * any records: the frontier clock and the per-channel clocks both restore from the single "f" blob.
      *
@@ -154,18 +154,18 @@ class ParsleyEngineCompletenessTest {
     void completenessRestoredIdenticallyAfterSimulatedRestart() {
         TestKeyValueStore<String, byte[]> sharedStore =
                 new TestKeyValueStore<String, byte[]>(java.util.Comparator.naturalOrder());
-        ParsleyFrontier firstFrontier = new ParsleyFrontier(sharedStore, new MockForwardedIndex());
+        ParsleyChannels firstFrontier = new ParsleyChannels(sharedStore, new MockForwardedIndex());
         deliverSequentially(firstFrontier, T1_ID, 10);
         firstFrontier.channelUpdate(T1_ID, 0, clock(T3_ID, 5));
         deliverSequentially(firstFrontier, T2_ID, 7);
         firstFrontier.channelUpdate(T2_ID, 0, clock(T3_ID, 3));
         ParsleyEngine<String, String> first = engineOver(firstFrontier, SCOPE);
 
-        ParsleyClock completenessBeforeRestart = first.completeness();
+        ParsleyVectorClock completenessBeforeRestart = first.completeness();
 
-        // Simulate restart: a fresh ParsleyFrontier over the same store reloads the "f" blob (frontier
+        // Simulate restart: a fresh ParsleyChannels over the same store reloads the "f" blob (frontier
         // clock + channel clocks). A fresh forwarded index is fine — it only affects future deliveries.
-        ParsleyFrontier restartedFrontier = new ParsleyFrontier(sharedStore, new MockForwardedIndex());
+        ParsleyChannels restartedFrontier = new ParsleyChannels(sharedStore, new MockForwardedIndex());
 
         assertEquals(completenessBeforeRestart, restartedFrontier.completeness(),
                 "completeness must be identical after restart when the frontier store is restored");
@@ -205,12 +205,12 @@ class ParsleyEngineCompletenessTest {
      */
     @Test
     void fanInRecordHeldUntilAGenuineWitnessProvesTheSharedAncestor() {
-        ParsleyClock.CoordinatePredicate scopeIncludingAncestor = (topicId, partition) ->
+        ParsleyVectorClock.CoordinatePredicate scopeIncludingAncestor = (topicId, partition) ->
                 partition == 0 && (topicId.equals(T1_ID) || topicId.equals(T2_ID) || topicId.equals(T3_ID));
-        ParsleyFrontier frontier = newFrontier();
-        frontier.channelUpdate(T1_ID, 0, ParsleyClock.empty());
-        frontier.channelUpdate(T2_ID, 0, ParsleyClock.empty());
-        frontier.channelUpdate(T3_ID, 0, ParsleyClock.empty());
+        ParsleyChannels frontier = newFrontier();
+        frontier.channelUpdate(T1_ID, 0, ParsleyVectorClock.empty());
+        frontier.channelUpdate(T2_ID, 0, ParsleyVectorClock.empty());
+        frontier.channelUpdate(T3_ID, 0, ParsleyVectorClock.empty());
         ParsleyEngine<String, String> engine = engineOver(frontier, scopeIncludingAncestor);
         TopicPartition t3 = new TopicPartition("t3", 0);
 
@@ -221,9 +221,9 @@ class ParsleyEngineCompletenessTest {
         // A real T3 record, genuinely and contiguously delivered up to offset 5, is the direct witness
         // that releases the held T1@0.
         for (long offset = 0; offset < 5; offset++) {
-            engine.receive(record(t3, offset, T3_ID, ParsleyClock.empty()));
+            engine.receive(record(t3, offset, T3_ID, ParsleyVectorClock.empty()));
         }
-        List<ParsleyMessage<String, String>> out2 = engine.receive(record(t3, 5, T3_ID, ParsleyClock.empty())).delivered();
+        List<ParsleyMessage<String, String>> out2 = engine.receive(record(t3, 5, T3_ID, ParsleyVectorClock.empty())).delivered();
         assertEquals(2, out2.size(),
                 "T3@5 delivers genuinely and releases the held T1@0, which depended on exactly that");
     }
@@ -240,11 +240,11 @@ class ParsleyEngineCompletenessTest {
     @Test
     void intraTopicDependencyOnOwnTopicIsSatisfiedImmediately() {
         // Single-input node consuming only T1.
-        ParsleyClock.CoordinatePredicate t1Only =
+        ParsleyVectorClock.CoordinatePredicate t1Only =
                 (topicId, partition) -> partition == 0 && topicId.equals(T1_ID);
         ParsleyEngine<String, String> engine = engineOver(newFrontier(), t1Only);
 
-        assertEquals(1, engine.receive(record(T1, 0, T1_ID, ParsleyClock.empty())).delivered().size(),
+        assertEquals(1, engine.receive(record(T1, 0, T1_ID, ParsleyVectorClock.empty())).delivered().size(),
                 "T1@0 with no dependencies delivers immediately");
         // T1@1 depends on T1@0 — an earlier offset of its own topic (intra-topic), already genuinely
         // delivered above.
@@ -261,34 +261,34 @@ class ParsleyEngineCompletenessTest {
      */
     @Test
     void interTopicDependencyHeldUntilTheSiblingChannelGenuinelyDelivers() {
-        ParsleyFrontier frontier = newFrontier();
-        frontier.channelUpdate(T1_ID, 0, ParsleyClock.empty());
-        frontier.channelUpdate(T2_ID, 0, ParsleyClock.empty());
+        ParsleyChannels frontier = newFrontier();
+        frontier.channelUpdate(T1_ID, 0, ParsleyVectorClock.empty());
+        frontier.channelUpdate(T2_ID, 0, ParsleyVectorClock.empty());
         ParsleyEngine<String, String> engine = engineOver(frontier, SCOPE);
 
         List<ParsleyMessage<String, String>> out1 = engine.receive(record(T1, 0, T1_ID, clock(T2_ID, 0))).delivered();
         assertEquals(List.of(), out1, "T1@0 must be held: T2 has not genuinely delivered anything yet");
 
-        List<ParsleyMessage<String, String>> out2 = engine.receive(record(T2, 0, T2_ID, ParsleyClock.empty())).delivered();
+        List<ParsleyMessage<String, String>> out2 = engine.receive(record(T2, 0, T2_ID, ParsleyVectorClock.empty())).delivered();
         assertEquals(2, out2.size(),
                 "T2@0 delivers genuinely and releases the held T1@0, which depended on exactly that");
     }
 
     // --- helpers --------------------------------------------------------------------------------
 
-    private static ParsleyFrontier newFrontier() {
-        return new ParsleyFrontier(ParsleyClock.empty(), new MockForwardedIndex());
+    private static ParsleyChannels newFrontier() {
+        return new ParsleyChannels(ParsleyVectorClock.empty(), new MockForwardedIndex());
     }
 
     /** Genuinely, contiguously delivers offsets {@code 0..upTo} on {@code topicId}'s channel. */
-    private static void deliverSequentially(ParsleyFrontier frontier, Uuid topicId, long upTo) {
+    private static void deliverSequentially(ParsleyChannels frontier, Uuid topicId, long upTo) {
         for (long offset = 0; offset <= upTo; offset++) {
-            frontier.deliver(topicId, 0, offset);
+            frontier.delivered(topicId, 0, offset);
         }
     }
 
-    private ParsleyEngine<String, String> engineOver(ParsleyFrontier frontier,
-                                                     ParsleyClock.CoordinatePredicate scope) {
+    private ParsleyEngine<String, String> engineOver(ParsleyChannels frontier,
+                                                     ParsleyVectorClock.CoordinatePredicate scope) {
         return new ParsleyEngine<>(frontier, buffer,
                 new MockCandidateIndex(), ParsleyMetrics.NOOP,
                 System::currentTimeMillis, scope);
@@ -299,12 +299,12 @@ class ParsleyEngineCompletenessTest {
     }
 
     private static ParsleyMessage<String, String> record(TopicPartition tp, long offset,
-                                                          Uuid topicId, ParsleyClock deps) {
+                                                          Uuid topicId, ParsleyVectorClock deps) {
         return new ParsleyMessage<>(tp.topic(), topicId, tp.partition(), offset, 0L,
                 "k", "v", List.of(), deps);
     }
 
-    private static ParsleyClock clock(Uuid topicId, long offset) {
-        return ParsleyClock.empty().observe(topicId, 0, offset);
+    private static ParsleyVectorClock clock(Uuid topicId, long offset) {
+        return ParsleyVectorClock.empty().observe(topicId, 0, offset);
     }
 }

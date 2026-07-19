@@ -33,12 +33,12 @@ class ParsleyBufferUnboundedLimitTest {
     void unboundedLimitNeverEvictsAndReleasesInCausalOrderWhenDependenciesSatisfied() {
         MockBufferStore<String, String> buffer = new MockBufferStore<>();
         ParsleyEngine<String, String> engine = new ParsleyEngine<>(
-                ParsleyClock.empty(),
+                ParsleyVectorClock.empty(),
                 buffer, new MockCandidateIndex(), new MockForwardedIndex(), ParsleyMetrics.NOOP,
                 System::currentTimeMillis);
 
         List<ParsleyMessage<String, String>> out = new ArrayList<>();
-        ParsleyClock needsT1 = ParsleyClock.empty().observe(T1_ID, 0, 4);
+        ParsleyVectorClock needsT1 = ParsleyVectorClock.empty().observe(T1_ID, 0, 4);
         for (long offset = 0; offset < 5; offset++) {
             out.addAll(engine.receive(message(T2, offset, T2_ID, needsT1)).delivered());
         }
@@ -47,7 +47,7 @@ class ParsleyBufferUnboundedLimitTest {
         assertEquals(List.of(), out, "no record must be forwarded before the dependency is satisfied");
 
         for (long offset = 0; offset < 5; offset++) {
-            out.addAll(engine.receive(message(T1, offset, T1_ID, ParsleyClock.empty())).delivered());
+            out.addAll(engine.receive(message(T1, offset, T1_ID, ParsleyVectorClock.empty())).delivered());
         }
 
         assertEquals(0, buffer.size(), "buffer must be empty after the dependency is satisfied");
@@ -58,7 +58,7 @@ class ParsleyBufferUnboundedLimitTest {
     }
 
     private static ParsleyMessage<String, String> message(TopicPartition tp, long offset,
-                                                           Uuid topicId, ParsleyClock dependencies) {
+                                                           Uuid topicId, ParsleyVectorClock dependencies) {
         return new ParsleyMessage<>(tp.topic(), topicId, tp.partition(), offset, 0L,
                 "k", "v", List.of(), dependencies);
     }

@@ -39,9 +39,9 @@ final class ParsleyCommittedCompleteness implements StateStore {
 
     private final String name;
     private volatile boolean open;
-    private volatile Supplier<ParsleyClock> live = ParsleyClock::empty;
-    private volatile ParsleyClock pending = ParsleyClock.empty();
-    private volatile ParsleyClock committed = ParsleyClock.empty();
+    private volatile Supplier<ParsleyVectorClock> live = ParsleyVectorClock::empty;
+    private volatile ParsleyVectorClock pending = ParsleyVectorClock.empty();
+    private volatile ParsleyVectorClock committed = ParsleyVectorClock.empty();
 
     ParsleyCommittedCompleteness(String name) {
         this.name = name;
@@ -52,14 +52,14 @@ final class ParsleyCommittedCompleteness implements StateStore {
      * completeness rebuilt from the committed changelog at task init, durable by definition. Called
      * once, from {@code ParsleyProcessor#init}, before the first publish can happen.
      */
-    void bind(Supplier<ParsleyClock> liveCompleteness, ParsleyClock restored) {
+    void bind(Supplier<ParsleyVectorClock> liveCompleteness, ParsleyVectorClock restored) {
         this.live = liveCompleteness;
         this.pending = restored;
         this.committed = restored;
     }
 
     /** The completeness as of the last committed transaction — the only publishable clock. */
-    ParsleyClock committed() {
+    ParsleyVectorClock committed() {
         return committed;
     }
 

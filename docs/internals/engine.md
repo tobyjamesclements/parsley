@@ -25,7 +25,7 @@ receive(record):
     if frontier.dominates(deps):                       # the gate: this node has ITSELF delivered
                                                         #   every depended coordinate — a peer's claim
                                                         #   never substitutes for local delivery
-        frontier.deliver(record.coordinate)            # advance frontier, self-persist "f"
+        channels.delivered(record.coordinate)            # advance frontier, self-persist "f"
         channelStore.update(record.channel, deps')     # stamp-only fold (deps minus own-sink coords)
         out.add(record)
         propagate(record.coordinate)                   # cascade releases (see below)
@@ -40,7 +40,7 @@ receive(record):
 onWatermark(channel, offset, carriedFrontier):
     channelAdvanced = !channelClock(channel).dominates(carriedFrontier')   # own-sink coords stripped
     channelStore.update(channel, carriedFrontier')     # stamp-only: feeds completeness(), not the gate
-    frontier.deliver(channel, offset)                   # the marker's OWN offset genuinely delivered
+    channels.delivered(channel, offset)                   # the marker's OWN offset genuinely delivered
     propagate(channel)                                  # releases via the frontier advance alone
     if frontier.tryAdvanceEpoch(): drainSatisfied()
     return (delivered, channelAdvanced)                 # caller relays downstream only if genuinely new
@@ -48,7 +48,7 @@ onWatermark(channel, offset, carriedFrontier):
 
 The gate is `frontier.dominates(effectiveDependencies)`: this node's own contiguous delivered
 frontier must cover every depended coordinate. `completeness()` — the frontier max-merged with every
-input channel's advertised dependencies (`ParsleyClock.merge`) — is the *outbound stamp*, carrying
+input channel's advertised dependencies (`ParsleyVectorClock.merge`) — is the *outbound stamp*, carrying
 transitive ancestry downstream where each receiver's own gate verifies it locally; it never releases
 anything here. See the [causal consistency model](causal-consistency.md) for why local delivery is
 required and the topology contract it implies.
@@ -62,20 +62,20 @@ unsatisfiable.
 
 | Field | Type | Purpose |
 |---|---|---|
-| `frontier` | `ParsleyFrontier` | All causal state: contiguous frontier clock, per-input-channel clocks, `completeness()`, forwarded-offset index, epoch floor, and baseline seeding — self-persisting as the single `"f"` value. Channel clocks are the dependencies advertised on each `(topicId, partition)` this node consumes, seeded at registration for bookkeeping even though a silent channel contributes nothing to the completeness merge |
+| `frontier` | `ParsleyChannels` | All causal state: contiguous frontier clock, per-input-channel clocks, `completeness()`, forwarded-offset index, epoch floor, and baseline seeding — self-persisting as the single `"f"` value. Channel clocks are the dependencies advertised on each `(topicId, partition)` this node consumes, seeded at registration for bookkeeping even though a silent channel contributes nothing to the completeness merge |
 | `buffer` | `ParsleyBufferStore<K,V>` | Durable set of held records — unbounded, no eviction |
 | `candidateIndex` | `ParsleyCandidateIndex` | Secondary index: coordinate -> candidate record IDs |
-| `inScope` | `ParsleyClock.CoordinatePredicate` | Coordinates this node could ever genuinely confirm (a registered input channel, on the partition this task owns). A dependency outside it fails the task fast rather than being treated as satisfied |
-| `ownSinkTopics` | `ParsleyClock.CoordinatePredicate` | Coordinates for a topic this node itself produces; stripped from any inbound dependency or marker clock before the gate |
+| `inScope` | `ParsleyVectorClock.CoordinatePredicate` | Coordinates this node could ever genuinely confirm (a registered input channel, on the partition this task owns). A dependency outside it fails the task fast rather than being treated as satisfied |
+| `ownSinkTopics` | `ParsleyVectorClock.CoordinatePredicate` | Coordinates for a topic this node itself produces; stripped from any inbound dependency or marker clock before the gate |
 
-`ParsleyFrontier` owns the causal state and the Lamport operations: `completeness()` (the delivery
-predicate's input), `deliver(coordinate)` (advance the frontier and notify), and
+`ParsleyChannels` owns the causal state and the Lamport operations: `completeness()` (the delivery
+predicate's input), `delivered(coordinate)` (advance the frontier and notify), and
 `seedIfFirstSeen(coordinate)` (establish the baseline for a newly observed coordinate) — plus, when
 topology-epoch coordination is configured, the per-coordinate epoch floor (see
 [topology epochs](topology-epochs.md)).
 
 `channelStore` backs the node's outbound stamp. `completeness()` is this node's own frontier
-max-merged with every input channel's advertised dependencies (`ParsleyClock.merge`): each channel
+max-merged with every input channel's advertised dependencies (`ParsleyVectorClock.merge`): each channel
 contributes the dependencies it has advertised, so transitive ancestry — a coordinate an upstream
 channel delivered that this node may not itself consume — flows through to downstream receivers,
 whose own gates verify it against their own delivery history. The delivery gate here is
@@ -90,12 +90,12 @@ contract it implies.
 1. The dependency clock is decoded once at the boundary (`ParsleyMessage.from`): a missing header
    becomes an empty, vacuously satisfied clock. An undecodable header is handled by
    `ParsleyProcessor.onUnresolvableClock()` before the engine is called — the task fails fast
-   (`ParsleyClockResolutionException`); a record is never forwarded on an unknown premise. The
-   engine always receives a typed `ParsleyClock`.
+   (`ParsleyVectorClockResolutionException`); a record is never forwarded on an unknown premise. The
+   engine always receives a typed `ParsleyVectorClock`.
 2. Seed the frontier if this is the coordinate's first sighting (`seedIfFirstSeen` — consumption need
    not start at offset 0), cascading any releases the seed enables.
 3. Check reachability: if any of the record's declared coordinates (after preprocessing) names a topic-partition `inScope` rejects, the engine cannot ever confirm it no matter how long it waits. Fail-closed rather than vacuously satisfied — throw `ParsleyUnreachableDependencyException`, never buffer, never treat as satisfied.
-4. Compute `effectiveDependencies`: strip the self-cycle (a `(topicId, partition)` entry whose required offset equals the record's own source offset — `ParsleyClock.without`), strip any coordinate this node itself produces (`ownSinkTopics`), and strip anything below the current topology-epoch floor (`ParsleyClock.strippedBelow`; a no-op when epoch coordination is off). This is the only dependency preprocessing.
+4. Compute `effectiveDependencies`: strip the self-cycle (a `(topicId, partition)` entry whose required offset equals the record's own source offset — `ParsleyVectorClock.without`), strip any coordinate this node itself produces (`ownSinkTopics`), and strip anything below the current topology-epoch floor (`ParsleyVectorClock.strippedBelow`; a no-op when epoch coordination is off). This is the only dependency preprocessing.
 5. Apply the gate: `frontier.dominates(effectiveDependencies)` — this node's own contiguous delivered frontier must cover every depended coordinate; a claim advertised on another channel never substitutes for local delivery. If it passes: advance the frontier, fold the record's dependencies (own-sink coordinates stripped) into its channel's clock — a stamp-only update feeding `completeness()`, made only at genuine gated delivery so the stamp never carries a claim from a record that was not actually forwarded — add the record to output, and call `propagate()`.
 6. Otherwise: add the record to the buffer (assigned an insertion sequence and a `bufferedAt` timestamp, no size or time limit) and index its coordinates unsatisfied by the frontier in the candidate index.
 7. If this delivery advanced the frontier past a pending epoch-transition boundary, `frontier.tryAdvanceEpoch()` closes the window and drains anything the raised floor releases. See [topology epochs](topology-epochs.md).
@@ -121,7 +121,7 @@ while toScan not empty:
       if entry == null: prune stale index entry, skip
       if isUnreachableDependency(entry): throw ParsleyUnreachableDependencyException
       if frontier.dominates(effectiveDependencies(entry.dependencies)):
-        frontier.deliver(entry's source coordinate)     # committed the moment it is decided,
+        channels.delivered(entry's source coordinate)     # committed the moment it is decided,
         channelStore.update(entry's channel, deps')     #   never staged for a later batch step
         buffer.remove(sequence)
         nextScan.add(entry's source coordinate)
@@ -152,7 +152,7 @@ Three distinct failures, each with its own exception:
   deliverable, so a held, undecodable record that is *not* yet releasable never surfaces this — it
   only fires on an actual forward attempt. The record remains in the buffer changelog for recovery
   once the schema is fixed or rolled back.
-- **An unresolvable dependency header** (`ParsleyClockResolutionException`) — handled by
+- **An unresolvable dependency header** (`ParsleyVectorClockResolutionException`) — handled by
   `ParsleyProcessor` before the engine is ever called (see step 1 of the `receive()` algorithm above);
   unconditionally fails the task, never forwarded on an unknown premise.
 
@@ -161,7 +161,7 @@ lengths — never the payload bytes themselves.
 
 ## Frontier persistence ordering
 
-`ParsleyFrontier` self-persists its single `"f"` value inside `deliver()` (and `seedIfFirstSeen()`), before control returns to the engine and the record is added to the output list. This ordering guarantees that the changelog write for the frontier advance is durable before the record reaches the user processor. There is no separate callback: the frontier owns its persistence.
+`ParsleyChannels` self-persists its single `"f"` value inside `delivered()` (and `seedIfFirstSeen()`), before control returns to the engine and the record is added to the output list. This ordering guarantees that the changelog write for the frontier advance is durable before the record reaches the user processor. There is no separate callback: the frontier owns its persistence.
 
 ## Buffer store
 

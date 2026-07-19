@@ -37,10 +37,10 @@ class ParsleyProcessorEpochSnapshotTest {
     /** A publisher double that records every (memberId, completeness) publication. */
     private static final class RecordingPublisher implements ParsleyEpochSnapshotPublisher {
         final List<String> members = new ArrayList<>();
-        final List<ParsleyClock> clocks = new ArrayList<>();
+        final List<ParsleyVectorClock> clocks = new ArrayList<>();
 
         @Override
-        public void publish(String memberId, ParsleyClock completeness) {
+        public void publish(String memberId, ParsleyVectorClock completeness) {
             members.add(memberId);
             clocks.add(completeness);
         }
@@ -99,7 +99,7 @@ class ParsleyProcessorEpochSnapshotTest {
         // Deliver a business record so this node's completeness advances to T1@5.
         context.setRecordMetadata("t1", 0, 5);
         Headers deps = ParsleyHeader.mutableHeaders();
-        deps.add(ParsleyHeader.CAUSAL_DEPENDENCIES, ParsleyClock.empty().toBytes());
+        deps.add(ParsleyHeader.CAUSAL_DEPENDENCIES, ParsleyVectorClock.empty().toBytes());
         processor.process(new Record<>("k", "v", 0L, deps));
         assertEquals(List.of("v"), processed, "the business record must be delivered to the delegate");
 
@@ -114,7 +114,7 @@ class ParsleyProcessorEpochSnapshotTest {
         context.setRecordMetadata("t1", 0, 6);
         Headers snapshot = ParsleyHeader.mutableHeaders();
         snapshot.add(ParsleyHeader.EPOCH_SNAPSHOT, new byte[0]);
-        snapshot.add(ParsleyHeader.CAUSAL_DEPENDENCIES, ParsleyClock.empty().observe(UPSTREAM_ID, 0, 3).toBytes());
+        snapshot.add(ParsleyHeader.CAUSAL_DEPENDENCIES, ParsleyVectorClock.empty().observe(UPSTREAM_ID, 0, 3).toBytes());
         processor.process(new Record<>("k", null, 0L, snapshot));
 
         assertEquals(List.of("v"), processed, "the snapshot marker must never reach the user delegate");
@@ -139,10 +139,10 @@ class ParsleyProcessorEpochSnapshotTest {
     }
 
     /** Decodes the completeness clock a relayed marker carries in its causal-dependencies header. */
-    private static ParsleyClock markerCompleteness(Record<? extends String, ? extends String> record) {
+    private static ParsleyVectorClock markerCompleteness(Record<? extends String, ? extends String> record) {
         for (Header h : record.headers()) {
             if (ParsleyHeader.CAUSAL_DEPENDENCIES.equals(h.key()) && h.value() != null) {
-                return ParsleyClock.fromBytes(h.value());
+                return ParsleyVectorClock.fromBytes(h.value());
             }
         }
         throw new AssertionError("relayed marker carried no completeness header");

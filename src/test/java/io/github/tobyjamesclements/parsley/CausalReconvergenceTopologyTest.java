@@ -260,7 +260,7 @@ class CausalReconvergenceTopologyTest {
 
             // The slow branch advertises ANC@10 via a watermark alone — no business record ever
             // flows on slow carrying this fact.
-            slowIn.pipeInput(watermarkRecord(ParsleyClock.empty().observe(ANC_ID, 0, 10)));
+            slowIn.pipeInput(watermarkRecord(ParsleyVectorClock.empty().observe(ANC_ID, 0, 10)));
             assertEquals(0, businessRecords(out).size(), "a watermark alone must not itself be a business record");
 
             // A fast record with empty deps of its own — no ANC claim at all — still delivers, and its
@@ -291,7 +291,7 @@ class CausalReconvergenceTopologyTest {
      * grandchild node's completeness advances even when no business record flows on that path.
      *
      * <p>This is tested at the {@link ParsleyEngine} level over a channel-tracking {@link
-     * ParsleyFrontier}: after {@link ParsleyEngine#onWatermark} is called with a frontier carrying an
+     * ParsleyChannels}: after {@link ParsleyEngine#onWatermark} is called with a frontier carrying an
      * ancestor coordinate, {@link ParsleyEngine#completeness()} must reflect it. This proves the
      * channel clock is updated by the watermark receipt, which is the mechanism that enables inductive
      * propagation through non-subscribing layers. Also asserts {@link
@@ -305,12 +305,12 @@ class CausalReconvergenceTopologyTest {
     @Test
     void onWatermarkAdvancesChannelClockAndCompleteness() {
         // T1 is the only subscribed topic. ANC_ID is an out-of-scope ancestor.
-        ParsleyClock.CoordinatePredicate scope = (topicId, partition) ->
+        ParsleyVectorClock.CoordinatePredicate scope = (topicId, partition) ->
                 partition == 0 && topicId.equals(T1_ID);
         MockBufferStore<String, String> buffer = new MockBufferStore<>();
 
         ParsleyEngine<String, String> engine = new ParsleyEngine<>(
-                new ParsleyFrontier(ParsleyClock.empty(), new MockForwardedIndex()),
+                new ParsleyChannels(ParsleyVectorClock.empty(), new MockForwardedIndex()),
                 buffer, new MockCandidateIndex(), ParsleyMetrics.NOOP,
                 System::currentTimeMillis);
 
@@ -319,7 +319,7 @@ class CausalReconvergenceTopologyTest {
                 "completeness must not know ANC before any watermark arrives");
 
         // Receive a watermark at T1/0 offset 0, carrying {ANC@5}.
-        ParsleyClock watermarkFrontier = ParsleyClock.empty().observe(ANC_ID, 0, 5);
+        ParsleyVectorClock watermarkFrontier = ParsleyVectorClock.empty().observe(ANC_ID, 0, 5);
         ParsleyEngine.WatermarkOutcome<String, String> watermarkOutcome =
                 engine.onWatermark(T1_ID, 0, 0, watermarkFrontier);
         List<ParsleyMessage<String, String>> released = watermarkOutcome.outcome().delivered();
@@ -358,7 +358,7 @@ class CausalReconvergenceTopologyTest {
      * {@code parsley-causal-dependencies} header.
      */
     @SuppressWarnings("NullAway") // watermark TestRecord intentionally has null key/value
-    private static TestRecord<String, String> watermarkRecord(ParsleyClock frontier) {
+    private static TestRecord<String, String> watermarkRecord(ParsleyVectorClock frontier) {
         Headers wm = ParsleyHeader.mutableHeaders();
         wm.add(ParsleyHeader.WATERMARK, new byte[0]);
         wm.add(ParsleyHeader.CAUSAL_DEPENDENCIES, frontier.toBytes());

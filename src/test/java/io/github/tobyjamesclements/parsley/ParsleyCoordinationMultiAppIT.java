@@ -188,7 +188,7 @@ class ParsleyCoordinationMultiAppIT {
      * (added during this same PR6 verification pass, after a {@link TopologyTestDriver} single-node
      * self-loop test — see {@code CausalCyclicTopologyTest} — caught a genuine infinite watermark loop)
      * together exist to enable: a topology where a node consumes both an ancestor and its own descendant,
-     * which the old {@code ParsleyClock#intersectMin} gate made a documented, permanent deadlock.
+     * which the old {@code ParsleyVectorClock#intersectMin} gate made a documented, permanent deadlock.
      *
      * Asserts both apps reach {@code RUNNING} and a record produced to {@code t1} flows all the way
      * around the cycle to {@code from-b} exactly once.
@@ -455,7 +455,7 @@ class ParsleyCoordinationMultiAppIT {
     }
 
     private static ProducerRecord<String, String> stampEmptyDeps(ProducerRecord<String, String> record) {
-        record.headers().add(ParsleyHeader.CAUSAL_DEPENDENCIES, ParsleyClock.empty().toBytes());
+        record.headers().add(ParsleyHeader.CAUSAL_DEPENDENCIES, ParsleyVectorClock.empty().toBytes());
         return record;
     }
 

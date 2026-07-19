@@ -17,9 +17,32 @@ import java.util.Map;
 import java.util.Set;
 
 /**
- * The causal state of a {@link ParsleyEngine}: the contiguous frontier clock, the per-input-channel
- * clocks, and the seeding/forwarding infrastructure that maintains the frontier — the single owner
- * of all causal metadata a node persists (the held-record buffer and its candidate index are a
+ * <strong>L1 — channels: the Kafka-to-reliable-FIFO-channel adaptation.</strong> Turns Kafka
+ * topic-partitions into the channels classical causal broadcast assumes (Hadzilacos–Toueg's
+ * reliable channels; the links layer of the Cachin–Guerraoui–Rodrigues stack, minus point-to-point —
+ * a partition is multi-producer fan-out). Everything that exists because Kafka violates a classical
+ * channel assumption lives here, stated once. Presented in the CGR module style ({@code
+ * package-info} states the two Parsley-wide deviations from the textbook presentation):
+ *
+ * <pre>
+ * requests:   receive(topicId, partition, offset)     a record arrived on a channel: establish the
+ *                                                     density baseline (seed) and bridge
+ *                                                     consumer-skipped holes
+ *             delivered(topicId, partition, offset)   L2 records a delivery; contiguous frontier
+ *                                                     advance (I4)
+ *             acknowledge(topic, partition, offset)   producer ack → ownOutputs (D2; stub until
+ *                                                     Phase 2)
+ * queries:    frontier() → ParsleyVectorClock         the delivered vector VT(p)
+ *             ownOutputs() → ParsleyVectorClock       the node's own acked output positions (D2;
+ *                                                     empty until Phase 2)
+ * properties: I3 (per-producer stamp monotonicity), I4 (contiguous frontier), I5 (normalised
+ *             clocks; the normalisation step itself lands in T1.2), I8 (stamp over-claim
+ *             soundness), I9 (unconditional merge, restore-side)
+ * </pre>
+ *
+ * <p>Concretely, this class is the single owner of all causal metadata a node persists: the
+ * contiguous frontier clock, the per-input-channel clocks, and the seeding/forwarding
+ * infrastructure that maintains the frontier (the held-record buffer and its candidate index are a
  * separate concern).
  *
  * <p>Three structures fold into one durable value here, stored as a single {@code "f"} key-value pair
@@ -42,17 +65,17 @@ import java.util.Set;
  * growable, order-sensitive set (offsets delivered above the contiguous frontier) with incremental
  * per-offset writes and range reads, so it keeps its own keyed store, injected here as a collaborator.
  *
- * <p>Core operations: {@link #completeness()} (the delivery boundary), {@link #deliver} (advance the
+ * <p>Core operations: {@link #completeness()} (the delivery boundary), {@link #delivered} (advance the
  * contiguous frontier for a delivered record), {@link #seedIfFirstSeen} (establish the baseline the
  * first time a coordinate is observed, since consumption need not start at offset 0), and the channel
  * accessors. {@link ParsleyEngine} enforces causal transitivity (the cascade after each delivery) and
  * owns the buffer around these operations.
  */
-final class ParsleyFrontier {
+final class ParsleyChannels {
 
-    private ParsleyClock frontier;
+    private ParsleyVectorClock frontier;
     // Per input channel (topicId, partition) -> the dependencies advertised on it (max-merged).
-    private final Map<CoordKey, ParsleyClock> channels = new HashMap<>();
+    private final Map<CoordKey, ParsleyVectorClock> channels = new HashMap<>();
     // Per input channel (topicId, partition) -> the highest offset ever physically received on it. Persisted
     // in the "f" blob (part of the EOS transaction, so exact across restart) and consulted by bridge(): the
     // open interval between the previous highest and a newly-received offset was skipped by the
@@ -81,7 +104,7 @@ final class ParsleyFrontier {
      * no persistence. Used by tests exercising {@link #completeness()} and any caller that does not
      * need a durable frontier.
      */
-    ParsleyFrontier(ParsleyClock initial, ParsleyForwardedIndex forwardedIndex) {
+    ParsleyChannels(ParsleyVectorClock initial, ParsleyForwardedIndex forwardedIndex) {
         this(initial, forwardedIndex, true, ParsleyEpoch.NONE);
     }
 
@@ -90,7 +113,7 @@ final class ParsleyFrontier {
      * {@code trackChannels = false}, {@link #completeness()} is the node's own frontier and
      * {@link #channelUpdate} is a no-op.
      */
-    ParsleyFrontier(ParsleyClock initial, ParsleyForwardedIndex forwardedIndex,
+    ParsleyChannels(ParsleyVectorClock initial, ParsleyForwardedIndex forwardedIndex,
                     boolean trackChannels, ParsleyEpoch epoch) {
         this.frontier = initial;
         this.forwardedIndex = forwardedIndex;
@@ -104,7 +127,7 @@ final class ParsleyFrontier {
      * channel clocks from key {@code "f"} of {@code store} (empty if absent), and rewrites that single
      * value on every subsequent change.
      */
-    ParsleyFrontier(KeyValueStore<String, byte[]> store, ParsleyForwardedIndex forwardedIndex) {
+    ParsleyChannels(KeyValueStore<String, byte[]> store, ParsleyForwardedIndex forwardedIndex) {
         this(store, forwardedIndex, ParsleyEpoch.NONE);
     }
 
@@ -116,18 +139,18 @@ final class ParsleyFrontier {
      * <p>On a restored (non-empty) load, also sweeps {@code forwardedIndex} once for every coordinate
      * the restored frontier carries, deleting any marked offset at or below that coordinate's watermark
      * — a stale entry that leaked below the contiguous frontier (e.g. via the benign tear direction
-     * {@link #deliver}'s Javadoc describes, now closed off by the {@code exactly_once_v2} requirement,
+     * {@link #delivered}'s Javadoc describes, now closed off by the {@code exactly_once_v2} requirement,
      * but still possible in a store carried over from before that requirement existed) can never be
-     * reached by {@link #deliver}'s absorb walk again, so it would otherwise linger in the
+     * reached by {@link #delivered}'s absorb walk again, so it would otherwise linger in the
      * changelog-backed store forever. A one-shot pass at load, not on the hot delivery path.
      */
-    ParsleyFrontier(KeyValueStore<String, byte[]> store, ParsleyForwardedIndex forwardedIndex, ParsleyEpoch epoch) {
+    ParsleyChannels(KeyValueStore<String, byte[]> store, ParsleyForwardedIndex forwardedIndex, ParsleyEpoch epoch) {
         this.store = store;
         this.forwardedIndex = forwardedIndex;
         this.epoch = epoch;
         this.trackChannels = true;
         byte[] blob = store.get(ParsleyStores.FRONTIER_KEY);
-        this.frontier = ParsleyClock.empty();
+        this.frontier = ParsleyVectorClock.empty();
         if (blob != null) {
             load(blob);
             frontier.forEach((topicId, partition, offset) -> forwardedIndex.pruneAtOrBelow(topicId, partition, offset));
@@ -139,9 +162,53 @@ final class ParsleyFrontier {
         return epoch;
     }
 
-    /** The current contiguous frontier clock. */
-    ParsleyClock snapshot() {
+    /**
+     * The current contiguous frontier clock — the delivered vector VT(p), in Mattern's sense (the
+     * <em>frontier</em> of a consistent cut; Mattern 1988, "Virtual Time and Global States of
+     * Distributed Systems"), indexed by channel rather than by process (see
+     * {@link ParsleyVectorClock}).
+     */
+    ParsleyVectorClock frontier() {
         return frontier;
+    }
+
+    /**
+     * The <em>receive</em> request: a record arrived on channel {@code (topicId, partition)} at
+     * {@code offset}. Establishes the channel's density baseline the first time the coordinate is
+     * ever observed ({@link #seedIfFirstSeen}) and bridges the consumer-skipped offsets below the
+     * record ({@link #bridge}) — the two Kafka-specific repairs that make the channel look gap-free
+     * to L2. Returns {@code true} if the contiguous frontier advanced; the caller must then cascade
+     * (a held record may have been waiting on exactly a seeded or bridged offset). The record itself
+     * is not delivered here — delivery is L2's decision, reported back via {@link #delivered}.
+     *
+     * <p>At most one of the two steps can advance the frontier on any single call: a first sighting
+     * seeds but records the offset as the channel's highest received without bridging, and a
+     * later sighting can bridge but never re-seeds.
+     */
+    boolean receive(Uuid topicId, int partition, long offset) {
+        boolean seeded = seedIfFirstSeen(topicId, partition, offset);
+        boolean bridged = bridge(topicId, partition, offset);
+        return seeded || bridged;
+    }
+
+    /**
+     * The <em>acknowledge</em> request: the producer acked this node's own send to sink coordinate
+     * {@code (topic, partition)} at {@code offset}. Feeds the {@link #ownOutputs()} clock — D2's
+     * own-slot tracking. A stub until Phase 2 (T2.2) wires the producer-interceptor registry in;
+     * declared now so the module's API is complete from the start.
+     */
+    void acknowledge(String topic, int partition, long offset) {
+        // Stub until Phase 2 (T2.2): acked output positions will fold into the ownOutputs clock.
+    }
+
+    /**
+     * The node's own acked output positions per sink coordinate — the clock that recovers CBCAST's
+     * own-slot semantics (D2: the broker performs the sender's clock increment, learned via
+     * {@link #acknowledge}). Empty until Phase 2 (T2.2) lands the tracking; stamp-side only, never
+     * consulted by the delivery gate.
+     */
+    ParsleyVectorClock ownOutputs() {
+        return ParsleyVectorClock.empty();
     }
 
     /**
@@ -149,19 +216,19 @@ final class ParsleyFrontier {
      * channel's advertised dependencies. This is the <em>outbound stamp</em> — the boundary this node
      * advertises downstream, carrying transitive ancestry (coordinates a channel has advertised that
      * this node may not itself have delivered yet) for each receiver's own gate to verify locally. It
-     * is <em>not</em> the delivery gate: the gate ({@link ParsleyEngine}) checks {@link #snapshot()}
+     * is <em>not</em> the delivery gate: the gate ({@link ParsleyEngine}) checks {@link #frontier()}
      * alone, so an advertised claim can never release a record here ahead of local delivery of its
      * cause. With no channel clocks recorded, this is exactly the node's own frontier.
      *
      * <p>This is the delivered frontier and the outbound stamp, carried as-is — <em>not</em> floored to
      * the epoch. The epoch transition is invisible in the data plane: each node floors <em>incoming</em>
-     * dependencies against its own epoch locally (the gate and the below-floor {@link #deliver}/
+     * dependencies against its own epoch locally (the gate and the below-floor {@link #delivered}/
      * {@link #seedIfFirstSeen}), so the stamp only ever carries positions this node actually delivered,
      * and a below-floor origin a downstream might see is floored out by that downstream's own gate.
      */
-    ParsleyClock completeness() {
-        ParsleyClock result = frontier;
-        for (ParsleyClock advertised : channels.values()) {
+    ParsleyVectorClock completeness() {
+        ParsleyVectorClock result = frontier;
+        for (ParsleyVectorClock advertised : channels.values()) {
             result = result.merge(advertised);
         }
         return result;
@@ -195,7 +262,7 @@ final class ParsleyFrontier {
      * found and unmarked again, leaking a permanent, purely cosmetic entry in the changelog-backed
      * forwarded index (this used to happen on every such replay).
      */
-    void deliver(Uuid topicId, int partition, long offset) {
+    void delivered(Uuid topicId, int partition, long offset) {
         if (offset < epoch.startsAt(topicId, partition)) {
             return;
         }
@@ -212,7 +279,9 @@ final class ParsleyFrontier {
      * offset on {@code (topicId, partition)} and {@code receivedOffset} — a transaction commit/abort marker
      * or an aborted-transaction data record, none of which the consumer ever returns — so the contiguous
      * walk can cross the hole they would otherwise wedge it at (a marker sits at a real offset that no
-     * business record ever fills). Called once per received record, <em>before</em> that record's own
+     * business record ever fills). The name is a coinage: no literature analog — the mechanism exists
+     * only because Kafka's EOS commit markers occupy offsets. Called once per received record,
+     * <em>before</em> that record's own
      * delivery, on every channel the engine advances a frontier on ({@link ParsleyEngine#receive} and
      * {@link ParsleyEngine#onWatermark}). Returns {@code true} if the contiguous frontier advanced — the
      * caller must then cascade ({@link ParsleyEngine#propagate}), since a held record may have been waiting
@@ -236,7 +305,7 @@ final class ParsleyFrontier {
      * records {@code receivedOffset} as the highest received, and returns {@code false}. A
      * {@code receivedOffset} at or below the recorded highest is an at-least-once replay: a strict no-op.
      *
-     * <p>The epoch floor is honoured exactly as {@link #deliver} honours it: a skipped offset below the
+     * <p>The epoch floor is honoured exactly as {@link #delivered} honours it: a skipped offset below the
      * coordinate's {@code startsAt} is not marked (an out-of-domain position must not enter the forwarded
      * index or advance the causal frontier). The <em>data-loss</em> guard — distinguishing a marker gap
      * from a retention/{@code deleteRecords} jump that would drop real committed records below the log-start
@@ -286,9 +355,9 @@ final class ParsleyFrontier {
     /**
      * Walks the longest run of consecutive forwarded offsets on {@code (topicId, partition)} now achievable
      * from {@code watermark}, advances the contiguous frontier by it, persists, and only then prunes the
-     * absorbed forwarded-index entries. Shared by {@link #deliver} (which marks one offset first) and
+     * absorbed forwarded-index entries. Shared by {@link #delivered} (which marks one offset first) and
      * {@link #bridge} (which marks a whole skipped run first). The persist-before-prune order is
-     * load-bearing — see {@link #deliver}'s Javadoc.
+     * load-bearing — see {@link #delivered}'s Javadoc.
      */
     private void absorbContiguous(Uuid topicId, int partition, long watermark) {
         long extended = watermark;
@@ -307,7 +376,9 @@ final class ParsleyFrontier {
 
     /**
      * Establishes the contiguous frontier's starting point the first time this coordinate is observed,
-     * floored to the epoch origin. The first offset seen need not be 0 (finite retention, fresh consumer
+     * floored to the epoch origin. The name is a coinage: no literature analog — the mechanism exists
+     * only because Kafka retention means a channel's history need not begin at its first offset.
+     * The first offset seen need not be 0 (finite retention, fresh consumer
      * group); anything below it is outside the engine's purview, not an unfillable gap, so folding
      * {@code offset - 1} into the frontier lets the contiguous walk start there. Returns {@code true} if
      * a seed was applied (the caller should then cascade). The coordinate is marked seen on the first
@@ -341,9 +412,9 @@ final class ParsleyFrontier {
     }
 
     /** The clock advertised on channel {@code (topicId, partition)}, or empty if never updated. */
-    ParsleyClock channelGet(Uuid topicId, int partition) {
-        ParsleyClock clock = channels.get(new CoordKey(topicId, partition));
-        return clock == null ? ParsleyClock.empty() : clock;
+    ParsleyVectorClock channelGet(Uuid topicId, int partition) {
+        ParsleyVectorClock clock = channels.get(new CoordKey(topicId, partition));
+        return clock == null ? ParsleyVectorClock.empty() : clock;
     }
 
     /**
@@ -360,12 +431,12 @@ final class ParsleyFrontier {
      * seeded-but-silent channel entry still does is give {@link #tryAdvanceEpoch}'s per-channel
      * marker-seen bookkeeping and {@link #pruneToScope} something to check against.
      */
-    void channelUpdate(Uuid topicId, int partition, ParsleyClock clock) {
+    void channelUpdate(Uuid topicId, int partition, ParsleyVectorClock clock) {
         if (!trackChannels) {
             return;
         }
         CoordKey key = new CoordKey(topicId, partition);
-        ParsleyClock existing = channels.get(key);
+        ParsleyVectorClock existing = channels.get(key);
         channels.put(key, existing == null ? clock : existing.merge(clock));
         persist();
     }
@@ -379,7 +450,7 @@ final class ParsleyFrontier {
      * {@link ParsleyEpochState} (tests and the epoch-0 default hold a static {@link ParsleyEpoch}). See
      * {@link #tryAdvanceEpoch}.
      */
-    boolean recordEpochMarker(long epochId, ParsleyClock lowerBounds, Uuid channelTopicId, int channelPartition) {
+    boolean recordEpochMarker(long epochId, ParsleyVectorClock lowerBounds, Uuid channelTopicId, int channelPartition) {
         if (epoch instanceof ParsleyEpochState state) {
             boolean newlyRecorded = state.onBoundary(epochId, lowerBounds, channelTopicId, channelPartition);
             if (newlyRecorded) {
@@ -392,7 +463,7 @@ final class ParsleyFrontier {
 
     /**
      * Closes an in-progress epoch transition if it is ready — the boundary marker has been received on
-     * <em>every</em> input channel and this node's own contiguous frontier ({@link #snapshot()})
+     * <em>every</em> input channel and this node's own contiguous frontier ({@link #frontier()})
      * dominates the pending floor {@code F_e}, restricted to the coordinates this node can ever observe
      * — promoting {@code F_e} to the settled floor and persisting. Returns {@code true} if it advanced
      * (the caller should then re-drain, since a raised floor can strip a held replay record's
@@ -415,7 +486,7 @@ final class ParsleyFrontier {
      * here to {@link #channels}' own coordinates — the same scoping {@link #pruneToScope} already
      * applies to the frontier — before the dominance check. A coordinate that <em>is</em> in scope but
      * not yet delivered here is deliberately left in the filtered floor rather than dropped:
-     * {@link ParsleyClock#dominates} then reads it as unsatisfied (an absent coordinate is never
+     * {@link ParsleyVectorClock#dominates} then reads it as unsatisfied (an absent coordinate is never
      * dominated), so the window correctly keeps holding until this node catches up — conservative,
      * not permissive, exactly mirroring "hold over guess" for causal safety. With channel tracking off
      * (the single-layer, frontier-only test mode, where {@link #channels} is permanently empty) there
@@ -426,7 +497,7 @@ final class ParsleyFrontier {
         if (!(epoch instanceof ParsleyEpochState state)) {
             return false;
         }
-        ParsleyClock pendingFloor = state.pendingFloor();
+        ParsleyVectorClock pendingFloor = state.pendingFloor();
         if (pendingFloor == null) {
             return false;
         }
@@ -435,10 +506,10 @@ final class ParsleyFrontier {
                 return false;
             }
         }
-        ParsleyClock scopedFloor = trackChannels
+        ParsleyVectorClock scopedFloor = trackChannels
                 ? pendingFloor.retaining((topicId, partition) -> channels.containsKey(new CoordKey(topicId, partition)))
                 : pendingFloor;
-        if (!snapshot().dominates(scopedFloor)) {
+        if (!frontier().dominates(scopedFloor)) {
             return false;
         }
         state.promote();
@@ -464,7 +535,7 @@ final class ParsleyFrontier {
      * ({@code ParsleyEngine#advertised}) — so an out-of-scope entry inside a channel clock can only
      * be a retired or recreated coordinate, never live transitive ancestry.
      */
-    void pruneToScope(ParsleyClock.CoordinatePredicate inScope) {
+    void pruneToScope(ParsleyVectorClock.CoordinatePredicate inScope) {
         frontier = frontier.retaining(inScope);
         channels.keySet().removeIf(key -> !inScope.test(key.topicId(), key.partition()));
         channels.replaceAll((key, clock) -> clock.retaining(inScope));
@@ -499,7 +570,7 @@ final class ParsleyFrontier {
              DataOutputStream dos = new DataOutputStream(baos)) {
             ParsleyByteUtils.writeBytes(dos, frontier.toBytes());
             dos.writeInt(channels.size());
-            for (Map.Entry<CoordKey, ParsleyClock> entry : channels.entrySet()) {
+            for (Map.Entry<CoordKey, ParsleyVectorClock> entry : channels.entrySet()) {
                 ParsleyByteUtils.writeUuid(dos, entry.getKey().topicId());
                 dos.writeInt(entry.getKey().partition());
                 ParsleyByteUtils.writeBytes(dos, entry.getValue().toBytes());
@@ -519,18 +590,18 @@ final class ParsleyFrontier {
             dos.flush();
             return baos.toByteArray();
         } catch (IOException e) {
-            throw new IllegalStateException("ParsleyFrontier serialisation failed", e);
+            throw new IllegalStateException("ParsleyChannels serialisation failed", e);
         }
     }
 
     private void load(byte[] blob) {
         try (DataInputStream dis = new DataInputStream(new ByteArrayInputStream(blob))) {
-            frontier = ParsleyClock.fromBytes(ParsleyByteUtils.readBytes(dis));
+            frontier = ParsleyVectorClock.fromBytes(ParsleyByteUtils.readBytes(dis));
             int count = dis.readInt();
             for (int i = 0; i < count; i++) {
                 Uuid topicId = ParsleyByteUtils.readUuid(dis);
                 int partition = dis.readInt();
-                ParsleyClock clock = ParsleyClock.fromBytes(ParsleyByteUtils.readBytes(dis));
+                ParsleyVectorClock clock = ParsleyVectorClock.fromBytes(ParsleyByteUtils.readBytes(dis));
                 channels.put(new CoordKey(topicId, partition), clock);
             }
             // The epoch section is optional and trailing: a blob written before epoch state existed (or
@@ -558,7 +629,7 @@ final class ParsleyFrontier {
                 }
             }
         } catch (IOException e) {
-            throw new IllegalStateException("ParsleyFrontier deserialisation failed", e);
+            throw new IllegalStateException("ParsleyChannels deserialisation failed", e);
         }
     }
 

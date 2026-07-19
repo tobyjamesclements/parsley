@@ -19,7 +19,7 @@ import java.util.TreeSet;
  * <p><strong>Why.</strong> Every causal source is declared with {@code AutoOffsetReset.none()} (see
  * {@link CausalTopology}) so Kafka Streams fails fast — rather than silently jumping forward — when a
  * committed offset falls out of range (retention or {@code deleteRecords} outran a lagging consumer); a
- * silent forward jump would let {@link ParsleyFrontier#bridge} fold real lost records as if they were
+ * silent forward jump would let {@link ParsleyChannels#bridge} fold real lost records as if they were
  * transaction markers. But {@code none()} also fails on a <em>genuine first start</em>, where no committed
  * offset exists yet. This seeder closes that gap: on a true first start it commits each source partition's
  * log-start offset, so {@code none()} sees a valid committed position and reads from the beginning exactly

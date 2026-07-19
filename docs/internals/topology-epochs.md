@@ -30,7 +30,7 @@ Underneath that rule is a single invariant: **no causal clock carries an entry b
 covers the decoded dependencies of an incoming record, the node's own frontier, each input channel's
 clock, the `completeness()` output, and the outbound stamp. Delivering a below-floor record still feeds
 the user's state — it is a real message the delegate should see — but it must not anchor the causal
-frontier below the floor. This generalises the per-channel origin that `ParsleyFrontier` already seeds
+frontier below the floor. This generalises the per-channel origin that `ParsleyChannels` already seeds
 at registration into a domain-wide, epoch-versioned origin.
 
 Under epoch 0 the invariant is a no-op (nothing is below a floor of 0), which is why an uncoordinated
@@ -81,7 +81,7 @@ in-flight records written under the previous epoch. Parsley uses the classic two
 message is gated against the floor of the epoch it was **written** in, so the transition is an interval,
 not an instant.
 
-`ParsleyEpochState` sits above `ParsleyFrontier` and holds the settled floor plus, while a transition
+`ParsleyEpochState` sits above `ParsleyChannels` and holds the settled floor plus, while a transition
 is open, the pending next floor and the set of channels on which its opening marker has been seen. The
 window opens on the first epoch marker and becomes engaged once that marker has arrived on every input
 channel (a Chandy-Lamport cut across the node's inputs). It closes once the node's own contiguous

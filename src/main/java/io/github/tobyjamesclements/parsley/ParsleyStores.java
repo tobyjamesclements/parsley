@@ -16,7 +16,7 @@ final class ParsleyStores {
     /**
      * Key under which the frontier state is stored in the processor's frontier state store: a single
      * value holding both the contiguous frontier clock and the per-channel clocks (see
-     * {@link ParsleyFrontier}).
+     * {@link ParsleyChannels}).
      */
     static final String FRONTIER_KEY = "f";
 

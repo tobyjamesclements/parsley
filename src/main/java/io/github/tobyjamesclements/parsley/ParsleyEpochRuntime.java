@@ -63,7 +63,7 @@ final class ParsleyEpochRuntime implements AutoCloseable {
     // A local member's live completeness snapshot, registered once its task's engine exists (see
     // registerLocalCompleteness). Lets the runtime thread publish on a member's behalf when its own task
     // thread cannot run pollEpochCoordination() — see autoPublishStalledLocalMembers.
-    private final Map<String, Supplier<ParsleyClock>> localCompletenessSuppliers = new ConcurrentHashMap<>();
+    private final Map<String, Supplier<ParsleyVectorClock>> localCompletenessSuppliers = new ConcurrentHashMap<>();
     // Intents enqueued by task threads, appended to the log by the runtime thread only.
     private final Queue<ParsleyEpochEvent> outbox = new ConcurrentLinkedQueue<>();
 
@@ -96,12 +96,12 @@ final class ParsleyEpochRuntime implements AutoCloseable {
      * bounds-from-commit-{@code N-1} (or vice versa) because a second commit landed between two
      * independent reads. See {@link #committedEpoch()}.
      */
-    record CommittedEpoch(long epochId, ParsleyClock lowerBounds) {}
+    record CommittedEpoch(long epochId, ParsleyVectorClock lowerBounds) {}
 
     // Published together for cross-thread readers (a source-layer task polls these to drive the in-band
     // wave; a joiner blocks on the id). One volatile record, not two separate volatile fields — see
     // CommittedEpoch's Javadoc for why. Written by the runtime thread, read by any thread.
-    private volatile CommittedEpoch committedEpoch = new CommittedEpoch(0, ParsleyClock.empty());
+    private volatile CommittedEpoch committedEpoch = new CommittedEpoch(0, ParsleyVectorClock.empty());
     private volatile boolean roundOpen;
     // Whether the transport has folded the whole startup backlog. The owner must not commit before this,
     // or a just-started runtime would commit a stale epoch believing the topology empty.
@@ -186,7 +186,7 @@ final class ParsleyEpochRuntime implements AutoCloseable {
      * join time, when a fresh joiner's snapshot would still be the empty placeholder and a restarting
      * member's would not yet reflect its restored state.
      */
-    void registerLocalCompleteness(String memberId, Supplier<ParsleyClock> completenessSupplier) {
+    void registerLocalCompleteness(String memberId, Supplier<ParsleyVectorClock> completenessSupplier) {
         localCompletenessSuppliers.put(memberId, completenessSupplier);
     }
 
@@ -228,7 +228,7 @@ final class ParsleyEpochRuntime implements AutoCloseable {
     }
 
     /** Publishes {@code memberId}'s current completeness frontier for the open round. */
-    void publishFrontier(String memberId, ParsleyClock completeness) {
+    void publishFrontier(String memberId, ParsleyVectorClock completeness) {
         outbox.add(new ParsleyEpochEvent.FrontierPublished(memberId, completeness));
     }
 
@@ -316,7 +316,7 @@ final class ParsleyEpochRuntime implements AutoCloseable {
     }
 
     /** The lower bounds of the last committed epoch (empty before any commit). */
-    ParsleyClock committedLowerBounds() {
+    ParsleyVectorClock committedLowerBounds() {
         return committedEpoch.lowerBounds();
     }
 
@@ -468,7 +468,7 @@ final class ParsleyEpochRuntime implements AutoCloseable {
             if (lastRound != null && lastRound == round) {
                 continue;
             }
-            Supplier<ParsleyClock> supplier = localCompletenessSuppliers.get(member);
+            Supplier<ParsleyVectorClock> supplier = localCompletenessSuppliers.get(member);
             if (supplier == null) {
                 continue;
             }

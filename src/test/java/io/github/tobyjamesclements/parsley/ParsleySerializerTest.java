@@ -34,7 +34,7 @@ class ParsleySerializerTest {
      */
     @Test
     void roundTripsEveryField() {
-        ParsleyClock deps = ParsleyClock.empty().observe(Uuid.randomUuid(), 0, 4);
+        ParsleyVectorClock deps = ParsleyVectorClock.empty().observe(Uuid.randomUuid(), 0, 4);
         List<ParsleyHeader> userHeaders = List.of(
                 new ParsleyHeader("h1", "a".getBytes()),
                 new ParsleyHeader("h2", null));
@@ -70,7 +70,7 @@ class ParsleySerializerTest {
 
         assertNull(out.key(), "null key must round-trip as null");
         assertNull(out.value(), "null value must round-trip as null");
-        assertEquals(ParsleyClock.empty(), out.dependencies(), "empty dependencies must round-trip as empty");
+        assertEquals(ParsleyVectorClock.empty(), out.dependencies(), "empty dependencies must round-trip as empty");
     }
 
     /**
@@ -108,7 +108,7 @@ class ParsleySerializerTest {
         ParsleySerializer<String, String> spying =
                 new ParsleySerializer<>(new ParsleyResolver<>(topic -> keySpy, topic -> valueSpy));
         ParsleyMessage<String, String> record =
-                buildRecord("k", "v", 0L, T1, 1L, ParsleyClock.empty(), List.of());
+                buildRecord("k", "v", 0L, T1, 1L, ParsleyVectorClock.empty(), List.of());
 
         spying.deserialize(spying.serialize(record));
 
@@ -149,10 +149,10 @@ class ParsleySerializerTest {
 
     private static ParsleyMessage<String, String> buildRecord(String key, String value, long timestamp,
                                                               TopicPartition tp, long offset,
-                                                              ParsleyClock deps,
+                                                              ParsleyVectorClock deps,
                                                               List<ParsleyHeader> userHeaders) {
         return new ParsleyMessage<>(tp.topic(), T1_ID, tp.partition(), offset, timestamp,
-                key, value, userHeaders, deps == null ? ParsleyClock.empty() : deps);
+                key, value, userHeaders, deps == null ? ParsleyVectorClock.empty() : deps);
     }
 
     /** A String serde that records the topic argument it was invoked with. */

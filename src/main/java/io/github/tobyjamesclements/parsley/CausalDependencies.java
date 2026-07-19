@@ -30,7 +30,7 @@ import java.util.Properties;
  */
 public final class CausalDependencies {
 
-    private final ParsleyClock clock;
+    private final ParsleyVectorClock clock;
 
     /**
      * The resolver bound for {@link #observe(ConsumerRecord)}, or {@code null} if unbound. Transient
@@ -39,11 +39,11 @@ public final class CausalDependencies {
      */
     private final @Nullable ParsleyTopics topics;
 
-    private CausalDependencies(ParsleyClock clock) {
+    private CausalDependencies(ParsleyVectorClock clock) {
         this(clock, null);
     }
 
-    private CausalDependencies(ParsleyClock clock, @Nullable ParsleyTopics topics) {
+    private CausalDependencies(ParsleyVectorClock clock, @Nullable ParsleyTopics topics) {
         this.clock = clock;
         this.topics = topics;
     }
@@ -56,7 +56,7 @@ public final class CausalDependencies {
      * @return an empty {@code CausalDependencies}
      */
     public static CausalDependencies empty() {
-        return new CausalDependencies(ParsleyClock.empty());
+        return new CausalDependencies(ParsleyVectorClock.empty());
     }
 
     /**
@@ -92,7 +92,7 @@ public final class CausalDependencies {
      * entry point same-package tests use directly with a reusable {@link ParsleyTopics} constant. */
     static CausalDependencies using(ParsleyTopics topics) {
         Objects.requireNonNull(topics, "topics must not be null");
-        return new CausalDependencies(ParsleyClock.empty(), topics);
+        return new CausalDependencies(ParsleyVectorClock.empty(), topics);
     }
 
     /**
@@ -131,7 +131,7 @@ public final class CausalDependencies {
      */
     public static final class Builder {
         private final ParsleyTopics topics;
-        private ParsleyClock clock = ParsleyClock.empty();
+        private ParsleyVectorClock clock = ParsleyVectorClock.empty();
 
         private Builder(ParsleyTopics topics) {
             this.topics = Objects.requireNonNull(topics, "topics must not be null");
@@ -219,9 +219,9 @@ public final class CausalDependencies {
                             + "(or CausalDependencies.builder(props)) before calling observe(record)");
         }
         Objects.requireNonNull(record, "record must not be null");
-        ParsleyClock carried = fromHeaders(record.headers()).map(deps -> deps.clock).orElse(ParsleyClock.empty());
-        ParsleyClock merged = clock.merge(carried);
-        ParsleyClock extended = isWatermark(record)
+        ParsleyVectorClock carried = fromHeaders(record.headers()).map(deps -> deps.clock).orElse(ParsleyVectorClock.empty());
+        ParsleyVectorClock merged = clock.merge(carried);
+        ParsleyVectorClock extended = isWatermark(record)
                 ? merged
                 : merged.observe(topics.topicId(record.topic()), record.partition(), record.offset());
         return new CausalDependencies(extended, topics);
@@ -278,7 +278,7 @@ public final class CausalDependencies {
      * @throws IllegalStateException if {@code bytes} is not valid, including an unrecognised version
      */
     public static CausalDependencies fromBytes(byte[] bytes) {
-        return new CausalDependencies(ParsleyClock.fromBytes(bytes));
+        return new CausalDependencies(ParsleyVectorClock.fromBytes(bytes));
     }
 
     /**
@@ -306,8 +306,8 @@ public final class CausalDependencies {
         return header == null ? Optional.empty() : Optional.of(fromBytes(header.value()));
     }
 
-    /** The backing clock; the engine works in {@link ParsleyClock} directly. */
-    ParsleyClock clock() {
+    /** The backing clock; the engine works in {@link ParsleyVectorClock} directly. */
+    ParsleyVectorClock clock() {
         return clock;
     }
 

@@ -34,7 +34,7 @@ class ParsleyEpochStateTest {
      */
     @Test
     void startsAtReadsTheSettledFloorPerCoordinate() {
-        ParsleyEpochState state = new ParsleyEpochState(ParsleyClock.empty().observe(T1_ID, 0, 100), 1);
+        ParsleyEpochState state = new ParsleyEpochState(ParsleyVectorClock.empty().observe(T1_ID, 0, 100), 1);
         assertEquals(100L, state.startsAt(T1_ID, 0), "T1 is floored at its settled startsAt");
         assertEquals(ParsleyEpoch.NO_BOUND, state.startsAt(T2_ID, 0), "an unrecorded coordinate is unbounded");
     }
@@ -46,9 +46,9 @@ class ParsleyEpochStateTest {
      */
     @Test
     void effectiveFloorStaysTheOldFloorWhilePending() {
-        ParsleyEpochState state = new ParsleyEpochState(ParsleyClock.empty().observe(T1_ID, 0, 5), 1);
+        ParsleyEpochState state = new ParsleyEpochState(ParsleyVectorClock.empty().observe(T1_ID, 0, 5), 1);
 
-        state.onBoundary(2, ParsleyClock.empty().observe(T1_ID, 0, 20), T1_ID, 0);
+        state.onBoundary(2, ParsleyVectorClock.empty().observe(T1_ID, 0, 20), T1_ID, 0);
 
         assertTrue(state.isTransitioning(), "receiving a boundary starts a transition");
         assertEquals(5L, state.startsAt(T1_ID, 0),
@@ -62,9 +62,9 @@ class ParsleyEpochStateTest {
      */
     @Test
     void aStaleBoundaryAtOrBelowTheSettledEpochIsIgnored() {
-        ParsleyEpochState state = new ParsleyEpochState(ParsleyClock.empty().observe(T1_ID, 0, 20), 2);
+        ParsleyEpochState state = new ParsleyEpochState(ParsleyVectorClock.empty().observe(T1_ID, 0, 20), 2);
 
-        boolean began = state.onBoundary(2, ParsleyClock.empty().observe(T1_ID, 0, 5), T1_ID, 0);
+        boolean began = state.onBoundary(2, ParsleyVectorClock.empty().observe(T1_ID, 0, 5), T1_ID, 0);
 
         assertFalse(began, "a boundary for the already-settled epoch must not begin a transition");
         assertFalse(state.isTransitioning(), "no transition starts for a stale epoch");
@@ -78,8 +78,8 @@ class ParsleyEpochStateTest {
      */
     @Test
     void promoteAdvancesTheSettledFloorAndEndsTheTransition() {
-        ParsleyEpochState state = new ParsleyEpochState(ParsleyClock.empty().observe(T1_ID, 0, 5), 1);
-        state.onBoundary(2, ParsleyClock.empty().observe(T1_ID, 0, 20), T1_ID, 0);
+        ParsleyEpochState state = new ParsleyEpochState(ParsleyVectorClock.empty().observe(T1_ID, 0, 5), 1);
+        state.onBoundary(2, ParsleyVectorClock.empty().observe(T1_ID, 0, 20), T1_ID, 0);
 
         state.promote();
 
@@ -95,7 +95,7 @@ class ParsleyEpochStateTest {
     @Test
     void markerReceiptIsTrackedPerChannel() {
         ParsleyEpochState state = new ParsleyEpochState();
-        ParsleyClock floor = ParsleyClock.empty().observe(T1_ID, 0, 20);
+        ParsleyVectorClock floor = ParsleyVectorClock.empty().observe(T1_ID, 0, 20);
 
         state.onBoundary(1, floor, T1_ID, 0);
 
@@ -117,7 +117,7 @@ class ParsleyEpochStateTest {
     @Test
     void onBoundaryReportsWhetherTheMarkerWasNewlyRecorded() {
         ParsleyEpochState state = new ParsleyEpochState();
-        ParsleyClock floor = ParsleyClock.empty().observe(T1_ID, 0, 20);
+        ParsleyVectorClock floor = ParsleyVectorClock.empty().observe(T1_ID, 0, 20);
 
         assertTrue(state.onBoundary(1, floor, T1_ID, 0),
                 "the first marker begins the transition and is newly recorded");
@@ -134,8 +134,8 @@ class ParsleyEpochStateTest {
      */
     @Test
     void roundTripsThroughSerialisationIncludingAnInProgressTransition() {
-        ParsleyEpochState original = new ParsleyEpochState(ParsleyClock.empty().observe(T1_ID, 0, 5), 3);
-        original.onBoundary(4, ParsleyClock.empty().observe(T1_ID, 0, 20).observe(T2_ID, 0, 7), T1_ID, 0);
+        ParsleyEpochState original = new ParsleyEpochState(ParsleyVectorClock.empty().observe(T1_ID, 0, 5), 3);
+        original.onBoundary(4, ParsleyVectorClock.empty().observe(T1_ID, 0, 20).observe(T2_ID, 0, 7), T1_ID, 0);
 
         ParsleyEpochState restored = new ParsleyEpochState();
         restored.restore(original.toBytes());

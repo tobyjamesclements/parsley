@@ -30,7 +30,7 @@ class ParsleyEngineWatermarkTest {
     private static final Uuid T3_ID = Uuid.randomUuid();
 
     // The node consumes T1 and T2 on partition 0.
-    private static final ParsleyClock.CoordinatePredicate SCOPE = (topicId, partition) ->
+    private static final ParsleyVectorClock.CoordinatePredicate SCOPE = (topicId, partition) ->
             partition == 0 && (topicId.equals(T1_ID) || topicId.equals(T2_ID));
 
     private final MockBufferStore<String, String> buffer = new MockBufferStore<>();
@@ -43,9 +43,9 @@ class ParsleyEngineWatermarkTest {
      */
     @Test
     void watermarkClaimOnASiblingChannelDoesNotReleaseAHeldRecord() {
-        ParsleyFrontier frontier = newFrontier();
-        frontier.channelUpdate(T1_ID, 0, ParsleyClock.empty());
-        frontier.channelUpdate(T2_ID, 0, ParsleyClock.empty());
+        ParsleyChannels frontier = newFrontier();
+        frontier.channelUpdate(T1_ID, 0, ParsleyVectorClock.empty());
+        frontier.channelUpdate(T2_ID, 0, ParsleyVectorClock.empty());
         ParsleyEngine<String, String> engine = engineOver(frontier);
 
         List<ParsleyMessage<String, String>> held =
@@ -62,12 +62,12 @@ class ParsleyEngineWatermarkTest {
                         + "even though nothing was released");
 
         for (long offset = 0; offset < 3; offset++) {
-            assertEquals(List.of(), engine.receive(record(T2, offset, T2_ID, ParsleyClock.empty())).delivered()
+            assertEquals(List.of(), engine.receive(record(T2, offset, T2_ID, ParsleyVectorClock.empty())).delivered()
                             .stream().filter(m -> m.topicId().equals(T1_ID)).toList(),
                     "the held T1@0 must stay held until T2 contiguously reaches 3, not before");
         }
         List<ParsleyMessage<String, String>> released =
-                engine.receive(record(T2, 3, T2_ID, ParsleyClock.empty())).delivered();
+                engine.receive(record(T2, 3, T2_ID, ParsleyVectorClock.empty())).delivered();
         assertEquals(2, released.size(),
                 "T2@3 genuinely delivering on this node's own channel releases the held T1@0 "
                         + "(plus T2@3 itself), in causal order");
@@ -80,9 +80,9 @@ class ParsleyEngineWatermarkTest {
      */
     @Test
     void watermarkClaimStillEntersTheOutboundStampCompleteness() {
-        ParsleyFrontier frontier = newFrontier();
-        frontier.channelUpdate(T1_ID, 0, ParsleyClock.empty());
-        frontier.channelUpdate(T2_ID, 0, ParsleyClock.empty());
+        ParsleyChannels frontier = newFrontier();
+        frontier.channelUpdate(T1_ID, 0, ParsleyVectorClock.empty());
+        frontier.channelUpdate(T2_ID, 0, ParsleyVectorClock.empty());
         ParsleyEngine<String, String> engine = engineOver(frontier);
 
         engine.onWatermark(T1_ID, 0, 0, clock(T3_ID, 5));
@@ -101,16 +101,16 @@ class ParsleyEngineWatermarkTest {
      */
     @Test
     void watermarkOwnOffsetAdvancesItsChannelAndReleasesDependents() {
-        ParsleyFrontier frontier = newFrontier();
-        frontier.channelUpdate(T1_ID, 0, ParsleyClock.empty());
-        frontier.channelUpdate(T2_ID, 0, ParsleyClock.empty());
+        ParsleyChannels frontier = newFrontier();
+        frontier.channelUpdate(T1_ID, 0, ParsleyVectorClock.empty());
+        frontier.channelUpdate(T2_ID, 0, ParsleyVectorClock.empty());
         ParsleyEngine<String, String> engine = engineOver(frontier);
 
         assertEquals(List.of(), engine.receive(record(T2, 0, T2_ID, clock(T1_ID, 0))).delivered(),
                 "T2@0 must be held: T1@0 has not been delivered yet");
 
         ParsleyEngine.WatermarkOutcome<String, String> watermark =
-                engine.onWatermark(T1_ID, 0, 0, ParsleyClock.empty());
+                engine.onWatermark(T1_ID, 0, 0, ParsleyVectorClock.empty());
 
         assertEquals(1, watermark.outcome().delivered().size(),
                 "the watermark's own offset genuinely delivers T1@0, releasing the held T2@0 — "
@@ -122,23 +122,23 @@ class ParsleyEngineWatermarkTest {
 
     // --- helpers --------------------------------------------------------------------------------
 
-    private static ParsleyFrontier newFrontier() {
-        return new ParsleyFrontier(ParsleyClock.empty(), new MockForwardedIndex());
+    private static ParsleyChannels newFrontier() {
+        return new ParsleyChannels(ParsleyVectorClock.empty(), new MockForwardedIndex());
     }
 
-    private ParsleyEngine<String, String> engineOver(ParsleyFrontier frontier) {
+    private ParsleyEngine<String, String> engineOver(ParsleyChannels frontier) {
         return new ParsleyEngine<>(frontier, buffer,
                 new MockCandidateIndex(), ParsleyMetrics.NOOP,
                 System::currentTimeMillis, SCOPE);
     }
 
     private static ParsleyMessage<String, String> record(TopicPartition tp, long offset,
-                                                          Uuid topicId, ParsleyClock deps) {
+                                                          Uuid topicId, ParsleyVectorClock deps) {
         return new ParsleyMessage<>(tp.topic(), topicId, tp.partition(), offset, 0L,
                 "k", "v", List.of(), deps);
     }
 
-    private static ParsleyClock clock(Uuid topicId, long offset) {
-        return ParsleyClock.empty().observe(topicId, 0, offset);
+    private static ParsleyVectorClock clock(Uuid topicId, long offset) {
+        return ParsleyVectorClock.empty().observe(topicId, 0, offset);
     }
 }

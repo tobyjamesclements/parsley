@@ -56,7 +56,7 @@ import java.util.function.Supplier;
 final class ParsleyProcessorContext<KOut, VOut> implements ProcessorContext<KOut, VOut> {
 
     private final ProcessorContext<KOut, VOut> delegate;
-    private final Supplier<ParsleyClock> completeness;
+    private final Supplier<ParsleyVectorClock> completeness;
     private final Supplier<Optional<RecordMetadata>> deliveredMetadata;
     // Every business sink this stage declared, or empty to fall back to the plain broadcast forward()
     // Kafka Streams itself provides. Non-empty only when a second, incompatibly-typed child has been
@@ -68,7 +68,7 @@ final class ParsleyProcessorContext<KOut, VOut> implements ProcessorContext<KOut
     private int forwardCount = 0;
 
     ParsleyProcessorContext(ProcessorContext<KOut, VOut> delegate,
-                             Supplier<ParsleyClock> completeness,
+                             Supplier<ParsleyVectorClock> completeness,
                              Supplier<Optional<RecordMetadata>> deliveredMetadata,
                              List<String> sinkNodeNames) {
         this.delegate = delegate;

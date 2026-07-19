@@ -6,6 +6,17 @@ All notable changes to this project are documented in this file. The format is b
 
 ## [Unreleased]
 
+### Changed (internal)
+- **The L1 channels module is named: `ParsleyChannels`.** First structural step of the three-protocol
+  redesign (T1.1). `ParsleyFrontier` folds into a new `ParsleyChannels` class — the
+  Kafka-to-reliable-FIFO-channel adaptation, presented in the Cachin–Guerraoui–Rodrigues module style
+  with the classical operation names: `receive` (density seeding and commit-marker bridging),
+  `delivered` (contiguous frontier advance), `frontier()`, and the Phase 2 stubs `acknowledge`/
+  `ownOutputs()` for own-output tracking. `ParsleyClock` is renamed `ParsleyVectorClock` (it is a
+  vector clock — Fidge 1988, Mattern 1988 — indexed by channel rather than process, a stated
+  variant). Behaviour-identical; all classes are package-private, so no public API or wire format
+  changes.
+
 ### Added
 - **Genesis cohort barrier and an authoritative member-app roster for topology-epoch coordination.** A
   coordinated domain now always establishes a committed *genesis* epoch — a consistent cut with an empty

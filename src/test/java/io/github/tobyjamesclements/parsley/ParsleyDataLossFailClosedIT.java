@@ -43,7 +43,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * {@code AutoOffsetReset.none()} (see {@link CausalTopology}), so when a committed offset has fallen out of
  * range — retention or {@code deleteRecords} outran a lagging consumer — Kafka Streams fails the task fast
  * at fetch rather than silently resetting forward over the lost records. Without {@code none()} the
- * consumer would jump to the new log-start and {@link ParsleyFrontier#bridge} would fold the skipped real
+ * consumer would jump to the new log-start and {@link ParsleyChannels#bridge} would fold the skipped real
  * records as if they were transaction markers, releasing dependents before their causes.
  *
  * <p>The scenario: commit offset 2 for the application's group, then delete records below offset 5 so the
@@ -75,7 +75,7 @@ class ParsleyDataLossFailClosedIT {
         try (KafkaProducer<String, String> producer = new KafkaProducer<>(producerConfig(bootstrap))) {
             for (int i = 0; i < 10; i++) {
                 ProducerRecord<String, String> record = new ProducerRecord<>(IN, "k", "v" + i);
-                record.headers().add(ParsleyHeader.CAUSAL_DEPENDENCIES, ParsleyClock.empty().toBytes());
+                record.headers().add(ParsleyHeader.CAUSAL_DEPENDENCIES, ParsleyVectorClock.empty().toBytes());
                 producer.send(record).get();
             }
         }

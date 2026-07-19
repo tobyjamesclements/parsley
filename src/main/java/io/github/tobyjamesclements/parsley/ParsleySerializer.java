@@ -88,7 +88,7 @@ final class ParsleySerializer<K, V> {
             int partition = in.readInt();
             long offset = in.readLong();
             // Dependencies are always framed non-null (serialize() writes dependencies().toBytes()).
-            ParsleyClock dependencies = ParsleyClock.fromBytes(Objects.requireNonNull(readNullable(in)));
+            ParsleyVectorClock dependencies = ParsleyVectorClock.fromBytes(Objects.requireNonNull(readNullable(in)));
             int headerCount = in.readInt();
             List<ParsleyHeader> headers = new ArrayList<>(headerCount);
             for (int i = 0; i < headerCount; i++) {
@@ -130,7 +130,7 @@ final class ParsleySerializer<K, V> {
      * The source coordinate and dependency clock decodable for an {@link ParsleyBufferStore.IndexEntry
      * IndexEntry} — see {@link #deserializeIndexMetadata}.
      */
-    record IndexMetadata(String topic, Uuid topicId, int partition, long offset, ParsleyClock dependencies) {}
+    record IndexMetadata(String topic, Uuid topicId, int partition, long offset, ParsleyVectorClock dependencies) {}
 
     /**
      * Reconstructs only the metadata a restored buffer needs to rebuild its candidate index — the
@@ -158,7 +158,7 @@ final class ParsleySerializer<K, V> {
             int partition = in.readInt();
             long offset = in.readLong();
             // Dependencies are always framed non-null (serialize() writes dependencies().toBytes()).
-            ParsleyClock dependencies = ParsleyClock.fromBytes(Objects.requireNonNull(readNullable(in)));
+            ParsleyVectorClock dependencies = ParsleyVectorClock.fromBytes(Objects.requireNonNull(readNullable(in)));
             return new IndexMetadata(topic, topicId, partition, offset, dependencies);
         } catch (IOException e) {
             throw new IllegalStateException("Buffered record metadata deserialisation failed", e);
@@ -172,7 +172,7 @@ final class ParsleySerializer<K, V> {
      * record and its subject.
      */
     private static String details(String topic, Uuid topicId, int partition, long offset, long timestamp,
-                                  ParsleyClock dependencies, List<ParsleyHeader> headers,
+                                  ParsleyVectorClock dependencies, List<ParsleyHeader> headers,
                                   byte @Nullable [] keyBytes, byte @Nullable [] valueBytes, int schemaId) {
         List<String> headerKeys = new ArrayList<>(headers.size());
         for (ParsleyHeader header : headers) {

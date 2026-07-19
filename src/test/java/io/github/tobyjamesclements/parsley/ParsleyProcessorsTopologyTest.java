@@ -610,10 +610,10 @@ class ParsleyProcessorsTopologyTest {
                     "t2 processor must forward to its own output topic");
 
             // Each decorator persisted only its own branch's frontier under its own namespace.
-            assertEquals(ParsleyClock.empty().observe(T3_ID, 0, 0),
+            assertEquals(ParsleyVectorClock.empty().observe(T3_ID, 0, 0),
                     frontierIn(driver, "t3-frontier"),
                     "t3 frontier must reflect only t3's source coordinate");
-            assertEquals(ParsleyClock.empty().observe(T2_ID, 0, 0),
+            assertEquals(ParsleyVectorClock.empty().observe(T2_ID, 0, 0),
                     frontierIn(driver, "t2-frontier"),
                     "t2 frontier must reflect only t2's source coordinate");
         }
@@ -651,7 +651,7 @@ class ParsleyProcessorsTopologyTest {
                 t3.pipeInput(new TestRecord<>("k", "v" + i, depsHeader(CausalDependencies.empty())));
             }
 
-            ParsleyClock frontier = frontierIn(driver, "parsley-frontier");
+            ParsleyVectorClock frontier = frontierIn(driver, "parsley-frontier");
             assertEquals(3, frontier.size(),
                     "the stamped frontier width must equal the number of source topics, not the record count");
         }
@@ -943,14 +943,14 @@ class ParsleyProcessorsTopologyTest {
 
             // proc1's frontier spans both source topics after draining.
             assertEquals(
-                    ParsleyClock.empty()
+                    ParsleyVectorClock.empty()
                             .observe(T2_ID, 0, 0)
                             .observe(T3_ID, 0, 0),
                     frontierIn(driver, "node1-frontier"),
                     "proc1 frontier must span both t2 and t3 after drain");
 
             // proc2's frontier spans t2 and t3 (from direct admissions) plus t4@1 (last t4-record drained).
-            ParsleyClock f2 = frontierIn(driver, "node2-frontier");
+            ParsleyVectorClock f2 = frontierIn(driver, "node2-frontier");
             assertEquals(0L, f2.offsetFor(T2_ID, 0), "proc2 must have seen t2 directly");
             assertEquals(0L, f2.offsetFor(T3_ID, 0), "proc2 must have seen t3 directly");
             assertEquals(1L, f2.offsetFor(T4_ID, 0), "proc2 must have drained both t4-records");
@@ -1037,11 +1037,11 @@ class ParsleyProcessorsTopologyTest {
 
             // Both processors' frontiers span both source topics after draining.
             assertEquals(
-                    ParsleyClock.empty().observe(T2_ID, 0, 0).observe(T3_ID, 0, 0),
+                    ParsleyVectorClock.empty().observe(T2_ID, 0, 0).observe(T3_ID, 0, 0),
                     frontierIn(driver, "node1-frontier"),
                     "proc1 frontier must span both t2 and t3 after drain");
             assertEquals(
-                    ParsleyClock.empty().observe(T2_ID, 0, 0).observe(T3_ID, 0, 0),
+                    ParsleyVectorClock.empty().observe(T2_ID, 0, 0).observe(T3_ID, 0, 0),
                     frontierIn(driver, "node2-frontier"),
                     "proc2 frontier must span both t2 and t3 after drain");
         }
@@ -1388,17 +1388,17 @@ class ParsleyProcessorsTopologyTest {
                 .orElseThrow(() -> new AssertionError("Parsley metric not found: " + metricName));
     }
 
-    private static ParsleyClock frontierIn(TopologyTestDriver driver, String frontierStoreName) {
+    private static ParsleyVectorClock frontierIn(TopologyTestDriver driver, String frontierStoreName) {
         KeyValueStore<String, byte[]> store = driver.getKeyValueStore(frontierStoreName);
         byte[] blob = store.get("f");
         if (blob == null) {
-            return ParsleyClock.empty();
+            return ParsleyVectorClock.empty();
         }
-        // The "f" value holds the combined ParsleyFrontier blob: [frontier-len:4][frontier bytes]
+        // The "f" value holds the combined ParsleyChannels blob: [frontier-len:4][frontier bytes]
         // [channel-count:4]... — extract just the leading frontier clock.
         try (java.io.DataInputStream dis =
                      new java.io.DataInputStream(new java.io.ByteArrayInputStream(blob))) {
-            return ParsleyClock.fromBytes(dis.readNBytes(dis.readInt()));
+            return ParsleyVectorClock.fromBytes(dis.readNBytes(dis.readInt()));
         } catch (java.io.IOException e) {
             throw new IllegalStateException(e);
         }

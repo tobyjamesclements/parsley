@@ -161,7 +161,7 @@ class ParsleyProcessorsAvroTopologyTest {
         KeyValueStore<Long, byte[]> backing = new TestKeyValueStore<Long, byte[]>(java.util.Comparator.naturalOrder());
         StoreBackedBufferStore<String, SpecificRecord> store = new StoreBackedBufferStore<>(backing, writable);
 
-        ParsleyClock deps = ParsleyClock.empty().observe(PRICES_ID, 0, 0);
+        ParsleyVectorClock deps = ParsleyVectorClock.empty().observe(PRICES_ID, 0, 0);
         ParsleyMessage<String, SpecificRecord> orderMessage = new ParsleyMessage<>(
                 ORDERS, ORDERS_ID, 0, 0, 0L, "k", new Order("o-1", "ACME", 5), List.of(), deps);
         long seq = store.add(orderMessage, 100L);

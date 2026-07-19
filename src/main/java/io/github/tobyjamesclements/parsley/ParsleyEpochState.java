@@ -14,7 +14,7 @@ import java.util.HashSet;
 import java.util.Set;
 
 /**
- * The parent epoch state a task holds over its {@link ParsleyFrontier} — a State (GoF): the settled
+ * The parent epoch state a task holds over its {@link ParsleyChannels} — a State (GoF): the settled
  * per-coordinate floor, plus an optional in-progress epoch transition. Implements {@link ParsleyEpoch} so
  * the frontier and the delivery gate floor against the settled floor directly ({@link #startsAt}).
  *
@@ -32,7 +32,7 @@ import java.util.Set;
  *       records on it have been received) and closes once this node's own contiguous frontier
  *       <em>dominates</em> {@code F_e} — everything up to the new floor has been delivered
  *       <em>here</em>, so e-1 is provably drained locally (a peer's advertised claim is never proof;
- *       see {@link ParsleyFrontier#tryAdvanceEpoch}). {@link #promote} then makes {@code F_e} the
+ *       see {@link ParsleyChannels#tryAdvanceEpoch}). {@link #promote} then makes {@code F_e} the
  *       settled floor. Because it only closes once the local frontier dominates {@code F_e},
  *       advancing the floor needs no re-flooring of already-recorded state.
  * </ul>
@@ -52,7 +52,7 @@ final class ParsleyEpochState implements ParsleyEpoch {
     static final byte WIRE_VERSION = 1;
 
     // The settled (effective) floor: the highest committed epoch's lowerBounds. startsAt reads this.
-    private ParsleyClock settledFloor;
+    private ParsleyVectorClock settledFloor;
     private long settledEpochId;
 
     // The in-progress transition, or null. While present, the effective floor stays settledFloor (the
@@ -61,10 +61,10 @@ final class ParsleyEpochState implements ParsleyEpoch {
 
     private static final class Pending {
         final long epochId;
-        final ParsleyClock floor;                          // F_e
+        final ParsleyVectorClock floor;                          // F_e
         final Set<CoordKey> markersSeen = new HashSet<>(); // input channels the marker has arrived on
 
-        Pending(long epochId, ParsleyClock floor) {
+        Pending(long epochId, ParsleyVectorClock floor) {
             this.epochId = epochId;
             this.floor = floor;
         }
@@ -74,10 +74,10 @@ final class ParsleyEpochState implements ParsleyEpoch {
 
     /** A fresh state at epoch 0 (floor 0 everywhere, i.e. every coordinate unbounded). */
     ParsleyEpochState() {
-        this(ParsleyClock.empty(), 0L);
+        this(ParsleyVectorClock.empty(), 0L);
     }
 
-    ParsleyEpochState(ParsleyClock settledFloor, long settledEpochId) {
+    ParsleyEpochState(ParsleyVectorClock settledFloor, long settledEpochId) {
         this.settledFloor = settledFloor;
         this.settledEpochId = settledEpochId;
     }
@@ -99,7 +99,7 @@ final class ParsleyEpochState implements ParsleyEpoch {
     }
 
     /** The pending epoch's floor {@code F_e}, or {@code null} when no transition is in progress. */
-    @Nullable ParsleyClock pendingFloor() {
+    @Nullable ParsleyVectorClock pendingFloor() {
         return pending == null ? null : pending.floor;
     }
 
@@ -121,7 +121,7 @@ final class ParsleyEpochState implements ParsleyEpoch {
      * channel's first sight of the boundary propagates — even when the marker's carried completeness
      * clock taught the channel nothing new (an idle, quiesced round; see {@link ParsleyProcessor}).
      */
-    boolean onBoundary(long epochId, ParsleyClock lowerBounds, Uuid channelTopicId, int channelPartition) {
+    boolean onBoundary(long epochId, ParsleyVectorClock lowerBounds, Uuid channelTopicId, int channelPartition) {
         if (epochId <= settledEpochId) {
             return false;
         }
@@ -194,10 +194,10 @@ final class ParsleyEpochState implements ParsleyEpoch {
                         "unsupported ParsleyEpochState wire version: " + version + " (expected " + WIRE_VERSION + ")");
             }
             this.settledEpochId = dis.readLong();
-            this.settledFloor = ParsleyClock.fromBytes(ParsleyByteUtils.readBytes(dis));
+            this.settledFloor = ParsleyVectorClock.fromBytes(ParsleyByteUtils.readBytes(dis));
             if (dis.readBoolean()) {
                 long pendingEpochId = dis.readLong();
-                ParsleyClock pendingFloor = ParsleyClock.fromBytes(ParsleyByteUtils.readBytes(dis));
+                ParsleyVectorClock pendingFloor = ParsleyVectorClock.fromBytes(ParsleyByteUtils.readBytes(dis));
                 Pending restored = new Pending(pendingEpochId, pendingFloor);
                 int markerCount = dis.readInt();
                 for (int i = 0; i < markerCount; i++) {

@@ -264,16 +264,16 @@ class ParsleyProcessorSourceLayerTest {
         // member 0_0 is admitted at epoch 2 (floor T1@5), and epoch 3 raises the committed floor to T1@10.
         seeder.append(new ParsleyEpochEvent.JoinRequested("F/0_0", "F", Set.of("t1"), Set.of(), Set.of("F"), 1));
         seeder.append(new ParsleyEpochEvent.SnapshotRequested("F/0_0"));
-        seeder.append(new ParsleyEpochEvent.EpochCommitted(1, ParsleyClock.empty(), Set.of("F")));
+        seeder.append(new ParsleyEpochEvent.EpochCommitted(1, ParsleyVectorClock.empty(), Set.of("F")));
         seeder.append(new ParsleyEpochEvent.JoinRequested("F/0_0", "F", Set.of("t1"), Set.of(), Set.of("F", ""), 1));
         seeder.append(new ParsleyEpochEvent.JoinRequested("0_0", "", Set.of("t1"), Set.of(), Set.of("F", ""), 1));
         seeder.append(new ParsleyEpochEvent.SnapshotRequested("F/0_0"));
-        seeder.append(new ParsleyEpochEvent.FrontierPublished("F/0_0", ParsleyClock.empty().observe(T1_ID, 0, 5)));
-        seeder.append(new ParsleyEpochEvent.EpochCommitted(2, ParsleyClock.empty().observe(T1_ID, 0, 5), Set.of("F", "")));
+        seeder.append(new ParsleyEpochEvent.FrontierPublished("F/0_0", ParsleyVectorClock.empty().observe(T1_ID, 0, 5)));
+        seeder.append(new ParsleyEpochEvent.EpochCommitted(2, ParsleyVectorClock.empty().observe(T1_ID, 0, 5), Set.of("F", "")));
         seeder.append(new ParsleyEpochEvent.SnapshotRequested("F/0_0"));
-        seeder.append(new ParsleyEpochEvent.FrontierPublished("F/0_0", ParsleyClock.empty().observe(T1_ID, 0, 10)));
-        seeder.append(new ParsleyEpochEvent.FrontierPublished("0_0", ParsleyClock.empty().observe(T1_ID, 0, 10)));
-        seeder.append(new ParsleyEpochEvent.EpochCommitted(3, ParsleyClock.empty().observe(T1_ID, 0, 10), Set.of("F", "")));
+        seeder.append(new ParsleyEpochEvent.FrontierPublished("F/0_0", ParsleyVectorClock.empty().observe(T1_ID, 0, 10)));
+        seeder.append(new ParsleyEpochEvent.FrontierPublished("0_0", ParsleyVectorClock.empty().observe(T1_ID, 0, 10)));
+        seeder.append(new ParsleyEpochEvent.EpochCommitted(3, ParsleyVectorClock.empty().observe(T1_ID, 0, 10), Set.of("F", "")));
         runtime.runOnce();   // fold it: committedEpoch=(3, T1@10), admissionFloors[0_0]=(2, T1@5)
 
         Fixture f = new Fixture(runtime);   // 0_0 is a running member -> restart path -> seeds ITS admission floor
@@ -361,7 +361,7 @@ class ParsleyProcessorSourceLayerTest {
         void processRecord(String key, long offset) {
             context.setRecordMetadata("t1", 0, offset);
             Headers deps = ParsleyHeader.mutableHeaders();
-            deps.add(ParsleyHeader.CAUSAL_DEPENDENCIES, ParsleyClock.empty().toBytes());
+            deps.add(ParsleyHeader.CAUSAL_DEPENDENCIES, ParsleyVectorClock.empty().toBytes());
             processor.process(new Record<>(key, "v", 0L, deps));
         }
 
@@ -371,7 +371,7 @@ class ParsleyProcessorSourceLayerTest {
             context.setRecordMetadata("t1", 0, offset);
             Headers deps = ParsleyHeader.mutableHeaders();
             deps.add(ParsleyHeader.CAUSAL_DEPENDENCIES,
-                    ParsleyClock.empty().observe(depTopic, 0, depOffset).toBytes());
+                    ParsleyVectorClock.empty().observe(depTopic, 0, depOffset).toBytes());
             processor.process(new Record<>(key, key, 0L, deps));
         }
 

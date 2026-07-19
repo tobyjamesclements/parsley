@@ -49,7 +49,7 @@ class ParsleyEpochEventTest {
     @Test
     void frontierPublishedRoundTrips() {
         ParsleyEpochEvent event = new ParsleyEpochEvent.FrontierPublished(
-                "task-0_3", ParsleyClock.empty().observe(T1_ID, 0, 7).observe(T2_ID, 1, 3));
+                "task-0_3", ParsleyVectorClock.empty().observe(T1_ID, 0, 7).observe(T2_ID, 1, 3));
         assertEquals(event, ParsleyEpochEvent.fromBytes(event.toBytes()), "FrontierPublished must round-trip");
     }
 
@@ -57,7 +57,7 @@ class ParsleyEpochEventTest {
     @Test
     void epochCommittedRoundTrips() {
         ParsleyEpochEvent event = new ParsleyEpochEvent.EpochCommitted(
-                42L, ParsleyClock.empty().observe(T1_ID, 0, 100), Set.of("orders", "payments"));
+                42L, ParsleyVectorClock.empty().observe(T1_ID, 0, 100), Set.of("orders", "payments"));
         assertEquals(event, ParsleyEpochEvent.fromBytes(event.toBytes()),
                 "EpochCommitted must round-trip with its committed roster");
     }

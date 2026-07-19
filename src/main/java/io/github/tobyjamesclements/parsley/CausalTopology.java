@@ -70,7 +70,7 @@ public final class CausalTopology {
      * parsley.topology.validation}, since this is a correctness requirement, not a topology-shape lint.
      *
      * <p>Parsley's crash-safety reasoning (the frontier-before-buffer-removal write ordering throughout
-     * {@code ParsleyEngine}/{@code ParsleyFrontier}) narrows an at-least-once torn-write window to a
+     * {@code ParsleyEngine}/{@code ParsleyChannels}) narrows an at-least-once torn-write window to a
      * benign tear direction, but two separate changelog topics still have no cross-store atomicity under
      * at-least-once: a crash during the commit-time flush can, rarely, ack one topic's batch and lose the
      * other's. Exactly-once-v2 wraps every state-store changelog write, every produced record, and the
@@ -97,7 +97,7 @@ public final class CausalTopology {
      * causal-correctness hazard, not a topology-shape lint (the same footing as {@link #requireExactlyOnce}
      * and {@code ParsleyProcessor}'s compacted-source guard).
      *
-     * <p>The skip-bridge ({@link ParsleyFrontier#bridge}) treats an offset the consumer never returned as a
+     * <p>The skip-bridge ({@link ParsleyChannels#bridge}) treats an offset the consumer never returned as a
      * transaction marker or aborted record. A {@code LogAndContinue} deserialization handler, or a
      * continue-mode {@code processing.exception.handler}, drops a real record <em>after</em> the consumer
      * returned it — including, for the processing handler, {@code ParsleyProcessor}'s own deliberate
@@ -189,7 +189,7 @@ public final class CausalTopology {
         // Every causal source — business and passthrough alike — is declared with AutoOffsetReset.none()
         // so Kafka Streams never silently resets a partition whose committed offset has fallen out of
         // range (retention or deleteRecords outrunning a lagging consumer). Such a reset would jump the
-        // consumer forward over real committed records, and the skip-bridge (ParsleyFrontier.bridge)
+        // consumer forward over real committed records, and the skip-bridge (ParsleyChannels.bridge)
         // would fold those lost records as if they were transaction markers — releasing dependents before
         // their causes (a silent causal-order violation). With none() the consumer fails fast at fetch
         // instead, before any jumped record is delivered, so the bridge needs no runtime log-start check.

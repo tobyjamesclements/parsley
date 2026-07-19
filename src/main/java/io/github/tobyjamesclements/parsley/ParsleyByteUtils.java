@@ -11,8 +11,8 @@ import java.util.Set;
 
 /**
  * Wire-primitive read/write helpers shared by every Parsley type that hand-rolls its own binary
- * {@code toBytes}/{@code fromBytes} — {@link ParsleyClock}, {@link ParsleyEpochState}, {@link
- * ParsleyEpochEvent}, {@link ParsleyEpochBoundary}, {@link ParsleyFrontier}. Modelled on Kafka's own
+ * {@code toBytes}/{@code fromBytes} — {@link ParsleyVectorClock}, {@link ParsleyEpochState}, {@link
+ * ParsleyEpochEvent}, {@link ParsleyEpochBoundary}, {@link ParsleyChannels}. Modelled on Kafka's own
  * {@code org.apache.kafka.common.utils.ByteUtils}: a stateless utility of primitive encoders, not a
  * shared serializer — each type still owns its own version byte, framing, and {@code toBytes}/{@code
  * fromBytes} pair; only the repeated byte-fiddling boilerplate lives here.

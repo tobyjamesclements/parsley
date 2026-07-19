@@ -324,7 +324,7 @@ class ParsleyEpochLogTest {
     /** A {@link ParsleyEpochEvent.FrontierPublished} observing {@code T1@t1off, T2@t2off}. */
     private static ParsleyEpochEvent.FrontierPublished publish(String memberId, long t1off, long t2off) {
         return new ParsleyEpochEvent.FrontierPublished(memberId,
-                ParsleyClock.empty().observe(T1_ID, 0, t1off).observe(T2_ID, 0, t2off));
+                ParsleyVectorClock.empty().observe(T1_ID, 0, t1off).observe(T2_ID, 0, t2off));
     }
 
     /** Opens a round owned by {@code owner}. */

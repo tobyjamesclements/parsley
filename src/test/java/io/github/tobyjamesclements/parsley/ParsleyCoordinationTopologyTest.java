@@ -127,7 +127,7 @@ class ParsleyCoordinationTopologyTest {
 
     private static org.apache.kafka.common.header.Headers emptyDeps() {
         org.apache.kafka.common.header.Headers headers = ParsleyHeader.mutableHeaders();
-        headers.add(ParsleyHeader.CAUSAL_DEPENDENCIES, ParsleyClock.empty().toBytes());
+        headers.add(ParsleyHeader.CAUSAL_DEPENDENCIES, ParsleyVectorClock.empty().toBytes());
         return headers;
     }
 

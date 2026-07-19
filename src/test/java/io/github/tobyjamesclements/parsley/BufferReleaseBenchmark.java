@@ -91,7 +91,7 @@ public class BufferReleaseBenchmark {
     }
 
     static ParsleyMessage<String, String> syntheticRecord(String srcTopic, int partition, long offset,
-                                                          ParsleyClock deps) {
+                                                          ParsleyVectorClock deps) {
         return new ParsleyMessage<>(srcTopic, topicId(srcTopic), partition, offset, 0L, "k", "v", List.of(), deps);
     }
 
@@ -100,7 +100,7 @@ public class BufferReleaseBenchmark {
                                                        KeyValueStore<byte[], byte[]> forwardedKV,
                                                        ParsleySerializer<String, String> serializer) {
         return new ParsleyEngine<>(
-                ParsleyClock.empty(),
+                ParsleyVectorClock.empty(),
                 new StoreBackedBufferStore<>(bufferKV, serializer),
                 new StoreBackedCandidateIndex(waitKV),
                 new StoreBackedForwardedIndex(forwardedKV),
@@ -182,18 +182,18 @@ public class BufferReleaseBenchmark {
             engine = freshEngine(bufferKV, waitKV, forwardedKV, serializer);
 
             // Record 0 waits on the trigger coordinate; only it is released when the trigger fires.
-            ParsleyClock triggerDeps = ParsleyClock.empty().observe(topicId("trigger"), 0, 0L);
+            ParsleyVectorClock triggerDeps = ParsleyVectorClock.empty().observe(topicId("trigger"), 0, 0L);
             engine.receive(syntheticRecord("bench-0", 0, 0L, triggerDeps));
 
             // Records 1..n-1 each wait on a unique, never-satisfied coordinate.
             for (int i = 1; i < bench.n; i++) {
-                ParsleyClock deps = ParsleyClock.empty().observe(topicId("unique-" + i), 0, 0L);
+                ParsleyVectorClock deps = ParsleyVectorClock.empty().observe(topicId("unique-" + i), 0, 0L);
                 engine.receive(syntheticRecord("bench-" + i, 0, (long) i, deps));
             }
 
             // Trigger: source=(trigger-topic, 0, 0), empty deps — forwarded immediately, advances
             // frontier on the trigger coordinate, causing record 0 to drain.
-            trigger = syntheticRecord("trigger", 0, 0L, ParsleyClock.empty());
+            trigger = syntheticRecord("trigger", 0, 0L, ParsleyVectorClock.empty());
         }
     }
 
@@ -231,7 +231,7 @@ public class BufferReleaseBenchmark {
             clearWaitStore(forwardedKV);
             engine = freshEngine(bufferKV, waitKV, forwardedKV, serializer);
 
-            ParsleyClock triggerDeps = ParsleyClock.empty().observe(topicId("trigger"), 0, 0L);
+            ParsleyVectorClock triggerDeps = ParsleyVectorClock.empty().observe(topicId("trigger"), 0, 0L);
 
             // k records all waiting on the same trigger coordinate.
             for (int i = 0; i < bench.k; i++) {
@@ -240,11 +240,11 @@ public class BufferReleaseBenchmark {
 
             // FIXED_N - k filler records each waiting on a unique, never-satisfied coordinate.
             for (int i = bench.k; i < FIXED_N; i++) {
-                ParsleyClock deps = ParsleyClock.empty().observe(topicId("unique-" + i), 0, 0L);
+                ParsleyVectorClock deps = ParsleyVectorClock.empty().observe(topicId("unique-" + i), 0, 0L);
                 engine.receive(syntheticRecord("filler-" + i, 0, (long) i, deps));
             }
 
-            trigger = syntheticRecord("trigger", 0, 0L, ParsleyClock.empty());
+            trigger = syntheticRecord("trigger", 0, 0L, ParsleyVectorClock.empty());
         }
     }
 
@@ -285,21 +285,21 @@ public class BufferReleaseBenchmark {
             // Record 0 depends on the trigger; record i depends on record (i-1)'s source coordinate.
             // This forms an r-hop chain: advancing the trigger releases record 0, which in turn
             // releases record 1, ..., which releases record r-1.
-            ParsleyClock dep0 = ParsleyClock.empty().observe(topicId("trigger"), 0, 0L);
+            ParsleyVectorClock dep0 = ParsleyVectorClock.empty().observe(topicId("trigger"), 0, 0L);
             engine.receive(syntheticRecord("chain-0", 0, 0L, dep0));
 
             for (int i = 1; i < bench.r; i++) {
-                ParsleyClock dep = ParsleyClock.empty().observe(topicId("chain-" + (i - 1)), 0, (long) (i - 1));
+                ParsleyVectorClock dep = ParsleyVectorClock.empty().observe(topicId("chain-" + (i - 1)), 0, (long) (i - 1));
                 engine.receive(syntheticRecord("chain-" + i, 0, (long) i, dep));
             }
 
             // Filler records: FIXED_N - r records each waiting on a unique, never-satisfied coordinate.
             for (int i = bench.r; i < FIXED_N; i++) {
-                ParsleyClock deps = ParsleyClock.empty().observe(topicId("unique-" + i), 0, 0L);
+                ParsleyVectorClock deps = ParsleyVectorClock.empty().observe(topicId("unique-" + i), 0, 0L);
                 engine.receive(syntheticRecord("filler-" + i, 0, (long) i, deps));
             }
 
-            trigger = syntheticRecord("trigger", 0, 0L, ParsleyClock.empty());
+            trigger = syntheticRecord("trigger", 0, 0L, ParsleyVectorClock.empty());
         }
     }
 

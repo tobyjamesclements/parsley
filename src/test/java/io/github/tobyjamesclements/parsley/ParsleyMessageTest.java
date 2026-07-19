@@ -30,7 +30,7 @@ class ParsleyMessageTest {
      */
     @Test
     void fromDecodesDependenciesAndKeepsUserHeaders() {
-        ParsleyClock deps = ParsleyClock.empty().observe(DEP_ID, 0, 5);
+        ParsleyVectorClock deps = ParsleyVectorClock.empty().observe(DEP_ID, 0, 5);
         Headers headers = ParsleyHeader.mutableHeaders();
         headers.add("user", "u".getBytes());
         headers.add(ParsleyHeader.CAUSAL_DEPENDENCIES, deps.toBytes());
@@ -61,7 +61,7 @@ class ParsleyMessageTest {
     }
 
     /**
-     * {@code from} throws {@link ParsleyClockResolutionException} when the dependency header is
+     * {@code from} throws {@link ParsleyVectorClockResolutionException} when the dependency header is
      * present but cannot be decoded — the caller applies
      * {@code parsley.clock.resolution.failure.policy} rather than {@code from} silently degrading.
      *
@@ -72,7 +72,7 @@ class ParsleyMessageTest {
         Headers headers = ParsleyHeader.mutableHeaders();
         headers.add(ParsleyHeader.CAUSAL_DEPENDENCIES, new byte[]{9, 9, 9});
 
-        ParsleyClockResolutionException thrown = assertThrows(ParsleyClockResolutionException.class,
+        ParsleyVectorClockResolutionException thrown = assertThrows(ParsleyVectorClockResolutionException.class,
                 () -> ParsleyMessage.from(new Record<>("k", "v", 0L, headers), T1, 0L, T1_ID),
                 "an undecodable dependencies header must throw rather than decode as empty");
         assertEquals("t1", thrown.topic(), "the exception must carry the source topic");
@@ -95,7 +95,7 @@ class ParsleyMessageTest {
         headers.add(ParsleyHeader.CAUSAL_DEPENDENCIES, new byte[]{9, 9, 9});
 
         ParsleyMessage<String, String> message = ParsleyMessage.from(
-                new Record<>("k", "v", 0L, headers), T1, 0L, T1_ID, ParsleyClock.empty());
+                new Record<>("k", "v", 0L, headers), T1, 0L, T1_ID, ParsleyVectorClock.empty());
 
         assertTrue(message.dependencies().isEmpty(), "the supplied empty dependencies must be used");
         assertEquals(1, message.headers().size(), "only the user header is carried");

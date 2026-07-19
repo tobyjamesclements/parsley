@@ -1045,7 +1045,7 @@ class CausalStreamsTopologyTest {
      * the task.
      *
      * Asserts processing the record throws (wrapped by Kafka Streams in a {@code StreamsException}) with
-     * a {@link ParsleyClockResolutionException} cause, and the delegate never runs.
+     * a {@link ParsleyVectorClockResolutionException} cause, and the delegate never runs.
      */
     @Test
     void unresolvableClockHeaderFailsTheWholeTopologyClosed() {
@@ -1065,7 +1065,7 @@ class CausalStreamsTopologyTest {
             StreamsException thrown = assertThrows(StreamsException.class,
                     () -> t1.pipeInput(new TestRecord<>("k", "v", corrupted)),
                     "an undecodable causal-dependencies header must fail the task rather than be diverted");
-            assertEquals(ParsleyClockResolutionException.class, thrown.getCause().getClass(),
+            assertEquals(ParsleyVectorClockResolutionException.class, thrown.getCause().getClass(),
                     "the wrapped cause must be the clock-resolution guard's exception");
             assertTrue(processed.isEmpty(), "the delegate must never run on a record that fails closed at ingest");
         }
@@ -1075,7 +1075,7 @@ class CausalStreamsTopologyTest {
      * Regression test for BACKLOG.md's write-ordering-overclaim finding: {@link CausalTopology#assemble}
      * requires {@code processing.guarantee=exactly_once_v2} unconditionally — never gated by {@code
      * parsley.topology.validation}, unlike the partition-count/cleanup-policy checks above — since the
-     * crash-safety reasoning throughout {@code ParsleyEngine}/{@code ParsleyFrontier} (a torn write always
+     * crash-safety reasoning throughout {@code ParsleyEngine}/{@code ParsleyChannels} (a torn write always
      * lands on the benign side) only holds without exception under exactly-once's transactional
      * multi-store commit.
      *

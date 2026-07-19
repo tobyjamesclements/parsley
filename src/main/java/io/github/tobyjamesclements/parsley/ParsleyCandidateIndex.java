@@ -32,7 +32,7 @@ interface ParsleyCandidateIndex {
      * @param frontier the frontier at the time of buffering; unsatisfied means the required offset
      *                 exceeds {@code frontier}'s offset for that coordinate
      */
-    void index(long recordId, ParsleyClock required, ParsleyClock frontier);
+    void index(long recordId, ParsleyVectorClock required, ParsleyVectorClock frontier);
 
     /**
      * Returns all index entries for {@code (topicId, partition)} whose required offset is ≤

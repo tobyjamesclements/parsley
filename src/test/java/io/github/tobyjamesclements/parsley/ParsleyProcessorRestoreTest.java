@@ -49,7 +49,7 @@ class ParsleyProcessorRestoreTest {
     void initRestoresAPersistedFrontierAndItGatesAdmissionImmediately() {
         // Use an in-scope coordinate (T1_ID) so the restored frontier is not pruned away and
         // genuinely gates admission — the dep is satisfied by the frontier, not vacuously.
-        ParsleyClock restoredFrontier = ParsleyClock.empty().observe(T1_ID, 0, 5);
+        ParsleyVectorClock restoredFrontier = ParsleyVectorClock.empty().observe(T1_ID, 0, 5);
         TestKeyValueStore<String, byte[]> frontierStore =
                 new TestKeyValueStore<String, byte[]>(Comparator.naturalOrder(), "frontier");
         frontierStore.put(ParsleyStores.FRONTIER_KEY, frontierBlob(restoredFrontier));
@@ -97,10 +97,10 @@ class ParsleyProcessorRestoreTest {
                 "the record must never have entered the buffer store");
     }
 
-    // Builds the combined ParsleyFrontier "f" blob for a frontier clock with no channel clocks:
-    // [frontier-len:4][frontier bytes][channel-count:4 = 0]. Mirrors ParsleyFrontier#toBytes so a
+    // Builds the combined ParsleyChannels "f" blob for a frontier clock with no channel clocks:
+    // [frontier-len:4][frontier bytes][channel-count:4 = 0]. Mirrors ParsleyChannels#toBytes so a
     // restored frontier can be seeded into the frontier store.
-    private static byte[] frontierBlob(ParsleyClock frontier) {
+    private static byte[] frontierBlob(ParsleyVectorClock frontier) {
         try (java.io.ByteArrayOutputStream baos = new java.io.ByteArrayOutputStream();
              java.io.DataOutputStream dos = new java.io.DataOutputStream(baos)) {
             byte[] f = frontier.toBytes();

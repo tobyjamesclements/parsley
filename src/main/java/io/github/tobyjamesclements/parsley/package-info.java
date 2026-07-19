@@ -56,6 +56,24 @@
  *       combine dependency sets for a fan-in</li>
  * </ul>
  *
+ * <h2>Internal protocol modules</h2>
+ * Internally the implementation is organised as layered protocols, each presented in the module style
+ * of Cachin–Guerraoui–Rodrigues (<em>Introduction to Reliable and Secure Distributed Programming</em>):
+ * requests in, indications out, properties guaranteed. The channels module
+ * ({@link io.github.tobyjamesclements.parsley.ParsleyChannels}) adapts Kafka topic-partitions into the
+ * reliable FIFO channels classical causal broadcast assumes. Two Parsley-wide deviations from the
+ * textbook presentation apply to every module, stated once here:
+ * <ul>
+ *   <li><strong>Indications are pulled, not pushed.</strong> Deliveries come back as ordered return
+ *       values rather than through an upcall, because Kafka Streams' threading is synchronous. Same
+ *       semantics, pull style.</li>
+ *   <li><strong>The sender's clock increment is performed by the broker.</strong> In
+ *       Birman–Schiper–Stephenson the sender increments its own vector entry at send; here the
+ *       increment is the broker's offset assignment, learned asynchronously from producer
+ *       acknowledgements. This is why an outbound stamp cannot include the record's own
+ *       coordinate.</li>
+ * </ul>
+ *
  * <h2>Key value types</h2>
  * <ul>
  *   <li>{@link io.github.tobyjamesclements.parsley.CausalDependencies} &mdash; the causal requirements stamped on a record

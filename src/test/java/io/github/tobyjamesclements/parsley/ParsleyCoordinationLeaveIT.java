@@ -243,7 +243,7 @@ class ParsleyCoordinationLeaveIT {
     }
 
     private static ProducerRecord<String, String> stampEmptyDeps(ProducerRecord<String, String> record) {
-        record.headers().add(ParsleyHeader.CAUSAL_DEPENDENCIES, ParsleyClock.empty().toBytes());
+        record.headers().add(ParsleyHeader.CAUSAL_DEPENDENCIES, ParsleyVectorClock.empty().toBytes());
         return record;
     }
 

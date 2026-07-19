@@ -4,7 +4,7 @@ All binary encodings are big-endian. All lengths are in bytes.
 
 ## `parsley-causal-dependencies` header
 
-The public `CausalDependencies` facade and the internal `ParsleyClock` (node frontier) share this
+The public `CausalDependencies` facade and the internal `ParsleyVectorClock` (node frontier) share this
 encoding.
 
 ```
@@ -89,7 +89,7 @@ The namespace is the stage name `CausalTopology#assemble` derives (or an explici
 
 | Store | Key serde | Value serde | Purpose |
 |---|---|---|---|
-| `{ns}-frontier` | `String` | `byte[]` | Single entry at key `"f"`: the combined `ParsleyFrontier` blob — the node's contiguous delivered frontier clock plus the per-input-channel clocks (see below) |
+| `{ns}-frontier` | `String` | `byte[]` | Single entry at key `"f"`: the combined `ParsleyChannels` blob — the node's contiguous delivered frontier clock plus the per-input-channel clocks (see below) |
 | `{ns}-buffer` | `Long` | `byte[]` | Insertion sequence -> `bufferedAt` + serialised `ParsleyMessage` |
 | `{ns}-candidate-index` | `byte[]` | `byte[]` (empty) | 36-byte composite key -> presence marker |
 | `{ns}-forwarded-index` | `byte[]` | `byte[]` (empty) | 28-byte `(topicId, partition, offset)` key -> presence marker: offsets forwarded ahead of the contiguous frontier |
@@ -98,13 +98,13 @@ All four stores are persistent and changelog-backed. Changelog topic names follo
 
 ### The `{ns}-frontier` `"f"` value
 
-`ParsleyFrontier` folds two structures into the single `"f"` value (loaded once at init, rewritten on
+`ParsleyChannels` folds two structures into the single `"f"` value (loaded once at init, rewritten on
 change; the changelog dedups repeated puts by key per commit):
 
 ```
-[frontier-clock-len:4][frontier ParsleyClock bytes][channel-count:4]
+[frontier-clock-len:4][frontier ParsleyVectorClock bytes][channel-count:4]
   then, per channel:
-  [topicId MSB:8][topicId LSB:8][partition:4][channel-clock-len:4][channel ParsleyClock bytes]
+  [topicId MSB:8][topicId LSB:8][partition:4][channel-clock-len:4][channel ParsleyVectorClock bytes]
 ```
 
 The frontier clock is the node's contiguous delivered frontier. Each channel clock is the dependencies

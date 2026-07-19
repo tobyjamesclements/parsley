@@ -52,7 +52,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * <p>The stage passes each record through, and {@link ParsleyProcessorContext} stamps every forward with
  * the node's completeness, whose {@code src} entry is the contiguous frontier. Reading the stamps back off
  * {@code out} therefore reveals how far the frontier advanced. If the contiguous walk
- * ({@code ParsleyFrontier.deliver}) stalls at the first marker hole, the highest {@code src} offset in any
+ * ({@code ParsleyChannels.deliver}) stalls at the first marker hole, the highest {@code src} offset in any
  * stamp is capped at 2 even though all six records were delivered — confirming the frontier cannot track a
  * transactional topic past its first commit.
  */
@@ -89,7 +89,7 @@ class ParsleyEosFrontierDensityIT {
                 producer.beginTransaction();
                 for (int i = 0; i < 3; i++) {
                     ProducerRecord<String, String> record = new ProducerRecord<>(SRC, "k", "v" + batch + i);
-                    record.headers().add(ParsleyHeader.CAUSAL_DEPENDENCIES, ParsleyClock.empty().toBytes());
+                    record.headers().add(ParsleyHeader.CAUSAL_DEPENDENCIES, ParsleyVectorClock.empty().toBytes());
                     producer.send(record).get();
                 }
                 producer.commitTransaction();
@@ -107,7 +107,7 @@ class ParsleyEosFrontierDensityIT {
                     for (ConsumerRecord<String, String> record : out.poll(Duration.ofMillis(300))) {
                         Header stamp = record.headers().lastHeader(ParsleyHeader.CAUSAL_DEPENDENCIES);
                         if (stamp != null) {
-                            srcOffsetsInStamps.add(ParsleyClock.fromBytes(stamp.value()).offsetFor(srcId, 0));
+                            srcOffsetsInStamps.add(ParsleyVectorClock.fromBytes(stamp.value()).offsetFor(srcId, 0));
                         }
                     }
                     return srcOffsetsInStamps.size() >= 6;

@@ -55,7 +55,7 @@ interface ParsleyForwardedIndex {
      * one-shot sweep for entries that leaked below the contiguous frontier and can never be reached by
      * {@link #forwardedAfter}'s absorb walk again (it only ever scans strictly above the watermark), so
      * they would otherwise linger in a changelog-backed store forever. Purely cosmetic: {@link
-     * ParsleyFrontier} calls this once per restored coordinate at load, not on the hot delivery path.
+     * ParsleyChannels} calls this once per restored coordinate at load, not on the hot delivery path.
      *
      * @param topicId   the coordinate's topic UUID
      * @param partition the coordinate's partition

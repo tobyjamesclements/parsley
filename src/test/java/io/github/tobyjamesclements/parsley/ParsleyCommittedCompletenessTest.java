@@ -17,8 +17,8 @@ class ParsleyCommittedCompletenessTest {
 
     private static final Uuid T1_ID = Uuid.randomUuid();
 
-    private static ParsleyClock at(long offset) {
-        return ParsleyClock.empty().observe(T1_ID, 0, offset);
+    private static ParsleyVectorClock at(long offset) {
+        return ParsleyVectorClock.empty().observe(T1_ID, 0, offset);
     }
 
     /**
@@ -42,7 +42,7 @@ class ParsleyCommittedCompletenessTest {
      */
     @Test
     void liveValueBecomesPublishableOnlyOneFlushLater() {
-        AtomicReference<ParsleyClock> live = new AtomicReference<>(at(5));
+        AtomicReference<ParsleyVectorClock> live = new AtomicReference<>(at(5));
         ParsleyCommittedCompleteness hook = new ParsleyCommittedCompleteness("h");
         hook.bind(live::get, at(3));
 
@@ -67,13 +67,13 @@ class ParsleyCommittedCompletenessTest {
      */
     @Test
     void pendingValueIsNeverPublishableUntilProvenCommitted() {
-        AtomicReference<ParsleyClock> live = new AtomicReference<>(at(100));
+        AtomicReference<ParsleyVectorClock> live = new AtomicReference<>(at(100));
         ParsleyCommittedCompleteness hook = new ParsleyCommittedCompleteness("h");
-        hook.bind(live::get, ParsleyClock.empty());
+        hook.bind(live::get, ParsleyVectorClock.empty());
 
         hook.flush();                        // stages the optimistic 100; its transaction may yet abort
 
-        assertEquals(ParsleyClock.empty(), hook.committed(),
+        assertEquals(ParsleyVectorClock.empty(), hook.committed(),
                 "the optimistic snapshot staged at flush must not be publishable before a later flush "
                         + "proves its transaction committed — a crash here must leak nothing");
     }

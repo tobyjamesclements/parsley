@@ -55,11 +55,11 @@ class ParsleyEpochRuntimeTest {
 
         // Second round: both publish and the round commits epoch 2 with the merge-min of the frontiers.
         a.requestSnapshot("A");
-        a.publishFrontier("A", ParsleyClock.empty().observe(T1, 0, 10).observe(T2, 0, 5));
-        b.publishFrontier("B", ParsleyClock.empty().observe(T1, 0, 7).observe(T2, 0, 9));
+        a.publishFrontier("A", ParsleyVectorClock.empty().observe(T1, 0, 10).observe(T2, 0, 5));
+        b.publishFrontier("B", ParsleyVectorClock.empty().observe(T1, 0, 7).observe(T2, 0, 9));
         settle(log, a, b);
 
-        ParsleyClock expected = ParsleyClock.empty().observe(T1, 0, 7).observe(T2, 0, 5);
+        ParsleyVectorClock expected = ParsleyVectorClock.empty().observe(T1, 0, 7).observe(T2, 0, 5);
         assertEquals(2L, a.committedEpochId(), "epoch 2 is committed");
         assertEquals(expected, a.committedLowerBounds(), "epoch 2 floor is the per-coordinate min of A and B");
         assertEquals(a.committedLowerBounds(), b.committedLowerBounds(),
@@ -79,11 +79,11 @@ class ParsleyEpochRuntimeTest {
         assertTrue(a.committedEpoch().lowerBounds().isEmpty(), "genesis's pairing reports its own empty floor");
 
         a.requestSnapshot("A");
-        a.publishFrontier("A", ParsleyClock.empty().observe(T1, 0, 10).observe(T2, 0, 5));
-        b.publishFrontier("B", ParsleyClock.empty().observe(T1, 0, 7).observe(T2, 0, 9));
+        a.publishFrontier("A", ParsleyVectorClock.empty().observe(T1, 0, 10).observe(T2, 0, 5));
+        b.publishFrontier("B", ParsleyVectorClock.empty().observe(T1, 0, 7).observe(T2, 0, 9));
         settle(log, a, b);
 
-        ParsleyClock epoch2Floor = ParsleyClock.empty().observe(T1, 0, 7).observe(T2, 0, 5);
+        ParsleyVectorClock epoch2Floor = ParsleyVectorClock.empty().observe(T1, 0, 7).observe(T2, 0, 5);
         ParsleyEpochRuntime.CommittedEpoch committed = a.committedEpoch();
         assertEquals(2L, committed.epochId(), "epoch 2's pairing reports id 2");
         assertEquals(epoch2Floor, committed.lowerBounds(),
@@ -104,8 +104,8 @@ class ParsleyEpochRuntimeTest {
 
         a.requestSnapshot("A");
         b.requestSnapshot("B");   // coalesces — a round is already open
-        a.publishFrontier("A", ParsleyClock.empty().observe(T1, 0, 3));
-        b.publishFrontier("B", ParsleyClock.empty().observe(T1, 0, 8));
+        a.publishFrontier("A", ParsleyVectorClock.empty().observe(T1, 0, 3));
+        b.publishFrontier("B", ParsleyVectorClock.empty().observe(T1, 0, 8));
         settle(log, a, b);
 
         assertEquals(2L, a.committedEpochId(), "the coalesced round yields exactly one new epoch");
@@ -121,8 +121,8 @@ class ParsleyEpochRuntimeTest {
 
         genesisAB(log, a, b);
         a.requestSnapshot("A");
-        a.publishFrontier("A", ParsleyClock.empty().observe(T1, 0, 4).observe(T2, 0, 6));
-        b.publishFrontier("B", ParsleyClock.empty().observe(T1, 0, 9).observe(T2, 0, 2));
+        a.publishFrontier("A", ParsleyVectorClock.empty().observe(T1, 0, 4).observe(T2, 0, 6));
+        b.publishFrontier("B", ParsleyVectorClock.empty().observe(T1, 0, 9).observe(T2, 0, 2));
         settle(log, a, b);
 
         assertEquals(a.committedEpochId(), b.committedEpochId(), "both nodes agree on the committed epoch");
@@ -162,14 +162,14 @@ class ParsleyEpochRuntimeTest {
         genesisAB(log, a, b);   // A and B running at genesis (epoch 1)
 
         a.requestSnapshot("A");         // open round 2; A publishes, B stays silent
-        a.publishFrontier("A", ParsleyClock.empty().observe(T1, 0, 4));
+        a.publishFrontier("A", ParsleyVectorClock.empty().observe(T1, 0, 4));
         settle(log, a);                 // drive only A (B is "down")
 
         assertEquals(1L, a.committedEpochId(),
                 "the silent member B keeps round 2 open, so no new epoch commits (never evicted)");
         assertTrue(a.isRunningMember("B"), "the silent member remains a running member — it is not evicted");
 
-        b.publishFrontier("B", ParsleyClock.empty().observe(T1, 0, 6));   // B returns and publishes
+        b.publishFrontier("B", ParsleyVectorClock.empty().observe(T1, 0, 6));   // B returns and publishes
         settle(log, a, b);
         assertEquals(2L, a.committedEpochId(), "once B publishes, round 2 commits epoch 2");
         assertEquals(4L, a.committedLowerBounds().offsetFor(T1, 0),
@@ -191,7 +191,7 @@ class ParsleyEpochRuntimeTest {
         assertTrue(a.owesPublication("A"), "A owes a publication for the open round");
         assertTrue(b.owesPublication("B"), "B owes a publication for the open round");
 
-        a.publishFrontier("A", ParsleyClock.empty().observe(T1, 0, 2));
+        a.publishFrontier("A", ParsleyVectorClock.empty().observe(T1, 0, 2));
         settle(log, a, b);
         assertFalse(a.owesPublication("A"), "A no longer owes a publication once it has published");
         assertTrue(b.owesPublication("B"), "B still owes one, keeping the round open");
@@ -213,14 +213,14 @@ class ParsleyEpochRuntimeTest {
 
         genesisAB(log, a, b);
 
-        ParsleyClock aCompleteness = ParsleyClock.empty().observe(T1, 0, 3).observe(T2, 0, 6);
+        ParsleyVectorClock aCompleteness = ParsleyVectorClock.empty().observe(T1, 0, 3).observe(T2, 0, 6);
         a.registerLocalCompleteness("A", () -> aCompleteness);   // A's only publication channel
         b.requestSnapshot("B");   // open round 2; A never calls publishFrontier directly
-        b.publishFrontier("B", ParsleyClock.empty().observe(T1, 0, 9).observe(T2, 0, 1));
+        b.publishFrontier("B", ParsleyVectorClock.empty().observe(T1, 0, 9).observe(T2, 0, 1));
         settle(log, a, b);
 
         assertEquals(2L, a.committedEpochId(), "round 2 committed using A's auto-published completeness alone");
-        assertEquals(ParsleyClock.empty().observe(T1, 0, 3).observe(T2, 0, 1), a.committedLowerBounds(),
+        assertEquals(ParsleyVectorClock.empty().observe(T1, 0, 3).observe(T2, 0, 1), a.committedLowerBounds(),
                 "the floor merge-mins A's auto-published snapshot with B's directly published frontier");
     }
 

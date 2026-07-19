@@ -30,8 +30,8 @@ class StoreBackedCandidateIndexTest {
     @Test
     void indexOnlyStoresUnsatisfiedDependenciesAndFindCandidatesScansTheRealRange() {
         StoreBackedCandidateIndex index = new StoreBackedCandidateIndex(newRocksStore());
-        ParsleyClock frontier = ParsleyClock.empty().observe(TOPIC_ID, 0, 5);
-        ParsleyClock required = ParsleyClock.empty()
+        ParsleyVectorClock frontier = ParsleyVectorClock.empty().observe(TOPIC_ID, 0, 5);
+        ParsleyVectorClock required = ParsleyVectorClock.empty()
                 .observe(TOPIC_ID, 0, 10)   // ahead of the frontier (5) — must be indexed
                 .observe(TOPIC_ID, 1, 2);   // partition 1 has no frontier entry (-1) — must be indexed
 
@@ -59,8 +59,8 @@ class StoreBackedCandidateIndexTest {
     @Test
     void pruneRemovesTheCandidateFromTheRealStore() {
         StoreBackedCandidateIndex index = new StoreBackedCandidateIndex(newRocksStore());
-        ParsleyClock required = ParsleyClock.empty().observe(TOPIC_ID, 0, 10);
-        index.index(7L, required, ParsleyClock.empty());
+        ParsleyVectorClock required = ParsleyVectorClock.empty().observe(TOPIC_ID, 0, 10);
+        index.index(7L, required, ParsleyVectorClock.empty());
 
         List<ParsleyCandidateIndex.Candidate> before = index.findCandidates(TOPIC_ID, 0, 10);
         assertEquals(1, before.size(), "the candidate must be present before pruning");
@@ -82,9 +82,9 @@ class StoreBackedCandidateIndexTest {
     void findCandidatesIsScopedToItsCoordinate() {
         StoreBackedCandidateIndex index = new StoreBackedCandidateIndex(newRocksStore());
         Uuid otherTopicId = Uuid.randomUuid();
-        index.index(1L, ParsleyClock.empty().observe(TOPIC_ID, 0, 10), ParsleyClock.empty());
-        index.index(2L, ParsleyClock.empty().observe(TOPIC_ID, 1, 10), ParsleyClock.empty());
-        index.index(3L, ParsleyClock.empty().observe(otherTopicId, 0, 10), ParsleyClock.empty());
+        index.index(1L, ParsleyVectorClock.empty().observe(TOPIC_ID, 0, 10), ParsleyVectorClock.empty());
+        index.index(2L, ParsleyVectorClock.empty().observe(TOPIC_ID, 1, 10), ParsleyVectorClock.empty());
+        index.index(3L, ParsleyVectorClock.empty().observe(otherTopicId, 0, 10), ParsleyVectorClock.empty());
 
         List<ParsleyCandidateIndex.Candidate> candidates = index.findCandidates(TOPIC_ID, 0, 10);
 

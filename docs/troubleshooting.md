@@ -28,7 +28,7 @@ fast — the record is never dropped and never forwarded on an unproven premise.
   ```
   Buffered record could not be deserialised; failing fast (fail-closed). It remains in the buffer
   changelog for recovery. held record orders-0@42 (topicId C3o…, ts 178…) (writer schema id 1);
-  dependencies: ParsleyClock{Wvr…-0@0}; header keys: [...]; key bytes: 1; value bytes: 15
+  dependencies: ParsleyVectorClock{Wvr…-0@0}; header keys: [...]; key bytes: 1; value bytes: 15
   ```
 
 ### Recovery

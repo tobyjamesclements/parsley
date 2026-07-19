@@ -42,16 +42,16 @@ public class HeaderEvaluationBenchmark {
     @Param({"1", "2", "4", "8", "16", "32", "64"})
     public int clockWidth;
 
-    private ParsleyClock frontier;
-    private ParsleyClock dependencies;
+    private ParsleyVectorClock frontier;
+    private ParsleyVectorClock dependencies;
     private byte[] headerBytes;
 
     @Setup(Level.Trial)
     public void setUp() {
         // Build a frontier and matching dependencies with exactly clockWidth entries.
         // All entries have offset=1 so dominates() always traverses every entry (worst-case path).
-        ParsleyClock f = ParsleyClock.empty();
-        ParsleyClock deps = ParsleyClock.empty();
+        ParsleyVectorClock f = ParsleyVectorClock.empty();
+        ParsleyVectorClock deps = ParsleyVectorClock.empty();
         for (int i = 0; i < clockWidth; i++) {
             Uuid topicId = Uuid.randomUuid();
             f = f.observe(topicId, 0, 1L);
@@ -67,8 +67,8 @@ public class HeaderEvaluationBenchmark {
      * arrives at a Parsley consumer.
      */
     @Benchmark
-    public ParsleyClock deserialize() {
-        return ParsleyClock.fromBytes(headerBytes);
+    public ParsleyVectorClock deserialize() {
+        return ParsleyVectorClock.fromBytes(headerBytes);
     }
 
     /**

@@ -92,7 +92,7 @@ buffered.
 ### The completeness clock (the outbound stamp)
 
 The **completeness clock** is this node's own delivered frontier, max-merged with every input
-channel's advertised dependencies (`ParsleyClock.merge`), computed in `ParsleyFrontier.completeness()`.
+channel's advertised dependencies (`ParsleyVectorClock.merge`), computed in `ParsleyChannels.completeness()`.
 Each channel contributes the dependencies its records and watermarks have advertised (the pairwise-max
 over what it has seen on that channel). Forwarded records and protocol watermarks are stamped with
 this clock (`ParsleyProcessor` reads `engine.completeness()`): it carries *transitive ancestry* — a

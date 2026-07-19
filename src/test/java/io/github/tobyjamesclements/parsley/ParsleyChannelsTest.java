@@ -12,10 +12,10 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * Tests for {@link ParsleyFrontier}'s single-value persistence: the frontier clock and the per-channel
+ * Tests for {@link ParsleyChannels}'s single-value persistence: the frontier clock and the per-channel
  * clocks both round-trip through the one {@code "f"} key of the frontier store.
  */
-class ParsleyFrontierTest {
+class ParsleyChannelsTest {
 
     private static final Uuid T1_ID = Uuid.randomUuid();
     private static final Uuid T2_ID = Uuid.randomUuid();
@@ -23,7 +23,7 @@ class ParsleyFrontierTest {
 
     /**
      * The frontier clock and the channel clocks survive a reload from the same store — a fresh
-     * {@link ParsleyFrontier} over the store reproduces both the delivered frontier and completeness,
+     * {@link ParsleyChannels} over the store reproduces both the delivered frontier and completeness,
      * without replaying any records.
      */
     @Test
@@ -31,22 +31,22 @@ class ParsleyFrontierTest {
         TestKeyValueStore<String, byte[]> store =
                 new TestKeyValueStore<String, byte[]>(Comparator.naturalOrder(), "frontier");
 
-        ParsleyFrontier original = new ParsleyFrontier(store, new MockForwardedIndex());
+        ParsleyChannels original = new ParsleyChannels(store, new MockForwardedIndex());
         // Advance the contiguous frontier on T1 and record channel clocks for two inputs.
-        original.deliver(T1_ID, 0, 0);
-        original.deliver(T1_ID, 0, 1);
-        original.channelUpdate(T1_ID, 0, ParsleyClock.empty().observe(ANC_ID, 0, 4));
-        original.channelUpdate(T2_ID, 0, ParsleyClock.empty().observe(ANC_ID, 0, 7));
+        original.delivered(T1_ID, 0, 0);
+        original.delivered(T1_ID, 0, 1);
+        original.channelUpdate(T1_ID, 0, ParsleyVectorClock.empty().observe(ANC_ID, 0, 4));
+        original.channelUpdate(T2_ID, 0, ParsleyVectorClock.empty().observe(ANC_ID, 0, 7));
 
-        ParsleyClock frontierBefore = original.snapshot();
-        ParsleyClock completenessBefore = original.completeness();
+        ParsleyVectorClock frontierBefore = original.frontier();
+        ParsleyVectorClock completenessBefore = original.completeness();
 
         // Reload: a fresh frontier over the same store restores from the "f" blob alone.
-        ParsleyFrontier restored = new ParsleyFrontier(store, new MockForwardedIndex());
+        ParsleyChannels restored = new ParsleyChannels(store, new MockForwardedIndex());
 
-        assertEquals(frontierBefore, restored.snapshot(),
+        assertEquals(frontierBefore, restored.frontier(),
                 "the contiguous frontier clock must round-trip through the \"f\" blob");
-        assertEquals(1L, restored.snapshot().offsetFor(T1_ID, 0),
+        assertEquals(1L, restored.frontier().offsetFor(T1_ID, 0),
                 "T1 must restore at its delivered offset 1");
         assertEquals(completenessBefore, restored.completeness(),
                 "completeness must be identical after reload — both channel clocks restored");
@@ -72,14 +72,14 @@ class ParsleyFrontierTest {
     void pruneToScopeAlsoPrunesRetiredCoordinatesOutOfChannelClockValues() {
         TestKeyValueStore<String, byte[]> store =
                 new TestKeyValueStore<String, byte[]>(Comparator.naturalOrder(), "frontier");
-        ParsleyFrontier frontier = new ParsleyFrontier(store, new MockForwardedIndex());
+        ParsleyChannels frontier = new ParsleyChannels(store, new MockForwardedIndex());
 
         // T1's channel advertises transitive ancestry on ANC (an upstream topic) and on T2 (a
         // consumed sibling); ANC is then retired from the topology.
-        frontier.deliver(T1_ID, 0, 0);
-        frontier.deliver(T1_ID, 0, 1);
+        frontier.delivered(T1_ID, 0, 0);
+        frontier.delivered(T1_ID, 0, 1);
         frontier.channelUpdate(T1_ID, 0,
-                ParsleyClock.empty().observe(ANC_ID, 0, 4).observe(T2_ID, 0, 2));
+                ParsleyVectorClock.empty().observe(ANC_ID, 0, 4).observe(T2_ID, 0, 2));
         assertEquals(4L, frontier.completeness().offsetFor(ANC_ID, 0),
                 "precondition: the retired ancestor is advertised before the prune");
 
@@ -92,10 +92,10 @@ class ParsleyFrontierTest {
                         + "would re-advertise it downstream forever");
         assertEquals(2L, frontier.completeness().offsetFor(T2_ID, 0),
                 "live transitive ancestry inside the same channel clock must survive the prune");
-        assertEquals(1L, frontier.snapshot().offsetFor(T1_ID, 0),
+        assertEquals(1L, frontier.frontier().offsetFor(T1_ID, 0),
                 "the in-scope frontier entry must survive the prune");
 
-        ParsleyFrontier reloaded = new ParsleyFrontier(store, new MockForwardedIndex());
+        ParsleyChannels reloaded = new ParsleyChannels(store, new MockForwardedIndex());
         assertEquals(-1L, reloaded.completeness().offsetFor(ANC_ID, 0),
                 "the prune must persist: a reload must not resurrect the retired coordinate");
     }
@@ -114,20 +114,20 @@ class ParsleyFrontierTest {
     @Test
     void epochWindowClosesOnOwnFrontierNotOnAChannelsAdvertisedClaim() {
         ParsleyEpochState state = new ParsleyEpochState();
-        ParsleyFrontier frontier =
-                new ParsleyFrontier(ParsleyClock.empty(), new MockForwardedIndex(), true, state);
-        frontier.channelUpdate(T1_ID, 0, ParsleyClock.empty());          // the node's one input channel
-        frontier.recordEpochMarker(1, ParsleyClock.empty().observe(T1_ID, 0, 3), T1_ID, 0);
+        ParsleyChannels frontier =
+                new ParsleyChannels(ParsleyVectorClock.empty(), new MockForwardedIndex(), true, state);
+        frontier.channelUpdate(T1_ID, 0, ParsleyVectorClock.empty());          // the node's one input channel
+        frontier.recordEpochMarker(1, ParsleyVectorClock.empty().observe(T1_ID, 0, 3), T1_ID, 0);
 
         // A peer's watermark claims T1@3 on the channel clock — completeness now dominates the floor,
         // but this node has delivered nothing itself.
-        frontier.channelUpdate(T1_ID, 0, ParsleyClock.empty().observe(T1_ID, 0, 3));
+        frontier.channelUpdate(T1_ID, 0, ParsleyVectorClock.empty().observe(T1_ID, 0, 3));
         assertFalse(frontier.tryAdvanceEpoch(),
                 "a channel's advertised claim of T1@3 must not close the window — this node has not "
                         + "delivered T1@0..3 itself, so e-1 is not provably drained here");
 
         for (long offset = 0; offset <= 3; offset++) {
-            frontier.deliver(T1_ID, 0, offset);
+            frontier.delivered(T1_ID, 0, offset);
         }
         assertTrue(frontier.tryAdvanceEpoch(),
                 "once this node's own contiguous frontier reaches the floor, the window closes");
@@ -139,8 +139,8 @@ class ParsleyFrontierTest {
     private static final ParsleyEpoch FLOOR_T1_AT_100 = (topicId, partition) ->
             topicId.equals(T1_ID) ? 100L : ParsleyEpoch.NO_BOUND;
 
-    private static ParsleyFrontier flooredFrontier(ParsleyEpoch epoch) {
-        return new ParsleyFrontier(ParsleyClock.empty(), new MockForwardedIndex(), true, epoch);
+    private static ParsleyChannels flooredFrontier(ParsleyEpoch epoch) {
+        return new ParsleyChannels(ParsleyVectorClock.empty(), new MockForwardedIndex(), true, epoch);
     }
 
     /**
@@ -152,11 +152,11 @@ class ParsleyFrontierTest {
      */
     @Test
     void belowFloorDeliveryDoesNotAdvanceTheCausalFrontier() {
-        ParsleyFrontier frontier = flooredFrontier(FLOOR_T1_AT_100);
+        ParsleyChannels frontier = flooredFrontier(FLOOR_T1_AT_100);
 
-        frontier.deliver(T1_ID, 0, 5);
+        frontier.delivered(T1_ID, 0, 5);
 
-        assertEquals(-1L, frontier.snapshot().offsetFor(T1_ID, 0),
+        assertEquals(-1L, frontier.frontier().offsetFor(T1_ID, 0),
                 "a below-floor delivery (T1@5 under floor 100) must not advance the causal frontier");
         assertEquals(-1L, frontier.completeness().offsetFor(T1_ID, 0),
                 "the below-floor position must not surface in the completeness frontier");
@@ -171,15 +171,15 @@ class ParsleyFrontierTest {
      */
     @Test
     void seedEstablishesTheEpochOriginForANewCoordinate() {
-        ParsleyFrontier frontier = flooredFrontier(FLOOR_T1_AT_100);
+        ParsleyChannels frontier = flooredFrontier(FLOOR_T1_AT_100);
 
         assertTrue(frontier.seedIfFirstSeen(T1_ID, 0, 5),
                 "the first sighting of T1 must seed the frontier");
-        assertEquals(99L, frontier.snapshot().offsetFor(T1_ID, 0),
+        assertEquals(99L, frontier.frontier().offsetFor(T1_ID, 0),
                 "the seed must land at the epoch origin (startsAt - 1 = 99), not the below-floor offset 5");
 
-        frontier.deliver(T1_ID, 0, 100);
-        assertEquals(100L, frontier.snapshot().offsetFor(T1_ID, 0),
+        frontier.delivered(T1_ID, 0, 100);
+        assertEquals(100L, frontier.frontier().offsetFor(T1_ID, 0),
                 "an in-domain delivery (T1@100) walks contiguously from the origin 99 to 100");
         assertEquals(100L, frontier.completeness().offsetFor(T1_ID, 0),
                 "the in-domain position surfaces in completeness once delivered");
@@ -196,21 +196,21 @@ class ParsleyFrontierTest {
      */
     @Test
     void newNodeReplayingFromZeroParticipatesOnlyFromTheFloor() {
-        ParsleyFrontier frontier = flooredFrontier(FLOOR_T1_AT_100);
+        ParsleyChannels frontier = flooredFrontier(FLOOR_T1_AT_100);
 
         // Replay below-floor history with a gap at offset 6 — all out of domain.
         frontier.seedIfFirstSeen(T1_ID, 0, 5);
-        frontier.deliver(T1_ID, 0, 5);
-        frontier.deliver(T1_ID, 0, 7);   // gap at 6 — would stall a naive contiguous walk
+        frontier.delivered(T1_ID, 0, 5);
+        frontier.delivered(T1_ID, 0, 7);   // gap at 6 — would stall a naive contiguous walk
 
-        assertEquals(99L, frontier.snapshot().offsetFor(T1_ID, 0),
+        assertEquals(99L, frontier.frontier().offsetFor(T1_ID, 0),
                 "below-floor replay (with a gap) must leave the frontier at the epoch origin, not stalled below it");
         assertTrue(frontier.completeness().offsetFor(T1_ID, 0) < 100L,
                 "no in-domain T1 has been delivered yet, so completeness sits below the floor (at the origin)");
 
         // The first in-domain delivery advances the frontier from the origin, unaffected by the gap.
-        frontier.deliver(T1_ID, 0, 100);
-        assertEquals(100L, frontier.snapshot().offsetFor(T1_ID, 0),
+        frontier.delivered(T1_ID, 0, 100);
+        assertEquals(100L, frontier.frontier().offsetFor(T1_ID, 0),
                 "the below-floor gap must not stall the in-domain frontier; T1@100 walks 99 → 100");
         assertTrue(frontier.completeness().offsetFor(T1_ID, 0) >= 100L,
                 "completeness must confirm the delivered in-domain T1@100");
@@ -231,9 +231,9 @@ class ParsleyFrontierTest {
      */
     @Test
     void completenessIsTheUnflooredDeliveredFrontier() {
-        ParsleyFrontier frontier = flooredFrontier(FLOOR_T1_AT_100);
+        ParsleyChannels frontier = flooredFrontier(FLOOR_T1_AT_100);
 
-        frontier.channelUpdate(T2_ID, 0, ParsleyClock.empty().observe(T1_ID, 0, 5)); // below floor
+        frontier.channelUpdate(T2_ID, 0, ParsleyVectorClock.empty().observe(T1_ID, 0, 5)); // below floor
 
         assertEquals(5L, frontier.completeness().offsetFor(T1_ID, 0),
                 "completeness is unfloored: the below-floor T1@5 advertisement is carried through, not stripped");
@@ -249,16 +249,16 @@ class ParsleyFrontierTest {
     void epochStateRoundTripsThroughTheFrontierBlob() {
         TestKeyValueStore<String, byte[]> store =
                 new TestKeyValueStore<String, byte[]>(Comparator.naturalOrder(), "frontier");
-        ParsleyEpochState epoch = new ParsleyEpochState(ParsleyClock.empty().observe(T1_ID, 0, 5), 1);
-        ParsleyFrontier original = new ParsleyFrontier(store, new MockForwardedIndex(), epoch);
+        ParsleyEpochState epoch = new ParsleyEpochState(ParsleyVectorClock.empty().observe(T1_ID, 0, 5), 1);
+        ParsleyChannels original = new ParsleyChannels(store, new MockForwardedIndex(), epoch);
 
         // Adopt an epoch-2 boundary (marker on one channel); the window stays open (nothing dominates it).
-        original.recordEpochMarker(2, ParsleyClock.empty().observe(T1_ID, 0, 20), T1_ID, 0);
+        original.recordEpochMarker(2, ParsleyVectorClock.empty().observe(T1_ID, 0, 20), T1_ID, 0);
         assertTrue(epoch.isTransitioning(), "the boundary starts a transition");
 
         // Reload into a fresh epoch state over the same store.
         ParsleyEpochState reloadedEpoch = new ParsleyEpochState();
-        new ParsleyFrontier(store, new MockForwardedIndex(), reloadedEpoch);
+        new ParsleyChannels(store, new MockForwardedIndex(), reloadedEpoch);
 
         assertEquals(1L, reloadedEpoch.settledEpochId(), "the settled epoch survives the blob round-trip");
         assertEquals(5L, reloadedEpoch.startsAt(T1_ID, 0), "the effective floor stays F_{e-1}=5 mid-window after restart");
@@ -275,15 +275,15 @@ class ParsleyFrontierTest {
      */
     @Test
     void withoutAnEpochFloorSeedAndDeliverAreUnchanged() {
-        ParsleyFrontier frontier = flooredFrontier(ParsleyEpoch.NONE);
+        ParsleyChannels frontier = flooredFrontier(ParsleyEpoch.NONE);
 
         assertTrue(frontier.seedIfFirstSeen(T1_ID, 0, 5),
                 "the first sighting seeds the frontier even with no epoch floor");
-        assertEquals(4L, frontier.snapshot().offsetFor(T1_ID, 0),
+        assertEquals(4L, frontier.frontier().offsetFor(T1_ID, 0),
                 "with no floor the seed lands at offset - 1 = 4, exactly as before epochs");
 
-        frontier.deliver(T1_ID, 0, 5);
-        assertEquals(5L, frontier.snapshot().offsetFor(T1_ID, 0),
+        frontier.delivered(T1_ID, 0, 5);
+        assertEquals(5L, frontier.frontier().offsetFor(T1_ID, 0),
                 "a contiguous delivery advances the frontier normally under NONE");
         assertFalse(frontier.completeness().isEmpty(),
                 "completeness reflects the delivered position with no flooring applied");
@@ -298,9 +298,9 @@ class ParsleyFrontierTest {
     // receive: bridge() then, for a deliverable record, deliver().
 
     /** Models receive of a deliverable record: bridge the channel below it, then deliver it. */
-    private static void receiveAndDeliver(ParsleyFrontier frontier, Uuid topicId, int partition, long offset) {
+    private static void receiveAndDeliver(ParsleyChannels frontier, Uuid topicId, int partition, long offset) {
         frontier.bridge(topicId, partition, offset);
-        frontier.deliver(topicId, partition, offset);
+        frontier.delivered(topicId, partition, offset);
     }
 
     /**
@@ -311,13 +311,13 @@ class ParsleyFrontierTest {
      */
     @Test
     void bridgeCrossesAConsumerSkippedOffsetSoTheContiguousWalkReachesTheEnd() {
-        ParsleyFrontier frontier = new ParsleyFrontier(ParsleyClock.empty(), new MockForwardedIndex());
+        ParsleyChannels frontier = new ParsleyChannels(ParsleyVectorClock.empty(), new MockForwardedIndex());
 
         for (long offset : new long[] {0, 1, 2, 4, 5, 6}) {   // 3 is a commit marker the consumer skips
             receiveAndDeliver(frontier, T1_ID, 0, offset);
         }
 
-        assertEquals(6L, frontier.snapshot().offsetFor(T1_ID, 0),
+        assertEquals(6L, frontier.frontier().offsetFor(T1_ID, 0),
                 "the frontier must advance past the skipped marker offset 3 to cover all delivered "
                         + "records (0,1,2,4,5,6); a stall at 2 is the density bug");
     }
@@ -329,18 +329,18 @@ class ParsleyFrontierTest {
      */
     @Test
     void bridgeReturnsTrueOnlyWhenItAdvancesTheFrontier() {
-        ParsleyFrontier frontier = new ParsleyFrontier(ParsleyClock.empty(), new MockForwardedIndex());
+        ParsleyChannels frontier = new ParsleyChannels(ParsleyVectorClock.empty(), new MockForwardedIndex());
 
         assertFalse(frontier.bridge(T1_ID, 0, 0),
                 "the first sighting of a channel bridges nothing (its baseline is the seed's concern)");
-        frontier.deliver(T1_ID, 0, 0);
+        frontier.delivered(T1_ID, 0, 0);
         receiveAndDeliver(frontier, T1_ID, 0, 1);
         receiveAndDeliver(frontier, T1_ID, 0, 2);
 
         assertTrue(frontier.bridge(T1_ID, 0, 4),
                 "bridging the marker at 3 (frontier at 2) advances the frontier to 3 — the walk crosses "
                         + "the hole — so it must return true to trigger a cascade");
-        assertEquals(3L, frontier.snapshot().offsetFor(T1_ID, 0),
+        assertEquals(3L, frontier.frontier().offsetFor(T1_ID, 0),
                 "the frontier advances to the marker offset itself once crossed; the real record at 4 is "
                         + "delivered separately");
         assertFalse(frontier.bridge(T1_ID, 0, 4),
@@ -355,7 +355,7 @@ class ParsleyFrontierTest {
      */
     @Test
     void bridgeDoesNotAdvancePastAHeldBusinessRecord() {
-        ParsleyFrontier frontier = new ParsleyFrontier(ParsleyClock.empty(), new MockForwardedIndex());
+        ParsleyChannels frontier = new ParsleyChannels(ParsleyVectorClock.empty(), new MockForwardedIndex());
 
         receiveAndDeliver(frontier, T1_ID, 0, 0);
         receiveAndDeliver(frontier, T1_ID, 0, 1);
@@ -364,12 +364,12 @@ class ParsleyFrontierTest {
         // Record at 4 arrives; offset 3 between the held 2 and 4 is a marker.
         assertFalse(frontier.bridge(T1_ID, 0, 4),
                 "bridging 3 must not advance the frontier while 2 is still held");
-        assertEquals(1L, frontier.snapshot().offsetFor(T1_ID, 0),
+        assertEquals(1L, frontier.frontier().offsetFor(T1_ID, 0),
                 "the held record at 2 blocks the walk; the frontier stays at 1 despite the bridged marker");
 
         // Once the held 2 is delivered, the walk absorbs 2 and the previously-bridged 3 in one run.
-        frontier.deliver(T1_ID, 0, 2);
-        assertEquals(3L, frontier.snapshot().offsetFor(T1_ID, 0),
+        frontier.delivered(T1_ID, 0, 2);
+        assertEquals(3L, frontier.frontier().offsetFor(T1_ID, 0),
                 "delivering the held 2 lets the walk absorb 2 and the bridged marker 3 together");
     }
 
@@ -383,14 +383,14 @@ class ParsleyFrontierTest {
     @Test
     void bridgeFastPathFoldsALargeSkippedRunWithoutMarkingEachOffset() {
         MockForwardedIndex forwardedIndex = new MockForwardedIndex();
-        ParsleyFrontier frontier = new ParsleyFrontier(ParsleyClock.empty(), forwardedIndex);
+        ParsleyChannels frontier = new ParsleyChannels(ParsleyVectorClock.empty(), forwardedIndex);
 
         receiveAndDeliver(frontier, T1_ID, 0, 0);          // frontier and highest-received both at 0
 
         // A record at 1_000_000 with the entire (0, 1_000_000) run consumer-skipped (a large aborted txn).
         assertTrue(frontier.bridge(T1_ID, 0, 1_000_000L),
                 "bridging a large skipped run must advance the frontier");
-        assertEquals(999_999L, frontier.snapshot().offsetFor(T1_ID, 0),
+        assertEquals(999_999L, frontier.frontier().offsetFor(T1_ID, 0),
                 "the whole skipped run folds into the frontier, up to just below the received offset");
         assertTrue(forwardedIndex.forwardedAfter(T1_ID, 0, -1L).isEmpty(),
                 "the fast path must mark none of the skipped offsets in the forwarded index — O(1), not O(gap)");
@@ -407,23 +407,23 @@ class ParsleyFrontierTest {
     void highestReceivedPersistsSoBridgeStaysExactAcrossRestart() {
         TestKeyValueStore<String, byte[]> store =
                 new TestKeyValueStore<String, byte[]>(Comparator.naturalOrder(), "frontier");
-        ParsleyFrontier original = new ParsleyFrontier(store, new MockForwardedIndex());
+        ParsleyChannels original = new ParsleyChannels(store, new MockForwardedIndex());
         for (long offset : new long[] {0, 1, 2, 4}) {   // 3 skipped; highest received becomes 4
             receiveAndDeliver(original, T1_ID, 0, offset);
         }
-        assertEquals(4L, original.snapshot().offsetFor(T1_ID, 0), "precondition: frontier reached 4 before restart");
+        assertEquals(4L, original.frontier().offsetFor(T1_ID, 0), "precondition: frontier reached 4 before restart");
 
         // Reload from the same store: the highest-received map restores from the "f" blob alone.
-        ParsleyFrontier restored = new ParsleyFrontier(store, new MockForwardedIndex());
+        ParsleyChannels restored = new ParsleyChannels(store, new MockForwardedIndex());
 
         // A record at 6 arrives (offset 5 a marker). Because highest-received restored as 4, the gap at
         // 5 is recognised and bridged.
         assertTrue(restored.bridge(T1_ID, 0, 6),
                 "the restored highest-received (4) lets bridge recognise the marker gap at 5 and advance");
-        assertEquals(5L, restored.snapshot().offsetFor(T1_ID, 0),
+        assertEquals(5L, restored.frontier().offsetFor(T1_ID, 0),
                 "the frontier crosses the bridged marker 5; a first-sighting misread would have stalled at 4");
-        restored.deliver(T1_ID, 0, 6);
-        assertEquals(6L, restored.snapshot().offsetFor(T1_ID, 0),
+        restored.delivered(T1_ID, 0, 6);
+        assertEquals(6L, restored.frontier().offsetFor(T1_ID, 0),
                 "delivering the real record at 6 then advances the frontier to 6");
     }
 
@@ -438,7 +438,7 @@ class ParsleyFrontierTest {
 
     /**
      * Proves the ordering directly: a {@link ParsleyForwardedIndex} that, at the exact moment {@code
-     * unmark()} is called, opens a second {@link ParsleyFrontier} over the same store must already see
+     * unmark()} is called, opens a second {@link ParsleyChannels} over the same store must already see
      * the new frontier value — i.e. {@code persist()} has already committed by the time any absorbed
      * entry is pruned.
      */
@@ -463,8 +463,8 @@ class ParsleyFrontierTest {
             public void unmark(Uuid topicId, int partition, long offset) {
                 // A fresh frontier over the same store sees only what has actually been written —
                 // not this call's own in-progress in-memory state.
-                ParsleyFrontier persistedView = new ParsleyFrontier(store, new MockForwardedIndex());
-                persistedOffsetAtUnmarkTime.add(persistedView.snapshot().offsetFor(T1_ID, 0));
+                ParsleyChannels persistedView = new ParsleyChannels(store, new MockForwardedIndex());
+                persistedOffsetAtUnmarkTime.add(persistedView.frontier().offsetFor(T1_ID, 0));
                 delegate.unmark(topicId, partition, offset);
             }
 
@@ -474,8 +474,8 @@ class ParsleyFrontierTest {
             }
         };
 
-        ParsleyFrontier frontier = new ParsleyFrontier(store, recordingIndex);
-        frontier.deliver(T1_ID, 0, 0);
+        ParsleyChannels frontier = new ParsleyChannels(store, recordingIndex);
+        frontier.delivered(T1_ID, 0, 0);
 
         assertEquals(List.of(0L), persistedOffsetAtUnmarkTime,
                 "by the time the absorbed entry is pruned, the frontier store must already durably "
@@ -514,11 +514,11 @@ class ParsleyFrontierTest {
                 delegate.pruneAtOrBelow(topicId, partition, watermark);
             }
         };
-        ParsleyFrontier frontier = new ParsleyFrontier(ParsleyClock.empty(), crashyIndex);
+        ParsleyChannels frontier = new ParsleyChannels(ParsleyVectorClock.empty(), crashyIndex);
 
-        frontier.deliver(T1_ID, 0, 0);
+        frontier.delivered(T1_ID, 0, 0);
 
-        assertEquals(0L, frontier.snapshot().offsetFor(T1_ID, 0),
+        assertEquals(0L, frontier.frontier().offsetFor(T1_ID, 0),
                 "the frontier already advanced to 0 — persist() ran before the (lost) unmark");
         assertEquals(List.of(0L), delegate.forwardedAfter(T1_ID, 0, -1),
                 "the now-redundant entry for the already-absorbed offset lingers, harmlessly, in the "
@@ -526,9 +526,9 @@ class ParsleyFrontierTest {
 
         // A later delivery must proceed normally despite the leaked entry sitting below the frontier —
         // this is the crux of the regression: the tear must never strand the coordinate.
-        frontier.deliver(T1_ID, 0, 1);
+        frontier.delivered(T1_ID, 0, 1);
 
-        assertEquals(1L, frontier.snapshot().offsetFor(T1_ID, 0),
+        assertEquals(1L, frontier.frontier().offsetFor(T1_ID, 0),
                 "a subsequent delivery must advance normally, unaffected by the leaked stale entry "
                         + "below the frontier");
     }
@@ -546,17 +546,17 @@ class ParsleyFrontierTest {
     @Test
     void replayingAnAlreadyDeliveredOffsetLeavesNoForwardedIndexEntry() {
         MockForwardedIndex forwardedIndex = new MockForwardedIndex();
-        ParsleyFrontier frontier = new ParsleyFrontier(ParsleyClock.empty(), forwardedIndex);
+        ParsleyChannels frontier = new ParsleyChannels(ParsleyVectorClock.empty(), forwardedIndex);
 
-        frontier.deliver(T1_ID, 0, 0);
-        frontier.deliver(T1_ID, 0, 1);
-        assertEquals(1L, frontier.snapshot().offsetFor(T1_ID, 0), "frontier advances normally through 0, 1");
+        frontier.delivered(T1_ID, 0, 0);
+        frontier.delivered(T1_ID, 0, 1);
+        assertEquals(1L, frontier.frontier().offsetFor(T1_ID, 0), "frontier advances normally through 0, 1");
 
         // Replay: offset 0 (below the watermark) and offset 1 (exactly at it) redelivered.
-        frontier.deliver(T1_ID, 0, 0);
-        frontier.deliver(T1_ID, 0, 1);
+        frontier.delivered(T1_ID, 0, 0);
+        frontier.delivered(T1_ID, 0, 1);
 
-        assertEquals(1L, frontier.snapshot().offsetFor(T1_ID, 0),
+        assertEquals(1L, frontier.frontier().offsetFor(T1_ID, 0),
                 "a replay of an already-delivered offset must not move the frontier");
         assertTrue(forwardedIndex.forwardedAfter(T1_ID, 0, -1).isEmpty(),
                 "a replayed already-delivered offset must never be marked in the forwarded index — the "
@@ -566,10 +566,10 @@ class ParsleyFrontierTest {
 
     /**
      * Regression test for BACKLOG.md's LOW item: a stale below-watermark forwarded-index entry — left
-     * over from the acknowledged benign tear direction {@link #deliver}'s Javadoc describes (frontier
+     * over from the acknowledged benign tear direction {@link #delivered}'s Javadoc describes (frontier
      * persisted, unmark lost) — is never reachable by the absorb walk again (it only scans strictly
      * above the watermark), so it would otherwise linger in the changelog-backed store forever. A fresh
-     * {@link ParsleyFrontier} over a restored store must sweep it away once, at load.
+     * {@link ParsleyChannels} over a restored store must sweep it away once, at load.
      *
      * <p>Mirrors {@link #aCrashBetweenPersistAndUnmarkLeavesOnlyAHarmlessStaleEntryNeverAWedge}'s setup
      * (a forwarded index that swallows one {@code unmark} call) but then reloads a second frontier over
@@ -605,15 +605,15 @@ class ParsleyFrontierTest {
             }
         };
 
-        ParsleyFrontier original = new ParsleyFrontier(store, crashyIndex);
-        original.deliver(T1_ID, 0, 0); // offset 0 absorbed, but its unmark is lost — leaks below the watermark
-        original.deliver(T1_ID, 0, 1); // watermark advances to 1; the offset-0 entry is now stale
+        ParsleyChannels original = new ParsleyChannels(store, crashyIndex);
+        original.delivered(T1_ID, 0, 0); // offset 0 absorbed, but its unmark is lost — leaks below the watermark
+        original.delivered(T1_ID, 0, 1); // watermark advances to 1; the offset-0 entry is now stale
 
         assertEquals(List.of(0L), delegate.forwardedAfter(T1_ID, 0, -1),
                 "the stale entry must still be sitting in the forwarded index before any restore");
 
         // Restore: a fresh frontier over the same durable store must sweep the stale entry away.
-        new ParsleyFrontier(store, delegate);
+        new ParsleyChannels(store, delegate);
 
         assertTrue(delegate.forwardedAfter(T1_ID, 0, -1).isEmpty(),
                 "restoring the frontier must sweep the stale below-watermark entry left by the crash");

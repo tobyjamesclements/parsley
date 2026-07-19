@@ -83,12 +83,12 @@ class ParsleyProcessorEpochBoundaryTest {
         // Inject an epoch-boundary marker on t1: a control record carrying the serialised ParsleyEpochBoundary,
         // a null value, and no business payload.
         context.setRecordMetadata("t1", 0, 0);
-        ParsleyEpochBoundary boundary = new ParsleyEpochBoundary(1, ParsleyClock.empty().observe(T1_ID, 0, 10));
+        ParsleyEpochBoundary boundary = new ParsleyEpochBoundary(1, ParsleyVectorClock.empty().observe(T1_ID, 0, 10));
         Headers headers = ParsleyHeader.mutableHeaders();
         headers.add(ParsleyHeader.EPOCH_BOUNDARY, boundary.toBytes());
         // Carries completeness this task's t1 channel does not already know, so the marker genuinely
         // advances the channel and the relay fires.
-        headers.add(ParsleyHeader.CAUSAL_DEPENDENCIES, ParsleyClock.empty().observe(UPSTREAM_ID, 0, 3).toBytes());
+        headers.add(ParsleyHeader.CAUSAL_DEPENDENCIES, ParsleyVectorClock.empty().observe(UPSTREAM_ID, 0, 3).toBytes());
         processor.process(new Record<>("k", null, 0L, headers));
 
         assertTrue(processed.isEmpty(), "the epoch-boundary marker must never reach the user delegate");
@@ -160,18 +160,18 @@ class ParsleyProcessorEpochBoundaryTest {
         // delegate is not invoked yet (and so does not throw yet).
         context.setRecordMetadata("t2", 0, 5);
         Headers held = ParsleyHeader.mutableHeaders();
-        held.add(ParsleyHeader.CAUSAL_DEPENDENCIES, ParsleyClock.empty().observe(T1_ID, 0, 0).toBytes());
+        held.add(ParsleyHeader.CAUSAL_DEPENDENCIES, ParsleyVectorClock.empty().observe(T1_ID, 0, 0).toBytes());
         processor.process(new Record<>("k", "v", 0L, held));
         assertEquals(1, bufferStore.approximateNumEntries(), "the t2@5 record must be held on t1@0");
 
         // An epoch-boundary marker arrives on t1@0. Its own delivery advances the t1 frontier to 0,
         // releasing the held record into the delegate — which throws.
         context.setRecordMetadata("t1", 0, 0);
-        ParsleyEpochBoundary boundary = new ParsleyEpochBoundary(1, ParsleyClock.empty().observe(T1_ID, 0, 10));
+        ParsleyEpochBoundary boundary = new ParsleyEpochBoundary(1, ParsleyVectorClock.empty().observe(T1_ID, 0, 10));
         Headers markerHeaders = ParsleyHeader.mutableHeaders();
         markerHeaders.add(ParsleyHeader.EPOCH_BOUNDARY, boundary.toBytes());
         markerHeaders.add(ParsleyHeader.CAUSAL_DEPENDENCIES,
-                ParsleyClock.empty().observe(UPSTREAM_ID, 0, 3).toBytes());
+                ParsleyVectorClock.empty().observe(UPSTREAM_ID, 0, 3).toBytes());
         Record<String, String> marker = new Record<>("k", null, 0L, markerHeaders);
 
         RuntimeException thrown = assertThrows(RuntimeException.class, () -> processor.process(marker),
@@ -234,10 +234,10 @@ class ParsleyProcessorEpochBoundaryTest {
         // An epoch-boundary marker on t1 carrying EMPTY completeness: the channel (an empty clock
         // dominates an empty clock) learns nothing new from it, exactly as on an idle, quiesced round.
         context.setRecordMetadata("t1", 0, 0);
-        ParsleyEpochBoundary boundary = new ParsleyEpochBoundary(1, ParsleyClock.empty().observe(T1_ID, 0, 10));
+        ParsleyEpochBoundary boundary = new ParsleyEpochBoundary(1, ParsleyVectorClock.empty().observe(T1_ID, 0, 10));
         Headers headers = ParsleyHeader.mutableHeaders();
         headers.add(ParsleyHeader.EPOCH_BOUNDARY, boundary.toBytes());
-        headers.add(ParsleyHeader.CAUSAL_DEPENDENCIES, ParsleyClock.empty().toBytes());
+        headers.add(ParsleyHeader.CAUSAL_DEPENDENCIES, ParsleyVectorClock.empty().toBytes());
         processor.process(new Record<>("k", null, 0L, headers));
 
         assertTrue(processed.isEmpty(), "the epoch-boundary marker must never reach the user delegate");
@@ -293,13 +293,13 @@ class ParsleyProcessorEpochBoundaryTest {
         context.addStateStore(new ParsleyCommittedCompleteness("frontier-commit-hook"));
         processor.init(context);
 
-        ParsleyEpochBoundary boundary = new ParsleyEpochBoundary(1, ParsleyClock.empty().observe(T1_ID, 0, 10));
+        ParsleyEpochBoundary boundary = new ParsleyEpochBoundary(1, ParsleyVectorClock.empty().observe(T1_ID, 0, 10));
 
         // First sight on t1@0: relays (newly recorded).
         context.setRecordMetadata("t1", 0, 0);
         Headers first = ParsleyHeader.mutableHeaders();
         first.add(ParsleyHeader.EPOCH_BOUNDARY, boundary.toBytes());
-        first.add(ParsleyHeader.CAUSAL_DEPENDENCIES, ParsleyClock.empty().toBytes());
+        first.add(ParsleyHeader.CAUSAL_DEPENDENCIES, ParsleyVectorClock.empty().toBytes());
         processor.process(new Record<>("k", null, 0L, first));
         assertEquals(1, context.forwarded().size(), "the boundary must relay once on its first sight");
 
@@ -307,7 +307,7 @@ class ParsleyProcessorEpochBoundaryTest {
         context.setRecordMetadata("t1", 0, 1);
         Headers duplicate = ParsleyHeader.mutableHeaders();
         duplicate.add(ParsleyHeader.EPOCH_BOUNDARY, boundary.toBytes());
-        duplicate.add(ParsleyHeader.CAUSAL_DEPENDENCIES, ParsleyClock.empty().toBytes());
+        duplicate.add(ParsleyHeader.CAUSAL_DEPENDENCIES, ParsleyVectorClock.empty().toBytes());
         processor.process(new Record<>("k", null, 0L, duplicate));
 
         assertEquals(1, context.forwarded().size(),
@@ -366,7 +366,7 @@ class ParsleyProcessorEpochBoundaryTest {
         // A business record on t2@5 depending on t1@0 is held: t1 has never been observed.
         context.setRecordMetadata("t2", 0, 5);
         Headers held = ParsleyHeader.mutableHeaders();
-        held.add(ParsleyHeader.CAUSAL_DEPENDENCIES, ParsleyClock.empty().observe(T1_ID, 0, 0).toBytes());
+        held.add(ParsleyHeader.CAUSAL_DEPENDENCIES, ParsleyVectorClock.empty().observe(T1_ID, 0, 0).toBytes());
         processor.process(new Record<>("k", "v", 0L, held));
         assertEquals(1, bufferStore.approximateNumEntries(), "the t2@5 record must be held on t1@0");
 
@@ -374,7 +374,7 @@ class ParsleyProcessorEpochBoundaryTest {
         // cannot be decoded, but its own offset (t1@0) must still be absorbed — which satisfies the held
         // record's t1@0 dependency and releases it.
         context.setRecordMetadata("t1", 0, 0);
-        ParsleyEpochBoundary boundary = new ParsleyEpochBoundary(1, ParsleyClock.empty().observe(T1_ID, 0, 10));
+        ParsleyEpochBoundary boundary = new ParsleyEpochBoundary(1, ParsleyVectorClock.empty().observe(T1_ID, 0, 10));
         Headers markerHeaders = ParsleyHeader.mutableHeaders();
         markerHeaders.add(ParsleyHeader.EPOCH_BOUNDARY, boundary.toBytes());
         markerHeaders.add(ParsleyHeader.CAUSAL_DEPENDENCIES, new byte[]{0x7f, 0x13, 0x37, 0x42});

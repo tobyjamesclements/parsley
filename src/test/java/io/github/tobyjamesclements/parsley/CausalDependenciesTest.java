@@ -15,7 +15,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 /**
  * Tests the public {@link CausalDependencies} facade: building, wire serialisation, and reading the
  * stamped header off records. The vector-clock semantics it delegates to are covered by
- * {@link ParsleyClockTest}.
+ * {@link ParsleyVectorClockTest}.
  */
 class CausalDependenciesTest {
 

@@ -24,7 +24,7 @@ import java.util.List;
  */
 record ParsleyMessage<K, V>(String topic, Uuid topicId, int partition, long offset, long timestamp,
                             @Nullable K key, @Nullable V value, List<ParsleyHeader> headers,
-                            ParsleyClock dependencies) {
+                            ParsleyVectorClock dependencies) {
 
     ParsleyMessage {
         headers = List.copyOf(headers);
@@ -36,12 +36,12 @@ record ParsleyMessage<K, V>(String topic, Uuid topicId, int partition, long offs
      * (absent → empty, vacuously satisfied), and all other non-internal headers are carried as user
      * headers.
      *
-     * @throws ParsleyClockResolutionException if the dependencies header is present but cannot be
+     * @throws ParsleyVectorClockResolutionException if the dependencies header is present but cannot be
      *     decoded; the caller fails the task fast rather than forward the record on an unknown premise
      */
     static <K, V> ParsleyMessage<K, V> from(Record<K, V> record, TopicPartition source,
                                             long offset, Uuid topicId) {
-        ParsleyClock dependencies = decodeDependencies(encodedDependencies(record), source, topicId, offset);
+        ParsleyVectorClock dependencies = decodeDependencies(encodedDependencies(record), source, topicId, offset);
         return from(record, source, offset, topicId, dependencies);
     }
 
@@ -49,7 +49,7 @@ record ParsleyMessage<K, V>(String topic, Uuid topicId, int partition, long offs
      * Builds a message with caller-supplied {@code dependencies}, skipping header decoding.
      */
     static <K, V> ParsleyMessage<K, V> from(Record<K, V> record, TopicPartition source,
-                                            long offset, Uuid topicId, ParsleyClock dependencies) {
+                                            long offset, Uuid topicId, ParsleyVectorClock dependencies) {
         return new ParsleyMessage<>(source.topic(), topicId, source.partition(), offset,
                 record.timestamp(), record.key(), record.value(), userHeaders(record), dependencies);
     }
@@ -89,15 +89,15 @@ record ParsleyMessage<K, V>(String topic, Uuid topicId, int partition, long offs
         return out;
     }
 
-    private static ParsleyClock decodeDependencies(byte @Nullable [] encoded, TopicPartition source,
+    private static ParsleyVectorClock decodeDependencies(byte @Nullable [] encoded, TopicPartition source,
                                                    Uuid topicId, long offset) {
         if (encoded == null) {
-            return ParsleyClock.empty();
+            return ParsleyVectorClock.empty();
         }
         try {
-            return ParsleyClock.fromBytes(encoded);
+            return ParsleyVectorClock.fromBytes(encoded);
         } catch (Exception e) {
-            throw new ParsleyClockResolutionException(source.topic(), topicId, source.partition(), offset,
+            throw new ParsleyVectorClockResolutionException(source.topic(), topicId, source.partition(), offset,
                     encoded, "encoded causal-dependencies header length " + encoded.length, e);
         }
     }

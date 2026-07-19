@@ -99,7 +99,7 @@ class ParsleyCoordinationTest {
         // An established domain of roster {M}: J's app is not a member, so J can never be admitted.
         seeder.append(seedJoin("M", Set.of("M")));
         seeder.append(new ParsleyEpochEvent.SnapshotRequested("M"));
-        seeder.append(seedCommit(1, ParsleyClock.empty(), Set.of("M")));
+        seeder.append(seedCommit(1, ParsleyVectorClock.empty(), Set.of("M")));
 
         ParsleyEpochRuntime runtime = new ParsleyEpochRuntime(new InMemoryEpochTransport(log));
         ParsleyCoordination coordination = ParsleyCoordination.forRuntime(runtime);
@@ -181,7 +181,7 @@ class ParsleyCoordinationTest {
         InMemoryEpochTransport seeder = new InMemoryEpochTransport(log);
         seeder.append(seedJoin("M", Set.of("M")));
         seeder.append(new ParsleyEpochEvent.SnapshotRequested("M"));
-        seeder.append(seedCommit(1, ParsleyClock.empty(), Set.of("M")));
+        seeder.append(seedCommit(1, ParsleyVectorClock.empty(), Set.of("M")));
 
         ParsleyEpochRuntime runtime = new ParsleyEpochRuntime(new InMemoryEpochTransport(log));
         ParsleyCoordination coordination = ParsleyCoordination.forRuntime(runtime);
@@ -205,13 +205,13 @@ class ParsleyCoordinationTest {
         InMemoryEpochTransport seeder = new InMemoryEpochTransport(log);
         seeder.append(seedJoin("R", Set.of("R")));
         seeder.append(new ParsleyEpochEvent.SnapshotRequested("R"));
-        seeder.append(seedCommit(1, ParsleyClock.empty(), Set.of("R")));   // R running at genesis, roster {R}
+        seeder.append(seedCommit(1, ParsleyVectorClock.empty(), Set.of("R")));   // R running at genesis, roster {R}
 
         ParsleyEpochRuntime runtime = new ParsleyEpochRuntime(new InMemoryEpochTransport(log));
         ParsleyCoordination coordination = ParsleyCoordination.forRuntime(runtime);
         // The incumbent R redeploys naming the new member J in its roster, so J becomes admissible.
         runtime.join("R", "R", Set.of("R"), Set.of(), Set.of(), Set.of("R", "J"), 1);
-        ParsleyClock rCompleteness = ParsleyClock.empty().observe(T1, 0, 9);
+        ParsleyVectorClock rCompleteness = ParsleyVectorClock.empty().observe(T1, 0, 9);
         runtime.registerLocalCompleteness("R", () -> rCompleteness);   // R's only publish channel
         runtime.start();
         try {
@@ -282,7 +282,7 @@ class ParsleyCoordinationTest {
     }
 
     /** A seed-side {@link ParsleyEpochEvent.EpochCommitted}. */
-    private static ParsleyEpochEvent.EpochCommitted seedCommit(long epoch, ParsleyClock floor, Set<String> roster) {
+    private static ParsleyEpochEvent.EpochCommitted seedCommit(long epoch, ParsleyVectorClock floor, Set<String> roster) {
         return new ParsleyEpochEvent.EpochCommitted(epoch, floor, roster);
     }
 

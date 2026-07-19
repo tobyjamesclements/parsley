@@ -100,7 +100,7 @@ public class StateRestorationBenchmark {
                 new ParsleyResolver<>(t -> Serdes.String(), t -> Serdes.String()));
 
         // Pre-populate the frontier store with 4 positions (realistic width).
-        ParsleyClock frontier = ParsleyClock.empty();
+        ParsleyVectorClock frontier = ParsleyVectorClock.empty();
         for (int i = 0; i < 4; i++) {
             frontier = frontier.observe(Uuid.randomUuid(), 0, (long) i);
         }
@@ -109,11 +109,11 @@ public class StateRestorationBenchmark {
         // Pre-populate the buffer store with bufferSize records, each with an unsatisfied
         // dependency, as if a crash occurred with that many held records.
         ParsleyEngine<String, String> engine = new ParsleyEngine<>(
-                ParsleyClock.empty(),
+                ParsleyVectorClock.empty(),
                 new StoreBackedBufferStore<>(bufferKV, serializer), new StoreBackedCandidateIndex(waitKV),
                 new StoreBackedForwardedIndex(forwardedKV), ParsleyMetrics.NOOP);
         for (int i = 0; i < bufferSize; i++) {
-            ParsleyClock deps = ParsleyClock.empty().observe(Uuid.randomUuid(), 0, 0L);
+            ParsleyVectorClock deps = ParsleyVectorClock.empty().observe(Uuid.randomUuid(), 0, 0L);
             engine.receive(record("bench-" + i, 0, (long) i, deps));
         }
         // Discard the engine; benchmark methods will reconstruct it from RocksDB.
@@ -126,12 +126,12 @@ public class StateRestorationBenchmark {
 
     /**
      * Simulates frontier restoration on startup: a single RocksDB read of key {@code "f"} followed
-     * by {@link ParsleyClock#fromBytes}. Expected to be effectively constant regardless of
+     * by {@link ParsleyVectorClock#fromBytes}. Expected to be effectively constant regardless of
      * buffer size.
      */
     @Benchmark
-    public ParsleyClock frontierRestore() {
-        return ParsleyClock.fromBytes(frontierKV.get(ParsleyStores.FRONTIER_KEY));
+    public ParsleyVectorClock frontierRestore() {
+        return ParsleyVectorClock.fromBytes(frontierKV.get(ParsleyStores.FRONTIER_KEY));
     }
 
     /**
@@ -146,12 +146,12 @@ public class StateRestorationBenchmark {
         StoreBackedBufferStore<String, String> buf = new StoreBackedBufferStore<>(bufferKV, serializer);
         StoreBackedCandidateIndex idx = new StoreBackedCandidateIndex(waitKV);
         StoreBackedForwardedIndex fwd = new StoreBackedForwardedIndex(forwardedKV);
-        return new ParsleyEngine<>(ParsleyClock.empty(),
+        return new ParsleyEngine<>(ParsleyVectorClock.empty(),
                 buf, idx, fwd, ParsleyMetrics.NOOP);
     }
 
     private static ParsleyMessage<String, String> record(String srcTopic, int partition, long offset,
-                                                         ParsleyClock deps) {
+                                                         ParsleyVectorClock deps) {
         return new ParsleyMessage<>(srcTopic, Uuid.randomUuid(), partition, offset, 0L, "k", "v", List.of(), deps);
     }
 }

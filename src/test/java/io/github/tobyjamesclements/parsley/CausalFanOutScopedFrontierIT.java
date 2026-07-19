@@ -148,7 +148,7 @@ class CausalFanOutScopedFrontierIT {
      * {@code SHARED} actually, contiguously reaches offset 1.
      *
      * <p>Completeness is this processor's own frontier max-merged with every input channel's advertised
-     * dependencies ({@link ParsleyFrontier#completeness()} / {@link ParsleyClock#merge}). Once
+     * dependencies ({@link ParsleyChannels#completeness()} / {@link ParsleyVectorClock#merge}). Once
      * {@code SHARED@1} genuinely delivers, the same {@code receive} call's cascade
      * ({@link ParsleyEngine#receive}'s {@code propagate()}) releases the held unique-topic record in
      * the same pass — so both records are stamped with the same post-cascade completeness, and

@@ -117,13 +117,13 @@ class CausalTopologyPassthroughTest {
 
     private static Headers emptyDeps() {
         Headers headers = ParsleyHeader.mutableHeaders();
-        headers.add(ParsleyHeader.CAUSAL_DEPENDENCIES, ParsleyClock.empty().toBytes());
+        headers.add(ParsleyHeader.CAUSAL_DEPENDENCIES, ParsleyVectorClock.empty().toBytes());
         return headers;
     }
 
     private static Headers dependsOn(Uuid topicId, long offset) {
         Headers headers = ParsleyHeader.mutableHeaders();
-        ParsleyClock deps = ParsleyClock.empty().observe(topicId, 0, offset);
+        ParsleyVectorClock deps = ParsleyVectorClock.empty().observe(topicId, 0, offset);
         headers.add(ParsleyHeader.CAUSAL_DEPENDENCIES, deps.toBytes());
         return headers;
     }

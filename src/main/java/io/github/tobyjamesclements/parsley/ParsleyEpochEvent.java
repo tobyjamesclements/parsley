@@ -66,12 +66,12 @@ sealed interface ParsleyEpochEvent
     record SnapshotRequested(String memberId) implements ParsleyEpochEvent {}
 
     /** A running member's completeness frontier for the currently open round. */
-    record FrontierPublished(String memberId, ParsleyClock completeness) implements ParsleyEpochEvent {}
+    record FrontierPublished(String memberId, ParsleyVectorClock completeness) implements ParsleyEpochEvent {}
 
     /** A complete round's decision — the new epoch id, its lower bounds, and the app-id membership
      * (committed roster) it establishes — appended by any node with a local member (identical everywhere;
      * dedup by {@code epochId}). */
-    record EpochCommitted(long epochId, ParsleyClock lowerBounds, Set<String> committedRoster)
+    record EpochCommitted(long epochId, ParsleyVectorClock lowerBounds, Set<String> committedRoster)
             implements ParsleyEpochEvent {}
 
     /**
@@ -141,9 +141,9 @@ sealed interface ParsleyEpochEvent
                         ParsleyByteUtils.readStringSet(dis), dis.readInt());
                 case TAG_SNAPSHOT -> new SnapshotRequested(ParsleyByteUtils.readString(dis));
                 case TAG_FRONTIER -> new FrontierPublished(ParsleyByteUtils.readString(dis),
-                        ParsleyClock.fromBytes(ParsleyByteUtils.readBytes(dis)));
+                        ParsleyVectorClock.fromBytes(ParsleyByteUtils.readBytes(dis)));
                 case TAG_COMMIT2 -> new EpochCommitted(dis.readLong(),
-                        ParsleyClock.fromBytes(ParsleyByteUtils.readBytes(dis)),
+                        ParsleyVectorClock.fromBytes(ParsleyByteUtils.readBytes(dis)),
                         ParsleyByteUtils.readStringSet(dis));
                 case TAG_LEAVE -> new Leave(ParsleyByteUtils.readString(dis));
                 case TAG_JOIN, TAG_COMMIT -> throw new ParsleyIncompatibleEpochLogException(

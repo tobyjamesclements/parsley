@@ -12,7 +12,10 @@ import java.util.Map;
 import java.util.Objects;
 
 /**
- * The one causal vector clock. A clock maps each topic-partition to the highest offset recorded on
+ * The one causal vector clock (Fidge 1988; Mattern 1988, "Virtual Time and Global States of
+ * Distributed Systems") — a stated variant of the classical structure: indexed by <em>channel</em>
+ * (topic-partition) rather than by process, with Kafka's broker-assigned offsets as the
+ * per-component counters. A clock maps each topic-partition to the highest offset recorded on
  * it, keyed by the topic's Kafka UUID so that topic deletion and recreation produce a different
  * identity even when the name is reused.
  *
@@ -30,7 +33,7 @@ import java.util.Objects;
  * {@code Map<Uuid, Map<Integer, Long>>} (topicId → partition → offset) — so there is no coordinate
  * wrapper object and no per-lookup key allocation on the hot gating path.
  */
-final class ParsleyClock {
+final class ParsleyVectorClock {
 
     /** Leading byte of the wire format. */
     static final byte WIRE_VERSION = 1;
@@ -49,15 +52,15 @@ final class ParsleyClock {
 
     private final Map<Uuid, Map<Integer, Long>> offsets; // always deeply immutable
 
-    private ParsleyClock(Map<Uuid, Map<Integer, Long>> offsets) {
+    private ParsleyVectorClock(Map<Uuid, Map<Integer, Long>> offsets) {
         this.offsets = offsets;
     }
 
     /**
      * Returns an empty clock with no positions recorded.
      */
-    static ParsleyClock empty() {
-        return new ParsleyClock(Map.of());
+    static ParsleyVectorClock empty() {
+        return new ParsleyVectorClock(Map.of());
     }
 
     /**
@@ -72,20 +75,21 @@ final class ParsleyClock {
     /**
      * Returns a new clock with {@code (topicId, partition)} recorded at {@code max(current, offset)}.
      */
-    ParsleyClock observe(Uuid topicId, int partition, long offset) {
+    ParsleyVectorClock observe(Uuid topicId, int partition, long offset) {
         Map<Uuid, Map<Integer, Long>> next = mutableCopy();
         next.computeIfAbsent(topicId, k -> new HashMap<>()).merge(partition, offset, Math::max);
-        return new ParsleyClock(freeze(next));
+        return new ParsleyVectorClock(freeze(next));
     }
 
     /**
-     * Returns the causal union of this clock and {@code other}: the per-coordinate maximum.
+     * Returns the causal union of this clock and {@code other}: the per-coordinate maximum — the
+     * lattice <em>join</em>, the same component-wise-max merge CRDTs name {@code merge}.
      */
-    ParsleyClock merge(ParsleyClock other) {
+    ParsleyVectorClock merge(ParsleyVectorClock other) {
         Map<Uuid, Map<Integer, Long>> merged = mutableCopy();
         other.forEach((topicId, partition, offset) ->
                 merged.computeIfAbsent(topicId, k -> new HashMap<>()).merge(partition, offset, Math::max));
-        return new ParsleyClock(freeze(merged));
+        return new ParsleyVectorClock(freeze(merged));
     }
 
     /**
@@ -96,18 +100,18 @@ final class ParsleyClock {
      * across the running members' published completeness clocks ({@code ParsleyEpochLog}) — the
      * committed floor is bounded by the slowest member.
      */
-    ParsleyClock mergeMin(ParsleyClock other) {
+    ParsleyVectorClock mergeMin(ParsleyVectorClock other) {
         Map<Uuid, Map<Integer, Long>> merged = mutableCopy();
         other.forEach((topicId, partition, offset) ->
                 merged.computeIfAbsent(topicId, k -> new HashMap<>()).merge(partition, offset, Math::min));
-        return new ParsleyClock(freeze(merged));
+        return new ParsleyVectorClock(freeze(merged));
     }
 
     /**
      * Returns a copy of this clock with the {@code (topicId, partition)} coordinate removed, if
      * present. Used to strip a record's self-reference before the admissibility check.
      */
-    ParsleyClock without(Uuid topicId, int partition) {
+    ParsleyVectorClock without(Uuid topicId, int partition) {
         if (offsetFor(topicId, partition) < 0) {
             return this;
         }
@@ -118,7 +122,7 @@ final class ParsleyClock {
         if (byPartition.isEmpty()) {
             next.remove(topicId);
         }
-        return new ParsleyClock(freeze(next));
+        return new ParsleyVectorClock(freeze(next));
     }
 
     /**
@@ -126,7 +130,7 @@ final class ParsleyClock {
      * {@code this} unchanged when every coordinate is kept (so the common all-in-scope case allocates
      * nothing). Used on recorded state a processor owns — pruning a restored frontier/pending-epoch
      * clock down to the coordinates currently in scope after a topic UUID change or scope narrowing
-     * ({@link ParsleyFrontier#pruneToScope}) — never used to silently drop a coordinate this node
+     * ({@link ParsleyChannels#pruneToScope}) — never used to silently drop a coordinate this node
      * merely has no channel for from an inbound record's own dependency clock: a dependency naming a
      * coordinate outside scope is not something to silently drop, see {@link ParsleyEngine}'s
      * fail-closed handling of that case. The one narrower, different exception is {@link
@@ -134,7 +138,7 @@ final class ParsleyClock {
      * coordinates specifically — see {@code ParsleyEngine#ownSinkTopics}'s Javadoc for why that is
      * sound rather than a relaxation of this rule.
      */
-    ParsleyClock retaining(CoordinatePredicate inScope) {
+    ParsleyVectorClock retaining(CoordinatePredicate inScope) {
         boolean anyDropped = false;
         outer:
         for (Map.Entry<Uuid, Map<Integer, Long>> byTopic : offsets.entrySet()) {
@@ -154,7 +158,7 @@ final class ParsleyClock {
                 kept.computeIfAbsent(topicId, k -> new HashMap<>()).put(partition, offset);
             }
         }));
-        return new ParsleyClock(freeze(kept));
+        return new ParsleyVectorClock(freeze(kept));
     }
 
     /**
@@ -166,7 +170,7 @@ final class ParsleyClock {
      * never confirm such a coordinate does not hold the record forever. A coordinate with no bound
      * reads as {@link ParsleyEpoch#NO_BOUND} (the minimum {@code startsAt}) and is always kept.
      */
-    ParsleyClock strippedBelow(ParsleyEpoch bound) {
+    ParsleyVectorClock strippedBelow(ParsleyEpoch bound) {
         boolean anyStripped = false;
         outer:
         for (Map.Entry<Uuid, Map<Integer, Long>> byTopic : offsets.entrySet()) {
@@ -186,14 +190,15 @@ final class ParsleyClock {
                 kept.computeIfAbsent(topicId, k -> new HashMap<>()).put(partition, offset);
             }
         }));
-        return new ParsleyClock(freeze(kept));
+        return new ParsleyVectorClock(freeze(kept));
     }
 
     /**
      * Returns {@code true} if this clock (a frontier) has recorded at least everything {@code deps}
      * require — for every coordinate in {@code deps}, this clock's offset is ≥ the required offset.
+     * This is vector-clock <em>dominance</em>, the component-wise ≤ order of the literature.
      */
-    boolean dominates(ParsleyClock deps) {
+    boolean dominates(ParsleyVectorClock deps) {
         for (Map.Entry<Uuid, Map<Integer, Long>> byTopic : deps.offsets.entrySet()) {
             Map<Integer, Long> here = offsets.get(byTopic.getKey());
             for (Map.Entry<Integer, Long> byPartition : byTopic.getValue().entrySet()) {
@@ -261,7 +266,7 @@ final class ParsleyClock {
             }
             return baos.toByteArray();
         } catch (IOException e) {
-            throw new IllegalStateException("ParsleyClock serialisation failed", e);
+            throw new IllegalStateException("ParsleyVectorClock serialisation failed", e);
         }
     }
 
@@ -270,12 +275,12 @@ final class ParsleyClock {
      *
      * @throws IllegalStateException if {@code bytes} is not valid, including an unrecognised version
      */
-    static ParsleyClock fromBytes(byte[] bytes) {
+    static ParsleyVectorClock fromBytes(byte[] bytes) {
         try (DataInputStream dis = new DataInputStream(new ByteArrayInputStream(bytes))) {
             byte version = dis.readByte();
             if (version != WIRE_VERSION) {
                 throw new IllegalStateException(
-                        "unsupported ParsleyClock wire version: " + version + " (expected " + WIRE_VERSION + ")");
+                        "unsupported ParsleyVectorClock wire version: " + version + " (expected " + WIRE_VERSION + ")");
             }
             int count = dis.readInt();
             Map<Uuid, Map<Integer, Long>> map = new HashMap<>();
@@ -285,9 +290,9 @@ final class ParsleyClock {
                 long offset = dis.readLong();
                 map.computeIfAbsent(topicId, k -> new HashMap<>()).put(partition, offset);
             }
-            return new ParsleyClock(freeze(map));
+            return new ParsleyVectorClock(freeze(map));
         } catch (IOException e) {
-            throw new IllegalStateException("ParsleyClock deserialisation failed", e);
+            throw new IllegalStateException("ParsleyVectorClock deserialisation failed", e);
         }
     }
 
@@ -306,7 +311,7 @@ final class ParsleyClock {
     @Override
     public boolean equals(Object o) {
         if (this == o) return true;
-        if (!(o instanceof ParsleyClock other)) return false;
+        if (!(o instanceof ParsleyVectorClock other)) return false;
         return offsets.equals(other.offsets);
     }
 
@@ -317,7 +322,7 @@ final class ParsleyClock {
 
     @Override
     public String toString() {
-        StringBuilder sb = new StringBuilder("ParsleyClock{");
+        StringBuilder sb = new StringBuilder("ParsleyVectorClock{");
         boolean[] first = {true};
         forEach((topicId, partition, offset) -> {
             if (!first[0]) sb.append(", ");

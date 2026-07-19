@@ -19,7 +19,7 @@ import java.util.Set;
  *
  * <p><strong>Genesis cohort barrier.</strong> The first commit (genesis) establishes a new logical
  * time-0: its floor is empty by construction (an empty running set folds to an empty {@link
- * ParsleyClock}), so a founder admitted at genesis strips nothing and sees full history in causal order.
+ * ParsleyVectorClock}), so a founder admitted at genesis strips nothing and sees full history in causal order.
  * Genesis does not commit until the whole founding cohort has declared — every app in the agreed roster
  * present with its full task set — so no founder is left behind and later mis-admitted at a non-empty
  * floor (which would strip a fan-out coordinate's genesis-era records: silent effect-before-cause).
@@ -40,14 +40,14 @@ import java.util.Set;
 final class ParsleyEpochLog {
 
     private long committedEpochId;                             // last committed epoch; 0 = pre-genesis
-    private ParsleyClock committedLowerBounds = ParsleyClock.empty();
+    private ParsleyVectorClock committedLowerBounds = ParsleyVectorClock.empty();
     // The app-id membership the last commit established — authoritative membership after genesis. Empty
     // before genesis. Voters (post-genesis) and the admission gate are computed against this.
     private Set<String> committedRoster = Set.of();
     private final Set<String> runningMembers = new HashSet<>();
     private final Set<String> pendingJoiners = new HashSet<>();
     private @Nullable String roundOwner;                       // non-null iff a round is open
-    private final Map<String, ParsleyClock> publications = new HashMap<>();  // current round only
+    private final Map<String, ParsleyVectorClock> publications = new HashMap<>();  // current round only
     // Every declared member's declaration, keyed by memberId, LWW on re-declaration. Folded
     // UNCONDITIONALLY (a non-roster app's declaration is kept, then filtered at each use against the
     // roster relevant to that use) — folding-time exclusion would discard a legitimately-joining app's
@@ -286,11 +286,11 @@ final class ParsleyEpochLog {
         if (!isMeshSatisfied(rNew)) {
             return Optional.empty();
         }
-        ParsleyClock lowerBounds = null;
-        for (ParsleyClock published : publications.values()) {
+        ParsleyVectorClock lowerBounds = null;
+        for (ParsleyVectorClock published : publications.values()) {
             lowerBounds = (lowerBounds == null) ? published : lowerBounds.mergeMin(published);
         }
-        ParsleyClock floor = (lowerBounds == null ? ParsleyClock.empty() : lowerBounds).merge(committedLowerBounds);
+        ParsleyVectorClock floor = (lowerBounds == null ? ParsleyVectorClock.empty() : lowerBounds).merge(committedLowerBounds);
         return Optional.of(new ParsleyEpochEvent.EpochCommitted(nextEpochId(), floor, Set.copyOf(rNew)));
     }
 
@@ -468,7 +468,7 @@ final class ParsleyEpochLog {
         return committedEpochId;
     }
 
-    ParsleyClock committedLowerBounds() {
+    ParsleyVectorClock committedLowerBounds() {
         return committedLowerBounds;
     }
 

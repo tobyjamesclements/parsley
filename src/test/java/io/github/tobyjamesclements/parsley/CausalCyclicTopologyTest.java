@@ -33,7 +33,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 /**
  * Proves the headline capability the max-merge redesign exists to enable: a node directly consuming both
  * an ancestor topic and its own descendant delivers correctly, where the old {@code
- * ParsleyClock#intersectMin} gate made this a documented, permanent deadlock (retired restriction: "no
+ * ParsleyVectorClock#intersectMin} gate made this a documented, permanent deadlock (retired restriction: "no
  * ancestor with its own descendant", {@code docs/internals/causal-consistency.md}) — the tightest possible
  * shape of it: a single node directly self-consuming its own sink.
  *
@@ -42,7 +42,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * received copy carries a fresh, ever-advancing self-position), a genuine infinite-loop bug this test
  * caught during development. Under max-merge this works because a node's own registered channel for the
  * looped-back topic directly advertises the ancestor coordinate it needs ({@link
- * ParsleyFrontier#channelUpdate}) — no cross-channel unanimity, and no third-party relay, is required.
+ * ParsleyChannels#channelUpdate}) — no cross-channel unanimity, and no third-party relay, is required.
  *
  * <p>A genuine <em>two-node</em> cycle (A→B→A over two separate, real Kafka Streams applications) is
  * proved instead in {@link ParsleyCoordinationMultiAppIT} — a single-Topology, two-stage
@@ -133,8 +133,8 @@ class CausalCyclicTopologyTest {
 
             TestRecord<String, String> businessRecord = emitted.stream()
                     .filter(r -> r.value() != null).findFirst().orElseThrow();
-            ParsleyClock stampedDeps = dependenciesOf(businessRecord);
-            assertTrue(stampedDeps.dominates(ParsleyClock.empty().observe(T1_ID, 0, 0)),
+            ParsleyVectorClock stampedDeps = dependenciesOf(businessRecord);
+            assertTrue(stampedDeps.dominates(ParsleyVectorClock.empty().observe(T1_ID, 0, 0)),
                     "the emitted p-out record's stamp must carry the ancestor coordinate (t1@0) it was "
                             + "genuinely derived from");
         }
@@ -142,17 +142,17 @@ class CausalCyclicTopologyTest {
 
     private static Headers emptyDeps() {
         Headers headers = ParsleyHeader.mutableHeaders();
-        headers.add(ParsleyHeader.CAUSAL_DEPENDENCIES, ParsleyClock.empty().toBytes());
+        headers.add(ParsleyHeader.CAUSAL_DEPENDENCIES, ParsleyVectorClock.empty().toBytes());
         return headers;
     }
 
-    private static ParsleyClock dependenciesOf(TestRecord<String, String> record) {
+    private static ParsleyVectorClock dependenciesOf(TestRecord<String, String> record) {
         for (org.apache.kafka.common.header.Header header : record.headers()) {
             if (ParsleyHeader.CAUSAL_DEPENDENCIES.equals(header.key()) && header.value() != null) {
-                return ParsleyClock.fromBytes(header.value());
+                return ParsleyVectorClock.fromBytes(header.value());
             }
         }
-        return ParsleyClock.empty();
+        return ParsleyVectorClock.empty();
     }
 
     private static Properties config() {
