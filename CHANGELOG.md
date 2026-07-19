@@ -7,6 +7,14 @@ All notable changes to this project are documented in this file. The format is b
 ## [Unreleased]
 
 ### Changed (internal)
+- **Dependency-clock normalisation is a single L1 step: `ParsleyChannels.normalize`.** Second
+  structural step of the three-protocol redesign (T1.2, decision D3). The self-cycle removal and the
+  below-floor strip relocate from the engine's per-gate preprocessing (`effectiveDependencies`) into
+  one `normalize(rawDeps, sourceCoordinate)` request on the channels module, so no gate code path
+  consults epoch state directly (invariant I5: after normalisation, no clock inside L2 carries a
+  self-reference). The below-floor clause is interim — it is deleted with the epoch floors in T3.2.
+  The gate-side own-sink strip stays in the engine until T3.1's two-branch gate replaces it.
+  Behaviour-identical; no public API or wire format changes.
 - **The L1 channels module is named: `ParsleyChannels`.** First structural step of the three-protocol
   redesign (T1.1). `ParsleyFrontier` folds into a new `ParsleyChannels` class — the
   Kafka-to-reliable-FIFO-channel adaptation, presented in the Cachin–Guerraoui–Rodrigues module style

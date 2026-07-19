@@ -7,7 +7,7 @@ import org.apache.kafka.common.Uuid;
  * {@code (topicId, partition)} coordinate. {@link #startsAt} returns the lowest offset that still
  * participates in the current epoch for a coordinate; anything below it references a prior, closed
  * epoch. This one bound drives the whole floored-clock invariant: a dependency below it is stripped
- * before the delivery gate's completeness check ({@link ParsleyVectorClock#strippedBelow}), and the node's
+ * before the delivery gate ever sees the clock ({@link ParsleyChannels#normalize}), and the node's
  * own causal state is floored to it ({@link ParsleyChannels} — the frontier does not anchor below the
  * bound, and {@code completeness()} / the channel clocks / the outbound stamp are all floored).
  *

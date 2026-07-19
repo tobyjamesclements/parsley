@@ -92,8 +92,9 @@ final class ParsleyEngine<K, V> {
 
     // The single owner of all persisted causal metadata: the contiguous frontier clock, the channel
     // clocks, and the forwarded-offset index. completeness() and channel state live here, floored to
-    // the topology epoch's lower bounds (channels.epoch(), also read at the gate to strip a record's
-    // out-of-domain dependencies; NONE when epoch bounding is disabled, so the floor is a no-op).
+    // the topology epoch's lower bounds; channels.normalize applies the same floor to every inbound
+    // dependency clock before the gate sees it (NONE when epoch bounding is disabled, so the floor
+    // is a no-op).
     private final ParsleyChannels channels;
 
     // Coordinates this node could ever genuinely confirm — a registered input channel, on the
@@ -707,31 +708,22 @@ final class ParsleyEngine<K, V> {
     }
 
     /**
-     * The dependency clock actually checked by the gate: three view-only preprocessing steps, none of
-     * which ever rewrites recorded state or the outbound stamp (which is completeness(), computed
-     * separately from the channel clocks {@link #advertised} feeds).
-     * <ol>
-     *   <li>The record's exact self-cycle is removed ({@link #withoutSelfReference}) — a record
-     *       depending on its own {@code (topicId, partition, offset)} has, by being delivered, met that
-     *       dependency, so it must not wait on itself (this keeps a self-referential stamp on a fused
-     *       chain from deadlocking). A backward same-partition dependency ({@code req < offset}) is an
-     *       intra-topic dependency like any other and flows through unchanged.</li>
-     *   <li>Any coordinate belonging to a topic this node itself produces ({@link #ownSinkTopics}) is
-     *       stripped — see that field's Javadoc for why this is sound and different from the
-     *       out-of-scope case below, not a relaxation of it.</li>
-     *   <li>Any dependency below its coordinate's topology-epoch {@code startsAt} bound is stripped
-     *       ({@link ParsleyVectorClock#strippedBelow}) — an out-of-domain reference to a prior, closed epoch
-     *       that no channel in this epoch will ever confirm. A no-op with epoch bounding disabled.</li>
-     * </ol>
+     * The dependency clock actually checked by the gate: L1's normalisation
+     * ({@link ParsleyChannels#normalize} — self-cycle removal plus the interim below-floor strip;
+     * I5), then the one view-only step still owned by this class: any coordinate belonging to a
+     * topic this node itself produces ({@link #ownSinkTopics}) is stripped — see that field's
+     * Javadoc for why this is sound and different from the out-of-scope case below, not a
+     * relaxation of it. Neither step ever rewrites recorded state or the outbound stamp (which is
+     * completeness(), computed separately from the channel clocks {@link #advertised} feeds).
+     *
      * <p>A coordinate outside {@link #inScope} is <strong>not</strong> dropped here — this node cannot
      * prove such a coordinate is safe to disregard, only that it cannot check it, so it is never
      * silently treated as satisfied. {@link #isUnreachableDependency} checks for one before this result
      * is ever handed to {@link #isDeliverable}, and fails the task fast instead.
      */
     private ParsleyVectorClock effectiveDependencies(ParsleyVectorClock deps, Uuid topicId, int partition, long offset) {
-        return withoutSelfReference(deps, topicId, partition, offset)
-                .retaining((depTopicId, depPartition) -> !ownSinkTopics.test(depTopicId, depPartition))
-                .strippedBelow(channels.epoch());
+        return channels.normalize(deps, topicId, partition, offset)
+                .retaining((depTopicId, depPartition) -> !ownSinkTopics.test(depTopicId, depPartition));
     }
 
     /**
@@ -743,13 +735,6 @@ final class ParsleyEngine<K, V> {
      */
     private ParsleyVectorClock advertised(ParsleyVectorClock clock) {
         return clock.retaining((depTopicId, depPartition) -> !ownSinkTopics.test(depTopicId, depPartition));
-    }
-
-    private ParsleyVectorClock withoutSelfReference(ParsleyVectorClock deps, Uuid topicId, int partition, long offset) {
-        if (deps.offsetFor(topicId, partition) == offset) {
-            return deps.without(topicId, partition);
-        }
-        return deps;
     }
 
     /**

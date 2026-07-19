@@ -30,14 +30,16 @@ import java.util.Set;
  *                                                     consumer-skipped holes
  *             delivered(topicId, partition, offset)   L2 records a delivery; contiguous frontier
  *                                                     advance (I4)
+ *             normalize(rawDeps, source)              normalise an inbound dependency clock before
+ *                                                     L2 evaluates it: self-cycle strip (I5), plus
+ *                                                     the interim below-floor strip (until T3.2)
  *             acknowledge(topic, partition, offset)   producer ack → ownOutputs (D2; stub until
  *                                                     Phase 2)
  * queries:    frontier() → ParsleyVectorClock         the delivered vector VT(p)
  *             ownOutputs() → ParsleyVectorClock       the node's own acked output positions (D2;
  *                                                     empty until Phase 2)
  * properties: I3 (per-producer stamp monotonicity), I4 (contiguous frontier), I5 (normalised
- *             clocks; the normalisation step itself lands in T1.2), I8 (stamp over-claim
- *             soundness), I9 (unconditional merge, restore-side)
+ *             clocks), I8 (stamp over-claim soundness), I9 (unconditional merge, restore-side)
  * </pre>
  *
  * <p>Concretely, this class is the single owner of all causal metadata a node persists: the
@@ -189,6 +191,36 @@ final class ParsleyChannels {
         boolean seeded = seedIfFirstSeen(topicId, partition, offset);
         boolean bridged = bridge(topicId, partition, offset);
         return seeded || bridged;
+    }
+
+    /**
+     * The <em>normalize</em> request: turns a raw inbound dependency clock into the clock L2's gate
+     * evaluates (I5 — after this step, no clock inside L2 carries a self-reference). Two steps:
+     * <ol>
+     *   <li><strong>Self-cycle removal.</strong> A record depending on its own {@code (topicId,
+     *       partition, offset)} has, by being delivered, met that dependency, so it must not wait on
+     *       itself (this keeps a self-referential stamp on a fused chain from deadlocking). Only the
+     *       exact self-coordinate is removed; a backward same-partition dependency ({@code required
+     *       < offset}) is an intra-topic dependency like any other and flows through unchanged.</li>
+     *   <li><strong>Below-floor strip (interim — deleted with the floors in T3.2, per D4).</strong>
+     *       Any dependency below its coordinate's topology-epoch {@code startsAt} bound is dropped
+     *       ({@link ParsleyVectorClock#strippedBelow}) — an out-of-domain reference to a prior,
+     *       closed epoch that no channel in this epoch will ever confirm. A no-op under
+     *       {@link ParsleyEpoch#NONE}.</li>
+     * </ol>
+     *
+     * <p>View-only: never rewrites recorded state or the outbound stamp ({@link #completeness()} is
+     * computed separately). The gate re-normalises on every evaluation rather than caching the result
+     * at receive time, because the epoch floor can rise while a record is held (a closing epoch
+     * transition strips a held record's below-floor dependencies — the drain {@link ParsleyEngine}
+     * runs after {@link #tryAdvanceEpoch} depends on that re-evaluation); once T3.2 removes the
+     * floor clause, the result is a pure function of the raw clock and the source coordinate.
+     */
+    ParsleyVectorClock normalize(ParsleyVectorClock rawDeps, Uuid sourceTopicId, int sourcePartition, long sourceOffset) {
+        ParsleyVectorClock deps = rawDeps.offsetFor(sourceTopicId, sourcePartition) == sourceOffset
+                ? rawDeps.without(sourceTopicId, sourcePartition)
+                : rawDeps;
+        return deps.strippedBelow(epoch);
     }
 
     /**
