@@ -2,12 +2,14 @@ package io.github.tobyjamesclements.parsley;
 
 import org.apache.kafka.common.TopicPartition;
 import org.apache.kafka.common.Uuid;
+import org.apache.kafka.streams.processor.api.Record;
 import org.junit.jupiter.api.Test;
 
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.OptionalLong;
 import java.util.concurrent.atomic.AtomicLong;
@@ -1080,6 +1082,36 @@ class ParsleyCausalBroadcastTest {
     // These helpers build an core over an untracked in-memory frontier — completeness() is the node's
     // own frontier — exercising the frontier/buffer mechanics in isolation. The cross-channel
     // completeness layer is covered by ParsleyCausalBroadcastCompletenessTest.
+
+    /**
+     * {@code broadcast()} — the single stamping site — drains the bound acknowledged-outputs
+     * source into the {@code ownOutputs} clock before attaching the stamp ("folded before each
+     * stamp", D2/O1), while the stamp itself remains exactly {@code completeness()} until T2.3:
+     * the acked sink coordinate must appear in {@code ownOutputs()} and must NOT appear in the
+     * attached dependency header.
+     */
+    @Test
+    void broadcastFoldsAcknowledgedOutputsBeforeStampingWithoutChangingTheStamp() {
+        Uuid sinkId = Uuid.randomUuid();
+        ParsleyChannels channels = new ParsleyChannels(ParsleyVectorClock.empty(), forwardedIndex);
+        channels.bindOwnOutputSource(consumer -> consumer.accept("out", 0, 11), Map.of("out", sinkId));
+        ParsleyCausalBroadcast<String, String> causalBroadcast = new ParsleyCausalBroadcast<>(
+                channels, buffer, new MockCandidateIndex(), ParsleyMetrics.NOOP,
+                System::currentTimeMillis);
+        causalBroadcast.receive(incomingRecord(T1, 3, ParsleyVectorClock.empty()));
+
+        Record<String, String> stamped =
+                causalBroadcast.broadcast(new Record<>("k", "v", 0L, ParsleyHeader.mutableHeaders()));
+
+        assertEquals(11L, channels.ownOutputs().offsetFor(sinkId, 0),
+                "broadcast must fold the pending ack into ownOutputs before stamping");
+        byte[] stampBytes = stamped.headers().lastHeader(ParsleyHeader.CAUSAL_DEPENDENCIES).value();
+        ParsleyVectorClock stamp = ParsleyVectorClock.fromBytes(stampBytes);
+        assertEquals(causalBroadcast.completeness(), stamp,
+                "the stamp must be exactly completeness() — the T2.3 union has not landed");
+        assertEquals(-1L, stamp.offsetFor(sinkId, 0),
+                "the acked own-output coordinate must not leak into the stamp before T2.3");
+    }
 
     private ParsleyCausalBroadcast<String, String> causalBroadcastWith() {
         return new ParsleyCausalBroadcast<>(ParsleyVectorClock.empty(), buffer,

@@ -48,6 +48,11 @@ class ParsleyTopicsTest {
             }
 
             @Override
+            public Map<Integer, Long> endOffsets(String topic) {
+                return Map.of();
+            }
+
+            @Override
             public void close() {
             }
         };

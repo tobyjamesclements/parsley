@@ -229,6 +229,18 @@ public final class CausalTopology {
         }
     }
 
+    /**
+     * Every sink topic any stage declares — the topics whose producer acks the own-output registry
+     * tracks (D2). Read by {@link CausalStreams} at construction, before {@link #assemble}.
+     */
+    Set<String> sinkTopics() {
+        Set<String> topics = new LinkedHashSet<>();
+        for (ParsleyStageSpec<?, ?, ?, ?> stage : stages) {
+            stage.sinks.forEach(sink -> topics.add(sink.topic()));
+        }
+        return topics;
+    }
+
     /** Classpath {@code parsley.properties} as a base layer, overlaid with the runtime's {@code props}. */
     private static ParsleyConfig resolveConfig(Properties props) {
         Properties merged = ParsleyConfig.loadProperties();

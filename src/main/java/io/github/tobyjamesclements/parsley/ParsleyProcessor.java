@@ -138,10 +138,18 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
     // Source topic name -> stable UUID, resolved from the broker at init() (the topology decorator
     // has no broker config until then). Used by ingest() to stamp each record's causal identity.
     private Map<String, Uuid> topicUuids = Map.of();
-    // This stage's own sink topics' UUIDs, best-effort resolved at init() (see resolveSinkTopicUuids) —
-    // fed to causalBroadcast() so ParsleyCausalBroadcast can strip a node's own produced coordinates from any inbound
-    // dependency/marker clock. Never used to route or gate an inbound record by itself.
-    private Set<Uuid> sinkTopicUuids = Set.of();
+    // This stage's own sink topics, name -> UUID, best-effort resolved at init() (see
+    // resolveSinkTopicUuids) — the UUIDs feed causalBroadcast() so ParsleyCausalBroadcast can strip a node's own
+    // produced coordinates from any inbound dependency/marker clock, and the name keys translate the
+    // producer-ack registry's topic names into UUID identity for the ownOutputs fold (D2). Never used
+    // to route or gate an inbound record by itself.
+    private Map<String, Uuid> sinkTopicUuids = Map.of();
+    // Each resolved sink topic's per-partition end offsets, captured at init() alongside the UUID
+    // resolution (same best-effort admin session) — the ownOutputs seed claims endOffset - 1, the
+    // sink's last appended position, per partition (D2/O1; an over-claim that is I8-sound and heals
+    // the "f" blob trailing the last transaction's acks). A sink that could not be described is
+    // simply absent, like its UUID.
+    private Map<String, Map<Integer, Long>> sinkEndOffsets = Map.of();
 
     // The most-recent business key seen on this task's owned partition — reused to route a self-injected
     // marker back to that partition lane (null until the first record). And the last snapshot-round /
@@ -504,10 +512,37 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
             channels.channelUpdate(topicId, taskPartition, ParsleyVectorClock.empty());
         }
 
+        // Wire the ownOutputs clock (D2): bind the producer-ack registry (when this task runs under
+        // a CausalStreams instance — a TopologyTestDriver run has none) so every stamp's preceding
+        // fold can translate acked sink names to UUID identity, then seed each resolved sink
+        // partition at its end offset - 1 — the sink's last appended position. The seed is an
+        // over-claim (it covers siblings' records on a shared sink, aborted tails, and markers) and
+        // is I8-sound for exactly that reason; it also heals the restored blob trailing the last
+        // transaction's acks. Runs after rescope so a recreated input-sink's destroyed UUID is
+        // already purged before its successor seeds.
+        Object registryId = context.appConfigs().get("producer." + ParsleyOwnOutputRegistry.CONFIG_KEY);
+        if (registryId != null) {
+            ParsleyOwnOutputRegistry registry = ParsleyOwnOutputRegistry.lookup(registryId.toString());
+            if (registry != null) {
+                channels.bindOwnOutputSource(registry, sinkTopicUuids);
+            }
+        }
+        for (Map.Entry<String, Uuid> sink : sinkTopicUuids.entrySet()) {
+            Map<Integer, Long> ends = sinkEndOffsets.get(sink.getKey());
+            if (ends == null) {
+                continue;
+            }
+            for (Map.Entry<Integer, Long> end : ends.entrySet()) {
+                if (end.getValue() > 0) {
+                    channels.acknowledge(sink.getValue(), end.getKey(), end.getValue() - 1);
+                }
+            }
+        }
+
         // This stage's own sink topics — never a delivery-scope concern (inScope, above), but fed to
         // the core so it can strip a node's own produced coordinates from any inbound dependency or
         // marker clock; see ParsleyCausalBroadcast's Javadoc on ownSinkTopics for why this is sound.
-        Set<Uuid> ownSinkTopicIds = sinkTopicUuids;
+        Set<Uuid> ownSinkTopicIds = Set.copyOf(sinkTopicUuids.values());
         ParsleyVectorClock.CoordinatePredicate ownSinkTopics = (topicId, partition) -> ownSinkTopicIds.contains(topicId);
 
         return new ParsleyCausalBroadcast<>(channels, buffer, candidateIndex,
@@ -1289,30 +1324,45 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
      * Best-effort, per-topic UUID resolution over {@link #sinkTopics} — unlike {@link
      * #additionalTopicInfo}, this always runs, never gated by {@code parsley.topology.validation}: it
      * feeds {@link #causalBroadcast}'s own-coordinate stripping (see {@link ParsleyCausalBroadcast}'s Javadoc on {@code
-     * ownSinkTopics}), a correctness mechanism, not a topology-misconfiguration lint.
+     * ownSinkTopics}) and the {@code ownOutputs} fold's name → UUID translation (D2) — correctness
+     * mechanisms, not topology-misconfiguration lints. Also captures each resolved sink's
+     * per-partition end offsets ({@link #sinkEndOffsets}) in the same admin session, for the
+     * {@code ownOutputs} init-time seed.
      *
      * <p>A sink that does not exist yet is skipped, and — because this resolution runs once, at
-     * {@code init()}, and is never re-attempted — own-coordinate stripping for that topic stays off
-     * for this task instance's whole lifetime, until the next restart re-runs {@code init()}. In a
-     * topology cycle that means a dependency reflecting this node's own not-yet-resolved sink back at
-     * it fails the task fast as "unreachable" (fail-closed, recoverable: the restart re-resolves the
-     * now-existing sink) rather than being wrongly stripped. Nothing can depend on the sink before its
-     * first record exists, so the exposure starts only at first produce and ends at the next init.
+     * {@code init()}, and is never re-attempted — own-coordinate stripping and the ownOutputs fold
+     * for that topic stay off for this task instance's whole lifetime, until the next restart
+     * re-runs {@code init()}. In a topology cycle that means a dependency reflecting this node's
+     * own not-yet-resolved sink back at it fails the task fast as "unreachable" (fail-closed,
+     * recoverable: the restart re-resolves the now-existing sink) rather than being wrongly
+     * stripped. Nothing can depend on the sink before its first record exists, so the exposure
+     * starts only at first produce and ends at the next init.
      */
-    private Set<Uuid> resolveSinkTopicUuids(ParsleyTopicAdmin admin) {
-        Set<Uuid> ids = new HashSet<>();
+    private Map<String, Uuid> resolveSinkTopicUuids(ParsleyTopicAdmin admin) {
+        Map<String, Uuid> ids = new HashMap<>();
+        Map<String, Map<Integer, Long>> endOffsets = new HashMap<>();
         for (String topic : sinkTopics) {
+            Uuid id = null;
             try {
-                Uuid id = admin.topicIds(List.of(topic)).get(topic);
-                if (id != null) {
-                    ids.add(id);
-                }
+                id = admin.topicIds(List.of(topic)).get(topic);
             } catch (Exception e) {
                 log.warn("Could not resolve topic id for sink topic '{}' (it may not exist yet); "
-                        + "own-coordinate stripping for it stays off until the next restart re-resolves it",
+                        + "own-coordinate stripping and own-output tracking for it stay off until "
+                        + "the next restart re-resolves it", topic, e);
+            }
+            if (id == null) {
+                continue;
+            }
+            ids.put(topic, id);
+            try {
+                endOffsets.put(topic, Map.copyOf(admin.endOffsets(topic)));
+            } catch (Exception e) {
+                log.warn("Could not read end offsets for sink topic '{}'; the ownOutputs seed for it "
+                        + "is skipped this start (live acks still fold; the next restart re-seeds)",
                         topic, e);
             }
         }
+        this.sinkEndOffsets = Map.copyOf(endOffsets);
         return ids;
     }
 

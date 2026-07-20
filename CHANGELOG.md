@@ -29,6 +29,30 @@ All notable changes to this project are documented in this file. The format is b
   coordinates it now (correctly) sees in stamps — fail-closed, never out-of-order.
 
 ### Changed (internal)
+- **The node tracks its own acknowledged output positions: the `ownOutputs` clock (T2.2, decision
+  D2).** Every `CausalStreams` instance now injects a `ProducerInterceptor`
+  (`ParsleyOwnOutputInterceptor`) into its stream producers through the public
+  `producer.interceptor.classes` prefix — appending to, never replacing, any user-configured
+  interceptors — plus a minted registry id under the same prefix, wiring producer acks for declared
+  sink topics into a per-instance concurrent registry (`ParsleyOwnOutputRegistry`). Before every
+  stamp, the single stamping site drains the registry into a new `ownOutputs` vector clock owned by
+  `ParsleyChannels` (`acknowledge(topicId, partition, offset)`, max-fold, monotone), persisted as a
+  new optional trailing section of the frontier `"f"` blob and seeded at init from each resolved
+  sink's end offsets (`endOffset - 1`, the last appended position) — a deliberate over-claim that is
+  conservative-sound (invariant I8) and heals the blob's one-transaction ack lag across a crash.
+  Registry granularity follows T2.1's carry-forward: acked offsets are a global per-coordinate max
+  (a sibling task's higher offset on a shared sink folds as an I8-sound over-claim, so no
+  send-to-task ack routing is needed), while pending-send tracking is per producer — which under
+  `exactly_once_v2` means per StreamThread, so the crossing wait resolves "this task's pending
+  sends" from the current thread alone. The crossing-wait primitive
+  (`awaitQuiescentExcept(topic, partition, timeout)`) enforces T3.0 A8's implementation invariant by
+  construction: it returns normally only when no send to another own-sink coordinate is
+  unacknowledged, and throws — failing the EOS transaction, never stamp-and-proceed — on timeout or
+  on an acknowledgement failure observed while waiting. Destroyed coordinates (a recreated
+  input-that-is-also-own-sink) are purged from the clock at rescope, per I9's one permitted removal.
+  The outbound stamp is byte-identical to before — `completeness ∪ ownOutputs` and the crossing
+  wait's stamping-site call land with T2.3, which also deletes the stamp-side own-sink strip. No
+  public API or wire format changes.
 - **The own-output acknowledgement mechanism is validated against a real broker (T2.1).** A new
   broker integration test, `ParsleyProducerAckMechanicsIT`, confirms the three mechanics the Phase 2
   own-output design depends on, ahead of building it: a `ProducerInterceptor` installed purely

@@ -1,5 +1,6 @@
 package io.github.tobyjamesclements.parsley;
 
+import org.apache.kafka.clients.producer.ProducerConfig;
 import org.apache.kafka.common.Uuid;
 import org.apache.kafka.common.header.Headers;
 import org.apache.kafka.common.serialization.Serdes;
@@ -19,6 +20,7 @@ import org.apache.kafka.streams.processor.api.Processor;
 import org.apache.kafka.streams.processor.api.ProcessorContext;
 import org.apache.kafka.streams.processor.api.ProcessorSupplier;
 import org.apache.kafka.streams.processor.api.Record;
+import org.apache.kafka.streams.state.KeyValueStore;
 import org.apache.kafka.streams.test.TestRecord;
 import org.junit.jupiter.api.Test;
 
@@ -37,6 +39,9 @@ import java.util.HashSet;
 import java.util.Set;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -1118,6 +1123,110 @@ class CausalStreamsTopologyTest {
         }
     }
 
+    // --- own outputs (D2, T2.2) ----------------------------------------------------------------
+
+    /**
+     * Task init seeds the {@code ownOutputs} clock from each resolved sink's end offsets: with the
+     * sink's end offset at 5, the clock claims the last appended position 4 — whether or not this
+     * task produced it (I8's over-claim path; it heals the persisted blob trailing the crashed
+     * transaction's acks). The seed is persisted in the frontier {@code "f"} blob, and the
+     * outbound stamp is unchanged by it — the stamp carries {@code ownOutputs} only from T2.3.
+     *
+     * Asserts the persisted own-output clock holds end offset - 1 for the sink and the emitted
+     * record's dependency stamp does not name the sink coordinate.
+     */
+    @Test
+    void initSeedsOwnOutputsFromSinkEndOffsetsWithoutChangingTheStamp() {
+        Uuid outId = Uuid.randomUuid();
+        ParsleyTopicAdmin admin = TestTopicAdmin.of(Map.of("t1", T1_ID, "out", outId))
+                .withEndOffsets(Map.of("out", Map.of(0, 5L)));
+        CausalStreamsBuilder builder = new CausalStreamsBuilder();
+        builder.stream("t1", Serdes.String(), Serdes.String())
+                .process(upperCaser())
+                .to("out-sink", "out", Serdes.String(), Serdes.String());
+        Topology topology = assemble(builder, admin);
+
+        try (TopologyTestDriver driver = new TopologyTestDriver(topology, config())) {
+            TestInputTopic<String, String> t1 =
+                    driver.createInputTopic("t1", new StringSerializer(), new StringSerializer());
+            TestOutputTopic<String, String> out =
+                    driver.createOutputTopic("out", new StringDeserializer(), new StringDeserializer());
+            t1.pipeInput(new TestRecord<>("k", "hello", depsHeader(CausalDependencies.empty())));
+
+            TestRecord<String, String> emitted = out.readRecord();
+            ParsleyVectorClock stamp = ParsleyVectorClock.fromBytes(
+                    emitted.headers().lastHeader(ParsleyHeader.CAUSAL_DEPENDENCIES).value());
+            assertEquals(-1L, stamp.offsetFor(outId, 0),
+                    "the seeded own-output coordinate must not appear in the stamp before T2.3");
+
+            KeyValueStore<String, byte[]> frontierStore =
+                    driver.getKeyValueStore("causal-streams-test-stage-1-frontier");
+            ParsleyChannels persisted = new ParsleyChannels(frontierStore, new MockForwardedIndex());
+            assertEquals(4L, persisted.ownOutputs().offsetFor(outId, 0),
+                    "init must seed ownOutputs at the sink's end offset - 1 and persist it");
+        }
+    }
+
+    /** A loadable stand-in for a user-configured producer interceptor (instantiated reflectively). */
+    public static final class UserNoopInterceptor implements org.apache.kafka.clients.producer.ProducerInterceptor<Object, Object> {
+        @Override
+        public org.apache.kafka.clients.producer.ProducerRecord<Object, Object> onSend(
+                org.apache.kafka.clients.producer.ProducerRecord<Object, Object> producerRecord) {
+            return producerRecord;
+        }
+
+        @Override
+        public void onAcknowledgement(org.apache.kafka.clients.producer.RecordMetadata metadata, Exception exception) {
+        }
+
+        @Override
+        public void close() {
+        }
+
+        @Override
+        public void configure(Map<String, ?> configs) {
+        }
+    }
+
+    /**
+     * {@link CausalStreams} construction wires the own-output ack machinery through public
+     * configuration alone (O1): it appends {@link ParsleyOwnOutputInterceptor} to the
+     * user-configured {@code producer.interceptor.classes} — never replacing them — injects the
+     * minted registry id under the {@code producer.} prefix, and registers a registry tracking
+     * exactly the declared sink topics; {@code close()} unregisters it.
+     *
+     * Asserts the user's interceptor is preserved ahead of Parsley's, the registry id resolves to
+     * a registry tracking the sink (and not the source), and the id no longer resolves after close.
+     */
+    @Test
+    void causalStreamsAppendsTheOwnOutputInterceptorAndManagesTheRegistryLifecycle() throws IOException {
+        CausalStreamsBuilder builder = new CausalStreamsBuilder();
+        builder.stream("t1", Serdes.String(), Serdes.String())
+                .process(upperCaser())
+                .to("out-sink", "out", Serdes.String(), Serdes.String());
+        Properties props = config(tempStateDir());
+        // KafkaStreams construction creates (but never connects) real clients, and client creation
+        // resolves the bootstrap hostname eagerly — so unlike the TopologyTestDriver tests' "dummy",
+        // this needs a resolvable (if dead) address.
+        props.put(StreamsConfig.BOOTSTRAP_SERVERS_CONFIG, "localhost:19092");
+        String interceptorsKey = "producer." + ProducerConfig.INTERCEPTOR_CLASSES_CONFIG;
+        props.put(interceptorsKey, UserNoopInterceptor.class.getName());
+
+        String registryId;
+        try (CausalStreams streams = new CausalStreams(builder.build(), props)) {
+            assertEquals(UserNoopInterceptor.class.getName() + "," + ParsleyOwnOutputInterceptor.class.getName(),
+                    props.get(interceptorsKey),
+                    "Parsley's interceptor must be appended after the user's, never replacing it");
+            registryId = String.valueOf(props.get("producer." + ParsleyOwnOutputRegistry.CONFIG_KEY));
+            ParsleyOwnOutputRegistry registry = ParsleyOwnOutputRegistry.lookup(registryId);
+            assertNotNull(registry, "the injected registry id must resolve while the instance lives");
+            assertTrue(registry.tracks("out"), "the registry must track the declared sink topic");
+            assertFalse(registry.tracks("t1"), "a source topic is not an own-output coordinate");
+        }
+        assertNull(ParsleyOwnOutputRegistry.lookup(registryId),
+                "close() must unregister the registry so the JVM-wide map cannot leak instances");
+    }
+
     /**
      * A {@link ParsleyTopicAdmin} test double that resolves the given topic UUIDs and reports the
      * given per-topic partition counts (default 1) and cleanup policies (default {@code "delete"}),
@@ -1177,6 +1286,11 @@ class CausalStreamsTopologyTest {
             }
         }
 
+        @Override
+        public Map<Integer, Long> endOffsets(String topic) throws Exception {
+            failIfAnyUnresolvable(List.of(topic));
+            return Map.of();
+        }
 
         @Override
         public void close() {
@@ -1231,6 +1345,10 @@ class CausalStreamsTopologyTest {
             return policies;
         }
 
+        @Override
+        public Map<Integer, Long> endOffsets(String topic) {
+            return Map.of();
+        }
 
         @Override
         public void close() {

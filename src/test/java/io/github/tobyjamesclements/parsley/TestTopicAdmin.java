@@ -17,16 +17,18 @@ final class TestTopicAdmin implements ParsleyTopicAdmin {
     private final Map<String, Uuid> topicIds;
     private final Map<String, Integer> partitionCounts;
     private final Map<String, String> cleanupPolicies;
+    private final Map<String, Map<Integer, Long>> endOffsets;
 
     private TestTopicAdmin(Map<String, Uuid> topicIds, Map<String, Integer> partitionCounts,
-            Map<String, String> cleanupPolicies) {
+            Map<String, String> cleanupPolicies, Map<String, Map<Integer, Long>> endOffsets) {
         this.topicIds = topicIds;
         this.partitionCounts = partitionCounts;
         this.cleanupPolicies = cleanupPolicies;
+        this.endOffsets = endOffsets;
     }
 
     static TestTopicAdmin of(Map<String, Uuid> topicIds) {
-        return new TestTopicAdmin(Map.copyOf(topicIds), Map.of(), Map.of());
+        return new TestTopicAdmin(Map.copyOf(topicIds), Map.of(), Map.of(), Map.of());
     }
 
     /**
@@ -34,7 +36,7 @@ final class TestTopicAdmin implements ParsleyTopicAdmin {
      * co-partitioning parity check. Topics absent from {@code partitionCounts} report a count of 1.
      */
     static TestTopicAdmin of(Map<String, Uuid> topicIds, Map<String, Integer> partitionCounts) {
-        return new TestTopicAdmin(Map.copyOf(topicIds), Map.copyOf(partitionCounts), Map.of());
+        return new TestTopicAdmin(Map.copyOf(topicIds), Map.copyOf(partitionCounts), Map.of(), Map.of());
     }
 
     /**
@@ -44,7 +46,17 @@ final class TestTopicAdmin implements ParsleyTopicAdmin {
      */
     static TestTopicAdmin of(Map<String, Uuid> topicIds, Map<String, Integer> partitionCounts,
             Map<String, String> cleanupPolicies) {
-        return new TestTopicAdmin(Map.copyOf(topicIds), Map.copyOf(partitionCounts), Map.copyOf(cleanupPolicies));
+        return new TestTopicAdmin(Map.copyOf(topicIds), Map.copyOf(partitionCounts),
+                Map.copyOf(cleanupPolicies), Map.of());
+    }
+
+    /**
+     * A copy of this double that also reports the given per-topic, per-partition end offsets, for
+     * exercising the {@code ownOutputs} init-time seed. Topics absent from {@code endOffsets}
+     * report an empty topic (every partition at end offset 0 — nothing appended, nothing seeded).
+     */
+    TestTopicAdmin withEndOffsets(Map<String, Map<Integer, Long>> endOffsets) {
+        return new TestTopicAdmin(topicIds, partitionCounts, cleanupPolicies, Map.copyOf(endOffsets));
     }
 
     @Override
@@ -72,6 +84,11 @@ final class TestTopicAdmin implements ParsleyTopicAdmin {
         Map<String, String> policies = new HashMap<>();
         topics.forEach(t -> policies.put(t, cleanupPolicies.getOrDefault(t, "delete")));
         return policies;
+    }
+
+    @Override
+    public Map<Integer, Long> endOffsets(String topic) {
+        return endOffsets.getOrDefault(topic, Map.of());
     }
 
     @Override

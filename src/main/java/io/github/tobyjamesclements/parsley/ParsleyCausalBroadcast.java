@@ -608,8 +608,11 @@ final class ParsleyCausalBroadcast<K, V> {
      * <p>This is the <strong>single stamping site</strong> for every outbound record: a delegate's
      * business forwards ({@link ParsleyProcessorContext#forward}) and {@code ParsleyProcessor}'s
      * protocol markers both route through here, so the stamp's content cannot diverge between the two
-     * paths by construction. Phase 2 (D2) extends the stamp to {@code completeness ∪ ownOutputs} by
-     * changing only this method's clock source.
+     * paths by construction. Every stamp is preceded by draining the producer-ack registry into the
+     * {@code ownOutputs} clock ({@link ParsleyChannels#foldAcknowledgedOutputs} — "folded before
+     * each stamp", D2/O1), so the fold-then-stamp ordering is likewise structural; T2.3 completes
+     * Phase 2 by extending the stamp itself to {@code completeness ∪ ownOutputs} through only this
+     * method's clock source.
      *
      * @param record the outbound record to stamp; its headers are not mutated (a fresh header set is
      *               built and applied via {@link Record#withHeaders})
@@ -618,6 +621,7 @@ final class ParsleyCausalBroadcast<K, V> {
      * @return the same record with the stamp header attached
      */
     <KOut, VOut> Record<KOut, VOut> broadcast(Record<KOut, VOut> record) {
+        channels.foldAcknowledgedOutputs();
         return record.withHeaders(
                 ParsleyHeader.replacingDependencies(record.headers(), completeness().toBytes()));
     }

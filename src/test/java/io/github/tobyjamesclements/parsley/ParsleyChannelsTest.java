@@ -221,6 +221,198 @@ class ParsleyChannelsTest {
                 "the rescope must record the current declaration for the next init to diff against");
     }
 
+    // --- Own outputs (D2, T2.2) -----------------------------------------------------------------
+    //
+    // The ownOutputs clock is stamp-side state only: acknowledge() folds producer acks (and the
+    // init-time end-offset seed) monotonically, and nothing here may leak into completeness() until
+    // T2.3 changes the stamp to completeness ∪ ownOutputs.
+
+    private static final Uuid SINK_ID = Uuid.randomUuid();
+
+    /**
+     * {@code acknowledge} folds monotonically into the {@code ownOutputs} clock: entries only ever
+     * rise (a lower or equal offset is a no-op, a negative offset is ignored), which is the
+     * property I3 leans on once T2.3 folds this clock into the stamp — and which makes re-draining
+     * the interceptor registry idempotent.
+     */
+    @Test
+    void acknowledgeFoldsMonotonicallyIntoOwnOutputs() {
+        ParsleyChannels channels =
+                new ParsleyChannels(ParsleyVectorClock.empty(), new MockForwardedIndex());
+
+        channels.acknowledge(SINK_ID, 0, 5);
+        assertEquals(5L, channels.ownOutputs().offsetFor(SINK_ID, 0),
+                "a first ack must establish the coordinate's own-output position");
+
+        channels.acknowledge(SINK_ID, 0, 3);
+        channels.acknowledge(SINK_ID, 0, 5);
+        channels.acknowledge(SINK_ID, 0, -1);
+        assertEquals(5L, channels.ownOutputs().offsetFor(SINK_ID, 0),
+                "a lower, equal, or negative offset must never lower an own-output entry");
+
+        channels.acknowledge(SINK_ID, 0, 9);
+        channels.acknowledge(SINK_ID, 1, 2);
+        assertEquals(9L, channels.ownOutputs().offsetFor(SINK_ID, 0),
+                "a higher ack must raise the entry");
+        assertEquals(2L, channels.ownOutputs().offsetFor(SINK_ID, 1),
+                "partitions of one sink are independent own-output coordinates (T3.0 A7)");
+    }
+
+    /**
+     * {@code ownOutputs} is stamp-side only and, until T2.3, not part of the stamp at all:
+     * {@link ParsleyChannels#completeness()} must not carry an acknowledged own-output coordinate —
+     * T2.2 lands the tracking with the outbound stamp byte-identical to before.
+     */
+    @Test
+    void ownOutputsDoesNotLeakIntoCompletenessBeforeStampIntegration() {
+        ParsleyChannels channels =
+                new ParsleyChannels(ParsleyVectorClock.empty(), new MockForwardedIndex());
+        channels.delivered(T1_ID, 0, 0);
+        ParsleyVectorClock before = channels.completeness();
+
+        channels.acknowledge(SINK_ID, 0, 41);
+
+        assertEquals(before, channels.completeness(),
+                "acknowledging own outputs must leave the outbound stamp unchanged until T2.3");
+        assertEquals(-1L, channels.completeness().offsetFor(SINK_ID, 0),
+                "the acked sink coordinate must not appear in completeness yet");
+    }
+
+    /**
+     * The {@code ownOutputs} clock round-trips through its trailing section of the {@code "f"}
+     * blob, and a blob written before the section existed (simulated by a pre-T2.2 write path:
+     * nothing acknowledged persists an empty clock — load() treats a truncated blob identically)
+     * loads with an empty clock rather than failing.
+     */
+    @Test
+    void ownOutputsRoundTripsThroughTheFBlob() {
+        TestKeyValueStore<String, byte[]> store =
+                new TestKeyValueStore<String, byte[]>(Comparator.naturalOrder(), "frontier");
+        ParsleyChannels original = new ParsleyChannels(store, new MockForwardedIndex());
+        original.delivered(T1_ID, 0, 2);
+        original.acknowledge(SINK_ID, 0, 7);
+        original.acknowledge(SINK_ID, 1, 3);
+
+        ParsleyChannels restored = new ParsleyChannels(store, new MockForwardedIndex());
+        assertEquals(7L, restored.ownOutputs().offsetFor(SINK_ID, 0),
+                "own-output positions must restore from the \"f\" blob's trailing section");
+        assertEquals(3L, restored.ownOutputs().offsetFor(SINK_ID, 1),
+                "every persisted own-output coordinate must restore");
+        assertEquals(original.frontier(), restored.frontier(),
+                "the own-outputs section must not disturb the sections before it");
+    }
+
+    /**
+     * The abort/restart tear the design tolerates (O1): the persisted blob can trail the last
+     * transaction's acks, because store caches flush before the producer flush completes acks — and
+     * the init-time end-offset seed heals exactly that window. A restored clock missing the final
+     * acks is raised by the seed (an {@code acknowledge} at the sink's last appended position), and
+     * a late replayed ack below the healed value is a no-op (I8: entries only ever rise).
+     */
+    @Test
+    void restoredOwnOutputsTrailingTheLastTransactionIsHealedByTheEndOffsetSeed() {
+        TestKeyValueStore<String, byte[]> store =
+                new TestKeyValueStore<String, byte[]>(Comparator.naturalOrder(), "frontier");
+        ParsleyChannels original = new ParsleyChannels(store, new MockForwardedIndex());
+        // Acks up to offset 10 were persisted; the crashed transaction's acks at 11..12 were not.
+        original.acknowledge(SINK_ID, 0, 10);
+
+        ParsleyChannels restored = new ParsleyChannels(store, new MockForwardedIndex());
+        assertEquals(10L, restored.ownOutputs().offsetFor(SINK_ID, 0),
+                "precondition: the restored clock trails the crashed transaction's acks");
+
+        // Init-time seed: the sink's end offset is 13, so its last appended position is 12.
+        restored.acknowledge(SINK_ID, 0, 12);
+        assertEquals(12L, restored.ownOutputs().offsetFor(SINK_ID, 0),
+                "the end-offset seed must heal the trailing clock up to the last appended position");
+
+        restored.acknowledge(SINK_ID, 0, 11);
+        assertEquals(12L, restored.ownOutputs().offsetFor(SINK_ID, 0),
+                "a replayed ack below the healed value must never lower the clock (I8)");
+    }
+
+    /**
+     * The end-offset seed's over-claim path (I8): the seed claims the sink's last appended position
+     * even when this task produced none of it — a sibling's records on a shared sink, an aborted
+     * tail, or a transaction marker may sit there. The claim can only delay downstream delivery,
+     * never reorder it, and the clock never recedes toward the "truthful" lower value afterwards.
+     */
+    @Test
+    void endOffsetSeedOverClaimsSoundlyAndNeverRecedes() {
+        ParsleyChannels channels =
+                new ParsleyChannels(ParsleyVectorClock.empty(), new MockForwardedIndex());
+
+        // Seed from end offset 42 (last appended position 41) with nothing produced by this task.
+        channels.acknowledge(SINK_ID, 0, 41);
+        assertEquals(41L, channels.ownOutputs().offsetFor(SINK_ID, 0),
+                "the seed must claim the last appended position regardless of who appended it");
+
+        // This task's first real ack lands far below the seed: the over-claim must stand.
+        channels.acknowledge(SINK_ID, 0, 7);
+        assertEquals(41L, channels.ownOutputs().offsetFor(SINK_ID, 0),
+                "a real ack below the seed must not lower the entry — I8 mechanisms only ever raise");
+    }
+
+    /**
+     * {@code foldAcknowledgedOutputs} drains the bound source through the sink-name → UUID map:
+     * a coordinate whose topic name resolves folds into {@code ownOutputs}; a name absent from the
+     * map (a sink whose UUID could not be resolved at init) is skipped rather than failing; and
+     * with no source bound the fold is a no-op (the TopologyTestDriver case).
+     */
+    @Test
+    void foldAcknowledgedOutputsDrainsTheBoundSourceThroughTheNameToUuidMap() {
+        ParsleyChannels channels =
+                new ParsleyChannels(ParsleyVectorClock.empty(), new MockForwardedIndex());
+        channels.foldAcknowledgedOutputs();
+        assertTrue(channels.ownOutputs().isEmpty(),
+                "an unbound fold must be a no-op, not a failure");
+
+        channels.bindOwnOutputSource(consumer -> {
+            consumer.accept("OUT", 0, 6);
+            consumer.accept("unresolved-sink", 0, 99);
+        }, Map.of("OUT", SINK_ID));
+        channels.foldAcknowledgedOutputs();
+
+        assertEquals(6L, channels.ownOutputs().offsetFor(SINK_ID, 0),
+                "an ack whose topic name resolves must fold under the sink's UUID identity");
+        assertEquals(ParsleyVectorClock.empty().observe(SINK_ID, 0, 6), channels.ownOutputs(),
+                "an ack for an unresolvable sink name must be skipped — no other entry may appear");
+    }
+
+    /**
+     * {@code rescope}'s destroyed-coordinate rule reaches {@code ownOutputs} (I9's one permitted
+     * removal from stamp-feeding state): an input topic this node also produces (a cycle) that was
+     * deleted and recreated purges its old UUID from the own-output clock — no receiver can ever
+     * deliver the old UUID's coordinates (E1) — while entries for unrelated sinks survive, and an
+     * ordinary input-set shrink or growth never touches the clock at all (it is sink-keyed).
+     */
+    @Test
+    void rescopePurgesOnlyDestroyedCoordinatesFromOwnOutputs() {
+        TestKeyValueStore<String, byte[]> store =
+                new TestKeyValueStore<String, byte[]>(Comparator.naturalOrder(), "frontier");
+        ParsleyChannels channels = new ParsleyChannels(store, new MockForwardedIndex());
+        // T1 is both input and own sink (a cycle); SINK is an ordinary, non-input sink.
+        channels.rescope(Map.of("T1", T1_ID, "T2", T2_ID), 0);
+        channels.acknowledge(T1_ID, 0, 4);
+        channels.acknowledge(SINK_ID, 0, 8);
+
+        // An ordinary shrink (T2 leaves) and growth (T3 arrives) must leave ownOutputs alone.
+        Uuid t3 = Uuid.randomUuid();
+        channels.rescope(Map.of("T1", T1_ID, "T3", t3), 0);
+        assertEquals(4L, channels.ownOutputs().offsetFor(T1_ID, 0),
+                "an input-set change must not prune own outputs — the clock is sink-keyed");
+        assertEquals(8L, channels.ownOutputs().offsetFor(SINK_ID, 0),
+                "a non-input sink's entry is untouched by any input-set change");
+
+        // T1 recreated: same name, new UUID — the old UUID is provably destroyed.
+        Uuid recreated = Uuid.randomUuid();
+        channels.rescope(Map.of("T1", recreated, "T3", t3), 0);
+        assertEquals(-1L, channels.ownOutputs().offsetFor(T1_ID, 0),
+                "a destroyed coordinate must leave the own-output clock — no receiver can deliver it");
+        assertEquals(8L, channels.ownOutputs().offsetFor(SINK_ID, 0),
+                "unrelated own-output entries must survive the destruction");
+    }
+
     // --- Epoch flooring (WS1) -------------------------------------------------------------------
     //
     // Each below floors T1 at startsAt = 100; every other coordinate is unbounded (NO_BOUND). The

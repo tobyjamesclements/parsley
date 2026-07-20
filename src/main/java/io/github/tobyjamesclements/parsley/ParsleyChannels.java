@@ -33,15 +33,13 @@ import java.util.Set;
  *             normalize(rawDeps, source)              normalise an inbound dependency clock before
  *                                                     L2 evaluates it: self-cycle strip (I5), plus
  *                                                     the interim below-floor strip (until T3.2)
- *             acknowledge(topic, partition, offset)   producer ack → ownOutputs (D2; stub until
- *                                                     Phase 2)
+ *             acknowledge(topicId, partition, offset) producer ack → ownOutputs (D2)
  *             rescope(currentInputs, taskPartition)   reconcile restored state with the declared
  *                                                     input set: re-home retired ancestry into the
  *                                                     carried-ancestry clock (A6), seed added
  *                                                     channels from carried ancestry (A5)
  * queries:    frontier() → ParsleyVectorClock         the delivered vector VT(p)
- *             ownOutputs() → ParsleyVectorClock       the node's own acked output positions (D2;
- *                                                     empty until Phase 2)
+ *             ownOutputs() → ParsleyVectorClock       the node's own acked output positions (D2)
  *             alreadyDelivered(topicId, partition,    membership in the delivered set (frontier ∪
  *                 offset) → boolean                   forwarded index); the receive path's replay
  *                                                     skip guard
@@ -92,6 +90,21 @@ final class ParsleyChannels {
     // past, restricted to retired channels. Stamp-side only: merged into completeness(), never
     // consulted by the delivery gate, never advanced by deliveries. Persisted in the "f" blob.
     private ParsleyVectorClock carriedAncestry = ParsleyVectorClock.empty();
+    // The node's own acked output positions per sink coordinate (D2) — the clock that recovers
+    // CBCAST's own-slot semantics (the broker performs the sender's clock increment; acknowledge()
+    // learns it). Monotone by construction (acknowledge only ever raises entries — I3 depends on
+    // this once T2.3 folds it into the stamp) and stamp-side only: never consulted by the delivery
+    // gate. Fed three ways, every one an at-or-below-a-real-appended-offset claim (I8): the
+    // interceptor registry drained by foldAcknowledgedOutputs(), the init-time sink end-offset
+    // seed (ParsleyProcessor), and the restored "f" blob — which may trail the last transaction's
+    // acks (store caches flush before the producer flush completes acks); the seed heals that.
+    private ParsleyVectorClock ownOutputs = ParsleyVectorClock.empty();
+    // The acknowledged-outputs source foldAcknowledgedOutputs() drains (the interceptor registry in
+    // production), with the sink-name → UUID resolution fixed at bind time; null until
+    // bindOwnOutputSource, and permanently null for in-memory/test instances and TopologyTestDriver
+    // runs (no registry exists there — ownOutputs then advances only via direct acknowledge calls).
+    private @Nullable AckedOutputs ackedOutputs;
+    private Map<String, Uuid> ownOutputTopicIds = Map.of();
     // The input-topic set (name -> UUID) this node's persisted state was written under, updated by
     // rescope() and persisted in the "f" blob. Comparing it against the currently declared inputs is
     // what makes a scope change detectable at init (the #21 fix: restart-vs-scope-change keys on
@@ -246,22 +259,65 @@ final class ParsleyChannels {
 
     /**
      * The <em>acknowledge</em> request: the producer acked this node's own send to sink coordinate
-     * {@code (topic, partition)} at {@code offset}. Feeds the {@link #ownOutputs()} clock — D2's
-     * own-slot tracking. A stub until Phase 2 (T2.2) wires the producer-interceptor registry in;
-     * declared now so the module's API is complete from the start.
+     * {@code (topicId, partition)} at {@code offset} — or an equally I8-sound stand-in for one (the
+     * init-time end-offset seed, which claims the sink's last appended position whether or not this
+     * task produced it). Folds into the {@link #ownOutputs()} clock (max, monotone — a lower or
+     * equal offset is a no-op, so replaying acks costs nothing) and persists on advance. Keyed by
+     * the topic's UUID, like every other request here: L1 owns coordinate identity (E1), and the
+     * name → UUID translation happens once, where sinks are resolved at init.
      */
-    void acknowledge(String topic, int partition, long offset) {
-        // Stub until Phase 2 (T2.2): acked output positions will fold into the ownOutputs clock.
+    void acknowledge(Uuid topicId, int partition, long offset) {
+        if (offset < 0 || offset <= ownOutputs.offsetFor(topicId, partition)) {
+            return;
+        }
+        ownOutputs = ownOutputs.observe(topicId, partition, offset);
+        persist();
     }
 
     /**
      * The node's own acked output positions per sink coordinate — the clock that recovers CBCAST's
      * own-slot semantics (D2: the broker performs the sender's clock increment, learned via
-     * {@link #acknowledge}). Empty until Phase 2 (T2.2) lands the tracking; stamp-side only, never
-     * consulted by the delivery gate.
+     * {@link #acknowledge}). Stamp-side only, never consulted by the delivery gate; the stamp
+     * itself carries it only from T2.3 ({@code completeness ∪ ownOutputs}).
      */
     ParsleyVectorClock ownOutputs() {
-        return ParsleyVectorClock.empty();
+        return ownOutputs;
+    }
+
+    /**
+     * Wires the acknowledged-outputs source {@link #foldAcknowledgedOutputs()} drains — the
+     * interceptor registry in production — together with this node's sink-name → UUID resolution
+     * (acks arrive keyed by topic name; the clock is keyed by UUID identity, E1). Called once at
+     * init by {@code ParsleyProcessor}; never called for in-memory/test instances, whose
+     * {@code ownOutputs} then advances only through direct {@link #acknowledge} calls. A sink
+     * whose UUID could not be resolved at init (the topic does not exist yet) is simply absent
+     * from {@code sinkTopicIds}: its acks are skipped until a restart re-resolves it — the same
+     * exposure, and the same heal, as the own-sink predicate's unresolved-sink caveat.
+     */
+    void bindOwnOutputSource(AckedOutputs source, Map<String, Uuid> sinkTopicIds) {
+        this.ackedOutputs = source;
+        this.ownOutputTopicIds = Map.copyOf(sinkTopicIds);
+    }
+
+    /**
+     * Drains the bound acknowledged-outputs source into {@link #ownOutputs()} — called by
+     * {@link ParsleyCausalBroadcast#broadcast} before every stamp, so no coordinate acked before
+     * this stamp can be missing from the clock the stamp (from T2.3) carries. Idempotent and
+     * cheap: the source exposes max acked offsets per coordinate and {@link #acknowledge} is a
+     * monotone no-op below the current entry, so re-draining persists nothing new. A no-op until
+     * {@link #bindOwnOutputSource} is called.
+     */
+    void foldAcknowledgedOutputs() {
+        AckedOutputs source = ackedOutputs;
+        if (source == null) {
+            return;
+        }
+        source.forEachAcked((topic, partition, offset) -> {
+            Uuid topicId = ownOutputTopicIds.get(topic);
+            if (topicId != null) {
+                acknowledge(topicId, partition, offset);
+            }
+        });
     }
 
     /**
@@ -641,6 +697,12 @@ final class ParsleyChannels {
             channels.keySet().removeIf(key -> destroyed.contains(key.topicId()));
             channels.replaceAll((key, clock) -> clock.retaining(notDestroyed));
             highestReceived.keySet().removeIf(key -> destroyed.contains(key.topicId()));
+            // A destroyed topic this node also produced (an input that is its own sink — a cycle)
+            // leaves ownOutputs too: its old-UUID coordinates can never be delivered by any
+            // receiver (E1), which is I9's one permitted removal from stamp-feeding state.
+            // Everything else about the input-set diff leaves ownOutputs alone below — it is
+            // keyed by sink coordinates, not input channels, and it only ever grows (I3).
+            ownOutputs = ownOutputs.retaining(notDestroyed);
         }
 
         // 2 — shrink: fold everything else leaving scope into the carried ancestry, then prune it.
@@ -730,6 +792,13 @@ final class ParsleyChannels {
      * subsequent stamp) — then {@code [input-count:4]} with per input {@code [name UTF][topicId MSB:8]
      * [topicId LSB:8]} — the {@link #declaredInputs} set, which is what makes a scope change
      * detectable at the next init ({@link #rescope}).
+     *
+     * <p>Then one more optional trailing section (T2.2):
+     * {@code [own-outputs-len:4][own-outputs bytes]} — the {@link #ownOutputs} clock. Best-effort
+     * durability by design: acks arriving after this transaction's last persist are missing from
+     * the committed blob (store caches flush before the producer flush completes acks — O1), so a
+     * restored clock can trail by one transaction; the init-time sink end-offset seed re-covers it
+     * (I8: both the trail and the seed only ever sit at or below a real appended offset).
      */
     private byte[] toBytes() {
         try (ByteArrayOutputStream baos = new ByteArrayOutputStream();
@@ -759,6 +828,7 @@ final class ParsleyChannels {
                 dos.writeUTF(entry.getKey());
                 ParsleyByteUtils.writeUuid(dos, entry.getValue());
             }
+            ParsleyByteUtils.writeBytes(dos, ownOutputs.toBytes());
             dos.flush();
             return baos.toByteArray();
         } catch (IOException e) {
@@ -812,10 +882,37 @@ final class ParsleyChannels {
                     declaredInputs.put(name, ParsleyByteUtils.readUuid(dis));
                 }
             }
+            // The own-outputs section is trailing and optional (T2.2): a pre-T2.2 blob ends before
+            // it, loading an empty clock — under-stated but never wrong, and the init-time sink
+            // end-offset seed immediately re-covers it (the same heal as the blob trailing the
+            // last transaction's acks; both are I8-sound directions).
+            if (dis.available() > 0) {
+                ownOutputs = ParsleyVectorClock.fromBytes(ParsleyByteUtils.readBytes(dis));
+            }
         } catch (IOException e) {
             throw new IllegalStateException("ParsleyChannels deserialisation failed", e);
         }
     }
 
     private record CoordKey(Uuid topicId, int partition) {}
+
+    /**
+     * The narrow seam {@link #foldAcknowledgedOutputs()} drains: a snapshot view of the highest
+     * successfully acknowledged offset per sink coordinate, keyed by topic <em>name</em> (that is
+     * what the producer ack carries; {@link #bindOwnOutputSource}'s map translates to UUID
+     * identity). Implemented by {@code ParsleyOwnOutputRegistry} in production and by hand-rolled
+     * doubles in tests. Iteration must be safe against concurrent updates (acks arrive on the
+     * producer network thread); values must be monotone per coordinate.
+     */
+    interface AckedOutputs {
+
+        /** Presents each coordinate's highest successfully acknowledged offset to {@code consumer}. */
+        void forEachAcked(Consumer consumer);
+
+        /** A receiver for each {@code (topic, partition, ackedOffset)} entry. */
+        @FunctionalInterface
+        interface Consumer {
+            void accept(String topic, int partition, long offset);
+        }
+    }
 }

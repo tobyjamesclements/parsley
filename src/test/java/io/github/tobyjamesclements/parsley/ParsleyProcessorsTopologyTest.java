@@ -1196,6 +1196,7 @@ class ParsleyProcessorsTopologyTest {
             @Override public Map<String, Uuid> topicIds(List<String> topics) { return Map.of(); }
             @Override public Map<String, Integer> partitionCounts(List<String> topics) { return Map.of(); }
             @Override public Map<String, String> cleanupPolicies(List<String> topics) { return Map.of(); }
+            @Override public Map<Integer, Long> endOffsets(String topic) { return Map.of(); }
             @Override public void close() {}
         };
         Topology topology = topology(
@@ -1230,6 +1231,7 @@ class ParsleyProcessorsTopologyTest {
             }
             @Override public Map<String, Integer> partitionCounts(List<String> topics) { return Map.of(); }
             @Override public Map<String, String> cleanupPolicies(List<String> topics) { return Map.of(); }
+            @Override public Map<Integer, Long> endOffsets(String topic) { return Map.of(); }
             @Override public void close() {}
         };
         Topology topology = topology(

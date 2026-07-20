@@ -1,5 +1,6 @@
 package io.github.tobyjamesclements.parsley;
 
+import org.apache.kafka.clients.producer.ProducerConfig;
 import org.apache.kafka.streams.KafkaStreams;
 import org.apache.kafka.streams.StreamsConfig;
 import org.apache.kafka.streams.Topology;
@@ -8,11 +9,14 @@ import org.apache.kafka.streams.errors.StreamsUncaughtExceptionHandler;
 import org.jspecify.annotations.Nullable;
 
 import java.time.Duration;
+import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.LinkedHashSet;
+import java.util.List;
 import java.util.Map;
 import java.util.Properties;
 import java.util.Set;
+import java.util.UUID;
 import java.util.function.Supplier;
 
 /**
@@ -55,6 +59,10 @@ public final class CausalStreams implements AutoCloseable {
     private final KafkaStreams kafkaStreams;
     private final ParsleyQuiesce quiesce;
     private final @Nullable ParsleyCoordination coordination;
+    // The minted id under which this instance's producer-ack registry is registered JVM-wide (D2):
+    // injected into props as producer.<CONFIG_KEY> so the interceptor (producer side) and each
+    // task's init (via appConfigs) resolve the same registry; unregistered at close().
+    private final String ownOutputRegistryId;
     // Everything the pre-start offset seeding needs, captured at construction: the consumer group id
     // (application.id), every causal source topic to seed (business and passthrough alike, read off the
     // assembled topology), and the admin configuration to reach the broker. See seedSourceOffsets().
@@ -74,6 +82,7 @@ public final class CausalStreams implements AutoCloseable {
         this.quiesce = new ParsleyQuiesce();
         this.coordination = coordinationFrom(props);
         Topology assembled = topology.assemble(props, quiesce, coordination);
+        this.ownOutputRegistryId = registerOwnOutputTracking(topology, props);
         this.kafkaStreams = new KafkaStreams(assembled, props);
         this.applicationId = props.getProperty(StreamsConfig.APPLICATION_ID_CONFIG);
         this.sourceTopics = sourceTopicsOf(assembled);
@@ -117,6 +126,34 @@ public final class CausalStreams implements AutoCloseable {
             }
         }
         return changelogs;
+    }
+
+    /**
+     * Creates and registers this instance's producer-ack registry (the {@code ownOutputs} clock's
+     * feed, D2) and injects the wiring into {@code props} before the {@code KafkaStreams} instance
+     * is built from them: {@link ParsleyOwnOutputInterceptor} is appended to any user-configured
+     * {@code producer.interceptor.classes} (never replacing them), and the minted registry id rides
+     * the same public {@code producer.} prefix so every stream producer's interceptor and every
+     * task's init resolve the same registry — no {@code *.internals.*} type is touched (O1).
+     *
+     * @return the minted registry id, for {@link #close()} to unregister
+     */
+    private static String registerOwnOutputTracking(CausalTopology topology, Properties props) {
+        String registryId = UUID.randomUUID().toString();
+        ParsleyOwnOutputRegistry.register(registryId, new ParsleyOwnOutputRegistry(topology.sinkTopics()));
+        String interceptorsKey = "producer." + ProducerConfig.INTERCEPTOR_CLASSES_CONFIG;
+        Object existing = props.get(interceptorsKey);
+        if (existing instanceof List<?> list) {
+            List<Object> appended = new ArrayList<>(list);
+            appended.add(ParsleyOwnOutputInterceptor.class.getName());
+            props.put(interceptorsKey, appended);
+        } else if (existing != null && !existing.toString().isBlank()) {
+            props.put(interceptorsKey, existing + "," + ParsleyOwnOutputInterceptor.class.getName());
+        } else {
+            props.put(interceptorsKey, ParsleyOwnOutputInterceptor.class.getName());
+        }
+        props.put("producer." + ParsleyOwnOutputRegistry.CONFIG_KEY, registryId);
+        return registryId;
     }
 
     private static @Nullable ParsleyCoordination coordinationFrom(Properties props) {
@@ -207,6 +244,7 @@ public final class CausalStreams implements AutoCloseable {
             coordination.leave(() -> canStillDrain(kafkaStreams.state()));
         }
         kafkaStreams.close();
+        ParsleyOwnOutputRegistry.unregister(ownOutputRegistryId);
         if (coordination != null) {
             coordination.close();
         }
