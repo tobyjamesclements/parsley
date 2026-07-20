@@ -56,6 +56,27 @@ interface ParsleyMetrics {
     void recordReplaySkipped();
 
     /**
+     * An inbound clock claimed one of this node's own sink coordinates above the {@code ownOutputs}
+     * clock, with pending producer acks already folded (I8). A truthful reflected claim can only name
+     * a position this node itself produced, so a claim above the own-output view means that view is
+     * stale beyond what the init-time end-offset seed healed, or a peer's stamp is not truthful.
+     * Diagnostic only — never a failure (O3 dissolved): the gate treats the claim like any other,
+     * and a stale view only ever delays delivery, never reorders it.
+     */
+    void recordReflectedClaimAboveOwnOutputs();
+
+    /**
+     * Reports how many held records have waited beyond the stall threshold on a consumed-channel
+     * dependency above that channel's highest physically received offset (T3.0 A9) — the signature
+     * of a claim nothing received so far can satisfy, whose delay is unbounded if the claimed
+     * channel stays silent. Fail-safe, never unsafe; reported as a gauge so a persistent stall is
+     * visible without log-scraping.
+     *
+     * @param count the number of held records currently stalled past the threshold
+     */
+    void reportHeldAboveHighestReceived(int count);
+
+    /**
      * Reports the buffer's current observable state. Called after every depth-changing event and,
      * independently, on a periodic refresh tick — so the oldest-record gauge stays current even on a
      * buffer that is idle (no admits or releases) between ticks.
@@ -73,6 +94,8 @@ interface ParsleyMetrics {
         @Override public void recordClockResolutionError() {}
         @Override public void recordUnreachableDependencyError() {}
         @Override public void recordReplaySkipped() {}
+        @Override public void recordReflectedClaimAboveOwnOutputs() {}
+        @Override public void reportHeldAboveHighestReceived(int count) {}
         @Override public void reportState(int depth, OptionalLong oldestBufferedAtMs) {}
     };
 
@@ -105,14 +128,20 @@ interface ParsleyMetrics {
                 Sensor.RecordingLevel.INFO);
         Sensor replaySkipped = sm.addRateTotalSensor("parsley", taskId, "replays-skipped",
                 Sensor.RecordingLevel.INFO);
+        Sensor reflectedAboveOwn = sm.addRateTotalSensor("parsley", taskId,
+                "reflected-claims-above-own-outputs", Sensor.RecordingLevel.INFO);
 
         Sensor depth = gauge(sm, parsleyId, "buffer-depth",
                 "Current number of records held in the causal buffer");
         Sensor oldestBufferedAt = gauge(sm, parsleyId, "buffer-oldest-buffered-at-ms",
                 "Buffer-admission time (epoch millis) of the oldest held record, or 0 if the buffer is empty");
+        Sensor heldAboveReceived = gauge(sm, parsleyId, "records-held-above-highest-received",
+                "Held records waiting past the stall threshold on a dependency above its channel's "
+                        + "highest received offset — nothing received so far can satisfy the claim");
 
         List<Sensor> sensors = new ArrayList<>(List.of(buffered, released, deserErr,
-                clockResErr, unreachableDepErr, replaySkipped, depth, oldestBufferedAt));
+                clockResErr, unreachableDepErr, replaySkipped, reflectedAboveOwn, depth,
+                oldestBufferedAt, heldAboveReceived));
 
         ParsleyMetrics metrics = new ParsleyMetrics() {
             @Override public void recordBuffered()             { buffered.record(); }
@@ -121,6 +150,8 @@ interface ParsleyMetrics {
             @Override public void recordClockResolutionError() { clockResErr.record(); }
             @Override public void recordUnreachableDependencyError() { unreachableDepErr.record(); }
             @Override public void recordReplaySkipped()        { replaySkipped.record(); }
+            @Override public void recordReflectedClaimAboveOwnOutputs() { reflectedAboveOwn.record(); }
+            @Override public void reportHeldAboveHighestReceived(int count) { heldAboveReceived.record(count); }
             @Override public void reportState(int d, OptionalLong oldest) {
                 depth.record(d);
                 oldestBufferedAt.record(oldest.isPresent() ? oldest.getAsLong() : 0L);

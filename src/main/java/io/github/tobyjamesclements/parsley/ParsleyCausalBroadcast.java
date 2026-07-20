@@ -1,5 +1,6 @@
 package io.github.tobyjamesclements.parsley;
 
+import org.apache.kafka.common.TopicPartition;
 import org.apache.kafka.common.Uuid;
 import org.apache.kafka.streams.processor.api.Record;
 import org.slf4j.Logger;
@@ -22,13 +23,16 @@ import java.util.function.LongSupplier;
  * which is why {@link #broadcast} attaches a stamp but cannot include the record's own coordinate):
  *
  * <pre>
- * requests:   broadcast(record) → stamped record       attach the outbound vector timestamp (the
- *                                                      BSS timestamp-assignment half; the underlying
- *                                                      point-to-point send is Kafka's produce)
+ * requests:   broadcast(record) → stamped record       attach the outbound vector timestamp
+ *                                                      completeness ∪ ownOutputs (D2; the BSS
+ *                                                      timestamp-assignment half — the underlying
+ *                                                      point-to-point send is Kafka's produce),
+ *                                                      after the crossing wait and the ack fold
  *             receive(message) → Outcome               the BSS receive: gate → deliver-or-hold →
  *                                                      cascade; the returned ordered list IS the
  *                                                      deliver() indication
- * queries:    completeness() → ParsleyVectorClock      the outbound stamp's clock
+ * queries:    completeness() → ParsleyVectorClock      the delivered/advertised boundary (the stamp
+ *                                                      is ParsleyChannels.stamp(): this ∪ ownOutputs)
  *             frontier() → ParsleyVectorClock          the delivered vector VT(p)
  * properties: I1 (causal delivery — a record reaches the delegate only after every dependency has
  *             been locally, contiguously delivered; no timeout, no eviction), I2 (stamp transitive
@@ -107,6 +111,9 @@ final class ParsleyCausalBroadcast<K, V> {
     private final ParsleyCandidateIndex candidateIndex;
     private final ParsleyMetrics metrics;
     private final LongSupplier clock;
+    // The stalled-dependency count last reported by reportHeldDependencyStalls (A9), so the WARN log
+    // fires on change rather than repeating every tick while a stall persists.
+    private int lastReportedStalls;
 
     // The single owner of all persisted causal metadata: the contiguous frontier clock, the channel
     // clocks, and the forwarded-offset index. completeness() and channel state live here, floored to
@@ -125,23 +132,18 @@ final class ParsleyCausalBroadcast<K, V> {
     // passes its real per-task predicate.
     private final ParsleyVectorClock.CoordinatePredicate inScope;
 
-    // Coordinates for a topic THIS NODE ITSELF produces (a registered sink). Stripped from any inbound
-    // dependency clock or marker-carried completeness before every gate check — see
-    // effectiveDependencies and onWatermark — never merely marked "in scope". This is sound, and a
-    // narrower, different case from the general out-of-scope rule above: a claim naming this node's own
-    // coordinate can only ever have arisen from something THIS node itself already produced (nothing
-    // else can ever advance it), so the claim is either already, trivially known here or could not have
-    // legitimately arisen at all — there is nothing to verify, unlike a genuinely foreign coordinate
-    // this node has no independent way to confirm. Concretely, this closes two related gaps: (1) a
-    // downstream node's stamp reflecting this node's own coordinate back toward it (e.g. in a topology
-    // cycle) would otherwise fail closed as "unreachable", even though the coordinate is this node's
-    // own and therefore never actually unverifiable; and (2) a node that also directly consumes its own
-    // sink (the tightest possible cycle) would otherwise never converge — every watermark it receives on
-    // that channel carries its own ever-advancing self-position, which the plain out-of-scope logic
-    // cannot distinguish from genuine foreign progress, so channelAdvanced never settles false and the
-    // marker never stops relaying. Defaults to "nothing is ever this node's own sink" so existing
-    // callers/tests that never construct with an explicit predicate are unaffected; ParsleyProcessor
-    // passes its real per-stage sink-topic predicate.
+    // Coordinates for a topic THIS NODE ITSELF produces (a registered sink). GATE-SIDE ONLY, and
+    // interim: stripped from any inbound dependency clock before the gate check (effectiveDependencies)
+    // so a claim reflecting this node's own coordinate back at it — directly (consuming its own sink)
+    // or around a topology cycle — is not failed fast as "unreachable"; T3.1's two-branch gate deletes
+    // this strip for good (reflection becomes ordinary ignore/consumed handling). The STAMP-side strip
+    // this predicate used to drive (the advertised-clock fold, the onWatermark carried-clock strip) is
+    // gone (T2.3, D2): it erased real ancestors from the outbound stamp when the sink is also consumed
+    // by a distinct downstream app (#22), and its relay-settling role is replaced by the I6
+    // knowledge-based relay rule (see onWatermark) — a reflected own claim is dominated by ownOutputs,
+    // so it teaches nothing and stops relaying without ever being stripped. A reflected claim ABOVE
+    // ownOutputs is a diagnostic metric, never a failure (I8). Defaults to "nothing is ever this
+    // node's own sink"; ParsleyProcessor passes its real per-stage sink-topic predicate.
     private final ParsleyVectorClock.CoordinatePredicate ownSinkTopics;
 
     // --- Convenience constructors: build an in-memory ParsleyChannels from an initial clock and a
@@ -205,9 +207,10 @@ final class ParsleyCausalBroadcast<K, V> {
      * @param inScope       coordinates this node could ever genuinely confirm (a registered input
      *                      channel, on the partition this task owns). A dependency outside this scope
      *                      fails the task fast rather than being silently treated as satisfied.
-     * @param ownSinkTopics coordinates for a topic this node itself produces. Stripped from any
-     *                      inbound dependency or marker clock before every gate check — see this
-     *                      field's own Javadoc for the soundness argument.
+     * @param ownSinkTopics coordinates for a topic this node itself produces. Stripped from the
+     *                      <em>gate's view</em> of an inbound dependency clock only (interim, until
+     *                      T3.1's two-branch gate) — never from the channel folds or the stamp; see
+     *                      this field's own Javadoc.
      */
     ParsleyCausalBroadcast(ParsleyChannels channels,
                  ParsleyBufferStore<K, V> buffer,
@@ -272,16 +275,20 @@ final class ParsleyCausalBroadcast<K, V> {
 
     /**
      * {@link #onWatermark}'s result: the ordinary {@link Outcome}, plus whether the marker's carried
-     * clock genuinely taught this node something it did not already know on that channel. A marker's own
-     * delivery must never itself count as a reason to relay further — only a genuine change does — or a
+     * clock genuinely taught this node something outside its <em>total knowledge</em> — the I6 relay
+     * rule ({@code frontier ∪ channel clocks ∪ carried ancestry ∪ ownOutputs}, i.e.
+     * {@link ParsleyChannels#stamp()}), never a single channel's clock. A marker's own delivery must
+     * never itself count as a reason to relay further — only genuinely new knowledge does — or a
      * cyclic topology (a marker-only passthrough channel included) would ping-pong the same marker
-     * forever; see {@link ParsleyProcessor}'s marker handlers, which gate their own downstream relay on
-     * {@link #channelAdvanced}.
+     * forever; relay on strict advance is the convergence argument for emulating broadcast on a graph
+     * with cycles (each relay strictly shrinks the set of unknown facts, so any cycle quiesces). See
+     * {@link ParsleyProcessor}'s marker handlers, which gate their downstream relay on
+     * {@link #learnedSomethingNew}.
      *
      * @param <K> the record key type
      * @param <V> the record value type
      */
-    record WatermarkOutcome<K, V>(Outcome<K, V> outcome, boolean channelAdvanced) {
+    record WatermarkOutcome<K, V>(Outcome<K, V> outcome, boolean learnedSomethingNew) {
     }
 
     /**
@@ -343,6 +350,8 @@ final class ParsleyCausalBroadcast<K, V> {
             throw failUnreachableDependency(message.topic(), message.topicId(), message.partition(), message.offset());
         }
 
+        recordReflectedClaims(message.dependencies());
+
         List<ParsleyMessage<K, V>> out = new ArrayList<>();
 
         // The L1 receive request: seed the channel's density baseline on first sighting, and bridge the
@@ -369,8 +378,10 @@ final class ParsleyCausalBroadcast<K, V> {
             // The channel-clock fold feeds only the outbound stamp (completeness()) — transitive
             // ancestry a downstream node's own gate will verify for itself — never this node's own
             // delivery gate. It happens only at genuine gated delivery, so the stamp never carries
-            // a claim sourced from a record that has not actually been forwarded.
-            channels.channelUpdate(message.topicId(), message.partition(), advertised(message.dependencies()));
+            // a claim sourced from a record that has not actually been forwarded. The WHOLE clock is
+            // folded — own-sink coordinates included (I9: the merge may not strip; the old stamp-side
+            // strip erased real ancestors for third parties sharing the sink, #22).
+            channels.channelUpdate(message.topicId(), message.partition(), message.dependencies());
             out.add(message);
             propagate(out, message.topicId(), message.partition());
         } else {
@@ -467,7 +478,7 @@ final class ParsleyCausalBroadcast<K, V> {
             // at-least-once duplicate — never the reverse (buffer gone, frontier never advanced), which
             // would permanently strand this coordinate's frontier.
             channels.delivered(record.topicId(), record.partition(), record.offset());
-            channels.channelUpdate(record.topicId(), record.partition(), advertised(record.dependencies()));
+            channels.channelUpdate(record.topicId(), record.partition(), record.dependencies());
             buffer.remove(meta.sequence());
             out.add(record);
             propagate(out, record.topicId(), record.partition());
@@ -510,51 +521,56 @@ final class ParsleyCausalBroadcast<K, V> {
      * itself delivered that cause — an effect-before-cause delivery to the delegate.
      *
      * <p>Records released here are delivered via the normal {@link ParsleyProcessor#deliver} path. The
-     * returned {@link WatermarkOutcome#channelAdvanced()} tells the caller ({@link ParsleyProcessor})
-     * whether this marker taught the channel anything genuinely new — the caller relays a downstream
+     * returned {@link WatermarkOutcome#learnedSomethingNew()} tells the caller ({@link ParsleyProcessor})
+     * whether this marker taught this node anything genuinely new — the caller relays a downstream
      * watermark only when it did, since a marker's own delivery must never itself be treated as a
      * reason to relay further (that would ping-pong forever around any cycle in the topology).
      *
-     * <p>Before anything else, {@code frontierClock} has this node's own {@link #ownSinkTopics}
-     * coordinates stripped (see that field's Javadoc) — without this, a node whose own produced
-     * coordinate is reflected back to it (directly, by consuming its own sink, or indirectly, via a
-     * downstream peer's stamp in a topology cycle) would see that coordinate as perpetually "new":
-     * receiving it always advances this node's own frontier for that channel by construction (a fresh
-     * offset each time), which then shows up in the very next stamp this node emits — so {@code
-     * channelAdvanced} would never settle {@code false} and the marker would never stop relaying.
+     * <p><strong>The relay signal is knowledge-based (I6):</strong> "new" is defined against this
+     * node's <em>total knowledge</em> — {@code frontier ∪ channel clocks ∪ carried ancestry ∪
+     * ownOutputs} ({@link ParsleyChannels#stamp()}) — never against the single source channel's clock.
+     * This one rule replaces the old per-channel comparison <em>and</em> the own-sink strip the
+     * carried clock used to pass through: a reflected own coordinate (a downstream's stamp echoing
+     * this node's own produced position around a cycle) is dominated by {@code ownOutputs}, so it
+     * teaches nothing and the relay settles — without the strip that erased real ancestors from the
+     * advertised fold (#22). The whole carried clock is folded into the channel's advertised view
+     * (I9: the merge may not strip); the producer-ack registry is drained first so the {@code
+     * ownOutputs} side of the comparison is current.
      *
      * @param sourceTopicId  the topic UUID of the watermark's source channel
      * @param sourcePartition the partition of the watermark's source channel
      * @param offset         the watermark record's own offset on its source channel
      * @param frontierClock  the completeness frontier carried by the watermark
-     * @return the records released in the process, plus whether the channel's carried clock genuinely
-     *         advanced
+     * @return the records released in the process, plus whether the carried clock taught this node
+     *         something outside its total knowledge (I6)
      */
     WatermarkOutcome<K, V> onWatermark(Uuid sourceTopicId, int sourcePartition, long offset, ParsleyVectorClock frontierClock) {
         List<ParsleyMessage<K, V>> out = new ArrayList<>();
-        ParsleyVectorClock strippedFrontierClock = advertised(frontierClock);
 
         // A watermark's own channel is transactional too (Parsley forwards it under EOS), so it carries
         // the same commit-marker holes; the L1 receive request seeds and bridges them before the marker's
-        // own offset is delivered. Seeding and bridging touch only the frontier and forwarded index,
-        // never the channels map, so channelAdvanced below is unaffected.
+        // own offset is delivered.
         if (channels.receive(sourceTopicId, sourcePartition, offset)) {
             propagate(out, sourceTopicId, sourcePartition);
         }
 
-        ParsleyVectorClock channelBefore = channels.channelGet(sourceTopicId, sourcePartition);
-        boolean channelAdvanced = !channelBefore.dominates(strippedFrontierClock);
-        channels.channelUpdate(sourceTopicId, sourcePartition, strippedFrontierClock);
+        recordReflectedClaims(frontierClock);
+        // The I6 comparison, taken BEFORE the carried clock is folded below (afterwards it is
+        // dominated by construction). Fold pending acks first so ownOutputs is current — a carried
+        // clock reflecting this node's own recent output must read as already known.
+        channels.foldAcknowledgedOutputs();
+        boolean learnedSomethingNew = !channels.stamp().dominates(frontierClock);
+        channels.channelUpdate(sourceTopicId, sourcePartition, frontierClock);
         channels.delivered(sourceTopicId, sourcePartition, offset);
         propagate(out, sourceTopicId, sourcePartition);
 
         // A watermark's own delivery advances the frontier, which can close a pending epoch
         // transition window. Its carried clock, by contrast, feeds only the stamp and the
-        // channelAdvanced relay signal — never the gate (see the method Javadoc).
+        // relay signal — never the gate (see the method Javadoc).
         if (channels.tryAdvanceEpoch()) {
             drainSatisfied(out);
         }
-        return new WatermarkOutcome<>(new Outcome<>(out), channelAdvanced);
+        return new WatermarkOutcome<>(new Outcome<>(out), learnedSomethingNew);
     }
 
     /** The buffer's metadata index, oldest-first (by insertion sequence); never decodes a value. */
@@ -596,23 +612,13 @@ final class ParsleyCausalBroadcast<K, V> {
     }
 
     /**
-     * The causal broadcast <em>broadcast</em> request (see the class Javadoc's module box): stamps
-     * {@code record} with this node's current outbound vector timestamp — {@link #completeness()},
-     * read live at stamp time — replacing any {@link ParsleyHeader#CAUSAL_DEPENDENCIES} header already
-     * present. The send itself is not performed here (it is Kafka's produce, via {@code
-     * context.forward()}); in Birman–Schiper–Stephenson terms this is the timestamp-assignment half of
-     * {@code broadcast(m)}, and the sender's own clock increment is the broker's offset assignment,
-     * learned only asynchronously — which is why the stamp cannot include the record's own coordinate
-     * ({@code package-info} states this Parsley-wide deviation once).
-     *
-     * <p>This is the <strong>single stamping site</strong> for every outbound record: a delegate's
-     * business forwards ({@link ParsleyProcessorContext#forward}) and {@code ParsleyProcessor}'s
-     * protocol markers both route through here, so the stamp's content cannot diverge between the two
-     * paths by construction. Every stamp is preceded by draining the producer-ack registry into the
-     * {@code ownOutputs} clock ({@link ParsleyChannels#foldAcknowledgedOutputs} — "folded before
-     * each stamp", D2/O1), so the fold-then-stamp ordering is likewise structural; T2.3 completes
-     * Phase 2 by extending the stamp itself to {@code completeness ∪ ownOutputs} through only this
-     * method's clock source.
+     * The causal broadcast <em>broadcast</em> request over an unknowable destination — the form every
+     * business forward takes ({@link ParsleyProcessorContext#forward}): the sink's partitioner runs
+     * downstream of {@code forward()}, so the record's destination coordinate cannot be named at
+     * stamp time and the crossing wait conservatively excludes nothing (full quiescence). Over-waiting
+     * only ever folds <em>more</em> acked positions into the stamp — monotone-sound (I8) — where a
+     * mispredicted same-partition exemption would silently under-claim. See
+     * {@link #broadcast(Record, Set)}.
      *
      * @param record the outbound record to stamp; its headers are not mutated (a fresh header set is
      *               built and applied via {@link Record#withHeaders})
@@ -621,9 +627,56 @@ final class ParsleyCausalBroadcast<K, V> {
      * @return the same record with the stamp header attached
      */
     <KOut, VOut> Record<KOut, VOut> broadcast(Record<KOut, VOut> record) {
+        return broadcast(record, Set.of());
+    }
+
+    /**
+     * The causal broadcast <em>broadcast</em> request (see the class Javadoc's module box): stamps
+     * {@code record} with this node's current outbound vector timestamp —
+     * {@code completeness ∪ ownOutputs} ({@link ParsleyChannels#stamp()}, D2), read live at stamp
+     * time — replacing any {@link ParsleyHeader#CAUSAL_DEPENDENCIES} header already present. The
+     * send itself is not performed here (it is Kafka's produce, via {@code context.forward()}); in
+     * Birman–Schiper–Stephenson terms this is the timestamp-assignment half of {@code broadcast(m)},
+     * and the sender's own clock increment is the broker's offset assignment, learned only
+     * asynchronously — which is why the stamp cannot include the record's own coordinate
+     * ({@code package-info} states this Parsley-wide deviation once).
+     *
+     * <p>Two steps precede every stamp, in order, both structural to this single site:
+     * <ol>
+     *   <li><strong>The crossing wait</strong> ({@link ParsleyChannels#awaitOwnOutputQuiescence} —
+     *       O1, per-partition granularity per T3.0 A7): block until no own-sink send outside
+     *       {@code destinations} is unacknowledged, so a send that process-order-precedes this
+     *       record cannot be missing from the clock the stamp carries. On timeout or ack failure
+     *       the wait throws and the EOS transaction dies — never stamp-and-proceed (A8). Uniform
+     *       across business forwards and null messages (O4; the recorded null-message exemption is
+     *       deliberately not taken).</li>
+     *   <li><strong>The ack fold</strong> ({@link ParsleyChannels#foldAcknowledgedOutputs} —
+     *       "folded before each stamp", D2/O1): drain the producer-ack registry into the
+     *       {@code ownOutputs} clock the stamp merges.</li>
+     * </ol>
+     *
+     * <p>This is the <strong>single stamping site</strong> for every outbound record: a delegate's
+     * business forwards ({@link ParsleyProcessorContext#forward}) and {@code ParsleyProcessor}'s
+     * protocol markers both route through here, so the stamp's content cannot diverge between the
+     * two paths by construction.
+     *
+     * @param record       the outbound record to stamp; its headers are not mutated (a fresh header
+     *                     set is built and applied via {@link Record#withHeaders})
+     * @param destinations the destination coordinates this stamped record will be sent to, excluded
+     *                     from the crossing wait (a pending send to the record's own destination is
+     *                     covered by partition FIFO plus I3, O1; for a marker fanned out to several
+     *                     sinks the whole set is excludable under O4's recorded null-message
+     *                     exemption). Empty when the destination is unknowable — the conservative
+     *                     full-quiescence wait
+     * @param <KOut>       the outbound key type
+     * @param <VOut>       the outbound value type
+     * @return the same record with the stamp header attached
+     */
+    <KOut, VOut> Record<KOut, VOut> broadcast(Record<KOut, VOut> record, Set<TopicPartition> destinations) {
+        channels.awaitOwnOutputQuiescence(destinations);
         channels.foldAcknowledgedOutputs();
         return record.withHeaders(
-                ParsleyHeader.replacingDependencies(record.headers(), completeness().toBytes()));
+                ParsleyHeader.replacingDependencies(record.headers(), channels.stamp().toBytes()));
     }
 
     /**
@@ -679,7 +732,7 @@ final class ParsleyCausalBroadcast<K, V> {
                         // reverse (a permanently stranded frontier).
                         channels.delivered(entry.record().topicId(), entry.record().partition(), entry.record().offset());
                         channels.channelUpdate(entry.record().topicId(), entry.record().partition(),
-                                advertised(entry.record().dependencies()));
+                                entry.record().dependencies());
                         buffer.remove(entry.sequence());
                         nextScan.computeIfAbsent(entry.record().topicId(), k -> new HashSet<>())
                                 .add(entry.record().partition());
@@ -780,11 +833,11 @@ final class ParsleyCausalBroadcast<K, V> {
     /**
      * The dependency clock actually checked by the gate: L1's normalisation
      * ({@link ParsleyChannels#normalize} — self-cycle removal plus the interim below-floor strip;
-     * I5), then the one view-only step still owned by this class: any coordinate belonging to a
-     * topic this node itself produces ({@link #ownSinkTopics}) is stripped — see that field's
-     * Javadoc for why this is sound and different from the out-of-scope case below, not a
-     * relaxation of it. Neither step ever rewrites recorded state or the outbound stamp (which is
-     * completeness(), computed separately from the channel clocks {@link #advertised} feeds).
+     * I5), then the one view-only step still owned by this class, itself interim until T3.1's
+     * two-branch gate: any coordinate belonging to a topic this node itself produces
+     * ({@link #ownSinkTopics}) is stripped from the <em>gate's view only</em> — see that field's
+     * Javadoc. Neither step ever rewrites recorded state or the outbound stamp (the stamp is
+     * {@link ParsleyChannels#stamp()}, computed from the unstripped channel folds).
      *
      * <p>A coordinate outside {@link #inScope} is <strong>not</strong> dropped here — this node cannot
      * prove such a coordinate is safe to disregard, only that it cannot check it, so it is never
@@ -797,14 +850,85 @@ final class ParsleyCausalBroadcast<K, V> {
     }
 
     /**
-     * The clock folded into a channel's advertised view (feeding the outbound stamp): the raw clock
-     * with this node's own produced coordinates stripped — see {@link #ownSinkTopics}. Own-sink
-     * coordinates only ever appear in an inbound clock by reflection around a topology cycle (a
-     * producer cannot know its own output's offsets at stamp time), so re-advertising them would only
-     * echo this node's own position back at itself.
+     * The I8 diagnostic: counts an inbound clock that claims one of this node's own sink coordinates
+     * <em>above</em> the {@code ownOutputs} clock. A truthful reflected claim can only ever name a
+     * position this node itself produced, so it should sit at or below {@code ownOutputs} once the
+     * pending acks are folded; a claim above it means the own-output view is stale (a torn restore
+     * beyond what the end-offset seed healed) or a peer's clock is not truthful — worth seeing,
+     * never worth failing over (O3 dissolved: the gate treats the claim like any other, and a stale
+     * view only ever delays). Checked once per inbound record and once per marker; the cheap
+     * first pass avoids the ack fold unless a candidate is actually above the current view.
      */
-    private ParsleyVectorClock advertised(ParsleyVectorClock clock) {
-        return clock.retaining((depTopicId, depPartition) -> !ownSinkTopics.test(depTopicId, depPartition));
+    private void recordReflectedClaims(ParsleyVectorClock clock) {
+        if (!reflectsAboveOwnOutputs(clock)) {
+            return;
+        }
+        // Re-check with pending acks folded: an ack simply not yet drained since the last stamp is
+        // not a genuine above-own-outputs reflection.
+        channels.foldAcknowledgedOutputs();
+        if (reflectsAboveOwnOutputs(clock)) {
+            metrics.recordReflectedClaimAboveOwnOutputs();
+        }
+    }
+
+    private boolean reflectsAboveOwnOutputs(ParsleyVectorClock clock) {
+        ParsleyVectorClock ownOutputs = channels.ownOutputs();
+        boolean[] above = {false};
+        clock.forEach((topicId, partition, offset) -> {
+            if (!above[0] && ownSinkTopics.test(topicId, partition)
+                    && offset > ownOutputs.offsetFor(topicId, partition)) {
+                above[0] = true;
+            }
+        });
+        return above[0];
+    }
+
+    /**
+     * The stalled-dependency observability scan (T3.0 A9): counts the held records waiting, for
+     * longer than {@code thresholdMs}, on a consumed-channel dependency <em>above</em> that
+     * channel's highest physically received offset — the exact signature of "nothing received so
+     * far can satisfy this claim". Such a hold is fail-safe, never unsafe, but its delay is
+     * unbounded when the claimed channel goes permanently silent (an aborted tail whose producer
+     * died; keying that never revisits the partition), so it must be visible rather than
+     * indistinguishable from ordinary buffering. Reported as a gauge on every call and logged when
+     * the count changes; called from the owning processor's periodic metrics tick, never the hot
+     * delivery path (the scan is O(buffer × deps)).
+     */
+    void reportHeldDependencyStalls(long thresholdMs) {
+        long now = clock.getAsLong();
+        int stalled = 0;
+        String exemplar = null;
+        for (ParsleyBufferStore.IndexEntry meta : buffer.indexEntries()) {
+            if (now - meta.bufferedAt() < thresholdMs) {
+                continue;
+            }
+            ParsleyVectorClock deps =
+                    effectiveDependencies(meta.dependencies(), meta.topicId(), meta.partition(), meta.offset());
+            boolean[] above = {false};
+            String[] cause = {""};
+            deps.forEach((depTopicId, depPartition, required) -> {
+                if (!above[0] && inScope.test(depTopicId, depPartition)
+                        && required > channels.highestReceived(depTopicId, depPartition)) {
+                    above[0] = true;
+                    cause[0] = depTopicId + "-" + depPartition + " @" + required;
+                }
+            });
+            if (above[0]) {
+                stalled++;
+                if (exemplar == null) {
+                    exemplar = meta.topic() + "-" + meta.partition() + " @" + meta.offset()
+                            + " waiting on " + cause[0];
+                }
+            }
+        }
+        metrics.reportHeldAboveHighestReceived(stalled);
+        if (stalled != lastReportedStalls && stalled > 0) {
+            log.warn("{} held record(s) have waited longer than {} ms on a dependency above its "
+                    + "channel's highest received offset — nothing received so far can satisfy the "
+                    + "claim (e.g. an aborted tail whose producer died). Fail-safe: delivery holds, "
+                    + "never reorders. Example: {}", stalled, thresholdMs, exemplar);
+        }
+        lastReportedStalls = stalled;
     }
 
     /**

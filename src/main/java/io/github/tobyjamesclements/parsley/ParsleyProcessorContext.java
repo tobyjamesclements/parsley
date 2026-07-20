@@ -21,8 +21,9 @@ import java.util.function.Supplier;
 
 /**
  * A Decorator (GoF) over the real {@link ProcessorContext} handed to a decorating causal processor's
- * delegate, stamping the current causal completeness onto every forwarded record's headers and
- * delegating everything else verbatim.
+ * delegate, stamping the current outbound vector timestamp ({@code completeness ∪ ownOutputs} —
+ * {@link ParsleyChannels#stamp()}) onto every forwarded record's headers and delegating everything
+ * else verbatim.
  *
  * <p>This is what makes outgoing messages causally stamped without the user stamping anything by
  * hand: within a topology {@code forward} is internal routing, and Kafka Streams sinks propagate a

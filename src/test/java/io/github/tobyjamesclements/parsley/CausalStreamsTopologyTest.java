@@ -1129,14 +1129,15 @@ class CausalStreamsTopologyTest {
      * Task init seeds the {@code ownOutputs} clock from each resolved sink's end offsets: with the
      * sink's end offset at 5, the clock claims the last appended position 4 — whether or not this
      * task produced it (I8's over-claim path; it heals the persisted blob trailing the crashed
-     * transaction's acks). The seed is persisted in the frontier {@code "f"} blob, and the
-     * outbound stamp is unchanged by it — the stamp carries {@code ownOutputs} only from T2.3.
+     * transaction's acks). The seed is persisted in the frontier {@code "f"} blob and rides the
+     * outbound stamp — {@code completeness ∪ ownOutputs} (D2, T2.3) — so a downstream consumer of
+     * the sink gates a derived record behind this node's whole appended prefix.
      *
      * Asserts the persisted own-output clock holds end offset - 1 for the sink and the emitted
-     * record's dependency stamp does not name the sink coordinate.
+     * record's dependency stamp names the sink coordinate at exactly that position.
      */
     @Test
-    void initSeedsOwnOutputsFromSinkEndOffsetsWithoutChangingTheStamp() {
+    void initSeedsOwnOutputsFromSinkEndOffsetsIntoTheStamp() {
         Uuid outId = Uuid.randomUuid();
         ParsleyTopicAdmin admin = TestTopicAdmin.of(Map.of("t1", T1_ID, "out", outId))
                 .withEndOffsets(Map.of("out", Map.of(0, 5L)));
@@ -1156,8 +1157,9 @@ class CausalStreamsTopologyTest {
             TestRecord<String, String> emitted = out.readRecord();
             ParsleyVectorClock stamp = ParsleyVectorClock.fromBytes(
                     emitted.headers().lastHeader(ParsleyHeader.CAUSAL_DEPENDENCIES).value());
-            assertEquals(-1L, stamp.offsetFor(outId, 0),
-                    "the seeded own-output coordinate must not appear in the stamp before T2.3");
+            assertEquals(4L, stamp.offsetFor(outId, 0),
+                    "the seeded own-output coordinate must ride the stamp (completeness ∪ "
+                            + "ownOutputs — D2, T2.3)");
 
             KeyValueStore<String, byte[]> frontierStore =
                     driver.getKeyValueStore("causal-streams-test-stage-1-frontier");

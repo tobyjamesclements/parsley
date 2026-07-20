@@ -39,6 +39,7 @@ import java.util.UUID;
 
 import static org.awaitility.Awaitility.await;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
  * End-to-end proof, against a real broker, of the two frontier guarantees a fan-in/fan-out pipeline
@@ -57,8 +58,10 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
  * </ol>
  *
  * <p>Every topic is single-partition, so source offsets are deterministic and the records are chained
- * by dependency, which makes each processor's admission frontier — and therefore each output stamp —
- * exact rather than racy.
+ * by dependency, which makes each processor's admission frontier — and therefore each stamp's
+ * input-topic entries — exact rather than racy. A stamp's own-OUTPUT-topic entry (present since
+ * T2.3: the stamp is {@code completeness ∪ ownOutputs}, D2) is asserted structurally instead, since
+ * its exact offset depends on where EOS commit markers land in the output log.
  */
 @Testcontainers(disabledWithoutDocker = true)
 class CausalFanOutScopedFrontierIT {
@@ -190,17 +193,11 @@ class CausalFanOutScopedFrontierIT {
             }
 
             // SHARED@1's delivery and the cascade release of the held unique-topic record happen in
-            // the same receive call, so both are stamped with the same post-cascade completeness:
-            // SHARED@1 plus this processor's own unique-topic coordinate.
-            CausalDependencies expectedA = CausalDependencies.builder(topics)
-                    .require(SHARED, 0, 1)
-                    .require(A_ONLY, 0, 0)
-                    .build();
-            CausalDependencies expectedB = CausalDependencies.builder(topics)
-                    .require(SHARED, 0, 1)
-                    .require(B_ONLY, 0, 0)
-                    .build();
-
+            // the same receive call, so both are stamped with the same post-cascade input frontier:
+            // SHARED@1 plus this processor's own unique-topic coordinate. Since T2.3 a stamp is
+            // completeness ∪ ownOutputs, so every stamp after a processor's first emission also
+            // carries its OWN OUTPUT topic's acked position (D2) — asserted structurally rather than
+            // by exact value, because the claimed offset depends on where EOS commit markers land.
             try (KafkaConsumer<String, byte[]> aConsumer = new KafkaConsumer<>(stampConsumerConfig(bootstrap));
                  KafkaConsumer<String, byte[]> bConsumer = new KafkaConsumer<>(stampConsumerConfig(bootstrap))) {
                 aConsumer.subscribe(List.of(A_OUT));
@@ -208,20 +205,45 @@ class CausalFanOutScopedFrontierIT {
                 Map<String, CausalDependencies> aStamps = pollStamps(aConsumer, 3);
                 Map<String, CausalDependencies> bStamps = pollStamps(bConsumer, 3);
 
-                assertEquals(expectedA, aStamps.get("S1"),
-                        "processor A's SHARED@1 stamp carries A_ONLY too: A_ONLY@0 was released by the "
-                                + "same receive cascade that delivered SHARED@1, so both share one stamp");
-                assertEquals(expectedB, bStamps.get("S1"),
-                        "processor B's SHARED@1 stamp carries B_ONLY too: B_ONLY@0 was released by the "
-                                + "same receive cascade that delivered SHARED@1, so both share one stamp");
-                assertEquals(expectedA, aStamps.get("A0"),
-                        "processor A's released A_ONLY@0 stamp carries SHARED@1 (its genuine dependency, "
-                                + "reached only once this processor's own SHARED channel actually got there) "
-                                + "plus its own A_ONLY coordinate — never B_ONLY, which this processor never "
-                                + "observes");
-                assertEquals(expectedB, bStamps.get("B0"),
-                        "processor B's released B_ONLY@0 stamp carries SHARED@1 plus its own B_ONLY "
-                                + "coordinate — never A_ONLY, which this processor never observes");
+                for (String output : List.of("S1", "A0")) {
+                    ParsleyVectorClock stamp = clockOf(aStamps.get(output));
+                    assertEquals(1L, stamp.offsetFor(topics.topicId(SHARED), 0),
+                            "processor A's " + output + " stamp must carry SHARED@1 — its genuine "
+                                    + "dependency, reached only once A's own SHARED channel got there");
+                    assertEquals(0L, stamp.offsetFor(topics.topicId(A_ONLY), 0),
+                            "processor A's " + output + " stamp must carry A_ONLY@0: the held "
+                                    + "unique-topic record was released by the same receive cascade "
+                                    + "that delivered SHARED@1, so both share one input frontier");
+                    assertEquals(-1L, stamp.offsetFor(topics.topicId(B_ONLY), 0),
+                            "processor A's " + output + " stamp must never carry B_ONLY, which this "
+                                    + "processor never observes — the scoped-frontier guarantee");
+                }
+                for (String output : List.of("S1", "B0")) {
+                    ParsleyVectorClock stamp = clockOf(bStamps.get(output));
+                    assertEquals(1L, stamp.offsetFor(topics.topicId(SHARED), 0),
+                            "processor B's " + output + " stamp must carry SHARED@1");
+                    assertEquals(0L, stamp.offsetFor(topics.topicId(B_ONLY), 0),
+                            "processor B's " + output + " stamp must carry B_ONLY@0 — released by the "
+                                    + "same cascade as SHARED@1's delivery");
+                    assertEquals(-1L, stamp.offsetFor(topics.topicId(A_ONLY), 0),
+                            "processor B's " + output + " stamp must never carry A_ONLY — the "
+                                    + "scoped-frontier guarantee");
+                }
+
+                // The D2 addition: each processor's stamps carry its own output topic's acked
+                // position, and the record forwarded LATER in the cascade (A0, after S1's output was
+                // sent and acked) claims a strictly higher own-output position than S1's stamp did —
+                // process order made provable by the crossing wait.
+                long aOutClaimAtS1 = clockOf(aStamps.get("S1")).offsetFor(topics.topicId(A_OUT), 0);
+                long aOutClaimAtA0 = clockOf(aStamps.get("A0")).offsetFor(topics.topicId(A_OUT), 0);
+                assertTrue(aOutClaimAtS1 >= 0,
+                        "processor A's S1 stamp must claim its own output topic's acked position "
+                                + "(completeness ∪ ownOutputs, D2) but claimed nothing");
+                assertTrue(aOutClaimAtA0 > aOutClaimAtS1,
+                        "the cascade's second forward (A0) must claim a strictly higher own-output "
+                                + "position than the first (S1): the crossing wait folds the first "
+                                + "forward's ack before the second is stamped; got " + aOutClaimAtS1
+                                + " then " + aOutClaimAtA0);
             }
         }
     }
@@ -257,6 +279,11 @@ class CausalFanOutScopedFrontierIT {
     }
 
     /** Polls until {@code count} stamped records are seen, keyed by their (upper-cased) value. */
+    /** The underlying vector clock of a wire stamp, for per-entry assertions. */
+    private static ParsleyVectorClock clockOf(CausalDependencies stamp) {
+        return ParsleyVectorClock.fromBytes(stamp.toBytes());
+    }
+
     private static Map<String, CausalDependencies> pollStamps(KafkaConsumer<String, byte[]> consumer, int count) {
         Map<String, CausalDependencies> byValue = new HashMap<>();
         await().atMost(Duration.ofSeconds(60)).until(() -> {

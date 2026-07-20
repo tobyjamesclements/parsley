@@ -295,7 +295,7 @@ class CausalReconvergenceTopologyTest {
      * ancestor coordinate, {@link ParsleyCausalBroadcast#completeness()} must reflect it. This proves the
      * channel clock is updated by the watermark receipt, which is the mechanism that enables inductive
      * propagation through non-subscribing layers. Also asserts {@link
-     * ParsleyCausalBroadcast.WatermarkOutcome#channelAdvanced()} reports {@code true} — the signal {@link
+     * ParsleyCausalBroadcast.WatermarkOutcome#learnedSomethingNew()} reports {@code true} — the signal {@link
      * ParsleyProcessor} gates further relay on (clock-invisible markers; see its class Javadoc) — since
      * this watermark genuinely taught the channel something it did not already know.
      *
@@ -327,8 +327,9 @@ class CausalReconvergenceTopologyTest {
         // No records were buffered, so nothing is released.
         assertEquals(0, released.size(),
                 "no records buffered, so onWatermark must return an empty release list");
-        assertTrue(watermarkOutcome.channelAdvanced(),
-                "the channel knew nothing before, so this watermark must report a genuine advance");
+        assertTrue(watermarkOutcome.learnedSomethingNew(),
+                "the node knew nothing of ANC before, so this watermark must report genuinely new "
+                        + "knowledge (I6)");
 
         // The channel clock for T1/0 now knows ANC@5, which must appear in completeness().
         assertEquals(5L, causalBroadcast.completeness().offsetFor(ANC_ID, 0),

@@ -1,5 +1,6 @@
 package io.github.tobyjamesclements.parsley;
 
+import org.apache.kafka.common.TopicPartition;
 import org.apache.kafka.common.Uuid;
 import org.apache.kafka.streams.state.KeyValueStore;
 import org.jspecify.annotations.Nullable;
@@ -34,12 +35,20 @@ import java.util.Set;
  *                                                     L2 evaluates it: self-cycle strip (I5), plus
  *                                                     the interim below-floor strip (until T3.2)
  *             acknowledge(topicId, partition, offset) producer ack → ownOutputs (D2)
+ *             awaitOwnOutputQuiescence(except)        the crossing wait (O1, per-partition per
+ *                                                     T3.0 A7): block until no own-sink send
+ *                                                     outside the excluded destinations is
+ *                                                     unacknowledged; throw, never stamp, on
+ *                                                     timeout or ack failure (A8)
  *             rescope(currentInputs, taskPartition)   reconcile restored state with the declared
  *                                                     input set: re-home retired ancestry into the
  *                                                     carried-ancestry clock (A6), seed added
  *                                                     channels from carried ancestry (A5)
  * queries:    frontier() → ParsleyVectorClock         the delivered vector VT(p)
  *             ownOutputs() → ParsleyVectorClock       the node's own acked output positions (D2)
+ *             stamp() → ParsleyVectorClock            the outbound vector timestamp
+ *                                                     completeness ∪ ownOutputs (D2) — equally the
+ *                                                     node's total knowledge, the I6 relay bound
  *             alreadyDelivered(topicId, partition,    membership in the delivered set (frontier ∪
  *                 offset) → boolean                   forwarded index); the receive path's replay
  *                                                     skip guard
@@ -104,6 +113,11 @@ final class ParsleyChannels {
     // bindOwnOutputSource, and permanently null for in-memory/test instances and TopologyTestDriver
     // runs (no registry exists there — ownOutputs then advances only via direct acknowledge calls).
     private @Nullable AckedOutputs ackedOutputs;
+    // The pending-send view the crossing wait blocks on (the same registry object as ackedOutputs in
+    // production); null until bindOwnOutputSource, making awaitOwnOutputQuiescence a no-op wherever
+    // no producer registry exists (in-memory/test instances, TopologyTestDriver runs).
+    private @Nullable PendingSends pendingSends;
+    private long crossingWaitTimeoutMs;
     private Map<String, Uuid> ownOutputTopicIds = Map.of();
     // The input-topic set (name -> UUID) this node's persisted state was written under, updated by
     // rescope() and persisted in the "f" blob. Comparing it against the currently declared inputs is
@@ -277,11 +291,26 @@ final class ParsleyChannels {
     /**
      * The node's own acked output positions per sink coordinate — the clock that recovers CBCAST's
      * own-slot semantics (D2: the broker performs the sender's clock increment, learned via
-     * {@link #acknowledge}). Stamp-side only, never consulted by the delivery gate; the stamp
-     * itself carries it only from T2.3 ({@code completeness ∪ ownOutputs}).
+     * {@link #acknowledge}). Stamp-side only, never consulted by the delivery gate; {@link #stamp()}
+     * carries it on every outbound record.
      */
     ParsleyVectorClock ownOutputs() {
         return ownOutputs;
+    }
+
+    /**
+     * The outbound vector timestamp — {@code completeness ∪ ownOutputs} (D2): everything this node
+     * has delivered, carried, or heard advertised ({@link #completeness()}), max-merged with its own
+     * acked output positions ({@link #ownOutputs()}). This is the clock
+     * {@link ParsleyCausalBroadcast#broadcast} attaches to every outbound record, and equally the
+     * node's <em>total knowledge</em> — the {@code known()} the I6 relay rule compares a carried
+     * clock against (frontier ∪ channel clocks ∪ carried ancestry ∪ ownOutputs). {@code ownOutputs}
+     * is merged here and only here: it never feeds {@link #completeness()} (the epoch-floor
+     * publication path must keep publishing only delivered/advertised positions while the interim
+     * floor machinery survives) and never the delivery gate.
+     */
+    ParsleyVectorClock stamp() {
+        return completeness().merge(ownOutputs);
     }
 
     /**
@@ -293,10 +322,48 @@ final class ParsleyChannels {
      * whose UUID could not be resolved at init (the topic does not exist yet) is simply absent
      * from {@code sinkTopicIds}: its acks are skipped until a restart re-resolves it — the same
      * exposure, and the same heal, as the own-sink predicate's unresolved-sink caveat.
+     *
+     * @param source                the acked-offsets view {@link #foldAcknowledgedOutputs()} drains
+     * @param pendingSends          the pending-send view {@link #awaitOwnOutputQuiescence} waits on
+     *                              (the same registry object in production)
+     * @param sinkTopicIds          sink topic name → UUID, resolved at init
+     * @param crossingWaitTimeoutMs the crossing wait's bound — the producer's
+     *                              {@code delivery.timeout.ms}, past which an unacked send has
+     *                              failed and the wait must throw rather than stamp (T3.0 A8)
      */
-    void bindOwnOutputSource(AckedOutputs source, Map<String, Uuid> sinkTopicIds) {
+    void bindOwnOutputSource(AckedOutputs source, PendingSends pendingSends,
+                             Map<String, Uuid> sinkTopicIds, long crossingWaitTimeoutMs) {
         this.ackedOutputs = source;
+        this.pendingSends = pendingSends;
         this.ownOutputTopicIds = Map.copyOf(sinkTopicIds);
+        this.crossingWaitTimeoutMs = crossingWaitTimeoutMs;
+    }
+
+    /**
+     * The crossing wait (O1; per-partition granularity per T3.0 A7): blocks until the calling
+     * task's producer has no unacknowledged send to any own-sink coordinate outside
+     * {@code exceptDestinations}, so the ack fold ({@link #foldAcknowledgedOutputs()}) that
+     * precedes the very next {@link #stamp()} read cannot miss the coordinate of a send that
+     * process-order-precedes the record being stamped. Passing an <em>empty</em> set waits for
+     * full quiescence — the conservative form used before stamping a business forward, whose
+     * destination partition is unknowable at stamp time (the sink's partitioner runs downstream
+     * of {@code forward()}); over-waiting only ever folds <em>more</em> acked positions, which is
+     * monotone-sound (I8), where a mispredicted same-partition exemption would silently
+     * under-claim. A marker stamp passes its exact destination set — each sink at the task's own
+     * partition — whose same-coordinate pending sends partition FIFO plus I3 already cover (and
+     * whose cross-sink exemption O4's recorded null-message exemption covers).
+     *
+     * <p><strong>Never stamp-and-proceed</strong> (T3.0 A8): the bound wait throws
+     * {@link ParsleyPendingAckException} on timeout or on an observed acknowledgement failure —
+     * the caller's EOS transaction must die rather than emit a potentially under-claiming stamp.
+     * A no-op until {@link #bindOwnOutputSource} is called (in-memory/test instances and
+     * TopologyTestDriver runs, which have no producer registry and therefore no pending sends).
+     */
+    void awaitOwnOutputQuiescence(Set<TopicPartition> exceptDestinations) {
+        PendingSends pending = pendingSends;
+        if (pending != null) {
+            pending.awaitQuiescentExcept(exceptDestinations, crossingWaitTimeoutMs);
+        }
     }
 
     /**
@@ -523,6 +590,19 @@ final class ParsleyChannels {
         return true;
     }
 
+    /**
+     * The highest offset ever physically received on channel {@code (topicId, partition)}, or
+     * {@code -1} if the channel has never been received on. This is {@link #bridge}'s skip-detection
+     * baseline, exposed for the stalled-dependency observability scan (T3.0 A9): a record held on a
+     * dependency <em>above</em> this value is waiting on an offset nothing received so far can
+     * satisfy — the exact signature of a claim whose producer's send failed or whose channel went
+     * permanently silent (fail-safe, never unsafe; the delay is unbounded, so it must be visible).
+     */
+    long highestReceived(Uuid topicId, int partition) {
+        Long highest = highestReceived.get(new CoordKey(topicId, partition));
+        return highest == null ? -1L : highest;
+    }
+
     /** The clock advertised on channel {@code (topicId, partition)}, or empty if never updated. */
     ParsleyVectorClock channelGet(Uuid topicId, int partition) {
         ParsleyVectorClock clock = channels.get(new CoordKey(topicId, partition));
@@ -724,14 +804,17 @@ final class ParsleyChannels {
         channels.replaceAll((key, clock) -> clock.retaining(inScope));
         highestReceived.keySet().removeIf(key -> outOfScope.test(key.topicId(), key.partition()));
 
-        // 3 — growth: an added channel skips the prefix this node already carried.
+        // 3 — growth: an added channel skips the prefix this node already carried. The seed reads
+        // stamp(), not completeness(): an added input that is this node's own former sink would
+        // otherwise under-skip the prefix its stamps already claimed via ownOutputs — "skip what
+        // you already claimed" extends A5's "skip what you already ignored" (T2.2 carry-forward).
         if (!declaredInputs.isEmpty()) {
             for (Map.Entry<String, Uuid> current : currentInputs.entrySet()) {
                 if (declaredInputs.containsKey(current.getKey())) {
                     continue;
                 }
                 Uuid topicId = current.getValue();
-                long carried = completeness().offsetFor(topicId, taskPartition);
+                long carried = stamp().offsetFor(topicId, taskPartition);
                 if (carried > frontier.offsetFor(topicId, taskPartition)) {
                     frontier = frontier.observe(topicId, taskPartition, carried);
                     forwardedIndex.pruneAtOrBelow(topicId, taskPartition, carried);
@@ -914,5 +997,24 @@ final class ParsleyChannels {
         interface Consumer {
             void accept(String topic, int partition, long offset);
         }
+    }
+
+    /**
+     * The narrow seam {@link #awaitOwnOutputQuiescence} blocks on: the calling task's unacknowledged
+     * own-sink sends, keyed by topic <em>name</em> like {@link AckedOutputs} (that is what the
+     * producer path carries). Implemented by {@code ParsleyOwnOutputRegistry} in production —
+     * resolving "this task's pending sends" from the calling thread (one producer per StreamThread
+     * under EOS v2) — and by hand-rolled doubles in tests.
+     */
+    @FunctionalInterface
+    interface PendingSends {
+
+        /**
+         * Blocks until no send to any tracked coordinate outside {@code exceptDestinations} is
+         * unacknowledged; empty means full quiescence. Throws {@link ParsleyPendingAckException}
+         * on timeout or on an acknowledgement failure observed while waiting (T3.0 A8) — never
+         * returns normally without genuine quiescence.
+         */
+        void awaitQuiescentExcept(Set<TopicPartition> exceptDestinations, long timeoutMs);
     }
 }

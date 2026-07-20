@@ -189,6 +189,62 @@ class ParsleyChannelsTest {
     }
 
     /**
+     * {@code rescope}'s growth seed reads {@link ParsleyChannels#stamp()}, not
+     * {@code completeness()} ("skip what you already claimed" extends A5's "skip what you already
+     * ignored", T2.2 → T2.3): an added input that is this node's own former sink seeds at the
+     * ownOutputs position its stamps already claimed — delivering that prefix into surviving state
+     * would replay records every downstream gate already treats as this node's causal past.
+     *
+     * Asserts the added own-former-sink input seeds at the ownOutputs value even though nothing was
+     * ever delivered or carried on it.
+     */
+    @Test
+    void rescopeSeedsAnAddedFormerSinkFromOwnOutputsNotJustCompleteness() {
+        TestKeyValueStore<String, byte[]> store =
+                new TestKeyValueStore<String, byte[]>(Comparator.naturalOrder(), "frontier");
+        ParsleyChannels channels = new ParsleyChannels(store, new MockForwardedIndex());
+
+        // Deployment 1: only T1 consumed; T2 is a pure sink whose sends were acked up to 9 — it is
+        // claimed by every stamp (completeness ∪ ownOutputs) without ever being delivered here.
+        channels.rescope(Map.of("T1", T1_ID), 0);
+        channels.acknowledge(T2_ID, 0, 9);
+        assertEquals(-1L, channels.completeness().offsetFor(T2_ID, 0),
+                "precondition: the sink coordinate is not in completeness — only ownOutputs claims it");
+
+        // Deployment 2: T2 added as an input (the node now consumes its own former sink).
+        channels.rescope(Map.of("T1", T1_ID, "T2", T2_ID), 0);
+
+        assertEquals(9L, channels.frontier().offsetFor(T2_ID, 0),
+                "the added former sink must seed at the ownOutputs value its stamps already "
+                        + "claimed — an under-seed would re-deliver a prefix downstream gates "
+                        + "already order behind this node's outputs");
+    }
+
+    /**
+     * {@link ParsleyChannels#stamp()} is {@code completeness ∪ ownOutputs} (D2): the outbound
+     * vector timestamp carries the acked own-output positions, and equally serves as the node's
+     * total knowledge (the I6 relay bound), while {@code completeness()} itself stays free of
+     * {@code ownOutputs} (the interim epoch-floor publication path reads it).
+     *
+     * Asserts stamp = completeness merged with ownOutputs and completeness excludes ownOutputs.
+     */
+    @Test
+    void stampIsCompletenessMergedWithOwnOutputs() {
+        ParsleyChannels channels =
+                new ParsleyChannels(ParsleyVectorClock.empty(), new MockForwardedIndex());
+        channels.seedIfFirstSeen(T1_ID, 0, 3);
+        channels.delivered(T1_ID, 0, 3);
+        channels.acknowledge(SINK_ID, 0, 6);
+
+        assertEquals(3L, channels.stamp().offsetFor(T1_ID, 0),
+                "the stamp must carry the delivered frontier");
+        assertEquals(6L, channels.stamp().offsetFor(SINK_ID, 0),
+                "the stamp must carry the acked own-output position (D2)");
+        assertEquals(-1L, channels.completeness().offsetFor(SINK_ID, 0),
+                "completeness must stay free of ownOutputs — only the stamp unions them");
+    }
+
+    /**
      * The declared input set and the carried ancestry are trailing-optional sections of the {@code
      * "f"} blob: a blob written before they existed (simulated by serialising with none recorded)
      * still loads, reporting an empty declared set — so the first {@code rescope} over an upgraded
@@ -370,7 +426,7 @@ class ParsleyChannelsTest {
         channels.bindOwnOutputSource(consumer -> {
             consumer.accept("OUT", 0, 6);
             consumer.accept("unresolved-sink", 0, 99);
-        }, Map.of("OUT", SINK_ID));
+        }, (except, timeoutMs) -> { }, Map.of("OUT", SINK_ID), 1_000L);
         channels.foldAcknowledgedOutputs();
 
         assertEquals(6L, channels.ownOutputs().offsetFor(SINK_ID, 0),

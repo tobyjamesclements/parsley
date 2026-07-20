@@ -43,13 +43,16 @@ import java.util.concurrent.ConcurrentHashMap;
  * </ul>
  *
  * <p>{@link #awaitQuiescentExcept} is the crossing-wait primitive (O1/T3.0 A7): it blocks until no
- * send to any <em>other</em> tracked coordinate — a different topic or a different partition of the
- * same topic — is unacknowledged, and it upholds the A8 implementation invariant by construction:
- * it returns normally only on quiescence, and <strong>throws</strong> — so the caller's EOS
- * transaction dies rather than stamp — on timeout or on any acknowledgement failure observed while
- * waiting. T2.3 wires it in before stamping; nothing calls it in production until then.
+ * send to any tracked coordinate outside the caller's excluded destination set — a different topic
+ * or a different partition of the same topic — is unacknowledged, and it upholds the A8
+ * implementation invariant by construction: it returns normally only on quiescence, and
+ * <strong>throws</strong> — so the caller's EOS transaction dies rather than stamp — on timeout or
+ * on any acknowledgement failure observed while waiting. {@link ParsleyCausalBroadcast#broadcast}
+ * runs it (via {@link ParsleyChannels#awaitOwnOutputQuiescence}) before every stamp: business
+ * forwards exclude nothing (their destination partition is unknowable at stamp time — over-waiting
+ * is monotone-sound, I8), marker forwards exclude their exact destination set.
  */
-final class ParsleyOwnOutputRegistry implements ParsleyChannels.AckedOutputs {
+final class ParsleyOwnOutputRegistry implements ParsleyChannels.AckedOutputs, ParsleyChannels.PendingSends {
 
     /**
      * The producer config key carrying the registry id — injected by {@link CausalStreams} with the
@@ -123,9 +126,10 @@ final class ParsleyOwnOutputRegistry implements ParsleyChannels.AckedOutputs {
 
     /**
      * The crossing-wait primitive: blocks until the calling thread's producer has no
-     * unacknowledged send to any tracked coordinate other than {@code (topic, partition)}
-     * (same-partition pending sends need no wait — partition FIFO plus I3 cover them; O1). A thread
-     * with no bound tracker (it has never sent) returns immediately.
+     * unacknowledged send to any tracked coordinate outside {@code exceptDestinations} (a pending
+     * send to the record's own destination coordinate needs no wait — partition FIFO plus I3 cover
+     * it; O1). An empty set waits for full quiescence. A thread with no bound tracker (it has
+     * never sent) returns immediately.
      *
      * <p><strong>Never stamp-and-proceed</strong> (T3.0 A8): this method returns normally only on
      * genuine quiescence. It throws {@link ParsleyPendingAckException} when {@code timeoutMs}
@@ -134,10 +138,11 @@ final class ParsleyOwnOutputRegistry implements ParsleyChannels.AckedOutputs {
      * the wait, since T2.1 confirmed an aborting transaction fails each pending send with exactly
      * one exception-carrying callback: the wait releases, and the failure outcome makes it die loud.
      */
-    void awaitQuiescentExcept(String topic, int partition, long timeoutMs) {
+    @Override
+    public void awaitQuiescentExcept(Set<TopicPartition> exceptDestinations, long timeoutMs) {
         PendingTracker tracker = trackerByThread.get(Thread.currentThread());
         if (tracker != null) {
-            tracker.awaitQuiescentExcept(topic, partition, timeoutMs);
+            tracker.awaitQuiescentExcept(exceptDestinations, timeoutMs);
         }
     }
 
@@ -199,24 +204,25 @@ final class ParsleyOwnOutputRegistry implements ParsleyChannels.AckedOutputs {
         }
 
         /** See {@link ParsleyOwnOutputRegistry#awaitQuiescentExcept}. */
-        synchronized void awaitQuiescentExcept(String topic, int partition, long timeoutMs) {
+        synchronized void awaitQuiescentExcept(Set<TopicPartition> exceptDestinations, long timeoutMs) {
             long failuresAtStart = failures;
             long deadlineNanos = System.nanoTime() + timeoutMs * 1_000_000L;
             while (true) {
                 if (failures > failuresAtStart) {
                     throw new ParsleyPendingAckException("a pending own-output send failed while "
-                            + "waiting to stamp a send to " + topic + "-" + partition
-                            + "; failing the transaction rather than stamping (T3.0 A8)");
+                            + "waiting to stamp a send (destinations " + exceptDestinations
+                            + "); failing the transaction rather than stamping (T3.0 A8)");
                 }
-                if (pendingOtherThan(topic, partition) == 0) {
+                if (pendingOutside(exceptDestinations) == 0) {
                     return;
                 }
                 long remainingNanos = deadlineNanos - System.nanoTime();
                 if (remainingNanos <= 0) {
                     throw new ParsleyPendingAckException("own-output acknowledgements still pending "
-                            + "on a coordinate other than " + topic + "-" + partition + " after "
-                            + timeoutMs + " ms; failing the transaction rather than stamping with a "
-                            + "potentially incomplete own-output clock (T3.0 A8)");
+                            + "on a coordinate outside the stamped send's destinations "
+                            + exceptDestinations + " after " + timeoutMs + " ms; failing the "
+                            + "transaction rather than stamping with a potentially incomplete "
+                            + "own-output clock (T3.0 A8)");
                 }
                 try {
                     wait(remainingNanos / 1_000_000L + 1);
@@ -228,11 +234,10 @@ final class ParsleyOwnOutputRegistry implements ParsleyChannels.AckedOutputs {
             }
         }
 
-        private int pendingOtherThan(String topic, int partition) {
+        private int pendingOutside(Set<TopicPartition> exceptDestinations) {
             int count = 0;
             for (Map.Entry<TopicPartition, Integer> entry : pending.entrySet()) {
-                TopicPartition tp = entry.getKey();
-                if (!(tp.topic().equals(topic) && tp.partition() == partition)) {
+                if (!exceptDestinations.contains(entry.getKey())) {
                     count += entry.getValue();
                 }
             }

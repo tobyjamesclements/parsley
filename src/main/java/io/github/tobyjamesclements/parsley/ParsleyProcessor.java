@@ -1,6 +1,7 @@
 package io.github.tobyjamesclements.parsley;
 
 import org.apache.kafka.clients.consumer.ConsumerConfig;
+import org.apache.kafka.clients.producer.ProducerConfig;
 import org.apache.kafka.common.TopicPartition;
 import org.apache.kafka.common.Uuid;
 import org.apache.kafka.common.config.TopicConfig;
@@ -45,7 +46,7 @@ import java.util.function.Function;
  * <p><strong>Clock-invisible markers.</strong> A received watermark or epoch-snapshot marker
  * ({@link #handleWatermark}, {@link #handleEpochSnapshot}) is relayed downstream only when it genuinely
  * taught this node's channel something it did not already know
- * ({@link ParsleyCausalBroadcast.WatermarkOutcome#channelAdvanced()}, via {@link #foldMarkerCompleteness}).
+ * ({@link ParsleyCausalBroadcast.WatermarkOutcome#learnedSomethingNew()}, via {@link #foldMarkerCompleteness}).
  * A marker's own delivery is never itself treated as a reason to relay further — unlike a genuine
  * business record, whose delivery always unconditionally causes this node to emit something on its own
  * sink (see {@link #delivered}). Gating on data-taught-something rather than on "a record was delivered"
@@ -58,7 +59,7 @@ import java.util.function.Function;
  *
  * <p>The <strong>epoch-boundary</strong> marker ({@link #handleEpochBoundary}) is the one exception: it
  * relays on its channel's first sight of the boundary regardless of whether the carried clock advanced
- * anything ({@link ParsleyCausalBroadcast.BoundaryOutcome#markerWasNew()} {@code || channelAdvanced}). A boundary
+ * anything ({@link ParsleyCausalBroadcast.BoundaryOutcome#markerWasNew()} {@code || learnedSomethingNew}). A boundary
  * re-carries the completeness the preceding snapshot already taught the channel, so on an idle, quiesced
  * round it teaches nothing new — but the downstream still needs the marker on this channel to close its
  * own marker-on-every-channel transition window. The per-epoch, per-channel newly-recorded signal fires
@@ -95,6 +96,8 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
 
     // Kafka's default max.poll.interval.ms, used when the app config does not set one explicitly.
     private static final long DEFAULT_MAX_POLL_INTERVAL_MS = 300_000L;
+    // Kafka's default producer delivery.timeout.ms, used when the app config does not set one.
+    private static final long DEFAULT_DELIVERY_TIMEOUT_MS = 120_000L;
     // The topology-epoch join wait (on the StreamThread, in init()) is bounded to this fraction of
     // max.poll.interval.ms, leaving margin for the rest of init() and the next poll — so an admission
     // that cannot happen fails loudly (ParsleyJoinTimeoutException) before the broker silently evicts
@@ -150,6 +153,18 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
     // the "f" blob trailing the last transaction's acks). A sink that could not be described is
     // simply absent, like its UUID.
     private Map<String, Map<Integer, Long>> sinkEndOffsets = Map.of();
+    // The effective producer delivery.timeout.ms, resolved at init(). Bounds the crossing wait (a
+    // send unacked past it has failed — the wait must throw, A8) and doubles as the A9 stall
+    // threshold (past it, no in-flight upstream send can still land at the claimed position, so a
+    // hold above highestReceived is a genuine stall, not latency). Leaning on the existing producer
+    // config rather than a new knob — its deadline is exactly the boundary both uses care about.
+    private long deliveryTimeoutMs = DEFAULT_DELIVERY_TIMEOUT_MS;
+    // A marker forward's exact destination set — every declared sink at this task's own partition
+    // (ParsleyMarkerPartition routes every marker there) — excluded from the marker stamp's crossing
+    // wait: same-coordinate pending sends are covered by partition FIFO + I3, and the cross-sink
+    // exemption is O4's recorded null-message exemption. Business forwards never get an exclusion
+    // (their destination partition is unknowable at stamp time; see ParsleyCausalBroadcast#broadcast).
+    private Set<TopicPartition> markerDestinations = Set.of();
 
     // The most-recent business key seen on this task's owned partition — reused to route a self-injected
     // marker back to that partition lane (null until the first record). And the last snapshot-round /
@@ -377,6 +392,15 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
 
         this.wiredMetrics = ParsleyMetrics.wire(context);
 
+        // The crossing-wait bound / A9 stall threshold, and every marker forward's destination set —
+        // both fixed for the task's lifetime, resolved before the causal-broadcast core binds them.
+        this.deliveryTimeoutMs = deliveryTimeoutMs(context.appConfigs());
+        Set<TopicPartition> destinations = new HashSet<>();
+        for (String sink : sinkTopics) {
+            destinations.add(new TopicPartition(sink, context.taskId().partition()));
+        }
+        this.markerDestinations = Set.copyOf(destinations);
+
         // Build the task's one causal-broadcast core: constructs the real ParsleyChannels (restoring from the store if
         // restored is true), prunes/seeds it to this task's current scope, and persists. Cached for the
         // processor's whole lifetime — see buildCausalBroadcast().
@@ -429,6 +453,10 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
         context.schedule(METRICS_REFRESH_INTERVAL, PunctuationType.WALL_CLOCK_TIME,
                 timestamp -> {
                     causalBroadcast().reportBufferState();
+                    // The A9 stalled-dependency scan (O(buffer × deps)) rides the same tick, never
+                    // the hot delivery path; the threshold is the producer delivery timeout — past
+                    // it, no in-flight send can still land at a claimed-but-never-received position.
+                    causalBroadcast().reportHeldDependencyStalls(deliveryTimeoutMs);
                     updateQuiesceState();
                 });
 
@@ -514,18 +542,30 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
 
         // Wire the ownOutputs clock (D2): bind the producer-ack registry (when this task runs under
         // a CausalStreams instance — a TopologyTestDriver run has none) so every stamp's preceding
-        // fold can translate acked sink names to UUID identity, then seed each resolved sink
+        // fold can translate acked sink names to UUID identity — the registry is also the
+        // pending-send view the crossing wait blocks on before each stamp (O1/A7), bounded by the
+        // producer's delivery.timeout.ms (past it the unacked send has failed, so the wait throws
+        // and the transaction dies with it, A8) — then seed each resolved sink
         // partition at its end offset - 1 — the sink's last appended position. The seed is an
         // over-claim (it covers siblings' records on a shared sink, aborted tails, and markers) and
         // is I8-sound for exactly that reason; it also heals the restored blob trailing the last
         // transaction's acks. Runs after rescope so a recreated input-sink's destroyed UUID is
         // already purged before its successor seeds.
         Object registryId = context.appConfigs().get("producer." + ParsleyOwnOutputRegistry.CONFIG_KEY);
-        if (registryId != null) {
-            ParsleyOwnOutputRegistry registry = ParsleyOwnOutputRegistry.lookup(registryId.toString());
-            if (registry != null) {
-                channels.bindOwnOutputSource(registry, sinkTopicUuids);
-            }
+        ParsleyOwnOutputRegistry registry = registryId == null
+                ? null
+                : ParsleyOwnOutputRegistry.lookup(registryId.toString());
+        if (registry != null) {
+            channels.bindOwnOutputSource(registry, registry, sinkTopicUuids, deliveryTimeoutMs);
+            log.debug("Bound own-output registry '{}' for sinks {} [task: {}]",
+                    registryId, sinkTopicUuids.keySet(), context.taskId());
+        } else {
+            // Not an error: TopologyTestDriver runs and low-level supplier wirings have no
+            // CausalStreams instance to mint a registry — ownOutputs then advances only through
+            // the init-time end-offset seed. Logged so a production task silently missing live
+            // ack tracking is diagnosable.
+            log.info("No own-output registry bound (id: {}) — ownOutputs advances only via the "
+                    + "end-offset seed; crossing wait inactive [task: {}]", registryId, context.taskId());
         }
         for (Map.Entry<String, Uuid> sink : sinkTopicUuids.entrySet()) {
             Map<Integer, Long> ends = sinkEndOffsets.get(sink.getKey());
@@ -847,8 +887,8 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
      */
     private void handleEpochSnapshot(Record<KIn, VIn> record) {
         snapshotPublisher.publish(memberId, commitHook.committed());
-        boolean channelAdvanced = foldMarkerCompleteness(record);
-        if (channelAdvanced) {
+        boolean learnedSomethingNew = foldMarkerCompleteness(record);
+        if (learnedSomethingNew) {
             forwardMarker(ParsleyHeader.EPOCH_SNAPSHOT, new byte[0], record.key());
         }
     }
@@ -865,7 +905,7 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
      * <p>Boundary relay cannot gate on the clock signal alone the way watermark and snapshot relay do
      * (clock-invisible markers; see the class Javadoc). A boundary re-carries the very completeness the
      * preceding snapshot marker already advertised, so on an idle, quiesced round the boundary teaches
-     * the channel nothing new and {@code channelAdvanced} is false — yet the downstream still needs the
+     * the channel nothing new and {@code learnedSomethingNew} is false — yet the downstream still needs the
      * marker on this channel to close its own marker-on-every-channel window. Gating on
      * {@code markerWasNew} propagates the boundary to every channel exactly once (a duplicate on an
      * already-seen channel records nothing new and does not relay), so a topology cycle still cannot
@@ -899,7 +939,7 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
         // A relayed marker carries the upstream node's completeness; adopt it into this channel's clock
         // and absorb the marker's own offset (draining anything either releases) before driving the
         // transition, so one record does both.
-        boolean channelAdvanced = foldMarkerCompleteness(record);
+        boolean learnedSomethingNew = foldMarkerCompleteness(record);
 
         ParsleyCausalBroadcast.BoundaryOutcome<KIn, VIn> outcome = causalBroadcast().onEpochBoundary(boundary, topicId, partition);
         deliver(outcome.outcome().delivered());
@@ -908,13 +948,13 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
         // every downstream task transitions its owned partitions. Relay when the marker was newly
         // recorded for its epoch on this channel OR its carried completeness taught this channel
         // something new. The clock signal alone is not enough: on an idle, quiesced round the boundary
-        // carries the same completeness the preceding snapshot already advertised, so channelAdvanced is
+        // carries the same completeness the preceding snapshot already advertised, so learnedSomethingNew is
         // false and gating on it alone would strand the transition at this node forever — the downstream
         // never sees the marker on this channel, so its marker-on-every-channel window never closes.
         // markerWasNew fires exactly once per channel per epoch (a duplicate records nothing new), so a
         // cyclic topology still cannot ping-pong it. See the class Javadoc's clock-invisible-markers
         // discussion, which governs watermark relay; a boundary is boundary news, not just clock news.
-        if (outcome.markerWasNew() || channelAdvanced) {
+        if (outcome.markerWasNew() || learnedSomethingNew) {
             forwardMarker(ParsleyHeader.EPOCH_BOUNDARY, boundaryBytes, record.key());
         }
     }
@@ -940,7 +980,7 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
      * used to diverge here, and only the watermark path got it right.
      *
      * @return whether the carried clock genuinely taught this channel something new
-     *         ({@link ParsleyCausalBroadcast.WatermarkOutcome#channelAdvanced()}) — {@code false} for an
+     *         ({@link ParsleyCausalBroadcast.WatermarkOutcome#learnedSomethingNew()}) — {@code false} for an
      *         unregistered topic, an absent/undecodable header, or a clock this channel already
      *         dominates. This is the clock-news signal watermark and snapshot relay gate on (see the
      *         class Javadoc); it is never the offset-delivery signal, which is unconditional.
@@ -975,7 +1015,7 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
         ParsleyCausalBroadcast.WatermarkOutcome<KIn, VIn> watermarkOutcome =
                 causalBroadcast().onWatermark(topicId, partition, offset, frontierClock);
         deliver(watermarkOutcome.outcome().delivered());
-        return watermarkOutcome.channelAdvanced();
+        return watermarkOutcome.learnedSomethingNew();
     }
 
     /**
@@ -1187,9 +1227,12 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
         // Stamped with the current wall clock, never 0L: a marker's timestamp carries no causal
         // meaning (only its headers do), but it does drive broker time-based retention — a sink
         // segment holding only 0L-timestamped markers (a marker-only passthrough channel) would look
-        // expired the moment it rolled and be deleted before a slow consumer read it.
+        // expired the moment it rolled and be deleted before a slow consumer read it. A marker's
+        // destination is exact — every sink at this task's own partition — so its crossing wait
+        // excludes exactly that set (see the markerDestinations field).
         forwardToSinks(causalBroadcast().broadcast(
-                new Record<>((KOut) (Object) triggerKey, null, context.currentSystemTimeMs(), headers)));
+                new Record<>((KOut) (Object) triggerKey, null, context.currentSystemTimeMs(), headers),
+                markerDestinations));
     }
 
     /**
@@ -1473,6 +1516,29 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
      * broker would evict this consumer. Leaning on the existing consumer config rather than a new knob —
      * the poll deadline is exactly the constraint the bound exists to respect.
      */
+    /**
+     * The effective producer {@code delivery.timeout.ms}: the {@code producer.}-prefixed override
+     * wins, then the un-prefixed client config Streams also passes through, then Kafka's default.
+     * See the {@link #deliveryTimeoutMs} field for the two uses (crossing-wait bound, A9 threshold).
+     */
+    private static long deliveryTimeoutMs(Map<String, Object> appConfigs) {
+        Object configured = appConfigs.get("producer." + ProducerConfig.DELIVERY_TIMEOUT_MS_CONFIG);
+        if (configured == null) {
+            configured = appConfigs.get(ProducerConfig.DELIVERY_TIMEOUT_MS_CONFIG);
+        }
+        if (configured instanceof Number number) {
+            return number.longValue();
+        }
+        if (configured instanceof String text && !text.isBlank()) {
+            try {
+                return Long.parseLong(text.trim());
+            } catch (NumberFormatException ignored) {
+                // Malformed override — fall back to the default rather than fail init on a config typo.
+            }
+        }
+        return DEFAULT_DELIVERY_TIMEOUT_MS;
+    }
+
     private static Duration joinBudget(Map<String, Object> appConfigs) {
         long maxPollMs = DEFAULT_MAX_POLL_INTERVAL_MS;
         Object configured = appConfigs.get(ConsumerConfig.MAX_POLL_INTERVAL_MS_CONFIG);

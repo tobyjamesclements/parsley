@@ -4,6 +4,8 @@ import org.apache.kafka.clients.producer.ProducerInterceptor;
 import org.apache.kafka.clients.producer.ProducerRecord;
 import org.apache.kafka.clients.producer.RecordMetadata;
 import org.jspecify.annotations.Nullable;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.util.Map;
 
@@ -21,6 +23,8 @@ import java.util.Map;
  * ({@link ParsleyOwnOutputRegistry#CONFIG_KEY}) every callback is a no-op.
  */
 public final class ParsleyOwnOutputInterceptor implements ProducerInterceptor<Object, Object> {
+
+    private static final Logger log = LoggerFactory.getLogger(ParsleyOwnOutputInterceptor.class);
 
     private @Nullable ParsleyOwnOutputRegistry registry;
     private ParsleyOwnOutputRegistry.@Nullable PendingTracker tracker;
@@ -51,17 +55,29 @@ public final class ParsleyOwnOutputInterceptor implements ProducerInterceptor<Ob
         if (registry != null && tracker != null && registry.tracks(producerRecord.topic())) {
             registry.bindThread(Thread.currentThread(), tracker);
             tracker.sent(producerRecord.topic(), producerRecord.partition());
+            if (log.isDebugEnabled()) {
+                log.debug("Tracked own-output send to {}-{} on {}",
+                        producerRecord.topic(), producerRecord.partition(), Thread.currentThread().getName());
+            }
         }
         return producerRecord;
     }
 
     /**
-     * Resolves a tracked send: clears its pending count (T2.1 — exactly one callback per send,
-     * abort included, failures carrying a non-null exception) and folds a successful ack's
-     * committed coordinate into the registry's per-coordinate max. Runs on the producer network
+     * Resolves a tracked send: folds a successful ack's committed coordinate into the registry's
+     * per-coordinate max, then clears its pending count (T2.1 — exactly one callback per send,
+     * abort included, failures carrying a non-null exception). Runs on the producer network
      * thread; everything it touches is the registry's concurrent state. A null {@code metadata}
      * (no coordinate to resolve) is counted as a failure so a crossing wait releases loudly
      * rather than hanging on a send that will never resolve.
+     *
+     * <p><strong>Fold-before-acknowledge is load-bearing</strong>: {@code tracker.acknowledged}
+     * wakes any crossing-wait waiter, whose very next step is draining the registry into the
+     * {@code ownOutputs} clock and stamping. Folding after the wake-up opens a window where the
+     * released stamp misses exactly the coordinate whose ack released it — an under-claiming
+     * stamp, the crossing wait's whole reason to exist (found live in
+     * {@code CausalFanOutScopedFrontierIT}). The acked map is a {@code ConcurrentHashMap} written
+     * before the tracker's monitor notification, so the woken waiter always observes the fold.
      */
     @Override
     public void onAcknowledgement(@Nullable RecordMetadata metadata, @Nullable Exception exception) {
@@ -77,10 +93,14 @@ public final class ParsleyOwnOutputInterceptor implements ProducerInterceptor<Ob
         if (!registry.tracks(metadata.topic())) {
             return;
         }
-        tracker.acknowledged(metadata.topic(), metadata.partition(), exception != null);
         if (exception == null && metadata.hasOffset()) {
             registry.fold(metadata.topic(), metadata.partition(), metadata.offset());
+            if (log.isDebugEnabled()) {
+                log.debug("Folded own-output ack {}-{} @{}",
+                        metadata.topic(), metadata.partition(), metadata.offset());
+            }
         }
+        tracker.acknowledged(metadata.topic(), metadata.partition(), exception != null);
     }
 
     @Override

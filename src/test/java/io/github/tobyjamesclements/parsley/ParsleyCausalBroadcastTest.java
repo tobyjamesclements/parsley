@@ -12,6 +12,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.OptionalLong;
+import java.util.Set;
 import java.util.concurrent.atomic.AtomicLong;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -190,6 +191,8 @@ class ParsleyCausalBroadcastTest {
             @Override public void recordClockResolutionError()  {}
             @Override public void recordUnreachableDependencyError() {}
             @Override public void recordReplaySkipped() {}
+            @Override public void recordReflectedClaimAboveOwnOutputs() {}
+            @Override public void reportHeldAboveHighestReceived(int count) {}
             @Override public void reportState(int depth, OptionalLong oldest) { reportedDepths.add(depth); }
         };
         ParsleyCausalBroadcast<String, String> causalBroadcast = new ParsleyCausalBroadcast<>(
@@ -228,6 +231,8 @@ class ParsleyCausalBroadcastTest {
             @Override public void recordClockResolutionError() {}
             @Override public void recordUnreachableDependencyError() {}
             @Override public void recordReplaySkipped() { replaySkips.add(1); }
+            @Override public void recordReflectedClaimAboveOwnOutputs() {}
+            @Override public void reportHeldAboveHighestReceived(int count) {}
             @Override public void reportState(int depth, OptionalLong oldest) {}
         };
         ParsleyCausalBroadcast<String, String> causalBroadcast = new ParsleyCausalBroadcast<>(
@@ -1084,17 +1089,19 @@ class ParsleyCausalBroadcastTest {
     // completeness layer is covered by ParsleyCausalBroadcastCompletenessTest.
 
     /**
-     * {@code broadcast()} — the single stamping site — drains the bound acknowledged-outputs
-     * source into the {@code ownOutputs} clock before attaching the stamp ("folded before each
-     * stamp", D2/O1), while the stamp itself remains exactly {@code completeness()} until T2.3:
-     * the acked sink coordinate must appear in {@code ownOutputs()} and must NOT appear in the
-     * attached dependency header.
+     * {@code broadcast()} — the single stamping site — runs the crossing wait, drains the bound
+     * acknowledged-outputs source into the {@code ownOutputs} clock ("folded before each stamp",
+     * D2/O1), and attaches the T2.3 stamp {@code completeness ∪ ownOutputs}: the acked sink
+     * coordinate must appear both in {@code ownOutputs()} and in the attached dependency header,
+     * and the crossing wait must have been invoked before the stamp was read.
      */
     @Test
-    void broadcastFoldsAcknowledgedOutputsBeforeStampingWithoutChangingTheStamp() {
+    void broadcastWaitsFoldsAndStampsCompletenessUnionOwnOutputs() {
         Uuid sinkId = Uuid.randomUuid();
+        List<Set<TopicPartition>> waits = new ArrayList<>();
         ParsleyChannels channels = new ParsleyChannels(ParsleyVectorClock.empty(), forwardedIndex);
-        channels.bindOwnOutputSource(consumer -> consumer.accept("out", 0, 11), Map.of("out", sinkId));
+        channels.bindOwnOutputSource(consumer -> consumer.accept("out", 0, 11),
+                (except, timeoutMs) -> waits.add(except), Map.of("out", sinkId), 1_000L);
         ParsleyCausalBroadcast<String, String> causalBroadcast = new ParsleyCausalBroadcast<>(
                 channels, buffer, new MockCandidateIndex(), ParsleyMetrics.NOOP,
                 System::currentTimeMillis);
@@ -1103,14 +1110,174 @@ class ParsleyCausalBroadcastTest {
         Record<String, String> stamped =
                 causalBroadcast.broadcast(new Record<>("k", "v", 0L, ParsleyHeader.mutableHeaders()));
 
+        assertEquals(List.of(Set.<TopicPartition>of()), waits,
+                "a business broadcast must run the crossing wait with the conservative empty "
+                        + "exclusion (its destination partition is unknowable at stamp time)");
         assertEquals(11L, channels.ownOutputs().offsetFor(sinkId, 0),
                 "broadcast must fold the pending ack into ownOutputs before stamping");
         byte[] stampBytes = stamped.headers().lastHeader(ParsleyHeader.CAUSAL_DEPENDENCIES).value();
         ParsleyVectorClock stamp = ParsleyVectorClock.fromBytes(stampBytes);
-        assertEquals(causalBroadcast.completeness(), stamp,
-                "the stamp must be exactly completeness() — the T2.3 union has not landed");
-        assertEquals(-1L, stamp.offsetFor(sinkId, 0),
-                "the acked own-output coordinate must not leak into the stamp before T2.3");
+        assertEquals(causalBroadcast.completeness().merge(channels.ownOutputs()), stamp,
+                "the stamp must be completeness ∪ ownOutputs (D2, T2.3)");
+        assertEquals(11L, stamp.offsetFor(sinkId, 0),
+                "the acked own-output coordinate must ride the stamp — the #22 fix");
+    }
+
+    /**
+     * The A8 invariant at the stamping site: a crossing wait that throws (timeout or observed ack
+     * failure) propagates out of {@code broadcast()} — the record is never stamped, so the EOS
+     * transaction dies rather than carry a potentially under-claiming clock.
+     */
+    @Test
+    void broadcastPropagatesACrossingWaitFailureWithoutStamping() {
+        ParsleyChannels channels = new ParsleyChannels(ParsleyVectorClock.empty(), forwardedIndex);
+        channels.bindOwnOutputSource(consumer -> { },
+                (except, timeoutMs) -> {
+                    throw new ParsleyPendingAckException("pending ack failed (test)");
+                }, Map.of(), 1_000L);
+        ParsleyCausalBroadcast<String, String> causalBroadcast = new ParsleyCausalBroadcast<>(
+                channels, buffer, new MockCandidateIndex(), ParsleyMetrics.NOOP,
+                System::currentTimeMillis);
+
+        assertThrows(ParsleyPendingAckException.class,
+                () -> causalBroadcast.broadcast(new Record<>("k", "v", 0L, ParsleyHeader.mutableHeaders())),
+                "a failed crossing wait must fail the broadcast — never stamp-and-proceed (A8)");
+    }
+
+    /**
+     * A marker broadcast passes its exact destination set to the crossing wait — every sink at the
+     * task's own partition — where a business broadcast passes the conservative empty set (see
+     * {@code broadcastWaitsFoldsAndStampsCompletenessUnionOwnOutputs}): same-coordinate pending
+     * sends are covered by partition FIFO plus I3, and the cross-sink exemption for a fanned-out
+     * marker is O4's recorded null-message exemption.
+     */
+    @Test
+    void markerBroadcastExcludesItsDestinationsFromTheCrossingWait() {
+        List<Set<TopicPartition>> waits = new ArrayList<>();
+        ParsleyChannels channels = new ParsleyChannels(ParsleyVectorClock.empty(), forwardedIndex);
+        channels.bindOwnOutputSource(consumer -> { },
+                (except, timeoutMs) -> waits.add(except), Map.of(), 1_000L);
+        ParsleyCausalBroadcast<String, String> causalBroadcast = new ParsleyCausalBroadcast<>(
+                channels, buffer, new MockCandidateIndex(), ParsleyMetrics.NOOP,
+                System::currentTimeMillis);
+
+        Set<TopicPartition> destinations = Set.of(new TopicPartition("out-a", 3), new TopicPartition("out-b", 3));
+        causalBroadcast.broadcast(new Record<>("k", "v", 0L, ParsleyHeader.mutableHeaders()), destinations);
+
+        assertEquals(List.of(destinations), waits,
+                "the marker's destination set must be excluded from its crossing wait");
+    }
+
+    /**
+     * The stamp-side own-sink strip is gone (T2.3, the #22 fix): a delivered record's dependency
+     * clock naming one of this node's own sink coordinates folds into the channel clock unstripped
+     * (I9) and rides the outbound completeness — the custody chain a third party consuming the
+     * shared sink gates on — while the gate itself still ignores the reflected claim for its own
+     * delivery decision (the interim gate-side strip, deleted at T3.1).
+     */
+    @Test
+    void ownSinkClaimInADeliveredRecordsClockRidesTheStampUnstripped() {
+        Uuid sinkId = Uuid.randomUuid();
+        ParsleyChannels channels = new ParsleyChannels(ParsleyVectorClock.empty(), forwardedIndex);
+        ParsleyCausalBroadcast<String, String> causalBroadcast = new ParsleyCausalBroadcast<>(
+                channels, buffer, new MockCandidateIndex(), ParsleyMetrics.NOOP,
+                System::currentTimeMillis, (topicId, partition) -> true,
+                (topicId, partition) -> topicId.equals(sinkId));
+
+        ParsleyCausalBroadcast.Outcome<String, String> outcome = causalBroadcast.receive(
+                incomingRecord(T1, 0, ParsleyVectorClock.empty().observe(sinkId, 0, 5)));
+
+        assertEquals(1, outcome.delivered().size(),
+                "the reflected own-sink claim must not hold the record — the gate-side strip is "
+                        + "still in force (interim, until T3.1)");
+        assertEquals(5L, causalBroadcast.completeness().offsetFor(sinkId, 0),
+                "the own-sink claim must fold into the advertised channel clock and ride the "
+                        + "stamp — stripping it erased a real ancestor for third parties (#22)");
+    }
+
+    /**
+     * The I8 diagnostic: an inbound clock claiming one of this node's own sink coordinates ABOVE
+     * the ownOutputs clock counts the reflected-claim metric — the own-output view is stale or the
+     * peer's stamp untruthful; worth seeing, never a failure — while a claim at or below it (the
+     * truthful reflection) counts nothing.
+     */
+    @Test
+    void reflectedClaimAboveOwnOutputsCountsTheDiagnosticMetric() {
+        Uuid sinkId = Uuid.randomUuid();
+        List<Integer> reflectedCounts = new ArrayList<>();
+        ParsleyMetrics capturing = new ParsleyMetrics() {
+            @Override public void recordBuffered() {}
+            @Override public void recordReleased(int c) {}
+            @Override public void recordDeserializationError() {}
+            @Override public void recordClockResolutionError() {}
+            @Override public void recordUnreachableDependencyError() {}
+            @Override public void recordReplaySkipped() {}
+            @Override public void recordReflectedClaimAboveOwnOutputs() { reflectedCounts.add(1); }
+            @Override public void reportHeldAboveHighestReceived(int count) {}
+            @Override public void reportState(int depth, OptionalLong oldest) {}
+        };
+        ParsleyChannels channels = new ParsleyChannels(ParsleyVectorClock.empty(), forwardedIndex);
+        channels.acknowledge(sinkId, 0, 7);
+        ParsleyCausalBroadcast<String, String> causalBroadcast = new ParsleyCausalBroadcast<>(
+                channels, buffer, new MockCandidateIndex(), capturing,
+                System::currentTimeMillis, (topicId, partition) -> true,
+                (topicId, partition) -> topicId.equals(sinkId));
+
+        causalBroadcast.receive(incomingRecord(T1, 0, ParsleyVectorClock.empty().observe(sinkId, 0, 7)));
+        assertEquals(List.of(), reflectedCounts,
+                "a reflected claim at or below ownOutputs is the truthful case — no diagnostic");
+
+        causalBroadcast.receive(incomingRecord(T1, 1, ParsleyVectorClock.empty().observe(sinkId, 0, 9)));
+        assertEquals(List.of(1), reflectedCounts,
+                "a reflected claim above ownOutputs must count the I8 diagnostic metric");
+    }
+
+    /**
+     * The A9 stalled-dependency scan: a record held past the threshold on a dependency ABOVE its
+     * channel's highest physically received offset (nothing received so far can satisfy the claim
+     * — an aborted tail, a dead producer) is counted; a record held on a dependency at or below
+     * the highest received (its cause arrived and is merely still held) is not; and nothing counts
+     * before the threshold elapses.
+     */
+    @Test
+    void heldDependencyStallScanCountsOnlyClaimsAboveHighestReceivedPastTheThreshold() {
+        List<Integer> stallCounts = new ArrayList<>();
+        ParsleyMetrics capturing = new ParsleyMetrics() {
+            @Override public void recordBuffered() {}
+            @Override public void recordReleased(int c) {}
+            @Override public void recordDeserializationError() {}
+            @Override public void recordClockResolutionError() {}
+            @Override public void recordUnreachableDependencyError() {}
+            @Override public void recordReplaySkipped() {}
+            @Override public void recordReflectedClaimAboveOwnOutputs() {}
+            @Override public void reportHeldAboveHighestReceived(int count) { stallCounts.add(count); }
+            @Override public void reportState(int depth, OptionalLong oldest) {}
+        };
+        AtomicLong now = new AtomicLong(0);
+        ParsleyChannels channels = new ParsleyChannels(ParsleyVectorClock.empty(), forwardedIndex);
+        ParsleyCausalBroadcast<String, String> causalBroadcast = new ParsleyCausalBroadcast<>(
+                channels, buffer, new MockCandidateIndex(), capturing, now::get);
+
+        // T1@5 delivers (frontier and highest received at 5); T1@8 arrives with an unsatisfiable
+        // foreign dependency and is held — the bridge folds the skipped 6..7, so highest received
+        // on T1 is 8 while the record itself waits on T3@0, a channel never received on (a stall).
+        causalBroadcast.receive(incomingRecord(T1, 5, ParsleyVectorClock.empty()));
+        causalBroadcast.receive(incomingRecord(T1, 8, ParsleyVectorClock.empty().observe(T3_ID, 0, 0)));
+        // T2@0 waits on T1@8 — at or below T1's highest received: its cause physically arrived and
+        // is merely held, NOT a stall. T2@1 waits on T1@11 — above it: a genuine stall.
+        causalBroadcast.receive(incomingRecord(T2, 0, ParsleyVectorClock.empty().observe(T1_ID, 0, 8)));
+        causalBroadcast.receive(incomingRecord(T2, 1, ParsleyVectorClock.empty().observe(T1_ID, 0, 11)));
+
+        causalBroadcast.reportHeldDependencyStalls(1_000L);
+        assertEquals(List.of(0), stallCounts,
+                "nothing may count as stalled before the threshold has elapsed");
+
+        now.set(1_001L);
+        causalBroadcast.reportHeldDependencyStalls(1_000L);
+        assertEquals(List.of(0, 2), stallCounts,
+                "exactly the two records waiting on never-received positions (T1@8 on T3@0, T2@1 "
+                        + "on T1@11) must count — the record whose cause arrived but is still held "
+                        + "(T2@0 on T1@8) must not");
     }
 
     private ParsleyCausalBroadcast<String, String> causalBroadcastWith() {

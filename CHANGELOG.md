@@ -7,6 +7,42 @@ All notable changes to this project are documented in this file. The format is b
 ## [Unreleased]
 
 ### Fixed
+- **The outbound stamp is now `completeness ∪ ownOutputs`, and the stamp-side own-sink strip is
+  gone (#22; T2.3, decision D2).** Every stamped record — business forwards and null messages alike,
+  through the single stamping site — now carries the node's own acknowledged output positions, and
+  an inbound clock's own-sink coordinates fold into the advertised channel clocks unstripped
+  (invariant I9: the gate may ignore, the merge may not). This closes the two own-sink stamp holes:
+  a stage whose sink topic is also consumed by a distinct downstream app no longer erases that real
+  ancestor from its other outputs' stamps (#22 — the third party could deliver effect before
+  cause), and a producer's second output is now provably after its first (the two-output diamond).
+  Before stamping, the task runs the **crossing wait** (O1; per-(topic, partition) granularity per
+  T3.0 A7): it blocks until no own-sink send to another coordinate — a different topic **or a
+  different partition of the same topic** — is unacknowledged, so a send that process-order-precedes
+  the record cannot be missing from its stamp; on timeout (bounded by the producer's
+  `delivery.timeout.ms`) or on an observed ack failure it throws and the EOS transaction dies —
+  never stamp-and-proceed (A8). A business forward's wait conservatively excludes nothing (its
+  destination partition is unknowable at stamp time; over-waiting only folds more acked positions —
+  monotone-sound by I8); a marker's wait excludes its exact destination set. Null-message relay is
+  now knowledge-based (invariant I6): a carried clock is relayed onward only when it teaches the
+  node something outside `frontier ∪ channel clocks ∪ carried ancestry ∪ ownOutputs`, replacing the
+  per-channel comparison and the strip's old cycle-settling role (a reflected own coordinate is
+  dominated by `ownOutputs`, so cycles still quiesce). A scope-growth rescope now seeds an added
+  input from the ownOutputs-inclusive stamp value, so an added input that was formerly this node's
+  own sink skips the prefix its stamps already claimed ("skip what you already claimed", extending
+  T3.0 A5). New observability: `reflected-claims-above-own-outputs` (I8 diagnostic — an own-sink
+  claim above the own-output view; never a failure) and the `records-held-above-highest-received`
+  gauge with a WARN log (T3.0 A9 — records held past `delivery.timeout.ms` on a dependency above
+  the channel's highest physically received offset, the signature of a claim nothing received can
+  satisfy; fail-safe, unbounded delay made visible). Wiring this surfaced an ack-ordering race in
+  the T2.2 interceptor, found live by `CausalFanOutScopedFrontierIT`: the callback cleared the
+  pending count (waking a crossing-wait waiter) before folding the acked offset into the registry,
+  so the released stamp could miss exactly the coordinate whose ack released it; the interceptor
+  now folds before it acknowledges, and its Javadoc records the order as load-bearing. The interim gate-side own-sink strip stays
+  until T3.1's two-branch gate, which also picks up the A7 funnel's downstream-delivery IT — the
+  cross-partition claims this change (correctly) puts on the wire are exactly what the interim
+  fail-fast gate rejects at a task owning a different partition (the same recorded
+  interim-consequence class as T1.3's re-homed stamps). Wire note: stamps gain entries (own-sink
+  coordinates); no header or blob format changes.
 - **Scope-change safety: a redeploy that changes the input-topic set no longer mishandles surviving
   causal state (#21; T3.0 attacks A5/A6).** The persisted frontier blob now records the declared
   input set (topic name → UUID) and a **carried-ancestry clock**, both as trailing sections, so a

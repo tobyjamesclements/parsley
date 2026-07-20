@@ -12,7 +12,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
  * Tests for {@link ParsleyCausalBroadcast#onWatermark}: a watermark's carried clock feeds the
- * outbound stamp ({@link ParsleyCausalBroadcast#completeness()}) and the {@code channelAdvanced} relay signal,
+ * outbound stamp ({@link ParsleyCausalBroadcast#completeness()}) and the {@code learnedSomethingNew} relay signal,
  * but never the delivery gate — a peer's claim that a coordinate was delivered <em>there</em> is not
  * proof it was delivered <em>here</em>, so a held record releases only once this node's own contiguous
  * frontier genuinely reaches its dependencies. Gating on the max-merged completeness used to let a
@@ -57,7 +57,7 @@ class ParsleyCausalBroadcastWatermarkTest {
         assertEquals(List.of(), watermark.outcome().delivered(),
                 "a watermark's carried claim of T2@3 must not release the held record — a peer's "
                         + "delivery is not this node's delivery");
-        assertTrue(watermark.channelAdvanced(),
+        assertTrue(watermark.learnedSomethingNew(),
                 "the carried clock did teach the channel something new, so the relay signal is true "
                         + "even though nothing was released");
 
@@ -115,9 +115,56 @@ class ParsleyCausalBroadcastWatermarkTest {
         assertEquals(1, watermark.outcome().delivered().size(),
                 "the watermark's own offset genuinely delivers T1@0, releasing the held T2@0 — "
                         + "a marker-only channel still advances its own frontier");
-        assertFalse(watermark.channelAdvanced(),
+        assertFalse(watermark.learnedSomethingNew(),
                 "an empty carried clock taught the channel nothing, so the relay signal stays false "
                         + "even though the marker's own delivery released a record");
+    }
+
+    /**
+     * The I6 relay rule with own outputs: a watermark reflecting this node's own produced
+     * coordinate back at it (a downstream stamp echoing around a topology cycle) at or below the
+     * {@code ownOutputs} clock teaches nothing — this node produced that position — so the relay
+     * signal settles {@code false} on first sight, without the old stamp-side own-sink strip. The
+     * unstripped claim still folds into the channel clock and rides the outbound stamp (I9).
+     */
+    @Test
+    void reflectedOwnOutputClaimTeachesNothingSoTheRelaySettles() {
+        Uuid sinkId = Uuid.randomUuid();
+        ParsleyChannels channels = newFrontier();
+        channels.acknowledge(sinkId, 0, 7);
+        ParsleyCausalBroadcast<String, String> causalBroadcast = new ParsleyCausalBroadcast<>(
+                channels, buffer, new MockCandidateIndex(), ParsleyMetrics.NOOP,
+                System::currentTimeMillis, SCOPE, (topicId, partition) -> topicId.equals(sinkId));
+
+        ParsleyCausalBroadcast.WatermarkOutcome<String, String> reflected =
+                causalBroadcast.onWatermark(T1_ID, 0, 0, clock(sinkId, 7));
+
+        assertFalse(reflected.learnedSomethingNew(),
+                "a claim at or below ownOutputs is this node's own knowledge — relaying it would "
+                        + "ping-pong forever around a cycle (I6: new is judged against total "
+                        + "knowledge, ownOutputs included)");
+        assertEquals(7L, causalBroadcast.completeness().offsetFor(sinkId, 0),
+                "the reflected claim must still fold into the channel clock unstripped (I9) — "
+                        + "only the relay is suppressed, never the merge");
+    }
+
+    /**
+     * A carried clock this node's total knowledge does not dominate — even one arriving on a
+     * channel whose own clock would dominate it — relays exactly once: the first sight folds it
+     * (so the stamp carries it, I9), and an identical repeat teaches nothing and settles. This is
+     * the strict-advance convergence argument: each relay shrinks the set of unknown facts.
+     */
+    @Test
+    void repeatedForeignClaimRelaysOnFirstSightOnly() {
+        ParsleyCausalBroadcast<String, String> causalBroadcast = causalBroadcastOver(newFrontier());
+
+        assertTrue(causalBroadcast.onWatermark(T1_ID, 0, 0, clock(T3_ID, 5)).learnedSomethingNew(),
+                "first sight of the foreign claim is genuinely new knowledge — it must relay");
+        assertFalse(causalBroadcast.onWatermark(T1_ID, 0, 1, clock(T3_ID, 5)).learnedSomethingNew(),
+                "the identical claim taught nothing the second time — it must settle, not ping-pong");
+        assertFalse(causalBroadcast.onWatermark(T2_ID, 0, 0, clock(T3_ID, 5)).learnedSomethingNew(),
+                "the same claim arriving on a DIFFERENT channel is still already-known — I6 "
+                        + "compares against total knowledge, never a single channel's clock");
     }
 
     // --- helpers --------------------------------------------------------------------------------

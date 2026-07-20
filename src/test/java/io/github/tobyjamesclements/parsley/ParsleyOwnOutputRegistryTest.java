@@ -141,7 +141,7 @@ class ParsleyOwnOutputRegistryTest {
                 "an untracked topic's ack must not enter the own-output snapshot");
         // With the changelog send still "in flight" (no ack needed — it was never tracked), the
         // crossing wait must see nothing pending and return at once.
-        registry.awaitQuiescentExcept(OUT, 0, 10);
+        registry.awaitQuiescentExcept(Set.of(new TopicPartition(OUT, 0)), 10);
         interceptor.close();
     }
 
@@ -153,11 +153,32 @@ class ParsleyOwnOutputRegistryTest {
     @Test
     void crossingWaitReturnsImmediatelyWithNothingPendingElsewhere() {
         ParsleyOwnOutputRegistry registry = registeredRegistry();
-        registry.awaitQuiescentExcept(OUT, 0, 10);
+        registry.awaitQuiescentExcept(Set.of(new TopicPartition(OUT, 0)), 10);
 
         ParsleyOwnOutputInterceptor interceptor = configuredInterceptor();
         interceptor.onSend(new ProducerRecord<>(OUT, 0, "k", "v"));
-        registry.awaitQuiescentExcept(OUT, 0, 10);
+        registry.awaitQuiescentExcept(Set.of(new TopicPartition(OUT, 0)), 10);
+        interceptor.close();
+    }
+
+    /**
+     * The business-forward form of the wait — an <em>empty</em> exclusion set — waits for full
+     * quiescence: even a pending send to a coordinate a marker stamp could have excluded holds it,
+     * because a business forward's destination partition is unknowable at stamp time and
+     * over-waiting is the sound direction (I8). The pending send's ack releases it.
+     */
+    @Test
+    void emptyExclusionWaitsOnEveryPendingCoordinate() {
+        ParsleyOwnOutputRegistry registry = registeredRegistry();
+        ParsleyOwnOutputInterceptor interceptor = configuredInterceptor();
+        interceptor.onSend(new ProducerRecord<>(OUT, 0, "k", "v"));
+
+        assertThrows(ParsleyPendingAckException.class,
+                () -> registry.awaitQuiescentExcept(Set.of(), 50),
+                "with no excludable destination, any pending send must hold the wait");
+
+        interceptor.onAcknowledgement(metadata(OUT, 0, 2), null);
+        registry.awaitQuiescentExcept(Set.of(), 10);
         interceptor.close();
     }
 
@@ -185,7 +206,7 @@ class ParsleyOwnOutputRegistryTest {
         }, "test-ack-network-thread");
         ackThread.start();
 
-        registry.awaitQuiescentExcept(OUT, 0, 5_000);
+        registry.awaitQuiescentExcept(Set.of(new TopicPartition(OUT, 0)), 5_000);
         assertTrue(waiterDone.await(1, TimeUnit.SECONDS),
                 "the wait must have been released by the ack, not by anything else");
         assertEquals(Map.of(new TopicPartition(OUT, 1), 4L), ackedOf(registry),
@@ -205,7 +226,7 @@ class ParsleyOwnOutputRegistryTest {
         interceptor.onSend(new ProducerRecord<>(OUT, 1, "k", "v"));
 
         assertThrows(ParsleyPendingAckException.class,
-                () -> registry.awaitQuiescentExcept(OUT, 0, 50),
+                () -> registry.awaitQuiescentExcept(Set.of(new TopicPartition(OUT, 0)), 50),
                 "an expired crossing wait must fail the transaction, never stamp-and-proceed");
         interceptor.close();
     }
@@ -232,7 +253,7 @@ class ParsleyOwnOutputRegistryTest {
         abortThread.start();
 
         assertThrows(ParsleyPendingAckException.class,
-                () -> registry.awaitQuiescentExcept(OUT, 0, 5_000),
+                () -> registry.awaitQuiescentExcept(Set.of(new TopicPartition(OUT, 0)), 5_000),
                 "a failed pending ack must surface as a throw, not as a satisfied wait");
         assertFalse(ackedOf(registry).containsKey(new TopicPartition(OUT, 1)),
                 "the aborted send must not have folded an own-output coordinate");
@@ -252,12 +273,12 @@ class ParsleyOwnOutputRegistryTest {
         interceptor.onSend(new ProducerRecord<>(OUT, null, "k", "v"));
 
         assertThrows(ParsleyPendingAckException.class,
-                () -> registry.awaitQuiescentExcept(OUT, 0, 50),
+                () -> registry.awaitQuiescentExcept(Set.of(new TopicPartition(OUT, 0)), 50),
                 "an unknown-partition pending send might target another partition — the wait must "
                         + "hold it (conservatively) rather than exclude it");
 
         interceptor.onAcknowledgement(metadata(OUT, 0, 6), null);
-        registry.awaitQuiescentExcept(OUT, 0, 10);
+        registry.awaitQuiescentExcept(Set.of(new TopicPartition(OUT, 0)), 10);
         assertEquals(Map.of(new TopicPartition(OUT, 0), 6L), ackedOf(registry),
                 "the resolving ack must fold at its real coordinate");
         interceptor.close();
