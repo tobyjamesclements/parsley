@@ -92,6 +92,31 @@ topic.
 
 ---
 
+## A causal topic was deleted or recreated while the application ran
+
+Topic names are resolved to their stable Kafka UUIDs once, at task initialisation, and causal
+identity is bound to the UUID for the process lifetime. If a causal topic — an input or a sink — is
+deleted (or deleted and recreated under the same name) while the application runs, `CausalStreams`
+detects the change through a background topic-identity poll and fails the application fast the next
+time a task processes or stamps a record:
+
+```
+causal topic 'prices' changed UUID from ... (resolved at init) to ... — it was deleted and
+recreated while this member ran. Channel identity is bound per process lifetime (E1): records of
+a recreated topic would be ingested and stamped under the old UUID, rebinding causal coordinates. ...
+```
+
+Depending on timing, the failure can instead surface as Kafka's own missing-source-topic rebalance
+error or, for a recreated input whose new log is still short, the out-of-range failure the
+`AutoOffsetReset.none()` sources fail closed under. All three are the same verdict: the member
+stops rather than processing the new incarnation's records under the old identity. Records fetched
+in the short window before detection are the residual exposure, so treat live deletion or
+recreation of a causal topic as an operational error, like letting retention outrun a lagging
+consumer. Restarting after a recreation is safe: identity is re-resolved at init, and the old
+incarnation's history reads as lost, never reordered.
+
+---
+
 ## Sustained buffer growth
 
 If `buffer-depth` (see [Configuration](configuration.md#metrics)) grows without bound instead of

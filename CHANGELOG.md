@@ -6,6 +6,35 @@ All notable changes to this project are documented in this file. The format is b
 
 ## [Unreleased]
 
+### Added
+- **Mid-run topic recreation now fails the application fast (T3.4, assumption E1).** Topic names
+  resolve to their stable Kafka UUIDs once, at task initialisation, so deleting and recreating a
+  causal topic while an application runs would silently rebind causal coordinates: a recreated
+  *input* whose new log re-passes the member's committed offset resumes fetching with no client
+  error, labelling the new incarnation's records with the old identity, and a recreated *sink*
+  turns every producer-ack fold into a monotone no-op, so stamps quietly stop claiming the node's
+  own new outputs. `CausalStreams` now runs a background topic-identity poll comparing the
+  broker's current topic IDs — inputs and sinks — against what each task resolved at
+  initialisation; on a detected change or deletion every task fails fast before ingesting or
+  stamping anything further (`ParsleyTopicRecreatedException`). Detection is bounded by the poll
+  interval (5 seconds), not instantaneous, so live recreation of a causal topic remains an
+  operational error — the guard makes it loud and bounded instead of silent and indefinite.
+  Restarting after a recreation stays safe: identity is re-resolved at initialisation, and the
+  old incarnation's history reads as lost, never reordered.
+
+### Fixed
+- **A dropped or repurposed sink no longer under-claims the node's own final-transaction outputs
+  (T3.4, invariant I2).** The persisted frontier blob always trails the final transaction's
+  own-output acknowledgements (state stores flush before the producer flush completes acks), and
+  the initialisation-time end-offset seed healed only the *currently* declared sinks — so a
+  redeploy that turned a sink into an input, or dropped it while a third party still consumed it,
+  restarted with stamps missing the node's own last outputs there, and a downstream consumer of
+  that topic plus another of the node's sinks could deliver a derived effect before its cause.
+  The blob now records the declared sink set, and initialisation heals every *previous* sink that
+  is no longer one: end-offset acknowledgement when the topic survives under its recorded UUID,
+  purge when it is provably destroyed (deleted, or recreated under a new UUID), and a loud
+  initialisation failure when it cannot be resolved at all — never a silent under-claim.
+
 ### Removed
 - **BREAKING: the topology-epoch coordination subsystem is deleted (decisions D4 + D7).** Causal
   safety never depended on it: the two-branch delivery gate (consumed dependencies gate on the

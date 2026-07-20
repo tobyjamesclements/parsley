@@ -16,6 +16,14 @@ The keys are Kafka topic UUIDs rather than topic names. Because a topic that is 
 receives a new UUID, a new incarnation of `prices` is treated as a distinct dependency. Records
 stamped against the old `prices` are never satisfied by the new one.
 
+Names are resolved to UUIDs once, at task initialisation. Deleting and recreating a causal topic
+while an application is running is therefore not a supported operation: a `CausalStreams` instance
+polls the broker's current topic IDs in the background and fails the application fast when a causal
+topic's UUID changes mid-run, rather than letting records of the new incarnation be processed under
+the old identity. Records fetched between the recreation and the next poll are the residual exposure,
+so treat live recreation as an operational error; restarting after a recreation is safe (identity is
+re-resolved, and the old incarnation's history reads as lost, never reordered).
+
 ## The frontier
 
 The causal frontier is the node's internal clock. For each `(topicId, partition)` coordinate it

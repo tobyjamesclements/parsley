@@ -127,6 +127,17 @@ final class ParsleyChannels {
     // UUIDs so a recreated topic (same name, new UUID) is provably destroyed rather than merely
     // out of scope.
     private final Map<String, Uuid> declaredInputs = new HashMap<>();
+    // The sink-topic set (name -> UUID) the persisted ownOutputs clock was written under, updated by
+    // declareSinks() at init and persisted in the "f" blob. This is the heal set for the restored
+    // ownOutputs clock (T3.4): the blob always trails the final transaction's own acks (store caches
+    // flush before the producer flush completes acks — O1), and the init-time end-offset seed heals
+    // only the CURRENTLY declared sinks — so a topic that was a sink in the previous run but is not
+    // one now (dropped, or turned into an input) would otherwise restart with stamps under-claiming
+    // this node's own final-transaction outputs, an I2 hole in the dangerous direction. The previous
+    // run's declaration is exactly the set of topics whose acks can have trailed; ParsleyProcessor
+    // heals each of them (end-offset acknowledge when the topic survives with its UUID, purge when
+    // the UUID is provably destroyed) before the first post-restart stamp.
+    private final Map<String, Uuid> declaredSinks = new HashMap<>();
     // Per input channel (topicId, partition) -> the highest offset ever physically received on it. Persisted
     // in the "f" blob (part of the EOS transaction, so exact across restart) and consulted by bridge(): the
     // open interval between the previous highest and a newly-received offset was skipped by the
@@ -651,6 +662,41 @@ final class ParsleyChannels {
         return Map.copyOf(declaredInputs);
     }
 
+    /**
+     * The sink-topic set (name → UUID) the persisted {@link #ownOutputs()} clock was written under —
+     * the previous run's declaration, empty on a fresh store or a pre-T3.4 blob. Read it at init to
+     * heal the restored clock's trailing acks (see the field note), <em>before</em>
+     * {@link #declareSinks} overwrites it with the current declaration.
+     */
+    Map<String, Uuid> declaredSinks() {
+        return Map.copyOf(declaredSinks);
+    }
+
+    /**
+     * Records the currently declared (resolved) sink set and persists, so the next init can heal
+     * exactly the coordinates whose acks may have trailed this run's final transaction. Called once
+     * at init, after the previous declaration has been read and healed. A sink that failed
+     * best-effort UUID resolution this run is absent — its acks are not tracked this run either,
+     * so there is nothing new to heal next time beyond what this call's absent entry already says.
+     */
+    void declareSinks(Map<String, Uuid> currentSinks) {
+        declaredSinks.clear();
+        declaredSinks.putAll(currentSinks);
+        persist();
+    }
+
+    /**
+     * Removes every {@code topicId} coordinate from the {@link #ownOutputs()} clock and persists —
+     * I9's one permitted removal from stamp-feeding state, for a provably destroyed topic (deleted,
+     * or recreated under a new UUID): its records can never be delivered by any receiver (E1), so a
+     * claim on them can gate nothing and heal nothing. Called by the init-time former-sink heal;
+     * {@link #rescope} performs the same purge for recreated <em>input</em> topics.
+     */
+    void destroyOwnOutput(Uuid topicId) {
+        ownOutputs = ownOutputs.retaining((id, partition) -> !id.equals(topicId));
+        persist();
+    }
+
     void rescope(Map<String, Uuid> currentInputs, int taskPartition) {
         // 1 — destroyed: recreated inputs' old UUIDs leave every stamp-feeding structure for good.
         Set<Uuid> destroyed = new HashSet<>();
@@ -769,6 +815,11 @@ final class ParsleyChannels {
      * the committed blob (store caches flush before the producer flush completes acks — O1), so a
      * restored clock can trail by one transaction; the init-time sink end-offset seed re-covers it
      * (I8: both the trail and the seed only ever sit at or below a real appended offset).
+     *
+     * <p>Then one final optional trailing section (T3.4): {@code [sink-count:4]} with per sink
+     * {@code [name UTF][topicId MSB:8][topicId LSB:8]} — the {@link #declaredSinks} set, which is
+     * what lets the next init heal the trailing acks of a topic that is no longer a sink then
+     * (see the field note).
      */
     private byte[] toBytes() {
         try (ByteArrayOutputStream baos = new ByteArrayOutputStream();
@@ -793,6 +844,11 @@ final class ParsleyChannels {
                 ParsleyByteUtils.writeUuid(dos, entry.getValue());
             }
             ParsleyByteUtils.writeBytes(dos, ownOutputs.toBytes());
+            dos.writeInt(declaredSinks.size());
+            for (Map.Entry<String, Uuid> entry : declaredSinks.entrySet()) {
+                dos.writeUTF(entry.getKey());
+                ParsleyByteUtils.writeUuid(dos, entry.getValue());
+            }
             dos.flush();
             return baos.toByteArray();
         } catch (IOException e) {
@@ -842,6 +898,16 @@ final class ParsleyChannels {
             // last transaction's acks; both are I8-sound directions).
             if (dis.available() > 0) {
                 ownOutputs = ParsleyVectorClock.fromBytes(ParsleyByteUtils.readBytes(dis));
+            }
+            // The declared-sink section is trailing and optional (T3.4): a pre-T3.4 blob ends
+            // before it, loading an empty set — the init-time heal then has nothing to heal, which
+            // matches the pre-1.0 no-upgrade-path stance (O6).
+            if (dis.available() > 0) {
+                int sinkCount = dis.readInt();
+                for (int i = 0; i < sinkCount; i++) {
+                    String name = dis.readUTF();
+                    declaredSinks.put(name, ParsleyByteUtils.readUuid(dis));
+                }
             }
         } catch (IOException e) {
             throw new IllegalStateException("ParsleyChannels deserialisation failed", e);

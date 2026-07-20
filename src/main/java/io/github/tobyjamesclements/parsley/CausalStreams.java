@@ -17,6 +17,9 @@ import java.util.Map;
 import java.util.Properties;
 import java.util.Set;
 import java.util.UUID;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.TimeUnit;
 import java.util.function.Supplier;
 
 /**
@@ -51,6 +54,10 @@ import java.util.function.Supplier;
 public final class CausalStreams implements AutoCloseable {
 
     private static final Duration QUIESCE_POLL_INTERVAL = Duration.ofMillis(100);
+    // How often the topic-identity watch compares the broker's current topic IDs against what the
+    // tasks resolved at init (E1 / T3.0 A13). Also the bound on the mislabelling window a mid-run
+    // delete+recreate can open before the member fails fast — see ParsleyTopicIdentityWatch.
+    private static final Duration TOPIC_IDENTITY_POLL_INTERVAL = Duration.ofSeconds(5);
 
     private final KafkaStreams kafkaStreams;
     private final ParsleyQuiesce quiesce;
@@ -58,6 +65,13 @@ public final class CausalStreams implements AutoCloseable {
     // injected into props as producer.<CONFIG_KEY> so the interceptor (producer side) and each
     // task's init (via appConfigs) resolve the same registry; unregistered at close().
     private final String ownOutputRegistryId;
+    // The minted id and instance of this application's topic-identity watch (E1 / T3.0 A13): tasks
+    // register their init-time name → UUID resolutions and check intactness per record; start()
+    // spins the poll loop below and close() tears it down + unregisters.
+    private final String topicIdentityWatchId;
+    private final ParsleyTopicIdentityWatch topicIdentityWatch;
+    private @Nullable ScheduledExecutorService identityPollExecutor;
+    private @Nullable ParsleyTopicAdmin identityPollAdmin;
     // Everything the pre-start offset seeding needs, captured at construction: the consumer group id
     // (application.id), every causal source topic to seed (business and passthrough alike, read off the
     // assembled topology), and the admin configuration to reach the broker. See seedSourceOffsets().
@@ -77,6 +91,10 @@ public final class CausalStreams implements AutoCloseable {
         this.quiesce = new ParsleyQuiesce();
         Topology assembled = topology.assemble(props, quiesce);
         this.ownOutputRegistryId = registerOwnOutputTracking(topology, props);
+        this.topicIdentityWatchId = UUID.randomUUID().toString();
+        this.topicIdentityWatch = new ParsleyTopicIdentityWatch();
+        ParsleyTopicIdentityWatch.register(topicIdentityWatchId, topicIdentityWatch);
+        props.put("producer." + ParsleyTopicIdentityWatch.CONFIG_KEY, topicIdentityWatchId);
         this.kafkaStreams = new KafkaStreams(assembled, props);
         this.applicationId = props.getProperty(StreamsConfig.APPLICATION_ID_CONFIG);
         this.sourceTopics = sourceTopicsOf(assembled);
@@ -160,7 +178,29 @@ public final class CausalStreams implements AutoCloseable {
      */
     public void start() {
         seedSourceOffsets();
+        startTopicIdentityPolling();
         kafkaStreams.start();
+    }
+
+    /**
+     * Starts the topic-identity poll loop (E1 / T3.0 A13): a single daemon thread comparing the
+     * broker's current topic IDs against every binding the tasks resolved at init, on a fixed
+     * interval. A detected delete or delete+recreate marks the watch broken; the tasks' per-record
+     * checks then fail the member fast (see {@link ParsleyTopicIdentityWatch}). The poll itself
+     * never throws — transient admin failures are logged and retried next tick.
+     */
+    private void startTopicIdentityPolling() {
+        ParsleyTopicAdmin admin = ParsleyTopicAdmin.ofConfigs(adminConfigs);
+        this.identityPollAdmin = admin;
+        ScheduledExecutorService executor = Executors.newSingleThreadScheduledExecutor(runnable -> {
+            Thread thread = new Thread(runnable, "parsley-topic-identity-watch");
+            thread.setDaemon(true);
+            return thread;
+        });
+        this.identityPollExecutor = executor;
+        long intervalMs = TOPIC_IDENTITY_POLL_INTERVAL.toMillis();
+        executor.scheduleWithFixedDelay(() -> topicIdentityWatch.poll(admin),
+                intervalMs, intervalMs, TimeUnit.MILLISECONDS);
     }
 
     private void seedSourceOffsets() {
@@ -210,6 +250,19 @@ public final class CausalStreams implements AutoCloseable {
         }
         kafkaStreams.close();
         ParsleyOwnOutputRegistry.unregister(ownOutputRegistryId);
+        ScheduledExecutorService executor = identityPollExecutor;
+        if (executor != null) {
+            executor.shutdownNow();
+        }
+        ParsleyTopicAdmin admin = identityPollAdmin;
+        if (admin != null) {
+            try {
+                admin.close();
+            } catch (Exception e) {
+                // Closing a poll-only admin client can fail only on shutdown races; nothing to do.
+            }
+        }
+        ParsleyTopicIdentityWatch.unregister(topicIdentityWatchId);
     }
 
     /**

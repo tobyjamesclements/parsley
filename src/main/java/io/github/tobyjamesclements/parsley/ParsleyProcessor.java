@@ -120,6 +120,13 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
     // marker back to that partition lane (null until the first record).
     private @Nullable KIn lastSeenKey;
 
+    // The instance-wide topic-identity watch (E1 / T3.0 A13), resolved from config at init() like
+    // the own-output registry; null when no CausalStreams instance minted one (TopologyTestDriver
+    // runs, low-level supplier wirings) — every check is then a no-op. Consulted before ingesting
+    // each record and before every stamped forward, so a detected mid-run topic recreation fails
+    // the task (and its EOS transaction) fast instead of mislabelling coordinates.
+    private @Nullable ParsleyTopicIdentityWatch identityWatch;
+
     private ProcessorContext<KOut, VOut> context;
     // The task's one causal-broadcast core, built once at init() over the task's state stores. Exactly
     // one Processor instance ever touches these stores within a task, so the cached ParsleyChannels's
@@ -174,6 +181,7 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
     public void init(ProcessorContext<KOut, VOut> context) {
         this.context = context;
         this.topicUuids = resolveTopicUuids(context);
+        registerIdentityExpectations();
         this.frontierStore = context.getStateStore(frontierStoreName);
         this.bufferStore = context.getStateStore(bufferStoreName);
         this.candidateIndexStore = context.getStateStore(candidateIndexStoreName);
@@ -204,7 +212,8 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
         }
 
         this.stampingContext = new ParsleyProcessorContext<>(
-                context, causalBroadcast, () -> Optional.ofNullable(deliveryMetadata), sinkNodeNames);
+                context, causalBroadcast, () -> Optional.ofNullable(deliveryMetadata), sinkNodeNames,
+                this::ensureTopicIdentityIntact);
         delegate.init(stampingContext);
         this.delegateInitialized = true;
 
@@ -343,6 +352,17 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
                 }
             }
         }
+        // Heal the restored ownOutputs clock for the PREVIOUS run's sinks that are no longer sinks
+        // (T3.4): the "f" blob always trails the final transaction's own acks, and the end-offset
+        // seed above covers only the currently declared sinks — without this, a redeploy that drops
+        // a sink (or turns it into an input) would stamp under-claims of this node's own
+        // final-transaction outputs, and a downstream consumer of that topic plus another of this
+        // node's sinks could deliver an effect before its cause (an I2 hole). Runs after rescope
+        // deliberately: an added former-own-sink input's frontier seed must keep the carried
+        // (pre-heal) cut, so the node's own final-transaction outputs are delivered as ordinary
+        // input records above it, while the stamp is healed to cover them from the first emission.
+        healFormerSinkOwnOutputs(channels);
+        channels.declareSinks(sinkTopicUuids);
 
         // This stage's own sink topics — never a delivery-scope concern (inScope, above), but fed
         // to the core for the I8 reflected-claim diagnostic: an inbound claim on an own-sink
@@ -354,6 +374,133 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
 
         return new ParsleyCausalBroadcast<>(channels, buffer, candidateIndex,
                 wiredMetrics.metrics(), context::currentSystemTimeMs, inScope, ownSinkTopics);
+    }
+
+    /**
+     * Resolves this instance's {@link ParsleyTopicIdentityWatch} (minted by {@link CausalStreams};
+     * absent under TopologyTestDriver and low-level wirings) and registers the name → UUID bindings
+     * this task just resolved — every input and every resolved sink — as its expectations. Sinks are
+     * included because a mid-run <em>sink</em> recreation is as unsafe as an input's: the ack
+     * registry folds by topic name through a stale UUID map, and the recreated topic's restarted
+     * offsets make every fold a monotone no-op, so stamps silently stop claiming this node's own
+     * new outputs (an I2 under-claim downstream).
+     */
+    private void registerIdentityExpectations() {
+        Object watchId = context.appConfigs().get("producer." + ParsleyTopicIdentityWatch.CONFIG_KEY);
+        this.identityWatch = watchId == null ? null : ParsleyTopicIdentityWatch.lookup(watchId.toString());
+        ParsleyTopicIdentityWatch watch = this.identityWatch;
+        if (watch == null) {
+            log.info("No topic-identity watch bound (id: {}) — mid-run topic recreation is not "
+                    + "monitored; identity is still re-resolved at every restart [task: {}]",
+                    watchId, context.taskId());
+            return;
+        }
+        topicUuids.forEach(watch::expect);
+        sinkTopicUuids.forEach(watch::expect);
+    }
+
+    /**
+     * Fails the task fast if the identity watch has detected a mid-run topic recreation — checked
+     * before each record is ingested and (via the stamping context) before each stamped forward.
+     * One volatile read when a watch is bound; a no-op otherwise.
+     */
+    private void ensureTopicIdentityIntact() {
+        ParsleyTopicIdentityWatch watch = identityWatch;
+        if (watch != null) {
+            watch.ensureIntact();
+        }
+    }
+
+    /**
+     * Heals the restored {@code ownOutputs} clock for every topic the <em>previous</em> run declared
+     * as a sink but this run does not ({@link ParsleyChannels#declaredSinks}). The previous
+     * declaration is exactly the set of topics whose acks can have trailed the persisted blob (only
+     * a declared sink's sends are ever acked into it), so per former sink, resolved through a fresh
+     * admin session:
+     * <ul>
+     *   <li><strong>Topic survives under its recorded UUID</strong> — acknowledge each partition's
+     *       {@code endOffset - 1}, the same I8-sound over-claim the current-sink seed makes: the end
+     *       offset is at or above every output this node ever produced there, so the healed stamp
+     *       covers the trailing final-transaction acks (over-covering third-party records appended
+     *       since is delay-only, I8).</li>
+     *   <li><strong>Topic deleted, or recreated under a new UUID</strong> — the recorded UUID's
+     *       records are destroyed; no receiver can ever deliver them (E1), so the claims heal
+     *       nothing and gate nothing: purge them ({@link ParsleyChannels#destroyOwnOutput} — I9's
+     *       one permitted removal from stamp-feeding state).</li>
+     *   <li><strong>Broker unreachable / resolution fails otherwise</strong> — fail init loudly:
+     *       proceeding would stamp potential under-claims, and purging without proof of destruction
+     *       would manufacture them.</li>
+     * </ul>
+     * A topic still declared as a sink is skipped: the current-sink end-offset seed already healed
+     * it (same UUID), or {@link ParsleyChannels#destroyOwnOutput} purges its recorded UUID here
+     * when the recreation happened across the restart (different UUID, successor already seeded).
+     * The common case — sink set unchanged — opens no admin session at all.
+     */
+    private void healFormerSinkOwnOutputs(ParsleyChannels channels) {
+        Map<String, Uuid> previousSinks = channels.declaredSinks();
+        Map<String, Uuid> former = new HashMap<>();
+        for (Map.Entry<String, Uuid> previous : previousSinks.entrySet()) {
+            Uuid current = sinkTopicUuids.get(previous.getKey());
+            if (current == null) {
+                former.put(previous.getKey(), previous.getValue());
+            } else if (!current.equals(previous.getValue())) {
+                channels.destroyOwnOutput(previous.getValue());
+            }
+        }
+        if (former.isEmpty()) {
+            return;
+        }
+        try (ParsleyTopicAdmin admin = adminFactory.apply(context.appConfigs())) {
+            for (Map.Entry<String, Uuid> sink : former.entrySet()) {
+                Uuid currentId = resolveFormerSinkId(admin, sink.getKey());
+                if (!sink.getValue().equals(currentId)) {
+                    log.info("Former sink topic '{}' is deleted or recreated; purging its destroyed "
+                            + "own-output claims [task: {}]", sink.getKey(), context.taskId());
+                    channels.destroyOwnOutput(sink.getValue());
+                    continue;
+                }
+                Map<Integer, Long> ends;
+                try {
+                    ends = admin.endOffsets(sink.getKey());
+                } catch (Exception e) {
+                    throw new IllegalStateException("failed to read end offsets for former sink topic '"
+                            + sink.getKey() + "' while healing the restored ownOutputs clock; the "
+                            + "persisted clock can trail the final transaction's acks, so starting "
+                            + "without the heal could stamp under-claims of this node's own outputs", e);
+                }
+                for (Map.Entry<Integer, Long> end : ends.entrySet()) {
+                    if (end.getValue() > 0) {
+                        channels.acknowledge(sink.getValue(), end.getKey(), end.getValue() - 1);
+                    }
+                }
+                log.info("Healed own-output claims for former sink topic '{}' from its end offsets "
+                        + "[task: {}]", sink.getKey(), context.taskId());
+            }
+        } catch (RuntimeException e) {
+            throw e;
+        } catch (Exception e) {
+            throw new IllegalStateException("failed to heal former-sink own-output claims", e);
+        }
+    }
+
+    /**
+     * Resolves {@code topic}'s current UUID for the former-sink heal, mapping a provably missing
+     * topic ({@link org.apache.kafka.common.errors.UnknownTopicOrPartitionException} in the failure
+     * chain) to {@code null} — the destroyed case — while any other failure (an unreachable broker)
+     * propagates and fails init: only positive evidence of destruction may purge claims.
+     */
+    private static @Nullable Uuid resolveFormerSinkId(ParsleyTopicAdmin admin, String topic) {
+        try {
+            return admin.topicIds(List.of(topic)).get(topic);
+        } catch (Exception e) {
+            for (Throwable t = e; t != null; t = t.getCause()) {
+                if (t instanceof org.apache.kafka.common.errors.UnknownTopicOrPartitionException) {
+                    return null;
+                }
+            }
+            throw new IllegalStateException("failed to resolve former sink topic '" + topic
+                    + "' while healing the restored ownOutputs clock", e);
+        }
     }
 
     /**
@@ -391,6 +538,10 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
 
     @Override
     public void process(Record<KIn, VIn> record) {
+        // Before anything ingests or advances state under a possibly stale name → UUID binding:
+        // once the watch has detected a mid-run topic recreation, every record from here on could
+        // be mislabelled, so the task must die now (E1 / T3.0 A13).
+        ensureTopicIdentityIntact();
         switch (classify(record)) {
             case WATERMARK -> {
                 handleWatermark(record);

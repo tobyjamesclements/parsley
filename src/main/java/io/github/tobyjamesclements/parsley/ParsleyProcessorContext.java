@@ -70,15 +70,21 @@ final class ParsleyProcessorContext<KOut, VOut> implements ProcessorContext<KOut
     // Counts business forward() calls since the last resetForwardCount(); read by ParsleyProcessor
     // to detect non-emitting delegate invocations and emit a watermark in their place.
     private int forwardCount = 0;
+    // Fails the forward fast if the topic-identity watch has detected a mid-run recreation (E1 /
+    // T3.0 A13) — a punctuator-driven forward is the one stamped path that does not pass through
+    // ParsleyProcessor.process()'s own check first.
+    private final Runnable identityCheck;
 
     ParsleyProcessorContext(ProcessorContext<KOut, VOut> delegate,
                              ParsleyCausalBroadcast<?, ?> broadcast,
                              Supplier<Optional<RecordMetadata>> deliveredMetadata,
-                             List<String> sinkNodeNames) {
+                             List<String> sinkNodeNames,
+                             Runnable identityCheck) {
         this.delegate = delegate;
         this.broadcast = broadcast;
         this.deliveredMetadata = deliveredMetadata;
         this.sinkNodeNames = sinkNodeNames;
+        this.identityCheck = identityCheck;
     }
 
     /**
@@ -119,6 +125,7 @@ final class ParsleyProcessorContext<KOut, VOut> implements ProcessorContext<KOut
     }
 
     private <K extends KOut, V extends VOut> Record<K, V> stamp(Record<K, V> record) {
+        identityCheck.run();
         return broadcast.broadcast(record);
     }
 

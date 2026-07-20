@@ -598,6 +598,64 @@ class ParsleyChannelsTest {
                 "unrelated own-output entries must survive the destruction");
     }
 
+    /**
+     * The declared-sink set (name → UUID) round-trips through the {@code "f"} blob as its own
+     * trailing section (T3.4): the next init reads it to heal the restored {@code ownOutputs}
+     * clock's trailing acks for topics that are no longer sinks then. A pre-T3.4 blob (no section)
+     * loads an empty set.
+     *
+     * Asserts the persisted declaration is reproduced by a fresh instance over the same store, and
+     * that a blob written before any declaration loads empty.
+     */
+    @Test
+    void declaredSinksRoundTripThroughTheFBlob() {
+        TestKeyValueStore<String, byte[]> store =
+                new TestKeyValueStore<String, byte[]>(Comparator.naturalOrder(), "frontier");
+        ParsleyChannels original = new ParsleyChannels(store, new MockForwardedIndex());
+        original.delivered(T1_ID, 0, 0);
+        assertEquals(Map.of(), new ParsleyChannels(store, new MockForwardedIndex()).declaredSinks(),
+                "a blob written before any sink declaration must load an empty declared-sink set");
+
+        original.declareSinks(Map.of("sink", SINK_ID));
+
+        ParsleyChannels restored = new ParsleyChannels(store, new MockForwardedIndex());
+        assertEquals(Map.of("sink", SINK_ID), restored.declaredSinks(),
+                "the declared-sink set must round-trip through its trailing \"f\" blob section");
+        assertEquals(0L, restored.frontier().offsetFor(T1_ID, 0),
+                "the earlier sections must be unaffected by the trailing sink declaration");
+    }
+
+    /**
+     * {@code destroyOwnOutput} removes every entry of a provably destroyed sink topic from the
+     * {@code ownOutputs} clock and persists — I9's one permitted removal from stamp-feeding state
+     * (a deleted or recreated topic's records can never be delivered by any receiver, E1). Used by
+     * the init-time former-sink heal.
+     *
+     * Asserts the destroyed topic's entries leave the clock (all partitions), unrelated entries
+     * survive, and the purge is durable across a reload.
+     */
+    @Test
+    void destroyOwnOutputPurgesADestroyedSinksClaimsDurably() {
+        TestKeyValueStore<String, byte[]> store =
+                new TestKeyValueStore<String, byte[]>(Comparator.naturalOrder(), "frontier");
+        ParsleyChannels channels = new ParsleyChannels(store, new MockForwardedIndex());
+        channels.acknowledge(SINK_ID, 0, 8);
+        channels.acknowledge(SINK_ID, 1, 3);
+        channels.acknowledge(T1_ID, 0, 5);
+
+        channels.destroyOwnOutput(SINK_ID);
+
+        assertEquals(-1L, channels.ownOutputs().offsetFor(SINK_ID, 0),
+                "the destroyed sink's partition-0 claim must leave the clock");
+        assertEquals(-1L, channels.ownOutputs().offsetFor(SINK_ID, 1),
+                "the destroyed sink's partition-1 claim must leave the clock");
+        assertEquals(5L, channels.ownOutputs().offsetFor(T1_ID, 0),
+                "an unrelated sink's claim must survive the purge");
+        assertEquals(-1L, new ParsleyChannels(store, new MockForwardedIndex())
+                        .ownOutputs().offsetFor(SINK_ID, 0),
+                "the purge must be persisted — a reload must not resurrect the destroyed claims");
+    }
+
     // --- bridge(): crossing consumer-skipped (EOS marker / aborted-txn) offsets --------------------
     //
     // A read_committed consumer never returns a transaction commit/abort marker or an aborted record,
