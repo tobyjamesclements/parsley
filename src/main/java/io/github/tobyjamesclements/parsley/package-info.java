@@ -13,12 +13,11 @@
  *       spelled out in {@link io.github.tobyjamesclements.parsley.ParsleyCausalBroadcast}'s Javadoc. See {@link
  *       io.github.tobyjamesclements.parsley.CausalDependencies} for the wire contract and the edge
  *       operations below for talking to a Parsley topology from plain Kafka clients.</li>
- *   <li><strong>Topology epochs.</strong> A running, coordinated topology can evolve — a stage added,
- *       replaced, or reconfigured — without dragging pre-change history into causal time: {@link
- *       io.github.tobyjamesclements.parsley.CausalStreams#requestEpochTransition()} evolves every
- *       participating member through a leaderless, in-band epoch boundary. Optional and off by default;
- *       {@code parsley.coordination.epoch-events-topic} turns it on. Absent that key, a topology runs in
- *       epoch 0 indefinitely — no epoch-events log, no coordination thread.</li>
+ *   <li><strong>Coordination-free joins.</strong> There is no membership, no epoch, and no join
+ *       barrier: a new application simply starts consuming, its replay self-gates into causal
+ *       delivery order through the ordinary hold-back queue, and its truthful stamps make its
+ *       outputs correctly gated everywhere from the first emission. The {@code
+ *       parsley.coordination.*} keys of earlier versions are inert and pending removal.</li>
  *   <li><strong>Schema handling.</strong> A held record's key and value are (de)serialised with the
  *       {@code Serde} registered for its own <em>source</em> topic, never the buffer's internal changelog
  *       topic, so topic-scoped serdes — Avro plus Schema Registry {@code TopicNameStrategy} in particular

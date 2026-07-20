@@ -47,8 +47,8 @@ import java.util.function.LongSupplier;
  * stamping site every outbound record — a delegate's business forward and a protocol marker alike —
  * passes through; the send itself is Kafka's own {@code ProducerRecord}/{@code context.forward()} (a
  * partition's total order and replication are already a reliable-broadcast substrate). {@link
- * #onWatermark} and {@code ParsleyProcessor}'s epoch-marker handlers sit on top of this algorithm as a
- * liveness/coordination layer — protocol extensions, not part of the CBCAST core.
+ * #onWatermark} sits on top of this algorithm as a
+ * liveness layer — a protocol extension, not part of the CBCAST core.
  *
  * <p>The processor feeds incoming records to {@link #receive} and forwards the returned records
  * downstream, in order. The delivery gate is the two-branch dispatch of D1, evaluated per
@@ -122,10 +122,9 @@ final class ParsleyCausalBroadcast<K, V> {
     private int lastReportedStalls;
 
     // The single owner of all persisted causal metadata: the contiguous frontier clock, the channel
-    // clocks, and the forwarded-offset index. completeness() and channel state live here, floored to
-    // the topology epoch's lower bounds; channels.normalize applies the same floor to every inbound
-    // dependency clock before the gate sees it (NONE when epoch bounding is disabled, so the floor
-    // is a no-op).
+    // clocks, and the forwarded-offset index. completeness() and channel state live here;
+    // channels.normalize strips the self-cycle from every inbound dependency clock before the gate
+    // sees it (I5).
     private final ParsleyChannels channels;
 
     // The consumed(c) predicate of the two-branch gate (D1): a registered input channel of this
@@ -171,7 +170,7 @@ final class ParsleyCausalBroadcast<K, V> {
                  ParsleyForwardedIndex forwardedIndex,
                  ParsleyMetrics metrics,
                  LongSupplier clock) {
-        this(new ParsleyChannels(initialFrontier, forwardedIndex, false, ParsleyEpoch.NONE),
+        this(new ParsleyChannels(initialFrontier, forwardedIndex, false),
                 buffer, candidateIndex, metrics, clock);
     }
 
@@ -300,22 +299,6 @@ final class ParsleyCausalBroadcast<K, V> {
     }
 
     /**
-     * {@link #onEpochBoundary}'s result: the ordinary {@link Outcome}, plus whether the marker was
-     * <em>newly recorded</em> for its epoch on its source channel. Unlike a watermark — whose relay is
-     * gated on the carried clock teaching the channel something new — a boundary marker must relay on
-     * its channel's first sight of it even when the carried completeness is nothing new (the idle,
-     * quiesced round: the boundary carries the same completeness the preceding snapshot already
-     * advertised). Gating boundary relay on this flag propagates the boundary to every channel exactly
-     * once while a duplicate on an already-seen channel records nothing new and does not relay, so a
-     * cyclic topology still cannot ping-pong it; see {@link ParsleyProcessor}'s marker handlers.
-     *
-     * @param <K> the record key type
-     * @param <V> the record value type
-     */
-    record BoundaryOutcome<K, V>(Outcome<K, V> outcome, boolean markerWasNew) {
-    }
-
-    /**
      * The causal broadcast <em>receive</em> event (see this class's Javadoc): admits one incoming record,
      * delivering it at once if its dependencies are already satisfied, buffering it otherwise.
      *
@@ -402,50 +385,15 @@ final class ParsleyCausalBroadcast<K, V> {
             reportBufferState();
         }
 
-        // A normal delivery can advance the frontier past a pending epoch boundary's floor, closing the
-        // transition window; a raised floor can then strip a held replay record's below-floor deps.
-        if (channels.tryAdvanceEpoch()) {
-            drainSatisfied(out);
-        }
         return new Outcome<>(out);
     }
 
     /**
-     * Handles a received epoch-boundary marker: records the marker on its source channel in the
-     * {@link ParsleyEpochState}, then closes the transition window if it is now ready (marker on every
-     * channel and the delivered frontier dominating the new floor), draining any records the raised
-     * floor releases. Mirrors {@link #onWatermark}. The marker itself is never delivered or buffered;
-     * the caller ({@link ParsleyProcessor}) relays the marker downstream so the boundary propagates
-     * edge by edge — but only when it was {@link BoundaryOutcome#markerWasNew() newly recorded} here, so
-     * a cyclic topology cannot ping-pong it.
-     *
-     * @param boundary        the decoded boundary (epoch id + new lower bounds)
-     * @param channelTopicId  the topic UUID of the channel the marker arrived on
-     * @param channelPartition the partition of that channel
-     * @return the records released by a resulting window close, plus whether the marker was newly recorded
-     */
-    BoundaryOutcome<K, V> onEpochBoundary(ParsleyEpochBoundary boundary, Uuid channelTopicId, int channelPartition) {
-        boolean markerWasNew =
-                channels.recordEpochMarker(boundary.epochId(), boundary.lowerBounds(), channelTopicId, channelPartition);
-        List<ParsleyMessage<K, V>> out = new ArrayList<>();
-        if (channels.tryAdvanceEpoch()) {
-            drainSatisfied(out);
-        }
-        return new BoundaryOutcome<>(new Outcome<>(out), markerWasNew);
-    }
-
-    /**
-     * Releases every buffered record that passes the causal gate against the current frontier. Used
-     * on two call paths:
-     * <ol>
-     *   <li>Via {@link #drainAfterRestore()} — once, from the 1ms post-init punctuator in
-     *       {@link ParsleyProcessor}, to drain records that were satisfied between the last
-     *       committed frontier and the last committed buffer-removal (the at-least-once window). On
-     *       fresh starts (empty buffer) this returns empty.
-     *   <li>After {@link ParsleyChannels#tryAdvanceEpoch} closes an epoch-transition window — the
-     *       raised floor can strip a held record's below-floor dependencies, satisfying it with no
-     *       frontier advance for {@link #propagate}'s candidate index to key on.
-     * </ol>
+     * Releases every buffered record that passes the causal gate against the current frontier. Called
+     * via {@link #drainAfterRestore()} — once, from the 1ms post-init punctuator in
+     * {@link ParsleyProcessor}, to drain records that were satisfied between the last
+     * committed frontier and the last committed buffer-removal (the at-least-once window). On
+     * fresh starts (empty buffer) this returns empty.
      *
      * <p>This is an O(buffer-depth) full scan by design — correctness-first choice; the
      * candidate-index fast path in {@link #propagate} handles the common frontier-advance case.
@@ -516,8 +464,8 @@ final class ParsleyCausalBroadcast<K, V> {
      * channel clock for the outbound stamp only — a peer's claim that a coordinate was delivered
      * <em>there</em> is not proof it was delivered <em>here</em>, and the delivery gate
      * ({@link #isDeliverable}) checks this node's own contiguous frontier exclusively. Releases on this
-     * path come only from the marker's own offset advancing its channel's frontier ({@link #propagate})
-     * or from a resulting epoch-window close. Gating on the max-merged completeness here used to let a
+     * path come only from the marker's own offset advancing its channel's frontier
+     * ({@link #propagate}). Gating on the max-merged completeness here used to let a
      * watermark claiming a sibling channel's coordinate release a held record before this node had
      * itself delivered that cause — an effect-before-cause delivery to the delegate.
      *
@@ -565,12 +513,6 @@ final class ParsleyCausalBroadcast<K, V> {
         channels.delivered(sourceTopicId, sourcePartition, offset);
         propagate(out, sourceTopicId, sourcePartition);
 
-        // A watermark's own delivery advances the frontier, which can close a pending epoch
-        // transition window. Its carried clock, by contrast, feeds only the stamp and the
-        // relay signal — never the gate (see the method Javadoc).
-        if (channels.tryAdvanceEpoch()) {
-            drainSatisfied(out);
-        }
         return new WatermarkOutcome<>(new Outcome<>(out), learnedSomethingNew);
     }
 
@@ -791,8 +733,8 @@ final class ParsleyCausalBroadcast<K, V> {
 
     /**
      * The dependency clock actually checked by the gate — the two-branch dispatch of D1 in one
-     * expression: L1's normalisation ({@link ParsleyChannels#normalize} — self-cycle removal plus
-     * the interim below-floor strip, deleted at T3.2; I5), then restriction to the coordinates
+     * expression: L1's normalisation ({@link ParsleyChannels#normalize} — self-cycle removal, a
+     * pure function; I5), then restriction to the coordinates
      * this node consumes ({@link #consumed}). Every other coordinate falls to the ignore branch:
      * unconditionally ignored — sound by the transitivity theorem (I2 + I9: a consumed causal
      * ancestor is always claimed directly in the record's own clock, so an unconsumed entry only

@@ -15,8 +15,8 @@ receive(record):
     frontier.seedIfFirstSeen(record.coordinate)        # one-time per coordinate, folds in
                                                         # everything below the first-seen offset
 
-    deps = consumedDependencies(record.dependencies)   # normalise (strip self-cycle and any
-                                                        #   below-epoch-floor entry), then keep only
+    deps = consumedDependencies(record.dependencies)   # normalise (strip the self-cycle — a pure
+                                                        #   function), then keep only
                                                         #   the coordinates this node consumes — every
                                                         #   other entry is IGNORED (counted by the
                                                         #   deps-out-of-scope-ignored metric, never a
@@ -33,8 +33,6 @@ receive(record):
         buffer.add(record)                             # hold until satisfied (no limit, no timeout)
         candidateIndex.index(record, deps, frontier)
 
-    if frontier.tryAdvanceEpoch():                      # a delivery can close a pending epoch
-        out.addAll(drainSatisfied())                    #   transition window; see topology-epochs.md
     return out
 
 onWatermark(channel, offset, carriedFrontier):
@@ -42,7 +40,6 @@ onWatermark(channel, offset, carriedFrontier):
     channelStore.update(channel, carriedFrontier)      # stamp-only: feeds completeness(), not the gate
     channels.delivered(channel, offset)                   # the marker's OWN offset genuinely delivered
     propagate(channel)                                  # releases via the frontier advance alone
-    if frontier.tryAdvanceEpoch(): drainSatisfied()
     return (delivered, learnedSomethingNew)             # caller relays downstream only if genuinely new
 ```
 
@@ -63,7 +60,7 @@ unsatisfiable.
 
 | Field | Type | Purpose |
 |---|---|---|
-| `frontier` | `ParsleyChannels` | All causal state: contiguous frontier clock, per-input-channel clocks, `completeness()`, forwarded-offset index, epoch floor, and baseline seeding — self-persisting as the single `"f"` value. Channel clocks are the dependencies advertised on each `(topicId, partition)` this node consumes, seeded at registration for bookkeeping even though a silent channel contributes nothing to the completeness merge |
+| `frontier` | `ParsleyChannels` | All causal state: contiguous frontier clock, per-input-channel clocks, `completeness()`, forwarded-offset index, and baseline seeding — self-persisting as the single `"f"` value. Channel clocks are the dependencies advertised on each `(topicId, partition)` this node consumes, seeded at registration for bookkeeping even though a silent channel contributes nothing to the completeness merge |
 | `buffer` | `ParsleyBufferStore<K,V>` | Durable set of held records — unbounded, no eviction |
 | `candidateIndex` | `ParsleyCandidateIndex` | Secondary index: coordinate -> candidate record IDs |
 | `consumed` | `ParsleyVectorClock.CoordinatePredicate` | The gate's consumed(c) predicate: a registered input channel, on the partition this task owns. A dependency on a consumed coordinate gates on the local frontier; any other dependency is ignored, with a metric |
@@ -71,9 +68,7 @@ unsatisfiable.
 
 `ParsleyChannels` owns the causal state and the Lamport operations: `completeness()` (the delivery
 predicate's input), `delivered(coordinate)` (advance the frontier and notify), and
-`seedIfFirstSeen(coordinate)` (establish the baseline for a newly observed coordinate) — plus, when
-topology-epoch coordination is configured, the per-coordinate epoch floor (see
-[topology epochs](topology-epochs.md)).
+`seedIfFirstSeen(coordinate)` (establish the baseline for a newly observed coordinate).
 
 `channelStore` backs the node's outbound stamp. `completeness()` is this node's own frontier
 max-merged with every input channel's advertised dependencies (`ParsleyVectorClock.merge`): each channel
@@ -95,10 +90,9 @@ contract it implies.
    engine always receives a typed `ParsleyVectorClock`.
 2. Seed the frontier if this is the coordinate's first sighting (`seedIfFirstSeen` — consumption need
    not start at offset 0), cascading any releases the seed enables.
-3. Compute `consumedDependencies`: normalise the clock (strip the self-cycle — a `(topicId, partition)` entry whose required offset equals the record's own source offset — and anything below the current topology-epoch floor; a no-op when epoch coordination is off), then keep only the coordinates this node consumes. Every other coordinate is the gate's *ignore branch*: unconditionally ignored — sound because transitively complete stamps merged unconditionally claim every consumed ancestor directly in the same clock — and counted by the `deps-out-of-scope-ignored` metric, never a failure.
+3. Compute `consumedDependencies`: normalise the clock (strip the self-cycle — a `(topicId, partition)` entry whose required offset equals the record's own source offset; a pure function of the clock and the source coordinate), then keep only the coordinates this node consumes. Every other coordinate is the gate's *ignore branch*: unconditionally ignored — sound because transitively complete stamps merged unconditionally claim every consumed ancestor directly in the same clock — and counted by the `deps-out-of-scope-ignored` metric, never a failure.
 4. Apply the gate: `frontier.dominates(consumedDependencies)` — this node's own contiguous delivered frontier must cover every depended consumed coordinate; a claim advertised on another channel never substitutes for local delivery. If it passes: advance the frontier, fold the record's whole raw dependency clock into its channel's clock — a stamp-only update feeding `completeness()`, made only at genuine gated delivery so the stamp never carries a claim from a record that was not actually forwarded — add the record to output, and call `propagate()`.
 5. Otherwise: add the record to the buffer (assigned an insertion sequence and a `bufferedAt` timestamp, no size or time limit) and index its coordinates unsatisfied by the frontier in the candidate index.
-6. If this delivery advanced the frontier past a pending epoch-transition boundary, `frontier.tryAdvanceEpoch()` closes the window and drains anything the raised floor releases. See [topology epochs](topology-epochs.md).
 
 A missing header becomes an empty dependency clock, which the gate satisfies trivially (step 4). It
 never reaches the buffer. The frontier still advances on these records, so buffered records waiting

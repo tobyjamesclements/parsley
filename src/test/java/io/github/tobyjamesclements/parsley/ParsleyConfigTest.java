@@ -69,68 +69,42 @@ class ParsleyConfigTest {
     }
 
     /**
-     * {@code parsley.coordination.domain-topics} parses as a comma-separated set, trimming whitespace
-     * around each entry and dropping empty entries, when {@code parsley.coordination.epoch-events-topic}
-     * is also set.
+     * The inert {@code parsley.coordination.*} keys still parse — {@code CausalStreams} reads them
+     * only to warn that they wire nothing — and no combination of them fails startup: an inert key
+     * cannot be misconfigured, so the old set-without-epoch-events-topic cross-checks are gone with
+     * the subsystem's protocol role.
      *
-     * Asserts the parsed set matches exactly, order and duplicates aside.
+     * Asserts each key parses alone without an exception, and domain-topics still parses as a
+     * trimmed, deduplicated comma-separated set.
      */
     @Test
-    void fromParsesDomainTopicsAsATrimmedCommaSeparatedSet() {
-        Properties props = new Properties();
-        props.setProperty("parsley.coordination.epoch-events-topic", "epoch-events");
-        props.setProperty("parsley.coordination.domain-topics", " t1, t2 ,t3,, t2");
+    void inertCoordinationKeysParseWithoutCrossChecks() {
+        Properties domainAlone = new Properties();
+        domainAlone.setProperty("parsley.coordination.domain-topics", " t1, t2 ,t3,, t2");
+        assertEquals(Set.of("t1", "t2", "t3"), ParsleyConfig.from(domainAlone).coordinationDomainTopics(),
+                "domain-topics must parse as a trimmed, deduplicated comma-separated set, with no "
+                        + "epoch-events-topic cross-check (the key is inert)");
 
-        assertEquals(Set.of("t1", "t2", "t3"), ParsleyConfig.from(props).coordinationDomainTopics(),
-                "domain-topics must parse as a trimmed, deduplicated comma-separated set");
+        Properties memberAppsAlone = new Properties();
+        memberAppsAlone.setProperty("parsley.coordination.member-apps", "app-a,app-b");
+        assertEquals(Set.of("app-a", "app-b"), ParsleyConfig.from(memberAppsAlone).coordinationMemberApps(),
+                "member-apps must parse alone without an epoch-events-topic cross-check (the key is inert)");
+
+        Properties topicAlone = new Properties();
+        topicAlone.setProperty("parsley.coordination.epoch-events-topic", "epoch-events");
+        assertEquals("epoch-events", ParsleyConfig.from(topicAlone).coordinationEpochEventsTopic(),
+                "epoch-events-topic must still parse (CausalStreams reads it to warn)");
     }
 
     /**
-     * With neither coordination key set, {@link ParsleyConfig#coordinationDomainTopics()} is empty —
-     * the common, uncoordinated case, unaffected by this new key's existence.
+     * With no coordination key set, {@link ParsleyConfig#coordinationDomainTopics()} is empty — the
+     * common case, unaffected by the inert keys' continued existence.
      *
      * Asserts the default is an empty set.
      */
     @Test
     void coordinationDomainTopicsDefaultsToEmpty() {
         assertEquals(Set.of(), ParsleyConfig.load().coordinationDomainTopics(),
-                "domain-topics must default to empty when coordination is not configured");
-    }
-
-    /**
-     * {@code parsley.coordination.domain-topics} is only meaningful alongside {@code parsley.coordination.
-     * epoch-events-topic} — setting it without the epoch-events-topic key is rejected at startup rather
-     * than silently ignored, since a passthrough-wiring config with no coordination log to validate
-     * against would create dead, never-exercised topology nodes with no way to detect the
-     * misconfiguration later.
-     *
-     * Asserts {@code IllegalStateException} is thrown when domain-topics is set alone.
-     */
-    @Test
-    void fromRejectsDomainTopicsWithoutEpochEventsTopic() {
-        Properties props = new Properties();
-        props.setProperty("parsley.coordination.domain-topics", "t1,t2");
-
-        assertThrows(IllegalStateException.class, () -> ParsleyConfig.from(props),
-                "domain-topics without epoch-events-topic must be rejected");
-    }
-
-    /**
-     * The reverse pairing is not required: {@code parsley.coordination.epoch-events-topic} alone (with no
-     * domain-topics) is exactly today's existing, already-supported coordination configuration — full-mesh
-     * validation derives its own domain from the shared log's live declarations, not from this static
-     * config, so there is nothing for an existing coordinated deployment to migrate.
-     *
-     * Asserts no exception is thrown and domain-topics is empty.
-     */
-    @Test
-    void fromAllowsEpochEventsTopicWithoutDomainTopics() {
-        Properties props = new Properties();
-        props.setProperty("parsley.coordination.epoch-events-topic", "epoch-events");
-
-        ParsleyConfig config = ParsleyConfig.from(props);
-        assertEquals("epoch-events", config.coordinationEpochEventsTopic());
-        assertEquals(Set.of(), config.coordinationDomainTopics(),
-                "epoch-events-topic alone must not require domain-topics");
+                "domain-topics must default to empty when the key is not set");
     }
 }

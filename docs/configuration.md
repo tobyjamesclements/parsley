@@ -45,31 +45,17 @@ absent file, or an absent key, falls back to the defaults below.
 #   off                disables the checks
 parsley.topology.validation = warn
 
-# The shared, single-partition epoch-events log topic name. Set this to turn on topology-epoch
-# coordination for a CausalStreams runtime. Absent (the default), a topology runs in epoch 0 exactly
-# as without coordination: no epoch-events log, no coordination thread.
-#
-# The topic must exist with EXACTLY ONE partition and must retain its full history: every instance
-# replays the log from the beginning on startup, so use cleanup.policy=delete with retention.ms=-1 —
-# finite retention or compaction silently erases membership and epoch history. Both are validated at
-# startup (the partition count, the cleanup policy, and the retention), failing fast on a topic that
-# could ever lose events the fold needs.
-# parsley.coordination.epoch-events-topic = parsley-epoch-events
-
-# The comma-separated set of every topic in the coordinated domain (every member's inputs and sinks,
-# external sources included). Only meaningful alongside parsley.coordination.epoch-events-topic; set
-# it so CausalTopology auto-wires a passthrough source for any domain topic a stage does not otherwise
-# consume or produce, letting that stage's declared subscriptions cover the full domain without a
-# redundant business subscription. Required for a topology with a genuine cycle. See
-# Evolving a running topology in streams.md.
-# parsley.coordination.domain-topics = prices,orders,enriched-output
+# The parsley.coordination.* keys of earlier versions (epoch-events-topic, domain-topics,
+# member-apps) are INERT: topology-epoch coordination has been removed from the causal protocol —
+# joins need zero coordination. The keys are still accepted so a configured deployment starts (a
+# warning is logged), and they are deleted outright — with a loud startup failure — in the next
+# release. Delete them from your configuration.
 ```
 
 | Key | Default | Values |
 |---|---|---|
 | `parsley.topology.validation` | `warn` | `off`, `warn`, `strict` |
-| `parsley.coordination.epoch-events-topic` | (unset) | a topic name |
-| `parsley.coordination.domain-topics` | (unset) | comma-separated topic names |
+| `parsley.coordination.*` | (unset) | inert; pending removal |
 
 `parsley.topology.validation = warn` logs a prominent warning at startup when the causal input topics
 do not share a partition count, which makes co-partitioning impossible, and lets the task start. This
@@ -79,15 +65,12 @@ their sink topics' partition counts into the same parity check and check each si
 for `compact` (a protocol watermark is a null-value record wire-indistinguishable from a compaction
 tombstone). Each sink is resolved independently, so one sink that does not exist yet never masks a
 genuine misconfiguration on a different sink in the same stage, even under `strict`; both sink-side
-checks are skipped entirely (no admin round-trip) when validation is `off`. Under topology-epoch
-coordination, a sink partition-count mismatch always escalates to a hard failure regardless of this
-setting — a crash loop is the actual failure mode a warning would otherwise hide. See
+checks are skipped entirely (no admin round-trip) when validation is `off`. Note that a sink with
+fewer partitions than a source fails protocol-marker produces at runtime (markers route to the
+task's own partition), so under `warn` a mismatched deployment crash-loops at the produce instead of
+failing at startup — `strict` surfaces it once, clearly, at init. See
 [Streams integration](streams.md#startup-validation) and its
 [preconditions](streams.md#preconditions) for the full contract.
-
-`parsley.coordination.epoch-events-topic` and `parsley.coordination.domain-topics` are read directly
-from the `Properties` passed to `new CausalStreams(topology, props)` — see
-[Evolving a running topology](streams.md#evolving-a-running-topology).
 
 ## Metrics
 

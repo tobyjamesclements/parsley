@@ -104,6 +104,30 @@ All notable changes to this project are documented in this file. The format is b
   in this same release by the two-branch gate; see Changed.)
 
 ### Changed
+- **The record path is decoupled from topology-epoch coordination; the `parsley.coordination.*`
+  keys are inert (T3.2, decisions D3/D4/D7 — breaking).** Every epoch consultation is out of the
+  hot path: the interim below-floor dependency strip is deleted (`normalize` is now a pure
+  self-cycle strip — no floor can rise under a held record, so the gate's re-evaluation is of a
+  pure function), the frontier's epoch-anchored seeding/delivery/bridge guards are gone (a
+  channel's baseline is its first-seen offset alone), the epoch boundary/snapshot markers are no
+  longer emitted, relayed, or recognised (null messages keep their path unchanged), and `init()`
+  no longer joins a coordination runtime or blocks on any barrier — a joiner just starts
+  consuming, replay self-gating into causal order through the ordinary hold-back queue. The
+  coordination configuration keys are accepted but wire nothing (a warning is logged when one is
+  present; `CausalStreams.requestEpochTransition()` now always throws, naming the removal) — they
+  are deleted outright, with a loud startup failure, in the next release, together with the
+  now-orphaned subsystem sources. Two deliberate behavioural reverts ride along: a sink
+  partition-count mismatch under the default `warn` validation no longer escalates to a hard
+  startup failure when coordination keys are present (the escalation rode on the subsystem;
+  `strict` still fails fast, and the produce-time consequence is documented), and the
+  `parsley.coordination.*` cross-checks ("domain-topics without epoch-events-topic") no longer
+  fail startup — an inert key cannot be misconfigured. The persisted frontier blob drops its
+  epoch section (a format break; pre-1.0 has no upgrade path — upgrades are fresh starts, so
+  pre-T3.2 state is never read). New broker ITs certify what replaces the join barrier: a joiner
+  replaying a two-partition topology mid-run delivers every historical cause before its derived
+  effect with zero coordination, and a late joiner consuming an input and its derived topic
+  orders every fully-historical pair correctly — the exact hole floored replay stamps used to
+  open.
 - **The delivery gate is now the two-branch dispatch: consumed coordinates gate, everything else
   is ignored (T3.1, decision D1).** A dependency on a coordinate this node consumes (an input
   channel of the task, on the partition it owns) must be covered by the node's own contiguous

@@ -6,6 +6,7 @@ import org.apache.kafka.streams.processor.api.Processor;
 import org.apache.kafka.streams.processor.api.ProcessorSupplier;
 import org.apache.kafka.streams.state.StoreBuilder;
 import org.jspecify.annotations.Nullable;
+import org.slf4j.LoggerFactory;
 
 import java.util.Collection;
 import java.util.HashSet;
@@ -57,7 +58,6 @@ final class ParsleyProcessorSupplier<KIn, VIn, KOut, VOut>
     private final Function<Map<String, Object>, ParsleyTopicAdmin> adminFactory;
     private final ParsleyConfig config;
     private final @Nullable ParsleyQuiesce quiesce;
-    private final @Nullable ParsleyCoordination coordination;
 
     /**
      * @param passthroughTopics a subset of {@code topics} that {@link CausalTopology} wires as extra,
@@ -80,8 +80,7 @@ final class ParsleyProcessorSupplier<KIn, VIn, KOut, VOut>
                                       List<String> sinkNodeNames,
                                       Function<Map<String, Object>, ParsleyTopicAdmin> adminFactory,
                                       ParsleyConfig config,
-                                      @Nullable ParsleyQuiesce quiesce,
-                                      @Nullable ParsleyCoordination coordination) {
+                                      @Nullable ParsleyQuiesce quiesce) {
         this.userSupplier = userSupplier;
         this.keySerdeByTopic = keySerdeByTopic;
         this.valueSerdeByTopic = valueSerdeByTopic;
@@ -96,7 +95,6 @@ final class ParsleyProcessorSupplier<KIn, VIn, KOut, VOut>
         this.adminFactory = adminFactory;
         this.config = config;
         this.quiesce = quiesce;
-        this.coordination = coordination;
     }
 
     /**
@@ -133,7 +131,7 @@ final class ParsleyProcessorSupplier<KIn, VIn, KOut, VOut>
                 new ParsleySerializer<>(new ParsleyResolver<>(keySerdeByTopic, valueSerdeByTopic)),
                 frontierStoreName, bufferStoreName, candidateIndexStoreName, forwardedIndexStoreName,
                 topics, passthroughTopics, sinkTopics, sinkNodeNames,
-                adminFactory, config, quiesce, ParsleyEpochSnapshotPublisher.NOOP, coordination);
+                adminFactory, config, quiesce);
     }
 
     /** The effective Parsley configuration this supplier was built with. Package-private for tests. */
@@ -178,7 +176,6 @@ final class ParsleyProcessorSupplier<KIn, VIn, KOut, VOut>
         private Set<String> sinkTopics = Set.of();
         private List<String> sinkNodeNames = List.of();
         private @Nullable ParsleyQuiesce quiesce = null;
-        private @Nullable ParsleyCoordination coordination = null;
         private Set<String> declaredTopics = Set.of();
 
         private Builder(ProcessorSupplier<KIn, VIn, KOut, VOut> userSupplier) {
@@ -301,15 +298,20 @@ final class ParsleyProcessorSupplier<KIn, VIn, KOut, VOut>
         }
 
         /**
-         * Registers this stage's tasks with a {@link ParsleyCoordination} to participate in topology-epoch
-         * coordination. Optional — without one, the stage runs in epoch 0 (no epoch-events log, no
-         * coordination thread), exactly as today.
+         * Accepted and ignored: topology-epoch coordination no longer participates in the causal
+         * protocol (the two-branch gate needs no coordination — see the D7 removal record), so the
+         * handle wires nothing. Logged so a caller still passing one can see it is inert. This
+         * method and {@link ParsleyCoordination} are deleted outright in the subsystem removal
+         * (T3.3).
          *
-         * @param coordination the coordination handle shared across every participating stage
+         * @param coordination ignored
          * @return this builder
          */
         Builder<KIn, VIn, KOut, VOut> withCoordination(ParsleyCoordination coordination) {
-            this.coordination = coordination;
+            LoggerFactory.getLogger(ParsleyProcessorSupplier.class)
+                    .warn("withCoordination is inert: topology-epoch coordination has been removed from "
+                            + "the causal protocol and this handle wires nothing (removed for good in "
+                            + "the next release)");
             return this;
         }
 
@@ -430,8 +432,7 @@ final class ParsleyProcessorSupplier<KIn, VIn, KOut, VOut>
                     userSupplier, keySerdeByTopic, valueSerdeByTopic,
                     store + "-frontier", store + "-buffer", store + "-candidate-index", store + "-forwarded-index",
                     Set.copyOf(topics), finalPassthroughTopics, sinkTopics, sinkNodeNames,
-                    adminFactory, effectiveConfig, quiesce,
-                    coordination);
+                    adminFactory, effectiveConfig, quiesce);
         }
 
         @SuppressWarnings("unchecked") // a passthrough topic's records are raw bytes at runtime regardless of K/V

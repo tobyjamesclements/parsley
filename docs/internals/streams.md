@@ -26,18 +26,17 @@ All four are created with `Stores.persistentKeyValueStore(...)`, so they are cha
 
 0. Resolve each registered `ParsleySource` topic's stable UUID from the broker via a `ParsleyTopicAdmin` built from `context.appConfigs()` (the topology decorator has no broker config until init), populating the `topicUuids` map. Closed immediately after.
 1. Retrieve the state stores from the processor context by name.
-2. If topology-epoch coordination is configured: resolve this task's shared `ParsleyEpochRuntime`, join it with this member's declared input channels and sink topics, block until this member is a running member (`awaitJoinCommit`), then run the startup self-check `validateFullMeshCoverage` — fails fast if this member's own declared topics do not cover the domain the coordination log already knows about.
-3. Construct the task's one `ParsleyEngine` (`buildEngine()`, cached for the processor's lifetime — sound because passthrough topics are wired as extra sources into this same node, so no second processor instance ever shares these stores). Its `ParsleyChannels` loads the frontier clock and channel clocks from the single `"f"` value (empty if absent) and self-persists that value on every change. The restored state is pruned to the current in-scope coordinates, then a channel entry is seeded for every consumed input topic-partition — including any passthrough topic (see below).
-4. Construct `ParsleyEngine` with the `ParsleyChannels` (which owns the forwarded index and self-persists), a `StoreBackedBufferStore` wrapping the buffer store and a `ParsleySerializer`, and a `StoreBackedCandidateIndex` wrapping the candidate-index store.
-5. Wrap the real context in a `ParsleyProcessorContext` (stamping proxy). Call `delegate.init(wrappedContext)`.
-6. Schedule a self-cancelling, one-shot `WALL_CLOCK_TIME` punctuation that drains any record satisfiable between the last committed frontier and the last committed buffer-removal (`drainAfterRestore()`), run once against the buffer restored from a changelog. Must run as a punctuation, not inline: Kafka Streams has not finished wiring the task's `RecordCollector` until every processor in the topology returns from `init()`, so `forward()` during `init()` throws.
-7. Schedule a periodic metrics-refresh punctuator that also re-pushes this task's quiesce-drained state, so a task whose buffer emptied before `requestQuiesce()` was ever called still reports drained within one tick.
+2. Construct the task's one `ParsleyEngine` (`buildEngine()`, cached for the processor's lifetime — sound because passthrough topics are wired as extra sources into this same node, so no second processor instance ever shares these stores). Its `ParsleyChannels` loads the frontier clock and channel clocks from the single `"f"` value (empty if absent) and self-persists that value on every change. The restored state is pruned to the current in-scope coordinates, then a channel entry is seeded for every consumed input topic-partition — including any passthrough topic (see below).
+3. Construct `ParsleyEngine` with the `ParsleyChannels` (which owns the forwarded index and self-persists), a `StoreBackedBufferStore` wrapping the buffer store and a `ParsleySerializer`, and a `StoreBackedCandidateIndex` wrapping the candidate-index store.
+4. Wrap the real context in a `ParsleyProcessorContext` (stamping proxy). Call `delegate.init(wrappedContext)`.
+5. Schedule a self-cancelling, one-shot `WALL_CLOCK_TIME` punctuation that drains any record satisfiable between the last committed frontier and the last committed buffer-removal (`drainAfterRestore()`), run once against the buffer restored from a changelog. Must run as a punctuation, not inline: Kafka Streams has not finished wiring the task's `RecordCollector` until every processor in the topology returns from `init()`, so `forward()` during `init()` throws.
+6. Schedule a periodic metrics-refresh punctuator that also re-pushes this task's quiesce-drained state, so a task whose buffer emptied before `requestQuiesce()` was ever called still reports drained within one tick.
 
 There is no eviction and no buffer-size punctuator: the causal buffer is unconditionally unbounded, so nothing needs to run periodically to enforce a limit.
 
 ## Passthrough topics
 
-When `parsley.coordination.domain-topics` is configured, `CausalTopology#assemble` wires an extra, raw `byte[]`/`byte[]` source into this same processor node for any domain topic this stage does not otherwise consume or produce (see `CausalTopology`). `ParsleyProcessor` recognises such a record by its own source topic (never a header) — it flows through the ordinary delivery gate exactly like any other channel, contributing its causal progress to the frontier, but its key/value are never handed to the delegate (they are not genuine `KIn`/`VIn` values). Any *other* record a passthrough delivery happens to release from the shared buffer as a side effect still reaches the real delegate correctly, on that message's own turn through the delivery loop.
+A passthrough topic is an extra, raw `byte[]`/`byte[]` source wired into this same processor node for a topic this stage does not otherwise consume or produce (the low-level `declareTopics` seam; the `domain-topics` auto-wiring that used to drive it is inert and pending removal). `ParsleyProcessor` recognises such a record by its own source topic (never a header) — it flows through the ordinary delivery gate exactly like any other channel, contributing its causal progress to the frontier, but its key/value are never handed to the delegate (they are not genuine `KIn`/`VIn` values). Any *other* record a passthrough delivery happens to release from the shared buffer as a side effect still reaches the real delegate correctly, on that message's own turn through the delivery loop.
 
 ## `process()` path
 
@@ -45,8 +44,6 @@ When `parsley.coordination.domain-topics` is configured, `CausalTopology#assembl
 process(Record<KIn,VIn>)
   switch classify(record):
     WATERMARK       -> handleWatermark(record); return
-    EPOCH_BOUNDARY  -> handleEpochBoundary(record); return
-    EPOCH_SNAPSHOT  -> handleEpochSnapshot(record); return
     BUSINESS        -> (fall through)
 
   if !isPassthroughRecord(record): lastSeenKey = record.key()
@@ -77,8 +74,6 @@ process(Record<KIn,VIn>)
   # propagates downstream without flooding no-op watermarks
   if outcome.delivered().isEmpty() and completeness() advanced past completenessBefore:
     forwardWatermark(passthrough ? lastSeenKey : record.key())
-
-  pollEpochCoordination()   # act promptly on a coordination-log change, not just on the wall-clock tick
 ```
 
 Each admitted record is stamped with `engine().completeness()` — the max-merge of this node's own contiguous frontier and every input channel's advertised clock, carrying transitive ancestry downstream (see [Causal consistency model](causal-consistency.md)). The delivery gate itself is the node's own contiguous frontier: a record is delivered only once this node has itself delivered every coordinate it depends on; an advertised claim feeds only the stamp. The same completeness value is stamped on forwarded records and watermarks.

@@ -1,5 +1,11 @@
 # Topology epochs
 
+> **Removed from the causal protocol.** The subsystem this page describes no longer participates in
+> delivery: the two-branch gate needs no membership, no epochs, and no join barrier, so joins need
+> zero coordination (see [Joining a running topology](../concepts.md#joining-a-running-topology)).
+> The `parsley.coordination.*` keys are inert and the remaining code is deleted — along with this
+> page — in the next release. The text below is retained unedited as a historical record.
+
 A causal topology sometimes has to change while it is running: add a stage, replace a stage, or
 recompile one whose logic has moved. In Kafka Streams a new stage subscribes to its inputs from the
 earliest offset and replays them from the start. Under the causal guarantee that replay is a problem.

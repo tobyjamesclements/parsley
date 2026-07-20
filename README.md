@@ -7,9 +7,9 @@ release the record once the frontier catches up.
 When co-partitioning and closed processor effects hold, if A causally precedes B, every Kafka
 Streams processor that subscribes to both topics processes A before B.
 
-A running topology can evolve — add a stage, replace a stage, recompile — across a leaderless epoch
-boundary, so a new node adopts the current causal floor instead of replaying pre-epoch history into the
-shared frontier. This is optional; without it a topology runs unchanged.
+Joining a running topology needs no coordination: a new application simply starts consuming, its
+replay self-gates into causal delivery order, and its truthful stamps make its outputs correctly
+gated everywhere from its first emission.
 
 ## Install
 

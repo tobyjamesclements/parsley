@@ -55,42 +55,28 @@ final class ParsleyConfig {
     static final String TOPOLOGY_VALIDATION = "parsley.topology.validation";
 
     /**
-     * {@code parsley.coordination.epoch-events-topic} — the shared, single-partition epoch-events log
-     * topic name. Set it to turn on topology-epoch coordination for a {@link CausalStreams} runtime;
-     * absent (the default), a topology runs in epoch 0 exactly as without coordination — no epoch-events
-     * log, no coordination thread, every coordination path inert.
+     * {@code parsley.coordination.epoch-events-topic} — <strong>inert</strong>: topology-epoch
+     * coordination has been removed from the causal protocol (the two-branch delivery gate needs no
+     * membership, no epochs, and no join barrier — joins are coordination-free). The key is still
+     * accepted so a configured deployment starts, but it wires nothing; {@link CausalStreams} logs a
+     * warning when it is present. Deleted outright — startup will then fail loudly on it — in the
+     * next release.
      */
     static final String COORDINATION_EPOCH_EVENTS_TOPIC = "parsley.coordination.epoch-events-topic";
 
     /**
-     * {@code parsley.coordination.domain-topics} — the comma-separated set of every topic in the
-     * coordinated domain (every member's inputs and sinks, external sources included). Only meaningful
-     * alongside {@link #COORDINATION_EPOCH_EVENTS_TOPIC} — {@link #from} fails startup if this is set
-     * without it. The reverse is not required: coordination works without this key exactly as it always
-     * has (full-mesh validation derives its own domain from the shared log's live declarations, not from
-     * this static config) — set it only when a stage needs {@link CausalTopology#assemble} to auto-wire
-     * extra raw-bytes passthrough sources into that stage's own processor node
-     * for any domain topic a stage does not otherwise consume or produce, so that stage's declared
-     * subscriptions can cover the full domain ({@link ParsleyProcessor#validateFullMeshCoverage}) without
-     * hand-wiring an "independent input" pass-through stage for every such topic. Kafka Streams has no
-     * public API to add a source topic to an already-running task, so the full domain must be known
-     * statically, ahead of runtime, for every member's source nodes to be wired correctly at all — the
-     * coordination log's own full-mesh validation is then a runtime cross-check that this configuration
-     * was applied correctly, never a mechanism that discovers or wires topics itself.
+     * {@code parsley.coordination.domain-topics} — <strong>inert</strong>, like
+     * {@link #COORDINATION_EPOCH_EVENTS_TOPIC}: the passthrough auto-wiring this key used to drive
+     * existed so a member's subscriptions could cover a coordinated domain, a requirement the
+     * two-branch gate dissolved (a dependency on an unconsumed topic is soundly ignored — D1).
+     * Accepted, ignored, warned about; deleted in the next release.
      */
     static final String COORDINATION_DOMAIN_TOPICS = "parsley.coordination.domain-topics";
 
     /**
-     * {@code parsley.coordination.member-apps} — the comma-separated set of every {@code application.id}
-     * that is a causal node in this coordinated domain. It is the authoritative domain membership, and
-     * must be declared identically by every participating app: the genesis cohort barrier waits until
-     * every listed app's full task set has declared before committing genesis (so no founder is left
-     * behind and later mis-admitted at a non-empty floor), and after genesis a roster change is admitted
-     * only once every committed member has re-declared the new roster. Apps that declare incompatible
-     * rosters refuse to commit or admit until the configs agree (fail-closed for progress; the domain
-     * keeps delivering under the last floor). Only meaningful alongside {@link
-     * #COORDINATION_EPOCH_EVENTS_TOPIC}. When absent, an app defaults to a single-app roster of its own
-     * {@code application.id} — a lone causal node coordinates trivially; a multi-app domain must set this.
+     * {@code parsley.coordination.member-apps} — <strong>inert</strong>, like
+     * {@link #COORDINATION_EPOCH_EVENTS_TOPIC}: there is no membership roster because there is no
+     * membership. Accepted, ignored, warned about; deleted in the next release.
      */
     static final String COORDINATION_MEMBER_APPS = "parsley.coordination.member-apps";
 
@@ -155,23 +141,18 @@ final class ParsleyConfig {
         return props;
     }
 
-    /** Builds from explicit properties (programmatic override / tests). */
+    /**
+     * Builds from explicit properties (programmatic override / tests). The {@code
+     * parsley.coordination.*} keys are inert but still parsed — {@link CausalStreams} reads them
+     * only to warn that they wire nothing; the old set-without-epoch-events-topic cross-checks are
+     * gone with the subsystem's protocol role (an inert key cannot be misconfigured).
+     */
     static ParsleyConfig from(Properties props) {
         String epochEventsTopic = props.getProperty(COORDINATION_EPOCH_EVENTS_TOPIC);
         String resolvedEpochEventsTopic =
                 (epochEventsTopic == null || epochEventsTopic.isBlank()) ? null : epochEventsTopic.trim();
         Set<String> domainTopics = domainTopics(props);
-        if (resolvedEpochEventsTopic == null && !domainTopics.isEmpty()) {
-            throw new IllegalStateException(COORDINATION_DOMAIN_TOPICS + " is set but "
-                    + COORDINATION_EPOCH_EVENTS_TOPIC + " is not; domain-topics only has meaning "
-                    + "under topology-epoch coordination");
-        }
         Set<String> memberApps = commaSeparated(props, COORDINATION_MEMBER_APPS);
-        if (resolvedEpochEventsTopic == null && !memberApps.isEmpty()) {
-            throw new IllegalStateException(COORDINATION_MEMBER_APPS + " is set but "
-                    + COORDINATION_EPOCH_EVENTS_TOPIC + " is not; member-apps only has meaning "
-                    + "under topology-epoch coordination");
-        }
         return new ParsleyConfig(validationMode(props), resolvedEpochEventsTopic, domainTopics, memberApps);
     }
 

@@ -1,13 +1,11 @@
 package io.github.tobyjamesclements.parsley;
 
-import org.apache.kafka.clients.consumer.ConsumerConfig;
 import org.apache.kafka.clients.producer.ProducerConfig;
 import org.apache.kafka.common.TopicPartition;
 import org.apache.kafka.common.Uuid;
 import org.apache.kafka.common.config.TopicConfig;
 import org.apache.kafka.common.header.Header;
 import org.apache.kafka.common.header.Headers;
-import org.apache.kafka.streams.StreamsConfig;
 import org.apache.kafka.streams.processor.Cancellable;
 import org.apache.kafka.streams.processor.PunctuationType;
 import org.apache.kafka.streams.processor.api.Processor;
@@ -43,8 +41,8 @@ import java.util.function.Function;
  * otherwise be lost). The frontier-before-forward invariant from {@link ParsleyCausalBroadcast} is preserved
  * on both the admit and punctuator paths.
  *
- * <p><strong>Clock-invisible markers.</strong> A received watermark or epoch-snapshot marker
- * ({@link #handleWatermark}, {@link #handleEpochSnapshot}) is relayed downstream only when it genuinely
+ * <p><strong>Clock-invisible markers.</strong> A received watermark
+ * ({@link #handleWatermark}) is relayed downstream only when it genuinely
  * taught this node's channel something it did not already know
  * ({@link ParsleyCausalBroadcast.WatermarkOutcome#learnedSomethingNew()}, via {@link #foldMarkerCompleteness}).
  * A marker's own delivery is never itself treated as a reason to relay further — unlike a genuine
@@ -57,20 +55,9 @@ import java.util.function.Function;
  * taught nothing new could not have just formed a new dependency on that non-event either — skipping
  * the re-emission strands nothing.
  *
- * <p>The <strong>epoch-boundary</strong> marker ({@link #handleEpochBoundary}) is the one exception: it
- * relays on its channel's first sight of the boundary regardless of whether the carried clock advanced
- * anything ({@link ParsleyCausalBroadcast.BoundaryOutcome#markerWasNew()} {@code || learnedSomethingNew}). A boundary
- * re-carries the completeness the preceding snapshot already taught the channel, so on an idle, quiesced
- * round it teaches nothing new — but the downstream still needs the marker on this channel to close its
- * own marker-on-every-channel transition window. The per-epoch, per-channel newly-recorded signal fires
- * exactly once per channel (a duplicate records nothing new), so a cycle still cannot ping-pong it. A
- * boundary is boundary news, not merely clock news.
- *
- * <p><strong>Passthrough topics.</strong> {@code passthroughTopics} (a subset of {@code topics}, wired
- * by {@link CausalTopology} from {@code parsley.coordination.domain-topics}) names a coordinated
- * domain's topic this stage does not otherwise consume or produce — declared solely so this member's
- * subscriptions cover the whole domain ({@link #validateFullMeshCoverage}) and so its causal progress
- * reaches this task's frontier. It is wired as an ordinary extra source into this same processor node,
+ * <p><strong>Passthrough topics.</strong> {@code passthroughTopics} (a subset of {@code topics})
+ * names a topic this stage does not otherwise consume or produce — declared solely so its causal
+ * progress reaches this task's frontier. It is wired as an ordinary extra source into this same processor node,
  * deserialised as raw {@code byte[]}/{@code byte[]} (never the stage's own {@code KIn}/{@code VIn} —
  * a passthrough topic's value schema is unrelated to this stage's business types). {@link #process}
  * and {@link #delivered} recognise it by its own source topic (never a header) and route it through the
@@ -92,17 +79,8 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
 
     private static final Duration METRICS_REFRESH_INTERVAL = Duration.ofSeconds(5);
 
-    private static final Duration EPOCH_POLL_INTERVAL = Duration.ofMillis(200);
-
-    // Kafka's default max.poll.interval.ms, used when the app config does not set one explicitly.
-    private static final long DEFAULT_MAX_POLL_INTERVAL_MS = 300_000L;
     // Kafka's default producer delivery.timeout.ms, used when the app config does not set one.
     private static final long DEFAULT_DELIVERY_TIMEOUT_MS = 120_000L;
-    // The topology-epoch join wait (on the StreamThread, in init()) is bounded to this fraction of
-    // max.poll.interval.ms, leaving margin for the rest of init() and the next poll — so an admission
-    // that cannot happen fails loudly (ParsleyJoinTimeoutException) before the broker silently evicts
-    // the consumer into a rebalance crash-loop. See awaitJoinCommit / ParsleyJoinTimeoutException.
-    private static final double JOIN_BUDGET_FRACTION = 0.9;
 
     private final Processor<KIn, VIn, KOut, VOut> delegate;
     private final ParsleySerializer<KIn, VIn> serializer;
@@ -112,29 +90,18 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
     private final String forwardedIndexStoreName;
     private final Set<String> topics;
     // A subset of topics wired as extra, raw byte[]/byte[] sources into this same processor node — a
-    // domain topic this stage does not otherwise consume or produce (see the class Javadoc's "Passthrough
-    // topics" paragraph). Empty for the ordinary case (no CausalTopology domain-topics configured).
+    // topic this stage does not otherwise consume or produce (see the class Javadoc's "Passthrough
+    // topics" paragraph). Empty for the ordinary case.
     private final Set<String> passthroughTopics;
-    // The topics this stage produces. Feeds the partition-count parity check and, when coordination is
-    // configured, this member's declaration on the epoch-events log for the DAG-wide source-topic registry.
+    // The topics this stage produces. Feeds the partition-count parity check.
     private final Set<String> sinkTopics;
-    // Every child node this processor forwards a control-plane record (watermark/epoch marker) to by
+    // Every child node this processor forwards a control-plane record (watermark) to by
     // name — a stage's processor node addresses every such forward explicitly rather than a zero-arg
     // broadcast. See ParsleyProcessorContext.forward.
     private final List<String> sinkNodeNames;
     private final Function<Map<String, Object>, ParsleyTopicAdmin> adminFactory;
     private final ParsleyConfig config;
     private final @Nullable ParsleyQuiesce quiesce;
-    // The publisher for the snapshot frontier. Non-final: when coordination is configured, init() installs
-    // the runtime-backed publisher (append to the epoch-events log) over whatever was passed.
-    private ParsleyEpochSnapshotPublisher snapshotPublisher;
-    // The per-instance epoch coordination handle, or null when no topology coordination is configured
-    // (epoch 0). Resolved to the shared runtime at init(); the source-topic registry is derived from the
-    // log, not carried here.
-    private final @Nullable ParsleyCoordination coordination;
-    // The shared epoch runtime resolved from the coordination handle at init(), or null in epoch 0. A
-    // source-layer task polls it to initiate the in-band snapshot/boundary waves.
-    private @Nullable ParsleyEpochRuntime epochRuntime;
 
     // All mutable state below is confined to the single Kafka Streams thread that owns this task.
 
@@ -167,28 +134,8 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
     private Set<TopicPartition> markerDestinations = Set.of();
 
     // The most-recent business key seen on this task's owned partition — reused to route a self-injected
-    // marker back to that partition lane (null until the first record). And the last snapshot-round /
-    // committed epoch this task has already acted on, so each is injected once. (Whether this task is
-    // source-layer is derived per poll from the log's source-topic registry, not cached here.)
+    // marker back to that partition lane (null until the first record).
     private @Nullable KIn lastSeenKey;
-    private long lastSnapshotRoundEpoch;
-    private long lastAdoptedEpoch;
-    // The snapshot round this task has already published its completeness for (log-driven, so every member
-    // publishes — not just source-layer). Reset in memory on restart, so a task that crashes mid-round
-    // re-publishes off the folded log alone; that keeps a blocked round from deadlocking when a member's
-    // side-channel publish was lost but its Streams offset commit survived. -1 = none yet.
-    private long lastPublishedRoundEpoch = -1;
-    // This task's globally-unique member id on the shared epoch-events log: application.id + task id. The
-    // task id alone collides across the many applications that make up a production causal DAG (each app's
-    // "0_0" is a different node); the application.id prefix disambiguates them, while two instances of the
-    // same app share it (they are the same logical member, only one live at a time).
-    private String memberId = "";
-    // This task's app id (application.id, or "" in a test context) and its app's total task count —
-    // resolved at init(). The app id is carried explicitly on the log (not string-parsed from memberId);
-    // the task total drives the genesis cohort barrier and the app-level pre-declaration of every sibling
-    // task of this app (see ParsleyEpochRuntime#join).
-    private String appId = "";
-    private int taskTotal = 1;
 
     private ProcessorContext<KOut, VOut> context;
     // The task's one causal-broadcast core, built once at init() over the task's state stores. Exactly one Processor
@@ -196,34 +143,25 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
     // into this SAME node, never as a separate processor node), so the cached ParsleyChannels's
     // in-memory copy of the persisted state cannot diverge from a concurrent writer — there is none.
     private ParsleyCausalBroadcast<KIn, VIn> causalBroadcast;
-    // The completeness as of the task's last committed transaction — the only clock ever published on
-    // the non-transactional epoch-events side channel (see ParsleyCommittedCompleteness). In-band
-    // stamps (forwards, watermark/marker headers) stay live: they ride the same transaction as the
-    // records they stamp and abort with them.
+    // The completeness as of the task's last committed transaction, snapshotted at each commit-cycle
+    // flush (see ParsleyCommittedCompleteness). The store survives until the coordination subsystem
+    // is deleted outright (T3.3); nothing reads the snapshot any more.
     private ParsleyCommittedCompleteness commitHook;
     private KeyValueStore<String, byte[]> frontierStore;
     private KeyValueStore<Long, byte[]> bufferStore;
     private KeyValueStore<byte[], byte[]> candidateIndexStore;
     private KeyValueStore<byte[], byte[]> forwardedIndexStore;
-    // The one-time seed for a fresh ParsleyEpochState (see buildCausalBroadcast()) — computed once at init()
-    // from whether this task joined an already-established epoch (epochSeedEpochId > 0) or starts
-    // fresh at epoch 0 (0, the sentinel: no real epoch is ever id 0). Consumed by buildCausalBroadcast()'s one
-    // ParsleyEpochState construction; a restored task's real state overrides it from the "f" blob.
-    private ParsleyVectorClock epochSeedFloor = ParsleyVectorClock.empty();
-    private long epochSeedEpochId;
     private ParsleyMetrics.Wired wiredMetrics;
     // Set once delegate.init() has returned, so close() closes the delegate only if it was actually
-    // initialised. init() can throw before delegate.init() (e.g. an interrupted awaitJoinCommit on a
-    // clean shutdown mid-join), after which Streams still calls close(); closing an un-inited delegate
+    // initialised. init() can throw before delegate.init(), after which Streams still calls close();
+    // closing an un-inited delegate
     // — or dereferencing the still-null wiredMetrics — would mask the real init failure. See close().
     private boolean delegateInitialized;
     // The stamping proxy context handed to the delegate. Held here so deliver() can check the
     // per-record forward count and emit a watermark when the delegate forwarded nothing. The stamp
     // itself comes from causalBroadcast.broadcast() — the single stamping site, read live at forward
     // time — confined to the task thread (both the delegate's forwards and its punctuator fires run on
-    // the StreamThread). The epoch runtime's off-thread publication of a wedged task's completeness
-    // rides a separate channel (commitHook::committed via registerLocalCompleteness, whose own
-    // volatiles carry it across threads), never the live clock.
+    // the StreamThread).
     private ParsleyProcessorContext<KOut, VOut> stampingContext;
     private volatile @Nullable RecordMetadata deliveryMetadata;
     private Cancellable restoredDrainSchedule;
@@ -242,7 +180,7 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
                      @Nullable ParsleyQuiesce quiesce) {
         this(delegate, serializer, frontierStoreName, bufferStoreName, candidateIndexStoreName,
                 forwardedIndexStoreName, topics, Set.of(), sinkTopics, sinkNodeNames,
-                adminFactory, config, quiesce, ParsleyEpochSnapshotPublisher.NOOP);
+                adminFactory, config, quiesce);
     }
 
     ParsleyProcessor(Processor<KIn, VIn, KOut, VOut> delegate,
@@ -257,28 +195,7 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
                      List<String> sinkNodeNames,
                      Function<Map<String, Object>, ParsleyTopicAdmin> adminFactory,
                      ParsleyConfig config,
-                     @Nullable ParsleyQuiesce quiesce,
-                     ParsleyEpochSnapshotPublisher snapshotPublisher) {
-        this(delegate, serializer, frontierStoreName, bufferStoreName, candidateIndexStoreName,
-                forwardedIndexStoreName, topics, passthroughTopics, sinkTopics, sinkNodeNames,
-                adminFactory, config, quiesce, snapshotPublisher, null);
-    }
-
-    ParsleyProcessor(Processor<KIn, VIn, KOut, VOut> delegate,
-                     ParsleySerializer<KIn, VIn> serializer,
-                     String frontierStoreName,
-                     String bufferStoreName,
-                     String candidateIndexStoreName,
-                     String forwardedIndexStoreName,
-                     Set<String> topics,
-                     Set<String> passthroughTopics,
-                     Set<String> sinkTopics,
-                     List<String> sinkNodeNames,
-                     Function<Map<String, Object>, ParsleyTopicAdmin> adminFactory,
-                     ParsleyConfig config,
-                     @Nullable ParsleyQuiesce quiesce,
-                     ParsleyEpochSnapshotPublisher snapshotPublisher,
-                     @Nullable ParsleyCoordination coordination) {
+                     @Nullable ParsleyQuiesce quiesce) {
         this.delegate = delegate;
         this.serializer = serializer;
         this.passthroughTopics = passthroughTopics;
@@ -292,16 +209,11 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
         this.adminFactory = adminFactory;
         this.config = config;
         this.quiesce = quiesce;
-        // May be replaced at init() by the runtime-backed publisher when coordination is configured.
-        this.snapshotPublisher = snapshotPublisher;
-        this.coordination = coordination;
     }
 
     @Override
     public void init(ProcessorContext<KOut, VOut> context) {
         this.context = context;
-        this.appId = appId(context);
-        this.memberId = memberId(context);
         this.topicUuids = resolveTopicUuids(context);
         this.frontierStore = context.getStateStore(frontierStoreName);
         this.bufferStore = context.getStateStore(bufferStoreName);
@@ -310,85 +222,6 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
         this.commitHook = context.getStateStore(ParsleyStores.commitHookName(frontierStoreName));
 
         boolean restored = frontierStore.get(ParsleyStores.FRONTIER_KEY) != null;
-
-        // Resolve epoch coordination from the handle before computing the epoch-state seed: build/share
-        // the per-instance runtime (from this task's appConfigs), install the runtime-backed snapshot
-        // publisher, and join as a member, then block until this member is a running member. That block is
-        // called unconditionally — its block-until-running rule decides per case: a fresh joiner or an
-        // evicted-then-restarted member (not a running member) blocks until an epoch re-includes it, while
-        // a normal restart (still a running member on the log) and a cold start (epoch 0) return at once.
-        // NB: a restored task must NOT skip this — a member that crashed while evicted is restored yet must
-        // still block until re-admitted, or it would resume under its stale floor and self-evict in a loop.
-        if (coordination != null) {
-            ParsleyEpochRuntime runtime = coordination.runtimeFor(context.appConfigs());
-            this.epochRuntime = runtime;
-            this.snapshotPublisher = runtime::publishFrontier;
-            // This member's view of the authoritative member-app roster (defaults to this app alone when
-            // member-apps is unset), and every task member of this app for app-level pre-declaration.
-            Set<String> rosterView = coordinationRosterView();
-            Set<String> appTaskMembers = appTaskMemberIds();
-            // Insurance: this task's own member id must be among the siblings it pre-declares, or it would
-            // declare its app's cohort without itself and never be promoted. Holds for every task-id shape
-            // CausalStreams produces (appId/subtopology_partition); a mismatch is an unexpected topology.
-            if (!appTaskMembers.contains(memberId)) {
-                throw new IllegalStateException("this task's member id '" + memberId + "' is not among its "
-                        + "app's derived task members " + appTaskMembers + " (unexpected task-id format)");
-            }
-            // One join budget shared across both waits below — a second, independent deadline could add up
-            // to well over max.poll.interval.ms and let the broker silently evict this consumer mid-block.
-            Duration joinBudget = joinBudget(context.appConfigs());
-            long joinDeadlineNanos = System.nanoTime() + joinBudget.toNanos();
-            // Fold the log to its end FIRST so runtime.domainTopics() is accurate, then validate this
-            // member's own full-mesh coverage BEFORE it declares itself. A mis-meshed member must never
-            // append a JoinRequested: if it did, a round could promote it to a running member that can
-            // never be meshed, wedging every future epoch round for the whole domain (and it would
-            // crash-loop, never publishing). Rejecting it here crash-loops it in isolation instead.
-            coordination.awaitBootstrap(runtime, memberId, joinBudget, joinDeadlineNanos);
-            validateFullMeshCoverage(runtime);
-            // Declare this app's whole task set (app-level pre-declaration: the cohort barrier needs every
-            // task of the app present to commit, but inits run serially on the StreamThread and a joiner
-            // blocks here — so declaring only this task could deadlock a sibling's init; see
-            // ParsleyEpochRuntime#join), carrying this member's topics, roster view, and task total. Then
-            // block until an epoch admits this member (a founder consumes at the empty genesis floor
-            // without blocking; only a post-genesis joiner blocks — see awaitJoinCommit).
-            runtime.join(memberId, appId, appTaskMembers, topics, sinkTopics, rosterView, taskTotal);
-            coordination.awaitJoinCommit(runtime, memberId, appId, joinBudget, joinDeadlineNanos);
-            // Re-validate after admission as a loud, at-startup diagnostic: a concurrent domain-expanding
-            // join folding during this member's own (potentially long) join wait can still promote it
-            // mis-meshed. Surfacing that here beats discovering it record by record on the data path.
-            validateFullMeshCoverage(runtime);
-        }
-
-        // The seed for buildCausalBroadcast()'s ParsleyEpochState, gating against the settled epoch. A fresh
-        // task that joined an established epoch settles DIRECTLY at the committed floor F_{k+1}: it has
-        // no in-flight prior-epoch records, so every below-floor replay record is pre-epoch history to
-        // strip — no overlap window. Otherwise it starts fresh at epoch 0; a restored task's state
-        // (settled floor plus any in-progress transition) is loaded from the frontier "f" blob by the
-        // ParsleyChannels constructor buildCausalBroadcast() runs below — which is why this is only ever a
-        // seed (see the epochSeedFloor/epochSeedEpochId field Javadoc).
-        //
-        // lastAdoptedEpoch is deliberately left at its default (0) even here: settling epochState
-        // directly is purely local (this task has no in-flight prior-epoch records to gate), but
-        // pollEpochCoordination()'s first poll must still get a genuine chance to relay the admitting
-        // epoch's boundary downstream on this task's own external-source inputs (if any) — a downstream
-        // task reachable only through this one's output, never touching that source topic directly,
-        // has no other way to learn the floor advanced. Re-injecting it locally on this task's own
-        // already-settled epochState is a no-op (ParsleyEpochState#onBoundary short-circuits at
-        // epochId <= settledEpochId), so retrying costs nothing.
-        if (epochRuntime != null && !restored) {
-            // Read this member's OWN admission cut — the epoch+floor of the commit that promoted it — not
-            // the current committed floor. A fresh joiner admitted at epoch k re-adopts F_k and strips its
-            // pre-cut prefix; a genesis founder re-adopts the empty genesis floor and strips nothing. This
-            // matters on a stateless restart (an EOS abort before the member's first commit): re-adopting
-            // its own cut avoids stripping genesis-era history it never skipped, or a joiner adopting a
-            // since-advanced floor. A member with no admission floor yet — a genesis founder still
-            // consuming before genesis commits — keeps the default empty epoch-0 seed.
-            ParsleyEpochRuntime.CommittedEpoch admission = epochRuntime.admissionFloor(memberId);
-            if (admission != null) {
-                this.epochSeedFloor = admission.lowerBounds();
-                this.epochSeedEpochId = admission.epochId();
-            }
-        }
 
         this.wiredMetrics = ParsleyMetrics.wire(context);
 
@@ -414,16 +247,9 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
 
         // Seed the commit hook with the restored completeness (rebuilt from the committed changelog,
         // durable by definition) and hand it the live supplier it snapshots at each commit-cycle
-        // flush. Every side-channel publication below reads commitHook.committed(), never the live
-        // clock — see ParsleyCommittedCompleteness for why.
+        // flush. Nothing reads the snapshot any more; the store dies with the coordination
+        // subsystem's deletion (T3.3).
         commitHook.bind(() -> causalBroadcast().completeness(), causalBroadcast.completeness());
-        // Registers the committed-completeness snapshot so the shared runtime can publish this
-        // member's completeness on its behalf from its own background thread if this task's thread is ever
-        // wedged (e.g. sharing a StreamThread with a joiner blocked in awaitJoinCommit) and so can never run
-        // pollEpochCoordination() itself. See ParsleyEpochRuntime#registerLocalCompleteness.
-        if (epochRuntime != null) {
-            epochRuntime.registerLocalCompleteness(memberId, commitHook::committed);
-        }
 
         this.stampingContext = new ParsleyProcessorContext<>(
                 context, causalBroadcast, () -> Optional.ofNullable(deliveryMetadata), sinkNodeNames);
@@ -460,14 +286,6 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
                     updateQuiesceState();
                 });
 
-        // A source-layer task self-initiates the in-band wave off the coordination log, so it must react
-        // even while idle (no inbound records to piggy-back on). Poll the runtime on a wall-clock tick as
-        // well as on process(). Scheduled only when coordination is configured — epoch 0 adds no tick.
-        if (epochRuntime != null) {
-            context.schedule(EPOCH_POLL_INTERVAL, PunctuationType.WALL_CLOCK_TIME,
-                    timestamp -> pollEpochCoordination());
-        }
-
         // Registered last, once init() has otherwise succeeded, so a failed init never leaves a
         // phantom task permanently blocking ParsleyQuiesce#isSafeToClose.
         if (quiesce != null) {
@@ -496,10 +314,10 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
 
     /**
      * Builds the causal-broadcast core over this task's state stores: constructs the {@link ParsleyChannels}
-     * (restoring the frontier clock, channel clocks, and epoch state from the {@code "f"} blob when
+     * (restoring the frontier clock and channel clocks from the {@code "f"} blob when
      * present), prunes restored state to this task's current scope, seeds a channel entry for every
      * consumed input, and wires the buffer, candidate index, and forwarded index. Called exactly once,
-     * from {@link #init}; {@link #wiredMetrics} and the {@code epochSeed*} fields must already be set.
+     * from {@link #init}; {@link #wiredMetrics} must already be set.
      */
     private ParsleyCausalBroadcast<KIn, VIn> buildCausalBroadcast() {
         ParsleyBufferStore<KIn, VIn> buffer = new StoreBackedBufferStore<>(bufferStore, serializer);
@@ -508,10 +326,7 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
         // The single owner of the persisted causal metadata: loads the frontier clock and channel
         // clocks from key "f" of the frontier store and rewrites that value on change. The forwarded
         // index keeps its own keyed store and is injected here.
-        ParsleyEpochState epochState = epochSeedEpochId > 0
-                ? new ParsleyEpochState(epochSeedFloor, epochSeedEpochId)
-                : new ParsleyEpochState();
-        ParsleyChannels channels = new ParsleyChannels(frontierStore, forwardedIndex, epochState);
+        ParsleyChannels channels = new ParsleyChannels(frontierStore, forwardedIndex);
 
         // The coordinates this task consumes: a registered input topic, on the partition this task
         // owns. Streams co-partitions a sub-topology's sources, so the task owns partition
@@ -624,91 +439,11 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
                 context.taskId(), added, removed, recreated);
     }
 
-    /**
-     * This task's globally-unique member id for the shared epoch-events log: {@code application.id/taskId}.
-     * The task id alone is not unique across the many applications of a production causal DAG (each app's
-     * {@code 0_0} is a different node), so the {@code application.id} from the task's config disambiguates
-     * them; two instances of the same app share it (the same logical member, only one live at a time).
-     * Falls back to the bare task id when no {@code application.id} is configured (e.g. a test context).
-     */
-    private String memberId(ProcessorContext<KOut, VOut> context) {
-        String app = appId(context);
-        String task = context.taskId().toString();
-        return app.isEmpty() ? task : app + "/" + task;
-    }
-
-    /** This task's {@code application.id}, or {@code ""} when none is configured (e.g. a test context). */
-    private String appId(ProcessorContext<KOut, VOut> context) {
-        Object applicationId = context.appConfigs().get(StreamsConfig.APPLICATION_ID_CONFIG);
-        return applicationId == null ? "" : applicationId.toString();
-    }
-
-    /**
-     * This member's view of the authoritative member-app roster: the configured {@code
-     * parsley.coordination.member-apps}, or a single-app roster of this app's own id when unset. Always
-     * contains this app's own id — a member excluded from its own roster is a misconfiguration that fails
-     * startup rather than silently never being admitted. Read from {@code appConfigs()} (like {@code
-     * application.id}), so it flows uniformly through the deployment props whether the topology is built
-     * through {@code CausalStreams} or the low-level {@code ParsleyProcessorSupplier}.
-     */
-    private Set<String> coordinationRosterView() {
-        Object configured = context.appConfigs().get(ParsleyConfig.COORDINATION_MEMBER_APPS);
-        Set<String> roster = new HashSet<>();
-        if (configured != null) {
-            for (String app : configured.toString().split(",")) {
-                String trimmed = app.trim();
-                if (!trimmed.isEmpty()) {
-                    roster.add(trimmed);
-                }
-            }
-        }
-        if (roster.isEmpty()) {
-            // Fall back to the Parsley-config surface (a parsley.properties classpath resource, or the
-            // low-level supplier's own config) so member-apps honours the same layering as every other
-            // parsley.coordination.* key, not just the Streams deployment props.
-            roster.addAll(config.coordinationMemberApps());
-        }
-        if (roster.isEmpty()) {
-            return Set.of(appId);
-        }
-        if (!roster.contains(appId)) {
-            throw new IllegalStateException("this application.id '" + appId + "' is not listed in its own "
-                    + ParsleyConfig.COORDINATION_MEMBER_APPS + " roster " + roster
-                    + "; every member app must include itself in the roster");
-        }
-        return Set.copyOf(roster);
-    }
-
-    /**
-     * Every task member id of this app — {@code appId/<subtopology>_0 .. appId/<subtopology>_{taskTotal-1}}
-     * (bare {@code <subtopology>_N} with no app id) — declared together at join so the genesis cohort
-     * barrier completes while only this task blocks (app-level pre-declaration; see {@link
-     * ParsleyEpochRuntime#join}). All of an app's tasks share one subtopology under the single-stage
-     * constraint, so they differ only by partition.
-     */
-    private Set<String> appTaskMemberIds() {
-        int subtopology = context.taskId().subtopology();
-        Set<String> members = new HashSet<>();
-        for (int partition = 0; partition < taskTotal; partition++) {
-            String taskId = subtopology + "_" + partition;
-            members.add(appId.isEmpty() ? taskId : appId + "/" + taskId);
-        }
-        return members;
-    }
-
     @Override
     public void process(Record<KIn, VIn> record) {
         switch (classify(record)) {
             case WATERMARK -> {
                 handleWatermark(record);
-                return;
-            }
-            case EPOCH_BOUNDARY -> {
-                handleEpochBoundary(record);
-                return;
-            }
-            case EPOCH_SNAPSHOT -> {
-                handleEpochSnapshot(record);
                 return;
             }
             case BUSINESS -> { }
@@ -738,9 +473,6 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
             // (ParsleyMarkerPartition ignores the key for routing regardless).
             forwardMarker(ParsleyHeader.WATERMARK, new byte[0], passthrough ? lastSeenKey : record.key());
         }
-        // A source-layer task also checks the coordination log after each record, so a round that opened
-        // (or an epoch that committed) is acted on promptly without waiting for the wall-clock tick.
-        pollEpochCoordination();
     }
 
     /**
@@ -762,23 +494,11 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
         if (quiesce != null) {
             quiesce.unregister(context.taskId().toString());
         }
-        // Unconditional, not just for a genuine decommission: Kafka Streams calls close() whenever this
-        // task stops running here, including a rebalance that migrates it to another instance. Without
-        // this, this instance's runtime would keep treating the departed member as local forever — stuck
-        // in allLocalMembersDrained()'s (never-refreshed) last report and in leaveLocalMembers()'s scope —
-        // so a later leave() here could hang waiting on it or wrongly evict it while it runs on. The
-        // member itself is unaffected: if the task is only migrating, the new instance's init() re-joins
-        // it; unregistering here is purely local bookkeeping, not a log event.
-        if (epochRuntime != null) {
-            epochRuntime.unregisterMember(memberId);
-        }
-        // init() may have thrown before it finished — most plausibly an interrupted awaitJoinCommit
-        // unwinding a clean shutdown mid-join (see ParsleyCoordination#awaitJoinCommit) — yet Streams
+        // init() may have thrown before it finished — yet Streams
         // still calls close(). Close only what init() actually set up: closing an un-inited delegate, or
         // dereferencing the still-null wiredMetrics, would throw here and mask the real init failure with
-        // a spurious NPE. (quiesce/epochRuntime cleanup above is already safe on a partial init: the
-        // quiesce sets no-op on an unregistered id, and epochRuntime is set together with the join it
-        // undoes.)
+        // a spurious NPE. (The quiesce cleanup above is already safe on a partial init: the
+        // quiesce sets no-op on an unregistered id.)
         if (delegateInitialized) {
             delegate.close();
         }
@@ -827,142 +547,42 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
     }
 
     /**
-     * Reports this task's current buffer-drained state, to {@link #quiesce} (if registered) and to the
-     * epoch runtime (if coordinated). Called after every buffer-depth-changing event (every path that can
+     * Reports this task's current buffer-drained state to {@link #quiesce} (if registered). Called
+     * after every buffer-depth-changing event (every path that can
      * hold or release a record funnels through {@link #delivered}), so the signal reflects the
      * current buffer depth without polling. Never fabricates completeness — it only observes the buffer
      * depth the ordinary delivery path already produced. Quiesce additionally gates its drained flag on
-     * {@link ParsleyQuiesce#isQuiesceRequested()}; the runtime tracks the raw depth so
-     * {@link ParsleyCoordination#leave()} can wait for a drained buffer before removing the member.
+     * {@link ParsleyQuiesce#isQuiesceRequested()}.
      */
     private void updateQuiesceState() {
         boolean empty = causalBroadcast().bufferSize() == 0;
         if (quiesce != null) {
             quiesce.setDrained(context.taskId().toString(), quiesce.isQuiesceRequested() && empty);
         }
-        if (epochRuntime != null) {
-            epochRuntime.reportDrained(memberId, empty);
-        }
     }
 
     /** Which Parsley protocol marker, if any, {@link #classify} identified a record as. */
-    private enum RecordKind { WATERMARK, EPOCH_BOUNDARY, EPOCH_SNAPSHOT, BUSINESS }
+    private enum RecordKind { WATERMARK, BUSINESS }
 
     /**
      * Classifies {@code record} by a single pass over its headers, identifying a Parsley protocol
-     * watermark ({@link ParsleyHeader#WATERMARK}), epoch-boundary marker ({@link
-     * ParsleyHeader#EPOCH_BOUNDARY}), or epoch-snapshot marker ({@link ParsleyHeader#EPOCH_SNAPSHOT}) —
-     * never by a record's key, which for a marker carries the triggering record's key for routing. Every
+     * watermark ({@link ParsleyHeader#WATERMARK}) —
+     * never by a record's key, which for a marker carries the triggering record's key for routing. A
      * marker carries no business payload and must never be forwarded to the user delegate or buffered —
-     * a watermark exists only to propagate causal completeness progress through non-emitting layers; the
-     * epoch markers drive each node's local epoch transition and the Mattern-cut publish respectively.
+     * a watermark exists only to propagate causal completeness progress through non-emitting layers.
      * Anything else is {@link RecordKind#BUSINESS}.
      */
     private RecordKind classify(Record<KIn, VIn> record) {
         for (Header h : record.headers()) {
-            String key = h.key();
-            if (ParsleyHeader.WATERMARK.equals(key)) {
+            if (ParsleyHeader.WATERMARK.equals(h.key())) {
                 return RecordKind.WATERMARK;
-            }
-            if (ParsleyHeader.EPOCH_BOUNDARY.equals(key)) {
-                return RecordKind.EPOCH_BOUNDARY;
-            }
-            if (ParsleyHeader.EPOCH_SNAPSHOT.equals(key)) {
-                return RecordKind.EPOCH_SNAPSHOT;
             }
         }
         return RecordKind.BUSINESS;
     }
 
     /**
-     * Handles a received epoch-snapshot marker: publishes this node's committed completeness frontier
-     * ({@link ParsleyCommittedCompleteness}) via {@link ParsleyEpochSnapshotPublisher}, so the log's
-     * fold can merge-min the published clocks into the next epoch's lower bounds. The marker is
-     * never delivered to the user delegate and never buffered, but — unlike the earlier
-     * coordinator-broadcast model — it is <strong>relayed</strong> downstream on the same key (the
-     * leaderless in-band cut propagates edge by edge through the DAG) <em>only when it genuinely taught
-     * this node's channel something new</em> ({@link #foldMarkerCompleteness}) — a marker's own
-     * delivery is never itself a reason to relay further, or a topology cycle would ping-pong the same
-     * marker forever (clock-invisible markers; see the class Javadoc). The relayed marker also carries
-     * this node's completeness, so a single record both propagates the cut and advances the downstream
-     * channel clock.
-     */
-    private void handleEpochSnapshot(Record<KIn, VIn> record) {
-        snapshotPublisher.publish(memberId, commitHook.committed());
-        boolean learnedSomethingNew = foldMarkerCompleteness(record);
-        if (learnedSomethingNew) {
-            forwardMarker(ParsleyHeader.EPOCH_SNAPSHOT, new byte[0], record.key());
-        }
-    }
-
-    /**
-     * Handles a received epoch-boundary marker: decodes it, records it on its source channel and (if the
-     * transition is now ready) closes the epoch window in the causal-broadcast core, delivers any records the raised
-     * floor releases, and <strong>relays the marker downstream</strong> on the same key so the boundary
-     * propagates edge by edge through the DAG (the leaderless in-band model). It relays when the marker
-     * was newly recorded for its epoch on this channel ({@link ParsleyCausalBroadcast.BoundaryOutcome#markerWasNew()})
-     * <em>or</em> its carried completeness taught this channel something new
-     * ({@link #foldMarkerCompleteness}).
-     *
-     * <p>Boundary relay cannot gate on the clock signal alone the way watermark and snapshot relay do
-     * (clock-invisible markers; see the class Javadoc). A boundary re-carries the very completeness the
-     * preceding snapshot marker already advertised, so on an idle, quiesced round the boundary teaches
-     * the channel nothing new and {@code learnedSomethingNew} is false — yet the downstream still needs the
-     * marker on this channel to close its own marker-on-every-channel window. Gating on
-     * {@code markerWasNew} propagates the boundary to every channel exactly once (a duplicate on an
-     * already-seen channel records nothing new and does not relay), so a topology cycle still cannot
-     * ping-pong it. A boundary is boundary news, not merely clock news. The relayed marker carries this
-     * node's completeness, so a single downstream record both adopts the boundary and advances the
-     * channel clock. The marker is never forwarded to the user delegate and never buffered.
-     */
-    private void handleEpochBoundary(Record<KIn, VIn> record) {
-        RecordMetadata meta = requireRecordMetadata();
-        String topic = meta.topic();
-        int partition = meta.partition();
-        Uuid topicId = topicUuids.get(topic);
-        if (topicId == null) {
-            log.warn("Received epoch boundary on unregistered topic '{}'; ignoring", topic);
-            return;
-        }
-
-        Header marker = record.headers().lastHeader(ParsleyHeader.EPOCH_BOUNDARY);
-        byte[] boundaryBytes = marker == null ? null : marker.value();
-        if (boundaryBytes == null) {
-            return;
-        }
-        ParsleyEpochBoundary boundary;
-        try {
-            boundary = ParsleyEpochBoundary.fromBytes(boundaryBytes);
-        } catch (Exception e) {
-            log.warn("Failed to decode epoch boundary on {}-{}; ignoring", topic, partition, e);
-            return;
-        }
-
-        // A relayed marker carries the upstream node's completeness; adopt it into this channel's clock
-        // and absorb the marker's own offset (draining anything either releases) before driving the
-        // transition, so one record does both.
-        boolean learnedSomethingNew = foldMarkerCompleteness(record);
-
-        ParsleyCausalBroadcast.BoundaryOutcome<KIn, VIn> outcome = causalBroadcast().onEpochBoundary(boundary, topicId, partition);
-        deliver(outcome.outcome().delivered());
-
-        // Relay the boundary downstream on the marker's key so it stays on the same partition lane and
-        // every downstream task transitions its owned partitions. Relay when the marker was newly
-        // recorded for its epoch on this channel OR its carried completeness taught this channel
-        // something new. The clock signal alone is not enough: on an idle, quiesced round the boundary
-        // carries the same completeness the preceding snapshot already advertised, so learnedSomethingNew is
-        // false and gating on it alone would strand the transition at this node forever — the downstream
-        // never sees the marker on this channel, so its marker-on-every-channel window never closes.
-        // markerWasNew fires exactly once per channel per epoch (a duplicate records nothing new), so a
-        // cyclic topology still cannot ping-pong it. See the class Javadoc's clock-invisible-markers
-        // discussion, which governs watermark relay; a boundary is boundary news, not just clock news.
-        if (outcome.markerWasNew() || learnedSomethingNew) {
-            forwardMarker(ParsleyHeader.EPOCH_BOUNDARY, boundaryBytes, record.key());
-        }
-    }
-
-    /**
-     * The one path every received marker — watermark, epoch snapshot, epoch boundary — takes through the
+     * The one path every received marker takes through the
      * core's {@link ParsleyCausalBroadcast#onWatermark channel-clock fold}. It does two independent things, and
      * the distinction is the crux of correctness here:
      * <ol>
@@ -978,13 +598,12 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
      * </ol>
      *
      * <p>Treating a decode failure as empty-but-still-delivered (rather than an early return) is what
-     * fixed the bug where a corrupt marker permanently gapped the frontier; watermark and epoch handlers
-     * used to diverge here, and only the watermark path got it right.
+     * fixed the bug where a corrupt marker permanently gapped the frontier.
      *
      * @return whether the carried clock genuinely taught this channel something new
      *         ({@link ParsleyCausalBroadcast.WatermarkOutcome#learnedSomethingNew()}) — {@code false} for an
      *         unregistered topic, an absent/undecodable header, or a clock this channel already
-     *         dominates. This is the clock-news signal watermark and snapshot relay gate on (see the
+     *         dominates. This is the clock-news signal watermark relay gates on (see the
      *         class Javadoc); it is never the offset-delivery signal, which is unconditional.
      */
     private boolean foldMarkerCompleteness(Record<KIn, VIn> record) {
@@ -1021,151 +640,6 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
     }
 
     /**
-     * A source-layer task's reaction to the coordination log: when a snapshot round opens, publish this
-     * node's completeness and inject the snapshot marker downstream; when a new epoch commits, adopt the
-     * epoch's floor for this task's external-source coordinates and inject the boundary marker downstream.
-     * A no-op for a non-source-layer task (driven purely by received in-band markers) and for epoch 0
-     * (no runtime). Called both from {@link #process} and a wall-clock punctuator so an idle source-layer
-     * task still reacts.
-     *
-     * <p><strong>Handoff grace period.</strong> {@code externalSourceTopics()} is a live, memoryless view
-     * of the log's current declarations: the instant some member declares a topic as a sink, that topic
-     * stops being external DAG-wide, even before the declaring member is running and able to relay
-     * anything in-band — it structurally cannot relay the very epoch whose round admits it, since it was
-     * not a participant in the wave that computed that epoch's cut. Without a grace period, the outgoing
-     * self-adopter (this task, if it was the one consuming that topic) would stop adopting for it in the
-     * same poll the topic leaves the live registry, and nobody would ever inject that one epoch's boundary
-     * onto it — a permanent gap for any downstream task that only learns of that coordinate's floor
-     * through this one's relay. So boundary adoption targets {@code live ∪ }{@link
-     * ParsleyEpochRuntime#externalSourceTopicsAsOfPreviousCommit()} — the registry as of the commit
-     * <em>before</em> the one just adopted, which still includes a topic whose declaring producer's join
-     * folded during the very round that admitted it, giving that topic exactly one more adoption cycle
-     * from its outgoing self-adopter. Purely log-derived (see that method's Javadoc), unlike the per-task
-     * in-memory cache this replaced: a task that crashes inside the handoff window computes the identical
-     * answer on restart, from the log alone, with no local memory to lose.
-     *
-     * <p>{@link #adoptAndInjectBoundary}/{@link #injectSnapshot} relay unconditionally, whether or not
-     * this task has seen a business record yet ({@link #lastSeenKey} may be {@code null}): {@link
-     * ParsleyMarkerPartition} routes the marker to this task's own owned partition regardless of the key
-     * carried on the record, so there is nothing to wait for and nothing to retry. Before that routing
-     * existed, a relay with no key to route on had to be skipped and retried on a later poll once a key
-     * became available — the source of the restart stall this Javadoc used to document as an open gap.
-     */
-    private void pollEpochCoordination() {
-        ParsleyEpochRuntime runtime = epochRuntime;
-        if (runtime == null) {
-            return;
-        }
-        // Continuous roster check: once genesis has committed, a task that is not a running member is one
-        // the agreed roster excluded — e.g. a would-be founder that consumed via the genesis short-circuit
-        // (which does not block) and passed its one-time admissibility check while the roster was still
-        // unsettled, then lost the vote. It is already delivering, so a one-time init check cannot catch
-        // it; fail it loudly here rather than let it run on forever, uncoordinated, at the pre-genesis
-        // floor (a silent fail-open). A legitimately-blocked joiner is not polling yet, so it is unaffected;
-        // and a member this instance is gracefully leaving is skipped — its Leave dropping it from the
-        // running set is expected, not an eviction, and faulting its still-draining task would (under EOS)
-        // abort the tail it just drained (see ParsleyEpochRuntime#isLeaving).
-        if (runtime.committedEpochId() > 0 && !runtime.isRunningMember(memberId) && !runtime.isLeaving(memberId)) {
-            throw new IllegalStateException("member '" + memberId + "' is not in the committed epoch roster "
-                    + runtime.committedRoster() + "; its application.id is not an agreed member of the "
-                    + "coordinated domain. Failing fast (fail-closed) — add it to every app's "
-                    + ParsleyConfig.COORDINATION_MEMBER_APPS + " and redeploy to admit it.");
-        }
-        // Keep the runtime's drained mirror current even while idle (no deliveries drive updateQuiesceState),
-        // so leave() observes a drained buffer promptly. Cheap and self-correcting on each poll tick.
-        runtime.reportDrained(memberId, causalBroadcast().bufferSize() == 0);
-        // Every member — not just source-layer — publishes its completeness for an open round it still owes
-        // one for, driven off the folded log. This makes publication restart-safe: a member that restarts
-        // mid-round re-derives from the log that it owes a publication and re-publishes, without depending
-        // on having consumed a one-shot in-band snapshot marker exactly once (the case timeout eviction used
-        // to paper over). The per-round guard bounds it to one append per round per task lifetime; a restart
-        // resets the guard, so a lost publish is re-sent. Publishes the committed (never live) completeness
-        // — see ParsleyCommittedCompleteness; staleness is safe pre-cut, since completeness is monotonic
-        // and the committed floor is a conservative merge-min.
-        if (runtime.owesPublication(memberId)) {
-            long round = runtime.committedEpochId() + 1;
-            if (round != lastPublishedRoundEpoch) {
-                snapshotPublisher.publish(memberId, commitHook.committed());
-                lastPublishedRoundEpoch = round;
-            }
-        }
-        // Whether this task is source-layer is derived per poll from the log's DAG-wide source-topic
-        // registry: the external source topics (inputs no member produces) that this task actually consumes.
-        // Derived, not configured, and re-read each poll because the registry changes as members join —
-        // including, mid-round, dropping a topic a new member just declared as a sink (see above).
-        Set<Uuid> liveExternalSourceTopicIds = resolveExternalSourceTopicIds(runtime.externalSourceTopics());
-        // Read the id and its lower bounds together (see ParsleyEpochRuntime.CommittedEpoch's Javadoc): a
-        // commit landing between two independent reads would otherwise stamp the relayed boundary with a
-        // fresher id than the bounds it carries — a boundary that is then never re-adopted (the per-epoch
-        // guard below only ever advances), leaving every downstream consumer merely conservative until the
-        // next commit rather than outright wrong, but avoidable entirely by reading one snapshot.
-        ParsleyEpochRuntime.CommittedEpoch committedEpoch = runtime.committedEpoch();
-        long committed = committedEpoch.epochId();
-        if (committed > lastAdoptedEpoch) {
-            Set<Uuid> adoptionTargets = new HashSet<>(liveExternalSourceTopicIds);
-            adoptionTargets.addAll(resolveExternalSourceTopicIds(runtime.externalSourceTopicsAsOfPreviousCommit()));
-            if (!adoptionTargets.isEmpty()) {
-                adoptAndInjectBoundary(new ParsleyEpochBoundary(committed, committedEpoch.lowerBounds()), adoptionTargets);
-            }
-            lastAdoptedEpoch = committed;
-        }
-        if (liveExternalSourceTopicIds.isEmpty()) {
-            return;
-        }
-        if (runtime.isRoundOpen()) {
-            long round = committed + 1;   // the epoch a commit of the currently open round would carry
-            if (round != lastSnapshotRoundEpoch) {
-                injectSnapshot();
-                lastSnapshotRoundEpoch = round;
-            }
-        }
-    }
-
-    /**
-     * Resolves {@code topicNames} — a log-derived external-source-topic name set, either {@link
-     * ParsleyEpochRuntime#externalSourceTopics()} (the live registry) or {@link
-     * ParsleyEpochRuntime#externalSourceTopicsAsOfPreviousCommit()} (the handoff grace set) — to the
-     * broker UUIDs of the ones this task actually consumes. Non-empty for the live registry iff this task
-     * is source-layer for the current registry.
-     */
-    private Set<Uuid> resolveExternalSourceTopicIds(Set<String> topicNames) {
-        return topicNames.stream()
-                .map(topicUuids::get)
-                .filter(id -> id != null)
-                .collect(java.util.stream.Collectors.toUnmodifiableSet());
-    }
-
-    /**
-     * Publishes this node's completeness for the open round (so the owner's merge-min includes it) and
-     * relays the snapshot marker downstream, opening the in-band cut for the next layer. The relay is
-     * keyed with {@link #lastSeenKey} when available (informational — a real business key on the wire is
-     * still preferable to none) but routes correctly to this task's own owned partition either way, via
-     * {@link ParsleyMarkerPartition}, so a task that has not yet seen a business record ({@code
-     * lastSeenKey} still {@code null}) relays exactly the same as one that has.
-     */
-    private void injectSnapshot() {
-        snapshotPublisher.publish(memberId, commitHook.committed());
-        forwardMarker(ParsleyHeader.EPOCH_SNAPSHOT, new byte[0], lastSeenKey);
-    }
-
-    /**
-     * Adopts {@code boundary} for this task's external-source coordinates — a topology-source channel's
-     * floor arrives from the log, since no in-band marker will ever reach it (break #1) — then relays the
-     * boundary downstream so the next layer transitions in-band. See {@link #injectSnapshot} for why the
-     * relay needs no business key to route correctly.
-     */
-    private void adoptAndInjectBoundary(ParsleyEpochBoundary boundary, Set<Uuid> externalSourceTopicIds) {
-        int partition = context.taskId().partition();
-        List<ParsleyMessage<KIn, VIn>> released = new ArrayList<>();
-        for (Uuid topicId : externalSourceTopicIds) {
-            ParsleyCausalBroadcast.BoundaryOutcome<KIn, VIn> outcome = causalBroadcast().onEpochBoundary(boundary, topicId, partition);
-            released.addAll(outcome.outcome().delivered());
-        }
-        deliver(released);
-        forwardMarker(ParsleyHeader.EPOCH_BOUNDARY, boundary.toBytes(), lastSeenKey);
-    }
-
-    /**
      * Handles a received protocol watermark: decodes its carried completeness frontier, updates the
      * per-channel clock for the watermark's source channel, releases any records newly satisfying the
      * gate, and re-emits a watermark downstream carrying this node's updated completeness frontier —
@@ -1193,13 +667,9 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
     }
 
     /**
-     * Forwards a protocol marker — a watermark ({@link ParsleyHeader#WATERMARK}), an epoch-snapshot
-     * marker ({@link ParsleyHeader#EPOCH_SNAPSHOT}), or an epoch-boundary marker
-     * ({@link ParsleyHeader#EPOCH_BOUNDARY}) — carrying this node's current
+     * Forwards a protocol watermark ({@link ParsleyHeader#WATERMARK}) carrying this node's current
      * {@link ParsleyCausalBroadcast#completeness() completeness} in the {@link ParsleyHeader#CAUSAL_DEPENDENCIES}
-     * header, so one record both signals the marker and advances the downstream channel clock. The
-     * marker type is set by {@code markerHeader} (with {@code markerValue}: an empty array for a
-     * watermark or snapshot, the encoded boundary for an epoch boundary).
+     * header, so one record both signals the marker and advances the downstream channel clock.
      *
      * <p>Sent to every business sink ({@link #sinkNodeNames} — never a zero-arg broadcast, so a sibling
      * child node with an incompatible type never receives one; see {@link ParsleyProcessorContext}),
@@ -1238,7 +708,7 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
     }
 
     /**
-     * Forwards a control-plane record (watermark or epoch marker) to every business sink by name, or
+     * Forwards a control-plane record (a watermark) to every business sink by name, or
      * broadcasts (Kafka Streams' own zero-arg {@code forward}) when {@link #sinkNodeNames} is empty —
      * the common case, with no incompatibly-typed sibling sink configured. Named forwarding is required
      * the moment one is a sibling child of this processor's business sink(s): see
@@ -1329,15 +799,6 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
         try (ParsleyTopicAdmin admin = adminFactory.apply(context.appConfigs())) {
             resolved = admin.topicIds(topicList);
             Map<String, Integer> sourcePartitionCounts = admin.partitionCounts(topicList);
-            // This app's total task count for the (single-stage) subtopology is the max partition count
-            // over all its source topics — business and passthrough alike, since a passthrough is wired as
-            // an extra source into this same node. It is the N in this app's task members appId/0_0..0_{N-1},
-            // which the cohort barrier waits for in full and which app-level pre-declaration declares.
-            int max = 1;
-            for (int count : sourcePartitionCounts.values()) {
-                max = Math.max(max, count);
-            }
-            this.taskTotal = max;
             partitionCounts = new HashMap<>(sourcePartitionCounts);
             partitionCounts.putAll(additionalTopicInfo(admin, "partition count", ParsleyTopicAdmin::partitionCounts));
             cleanupPolicies = additionalTopicInfo(admin, "cleanup.policy", ParsleyTopicAdmin::cleanupPolicies);
@@ -1458,12 +919,12 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
      * counts make that impossible and let the completeness frontier evaluate against an incomplete
      * partition set. A single topic in the check (or {@code off}) is always vacuously fine.
      *
-     * <p>When topology-epoch coordination is configured ({@link #coordination} non-null), a mismatch is
-     * escalated to a hard failure even under the default {@code warn} — {@link ParsleyMarkerPartitioner}
-     * routes an epoch marker to this task's own owned partition ({@code taskId().partition()})
-     * unconditionally, so a sink with fewer partitions than a source makes the produce fail outright,
-     * crash-looping the task instead of surfacing what is actually a startup misconfiguration. {@code
-     * off} is still honoured as an explicit, deliberate opt-out of every check this method performs.
+     * <p>Note the produce-time consequence a mismatch carries under {@code warn}: {@link
+     * ParsleyMarkerPartitioner} routes a protocol marker to this task's own owned partition
+     * ({@code taskId().partition()}) unconditionally, so a sink with fewer partitions than a source
+     * makes the marker produce fail outright, crash-looping the task. {@code strict} turns that
+     * into the startup failure it really is; the default stays {@code warn} for parity with the
+     * pre-coordination behaviour (the escalation that rode on the epoch subsystem left with it).
      */
     private void validatePartitionParity(Map<String, Integer> partitionCounts) {
         ParsleyConfig.ValidationMode mode = config.topologyValidation();
@@ -1479,45 +940,9 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
         if (mode == ParsleyConfig.ValidationMode.STRICT) {
             throw new IllegalStateException("parsley.topology.validation=strict: " + detail);
         }
-        if (coordination != null) {
-            throw new IllegalStateException("parsley.topology.validation=warn, but topology-epoch "
-                    + "coordination is configured: " + detail + "; a mismatch under coordination fails "
-                    + "epoch-marker routing at produce time instead of at startup, so it is treated as "
-                    + "strict regardless of the configured mode");
-        }
         log.warn("parsley.topology.validation=warn: {}", detail);
     }
 
-    /**
-     * Warns or fails (per {@code parsley.topology.validation}) when this member's own declared
-     * subscriptions do not cover the coordinated domain's full topic set — some other member on the
-     * shared epoch-events log consumes or produces a topic this member neither consumes nor produces.
-     * Escalated to a hard failure even under the default {@code warn} — mirroring {@link
-     * #validatePartitionParity}'s coordination precedent — since this member could later be asked to
-     * gate a record on a coordinate it can never see (fail-closed in {@link ParsleyCausalBroadcast}, not silently
-     * satisfied), and an incomplete mesh also blocks every epoch round from ever completing (see the mesh conjunct of {@link
-     * ParsleyEpochLog#evaluateCommit()}). Surfacing this loudly at startup is better than a
-     * data-path crash loop discovering it record by record, or every round silently hanging forever.
-     * {@code off} is still honoured as an explicit, deliberate opt-out.
-     *
-     * <p>Called twice from {@code init}. The <strong>first</strong> call runs <em>before</em> {@link
-     * ParsleyEpochRuntime#join} — after {@link ParsleyCoordination#awaitBootstrap}, so {@code
-     * runtime.domainTopics()} already reflects every member declared on the log at bootstrap — so a
-     * mis-meshed member is rejected before it appends a {@link ParsleyEpochEvent.JoinRequested} and can be
-     * promoted into a running member that permanently wedges every epoch round (see the mesh conjunct of {@link
-     * ParsleyEpochLog#evaluateCommit()}). This member's own declaration is verdict-neutral: it only
-     * adds domain topics this member itself covers, which the coverage subtraction removes either way, so
-     * the pre-declaration check reaches the same verdict as one run after the join folds. The
-     * <strong>second</strong> call runs after {@link ParsleyCoordination#awaitJoinCommit} admits it, purely
-     * as a loud at-startup diagnostic for the residual race where a concurrent domain-expanding join folds
-     * during this member's own join wait and promotes it mis-meshed anyway.
-     */
-    /**
-     * The topology-epoch join wait's time budget: {@link #JOIN_BUDGET_FRACTION} of the effective
-     * {@code max.poll.interval.ms} (Kafka's default when unset), so the wait fails loudly before the
-     * broker would evict this consumer. Leaning on the existing consumer config rather than a new knob —
-     * the poll deadline is exactly the constraint the bound exists to respect.
-     */
     /**
      * The effective producer {@code delivery.timeout.ms}: the {@code producer.}-prefixed override
      * wins, then the un-prefixed client config Streams also passes through, then Kafka's default.
@@ -1539,46 +964,6 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
             }
         }
         return DEFAULT_DELIVERY_TIMEOUT_MS;
-    }
-
-    private static Duration joinBudget(Map<String, Object> appConfigs) {
-        long maxPollMs = DEFAULT_MAX_POLL_INTERVAL_MS;
-        Object configured = appConfigs.get(ConsumerConfig.MAX_POLL_INTERVAL_MS_CONFIG);
-        if (configured instanceof Number number) {
-            maxPollMs = number.longValue();
-        } else if (configured instanceof String text && !text.isBlank()) {
-            try {
-                maxPollMs = Long.parseLong(text.trim());
-            } catch (NumberFormatException ignored) {
-                // Malformed override — fall back to the default rather than fail init on a config typo.
-            }
-        }
-        return Duration.ofMillis((long) (maxPollMs * JOIN_BUDGET_FRACTION));
-    }
-
-    private void validateFullMeshCoverage(ParsleyEpochRuntime runtime) {
-        ParsleyConfig.ValidationMode mode = config.topologyValidation();
-        if (mode == ParsleyConfig.ValidationMode.OFF) {
-            return;
-        }
-        Set<String> domain = runtime.domainTopics();
-        Set<String> missing = new HashSet<>(domain);
-        missing.removeAll(topics);
-        missing.removeAll(sinkTopics);
-        if (missing.isEmpty()) {
-            return;
-        }
-        String detail = "this member's own subscriptions (inputs " + topics + ", sinks " + sinkTopics
-                + ") do not cover the coordinated domain " + domain + "; missing: " + missing
-                + " — every running member must be able to see every domain coordinate for the "
-                + "completeness it publishes to be sound";
-        if (mode == ParsleyConfig.ValidationMode.STRICT) {
-            throw new IllegalStateException("parsley.topology.validation=strict: " + detail);
-        }
-        throw new IllegalStateException("parsley.topology.validation=warn, but topology-epoch "
-                + "coordination is configured: " + detail + "; an incomplete mesh under coordination "
-                + "blocks every epoch round from ever completing, so it is treated as strict regardless "
-                + "of the configured mode");
     }
 
     /**

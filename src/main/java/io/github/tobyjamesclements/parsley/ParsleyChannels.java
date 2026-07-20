@@ -32,8 +32,8 @@ import java.util.Set;
  *             delivered(topicId, partition, offset)   L2 records a delivery; contiguous frontier
  *                                                     advance (I4)
  *             normalize(rawDeps, source)              normalise an inbound dependency clock before
- *                                                     L2 evaluates it: self-cycle strip (I5), plus
- *                                                     the interim below-floor strip (until T3.2)
+ *                                                     L2 evaluates it: self-cycle strip (I5); a
+ *                                                     pure function of the clock and the source
  *             acknowledge(topicId, partition, offset) producer ack → ownOutputs (D2)
  *             awaitOwnOutputQuiescence(except)        the crossing wait (O1, per-partition per
  *                                                     T3.0 A7): block until no own-sink send
@@ -152,11 +152,6 @@ final class ParsleyChannels {
     // Coordinates observed at least once; guards the one-time baseline seed in seedIfFirstSeen.
     private final Set<CoordKey> seenCoordinates = new HashSet<>();
     private final ParsleyForwardedIndex forwardedIndex;
-    // The topology epoch's lower bounds — the per-coordinate floor consulted on every clock this
-    // frontier builds or merges (deliver, seedIfFirstSeen, completeness, channelUpdate), so no causal
-    // clock ever carries an entry below the floor. NONE (every coordinate unbounded) disables it, so
-    // the floor is a no-op and behaviour matches epoch 0.
-    private final ParsleyEpoch epoch;
     // The frontier state store, holding this frontier+channels blob at key "f"; null for in-memory
     // (test) instances, which skip persistence.
     private final @Nullable KeyValueStore<String, byte[]> store;
@@ -171,36 +166,24 @@ final class ParsleyChannels {
      * need a durable frontier.
      */
     ParsleyChannels(ParsleyVectorClock initial, ParsleyForwardedIndex forwardedIndex) {
-        this(initial, forwardedIndex, true, ParsleyEpoch.NONE);
+        this(initial, forwardedIndex, true);
     }
 
     /**
-     * In-memory instance with channel tracking optionally disabled and an explicit epoch floor. With
+     * In-memory instance with channel tracking optionally disabled. With
      * {@code trackChannels = false}, {@link #completeness()} is the node's own frontier and
      * {@link #channelUpdate} is a no-op.
      */
-    ParsleyChannels(ParsleyVectorClock initial, ParsleyForwardedIndex forwardedIndex,
-                    boolean trackChannels, ParsleyEpoch epoch) {
+    ParsleyChannels(ParsleyVectorClock initial, ParsleyForwardedIndex forwardedIndex, boolean trackChannels) {
         this.frontier = initial;
         this.forwardedIndex = forwardedIndex;
-        this.epoch = epoch;
         this.store = null;
         this.trackChannels = trackChannels;
     }
 
     /**
-     * Durable instance with no epoch floor ({@link ParsleyEpoch#NONE}): loads the frontier clock and
-     * channel clocks from key {@code "f"} of {@code store} (empty if absent), and rewrites that single
-     * value on every subsequent change.
-     */
-    ParsleyChannels(KeyValueStore<String, byte[]> store, ParsleyForwardedIndex forwardedIndex) {
-        this(store, forwardedIndex, ParsleyEpoch.NONE);
-    }
-
-    /**
-     * Durable instance with an explicit epoch floor: loads the frontier clock and channel clocks from
-     * key {@code "f"} of {@code store} (empty if absent), and rewrites that single value on every
-     * subsequent change.
+     * Durable instance: loads the frontier clock and channel clocks from key {@code "f"} of
+     * {@code store} (empty if absent), and rewrites that single value on every subsequent change.
      *
      * <p>On a restored (non-empty) load, also sweeps {@code forwardedIndex} once for every coordinate
      * the restored frontier carries, deleting any marked offset at or below that coordinate's watermark
@@ -210,10 +193,9 @@ final class ParsleyChannels {
      * reached by {@link #delivered}'s absorb walk again, so it would otherwise linger in the
      * changelog-backed store forever. A one-shot pass at load, not on the hot delivery path.
      */
-    ParsleyChannels(KeyValueStore<String, byte[]> store, ParsleyForwardedIndex forwardedIndex, ParsleyEpoch epoch) {
+    ParsleyChannels(KeyValueStore<String, byte[]> store, ParsleyForwardedIndex forwardedIndex) {
         this.store = store;
         this.forwardedIndex = forwardedIndex;
-        this.epoch = epoch;
         this.trackChannels = true;
         byte[] blob = store.get(ParsleyStores.FRONTIER_KEY);
         this.frontier = ParsleyVectorClock.empty();
@@ -234,11 +216,6 @@ final class ParsleyChannels {
                 }
             }
         }
-    }
-
-    /** The topology epoch's lower bounds this frontier floors against; {@link ParsleyEpoch#NONE} if unbounded. */
-    ParsleyEpoch epoch() {
-        return epoch;
     }
 
     /**
@@ -272,32 +249,22 @@ final class ParsleyChannels {
 
     /**
      * The <em>normalize</em> request: turns a raw inbound dependency clock into the clock L2's gate
-     * evaluates (I5 — after this step, no clock inside L2 carries a self-reference). Two steps:
-     * <ol>
-     *   <li><strong>Self-cycle removal.</strong> A record depending on its own {@code (topicId,
-     *       partition, offset)} has, by being delivered, met that dependency, so it must not wait on
-     *       itself (this keeps a self-referential stamp on a fused chain from deadlocking). Only the
-     *       exact self-coordinate is removed; a backward same-partition dependency ({@code required
-     *       < offset}) is an intra-topic dependency like any other and flows through unchanged.</li>
-     *   <li><strong>Below-floor strip (interim — deleted with the floors in T3.2, per D4).</strong>
-     *       Any dependency below its coordinate's topology-epoch {@code startsAt} bound is dropped
-     *       ({@link ParsleyVectorClock#strippedBelow}) — an out-of-domain reference to a prior,
-     *       closed epoch that no channel in this epoch will ever confirm. A no-op under
-     *       {@link ParsleyEpoch#NONE}.</li>
-     * </ol>
+     * evaluates (I5 — after this step, no clock inside L2 carries a self-reference). One step:
+     * <strong>self-cycle removal</strong>. A record depending on its own {@code (topicId,
+     * partition, offset)} has, by being delivered, met that dependency, so it must not wait on
+     * itself (this keeps a self-referential stamp on a fused chain from deadlocking). Only the
+     * exact self-coordinate is removed; a backward same-partition dependency ({@code required
+     * < offset}) is an intra-topic dependency like any other and flows through unchanged.
      *
      * <p>View-only: never rewrites recorded state or the outbound stamp ({@link #completeness()} is
-     * computed separately). The gate re-normalises on every evaluation rather than caching the result
-     * at receive time, because the epoch floor can rise while a record is held (a closing epoch
-     * transition strips a held record's below-floor dependencies — the drain {@link ParsleyCausalBroadcast}
-     * runs after {@link #tryAdvanceEpoch} depends on that re-evaluation); once T3.2 removes the
-     * floor clause, the result is a pure function of the raw clock and the source coordinate.
+     * computed separately). A pure function of the raw clock and the source coordinate, so the gate
+     * may evaluate it as often as it likes — every evaluation of the same held record yields the
+     * same result.
      */
     ParsleyVectorClock normalize(ParsleyVectorClock rawDeps, Uuid sourceTopicId, int sourcePartition, long sourceOffset) {
-        ParsleyVectorClock deps = rawDeps.offsetFor(sourceTopicId, sourcePartition) == sourceOffset
+        return rawDeps.offsetFor(sourceTopicId, sourcePartition) == sourceOffset
                 ? rawDeps.without(sourceTopicId, sourcePartition)
                 : rawDeps;
-        return deps.strippedBelow(epoch);
     }
 
     /**
@@ -338,9 +305,9 @@ final class ParsleyChannels {
      * {@link ParsleyCausalBroadcast#broadcast} attaches to every outbound record, and equally the
      * node's <em>total knowledge</em> — the {@code known()} the I6 relay rule compares a carried
      * clock against (frontier ∪ channel clocks ∪ carried ancestry ∪ ownOutputs ∪ highestDelivered).
-     * Both extra clocks are merged here and only here: they never feed {@link #completeness()} (the
-     * epoch-floor publication path must keep publishing only delivered/advertised positions while
-     * the interim floor machinery survives) and never the delivery gate.
+     * Both extra clocks are merged here and only here: they never feed {@link #completeness()}
+     * (which stays the delivered/advertised view — what this node has locally delivered, carried,
+     * or heard advertised) and never the delivery gate.
      */
     ParsleyVectorClock stamp() {
         return completeness().merge(ownOutputs).merge(highestDelivered);
@@ -431,12 +398,6 @@ final class ParsleyChannels {
      * is <em>not</em> the delivery gate: the gate ({@link ParsleyCausalBroadcast}) checks {@link #frontier()}
      * alone, so an advertised claim can never release a record here ahead of local delivery of its
      * cause. With no channel clocks recorded, this is exactly the node's own frontier.
-     *
-     * <p>This is the delivered frontier and the outbound stamp, carried as-is — <em>not</em> floored to
-     * the epoch. The epoch transition is invisible in the data plane: each node floors <em>incoming</em>
-     * dependencies against its own epoch locally (the gate and the below-floor {@link #delivered}/
-     * {@link #seedIfFirstSeen}), so the stamp only ever carries positions this node actually delivered,
-     * and a below-floor origin a downstream might see is floored out by that downstream's own gate.
      */
     ParsleyVectorClock completeness() {
         ParsleyVectorClock result = frontier.merge(carriedAncestry);
@@ -463,11 +424,6 @@ final class ParsleyChannels {
      * "usually toward" the benign side (see {@link ParsleyCausalBroadcast}'s class Javadoc for the fuller version
      * of this note).
      *
-     * <p>A <em>below-floor</em> delivery ({@code offset < startsAt}) is a no-op on the causal frontier:
-     * the record still feeds state and is forwarded by the causal-broadcast core, but an out-of-domain offset must not
-     * advance the causal frontier (it stays at the epoch origin until an in-domain offset is delivered)
-     * nor enter the forwarded index. Under {@link ParsleyEpoch#NONE} every offset is in-domain.
-     *
      * <p>A delivery at or below the current watermark ({@code offset <= frontier}) is an at-least-once
      * replay of an already-delivered offset — a no-op here too, and deliberately never marked: the absorb
      * walk below only ever scans strictly above the watermark, so a mark at or below it could never be
@@ -475,9 +431,6 @@ final class ParsleyChannels {
      * forwarded index (this used to happen on every such replay).
      */
     void delivered(Uuid topicId, int partition, long offset) {
-        if (offset < epoch.startsAt(topicId, partition)) {
-            return;
-        }
         long watermark = frontier.offsetFor(topicId, partition);
         if (offset <= watermark) {
             return;
@@ -504,7 +457,7 @@ final class ParsleyChannels {
      * {@code receivedOffset} has arrived every lower offset that would ever be returned to this consumer
      * already has been. An offset in {@code (highestReceived, receivedOffset)} was therefore skipped
      * permanently — a transaction marker, an aborted record, or a protocol record the causal-broadcast core consumed but
-     * deliberately did not record as a delivery (a boundary marker on an early-return path) — never a
+     * deliberately did not record as a delivery (a marker on an early-return path) — never a
      * business record still in flight, and never a <em>held</em> business record (a held record was
      * received, so it is in the buffer and its offset is at or below {@code highestReceived}, outside the
      * bridged interval). None of these is a cause any dependent awaits, so folding them is safe. A marker carries no
@@ -518,9 +471,7 @@ final class ParsleyChannels {
      * records {@code receivedOffset} as the highest received, and returns {@code false}. A
      * {@code receivedOffset} at or below the recorded highest is an at-least-once replay: a strict no-op.
      *
-     * <p>The epoch floor is honoured exactly as {@link #delivered} honours it: a skipped offset below the
-     * coordinate's {@code startsAt} is not marked (an out-of-domain position must not enter the forwarded
-     * index or advance the causal frontier). The <em>data-loss</em> guard — distinguishing a marker gap
+     * <p>The <em>data-loss</em> guard — distinguishing a marker gap
      * from a retention/{@code deleteRecords} jump that would drop real committed records below the log-start
      * offset — is the caller's responsibility, since only it can see the partition's log-start (see
      * {@link ParsleyCausalBroadcast}); this method assumes the interval it is handed is a genuine skip.
@@ -537,15 +488,12 @@ final class ParsleyChannels {
             return false;
         }
         long watermark = frontier.offsetFor(topicId, partition);
-        long startsAt = epoch.startsAt(topicId, partition);
         // Fast path: the frontier is caught up to the previous highest received (watermark == prev), so no
         // held record sits in the skipped run — it is contiguous from the frontier and, being all
         // consumer-skipped, all markers. Fold it straight into the frontier without O(gap) forwarded-index
         // writes; a large aborted transaction could otherwise mark hundreds of thousands of offsets inside
-        // one EOS transaction, risking the transaction timeout and a crash-loop on legal input. The
-        // in-domain guard (prev + 1 >= startsAt) keeps a below-floor offset out of the frontier — and holds
-        // whenever watermark == prev, since a seeded coordinate's watermark never sits below startsAt - 1.
-        if (watermark == prev && prev + 1 >= startsAt) {
+        // one EOS transaction, risking the transaction timeout and a crash-loop on legal input.
+        if (watermark == prev) {
             frontier = frontier.observe(topicId, partition, receivedOffset - 1);
             highestReceived.put(key, receivedOffset);
             persist();
@@ -553,9 +501,9 @@ final class ParsleyChannels {
         }
         // Slow path: a held record may sit between the frontier and the previous highest received, so mark
         // the skipped offsets and let the contiguous walk absorb only the run now reachable (it stops at the
-        // held record). Below-floor and at-or-below-watermark offsets are not marked, mirroring deliver().
+        // held record). At-or-below-watermark offsets are not marked, mirroring deliver().
         for (long skipped = prev + 1; skipped < receivedOffset; skipped++) {
-            if (skipped < startsAt || skipped <= watermark) {
+            if (skipped <= watermark) {
                 continue;
             }
             forwardedIndex.mark(topicId, partition, skipped);
@@ -588,8 +536,8 @@ final class ParsleyChannels {
     }
 
     /**
-     * Establishes the contiguous frontier's starting point the first time this coordinate is observed,
-     * floored to the epoch origin. The name is a coinage: no literature analog — the mechanism exists
+     * Establishes the contiguous frontier's starting point the first time this coordinate is observed.
+     * The name is a coinage: no literature analog — the mechanism exists
      * only because Kafka retention means a channel's history need not begin at its first offset.
      * The first offset seen need not be 0 (finite retention, fresh consumer
      * group); anything below it is outside the causal-broadcast core's purview, not an unfillable gap, so folding
@@ -598,26 +546,15 @@ final class ParsleyChannels {
      * call even if the record is held, so a later record cannot re-trigger the seed and skip the
      * still-held earlier one. The seen-set is in-memory only; {@link ParsleyCausalBroadcast}'s constructor
      * replays this call for every restored held record's source coordinate (at its lowest held
-     * offset) so the guard survives a restart.
-     *
-     * <p>The epoch generalises the per-channel origin into a domain-wide one: the causal frontier for a
-     * coordinate begins at the <em>epoch origin</em> {@code startsAt - 1} (nothing below the floor is
-     * in-domain), so the seed target is {@code max(firstOffset - 1, startsAt - 1)}. A below-floor
-     * first sighting therefore still anchors the frontier at the origin (not below it), and a restored
-     * value sitting below the origin is lifted to it. Under {@link ParsleyEpoch#NONE} the origin is
-     * {@code -1}, so this reduces exactly to the original "seed to {@code offset - 1} only when the
-     * coordinate is unrecorded" behaviour.
+     * offset) so the guard survives a restart. A coordinate the frontier already records (a restored
+     * or rescope-seeded channel) is left as-is.
      */
     boolean seedIfFirstSeen(Uuid topicId, int partition, long offset) {
         if (!seenCoordinates.add(new CoordKey(topicId, partition))) return false;
-        long startsAt = epoch.startsAt(topicId, partition);
-        // The epoch origin: startsAt - 1, or -1 (absent) with no epoch floor. Guarded against the
-        // NO_BOUND (Long.MIN_VALUE) underflow.
-        long floorOrigin = startsAt > 0 ? startsAt - 1 : -1L;
         long current = frontier.offsetFor(topicId, partition);
         // An unrecorded coordinate folds everything below its first offset into the frontier; a recorded
-        // one is left as-is. Either way, never below the epoch origin.
-        long seedTo = Math.max(current < 0 ? offset - 1 : current, floorOrigin);
+        // one is left as-is.
+        long seedTo = current < 0 ? offset - 1 : current;
         if (seedTo < 0 || seedTo <= current) return false;
         frontier = frontier.observe(topicId, partition, seedTo);
         persist();
@@ -646,16 +583,12 @@ final class ParsleyChannels {
     /**
      * Max-merges {@code clock} into channel {@code (topicId, partition)}'s advertised dependencies
      * (monotonic: the stored clock never decreases) and persists. A first call for a channel
-     * initialises it from {@code clock}. Channel clocks are <em>not</em> floored here: a below-floor
-     * position a channel advertises is harmless — a dependency on it is stripped at the gate (against
-     * the effective floor), so it never gates anything, and completeness carries it only as the
-     * unfloored delivered frontier the stamp advertises.
+     * initialises it from {@code clock}.
      *
      * <p>A channel's entry no longer holds {@link #completeness()} down to an intersection minimum —
      * {@link #completeness()} is a plain max-merge now, so a channel with nothing advertised simply
      * contributes nothing rather than excluding a coordinate every other channel has confirmed. What a
-     * seeded-but-silent channel entry still does is give {@link #tryAdvanceEpoch}'s per-channel
-     * marker-seen bookkeeping and {@link #rescope} something to check against.
+     * seeded-but-silent channel entry still does is give {@link #rescope} something to check against.
      */
     void channelUpdate(Uuid topicId, int partition, ParsleyVectorClock clock) {
         if (!trackChannels) {
@@ -665,82 +598,6 @@ final class ParsleyChannels {
         ParsleyVectorClock existing = channels.get(key);
         channels.put(key, existing == null ? clock : existing.merge(clock));
         persist();
-    }
-
-    /**
-     * Records an epoch-boundary marker received on channel {@code (channelTopicId, channelPartition)},
-     * persisting when it changed the state. Returns {@code true} if the marker was newly recorded — a
-     * fresh pending transition or a channel not yet seen for the current one (see
-     * {@link ParsleyEpochState#onBoundary}); the relaying caller forwards the marker downstream only on
-     * {@code true}. A no-op returning {@code false} unless this frontier's epoch is a live
-     * {@link ParsleyEpochState} (tests and the epoch-0 default hold a static {@link ParsleyEpoch}). See
-     * {@link #tryAdvanceEpoch}.
-     */
-    boolean recordEpochMarker(long epochId, ParsleyVectorClock lowerBounds, Uuid channelTopicId, int channelPartition) {
-        if (epoch instanceof ParsleyEpochState state) {
-            boolean newlyRecorded = state.onBoundary(epochId, lowerBounds, channelTopicId, channelPartition);
-            if (newlyRecorded) {
-                persist();
-            }
-            return newlyRecorded;
-        }
-        return false;
-    }
-
-    /**
-     * Closes an in-progress epoch transition if it is ready — the boundary marker has been received on
-     * <em>every</em> input channel and this node's own contiguous frontier ({@link #frontier()})
-     * dominates the pending floor {@code F_e}, restricted to the coordinates this node can ever observe
-     * — promoting {@code F_e} to the settled floor and persisting. Returns {@code true} if it advanced
-     * (the caller should then re-drain, since a raised floor can strip a held replay record's
-     * below-floor dependencies). A no-op with no live {@link ParsleyEpochState} or no ready transition.
-     * Called after every causal-broadcast operation that can advance the frontier.
-     *
-     * <p>The dominance check deliberately uses the frontier, not {@link #completeness()}: the window
-     * closing is the proof that everything below {@code F_e} has been delivered <em>here</em>, and a
-     * channel's advertised claim that a peer delivered it is no such proof — closing on completeness
-     * would let the raised floor strip a held e-1 record's dependencies before this node had actually
-     * delivered them, releasing it out of causal order (the same hearsay hole the delivery gate
-     * closes; see {@link ParsleyCausalBroadcast#isDeliverable}).
-     *
-     * <p>{@code F_e} is the DAG-wide committed floor — the {@code mergeMin} of every member's published
-     * completeness — so it can carry coordinates for topics downstream of (or parallel to) this node
-     * that this node never channels at all (its own {@code completeness()} can never contain them: a
-     * dependency clock only ever spans a node's own input channels). Comparing the unfiltered floor
-     * against this node's completeness would therefore never dominate at any non-terminal stage. When
-     * channel tracking is on (the production case; see {@link #trackChannels}), the floor is filtered
-     * here to {@link #channels}' own coordinates — the same scoping {@link #rescope} already
-     * applies to the frontier — before the dominance check. A coordinate that <em>is</em> in scope but
-     * not yet delivered here is deliberately left in the filtered floor rather than dropped:
-     * {@link ParsleyVectorClock#dominates} then reads it as unsatisfied (an absent coordinate is never
-     * dominated), so the window correctly keeps holding until this node catches up — conservative,
-     * not permissive, exactly mirroring "hold over guess" for causal safety. With channel tracking off
-     * (the single-layer, frontier-only test mode, where {@link #channels} is permanently empty) there
-     * is no channel concept to scope by, so the floor is left unfiltered — scoping to an always-empty
-     * key set would strip every coordinate and vacuously close every window.
-     */
-    boolean tryAdvanceEpoch() {
-        if (!(epoch instanceof ParsleyEpochState state)) {
-            return false;
-        }
-        ParsleyVectorClock pendingFloor = state.pendingFloor();
-        if (pendingFloor == null) {
-            return false;
-        }
-        for (CoordKey key : channels.keySet()) {
-            if (!state.hasMarker(key.topicId(), key.partition())) {
-                return false;
-            }
-        }
-        ParsleyVectorClock scopedFloor = trackChannels
-                ? pendingFloor.retaining((topicId, partition) -> channels.containsKey(new CoordKey(topicId, partition)))
-                : pendingFloor;
-        if (!frontier().dominates(scopedFloor)) {
-            return false;
-        }
-        state.promote();
-        persist();
-        return true;
     }
 
     /**
@@ -875,16 +732,8 @@ final class ParsleyChannels {
      * log-start while the seeded frontier already covers the carried prefix), and otherwise the
      * fail-safe net for an at-or-below-watermark arrival that {@code exactly_once_v2} should make
      * impossible (T3.0 A11).
-     *
-     * <p>A below-floor offset is never reported as delivered: under a live epoch floor the frontier
-     * sits at the epoch origin without any below-floor record having been delivered, and below-floor
-     * replay must keep feeding delegate state exactly as {@link #delivered}'s below-floor no-op
-     * intends (interim — the clause dies with the floors, D4).
      */
     boolean alreadyDelivered(Uuid topicId, int partition, long offset) {
-        if (offset < epoch.startsAt(topicId, partition)) {
-            return false;
-        }
         return offset <= frontier.offsetFor(topicId, partition)
                 || forwardedIndex.contains(topicId, partition, offset);
     }
@@ -896,14 +745,13 @@ final class ParsleyChannels {
     }
 
     /**
-     * Serialises the frontier clock, channel clocks, epoch state, and highest-received offsets into the
+     * Serialises the frontier clock, channel clocks, and highest-received offsets into the
      * single {@code "f"} value: {@code [frontier-len:4][frontier bytes][channel-count:4]} then per channel
      * {@code [topicId MSB:8][topicId LSB:8][partition:4][clock-len:4][clock bytes]}, then
-     * {@code [epoch-present:1]} and, when the epoch is a live {@link ParsleyEpochState},
-     * {@code [epoch-len:4][epoch bytes]}, then {@code [highest-received-count:4]} and per channel
-     * {@code [topicId MSB:8][topicId LSB:8][partition:4][offset:8]}. The epoch state is persisted so a
-     * mid-transition restart — which resumes past the already-consumed boundary marker — resumes the
-     * pending window rather than losing it (which would leave the transition unable to close). The
+     * {@code [highest-received-count:4]} and per channel
+     * {@code [topicId MSB:8][topicId LSB:8][partition:4][offset:8]}. (T3.2 removed the epoch section
+     * that used to sit between the channels and the highest-received offsets — a pre-T3.2 blob is not
+     * readable, consistent with the pre-1.0 no-upgrade-path stance.) The
      * highest-received offsets are persisted so {@link #bridge}'s skip detection is exact across a restart
      * (the map is written inside the same EOS transaction as the frontier and forwarded index), rather than
      * reconstructed and possibly having to re-bridge already-forwarded offsets.
@@ -931,12 +779,6 @@ final class ParsleyChannels {
                 ParsleyByteUtils.writeUuid(dos, entry.getKey().topicId());
                 dos.writeInt(entry.getKey().partition());
                 ParsleyByteUtils.writeBytes(dos, entry.getValue().toBytes());
-            }
-            if (epoch instanceof ParsleyEpochState state) {
-                dos.writeBoolean(true);
-                ParsleyByteUtils.writeBytes(dos, state.toBytes());
-            } else {
-                dos.writeBoolean(false);
             }
             dos.writeInt(highestReceived.size());
             for (Map.Entry<CoordKey, Long> entry : highestReceived.entrySet()) {
@@ -968,21 +810,11 @@ final class ParsleyChannels {
                 ParsleyVectorClock clock = ParsleyVectorClock.fromBytes(ParsleyByteUtils.readBytes(dis));
                 channels.put(new CoordKey(topicId, partition), clock);
             }
-            // The epoch section is optional and trailing: a blob written before epoch state existed (or
-            // by a static-epoch frontier) simply ends after the channels. available() is exact over the
-            // backing ByteArrayInputStream.
-            if (dis.available() > 0 && dis.readBoolean()) {
-                byte[] e = ParsleyByteUtils.readBytes(dis);
-                // Only a live ParsleyEpochState can restore epoch bytes; a static epoch (tests/epoch 0)
-                // never wrote them, so this branch is not reached for those.
-                if (epoch instanceof ParsleyEpochState state) {
-                    state.restore(e);
-                }
-            }
-            // The highest-received section is likewise optional and trailing: a blob written before it
-            // existed simply ends after the epoch flag, leaving the map empty — every channel then reads as
+            // The highest-received section is optional and trailing: a blob written before it existed
+            // simply ends after the channels, leaving the map empty — every channel then reads as
             // a first sighting on its next record (no bridge, records the offset), which self-heals on the
-            // following gap. A live blob carries the exact per-channel highest received.
+            // following gap. A live blob carries the exact per-channel highest received. available() is
+            // exact over the backing ByteArrayInputStream.
             if (dis.available() > 0) {
                 int highestReceivedCount = dis.readInt();
                 for (int i = 0; i < highestReceivedCount; i++) {

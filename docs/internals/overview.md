@@ -20,8 +20,8 @@ All share a common set of value types and a single causal engine.
 |---|---|
 | `CausalStreamsBuilder` | Declares one or more causal stages: `stream(...)` source topics, `.process(supplier)`, `.to(...)` sink(s); `.build()` produces a `CausalTopology` |
 | `CausalStream` / `CausalProcessedStream` | Fluent intermediate types `CausalStreamsBuilder` returns while declaring a stage (`merge`, `process`, `to`, `withPartitioner`) |
-| `CausalTopology` | The built, immutable topology specification; `assemble(props, quiesce, coordination)` produces the real Kafka Streams `Topology` |
-| `CausalStreams` | The runtime: wraps the underlying `KafkaStreams` instance, owns graceful causal drain on `close()` and, when configured, topology-epoch coordination |
+| `CausalTopology` | The built, immutable topology specification; `assemble(props, quiesce)` produces the real Kafka Streams `Topology` (a vestigial third parameter survives until the coordination subsystem's deletion) |
+| `CausalStreams` | The runtime: wraps the underlying `KafkaStreams` instance, owns graceful causal drain on `close()` |
 | `CausalDependencies` | Public facade over a `ParsleyVectorClock`: the causal requirements stamped onto each record, plus the `using`/`observe`/`stamp`/`merge` edge operations and `isWatermark` for skipping protocol watermarks on the consumer side |
 
 ### Package-private implementation
@@ -34,7 +34,7 @@ All share a common set of value types and a single causal engine.
 | `ParsleyVectorClock` | The one vector clock: node frontier *and* dependency representation, keyed on `(Uuid, int)` primitives |
 | `ParsleyMessage` | Typed engine envelope: source coordinate + dependency clock as fields, user headers separate |
 | `ParsleyHeader` | A `(key, value)` header plus the header-key vocabulary (`_parsley_*`, reserved keys, factories) |
-| `ParsleyProcessor` | Kafka Streams processor wrapping the user processor and driving the engine; emits and consumes protocol watermarks and epoch markers |
+| `ParsleyProcessor` | Kafka Streams processor wrapping the user processor and driving the engine; emits and consumes protocol watermarks |
 | `ParsleyProcessorSupplier` | Processor factory; registers Parsley's four state stores |
 | `ParsleyProcessorContext` | Stamping proxy: replaces the context given to the user processor; counts business forwards to drive watermark emission |
 | `ParsleyBufferStore` / `StoreBackedBufferStore` | Durable buffer of held records |
@@ -54,7 +54,7 @@ Edge (plain Kafka producer)
 
 Causal processor (Streams)
   ParsleyProcessor.process(record)
-    -> watermark/epoch marker? -> advance channel clock, drain, relay onward only if it genuinely advanced
+    -> watermark? -> advance channel clock, drain, relay onward only if it genuinely advanced
     -> ingest: wrap in ParsleyMessage, embed source coordinates
     -> gate:   ParsleyEngine.receive()
                  frontier.dominates(deps) — this node's own contiguous delivered frontier; a

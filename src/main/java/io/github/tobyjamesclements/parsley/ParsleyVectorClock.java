@@ -162,38 +162,6 @@ final class ParsleyVectorClock {
     }
 
     /**
-     * Returns a copy of this clock with every entry {@code (topicId, partition, offset)} dropped for
-     * which {@code offset < bound.startsAt(topicId, partition)}, or {@code this} unchanged when nothing
-     * is stripped (so the common no-bound case allocates nothing). Used to strip a record's
-     * dependencies on coordinates below the topology epoch's lower bound — references outside the
-     * current causal domain — before the admissibility check, so a completeness minimum that will
-     * never confirm such a coordinate does not hold the record forever. A coordinate with no bound
-     * reads as {@link ParsleyEpoch#NO_BOUND} (the minimum {@code startsAt}) and is always kept.
-     */
-    ParsleyVectorClock strippedBelow(ParsleyEpoch bound) {
-        boolean anyStripped = false;
-        outer:
-        for (Map.Entry<Uuid, Map<Integer, Long>> byTopic : offsets.entrySet()) {
-            for (Map.Entry<Integer, Long> byPartition : byTopic.getValue().entrySet()) {
-                if (byPartition.getValue() < bound.startsAt(byTopic.getKey(), byPartition.getKey())) {
-                    anyStripped = true;
-                    break outer;
-                }
-            }
-        }
-        if (!anyStripped) {
-            return this;
-        }
-        Map<Uuid, Map<Integer, Long>> kept = new HashMap<>();
-        offsets.forEach((topicId, byPartition) -> byPartition.forEach((partition, offset) -> {
-            if (offset >= bound.startsAt(topicId, partition)) {
-                kept.computeIfAbsent(topicId, k -> new HashMap<>()).put(partition, offset);
-            }
-        }));
-        return new ParsleyVectorClock(freeze(kept));
-    }
-
-    /**
      * Returns {@code true} if this clock (a frontier) has recorded at least everything {@code deps}
      * require — for every coordinate in {@code deps}, this clock's offset is ≥ the required offset.
      * This is vector-clock <em>dominance</em>, the component-wise ≤ order of the literature.

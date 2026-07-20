@@ -48,7 +48,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * cross-channel unanimity, and no third-party relay, is required.
  *
  * <p>A genuine <em>two-node</em> cycle (A→B→A over two separate, real Kafka Streams applications) is
- * proved instead in {@link ParsleyCoordinationMultiAppIT} — a single-Topology, two-stage
+ * proved instead in {@link ParsleyCyclicReflectionIT} — a single-Topology, two-stage
  * {@link TopologyTestDriver} version of that scenario is not meaningful: Kafka Streams allows only one
  * source node per topic per {@code Topology}, so two logically-separate stages sharing one root topic
  * (one directly, one via passthrough) cannot coexist in one {@code Topology} the way two genuinely

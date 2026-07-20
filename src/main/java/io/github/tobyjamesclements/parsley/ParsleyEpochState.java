@@ -32,7 +32,7 @@ import java.util.Set;
  *       records on it have been received) and closes once this node's own contiguous frontier
  *       <em>dominates</em> {@code F_e} — everything up to the new floor has been delivered
  *       <em>here</em>, so e-1 is provably drained locally (a peer's advertised claim is never proof;
- *       see {@link ParsleyChannels#tryAdvanceEpoch}). {@link #promote} then makes {@code F_e} the
+ *       the window logic lived in {@code ParsleyChannels} until T3.2). {@link #promote} then makes {@code F_e} the
  *       settled floor. Because it only closes once the local frontier dominates {@code F_e},
  *       advancing the floor needs no re-flooring of already-recorded state.
  * </ul>

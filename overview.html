@@ -16,12 +16,10 @@ declares one or more causal stages, {@code .build()} produces a
 {@code KafkaStreams} instance. The low-level processor decorator that powers it,
 {@code ParsleyProcessorSupplier}, is package-private internal machinery, not constructed directly.</p>
 
-<p>A running topology can also evolve — add a stage, replace a stage, recompile — across a leaderless
-epoch boundary: {@link io.github.tobyjamesclements.parsley.CausalStreams#requestEpochTransition()}
-evolves every participating member through it, so a new node adopts the current causal floor instead of
-replaying pre-epoch history into the shared frontier. This is optional and off by default; setting
-{@code parsley.coordination.epoch-events-topic} turns it on. Absent that key, a topology runs in epoch 0
-indefinitely.</p>
+<p>Joining a running topology needs no coordination: a new application simply starts consuming, its
+replay self-gates into causal delivery order through the ordinary hold-back queue, and its truthful
+stamps make its outputs correctly gated everywhere from its first emission. The {@code
+parsley.coordination.*} keys of earlier versions are inert and pending removal.</p>
 
 <h2>Core concepts</h2>
 <dl>
@@ -75,7 +73,7 @@ indefinitely.</p>
   <tbody>
     <tr><td>{@link io.github.tobyjamesclements.parsley.CausalStreamsBuilder}</td><td>Declares one or more causal stages: {@code stream(...)} one or more source topics, {@code .process(supplier)} to bind them to a causal-decorated processor, {@code .to(...)} to declare its sink(s). {@code .build()} produces a {@link io.github.tobyjamesclements.parsley.CausalTopology}.</td></tr>
     <tr><td>{@link io.github.tobyjamesclements.parsley.CausalTopology}</td><td>The built causal topology — a specification, not yet a real Kafka Streams {@code Topology} — ready for {@code new CausalStreams(topology, props)}.</td></tr>
-    <tr><td>{@link io.github.tobyjamesclements.parsley.CausalStreams}</td><td>The runtime: wraps the underlying {@code KafkaStreams} instance, and owns graceful causal drain on {@code close()} and, when {@code parsley.coordination.epoch-events-topic} is configured, topology-epoch coordination. Evolve a running topology through an epoch boundary with {@code requestEpochTransition()}.</td></tr>
+    <tr><td>{@link io.github.tobyjamesclements.parsley.CausalStreams}</td><td>The runtime: wraps the underlying {@code KafkaStreams} instance, and owns graceful causal drain on {@code close()}.</td></tr>
     <tr><td>{@link io.github.tobyjamesclements.parsley.CausalDependencies}</td><td>Stamps and reads causal dependencies directly on plain {@code ProducerRecord} and {@code ConsumerRecord} objects, for talking to a Parsley topology from outside Kafka Streams.</td></tr>
   </tbody>
 </table>

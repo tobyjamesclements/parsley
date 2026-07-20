@@ -43,13 +43,13 @@ recovery, and [Configuration](configuration.md) covers the resulting metrics.
 
 The library is a single jar built around one topology-level entry point and a set of edge operations.
 They share a common vocabulary of value types. Everything else — the processor decorator, the buffer,
-graceful-shutdown quiesce, epoch coordination — is internal machinery `CausalStreams` composes for you;
+graceful-shutdown quiesce — is internal machinery `CausalStreams` composes for you;
 there is no low-level public entry point to build a topology around by hand.
 
 | API | Purpose |
 |---|---|
 | `CausalStreamsBuilder` / `CausalTopology` | Declare a causal topology — one or more stages, each a set of source topics feeding a processor and forwarding to sink(s) — the same way `StreamsBuilder`/`Topology` declare a plain Kafka Streams one. |
-| `CausalStreams` | The runtime: wraps the underlying `KafkaStreams` instance around the causal guarantee. Owns graceful causal drain on `close()` and, when `parsley.coordination.epoch-events-topic` is configured, leaderless topology-epoch coordination — evolve a running topology through an epoch boundary with `requestEpochTransition()`. |
+| `CausalStreams` | The runtime: wraps the underlying `KafkaStreams` instance around the causal guarantee. Owns graceful causal drain on `close()`. |
 | `CausalDependencies.using` / `observe` / `stamp` / `merge` | Maintain a consumer-side frontier and stamp causal context onto records produced to plain Kafka clients at the topology edge. Topic names are resolved to their stable Kafka UUIDs internally. |
 
 ## Where to go next

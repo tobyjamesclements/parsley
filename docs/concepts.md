@@ -70,17 +70,14 @@ is the *outbound stamp*, not the delivery gate: it carries transitive ancestry (
 upstream channel has advertised) downstream, where each receiver's own gate verifies them against
 its own delivery history.
 
-There is no vacuous satisfaction, though: a dependency naming a coordinate this node has **no input
-channel for at all** — an undeclared topic, or a partition a different task instance owns — is not
-treated as satisfied just because it is out of scope. This node can prove it has no way to confirm such
-a coordinate, never that the coordinate is genuinely irrelevant, so it fails the task fast instead of
-buffering forever or guessing. The corollary is the **topology contract**: every coordinate a node's
-records could ever depend on must be reachable to that node through at least one input channel,
-directly or transitively. A join of fully independent sources can still receive a record depending on a
-coordinate no input channel observes — route that coordinate through some input branch instead (see
-[`parsley.coordination.domain-topics`](configuration.md) for doing this without a redundant business
-subscription). Unlike the topology contract, there is no restriction on a node consuming both a topic
-and a topic derived from it — single-witness merge has no unanimity requirement for that to violate.
+A dependency naming a coordinate this node does not consume at all — an undeclared topic, or a
+partition a different task instance owns — is **ignored**, unconditionally. That is sound, not
+vacuous satisfaction: stamps are transitively complete and merged unconditionally, so any consumed
+causal ancestor of a record is claimed *directly* in that record's own clock — an unconsumed entry
+only ever proxies ancestry the same clock already states, and ignoring it loses no ordering
+observable at this node. Each ignore is counted by the `parsley.deps.out-of-scope-ignored` metric,
+never a failure. There is no restriction on a node consuming both a topic
+and a topic derived from it.
 See the [causal consistency model](internals/causal-consistency.md) for the full contract and why a
 single witness suffices.
 
@@ -113,28 +110,14 @@ folds sink partition counts into the same check and applies one partitioner unif
 a stage declares so a shard cannot drift onto different partitions across topics by accident. See the
 [Streams integration](streams.md#preconditions) preconditions for the full contract.
 
-## Topology epochs
+## Joining a running topology
 
 A causal topology sometimes has to change while it runs — a new stage, a replaced stage, a recompile.
-A new stage replays its inputs from the earliest offset, and the completeness frontier is a minimum
-across every node, so a node replaying from offset 0 would pull the shared frontier back to the start
-and un-strip history the other nodes had already delivered. An **epoch** prevents this. It defines a
-floor per coordinate; history below the floor is pre-epoch, so it feeds the delegate's state but does
-not participate in causal time. A node deployed into a running topology adopts the current floor and
-replays with everything below it stripped, so it never drags the frontier down.
-
-Setting `parsley.coordination.epoch-events-topic` turns this on. It is optional and leaderless:
-participating applications share one single-partition epoch-events log and each folds it identically
-to agree on every epoch's floor, which then propagates through the topology in-band. Which topics are
-external entry points is derived from what each node declares it consumes and produces, not configured
-by hand. Absent that key, a topology runs in epoch 0 and behaves exactly as one with no epoch
-machinery.
-
-Coordination also requires every running member's declared inputs and sinks to jointly cover the full
-coordinated domain, or an epoch round cannot commit — a genuine multi-stage pipeline (app A produces a
-topic only app B consumes) needs every member to also cover the topics only a sibling touches. Set
-`parsley.coordination.domain-topics` so `CausalTopology` auto-wires a passthrough source for any domain
-topic a stage does not otherwise consume or produce, covering it without a redundant business
-subscription — this is what makes a genuinely cyclic topology (A produces to B, B produces back to A)
-coordinate correctly. See [Evolving a running topology](streams.md#evolving-a-running-topology) for the
-API and [Topology epochs](internals/topology-epochs.md) for the protocol.
+Joining needs **zero coordination**: a fresh application starts consuming from wherever the log
+starts, its hold-back queue converts arbitrary cross-partition arrival into causal delivery order
+(replay is just arbitrarily delayed delivery, which causal broadcast absorbs by construction), and
+its truthful stamps make its outputs correctly gated everywhere from its first emission. A fresh
+record with old dependencies simply sits low in the causal partial order — correct, not a hazard.
+There is no join barrier, no admission, no membership roster, and no epoch. (Earlier versions
+coordinated joins through a topology-epoch subsystem; it contributed nothing to causal safety and
+has been removed. Its `parsley.coordination.*` keys are inert and pending removal.)

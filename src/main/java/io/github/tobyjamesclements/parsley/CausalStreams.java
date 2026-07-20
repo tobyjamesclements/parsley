@@ -7,6 +7,7 @@ import org.apache.kafka.streams.Topology;
 import org.apache.kafka.streams.TopologyDescription;
 import org.apache.kafka.streams.errors.StreamsUncaughtExceptionHandler;
 import org.jspecify.annotations.Nullable;
+import org.slf4j.LoggerFactory;
 
 import java.time.Duration;
 import java.util.ArrayList;
@@ -22,7 +23,7 @@ import java.util.function.Supplier;
 /**
  * The causal application runtime: a Facade (GoF) over the Kafka Streams instance a {@link CausalTopology}
  * runs as, and the causal machinery a plain {@code KafkaStreams} doesn't know about — graceful causal
- * drain on shutdown, and (when configured) topology-epoch coordination — behind the one simple
+ * drain on shutdown — behind the one simple
  * start/close lifecycle below. Plays the same role {@link KafkaStreams} plays for a plain Kafka Streams
  * application:
  *
@@ -39,18 +40,16 @@ import java.util.function.Supplier;
  * Runtime.getRuntime().addShutdownHook(new Thread(causalStreams::close));
  * }</pre>
  *
- * <p><strong>Topology-epoch coordination</strong> turns on by setting
- * {@code parsley.coordination.epoch-events-topic} in {@code props}; {@code application.id} supplies the
- * epoch member identity. Absent that key, the topology runs in epoch 0 — no epoch-events log, no
- * coordination thread. Evolve a running, coordinated topology through an epoch boundary with
- * {@link #requestEpochTransition()}. A transition blocks — unbounded — until every running member has
- * published; see {@link ParsleyCoordination#leave()} for how a member is removed from the domain.
+ * <p><strong>Topology-epoch coordination has been removed from the causal protocol</strong>: the
+ * two-branch delivery gate needs no membership, no epochs, and no join barrier, so joins need zero
+ * coordination — a fresh application simply starts consuming, and its replay self-gates into causal
+ * order. The {@code parsley.coordination.*} keys are accepted but <em>inert</em> (a warning is logged
+ * when one is present); they are deleted outright — startup will then fail loudly on them — in the
+ * next release.
  *
  * <p><strong>{@link #close()}</strong> always runs the full graceful shutdown: it waits for every task's
- * causal buffer to drain through the ordinary delivery path, then — if coordination is configured —
- * permanently decommissions this instance's members (so a restart always rejoins as a fresh member and
- * waits to be re-admitted; slower than resuming as the same running member, but there is no restart/leave
- * distinction for a caller to get wrong), before stopping the underlying {@code KafkaStreams}.
+ * causal buffer to drain through the ordinary delivery path before stopping the underlying
+ * {@code KafkaStreams}.
  */
 public final class CausalStreams implements AutoCloseable {
 
@@ -58,7 +57,6 @@ public final class CausalStreams implements AutoCloseable {
 
     private final KafkaStreams kafkaStreams;
     private final ParsleyQuiesce quiesce;
-    private final @Nullable ParsleyCoordination coordination;
     // The minted id under which this instance's producer-ack registry is registered JVM-wide (D2):
     // injected into props as producer.<CONFIG_KEY> so the interceptor (producer side) and each
     // task's init (via appConfigs) resolve the same registry; unregistered at close().
@@ -80,8 +78,8 @@ public final class CausalStreams implements AutoCloseable {
      */
     public CausalStreams(CausalTopology topology, Properties props) {
         this.quiesce = new ParsleyQuiesce();
-        this.coordination = coordinationFrom(props);
-        Topology assembled = topology.assemble(props, quiesce, coordination);
+        warnOnInertCoordinationConfig(props);
+        Topology assembled = topology.assemble(props, quiesce, null);
         this.ownOutputRegistryId = registerOwnOutputTracking(topology, props);
         this.kafkaStreams = new KafkaStreams(assembled, props);
         this.applicationId = props.getProperty(StreamsConfig.APPLICATION_ID_CONFIG);
@@ -156,11 +154,25 @@ public final class CausalStreams implements AutoCloseable {
         return registryId;
     }
 
-    private static @Nullable ParsleyCoordination coordinationFrom(Properties props) {
+    /**
+     * Logs a warning when any {@code parsley.coordination.*} key is present: the coordination
+     * subsystem no longer participates in the causal protocol (the two-branch gate needs no
+     * membership — joins are coordination-free), so the keys are accepted but wire nothing. They
+     * are deleted outright — startup will then fail loudly on them — in the next release.
+     */
+    private static void warnOnInertCoordinationConfig(Properties props) {
         Properties merged = ParsleyConfig.loadProperties();
         merged.putAll(props);
-        String epochEventsTopic = ParsleyConfig.from(merged).coordinationEpochEventsTopic();
-        return epochEventsTopic == null ? null : ParsleyCoordination.create(epochEventsTopic);
+        ParsleyConfig config = ParsleyConfig.from(merged);
+        if (config.coordinationEpochEventsTopic() != null
+                || !config.coordinationDomainTopics().isEmpty()
+                || !config.coordinationMemberApps().isEmpty()) {
+            LoggerFactory.getLogger(CausalStreams.class)
+                    .warn("parsley.coordination.* configuration is inert: topology-epoch coordination "
+                            + "has been removed from the causal protocol (joins need zero coordination). "
+                            + "Delete these keys — they are removed for good, with a loud startup "
+                            + "failure, in the next release.");
+        }
     }
 
     /**
@@ -204,35 +216,29 @@ public final class CausalStreams implements AutoCloseable {
     }
 
     /**
-     * Requests an epoch transition across the currently-running nodes, evolving a running, coordinated
-     * topology through an epoch boundary.
+     * Always throws: topology-epoch coordination has been removed from the causal protocol, so there
+     * is no epoch to transition. The method survives only so a caller still compiled against it gets
+     * a clear message; it is deleted outright in the next release.
      *
-     * @throws IllegalStateException if topology-epoch coordination is not configured (see
-     *         {@code parsley.coordination.epoch-events-topic}), or no task has initialised it yet
+     * @throws IllegalStateException always
      */
     public void requestEpochTransition() {
-        if (coordination == null) {
-            throw new IllegalStateException("topology-epoch coordination is not configured — set "
-                    + "parsley.coordination.epoch-events-topic to enable it");
-        }
-        coordination.requestEpochTransition();
+        throw new IllegalStateException("topology-epoch coordination has been removed from the causal "
+                + "protocol — there are no epochs to transition; delete this call and any "
+                + "parsley.coordination.* configuration");
     }
 
     /**
      * Gracefully shuts down: waits — unbounded, no timeout — for every task's causal buffer to drain
-     * through the ordinary delivery path, then, if coordination is configured, permanently decommissions
-     * this instance's members from the epoch domain, then stops the underlying {@code KafkaStreams}, then
-     * closes the coordination runtime. Idempotent-safe to call even if {@link #start()} was never called.
+     * through the ordinary delivery path, then stops the underlying {@code KafkaStreams}.
+     * Idempotent-safe to call even if {@link #start()} was never called.
      *
      * <p>The drain wait is unbounded only while draining can actually progress: if the underlying
      * streams instance leaves {@code RUNNING}/{@code REBALANCING} (it died in {@code ERROR}, or was
      * already stopped), no task will ever deliver again, so the wait ends and shutdown proceeds — every
      * held record is changelog-backed and survives to the next start, so nothing is lost by closing an
      * already-dead instance (see {@link ParsleyQuiesce}: the drain is a stall-avoidance optimisation,
-     * not a correctness requirement). The coordination decommission honours the same liveness rule: on
-     * an instance that can no longer drain, {@link ParsleyCoordination#leave} abandons the removal
-     * (members stay in the domain, exactly as a crash would leave them) instead of hanging on a buffer
-     * no task will ever empty.
+     * not a correctness requirement).
      */
     @Override
     public void close() {
@@ -240,14 +246,8 @@ public final class CausalStreams implements AutoCloseable {
             quiesce.requestQuiesce();
             awaitDrain(quiesce, kafkaStreams::state);
         }
-        if (coordination != null) {
-            coordination.leave(() -> canStillDrain(kafkaStreams.state()));
-        }
         kafkaStreams.close();
         ParsleyOwnOutputRegistry.unregister(ownOutputRegistryId);
-        if (coordination != null) {
-            coordination.close();
-        }
     }
 
     /**
@@ -269,8 +269,8 @@ public final class CausalStreams implements AutoCloseable {
         }
     }
 
-    /** Whether tasks in {@code state} can still deliver records — the liveness rule both {@link
-     * #awaitDrain} and the coordination decommission's drain wait poll. */
+    /** Whether tasks in {@code state} can still deliver records — the liveness rule
+     * {@link #awaitDrain} polls. */
     private static boolean canStillDrain(KafkaStreams.State state) {
         return state == KafkaStreams.State.RUNNING || state == KafkaStreams.State.REBALANCING;
     }
