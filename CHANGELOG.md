@@ -29,6 +29,17 @@ All notable changes to this project are documented in this file. The format is b
   coordinates it now (correctly) sees in stamps — fail-closed, never out-of-order.
 
 ### Changed (internal)
+- **The own-output acknowledgement mechanism is validated against a real broker (T2.1).** A new
+  broker integration test, `ParsleyProducerAckMechanicsIT`, confirms the three mechanics the Phase 2
+  own-output design depends on, ahead of building it: a `ProducerInterceptor` installed purely
+  through the public `producer.interceptor.classes` config prefix reaches the exactly-once stream
+  producer and reports the exact committed `(topic, partition, offset)` of each sink send, on the
+  producer's network thread rather than the stream thread; `KafkaProducer.flush()` — the call a
+  Streams commit makes — returns only after every prior send's callback has completed, so a stamp
+  taken after a flush cannot miss an own-output coordinate; and aborting a transaction with sends
+  outstanding fails each of them with exactly one callback, so a wait fed by those callbacks is
+  always released and can fail the transaction instead of stamping with an unverified position.
+  Test-only: no main sources, public API, or wire formats change.
 - **The L2 causal-broadcast module is named: `ParsleyEngine` becomes `ParsleyCausalBroadcast`.** Third
   structural step of the three-protocol redesign (T1.2b, decisions D5 and O4). The class is the
   receive/deliver core of Birman–Schiper–Stephenson causal broadcast, so it now carries that name,
