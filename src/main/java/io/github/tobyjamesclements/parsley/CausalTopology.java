@@ -101,7 +101,7 @@ public final class CausalTopology {
      * transaction marker or aborted record. A {@code LogAndContinue} deserialization handler, or a
      * continue-mode {@code processing.exception.handler}, drops a real record <em>after</em> the consumer
      * returned it — including, for the processing handler, {@code ParsleyProcessor}'s own deliberate
-     * fail-closed throws (poison record, unreachable dependency, unresolvable clock). The bridge would then
+     * fail-closed throws (poison record, unresolvable clock). The bridge would then
      * fold that dropped offset as if it were a marker and release a dependent before its cause: a silent
      * causal-order violation, where the fail-closed default would instead stall (safe). Both handlers
      * default to the fail variant, so only an explicit misconfiguration is rejected here. A custom handler

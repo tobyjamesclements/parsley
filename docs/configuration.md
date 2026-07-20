@@ -99,9 +99,9 @@ Parsley wires a handful of Kafka Streams `Sensor`s per task, under the `stream-p
 | `records-released` | rate/total | Records released from the buffer once their dependencies were satisfied. |
 | `deserialization-errors` | rate/total | Records that failed to deserialise on the forward path. |
 | `clock-resolution-errors` | rate/total | Records whose `parsley-causal-dependencies` header could not be decoded. |
-| `unreachable-dependency-errors` | rate/total | Records naming a dependency this node has no input channel for. |
+| `deps-out-of-scope-ignored` | rate/total | Dependency coordinates on channels this node does not consume, ignored by the gate (one count per coordinate). Routine in topologies whose consumers have narrower scopes than their ancestors' stamps; a sustained unexpected rate can indicate a cross-wired deployment or a co-partitioning mistake. |
 | `buffer-depth` | gauge | Current number of records held in the causal buffer. |
 | `buffer-oldest-buffered-at-ms` | gauge | Timestamp the oldest currently-held record was buffered at. |
 
-Any non-zero rate on the three error sensors, or sustained growth in `buffer-depth`, is worth alerting
+Any non-zero rate on the two error sensors, or sustained growth in `buffer-depth`, is worth alerting
 on — see [Troubleshooting](troubleshooting.md).

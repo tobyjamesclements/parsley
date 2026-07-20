@@ -128,16 +128,15 @@ final class ParsleyVectorClock {
     /**
      * Returns a copy of this clock keeping only the coordinates for which {@code inScope} holds, or
      * {@code this} unchanged when every coordinate is kept (so the common all-in-scope case allocates
-     * nothing). Used on recorded state a processor owns — pruning a restored frontier/pending-epoch
-     * clock down to the coordinates currently in scope after a topic UUID change or scope narrowing
-     * ({@link ParsleyChannels#rescope}, which re-homes what it prunes into the carried-ancestry
-     * clock rather than dropping it) — never used to silently drop a coordinate this node
-     * merely has no channel for from an inbound record's own dependency clock: a dependency naming a
-     * coordinate outside scope is not something to silently drop, see {@link ParsleyCausalBroadcast}'s
-     * fail-closed handling of that case. The one narrower, different exception is {@link
-     * ParsleyCausalBroadcast#effectiveDependencies}/{@code onWatermark} stripping a node's own produced
-     * coordinates specifically — see {@code ParsleyCausalBroadcast#ownSinkTopics}'s Javadoc for why that is
-     * sound rather than a relaxation of this rule.
+     * nothing). Two callers, both view-only: recorded state a processor owns — pruning a restored
+     * frontier clock down to the coordinates currently in scope after a topic UUID change or scope
+     * narrowing ({@link ParsleyChannels#rescope}, which re-homes what it prunes into the
+     * carried-ancestry clock rather than dropping it) — and the gate's view of an inbound
+     * dependency clock ({@code ParsleyCausalBroadcast#consumedDependencies}), whose restriction to
+     * consumed coordinates <em>is</em> the D1 ignore branch: sound by I2 + I9 (a consumed causal
+     * ancestor is always claimed directly in the same clock), counted by the out-of-scope-ignored
+     * metric, and never applied to the clock that is folded into channel state or the outbound
+     * stamp (I9: the gate may ignore; the merge may not).
      */
     ParsleyVectorClock retaining(CoordinatePredicate inScope) {
         boolean anyDropped = false;

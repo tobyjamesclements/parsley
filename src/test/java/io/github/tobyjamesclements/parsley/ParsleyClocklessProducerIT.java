@@ -2,17 +2,17 @@ package io.github.tobyjamesclements.parsley;
 
 import org.apache.kafka.clients.admin.Admin;
 import org.apache.kafka.clients.admin.NewTopic;
-import org.apache.kafka.clients.admin.OffsetSpec;
 import org.apache.kafka.clients.consumer.ConsumerConfig;
+import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.apache.kafka.clients.consumer.KafkaConsumer;
 import org.apache.kafka.clients.producer.KafkaProducer;
 import org.apache.kafka.clients.producer.ProducerConfig;
 import org.apache.kafka.clients.producer.ProducerRecord;
-import org.apache.kafka.common.TopicPartition;
+import org.apache.kafka.common.Uuid;
+import org.apache.kafka.common.header.Header;
 import org.apache.kafka.common.serialization.Serdes;
 import org.apache.kafka.common.serialization.StringDeserializer;
 import org.apache.kafka.common.serialization.StringSerializer;
-import org.apache.kafka.streams.KafkaStreams;
 import org.apache.kafka.streams.StreamsConfig;
 import org.apache.kafka.streams.processor.api.Processor;
 import org.apache.kafka.streams.processor.api.ProcessorContext;
@@ -26,6 +26,7 @@ import org.testcontainers.utility.DockerImageName;
 
 import java.time.Duration;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Properties;
@@ -34,93 +35,81 @@ import java.util.UUID;
 
 import static org.awaitility.Awaitility.await;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * The tightest topology cycle against a real broker (T2.3 IT c): an app that consumes its own sink.
- * With the stamp-side own-sink strip gone (T2.3), relay settling rests entirely on the I6
- * knowledge-based rule — a null message is relayed only when its carried clock teaches the node
- * something outside {@code frontier ∪ channel clocks ∪ ownOutputs}. A reflected own coordinate is
- * dominated by {@code ownOutputs}, so the cycle must quiesce: after the input stops, the sink topic
- * must stop growing rather than ping-pong markers forever.
+ * A plain, clockless Kafka producer on a consumed topic (T3.1 IT d): a producer that stamps
+ * nothing claims nothing, so its records are causally minimal by definition and deliver
+ * immediately — no declaration, no "external source" registration, no coordination (E3; the v5
+ * declared-external-source concept dissolved with D7). The member stamps the clockless records'
+ * coordinates on consumption, so causal custody begins at the first Parsley hop exactly as if
+ * the source had participated from the start.
  */
 @Testcontainers(disabledWithoutDocker = true)
-class ParsleyCyclicQuiesceIT {
+class ParsleyClocklessProducerIT {
 
     @Container
     private final KafkaContainer kafka =
             new KafkaContainer(DockerImageName.parse("apache/kafka:3.7.0"));
 
     private static final String T1 = "t1";
-    private static final String LOOP = "loop";
+    private static final String OUT = "out";
 
     /**
-     * After one input record flows through the cycle (T1 → loop → the app's own gate again), the
-     * loop topic's end offset must stabilise — the I6 relay settles once nothing new is being
-     * learned — and the app must still be running (the cycle neither crashes nor spins).
+     * Two records produced with no {@code parsley-causal-dependencies} header at all must deliver
+     * to the delegate immediately and in order, and the derived outputs' wire clocks must claim
+     * the clockless records' exact input coordinates — stamped on consumption.
      *
-     * Asserts the business record traverses the loop, the loop end offset then holds still for a
-     * sustained window, and the Streams instance is still RUNNING at the end.
+     * Asserts both derivations arrive in input order and the second output's clock claims the
+     * second input's coordinate (which offset-prefix dominance makes a claim on the first too).
      */
     @Test
-    void ownSinkCycleQuiescesAfterTheInputStops() throws Exception {
+    void clocklessRecordsDeliverImmediatelyAndAreStampedOnConsumption() throws Exception {
         String bootstrap = kafka.getBootstrapServers();
-        createTopics(bootstrap, T1, LOOP);
+        createTopics(bootstrap, T1, OUT);
+        Uuid t1Id = topicId(bootstrap, T1);
 
         CausalTopology topology = new CausalStreamsBuilder()
-                .stream(List.of(T1, LOOP), Serdes.String(), Serdes.String())
-                .process(loopingProcessor())
-                .to(LOOP, Serdes.String(), Serdes.String())
+                .stream(List.of(T1), Serdes.String(), Serdes.String())
+                .process(prefixingProcessor("d:"))
+                .to(OUT, Serdes.String(), Serdes.String())
                 .build();
 
         try (CausalStreams streams = new CausalStreams(topology, streamsConfig(bootstrap))) {
             streams.start();
 
             try (KafkaProducer<String, String> input = new KafkaProducer<>(producerConfig(bootstrap))) {
-                input.send(CausalDependencies.empty().stamp(new ProducerRecord<>(T1, "k", "hello"))).get();
+                // Deliberately NOT CausalDependencies.empty().stamp(...): no clock header at all.
+                input.send(new ProducerRecord<>(T1, "k", "one")).get();
+                input.send(new ProducerRecord<>(T1, "k", "two")).get();
             }
 
-            // The business record must traverse the cycle: T1's delivery forwards s:hello onto the
-            // loop topic, and the app must then deliver its own sink record (a delay, never a
-            // deadlock — the self-consumed sink's claims are genuinely gated by the consumed
-            // branch, and reflected claims are ownOutputs-known at relay).
-            List<String> loopValues = new ArrayList<>();
+            List<ConsumerRecord<String, String>> outputs = new ArrayList<>();
             try (KafkaConsumer<String, String> consumer = new KafkaConsumer<>(consumerConfig(bootstrap))) {
-                consumer.subscribe(List.of(LOOP));
+                consumer.subscribe(List.of(OUT));
                 await().atMost(Duration.ofSeconds(90)).until(() -> {
                     consumer.poll(Duration.ofMillis(500)).forEach(record -> {
-                        if (record.value() != null && record.headers().lastHeader(ParsleyHeader.WATERMARK) == null) {
-                            loopValues.add(record.value());
+                        if (isBusinessRecord(record)) {
+                            outputs.add(record);
                         }
                     });
-                    return loopValues.contains("s:hello");
+                    return outputs.size() >= 2;
                 });
             }
-            assertEquals(List.of("s:hello"), loopValues,
-                    "exactly one business record must traverse the loop — the cycle must not "
-                            + "re-derive or duplicate it");
 
-            // Quiescence: the loop topic's end offset must hold still for a sustained window once
-            // the marker exchange settles. A ping-ponging relay would grow it on every commit.
-            await().atMost(Duration.ofSeconds(120)).until(() -> {
-                long before = endOffset(bootstrap, LOOP);
-                Thread.sleep(5_000);
-                return endOffset(bootstrap, LOOP) == before;
-            });
-
-            assertTrue(streams.state() == KafkaStreams.State.RUNNING,
-                    "the cyclic app must still be RUNNING after quiescing — settling must come "
-                            + "from the I6 relay rule, never from a crash");
+            assertEquals(List.of("d:one", "d:two"),
+                    List.of(outputs.get(0).value(), outputs.get(1).value()),
+                    "clockless records must deliver immediately and in input order — causally "
+                            + "minimal, never held and never failed");
+            assertTrue(wireClock(outputs.get(1)).offsetFor(t1Id, 0) >= 1,
+                    "the second derivation's clock must claim the clockless input's coordinate "
+                            + "t1@1 — custody begins at the first Parsley hop");
         }
     }
 
-    /**
-     * The cyclic delegate: a T1 record forwards {@code s:<value>} onto the loop sink; a loop
-     * record — the app's own sink coming back around — forwards nothing (a non-emitting delivery,
-     * so the processor advertises progress with a null message instead, exercising marker relay
-     * around the cycle).
-     */
-    private static ProcessorSupplier<String, String, String, String> loopingProcessor() {
+    /** A delegate that forwards every delivery with {@code prefix} prepended to its value. */
+    private static ProcessorSupplier<String, String, String, String> prefixingProcessor(String prefix) {
         return () -> new Processor<>() {
             private ProcessorContext<String, String> ctx;
 
@@ -131,24 +120,31 @@ class ParsleyCyclicQuiesceIT {
 
             @Override
             public void process(Record<String, String> record) {
-                if (T1.equals(ctx.recordMetadata().orElseThrow().topic())) {
-                    ctx.forward(record.withValue("s:" + record.value()));
-                }
+                ctx.forward(record.withValue(prefix + record.value()));
             }
         };
     }
 
-    private static long endOffset(String bootstrap, String topic) throws Exception {
+    /** A record with a value and no Parsley marker header — a business record, not a null message. */
+    private static boolean isBusinessRecord(ConsumerRecord<String, String> record) {
+        return record.value() != null && record.headers().lastHeader(ParsleyHeader.WATERMARK) == null;
+    }
+
+    private static ParsleyVectorClock wireClock(ConsumerRecord<String, String> record) {
+        Header header = record.headers().lastHeader(ParsleyHeader.CAUSAL_DEPENDENCIES);
+        assertNotNull(header, "every stamped business record must carry the causal-dependencies header");
+        return ParsleyVectorClock.fromBytes(header.value());
+    }
+
+    private static Uuid topicId(String bootstrap, String topic) throws Exception {
         try (Admin admin = Admin.create(Map.of("bootstrap.servers", bootstrap))) {
-            TopicPartition tp = new TopicPartition(topic, 0);
-            return admin.listOffsets(Map.of(tp, OffsetSpec.latest()))
-                    .partitionResult(tp).get().offset();
+            return admin.describeTopics(List.of(topic)).allTopicNames().get().get(topic).topicId();
         }
     }
 
     private static Properties streamsConfig(String bootstrap) {
         Properties props = new Properties();
-        props.put(StreamsConfig.APPLICATION_ID_CONFIG, "cyclic-quiesce-" + UUID.randomUUID());
+        props.put(StreamsConfig.APPLICATION_ID_CONFIG, "clockless-" + UUID.randomUUID());
         props.put(StreamsConfig.BOOTSTRAP_SERVERS_CONFIG, bootstrap);
         props.put(StreamsConfig.DEFAULT_KEY_SERDE_CLASS_CONFIG, Serdes.String().getClass().getName());
         props.put(StreamsConfig.DEFAULT_VALUE_SERDE_CLASS_CONFIG, Serdes.String().getClass().getName());
@@ -167,7 +163,7 @@ class ParsleyCyclicQuiesceIT {
     private static Map<String, Object> consumerConfig(String bootstrap) {
         return Map.of(
                 ConsumerConfig.BOOTSTRAP_SERVERS_CONFIG, bootstrap,
-                ConsumerConfig.GROUP_ID_CONFIG, "loop-observer-" + UUID.randomUUID(),
+                ConsumerConfig.GROUP_ID_CONFIG, "observer-" + UUID.randomUUID(),
                 ConsumerConfig.AUTO_OFFSET_RESET_CONFIG, "earliest",
                 ConsumerConfig.ISOLATION_LEVEL_CONFIG, "read_committed",
                 ConsumerConfig.KEY_DESERIALIZER_CLASS_CONFIG, StringDeserializer.class.getName(),
@@ -176,11 +172,11 @@ class ParsleyCyclicQuiesceIT {
 
     private static void createTopics(String bootstrap, String... topics) throws Exception {
         try (Admin admin = Admin.create(Map.of("bootstrap.servers", bootstrap))) {
-            List<NewTopic> newTopics = new ArrayList<>();
+            Set<NewTopic> newTopics = new HashSet<>();
             for (String topic : topics) {
                 newTopics.add(new NewTopic(topic, 1, (short) 1));
             }
-            admin.createTopics(Set.copyOf(newTopics)).all().get();
+            admin.createTopics(newTopics).all().get();
         }
     }
 }

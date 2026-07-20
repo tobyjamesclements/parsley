@@ -24,17 +24,18 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  *   A {t1} → t2          D {t1} → t2      (two producers sharing sink t2: interleaved stamps on
  *                                          one partition are how out-of-order delivery above a
  *                                          contiguous-frontier gap arises downstream)
- *   B {t1,t2,t3} → t3                     (self-consuming cycle: reflection through the interim
- *                                          own-sink strip, relay quiescence)
+ *   B {t1,t2,t3} → t3                     (self-consuming cycle: reflected own-sink claims through
+ *                                          the consumed branch, relay quiescence)
  *   C {t1,t2,t3} → t4
  *   W {t1,t2,t3,t4} → t5 (silent delegate: t5 carries only null messages)
  *   N {t5} → t6          (consumes only null messages — its stamps must still carry t1..t5
  *                          ancestry it never consumed: the I9 custody chain, gate-free)
  * </pre>
  *
- * <p>INTERIM (until T3.1): every business consumer's scope covers all coordinates its records can
- * claim (the sim's dep-cover guard states this once); differing-scope <em>business</em> topologies
- * join these tests when the two-branch gate lands.
+ * <p>The chain topology (see {@link #differingScopeChain}) adds business consumers whose scopes do
+ * <em>not</em> cover the coordinates their records' clocks claim — each hop consumes only its
+ * predecessor's sink, so upstream claims land in the gate's ignore branch (D1) at every node, and
+ * the same continuous properties then certify the ignore branch end to end.
  */
 class ParsleyStampInvariantPropertyTest {
 
@@ -162,6 +163,68 @@ class ParsleyStampInvariantPropertyTest {
                     "[seed " + seed + "] N's stamp must claim t1 ancestry it learned only from "
                             + "carried clocks on t5 — the merge may never strip unconsumed channels (I9)");
         }
+    }
+
+    /**
+     * The T3.1 differing-scope chain: no consumer past A consumes t1, so every record's clock
+     * claims coordinates its receiver has no channel for — exactly the shape the retired I7
+     * fail-fast rejected. K's two consumed channels keep the consumed branch genuinely exercised
+     * beside the ignore branch: a t3 record (from A2, whose stamps claim t2 ancestry) can arrive
+     * at K before its t2 cause, so K holds it — while the same clock's t1 claims are ignored. L
+     * consumes only t7 and ignores everything upstream (claims on t1, t2, t3 alike).
+     */
+    private static ParsleyTopologySim differingScopeChain(long seed) {
+        ParsleyTopologySim sim = new ParsleyTopologySim(seed);
+        sim.externalTopic("t1");
+        sim.node("A", Set.of("t1"), List.of("t2"), 0.8);
+        sim.node("A2", Set.of("t2"), List.of("t3"), 0.8);
+        sim.node("K", Set.of("t2", "t3"), List.of("t7"), 0.8);
+        sim.node("L", Set.of("t7"), List.of("t8"), 0.8);
+        return sim;
+    }
+
+    /**
+     * The two-branch gate's ignore branch under the full property sweep (T3.1, D1): a chain whose
+     * business consumers do not consume their ancestors' topics. Every upstream claim a record
+     * carries lands in the ignore branch at its consumer, yet all of the sim's continuous
+     * invariants — I2 both forms, I3, I9's custody chain, and the ground-truth causal delivery
+     * order — must hold exactly as in a fully-covering topology, and every seed must still drain
+     * to empty hold-back queues (an ignore that wrongly gated would strand records; one that
+     * wrongly satisfied a consumed dependency would break the order check at K).
+     *
+     * Asserts every seed drains, the origin t1@0 genuinely traverses the chain to L in the sweep,
+     * L's stamp then claims the origin it never consumed (I9 through ignoring consumers), and
+     * records were genuinely held at K (the consumed branch ran beside the ignore branch).
+     */
+    @Test
+    void differingScopeChainCertifiesTheIgnoreBranchEndToEnd() {
+        int held = 0;
+        int originsReachedL = 0;
+        for (long seed = 9000; seed < 9000 + SEEDS; seed++) {
+            ParsleyTopologySim sim = differingScopeChain(seed);
+            sim.produceExternal("t1"); // the tagged origin: t1@0, before any random scheduling
+            sim.run(STEPS);
+            for (String node : List.of("A", "A2", "K", "L")) {
+                assertEquals(0, sim.nodeNamed(node).core.bufferSize(),
+                        "[seed " + seed + "] node " + node + " must end fully drained — an ignored "
+                                + "coordinate must never strand a record");
+            }
+            ParsleyTopologySim.SimCoord origin = new ParsleyTopologySim.SimCoord(sim.topicId("t1"), 0);
+            ParsleyTopologySim.SimNode l = sim.nodeNamed("L");
+            if (l.truePast.contains(origin)) {
+                originsReachedL++;
+                assertTrue(l.channels.stamp().offsetFor(sim.topicId("t1"), 0) >= 0,
+                        "[seed " + seed + "] L's stamp must claim the origin t1@0 it never consumed "
+                                + "— the I9 custody chain through ignoring consumers");
+            }
+            held += sim.recordsHeld;
+        }
+        assertTrue(originsReachedL > 0,
+                "vacuity guard: the origin must traverse the full differing-scope chain to L in at "
+                        + "least one seed for the custody property to mean anything");
+        assertTrue(held > 0,
+                "vacuity guard: the sweep must genuinely hold records at K — the consumed branch "
+                        + "has to be exercised alongside the ignore branch");
     }
 
     /**

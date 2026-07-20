@@ -49,11 +49,10 @@ import static org.junit.jupiter.api.Assertions.assertNotNull;
  * partition.
  *
  * <p>The downstream half of the A7 scenario — a Parsley consumer of the funnel sink gating the
- * second output's descendants on the first output — cannot run until T3.1: the cross-partition
- * claim this test proves is exactly what the <em>interim</em> fail-fast gate (I7, retired at T3.1)
- * rejects as an unreachable coordinate at a task that owns only the other partition. T3.1's
- * two-branch-gate ITs pick that half up; this is the same recorded interim-consequence class as
- * T1.3's re-homed-stamp note.
+ * second output's descendants on the first output — is proven by
+ * {@link ParsleyFunnelDeliveryOrderIT}: the cross-partition claim this test puts on the wire is
+ * ignored (D1) and carried (I9) at a task that owns only the other partition, and genuinely gated
+ * where both partitions' derivatives converge.
  */
 @Testcontainers(disabledWithoutDocker = true)
 class ParsleyFunnelCrossingWaitIT {

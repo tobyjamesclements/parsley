@@ -99,9 +99,35 @@ All notable changes to this project are documented in this file. The format is b
   `replays-skipped` metric instead of being forwarded to the delegate again. The pre-start offset
   seeder now permits the added-input redeploy — a topic this group has never committed on, while
   another source topic is committed, seeds to log-start (the skip guard makes the replay safe);
-  every other surviving-state refusal is unchanged. Interim note, until T3.1's two-branch gate
-  lands: a downstream Parsley app that does not consume a removed topic fails fast on the re-homed
-  coordinates it now (correctly) sees in stamps — fail-closed, never out-of-order.
+  every other surviving-state refusal is unchanged. (The interim consequence this entry originally
+  noted — a downstream app failing fast on re-homed coordinates it does not consume — is resolved
+  in this same release by the two-branch gate; see Changed.)
+
+### Changed
+- **The delivery gate is now the two-branch dispatch: consumed coordinates gate, everything else
+  is ignored (T3.1, decision D1).** A dependency on a coordinate this node consumes (an input
+  channel of the task, on the partition it owns) must be covered by the node's own contiguous
+  delivered frontier, exactly as before. A dependency on any other coordinate — an unconsumed
+  topic, a partition another task owns, a reflected claim on the node's own sink — is now
+  *ignored*, unconditionally, instead of failing the task:
+  `ParsleyUnreachableDependencyException` and the fail-fast dispatch (invariant I7) are removed,
+  and the `unreachable-dependency-errors` sensor is replaced by `deps-out-of-scope-ignored`
+  (one count per ignored coordinate). Ignoring is sound by the transitivity theorem the Phase 2
+  work certified: with transitively complete stamps (I2) carried by unconditional merges (I9),
+  any consumed causal ancestor of a record is claimed directly in that record's own clock, so an
+  unconsumed entry only ever proxies ancestry the clock already states — ordering observable at
+  the node is unchanged, while topologies the fail-fast made impossible (independent sources
+  joined across an unconsumed intermediate topic, cross-partition funnel claims, uncoordinated
+  cycles) now just work. The interim gate-side own-sink strip is deleted with it: a self-consumed
+  sink's claims are genuinely gated (closing the shared-sink blindspot, where a claim about
+  *another producer's* record on a shared sink was vacuously satisfied), and an unconsumed sink's
+  reflected claims fall to the ignore branch. Cross-partition references on a consumed topic — a
+  co-partitioning misconfiguration signal — shift from hard runtime failure to startup validation
+  (`parsley.topology.validation`, unchanged) plus the ignore metric. New broker ITs cover the
+  unconsumed-intermediate join, the shared-sink ordering fix, a two-app cycle with zero
+  coordination, clockless producers (causally minimal by definition — no declaration needed), and
+  the funnel's deferred delivery-order half; the property harness drops its interim fail-fast
+  guards and adds a differing-scope chain sweep that certifies the ignore branch end to end.
 
 ### Changed (internal)
 - **The node tracks its own acknowledged output positions: the `ownOutputs` clock (T2.2, decision

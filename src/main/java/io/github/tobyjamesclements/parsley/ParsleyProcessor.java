@@ -579,9 +579,11 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
             }
         }
 
-        // This stage's own sink topics — never a delivery-scope concern (inScope, above), but fed to
-        // the core so it can strip a node's own produced coordinates from any inbound dependency or
-        // marker clock; see ParsleyCausalBroadcast's Javadoc on ownSinkTopics for why this is sound.
+        // This stage's own sink topics — never a delivery-scope concern (inScope, above), but fed
+        // to the core for the I8 reflected-claim diagnostic: an inbound claim on an own-sink
+        // coordinate above the ownOutputs clock is worth seeing (a stale own-output view or an
+        // untruthful peer stamp), never worth failing over. The gate treats reflected claims like
+        // any other dependency (consumed → gated on local delivery; unconsumed → ignored, D1).
         Set<Uuid> ownSinkTopicIds = Set.copyOf(sinkTopicUuids.values());
         ParsleyVectorClock.CoordinatePredicate ownSinkTopics = (topicId, partition) -> ownSinkTopicIds.contains(topicId);
 
@@ -1366,20 +1368,20 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
     /**
      * Best-effort, per-topic UUID resolution over {@link #sinkTopics} — unlike {@link
      * #additionalTopicInfo}, this always runs, never gated by {@code parsley.topology.validation}: it
-     * feeds {@link #causalBroadcast}'s own-coordinate stripping (see {@link ParsleyCausalBroadcast}'s Javadoc on {@code
-     * ownSinkTopics}) and the {@code ownOutputs} fold's name → UUID translation (D2) — correctness
+     * feeds the {@code ownOutputs} fold's name → UUID translation (D2) and {@link
+     * #causalBroadcast}'s I8 reflected-claim diagnostic — correctness and observability
      * mechanisms, not topology-misconfiguration lints. Also captures each resolved sink's
      * per-partition end offsets ({@link #sinkEndOffsets}) in the same admin session, for the
      * {@code ownOutputs} init-time seed.
      *
      * <p>A sink that does not exist yet is skipped, and — because this resolution runs once, at
-     * {@code init()}, and is never re-attempted — own-coordinate stripping and the ownOutputs fold
-     * for that topic stay off for this task instance's whole lifetime, until the next restart
-     * re-runs {@code init()}. In a topology cycle that means a dependency reflecting this node's
-     * own not-yet-resolved sink back at it fails the task fast as "unreachable" (fail-closed,
-     * recoverable: the restart re-resolves the now-existing sink) rather than being wrongly
-     * stripped. Nothing can depend on the sink before its first record exists, so the exposure
-     * starts only at first produce and ends at the next init.
+     * {@code init()}, and is never re-attempted — the ownOutputs fold and the reflected-claim
+     * diagnostic for that topic stay off for this task instance's whole lifetime, until the next
+     * restart re-runs {@code init()}. Delivery safety never depends on this resolution: a
+     * dependency reflecting the not-yet-resolved sink is handled by the ordinary two-branch gate
+     * (consumed → gated on local delivery; unconsumed → ignored, D1). Nothing can depend on the
+     * sink before its first record exists, so the exposure starts only at first produce and ends
+     * at the next init.
      */
     private Map<String, Uuid> resolveSinkTopicUuids(ParsleyTopicAdmin admin) {
         Map<String, Uuid> ids = new HashMap<>();
@@ -1390,8 +1392,8 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
                 id = admin.topicIds(List.of(topic)).get(topic);
             } catch (Exception e) {
                 log.warn("Could not resolve topic id for sink topic '{}' (it may not exist yet); "
-                        + "own-coordinate stripping and own-output tracking for it stay off until "
-                        + "the next restart re-resolves it", topic, e);
+                        + "own-output tracking and the reflected-claim diagnostic for it stay off "
+                        + "until the next restart re-resolves it", topic, e);
             }
             if (id == null) {
                 continue;

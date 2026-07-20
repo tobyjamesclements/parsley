@@ -76,21 +76,19 @@ produced the undecodable header, then restart.
 
 ## A record depends on a coordinate this node has no input channel for
 
-Parsley cannot silently treat an unreachable dependency as satisfied — it can only prove it has no way
-to check it, never that the coordinate is genuinely irrelevant. A dependency naming an undeclared
-topic, or a partition a different task instance owns, fails the task fast:
+This is not a failure: the gate ignores a dependency on a coordinate this node does not consume —
+an undeclared topic, or a partition a different task instance owns — and counts each ignored
+coordinate on the `deps-out-of-scope-ignored` sensor. Ignoring is sound because stamps are
+transitively complete and merged unconditionally: any consumed causal ancestor of a record is
+claimed directly in that record's own clock, so the unconsumed entry only proxies ancestry the
+clock already states.
 
-```
-orders-0 @42 depends on a coordinate this node has no channel for; failing fast (fail-closed). The
-record was not forwarded and is reprocessed on restart.
-```
-
-This usually means the topology is missing a subscription: either a genuine bug (the producer stamped
-a dependency on a topic this stage never registered), or, under topology-epoch coordination, a stage
-that does not cover the full coordinated domain — see
-[`parsley.coordination.domain-topics`](configuration.md) and
-[Evolving a running topology](streams.md#evolving-a-running-topology) for wiring a passthrough source
-to cover it without a redundant business subscription.
+Producers stamp a clock spanning everything they consume, so a downstream stage with a narrower
+scope sees out-of-scope coordinates routinely — a steady rate on the sensor is normal there. A
+sustained rate where you expected full coverage is worth investigating: it can indicate a missing
+subscription, a co-partitioning mistake (also flagged by
+[`parsley.topology.validation`](configuration.md)), or two deployments unintentionally sharing a
+topic.
 
 ---
 

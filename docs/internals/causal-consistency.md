@@ -124,11 +124,13 @@ subscription — an effect delivered before its cause, to a processor subscribed
 checks the local frontier exclusively, and an advertised claim is only ever *carried* (in the
 outbound stamp) for downstream nodes to verify against their own frontiers in turn.
 
-What the model still requires is that every coordinate a node's messages could ever depend on be
-consumed by that node — see the [topology contract](#the-topology-contract). That is both a liveness
-requirement (this node must eventually deliver the fact locally) and the reason the fail-closed
-unreachable-dependency check exists (a coordinate this node never consumes could never be proven
-here at all).
+A dependency on a coordinate this node does not consume at all is *ignored* by the gate, and the
+ignore is counted by the `deps-out-of-scope-ignored` metric. That is sound, not vacuous: stamps are
+transitively complete and merged unconditionally, so any consumed causal ancestor of a record is
+claimed directly in that record's own clock — an unconsumed entry only ever proxies ancestry the
+clock already states, and ignoring it loses no ordering observable at this node. (The historical
+fail-fast on such coordinates added no safety and made joining a running topology need
+coordination; it is retired.)
 
 ### The topology contract
 

@@ -57,13 +57,12 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  *       stamp claims at least all acked sends.</li>
  * </ul>
  *
- * <p><strong>INTERIM (until T3.1, D1):</strong> the fail-fast gate ({@code I7}) rejects any
- * business record whose clock names a topic outside the receiving node's consumption scope, so
- * business-record topologies must keep every consumer's scope covering all upstream coordinates
- * ({@link #assertInterimDepCover}). Unconsumed-channel custody (I9) is exercised through the two
- * gate-free paths that exist today: null-message carried clocks and rescope carried ancestry.
- * When T3.1 lands the two-branch gate, delete {@link #assertInterimDepCover} and add topologies
- * whose business consumers have genuinely differing scopes (T3.1 task list).
+ * <p>Business consumers' scopes may genuinely differ (T3.1, D1): a record whose clock names
+ * topics outside the receiving node's consumption scope is handled by the two-branch gate —
+ * consumed coordinates gate on the node's own frontier, everything else is ignored — so
+ * differing-scope chains exercise the ignore branch end to end, and unconsumed-channel custody
+ * (I9) is additionally exercised through null-message carried clocks and rescope carried
+ * ancestry.
  *
  * <p>Deliberate simplifications, each an explicit non-goal here: restarts are clean (pending sends
  * ack before the store reconstruct — mid-transaction crash tears are broker-IT territory,
@@ -147,6 +146,12 @@ final class ParsleyTopologySim {
         final Set<SimCoord> ownBusinessSends = new HashSet<>();
         ParsleyVectorClock obligation = ParsleyVectorClock.empty();
         ParsleyVectorClock lastStamp = ParsleyVectorClock.empty();
+        // The frontier as of the most recent (re)start: everything at or below it is causal past
+        // this node has either genuinely delivered (also in `delivered`) or deliberately skipped —
+        // a scope-growth seed's prefix (A5, "skip what you already ignored/claimed"). The
+        // ground-truth order check exempts causes at or below it: skipped past is never
+        // re-entered, so its absence from `delivered` is by design, not a reorder.
+        ParsleyVectorClock frontierAtStart = ParsleyVectorClock.empty();
         final Map<String, List<Long>> deliveredOffsetsByTopic = new HashMap<>();
         int carriedClocksFolded;
 
@@ -188,6 +193,7 @@ final class ParsleyTopologySim {
                     ParsleyMetrics.NOOP, () -> ++simTimeMs,
                     (topicId, partition) -> partition == PARTITION && inputUuids.contains(topicId),
                     (topicId, partition) -> sinkUuids.contains(topicId));
+            frontierAtStart = channels.frontier();
         }
 
         boolean hasPollableInput() {
@@ -369,7 +375,6 @@ final class ParsleyTopologySim {
     // --- the receive paths ---------------------------------------------------------------------
 
     private void deliverBusiness(SimNode node, SimRecord record) {
-        assertInterimDepCover(node, record);
         ParsleyVectorClock completenessBefore = node.core.completeness();
         ParsleyCausalBroadcast.Outcome<String, String> outcome = node.core.receive(new ParsleyMessage<>(
                 record.topic(), record.topicId(), PARTITION, record.offset(), 0L,
@@ -429,13 +434,13 @@ final class ParsleyTopologySim {
 
     /**
      * The end-to-end no-effect-before-cause check: every consumed-topic coordinate in the true
-     * history of a record being delivered must already have been delivered here.
-     *
-     * <p>INTERIM (until T3.1): coordinates on a topic that is both this node's input and its own
-     * sink are exempt — the interim gate-side own-sink strip vacuously satisfies a self-consumer's
-     * claims about its own sink, so a cyclic node can see its later own record before its earlier
-     * one until the two-branch gate replaces the strip (the strip's deletion is T3.1's task; this
-     * exemption dies with it).
+     * history of a record being delivered must already have been delivered here — own-sink topics
+     * this node also consumes included (the two-branch gate genuinely gates a self-consumer's
+     * claims about its own sink; the interim strip that once vacuously satisfied them died at
+     * T3.1). Causes at or below the node's frontier as of its most recent (re)start are exempt:
+     * that prefix is causal past the node either delivered in an earlier incarnation (then it is
+     * in {@code delivered} anyway) or deliberately skipped at a scope-growth seed (A5) — skipped
+     * past is never re-entered, so its absence from {@code delivered} is by design.
      */
     private void assertCausalDeliveryOrder(SimNode node, SimRecord record) {
         for (SimCoord cause : record.causalHistory()) {
@@ -443,8 +448,8 @@ final class ParsleyTopologySim {
             if (!node.inputs.contains(causeTopic)) {
                 continue;
             }
-            if (node.sinks.contains(causeTopic)) {
-                continue; // INTERIM own-sink strip exemption — see the method Javadoc.
+            if (cause.offset() <= node.frontierAtStart.offsetFor(cause.topicId(), PARTITION)) {
+                continue; // delivered-or-skipped causal past as of the last (re)start — see Javadoc.
             }
             assertTrue(node.delivered.contains(cause),
                     runLabel + node.name + ": delivered " + record.topic() + "@" + record.offset()
@@ -523,25 +528,6 @@ final class ParsleyTopologySim {
     }
 
     // --- assertions and helpers ----------------------------------------------------------------
-
-    /**
-     * INTERIM (until T3.1, D1): the I7 fail-fast gate rejects any business record whose clock
-     * names a topic outside the receiving node's scope, so the sim's business topologies must keep
-     * every consumer's scope covering every claimable upstream coordinate (own-sink claims are
-     * covered by the interim gate-side strip). This method turns a topology mistake into a clear
-     * failure at the sim layer instead of a {@code ParsleyUnreachableDependencyException} deep in
-     * the gate. Delete it when T3.1's two-branch gate lands, and add differing-scope business
-     * topologies to the property tests (tracked on T3.1's task list).
-     */
-    private void assertInterimDepCover(SimNode node, SimRecord record) {
-        record.stamp().forEach((topicId, partition, offset) -> {
-            String claimed = topicNamesById.get(topicId);
-            assertTrue(node.inputs.contains(claimed) || node.sinks.contains(claimed),
-                    runLabel + "INTERIM topology bug (until T3.1): node " + node.name + " consumes "
-                            + record.topic() + " whose records claim " + claimed
-                            + ", outside its scope — the interim I7 gate would fail fast");
-        });
-    }
 
     private void assertClockCovers(ParsleyVectorClock stamp, Set<SimCoord> coords, String message) {
         for (SimCoord coord : coords) {

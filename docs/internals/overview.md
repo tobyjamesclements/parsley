@@ -63,7 +63,8 @@ Causal processor (Streams)
                  satisfied     -> advance frontier, drain cascade
                  unsatisfied   -> buffer (StoreBackedBufferStore) + index (StoreBackedCandidateIndex)
                  no header     -> trivially satisfied (empty dependencies)
-                 unreachable   -> no channel for this coordinate at all -> fail the task fast
+                 unconsumed    -> no channel for this coordinate here -> ignored, with a metric
+                                  (consumed ancestry is claimed directly by the same clock)
     -> deliver: user processor receives records via ParsleyProcessorContext
                 forwarded records carry the node's completeness frontier
                 an input that emits no business record -> a protocol watermark instead

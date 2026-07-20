@@ -41,10 +41,19 @@ interface ParsleyMetrics {
     void recordClockResolutionError();
 
     /**
-     * A record's dependencies named a coordinate this node has no input channel for — the task fails
-     * fast. This counts the occurrence.
+     * A received record's dependency clock named {@code coordinates} coordinate(s) this node does
+     * not consume — the gate's ignore branch (D1). Ignoring is unconditional and sound: with
+     * transitively complete stamps (I2) carried by unconditional merges (I9), any consumed causal
+     * ancestor of the record is claimed directly in the same clock, so an unconsumed entry only
+     * ever proxies ancestry the clock already states. Counted for observability — this replaces
+     * the retired I7 fail-fast (D7). Sustained counts are routine in topologies whose consumers
+     * have narrower scopes than their ancestors' stamps; the sensor exists so a genuinely
+     * unexpected out-of-scope flow (a cross-wired deployment, a co-partitioning mistake a strict
+     * startup validation would also flag) is visible without log-scraping.
+     *
+     * @param coordinates the number of ignored coordinates on this record's clock
      */
-    void recordUnreachableDependencyError();
+    void recordOutOfScopeIgnored(int coordinates);
 
     /**
      * A received record's offset was already delivered here (at or below the contiguous frontier, or
@@ -92,7 +101,7 @@ interface ParsleyMetrics {
         @Override public void recordReleased(int c) {}
         @Override public void recordDeserializationError() {}
         @Override public void recordClockResolutionError() {}
-        @Override public void recordUnreachableDependencyError() {}
+        @Override public void recordOutOfScopeIgnored(int coordinates) {}
         @Override public void recordReplaySkipped() {}
         @Override public void recordReflectedClaimAboveOwnOutputs() {}
         @Override public void reportHeldAboveHighestReceived(int count) {}
@@ -124,7 +133,7 @@ interface ParsleyMetrics {
         Sensor released  = sm.addRateTotalSensor("parsley", taskId, "records-released",  Sensor.RecordingLevel.INFO);
         Sensor deserErr  = sm.addRateTotalSensor("parsley", taskId, "deserialization-errors", Sensor.RecordingLevel.INFO);
         Sensor clockResErr = sm.addRateTotalSensor("parsley", taskId, "clock-resolution-errors", Sensor.RecordingLevel.INFO);
-        Sensor unreachableDepErr = sm.addRateTotalSensor("parsley", taskId, "unreachable-dependency-errors",
+        Sensor outOfScopeIgnored = sm.addRateTotalSensor("parsley", taskId, "deps-out-of-scope-ignored",
                 Sensor.RecordingLevel.INFO);
         Sensor replaySkipped = sm.addRateTotalSensor("parsley", taskId, "replays-skipped",
                 Sensor.RecordingLevel.INFO);
@@ -140,7 +149,7 @@ interface ParsleyMetrics {
                         + "highest received offset — nothing received so far can satisfy the claim");
 
         List<Sensor> sensors = new ArrayList<>(List.of(buffered, released, deserErr,
-                clockResErr, unreachableDepErr, replaySkipped, reflectedAboveOwn, depth,
+                clockResErr, outOfScopeIgnored, replaySkipped, reflectedAboveOwn, depth,
                 oldestBufferedAt, heldAboveReceived));
 
         ParsleyMetrics metrics = new ParsleyMetrics() {
@@ -148,7 +157,13 @@ interface ParsleyMetrics {
             @Override public void recordReleased(int c)        { released.record(c); }
             @Override public void recordDeserializationError() { deserErr.record(); }
             @Override public void recordClockResolutionError() { clockResErr.record(); }
-            @Override public void recordUnreachableDependencyError() { unreachableDepErr.record(); }
+            // One record() per ignored coordinate: the sensor's "-total" is a cumulative count of
+            // observations, so a single record(n) would count one ignore regardless of n.
+            @Override public void recordOutOfScopeIgnored(int coordinates) {
+                for (int i = 0; i < coordinates; i++) {
+                    outOfScopeIgnored.record();
+                }
+            }
             @Override public void recordReplaySkipped()        { replaySkipped.record(); }
             @Override public void recordReflectedClaimAboveOwnOutputs() { reflectedAboveOwn.record(); }
             @Override public void reportHeldAboveHighestReceived(int count) { heldAboveReceived.record(count); }

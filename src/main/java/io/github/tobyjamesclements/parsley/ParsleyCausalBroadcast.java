@@ -51,17 +51,23 @@ import java.util.function.LongSupplier;
  * liveness/coordination layer — protocol extensions, not part of the CBCAST core.
  *
  * <p>The processor feeds incoming records to {@link #receive} and forwards the returned records
- * downstream, in order. Delivery is strictly fail-closed: a record is forwarded only after its
- * declared dependencies have been satisfied by this node's <em>own</em> contiguous frontier — the
- * positions this node has itself delivered, never a position a peer merely claims to have delivered
- * (see {@link #isDeliverable}). There is no eviction, no
- * buffer limit, and no timeout — a record whose dependencies are not yet satisfied stays buffered
- * (the buffer is a changelog-backed state store, so it spills to disk rather than growing in memory).
- * A record whose dependencies can be proven impossible to ever satisfy — an undecodable payload or
- * dependency header, or a dependency naming a coordinate this node has no input channel for at all —
- * unconditionally fails the task fast, rather than being forwarded downstream as if it were causally
- * valid or silently discarded. There is no diversion sink: this is the single, simple failure model —
- * any error is a hard stop, never a partial or best-effort continuation.
+ * downstream, in order. The delivery gate is the two-branch dispatch of D1, evaluated per
+ * dependency coordinate: a dependency on a coordinate this node <em>consumes</em> (an input
+ * channel of this task, on the partition this task owns) must be satisfied by this node's own
+ * contiguous frontier — the positions this node has itself delivered, never a position a peer
+ * merely claims to have delivered (see {@link #isDeliverable}); a dependency on any other
+ * coordinate is <em>ignored</em>, unconditionally — counted by the out-of-scope-ignored metric,
+ * never a failure. The ignore branch is sound by the transitivity theorem (D1/D7): with
+ * transitively complete stamps (I2) carried by unconditional merges (I9), any consumed causal
+ * ancestor of a record is claimed directly in that record's own clock, so an unconsumed entry
+ * only ever proxies ancestry the clock already states explicitly — ignoring it loses no ordering
+ * observable at this node. On the consumed branch there is no eviction, no buffer limit, and no
+ * timeout — a record whose dependencies are not yet satisfied stays buffered (the buffer is a
+ * changelog-backed state store, so it spills to disk rather than growing in memory). A record
+ * that can be proven impossible to ever evaluate — an undecodable payload or dependency header —
+ * unconditionally fails the task fast, rather than being forwarded downstream as if it were
+ * causally valid or silently discarded. There is no diversion sink: this is the single, simple
+ * failure model — any error is a hard stop, never a partial or best-effort continuation.
  *
  * <p><strong>The frontier is a contiguous watermark, not a running max.</strong> This class does
  * not head-of-line block: a later-offset record on a partition may forward before an earlier one
@@ -122,28 +128,29 @@ final class ParsleyCausalBroadcast<K, V> {
     // is a no-op).
     private final ParsleyChannels channels;
 
-    // Coordinates this node could ever genuinely confirm — a registered input channel, on the
-    // partition this task owns. A dependency outside this scope (an undeclared topic, or a partition
-    // a different task instance owns) can never be observed here no matter how long it waits — but
-    // that does not make it safe to disregard: this node can prove it cannot check the coordinate,
-    // never that the coordinate is genuinely irrelevant. So it is fail-closed, not vacuously
-    // satisfied — see isUnreachableDependency. Defaults to "everything in scope" so existing
-    // callers/tests that never construct with an explicit predicate are unaffected; ParsleyProcessor
-    // passes its real per-task predicate.
-    private final ParsleyVectorClock.CoordinatePredicate inScope;
+    // The consumed(c) predicate of the two-branch gate (D1): a registered input channel of this
+    // task, on the partition this task owns. A dependency on a consumed coordinate must be
+    // satisfied by this node's own contiguous frontier (local delivery, never hearsay); a
+    // dependency on any other coordinate falls to the gate's IGNORE branch — counted by the
+    // out-of-scope-ignored metric, never a failure (the I7 fail-fast is retired, D7). The ignore
+    // is unconditional and sound by the transitivity theorem: I2 + I9 guarantee any consumed
+    // causal ancestor of a record is claimed directly in that record's own clock, so an unconsumed
+    // entry only ever proxies ancestry the clock already states. Defaults to "everything is
+    // consumed" so existing callers/tests that never construct with an explicit predicate are
+    // unaffected; ParsleyProcessor passes its real per-task predicate.
+    private final ParsleyVectorClock.CoordinatePredicate consumed;
 
-    // Coordinates for a topic THIS NODE ITSELF produces (a registered sink). GATE-SIDE ONLY, and
-    // interim: stripped from any inbound dependency clock before the gate check (effectiveDependencies)
-    // so a claim reflecting this node's own coordinate back at it — directly (consuming its own sink)
-    // or around a topology cycle — is not failed fast as "unreachable"; T3.1's two-branch gate deletes
-    // this strip for good (reflection becomes ordinary ignore/consumed handling). The STAMP-side strip
-    // this predicate used to drive (the advertised-clock fold, the onWatermark carried-clock strip) is
-    // gone (T2.3, D2): it erased real ancestors from the outbound stamp when the sink is also consumed
-    // by a distinct downstream app (#22), and its relay-settling role is replaced by the I6
-    // knowledge-based relay rule (see onWatermark) — a reflected own claim is dominated by ownOutputs,
-    // so it teaches nothing and stops relaying without ever being stripped. A reflected claim ABOVE
-    // ownOutputs is a diagnostic metric, never a failure (I8). Defaults to "nothing is ever this
-    // node's own sink"; ParsleyProcessor passes its real per-stage sink-topic predicate.
+    // Coordinates for a topic THIS NODE ITSELF produces (a registered sink). Feeds only the I8
+    // reflected-claim diagnostic (recordReflectedClaims): an inbound claim on an own-sink
+    // coordinate ABOVE the ownOutputs clock means the own-output view is stale or a peer's stamp
+    // untruthful — worth seeing, never worth failing over. The gate treats a reflected claim like
+    // any other dependency (consumed → gated on local delivery; unconsumed → ignored): the
+    // historical gate-side strip this predicate used to drive died at T3.1 with the two-branch
+    // dispatch — its vacuous satisfaction of claims about OTHER producers' records on a shared
+    // sink topic was finding (iii) — and the stamp-side strip died at T2.3 (#22); relay settling
+    // rests on the I6 knowledge-based rule (see onWatermark), where a reflected own claim is
+    // dominated by ownOutputs and so teaches nothing. Defaults to "nothing is ever this node's
+    // own sink"; ParsleyProcessor passes its real per-stage sink-topic predicate.
     private final ParsleyVectorClock.CoordinatePredicate ownSinkTopics;
 
     // --- Convenience constructors: build an in-memory ParsleyChannels from an initial clock and a
@@ -171,9 +178,9 @@ final class ParsleyCausalBroadcast<K, V> {
     /**
      * As {@link #ParsleyCausalBroadcast(ParsleyChannels, ParsleyBufferStore, ParsleyCandidateIndex,
      * ParsleyMetrics, LongSupplier, ParsleyVectorClock.CoordinatePredicate,
-     * ParsleyVectorClock.CoordinatePredicate) the full constructor}, with every coordinate in scope and
-     * nothing treated as this node's own sink — for callers/tests that do not need to exercise
-     * per-task partition scoping or own-coordinate stripping.
+     * ParsleyVectorClock.CoordinatePredicate) the full constructor}, with every coordinate consumed
+     * and nothing treated as this node's own sink — for callers/tests that do not need to exercise
+     * the gate's ignore branch or the reflected-claim diagnostic.
      */
     ParsleyCausalBroadcast(ParsleyChannels channels,
                  ParsleyBufferStore<K, V> buffer,
@@ -188,15 +195,15 @@ final class ParsleyCausalBroadcast<K, V> {
      * As {@link #ParsleyCausalBroadcast(ParsleyChannels, ParsleyBufferStore, ParsleyCandidateIndex,
      * ParsleyMetrics, LongSupplier, ParsleyVectorClock.CoordinatePredicate,
      * ParsleyVectorClock.CoordinatePredicate) the full constructor}, with nothing ever treated as this node's
-     * own sink — for callers/tests that do not need to exercise own-coordinate stripping.
+     * own sink — for callers/tests that do not need to exercise the reflected-claim diagnostic.
      */
     ParsleyCausalBroadcast(ParsleyChannels channels,
                  ParsleyBufferStore<K, V> buffer,
                  ParsleyCandidateIndex candidateIndex,
                  ParsleyMetrics metrics,
                  LongSupplier clock,
-                 ParsleyVectorClock.CoordinatePredicate inScope) {
-        this(channels, buffer, candidateIndex, metrics, clock, inScope, (topicId, partition) -> false);
+                 ParsleyVectorClock.CoordinatePredicate consumed) {
+        this(channels, buffer, candidateIndex, metrics, clock, consumed, (topicId, partition) -> false);
     }
 
     /**
@@ -204,27 +211,28 @@ final class ParsleyCausalBroadcast<K, V> {
      * clock, channel clocks, and forwarded index — so callers control its persistence (a store-backed
      * frontier in production, an in-memory one in tests).
      *
-     * @param inScope       coordinates this node could ever genuinely confirm (a registered input
-     *                      channel, on the partition this task owns). A dependency outside this scope
-     *                      fails the task fast rather than being silently treated as satisfied.
-     * @param ownSinkTopics coordinates for a topic this node itself produces. Stripped from the
-     *                      <em>gate's view</em> of an inbound dependency clock only (interim, until
-     *                      T3.1's two-branch gate) — never from the channel folds or the stamp; see
-     *                      this field's own Javadoc.
+     * @param consumed      the consumed(c) predicate of the two-branch gate (D1): a registered
+     *                      input channel of this task, on the partition this task owns. A
+     *                      dependency on a consumed coordinate is gated on this node's own
+     *                      contiguous frontier; a dependency on any other coordinate is ignored,
+     *                      with a metric — see this field's own Javadoc.
+     * @param ownSinkTopics coordinates for a topic this node itself produces. Feeds only the I8
+     *                      reflected-claim diagnostic — never the gate, the channel folds, or the
+     *                      stamp; see this field's own Javadoc.
      */
     ParsleyCausalBroadcast(ParsleyChannels channels,
                  ParsleyBufferStore<K, V> buffer,
                  ParsleyCandidateIndex candidateIndex,
                  ParsleyMetrics metrics,
                  LongSupplier clock,
-                 ParsleyVectorClock.CoordinatePredicate inScope,
+                 ParsleyVectorClock.CoordinatePredicate consumed,
                  ParsleyVectorClock.CoordinatePredicate ownSinkTopics) {
         this.channels = channels;
         this.buffer = buffer;
         this.candidateIndex = candidateIndex;
         this.metrics = metrics;
         this.clock = clock;
-        this.inScope = inScope;
+        this.consumed = consumed;
         this.ownSinkTopics = ownSinkTopics;
         List<ParsleyBufferStore.IndexEntry> restored = buffer.indexEntries();
         // Replay receive()'s first-sighting seed for every restored held record's source coordinate,
@@ -236,15 +244,15 @@ final class ParsleyCausalBroadcast<K, V> {
         // module's purview" — releasing records that depend on it before it has ever been delivered
         // (an effect-before-cause delivery). Seeding at the lowest held offset reproduces exactly
         // what the first in-run sighting did: marks the coordinate seen, and never seeds past a held
-        // record. Out-of-scope coordinates are skipped — a held record on one fails the drain fast
-        // anyway, and re-seeding an entry rescope just pruned would resurrect it in the gate view.
+        // record. Unconsumed coordinates are skipped — re-seeding an entry rescope just pruned
+        // would resurrect it in the gate view.
         Map<Uuid, Map<Integer, Long>> lowestHeld = new HashMap<>();
         for (ParsleyBufferStore.IndexEntry entry : restored) {
             lowestHeld.computeIfAbsent(entry.topicId(), k -> new HashMap<>())
                     .merge(entry.partition(), entry.offset(), Math::min);
         }
         lowestHeld.forEach((topicId, byPartition) -> byPartition.forEach((partition, offset) -> {
-            if (inScope.test(topicId, partition)) {
+            if (consumed.test(topicId, partition)) {
                 channels.seedIfFirstSeen(topicId, partition, offset);
             }
         }));
@@ -259,7 +267,7 @@ final class ParsleyCausalBroadcast<K, V> {
         // no candidate to release.
         for (ParsleyBufferStore.IndexEntry entry : restored) {
             candidateIndex.index(entry.sequence(),
-                    effectiveDependencies(entry.dependencies(), entry.topicId(), entry.partition(), entry.offset()),
+                    consumedDependencies(entry.dependencies(), entry.topicId(), entry.partition(), entry.offset()),
                     channels.frontier());
         }
     }
@@ -320,9 +328,8 @@ final class ParsleyCausalBroadcast<K, V> {
         // time. Routine while an added input's re-fetched prefix replays past the carried-ancestry
         // seed (ParsleyChannels#rescope — "skip what you already ignored", T3.0 A5); otherwise the
         // fail-safe net for a redelivery exactly_once_v2 should make impossible (A11). Checked
-        // before the unreachable-dependency dispatch deliberately: a replayed record's clock may
-        // name coordinates that have since left this node's scope, and an already-delivered record
-        // must skip, never crash the task. The L1 receive bookkeeping still runs (it keeps
+        // first: an already-delivered record must skip before any of the ordinary receive
+        // bookkeeping below re-evaluates it. The L1 receive bookkeeping still runs (it keeps
         // highestReceived exact for bridge()'s skip detection; on an already-delivered offset it
         // cannot advance the frontier past anything undelivered).
         if (channels.alreadyDelivered(message.topicId(), message.partition(), message.offset())) {
@@ -334,20 +341,6 @@ final class ParsleyCausalBroadcast<K, V> {
             log.debug("Skipping {}-{} @{} (already delivered; replay)",
                     message.topic(), message.partition(), message.offset());
             return new Outcome<>(out);
-        }
-
-        // A record whose dependencies name a coordinate this node has no channel for at all can never
-        // be checked here no matter how long it waits. Fail-closed rather than vacuously satisfied:
-        // this node can prove it cannot check the coordinate, never that the coordinate is irrelevant.
-        // Checked FIRST, before any state mutation: seedIfFirstSeen persists a seeded frontier and
-        // propagate can deliver, persist, and remove records from the buffer, so throwing after them
-        // would leave the frontier advanced and the released records (discarded with the unwound `out`)
-        // gone from the buffer. Under EOS the whole batch rolls back, but an in-memory instance has no
-        // rollback; failing before mutating keeps the persisted state consistent either way. The check
-        // reads only the dependency clock and the settled epoch floor, neither of which seedIfFirstSeen
-        // affects, so hoisting it changes nothing but the failure's timing.
-        if (isUnreachableDependency(message)) {
-            throw failUnreachableDependency(message.topic(), message.topicId(), message.partition(), message.offset());
         }
 
         recordReflectedClaims(message.dependencies());
@@ -364,8 +357,21 @@ final class ParsleyCausalBroadcast<K, V> {
             propagate(out, message.topicId(), message.partition());
         }
 
-        ParsleyVectorClock deps = effectiveDependencies(message.dependencies(),
+        // The gate's ignore branch (D1), counted once per received record: every normalised
+        // dependency coordinate this node does not consume is ignored — sound by I2 + I9 (a
+        // consumed causal ancestor is always claimed directly in this same clock, so the entry is
+        // a proxy for ancestry the clock already states) — and surfaces only as a metric, never a
+        // failure (the I7 fail-fast is retired, D7).
+        ParsleyVectorClock normalized = channels.normalize(message.dependencies(),
                 message.topicId(), message.partition(), message.offset());
+        ParsleyVectorClock deps = normalized.retaining(consumed);
+        int ignored = normalized.size() - deps.size();
+        if (ignored > 0) {
+            metrics.recordOutOfScopeIgnored(ignored);
+            log.debug("Ignoring {} out-of-scope dependency coordinate(s) on {}-{} @{} — consumed "
+                    + "ancestry is claimed directly by the same clock (I2/I9)",
+                    ignored, message.topic(), message.partition(), message.offset());
+        }
 
         // Every record is checked against this node's own delivered frontier — never against a stamp
         // this same record just supplied, and never against a position a peer merely claims to have
@@ -452,14 +458,9 @@ final class ParsleyCausalBroadcast<K, V> {
      */
     private void drainSatisfied(List<ParsleyMessage<K, V>> out) {
         for (ParsleyBufferStore.IndexEntry meta : orderedIndex()) {
-            // Normally unreachable: receive already rejects an unreachable-dependency record before
-            // it is ever buffered. This only catches a record buffered by an older binary version
-            // (before this check existed) surviving a restart onto this one.
-            if (isUnreachableDependency(meta.dependencies(), meta.topicId(), meta.partition(), meta.offset())) {
-                throw failUnreachableDependency(meta.topic(), meta.topicId(), meta.partition(), meta.offset());
-            }
-            // The delivery gate, on metadata only: every declared coordinate (self-cycle stripped,
-            // out-of-scope already rejected above) is within this node's own contiguous frontier.
+            // The delivery gate, on metadata only: every consumed declared coordinate (self-cycle
+            // stripped, unconsumed coordinates ignored per D1) is within this node's own
+            // contiguous frontier.
             if (!isDeliverable(meta.dependencies(), meta.topicId(), meta.partition(), meta.offset())) {
                 continue;
             }
@@ -717,13 +718,6 @@ final class ParsleyCausalBroadcast<K, V> {
                             stale.add(candidate);
                             continue;
                         }
-                        // Normally unreachable here — receive already rejects an unreachable-dependency
-                        // record before it is ever buffered — but a record buffered by an older binary
-                        // (before this check existed) can still surface it after a restart.
-                        if (isUnreachableDependency(entry.record())) {
-                            throw failUnreachableDependency(entry.record().topic(), entry.record().topicId(),
-                                    entry.record().partition(), entry.record().offset());
-                        }
                         if (!isDeliverable(entry.record())) continue;
 
                         // See drainSatisfied: persist the frontier/forwarded-index advance before
@@ -769,12 +763,15 @@ final class ParsleyCausalBroadcast<K, V> {
     }
 
     /**
-     * The causal delivery gate: every coordinate {@code record} depends on (its own self-cycle
-     * stripped) is within this node's <em>own</em> contiguous delivered frontier. A dependency is
-     * satisfied only by this node having itself delivered the cause — never by a channel's advertised
-     * claim that some peer delivered it ({@link #completeness()} is the outbound stamp, not this
-     * gate). This is the single source of truth for "may this record be delivered now", used on every
-     * release path ({@link #receive}, {@link #drainSatisfied}, {@link #propagate}).
+     * The causal delivery gate — the two-branch dispatch of D1: every coordinate {@code record}
+     * depends on is either <em>consumed</em> here (an input channel of this task, on the partition
+     * this task owns), in which case it must be within this node's <em>own</em> contiguous
+     * delivered frontier, or it is not, in which case it is ignored
+     * ({@link #consumedDependencies}). A consumed dependency is satisfied only by this node having
+     * itself delivered the cause — never by a channel's advertised claim that some peer delivered
+     * it ({@link #completeness()} is the outbound stamp, not this gate). This is the single source
+     * of truth for "may this record be delivered now", used on every release path
+     * ({@link #receive}, {@link #drainSatisfied}, {@link #propagate}).
      */
     private boolean isDeliverable(ParsleyMessage<K, V> record) {
         return isDeliverable(record.dependencies(), record.topicId(), record.partition(), record.offset());
@@ -785,68 +782,28 @@ final class ParsleyCausalBroadcast<K, V> {
      * source coordinate alone, without decoding its user value. Used by {@link #drainSatisfied} so a
      * held, undecodable record that is not releasable is never deserialised.
      *
-     * <p>The dominance check runs against {@link #effectiveDependencies}, never the raw clock — see
-     * that method for the preprocessing steps. Only ever called on a record already proven reachable
-     * ({@link #isUnreachableDependency} false) — {@code effectiveDependencies} does not itself filter
-     * out-of-scope coordinates, so this would otherwise wait forever on one.
+     * <p>The dominance check runs against {@link #consumedDependencies}, never the raw clock — see
+     * that method for the two-branch dispatch it implements.
      */
     private boolean isDeliverable(ParsleyVectorClock dependencies, Uuid topicId, int partition, long offset) {
-        return channels.frontier().dominates(effectiveDependencies(dependencies, topicId, partition, offset));
+        return channels.frontier().dominates(consumedDependencies(dependencies, topicId, partition, offset));
     }
 
     /**
-     * Returns {@code true} if any coordinate {@code message} depends on ({@link #effectiveDependencies},
-     * the same preprocessing {@link #isDeliverable} applies) names a coordinate outside {@link #inScope}
-     * — this node has no input channel for it at all, so it can never be confirmed here no matter how
-     * long it waits.
+     * The dependency clock actually checked by the gate — the two-branch dispatch of D1 in one
+     * expression: L1's normalisation ({@link ParsleyChannels#normalize} — self-cycle removal plus
+     * the interim below-floor strip, deleted at T3.2; I5), then restriction to the coordinates
+     * this node consumes ({@link #consumed}). Every other coordinate falls to the ignore branch:
+     * unconditionally ignored — sound by the transitivity theorem (I2 + I9: a consumed causal
+     * ancestor is always claimed directly in the record's own clock, so an unconsumed entry only
+     * ever proxies ancestry the clock already states) — and counted once per received record via
+     * the out-of-scope-ignored metric ({@link #receive}), never a failure (the I7 fail-fast is
+     * retired, D7). Neither step ever rewrites recorded state or the outbound stamp (the stamp is
+     * {@link ParsleyChannels#stamp()}, computed from the unstripped channel folds — I9: the gate
+     * may ignore; the merge may not).
      */
-    private boolean isUnreachableDependency(ParsleyMessage<K, V> message) {
-        return isUnreachableDependency(message.dependencies(), message.topicId(), message.partition(), message.offset());
-    }
-
-    private boolean isUnreachableDependency(ParsleyVectorClock dependencies, Uuid topicId, int partition, long offset) {
-        ParsleyVectorClock effective = effectiveDependencies(dependencies, topicId, partition, offset);
-        boolean[] unreachable = {false};
-        effective.forEach((depTopicId, depPartition, requiredOffset) -> {
-            if (!inScope.test(depTopicId, depPartition)) {
-                unreachable[0] = true;
-            }
-        });
-        return unreachable[0];
-    }
-
-    /**
-     * Builds (but does not throw) the exception for a record whose dependencies name a coordinate this
-     * node has no channel for. Records the failure via {@link #metrics} first, mirroring
-     * {@link #failPoison}, then returns the exception for the caller to throw — never buffering the
-     * record and never treating the unreachable coordinate as satisfied.
-     */
-    private ParsleyUnreachableDependencyException failUnreachableDependency(
-            String topic, Uuid topicId, int partition, long offset) {
-        metrics.recordUnreachableDependencyError();
-        log.error("{}-{} @{} depends on a coordinate this node has no channel for; failing fast "
-                + "(fail-closed). The record was not forwarded and is reprocessed on restart.",
-                topic, partition, offset);
-        return new ParsleyUnreachableDependencyException(topic, topicId, partition, offset);
-    }
-
-    /**
-     * The dependency clock actually checked by the gate: L1's normalisation
-     * ({@link ParsleyChannels#normalize} — self-cycle removal plus the interim below-floor strip;
-     * I5), then the one view-only step still owned by this class, itself interim until T3.1's
-     * two-branch gate: any coordinate belonging to a topic this node itself produces
-     * ({@link #ownSinkTopics}) is stripped from the <em>gate's view only</em> — see that field's
-     * Javadoc. Neither step ever rewrites recorded state or the outbound stamp (the stamp is
-     * {@link ParsleyChannels#stamp()}, computed from the unstripped channel folds).
-     *
-     * <p>A coordinate outside {@link #inScope} is <strong>not</strong> dropped here — this node cannot
-     * prove such a coordinate is safe to disregard, only that it cannot check it, so it is never
-     * silently treated as satisfied. {@link #isUnreachableDependency} checks for one before this result
-     * is ever handed to {@link #isDeliverable}, and fails the task fast instead.
-     */
-    private ParsleyVectorClock effectiveDependencies(ParsleyVectorClock deps, Uuid topicId, int partition, long offset) {
-        return channels.normalize(deps, topicId, partition, offset)
-                .retaining((depTopicId, depPartition) -> !ownSinkTopics.test(depTopicId, depPartition));
+    private ParsleyVectorClock consumedDependencies(ParsleyVectorClock deps, Uuid topicId, int partition, long offset) {
+        return channels.normalize(deps, topicId, partition, offset).retaining(consumed);
     }
 
     /**
@@ -903,12 +860,11 @@ final class ParsleyCausalBroadcast<K, V> {
                 continue;
             }
             ParsleyVectorClock deps =
-                    effectiveDependencies(meta.dependencies(), meta.topicId(), meta.partition(), meta.offset());
+                    consumedDependencies(meta.dependencies(), meta.topicId(), meta.partition(), meta.offset());
             boolean[] above = {false};
             String[] cause = {""};
             deps.forEach((depTopicId, depPartition, required) -> {
-                if (!above[0] && inScope.test(depTopicId, depPartition)
-                        && required > channels.highestReceived(depTopicId, depPartition)) {
+                if (!above[0] && required > channels.highestReceived(depTopicId, depPartition)) {
                     above[0] = true;
                     cause[0] = depTopicId + "-" + depPartition + " @" + required;
                 }

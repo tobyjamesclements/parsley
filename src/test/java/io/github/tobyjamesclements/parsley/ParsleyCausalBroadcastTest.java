@@ -189,7 +189,7 @@ class ParsleyCausalBroadcastTest {
             @Override public void recordReleased(int c)        { releasedCounts.add(c); }
             @Override public void recordDeserializationError()  {}
             @Override public void recordClockResolutionError()  {}
-            @Override public void recordUnreachableDependencyError() {}
+            @Override public void recordOutOfScopeIgnored(int coordinates) {}
             @Override public void recordReplaySkipped() {}
             @Override public void recordReflectedClaimAboveOwnOutputs() {}
             @Override public void reportHeldAboveHighestReceived(int count) {}
@@ -215,8 +215,8 @@ class ParsleyCausalBroadcastTest {
      * receive path's replay skip guard: routine while an added input's re-fetched prefix replays
      * past the carried-ancestry seed ({@code ParsleyChannels#rescope}, T3.0 A5), and otherwise the
      * fail-safe net for a redelivery {@code exactly_once_v2} should make impossible (A11). The skip
-     * is checked before the unreachable-dependency dispatch, so a replayed record whose clock names
-     * a coordinate now out of scope skips rather than crashing the task.
+     * is checked first, so a replayed record whose clock names a coordinate now out of scope skips
+     * without even counting the ignore metric.
      *
      * Asserts the replay is not forwarded and not buffered, the frontier is unchanged, and the
      * replay-skipped metric fires — including for a replay carrying an out-of-scope dependency.
@@ -229,7 +229,7 @@ class ParsleyCausalBroadcastTest {
             @Override public void recordReleased(int c) {}
             @Override public void recordDeserializationError() {}
             @Override public void recordClockResolutionError() {}
-            @Override public void recordUnreachableDependencyError() {}
+            @Override public void recordOutOfScopeIgnored(int coordinates) {}
             @Override public void recordReplaySkipped() { replaySkips.add(1); }
             @Override public void recordReflectedClaimAboveOwnOutputs() {}
             @Override public void reportHeldAboveHighestReceived(int count) {}
@@ -1021,47 +1021,62 @@ class ParsleyCausalBroadcastTest {
     }
 
     /**
-     * A record whose dependencies name a coordinate this node has no input channel for at all — here, a
-     * coordinate simply outside the configured scope — can never be confirmed no matter how long it
-     * waits, so it fails the task fast rather than silently treating the unreachable coordinate as
-     * satisfied: this node can prove it cannot check the coordinate, never that the coordinate is
-     * irrelevant.
+     * The two-branch gate's ignore branch (D1): a dependency on a coordinate this node does not
+     * consume — an undeclared topic, or a partition another task owns — is ignored,
+     * unconditionally. With transitively complete stamps (I2) carried by unconditional merges
+     * (I9), any consumed causal ancestor of the record is claimed directly in the record's own
+     * clock, so the unconsumed entry only proxies ancestry the clock already states; the retired
+     * I7 fail-fast added no safety and manufactured the join-coordination problem (D7).
      *
-     * Asserts {@code receive} throws {@link ParsleyUnreachableDependencyException} and the record is
-     * never added to the buffer.
+     * Asserts the record delivers immediately, is never buffered, and each ignored coordinate is
+     * counted by the out-of-scope-ignored metric.
      */
     @Test
-    void unreachableDependencyFailsTheTask() {
-        // Only T1 is in scope; T2 is a coordinate this node has no channel for at all.
+    void outOfScopeDependenciesAreIgnoredAndTheRecordDelivers() {
+        List<Integer> ignoredCounts = new ArrayList<>();
+        ParsleyMetrics capturing = new ParsleyMetrics() {
+            @Override public void recordBuffered() {}
+            @Override public void recordReleased(int c) {}
+            @Override public void recordDeserializationError() {}
+            @Override public void recordClockResolutionError() {}
+            @Override public void recordOutOfScopeIgnored(int coordinates) { ignoredCounts.add(coordinates); }
+            @Override public void recordReplaySkipped() {}
+            @Override public void recordReflectedClaimAboveOwnOutputs() {}
+            @Override public void reportHeldAboveHighestReceived(int count) {}
+            @Override public void reportState(int depth, OptionalLong oldest) {}
+        };
+        // Only T1 is consumed; T2 and T3 are coordinates this node has no channel for at all.
         ParsleyVectorClock.CoordinatePredicate onlyT1 = (topicId, partition) -> partition == 0 && topicId.equals(T1_ID);
-        ParsleyChannels frontier = new ParsleyChannels(ParsleyVectorClock.empty(), new MockForwardedIndex());
-        MockBufferStore<String, String> buffer = new MockBufferStore<>();
-        ParsleyCausalBroadcast<String, String> causalBroadcast = new ParsleyCausalBroadcast<>(frontier, buffer, new MockCandidateIndex(),
-                ParsleyMetrics.NOOP, System::currentTimeMillis, onlyT1);
+        MockBufferStore<String, String> localBuffer = new MockBufferStore<>();
+        ParsleyCausalBroadcast<String, String> causalBroadcast = new ParsleyCausalBroadcast<>(
+                new ParsleyChannels(ParsleyVectorClock.empty(), new MockForwardedIndex()),
+                localBuffer, new MockCandidateIndex(), capturing, System::currentTimeMillis, onlyT1);
 
-        ParsleyVectorClock needsT2 = ParsleyVectorClock.empty().observe(T2_ID, 0, 0);
+        ParsleyVectorClock needsT2AndT3 =
+                ParsleyVectorClock.empty().observe(T2_ID, 0, 0).observe(T3_ID, 0, 4);
+        ParsleyCausalBroadcast.Outcome<String, String> outcome =
+                causalBroadcast.receive(incomingRecord(T1, 0, needsT2AndT3));
 
-        assertThrows(ParsleyUnreachableDependencyException.class,
-                () -> causalBroadcast.receive(incomingRecord(T1, 0, needsT2)),
-                "a dependency on a coordinate outside this node's scope must fail the task");
-        assertEquals(0, buffer.size(), "the record must never be added to the buffer");
+        assertEquals(1, outcome.delivered().size(),
+                "dependencies on unconsumed coordinates must fall to the ignore branch, not gate "
+                        + "or fail the record (D1)");
+        assertEquals(0, localBuffer.size(), "a record held back by nothing consumed must never be buffered");
+        assertEquals(List.of(2), ignoredCounts,
+                "every ignored coordinate must count the out-of-scope-ignored metric, once per received record");
     }
 
     /**
-     * The unreachable-dependency check must run <em>before</em> {@code receive} mutates any persisted
-     * state. A first-ever observation of a coordinate seeds the frontier for it ({@code seedIfFirstSeen}
-     * persists, folding the below-first-seen history in), so an unreachable-dependency throw that ran
-     * after the seed would leave the frontier advanced by a record that never delivered — and could have
-     * released and un-buffered other records into a result list the throw then discards. Under EOS the
-     * whole batch rolls back so persisted state stays consistent, but an in-memory core has no
-     * rollback; failing before the first mutation keeps the two consistent.
+     * The ignore branch never bleeds into the consumed branch: a record claiming both an
+     * unconsumed coordinate (ignored) and an unmet consumed coordinate is still held on the
+     * consumed one — the dispatch is per coordinate, not per record — and releases the moment the
+     * consumed cause is locally delivered.
      *
-     * Asserts that after the throw the frontier is still empty — the failing record's first-observation
-     * seed never took effect.
+     * Asserts the record is held despite the ignored coordinate, then delivers once the consumed
+     * dependency is satisfied.
      */
     @Test
-    void unreachableDependencyFailsBeforeSeedingTheFrontier() {
-        // T1 and T2 are in scope; T3 is a coordinate this node has no channel for.
+    void ignoredCoordinateNeverSatisfiesTheConsumedBranch() {
+        // T1 and T2 are consumed; T3 is a coordinate this node has no channel for.
         ParsleyVectorClock.CoordinatePredicate scope = (topicId, partition) ->
                 partition == 0 && (topicId.equals(T1_ID) || topicId.equals(T2_ID));
         MockBufferStore<String, String> localBuffer = new MockBufferStore<>();
@@ -1069,17 +1084,18 @@ class ParsleyCausalBroadcastTest {
                 new ParsleyChannels(ParsleyVectorClock.empty(), new MockForwardedIndex()),
                 localBuffer, new MockCandidateIndex(), ParsleyMetrics.NOOP, System::currentTimeMillis, scope);
 
-        // A first observation of T1 at offset 5 would seed the frontier to T1@4 inside seedIfFirstSeen —
-        // but this record depends on T3, outside scope, so it must fail first and seed nothing.
-        ParsleyVectorClock needsT3 = ParsleyVectorClock.empty().observe(T3_ID, 0, 0);
+        // T3@9 is unconsumed (ignored); T2@0 is consumed and not yet delivered here (gates).
+        ParsleyVectorClock deps = ParsleyVectorClock.empty().observe(T3_ID, 0, 9).observe(T2_ID, 0, 0);
+        ParsleyCausalBroadcast.Outcome<String, String> held =
+                causalBroadcast.receive(incomingRecord(T1, 0, deps));
+        assertEquals(0, held.delivered().size(),
+                "the unmet consumed dependency must hold the record — ignoring T3 must not admit it");
+        assertEquals(1, localBuffer.size(), "the held record must be buffered on the consumed branch");
 
-        assertThrows(ParsleyUnreachableDependencyException.class,
-                () -> causalBroadcast.receive(incomingRecord(T1, 5, needsT3)),
-                "a dependency on a coordinate outside this node's scope must fail the task");
-        assertEquals(ParsleyVectorClock.empty(), causalBroadcast.frontier(),
-                "the failing record must not have seeded the frontier — the unreachable check runs "
-                        + "before any state mutation, so an in-memory causalBroadcast (no EOS rollback) stays consistent");
-        assertEquals(0, localBuffer.size(), "the failing record must never be buffered");
+        ParsleyCausalBroadcast.Outcome<String, String> released =
+                causalBroadcast.receive(incomingRecord(T2, 0, ParsleyVectorClock.empty()));
+        assertEquals(2, released.delivered().size(),
+                "local delivery of the consumed cause must release the held record");
     }
 
     // --- helpers --------------------------------------------------------------------------------
@@ -1169,11 +1185,11 @@ class ParsleyCausalBroadcastTest {
     }
 
     /**
-     * The stamp-side own-sink strip is gone (T2.3, the #22 fix): a delivered record's dependency
-     * clock naming one of this node's own sink coordinates folds into the channel clock unstripped
-     * (I9) and rides the outbound completeness — the custody chain a third party consuming the
-     * shared sink gates on — while the gate itself still ignores the reflected claim for its own
-     * delivery decision (the interim gate-side strip, deleted at T3.1).
+     * A reflected own-sink claim is ordinary ancestry under the two-branch gate (T3.1): when the
+     * sink is not consumed here it falls to the ignore branch — the record delivers — while the
+     * claim still folds into the delivered record's channel clock unstripped (I9) and rides the
+     * outbound completeness, the custody chain a third party consuming the shared sink gates on
+     * (#22; the stamp-side strip died at T2.3, the gate-side strip at T3.1).
      */
     @Test
     void ownSinkClaimInADeliveredRecordsClockRidesTheStampUnstripped() {
@@ -1181,18 +1197,52 @@ class ParsleyCausalBroadcastTest {
         ParsleyChannels channels = new ParsleyChannels(ParsleyVectorClock.empty(), forwardedIndex);
         ParsleyCausalBroadcast<String, String> causalBroadcast = new ParsleyCausalBroadcast<>(
                 channels, buffer, new MockCandidateIndex(), ParsleyMetrics.NOOP,
-                System::currentTimeMillis, (topicId, partition) -> true,
+                System::currentTimeMillis,
+                (topicId, partition) -> partition == 0 && topicId.equals(T1_ID),
                 (topicId, partition) -> topicId.equals(sinkId));
 
         ParsleyCausalBroadcast.Outcome<String, String> outcome = causalBroadcast.receive(
                 incomingRecord(T1, 0, ParsleyVectorClock.empty().observe(sinkId, 0, 5)));
 
         assertEquals(1, outcome.delivered().size(),
-                "the reflected own-sink claim must not hold the record — the gate-side strip is "
-                        + "still in force (interim, until T3.1)");
+                "the reflected claim on an unconsumed own sink must fall to the ignore branch and "
+                        + "deliver the record (D1)");
         assertEquals(5L, causalBroadcast.completeness().offsetFor(sinkId, 0),
                 "the own-sink claim must fold into the advertised channel clock and ride the "
                         + "stamp — stripping it erased a real ancestor for third parties (#22)");
+    }
+
+    /**
+     * Finding (iii), the shared-sink blindspot, closed by the gate-side strip's deletion (T3.1): a
+     * node that <em>consumes</em> its own sink topic genuinely gates a claim about that sink —
+     * another producer's record on the shared topic is a real, possibly unseen cause, and the old
+     * strip vacuously satisfied exactly this claim. The record must hold until this node has
+     * itself delivered the claimed sink offset, then release.
+     */
+    @Test
+    void consumedOwnSinkClaimIsGenuinelyGatedNotVacuouslySatisfied() {
+        Uuid sinkId = Uuid.randomUuid();
+        TopicPartition sink = new TopicPartition("sink", 0);
+        MockBufferStore<String, String> localBuffer = new MockBufferStore<>();
+        ParsleyCausalBroadcast<String, String> causalBroadcast = new ParsleyCausalBroadcast<>(
+                new ParsleyChannels(ParsleyVectorClock.empty(), new MockForwardedIndex()),
+                localBuffer, new MockCandidateIndex(), ParsleyMetrics.NOOP,
+                System::currentTimeMillis,
+                (topicId, partition) -> partition == 0 && (topicId.equals(T1_ID) || topicId.equals(sinkId)),
+                (topicId, partition) -> topicId.equals(sinkId));
+
+        // A T1 record claims a sibling producer's record at sink@0, not yet delivered here.
+        ParsleyCausalBroadcast.Outcome<String, String> held = causalBroadcast.receive(
+                incomingRecord(T1, 0, ParsleyVectorClock.empty().observe(sinkId, 0, 0)));
+        assertEquals(0, held.delivered().size(),
+                "a claim about another producer's record on the consumed shared sink must gate, "
+                        + "never be vacuously satisfied (finding (iii))");
+        assertEquals(1, localBuffer.size(), "the held effect must be buffered until its cause is delivered");
+
+        ParsleyCausalBroadcast.Outcome<String, String> released = causalBroadcast.receive(
+                incomingRecordWithId(sink, 0, sinkId, ParsleyVectorClock.empty()));
+        assertEquals(2, released.delivered().size(),
+                "local delivery of the shared-sink cause must release the held effect, in cause-first order");
     }
 
     /**
@@ -1210,7 +1260,7 @@ class ParsleyCausalBroadcastTest {
             @Override public void recordReleased(int c) {}
             @Override public void recordDeserializationError() {}
             @Override public void recordClockResolutionError() {}
-            @Override public void recordUnreachableDependencyError() {}
+            @Override public void recordOutOfScopeIgnored(int coordinates) {}
             @Override public void recordReplaySkipped() {}
             @Override public void recordReflectedClaimAboveOwnOutputs() { reflectedCounts.add(1); }
             @Override public void reportHeldAboveHighestReceived(int count) {}
@@ -1247,7 +1297,7 @@ class ParsleyCausalBroadcastTest {
             @Override public void recordReleased(int c) {}
             @Override public void recordDeserializationError() {}
             @Override public void recordClockResolutionError() {}
-            @Override public void recordUnreachableDependencyError() {}
+            @Override public void recordOutOfScopeIgnored(int coordinates) {}
             @Override public void recordReplaySkipped() {}
             @Override public void recordReflectedClaimAboveOwnOutputs() {}
             @Override public void reportHeldAboveHighestReceived(int count) { stallCounts.add(count); }

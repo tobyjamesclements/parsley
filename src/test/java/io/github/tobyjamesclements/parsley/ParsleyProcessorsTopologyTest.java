@@ -658,16 +658,18 @@ class ParsleyProcessorsTopologyTest {
     }
 
     /**
-     * A dependency spanning many partitions of an entirely unconsumed topic ({@code ghost}) is just
-     * as unreachable as a single one — this node has no channel for any of them, so it can prove it
-     * cannot check them, never that they are irrelevant. Fail-closed: the task fails fast rather than
-     * admitting the record on an unproven premise.
+     * The gate's ignore branch (D1) at the processor level, at width: a dependency clock spanning
+     * many partitions of an entirely unconsumed topic ({@code ghost}) is ignored coordinate by
+     * coordinate — with transitively complete stamps (I2) carried by unconditional merges (I9),
+     * any consumed causal ancestor is claimed directly in the same clock, so the unconsumed
+     * entries only proxy ancestry the clock already states. The retired I7 fail-fast (D7) used to
+     * crash the task here.
      *
-     * Asserts processing the record throws (wrapped by Kafka Streams in a {@code StreamsException})
-     * with a {@link ParsleyUnreachableDependencyException} cause, and the delegate never runs.
+     * Asserts the record delivers to the delegate immediately and every ignored coordinate is
+     * counted by the {@code deps-out-of-scope-ignored} sensor.
      */
     @Test
-    void manyDependenciesOnAnUnconsumedTopicFailClosed() {
+    void manyDependenciesOnAnUnconsumedTopicAreIgnoredAndDeliver() {
         CausalDependencies.Builder bigBuilder = CausalDependencies.builder(TOPICS);
         for (int p = 0; p < 500; p++) {
             bigBuilder.require("ghost", p, 1_000 + p);
@@ -684,33 +686,29 @@ class ParsleyProcessorsTopologyTest {
             TestInputTopic<String, String> t1 =
                     driver.createInputTopic("t1", new StringSerializer(), new StringSerializer());
 
-            StreamsException thrown = assertThrows(StreamsException.class,
-                    () -> t1.pipeInput(new TestRecord<>("k", "v", depsHeader(big))),
-                    "a record depending on an unconsumed topic must not be admitted on an unproven premise");
-            assertEquals(ParsleyUnreachableDependencyException.class, thrown.getCause().getClass(),
-                    "the wrapped cause must be the unreachable-dependency guard's exception");
-            assertTrue(processed.isEmpty(), "the delegate must never run on a record that fails closed at the gate");
+            t1.pipeInput(new TestRecord<>("k", "v", depsHeader(big)));
+
+            assertEquals(List.of("v"), processed,
+                    "a record whose only dependencies are unconsumed coordinates must deliver "
+                            + "immediately — the ignore branch, not a failure (D1)");
+            assertEquals(500.0, parsleyMetric(driver, "deps-out-of-scope-ignored-total"), 0.001,
+                    "every ignored coordinate must count the out-of-scope-ignored sensor");
         }
     }
 
     /**
-     * A dependency on a coordinate this processor does not consume — a topic outside its registered
-     * buffers, or a partition this task does not own — can never be confirmed here no matter how long
-     * it waits. Fail-closed rather than vacuously satisfied: this node can prove it cannot check such
-     * a coordinate, never that it is irrelevant, so the task fails fast rather than admitting the
-     * record on an unproven premise.
+     * The two-branch dispatch is per coordinate (D1): a clock naming an unconsumed topic
+     * ({@code ghost}) and a partition of a consumed topic this task does not own ({@code t1}
+     * partition 7) sends both to the ignore branch — producers stamp a clock spanning everything
+     * they consume, so a downstream processor routinely sees coordinates it can never observe
+     * directly, and ignoring them is sound because the same clock claims every consumed ancestor
+     * directly (I2/I9). The retired I7 fail-fast (D7) used to crash the task on either entry.
      *
-     * <p>Producers stamp a clock spanning every topic and partition they consume, so a downstream
-     * processor routinely sees dependencies it can never observe directly — an unconsumed topic
-     * ({@code ghost}) and a partition of a consumed topic ({@code t1}) this task does not own. Both
-     * are unreachable to this task the same way, and both must fail the task rather than be silently
-     * admitted.
-     *
-     * Asserts processing the record throws (wrapped by Kafka Streams in a {@code StreamsException})
-     * with a {@link ParsleyUnreachableDependencyException} cause, and the delegate never runs.
+     * Asserts the record delivers to the delegate and both ignored coordinates count the
+     * {@code deps-out-of-scope-ignored} sensor.
      */
     @Test
-    void dependenciesOnUnconsumedCoordinatesFailClosed() {
+    void dependenciesOnUnconsumedCoordinatesAreIgnoredAndDeliver() {
         CausalDependencies deps = CausalDependencies.builder(TOPICS)
                 .require("ghost", 0, 5)     // un-consumed topic
                 .require("t1", 7, 9)        // consumed topic, but a partition this task does not own
@@ -726,12 +724,12 @@ class ParsleyProcessorsTopologyTest {
             TestInputTopic<String, String> t1 =
                     driver.createInputTopic("t1", new StringSerializer(), new StringSerializer());
 
-            StreamsException thrown = assertThrows(StreamsException.class,
-                    () -> t1.pipeInput(new TestRecord<>("k", "hello", depsHeader(deps))),
-                    "a record depending on an unreachable coordinate must not be admitted on an unproven premise");
-            assertEquals(ParsleyUnreachableDependencyException.class, thrown.getCause().getClass(),
-                    "the wrapped cause must be the unreachable-dependency guard's exception");
-            assertTrue(processed.isEmpty(), "the delegate must never run on a record that fails closed at the gate");
+            t1.pipeInput(new TestRecord<>("k", "hello", depsHeader(deps)));
+
+            assertEquals(List.of("hello"), processed,
+                    "unconsumed-coordinate dependencies must be ignored and the record delivered (D1)");
+            assertEquals(2.0, parsleyMetric(driver, "deps-out-of-scope-ignored-total"), 0.001,
+                    "both the unconsumed topic and the unowned partition must count the sensor");
         }
     }
 

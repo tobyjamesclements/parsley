@@ -37,12 +37,15 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * ancestor with its own descendant", {@code docs/internals/causal-consistency.md}) — the tightest possible
  * shape of it: a single node directly self-consuming its own sink.
  *
- * <p>This also exercises {@link ParsleyCausalBroadcast}'s own-coordinate stripping ({@code ownSinkTopics}):
- * without it, a node observing its own watermark reflected back to it would never converge (every
- * received copy carries a fresh, ever-advancing self-position), a genuine infinite-loop bug this test
- * caught during development. Under max-merge this works because a node's own registered channel for the
- * looped-back topic directly advertises the ancestor coordinate it needs ({@link
- * ParsleyChannels#channelUpdate}) — no cross-channel unanimity, and no third-party relay, is required.
+ * <p>This also exercises relay convergence on a self-loop: a node observing its own watermark
+ * reflected back at it must not relay it onward again (an infinite loop this test caught during
+ * development, historically closed by an own-coordinate strip). Convergence now rests on the I6
+ * knowledge-based relay rule — a reflected marker's carried clock is this node's own past stamp,
+ * dominated by its current {@code stamp()}, so it teaches nothing and the relay settles — and the
+ * self-consumed sink's claims are genuinely gated by the two-branch gate's consumed branch (T3.1).
+ * Under max-merge this works because a node's own registered channel for the looped-back topic
+ * directly advertises the ancestor coordinate it needs ({@link ParsleyChannels#channelUpdate}) — no
+ * cross-channel unanimity, and no third-party relay, is required.
  *
  * <p>A genuine <em>two-node</em> cycle (A→B→A over two separate, real Kafka Streams applications) is
  * proved instead in {@link ParsleyCoordinationMultiAppIT} — a single-Topology, two-stage
@@ -98,10 +101,9 @@ class CausalCyclicTopologyTest {
                         .addBufferStore("parsley")
                         .addSource(new ParsleySource<>("t1", Serdes.String(), Serdes.String()))
                         .addSource(new ParsleySource<>("p-out", Serdes.String(), Serdes.String()))
-                        // Required for ParsleyCausalBroadcast's own-coordinate stripping (see ParsleyCausalBroadcast's
-                        // ownSinkTopics Javadoc): without this declaration, P has no way to recognise
-                        // "p-out" as its own produced coordinate, and a self-consumed watermark carrying
-                        // its own ever-advancing position would never converge.
+                        // Declares p-out as P's own produced topic: feeds the ownOutputs clock the
+                        // I6 knowledge-based relay compares against (a reflected own claim teaches
+                        // nothing, so the loop settles) and the I8 reflected-claim diagnostic.
                         .sinkTopics(Set.of("p-out"))
                         .topicAdmin(ADMIN)
                         .build())
