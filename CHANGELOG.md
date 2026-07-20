@@ -7,6 +7,45 @@ All notable changes to this project are documented in this file. The format is b
 ## [Unreleased]
 
 ### Fixed
+- **The outbound stamp now claims records delivered out of order above a contiguous-frontier gap:
+  the `highestDelivered` clock (T2.4, invariant I2).** Delivery within a partition is deliberately
+  not head-of-line-blocking, so a later record can be delivered to the delegate while an earlier
+  one from a different producer is still held — but the stamp previously carried only the
+  contiguous frontier (stuck below the gap), the delivered record's *dependency clock* (via the
+  channel fold), and the node's own *outputs*. The delivered record's own coordinate appeared
+  nowhere, so an output derived from it failed to claim its true cause, and a downstream consumer
+  of both topics could deliver the effect before the cause — the input-side sibling of the
+  own-output gap #22 closed. `ParsleyChannels` now keeps `highestDelivered`, the max projection of
+  the delivered vector that non-head-of-line delivery splits off from the contiguous frontier:
+  observed on every delivery, folded into `stamp()` only (never the delivery gate, and never
+  `completeness()`, which the interim epoch-floor publication still reads), and deliberately not
+  persisted — its above-frontier content is exactly the forwarded index's marks, which commit in
+  the same EOS transaction as the frontier blob, so a restart reconstructs it losslessly. A scope
+  shrink re-homes it into the carried-ancestry clock like any delivered causal past (A6); a
+  recreated topic's old UUID leaves it outright (E1). The implied claim on the held gap offsets
+  below an above-gap entry is an offset-prefix over-claim of real appended positions —
+  delay-only, sound by invariant I8. Invariant I2 is restated to match what the D1/D7 proof
+  always needed: the stamp dominates the dependency clocks *and the coordinates* of every
+  delivered event.
+- **T2.4 property harness: I2/I3/I9 certified under randomised interleavings.** A new in-memory
+  multi-node simulator (`ParsleyTopologySim`) drives real `ParsleyChannels` +
+  `ParsleyCausalBroadcast` instances over store-backed persistence through the production entry
+  points — business receive, null-message receive, the single stamping site with the crossing-wait
+  and ack-fold seams, in-place restarts rebuilt from the durable stores, and `rescope` — under
+  seeded-random schedules, while tracking exact delegate-visible causal histories
+  (Schwarz–Mattern) as ground truth. Continuously asserted: I2 in both forms (stamps dominate
+  delivered dependency clocks + coordinates, and the ground-truth causal past), I3 (successive
+  stamps vector-monotone, across restart boundaries too), I9 (stamps carry unconsumed-channel
+  ancestry — the transitive chain claims the origin coordinate at every hop, and a node fed only
+  null messages still stamps ancestry it never consumed), ground-truth causal delivery order (no
+  effect before its consumed cause at any delegate), own-output stamp coverage (D2), and liveness
+  (every seed drains to empty hold-back queues). The scope-change properties (T3.0 A5/A6) run the
+  same sweeps across scope-shrinking and scope-growing restarts, including growth onto a former
+  own sink ("skip what you already claimed"). Reverting the `highestDelivered` fix kills all five
+  invariant properties — the harness is the certification the T3.1 gate switch (D1) leans on.
+  Interim, until T3.1: business topologies keep every consumer's scope covering claimable upstream
+  coordinates (the sim states this once, in `assertInterimDepCover`); differing-scope business
+  chains join the sweep when the two-branch gate lands.
 - **The outbound stamp is now `completeness ∪ ownOutputs`, and the stamp-side own-sink strip is
   gone (#22; T2.3, decision D2).** Every stamped record — business forwards and null messages alike,
   through the single stamping site — now carries the node's own acknowledged output positions, and

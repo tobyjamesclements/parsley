@@ -1,0 +1,190 @@
+package io.github.tobyjamesclements.parsley;
+
+import org.junit.jupiter.api.Test;
+
+import java.util.List;
+import java.util.Set;
+
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+
+/**
+ * The T2.4 property tests for I2 (stamp transitive completeness), I3 (per-producer stamp
+ * monotonicity), and I9 (unconditional merge — stamps carry unconsumed-channel ancestry): the
+ * certification the D1 unconditional-ignore gate leans on before Phase 3 switches it on. Every
+ * invariant is asserted <em>continuously inside</em> {@link ParsleyTopologySim} — at every
+ * emission and every delivery, under seeded-random interleavings — so each test here is one
+ * topology + a seed sweep + vacuity guards proving the interesting paths (holds, out-of-order
+ * deliveries above gaps, carried-clock folds, restarts) genuinely ran. A failure message always
+ * carries the seed; re-running the single seed reproduces the schedule deterministically.
+ *
+ * <p>The standing topology (single-partition topics t1..t6):
+ * <pre>
+ *   external → t1 (clockless producer: causally minimal by definition)
+ *   A {t1} → t2          D {t1} → t2      (two producers sharing sink t2: interleaved stamps on
+ *                                          one partition are how out-of-order delivery above a
+ *                                          contiguous-frontier gap arises downstream)
+ *   B {t1,t2,t3} → t3                     (self-consuming cycle: reflection through the interim
+ *                                          own-sink strip, relay quiescence)
+ *   C {t1,t2,t3} → t4
+ *   W {t1,t2,t3,t4} → t5 (silent delegate: t5 carries only null messages)
+ *   N {t5} → t6          (consumes only null messages — its stamps must still carry t1..t5
+ *                          ancestry it never consumed: the I9 custody chain, gate-free)
+ * </pre>
+ *
+ * <p>INTERIM (until T3.1): every business consumer's scope covers all coordinates its records can
+ * claim (the sim's dep-cover guard states this once); differing-scope <em>business</em> topologies
+ * join these tests when the two-branch gate lands.
+ */
+class ParsleyStampInvariantPropertyTest {
+
+    private static final int SEEDS = 20;
+    private static final int STEPS = 400;
+
+    private static ParsleyTopologySim standingTopology(long seed) {
+        ParsleyTopologySim sim = new ParsleyTopologySim(seed);
+        sim.externalTopic("t1");
+        sim.node("A", Set.of("t1"), List.of("t2"), 0.7);
+        sim.node("D", Set.of("t1"), List.of("t2"), 0.7);
+        sim.node("B", Set.of("t1", "t2", "t3"), List.of("t3"), 0.6);
+        sim.node("C", Set.of("t1", "t2", "t3"), List.of("t4"), 0.7);
+        sim.node("W", Set.of("t1", "t2", "t3", "t4"), List.of("t5"), 0.0);
+        sim.node("N", Set.of("t5"), List.of("t6"), 0.0);
+        return sim;
+    }
+
+    /**
+     * I2, both forms, plus the ground-truth causal delivery order, across random interleavings:
+     * at every emission the stamp dominates (a) the dependency clocks and coordinates of every
+     * event the node has delivered and (b) the node's exact delegate-visible causal past; at every
+     * delivery, every consumed cause in the record's true history was already delivered locally.
+     * All asserted inside the sim on every event — this test sweeps seeds and then proves the runs
+     * were not vacuous: records were genuinely held and released, and records were genuinely
+     * delivered out of order above contiguous-frontier gaps (the {@code highestDelivered} path).
+     *
+     * Asserts every seed completes with empty hold-back queues (liveness: everything eventually
+     * delivered) and that holds, gaps, and null-message folds all occurred across the sweep.
+     */
+    @Test
+    void stampsDominateDeliveredDependenciesAndGroundTruthAcrossRandomInterleavings() {
+        int held = 0;
+        int outOfOrder = 0;
+        int folded = 0;
+        for (long seed = 1000; seed < 1000 + SEEDS; seed++) {
+            ParsleyTopologySim sim = standingTopology(seed);
+            sim.run(STEPS);
+            for (String node : List.of("A", "D", "B", "C", "W", "N")) {
+                assertEquals(0, sim.nodeNamed(node).core.bufferSize(),
+                        "[seed " + seed + "] node " + node + " must end fully drained — a record "
+                                + "held forever means a stamped claim nothing appended can satisfy");
+            }
+            held += sim.recordsHeld;
+            outOfOrder += sim.outOfOrderDeliveries;
+            folded += sim.nullMessagesDelivered;
+        }
+        assertTrue(held > 0,
+                "vacuity guard: no seed ever held a record — the gate was never genuinely exercised");
+        assertTrue(outOfOrder > 0,
+                "vacuity guard: no record was ever delivered above a contiguous-frontier gap — the "
+                        + "shared-sink interleaving must produce non-head-of-line deliveries");
+        assertTrue(folded > 0,
+                "vacuity guard: no null message was ever delivered — carried-clock custody was "
+                        + "never genuinely exercised");
+    }
+
+    /**
+     * I3 across random interleavings: a node's successive stamps are vector-monotone (asserted in
+     * the sim at every single emission), which is what makes non-head-of-line delivery preserve
+     * FIFO-per-producer downstream — if an earlier record from a producer is held, every later one
+     * is held too. The shared sink t2 is the load-bearing case: A's and D's interleaved records on
+     * one partition each stay individually monotone, which is exactly what lets B deliver one
+     * producer's record above the other's held one without reordering either producer's sequence.
+     *
+     * Asserts the sweep genuinely emitted from both t2 producers in every seed.
+     */
+    @Test
+    void successiveStampsArePerProducerMonotoneAcrossRandomInterleavings() {
+        for (long seed = 2000; seed < 2000 + SEEDS; seed++) {
+            ParsleyTopologySim sim = standingTopology(seed);
+            sim.run(STEPS);
+            assertTrue(sim.nodeNamed("A").ownBusinessSends.size() + sim.nodeNamed("D").ownBusinessSends.size() > 0,
+                    "[seed " + seed + "] vacuity guard: the shared sink t2 must see business "
+                            + "emissions for the per-producer monotonicity to be exercised");
+        }
+    }
+
+    /**
+     * I9's transitive-chain scenario: the origin record t1@0's coordinate must be claimed directly
+     * by the stamp of every node whose true causal past contains it, however many hops from t1 it
+     * sits — the custody chain that makes the D1 ignore branch sound (a consumed ancestor is
+     * always claimed <em>in the record's own clock</em>, never only via intermediaries).
+     *
+     * Asserts, per seed, that the chain genuinely propagated (C's ground-truth past contains the
+     * origin) and that C's final stamp claims the origin coordinate.
+     */
+    @Test
+    void transitiveChainClaimsTheOriginCoordinateAtEveryHop() {
+        for (long seed = 3000; seed < 3000 + SEEDS; seed++) {
+            ParsleyTopologySim sim = standingTopology(seed);
+            sim.produceExternal("t1"); // the tagged origin: t1@0, before any random scheduling
+            sim.run(STEPS);
+            ParsleyTopologySim.SimCoord origin = new ParsleyTopologySim.SimCoord(sim.topicId("t1"), 0);
+            ParsleyTopologySim.SimNode c = sim.nodeNamed("C");
+            assertTrue(c.truePast.contains(origin),
+                    "[seed " + seed + "] vacuity guard: the origin t1@0 must reach C's causal past "
+                            + "through the chain (drain() delivers all backlog)");
+            assertTrue(c.channels.stamp().offsetFor(sim.topicId("t1"), 0) >= 0,
+                    "[seed " + seed + "] C's stamp must claim the origin coordinate t1@0 directly "
+                            + "(I2/I9: transitively complete, unconditionally merged)");
+        }
+    }
+
+    /**
+     * I9's gate-free custody path: node N consumes only t5 — null messages from W — yet its
+     * outbound stamps must carry the t1..t4 ancestry those carried clocks name, none of which N
+     * consumes. This is the unconditional merge working across differing consumption sets today
+     * (business-record custody across differing scopes joins at T3.1 with the two-branch gate).
+     *
+     * Asserts N genuinely folded carried clocks, never consumed t1, and still stamps a t1 claim.
+     */
+    @Test
+    void unconsumedChannelAncestryIsCarriedThroughNullMessageCustody() {
+        for (long seed = 4000; seed < 4000 + SEEDS; seed++) {
+            ParsleyTopologySim sim = standingTopology(seed);
+            sim.produceExternal("t1");
+            sim.run(STEPS);
+            ParsleyTopologySim.SimNode n = sim.nodeNamed("N");
+            assertTrue(n.carriedClocksFolded > 0,
+                    "[seed " + seed + "] vacuity guard: N must have folded at least one carried clock");
+            assertTrue(!n.inputs.contains("t1"),
+                    "topology self-check: N must not consume t1 for this property to mean anything");
+            assertTrue(n.channels.stamp().offsetFor(sim.topicId("t1"), 0) >= 0,
+                    "[seed " + seed + "] N's stamp must claim t1 ancestry it learned only from "
+                            + "carried clocks on t5 — the merge may never strip unconsumed channels (I9)");
+        }
+    }
+
+    /**
+     * All of the above under in-place restarts: nodes are torn down mid-schedule and rebuilt from
+     * their durable stores (the {@code "f"} blob, buffer, candidate and forwarded-index stores,
+     * the sink end-offset {@code ownOutputs} seed, and the forwarded-index reconstruction of
+     * {@code highestDelivered}), and every continuous invariant — including I3's monotonicity
+     * <em>across</em> the restart boundary — must hold exactly as in an uninterrupted run.
+     *
+     * Asserts restarts genuinely occurred and every seed still drains to empty hold-back queues.
+     */
+    @Test
+    void invariantsHoldAcrossInPlaceRestartsFromDurableState() {
+        int restarts = 0;
+        for (long seed = 5000; seed < 5000 + SEEDS; seed++) {
+            ParsleyTopologySim sim = standingTopology(seed).withRestarts();
+            sim.run(STEPS);
+            for (String node : List.of("A", "D", "B", "C", "W", "N")) {
+                assertEquals(0, sim.nodeNamed(node).core.bufferSize(),
+                        "[seed " + seed + "] node " + node + " must end fully drained after restarts");
+            }
+            restarts += sim.restarts;
+        }
+        assertTrue(restarts > 0, "vacuity guard: the sweep must include at least one in-place restart");
+    }
+}

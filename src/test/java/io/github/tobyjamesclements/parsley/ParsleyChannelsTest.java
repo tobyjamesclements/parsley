@@ -57,6 +57,135 @@ class ParsleyChannelsTest {
     }
 
     /**
+     * A record delivered out of order <em>above</em> a contiguous-frontier gap (non-head-of-line
+     * delivery: a later offset forwards while an earlier one is still held) must be claimed by the
+     * outbound stamp even though the frontier cannot reach it: an output emitted from that delivery
+     * is causally after it, and a downstream consumer of both topics gates only on what the stamp
+     * claims. The frontier (the gate's view) and completeness (the interim floor-publication view)
+     * must both stay below the gap — only {@code stamp()} carries the above-gap claim, exactly the
+     * split T2.3 established for {@code ownOutputs}.
+     *
+     * Asserts the stamp claims the above-gap offset while frontier and completeness stay at the
+     * contiguous prefix.
+     */
+    @Test
+    void stampClaimsADeliveryAboveTheContiguousFrontierGap() {
+        TestKeyValueStore<String, byte[]> store =
+                new TestKeyValueStore<String, byte[]>(Comparator.naturalOrder(), "frontier");
+        ParsleyChannels channels = new ParsleyChannels(store, new MockForwardedIndex());
+
+        channels.receive(T1_ID, 0, 0);
+        channels.delivered(T1_ID, 0, 0);
+        channels.receive(T1_ID, 0, 1);
+        channels.delivered(T1_ID, 0, 1);
+        channels.receive(T1_ID, 0, 2); // received but held — a genuine gap, not a consumer skip
+        channels.receive(T1_ID, 0, 3);
+        channels.delivered(T1_ID, 0, 3); // delivered above the gap at offset 2
+
+        assertEquals(1L, channels.frontier().offsetFor(T1_ID, 0),
+                "the contiguous frontier must not advance past the held offset 2");
+        assertEquals(1L, channels.completeness().offsetFor(T1_ID, 0),
+                "completeness (the floor-publication view) must not claim above the gap either");
+        assertEquals(3L, channels.stamp().offsetFor(T1_ID, 0),
+                "the outbound stamp must claim the record delivered above the gap — its coordinate "
+                        + "is real delivered causal past, and omitting it lets a downstream consumer "
+                        + "deliver a derived output before this cause");
+    }
+
+    /**
+     * {@code highestDelivered} is deliberately not persisted: an above-gap delivered offset is
+     * exactly a forwarded-index mark, committed in the same EOS transaction as the {@code "f"}
+     * blob, so a fresh {@link ParsleyChannels} over the same stores must reconstruct the stamp's
+     * above-gap claim from the index alone.
+     *
+     * Asserts the restored instance's stamp still claims the above-gap offset while its frontier
+     * stays at the contiguous prefix.
+     */
+    @Test
+    void stampsAboveGapClaimIsReconstructedFromTheForwardedIndexOnRestore() {
+        TestKeyValueStore<String, byte[]> store =
+                new TestKeyValueStore<String, byte[]>(Comparator.naturalOrder(), "frontier");
+        MockForwardedIndex forwardedIndex = new MockForwardedIndex();
+        ParsleyChannels original = new ParsleyChannels(store, forwardedIndex);
+        original.receive(T1_ID, 0, 0);
+        original.delivered(T1_ID, 0, 0);
+        original.receive(T1_ID, 0, 1); // received but held
+        original.receive(T1_ID, 0, 2);
+        original.delivered(T1_ID, 0, 2); // delivered above the gap at offset 1
+
+        ParsleyChannels restored = new ParsleyChannels(store, forwardedIndex);
+
+        assertEquals(0L, restored.frontier().offsetFor(T1_ID, 0),
+                "the restored frontier must still sit below the gap");
+        assertEquals(2L, restored.stamp().offsetFor(T1_ID, 0),
+                "the restored stamp must reconstruct the above-gap delivered claim from the "
+                        + "forwarded index — losing it across a restart would let post-restart "
+                        + "outputs under-claim delivered causal past");
+    }
+
+    /**
+     * A scope shrink re-homes an above-gap delivered offset on the retiring channel into the
+     * carried-ancestry clock, like any other delivered causal past (T3.0 A6: skipped, never
+     * dropped). Without this, a restart that removes an input would erase the stamp's claim to a
+     * record the node genuinely delivered — the same under-claim the re-homing rule exists to
+     * prevent for frontier entries.
+     *
+     * Asserts the stamp still claims the retired channel's above-gap offset after the shrink,
+     * across a store-backed restart.
+     */
+    @Test
+    void rescopeReHomesAnAboveGapDeliveryIntoTheCarriedAncestryClock() {
+        TestKeyValueStore<String, byte[]> store =
+                new TestKeyValueStore<String, byte[]>(Comparator.naturalOrder(), "frontier");
+        MockForwardedIndex forwardedIndex = new MockForwardedIndex();
+        ParsleyChannels original = new ParsleyChannels(store, forwardedIndex);
+        original.rescope(Map.of("T1", T1_ID, "T2", T2_ID), 0);
+        original.receive(T2_ID, 0, 0);
+        original.delivered(T2_ID, 0, 0);
+        original.receive(T2_ID, 0, 1); // received but held
+        original.receive(T2_ID, 0, 2);
+        original.delivered(T2_ID, 0, 2); // delivered above the gap at offset 1
+
+        // Restart with T2 removed from the declared inputs — the A6 shrink path.
+        ParsleyChannels restored = new ParsleyChannels(store, forwardedIndex);
+        restored.rescope(Map.of("T1", T1_ID), 0);
+
+        assertEquals(2L, restored.stamp().offsetFor(T2_ID, 0),
+                "the retired channel's above-gap delivered offset must survive the shrink in the "
+                        + "carried ancestry — delivered causal past is re-homed, never dropped");
+    }
+
+    /**
+     * A recreated input's old UUID leaves the above-gap delivered claim with everything else: the
+     * old coordinates can never be delivered by any receiver again (E1), which is I9's one
+     * permitted removal from stamp-feeding state.
+     *
+     * Asserts the stamp carries no claim at all for the destroyed UUID after the rescope.
+     */
+    @Test
+    void rescopeDestroysARecreatedInputsAboveGapClaimWithItsUuid() {
+        TestKeyValueStore<String, byte[]> store =
+                new TestKeyValueStore<String, byte[]>(Comparator.naturalOrder(), "frontier");
+        MockForwardedIndex forwardedIndex = new MockForwardedIndex();
+        ParsleyChannels original = new ParsleyChannels(store, forwardedIndex);
+        original.rescope(Map.of("T1", T1_ID, "T2", T2_ID), 0);
+        original.receive(T2_ID, 0, 0);
+        original.delivered(T2_ID, 0, 0);
+        original.receive(T2_ID, 0, 1); // received but held
+        original.receive(T2_ID, 0, 2);
+        original.delivered(T2_ID, 0, 2); // delivered above the gap at offset 1
+
+        // Restart with T2 recreated: same name, new UUID — the destroyed-coordinate path.
+        Uuid recreatedT2 = Uuid.randomUuid();
+        ParsleyChannels restored = new ParsleyChannels(store, forwardedIndex);
+        restored.rescope(Map.of("T1", T1_ID, "T2", recreatedT2), 0);
+
+        assertEquals(-1L, restored.stamp().offsetFor(T2_ID, 0),
+                "a destroyed (recreated) UUID's above-gap claim must leave the stamp outright — "
+                        + "no receiver can ever deliver the old coordinates (E1)");
+    }
+
+    /**
      * {@code rescope} re-homes — never drops — the ancestry a scope shrink retires (T3.0 A6). A
      * channel-clock entry for a topic that has left the input set folds into the carried-ancestry
      * clock, so completeness (the outbound stamp) is unchanged by the prune: dropping it, as the old

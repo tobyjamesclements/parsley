@@ -47,7 +47,8 @@ import java.util.Set;
  * queries:    frontier() → ParsleyVectorClock         the delivered vector VT(p)
  *             ownOutputs() → ParsleyVectorClock       the node's own acked output positions (D2)
  *             stamp() → ParsleyVectorClock            the outbound vector timestamp
- *                                                     completeness ∪ ownOutputs (D2) — equally the
+ *                                                     completeness ∪ ownOutputs ∪ highestDelivered
+ *                                                     (D2 + the above-gap repair) — equally the
  *                                                     node's total knowledge, the I6 relay bound
  *             alreadyDelivered(topicId, partition,    membership in the delivered set (frontier ∪
  *                 offset) → boolean                   forwarded index); the receive path's replay
@@ -133,6 +134,21 @@ final class ParsleyChannels {
     // an in-flight or held business record. An absent entry means the channel has never been received on —
     // its baseline is seedIfFirstSeen's concern, not a gap to bridge.
     private final Map<CoordKey, Long> highestReceived = new HashMap<>();
+    // Per input channel (topicId, partition) -> the highest offset ever DELIVERED on it, including
+    // deliveries above a contiguous-frontier gap (non-head-of-line delivery). The frontier and this
+    // clock are the two projections of the BSS delivered vector VT(p) that non-FIFO delivery within
+    // a partition splits apart: the gate consults the contiguous projection (frontier — "everything
+    // up to n"), the stamp must carry the max projection, because an output emitted from an
+    // above-gap delivery is causally after that record even though the frontier has not reached it
+    // (the input-side sibling of the own-output gap D2 closed: the stamp otherwise carries the
+    // delivered record's causes but not the record itself, and a downstream consumer of both topics
+    // can deliver the effect before the cause). Stamping it over-claims the gap offsets below it —
+    // real appended offsets, so delay-only (I8), exactly like ownOutputs' seeds. Stamp-side only:
+    // never consulted by the delivery gate; monotone by construction (observe only ever raises —
+    // I3). Deliberately NOT persisted: above-frontier delivered offsets are exactly the forwarded
+    // index's marks, which commit in the same EOS transaction as the frontier blob, so the store
+    // constructor reconstructs this clock from them losslessly.
+    private ParsleyVectorClock highestDelivered = ParsleyVectorClock.empty();
     // Coordinates observed at least once; guards the one-time baseline seed in seedIfFirstSeen.
     private final Set<CoordKey> seenCoordinates = new HashSet<>();
     private final ParsleyForwardedIndex forwardedIndex;
@@ -204,6 +220,19 @@ final class ParsleyChannels {
         if (blob != null) {
             load(blob);
             frontier.forEach((topicId, partition, offset) -> forwardedIndex.pruneAtOrBelow(topicId, partition, offset));
+            // Reconstruct highestDelivered from the forwarded index: its marks are exactly the
+            // offsets delivered above the contiguous frontier, committed in the same EOS transaction
+            // as this blob, so the reconstruction is lossless. Entries at or below the frontier need
+            // no reconstruction — the frontier itself dominates them wherever the two are merged
+            // (stamp()). Every delivered coordinate was received first, so highestReceived's keys
+            // enumerate every channel that can carry a mark.
+            for (Map.Entry<CoordKey, Long> received : highestReceived.entrySet()) {
+                Uuid topicId = received.getKey().topicId();
+                int partition = received.getKey().partition();
+                for (long mark : forwardedIndex.forwardedAfter(topicId, partition, frontier.offsetFor(topicId, partition))) {
+                    highestDelivered = highestDelivered.observe(topicId, partition, mark);
+                }
+            }
         }
     }
 
@@ -299,18 +328,22 @@ final class ParsleyChannels {
     }
 
     /**
-     * The outbound vector timestamp — {@code completeness ∪ ownOutputs} (D2): everything this node
-     * has delivered, carried, or heard advertised ({@link #completeness()}), max-merged with its own
-     * acked output positions ({@link #ownOutputs()}). This is the clock
+     * The outbound vector timestamp — {@code completeness ∪ ownOutputs ∪ highestDelivered} (D2 +
+     * the above-gap delivery repair): everything this node has delivered contiguously, carried, or
+     * heard advertised ({@link #completeness()}), max-merged with its own acked output positions
+     * ({@link #ownOutputs()}) and with the highest offset delivered on each input channel —
+     * including deliveries still above a contiguous-frontier gap, which the frontier cannot yet
+     * claim but the stamp must (an output emitted from such a delivery is causally after it; see
+     * the {@code highestDelivered} field note). This is the clock
      * {@link ParsleyCausalBroadcast#broadcast} attaches to every outbound record, and equally the
      * node's <em>total knowledge</em> — the {@code known()} the I6 relay rule compares a carried
-     * clock against (frontier ∪ channel clocks ∪ carried ancestry ∪ ownOutputs). {@code ownOutputs}
-     * is merged here and only here: it never feeds {@link #completeness()} (the epoch-floor
-     * publication path must keep publishing only delivered/advertised positions while the interim
-     * floor machinery survives) and never the delivery gate.
+     * clock against (frontier ∪ channel clocks ∪ carried ancestry ∪ ownOutputs ∪ highestDelivered).
+     * Both extra clocks are merged here and only here: they never feed {@link #completeness()} (the
+     * epoch-floor publication path must keep publishing only delivered/advertised positions while
+     * the interim floor machinery survives) and never the delivery gate.
      */
     ParsleyVectorClock stamp() {
-        return completeness().merge(ownOutputs);
+        return completeness().merge(ownOutputs).merge(highestDelivered);
     }
 
     /**
@@ -449,6 +482,7 @@ final class ParsleyChannels {
         if (offset <= watermark) {
             return;
         }
+        highestDelivered = highestDelivered.observe(topicId, partition, offset);
         forwardedIndex.mark(topicId, partition, offset);
         absorbContiguous(topicId, partition, watermark);
     }
@@ -783,6 +817,7 @@ final class ParsleyChannels {
             // Everything else about the input-set diff leaves ownOutputs alone below — it is
             // keyed by sink coordinates, not input channels, and it only ever grows (I3).
             ownOutputs = ownOutputs.retaining(notDestroyed);
+            highestDelivered = highestDelivered.retaining(notDestroyed);
         }
 
         // 2 — shrink: fold everything else leaving scope into the carried ancestry, then prune it.
@@ -799,9 +834,13 @@ final class ParsleyChannels {
             carriedAncestry = carriedAncestry.merge(
                     channelRetired ? channel.getValue() : channel.getValue().retaining(outOfScope));
         }
+        // An above-gap delivered offset on a retiring channel is delivered causal past like any
+        // frontier entry — re-homed, never dropped (A6).
+        carriedAncestry = carriedAncestry.merge(highestDelivered.retaining(outOfScope));
         frontier = frontier.retaining(inScope);
         channels.keySet().removeIf(key -> outOfScope.test(key.topicId(), key.partition()));
         channels.replaceAll((key, clock) -> clock.retaining(inScope));
+        highestDelivered = highestDelivered.retaining(inScope);
         highestReceived.keySet().removeIf(key -> outOfScope.test(key.topicId(), key.partition()));
 
         // 3 — growth: an added channel skips the prefix this node already carried. The seed reads

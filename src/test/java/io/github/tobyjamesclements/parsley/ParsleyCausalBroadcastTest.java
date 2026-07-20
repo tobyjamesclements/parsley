@@ -1280,6 +1280,40 @@ class ParsleyCausalBroadcastTest {
                         + "(T2@0 on T1@8) must not");
     }
 
+    /**
+     * The input-side sibling of the own-output gap D2 closed: a record delivered out of order above
+     * a contiguous-frontier gap (t1:3 held on an unseen t2 dependency; t1:4 from another producer
+     * delivers past it) must be claimed by the stamp {@code broadcast()} attaches — the delegate
+     * has seen t1:4, so any output emitted now is causally after it, and a downstream consumer of
+     * both the sink and t1 gates only on the stamp. Before the {@code highestDelivered} repair the
+     * stamp claimed only the contiguous prefix (t1@2), so the derived output could be delivered
+     * downstream before its cause t1:4.
+     *
+     * Asserts the broadcast stamp dominates the out-of-order-delivered coordinate while the gate's
+     * frontier stays below the gap.
+     */
+    @Test
+    void broadcastStampClaimsARecordDeliveredAboveTheContiguousFrontierGap() {
+        ParsleyCausalBroadcast<String, String> causalBroadcast = causalBroadcastWith();
+        for (long offset = 0; offset <= 2; offset++) {
+            processRecord(causalBroadcast, incomingRecord(T1, offset, ParsleyVectorClock.empty()));
+        }
+        processRecord(causalBroadcast, incomingRecord(T1, 3, ParsleyVectorClock.empty().observe(T2_ID, 0, 9)));
+        processRecord(causalBroadcast, incomingRecord(T1, 4, ParsleyVectorClock.empty()));
+        assertEquals(4, forwarded.size(), "t1:0..2 and the out-of-order t1:4 must have been delivered");
+        assertEquals(4L, forwarded.get(3).offset(), "the out-of-order delivery must be t1:4");
+
+        Record<String, String> stamped = causalBroadcast.broadcast(new Record<>("k", "v", 0L));
+
+        ParsleyVectorClock stamp = ParsleyVectorClock.fromBytes(
+                stamped.headers().lastHeader(ParsleyHeader.CAUSAL_DEPENDENCIES).value());
+        assertEquals(2L, causalBroadcast.frontier().offsetFor(T1_ID, 0),
+                "the gate's contiguous frontier must stay below the gap at t1:3");
+        assertTrue(stamp.dominates(ParsleyVectorClock.empty().observe(T1_ID, 0, 4)),
+                "the outbound stamp must claim the delivered record t1:4 — an output emitted after "
+                        + "its delivery is causally after it");
+    }
+
     private ParsleyCausalBroadcast<String, String> causalBroadcastWith() {
         return new ParsleyCausalBroadcast<>(ParsleyVectorClock.empty(), buffer,
                 new MockCandidateIndex(), forwardedIndex, ParsleyMetrics.NOOP,
