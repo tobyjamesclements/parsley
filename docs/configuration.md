@@ -4,10 +4,11 @@
 
 A record is either **forwarded** once its dependencies are satisfied, or stays **buffered** —
 unbounded, changelog-backed — while they are not. There is no configuration that trades causal safety
-for liveness, no eviction, and no third disposition: a record whose dependencies are proven impossible
-(an undecodable payload or dependencies header, or a dependency naming a coordinate this node has no
-input channel for) unconditionally fails the task. See [Troubleshooting](troubleshooting.md) for what
-that looks like operationally and how to recover from it.
+for liveness, no eviction, and no third disposition: a record that cannot be evaluated at all (an
+undecodable payload or an undecodable causal-clock header) unconditionally fails the task, and a
+dependency on a coordinate this node does not consume is ignored, soundly, with a metric. See
+[Troubleshooting](troubleshooting.md) for what that looks like operationally and how to recover
+from it.
 
 ---
 
@@ -80,6 +81,9 @@ Parsley wires a handful of Kafka Streams `Sensor`s per task, under the `stream-p
 | `deserialization-errors` | rate/total | Records that failed to deserialise on the forward path. |
 | `clock-resolution-errors` | rate/total | Records whose `parsley-causal-clock` header could not be decoded. |
 | `deps-out-of-scope-ignored` | rate/total | Dependency coordinates on channels this node does not consume, ignored by the gate (one count per coordinate). Routine in topologies whose consumers have narrower scopes than their ancestors' stamps; a sustained unexpected rate can indicate a cross-wired deployment or a co-partitioning mistake. |
+| `replays-skipped` | rate/total | Received records whose offset was already delivered here, skipped instead of being forwarded to the delegate again. Routine while an added input's re-fetched prefix replays past the carried-ancestry seed after a scope change; sustained counts outside that warrant investigation. |
+| `reflected-claims-above-own-outputs` | rate/total | Inbound clocks claiming one of this node's own sink coordinates above its own-outputs clock. Diagnostic only, never a failure: it means the own-output view is stale beyond the init-time heal, or a peer's stamp is not truthful. |
+| `records-held-above-highest-received` | gauge | Held records waiting past the stall threshold on a dependency above its channel's highest received offset — nothing received so far can satisfy the claim, so the delay is unbounded until that channel produces again. Fail-safe, never unsafe; also logged at `WARN` when the count changes. |
 | `buffer-depth` | gauge | Current number of records held in the causal buffer. |
 | `buffer-oldest-buffered-at-ms` | gauge | Timestamp the oldest currently-held record was buffered at. |
 

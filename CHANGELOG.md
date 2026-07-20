@@ -20,6 +20,25 @@ All notable changes to this project are documented in this file. The format is b
   no upgrade path (upgrades are fresh starts), so old-header records are simply unreadable by this
   version. Documentation vocabulary updated throughout.
 
+### Documentation
+- **The documentation is rewritten around the three protocol modules (T4.2).** The internals
+  section now has one page per module — a new `internals/channels.md` (coordinates and identity,
+  density, own outputs, scope changes), `internals/engine.md` renamed to
+  `internals/causal-broadcast.md`, and a new `internals/gossip.md` — each opening with its module
+  box in the request/indication/property style the source Javadoc uses.
+  `internals/causal-consistency.md` is rewritten around the two-branch delivery gate and its
+  soundness argument, and now states the three environmental assumptions explicitly: E1 (stable
+  channel identity), E2 (retention must not destroy causally-live history — with a new operating
+  note in Streams integration and a new troubleshooting entry for the out-of-range crash-loop),
+  and E3 (participation is per-path — a new precondition in Streams integration). Four pages
+  (`index.md`, `concepts.md`, `configuration.md`, `overview.html`) still described the retired
+  fail-fast on dependencies naming unconsumed coordinates; all now describe the ignore branch.
+  `internals/wire-format.md` documents the frontier blob's carried-ancestry, declared-input,
+  own-outputs, and declared-sink sections, and the metrics table gains the `replays-skipped`,
+  `reflected-claims-above-own-outputs`, and `records-held-above-highest-received` sensors.
+  `migration.md` and the README state that pre-1.0 versions have no upgrade path (upgrades are
+  fresh starts).
+
 ### Changed (internal)
 - **The L3 gossip module is extracted as `ParsleyGossip` (T4.1, design §1b).** The null-message
   receive path (deliver the message's own offset, fold its carried clock stamp-side only) and the

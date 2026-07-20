@@ -43,8 +43,8 @@ frontier catches up. See [Streams integration](streams.md) for the full setup.
 
 ## Stamping causal context onto produced records
 
-At the edges of a topology, where plain Kafka producers feed records in, a node has no Parsley engine
-maintaining a frontier for it, so it maintains one itself. A `CausalClock` value is that
+At the edges of a topology, where plain Kafka producers feed records in, a node has no Parsley
+processor maintaining a frontier for it, so it maintains one itself. A `CausalClock` value is that
 frontier: the running set of positions the node has observed. Bind one with `using`, giving it the
 Kafka client configuration to resolve topic UUIDs through, fold in each record you consume with
 `observe`, and attach the result to each record you produce with `stamp`. Topic UUID resolution is

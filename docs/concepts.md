@@ -1,5 +1,14 @@
 # Concepts
 
+This page covers the concepts a user of Parsley works with: the causal clock, the frontier, the
+buffer, delivery, co-partitioning, and topology changes. Internally these are implemented as three
+layered protocols — a channels layer that adapts Kafka topic-partitions into the reliable FIFO
+channels causal broadcast assumes, a causal-broadcast layer that delivers records in causal order,
+and a gossip layer that keeps clock progress flowing through processors that emit nothing. The
+[internals overview](internals/overview.md) maps the layers to classes, and the
+[causal consistency model](internals/causal-consistency.md) gives the theory; nothing below
+requires either.
+
 ## Causal dependencies
 
 `CausalClock` is a snapshot of what a producer had observed when it sent a record. It is a map
@@ -36,7 +45,7 @@ delivered, whether it is released or evicted, the frontier catches up in a singl
 everything already forwarded above it.
 
 The node's internal frontier is an implementation detail, and there is no public type for it: it is
-contiguous (the highest offset delivered without a gap), which is specific to how the engine releases
+contiguous (the highest offset delivered without a gap), which is specific to how Parsley releases
 held records. A node consuming with a plain Kafka client maintains its own frontier instead, as an
 accumulating `CausalClock` value. Bind a resolver once with `CausalClock.using(props)`,
 fold in each record you consume with `observe(record)`, and stamp the result onto each record you
@@ -73,10 +82,11 @@ processor could see an effect before the cause it directly subscribes to. This c
 delivered immediately and a record delivered after a wait; a record that claims no dependencies (an
 empty dependency set) is trivially satisfied.
 
-The **completeness** clock — the frontier max-merged with every input channel's advertised clock —
-is the *outbound stamp*, not the delivery gate: it carries transitive ancestry (coordinates an
-upstream channel has advertised) downstream, where each receiver's own gate verifies them against
-its own delivery history.
+The *outbound stamp* — the frontier max-merged with every input channel's advertised clock and
+with the node's own acknowledged output positions — is not the delivery gate: it carries
+transitive ancestry (coordinates an upstream channel has advertised, and the node's own produced
+positions) downstream, where each receiver's own gate verifies them against its own delivery
+history.
 
 A dependency naming a coordinate this node does not consume at all — an undeclared topic, or a
 partition a different task instance owns — is **ignored**, unconditionally. That is sound, not
@@ -92,11 +102,12 @@ single witness suffices.
 ## Causal buffer is unbounded and fail-closed
 
 The causal buffer never evicts and never delivers a record out of causal order. There is no
-configuration that trades causal safety for liveness. A record whose dependencies are proven
-impossible — an undecodable payload or dependencies header, or a dependency naming a coordinate this
-node has no channel for — unconditionally fails the task; it is never dropped or forwarded on an
-unproven premise. The failure is logged with the record's coordinate and, for a decode failure, its
-metadata (never the payload), and counted by a metric. See [Troubleshooting](troubleshooting.md) for
+configuration that trades causal safety for liveness. A record that cannot be evaluated at all — an
+undecodable payload or an undecodable causal-clock header — unconditionally fails the task; it is
+never dropped or forwarded on an unproven premise. The failure is logged with the record's
+coordinate and its metadata (never the payload), and counted by a metric. A dependency on a
+coordinate this node does not consume is not a failure: it falls to the delivery gate's ignore
+branch, described under [Delivery](#delivery). See [Troubleshooting](troubleshooting.md) for
 the operational playbook and [Configuration](configuration.md#metrics) for the metrics.
 
 ## Co-partitioning

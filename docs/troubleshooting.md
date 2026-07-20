@@ -117,6 +117,26 @@ incarnation's history reads as lost, never reordered.
 
 ---
 
+## Retention outran a causal consumer
+
+Kafka retention (or an explicit `deleteRecords`) can expunge records a lagging or replaying causal
+consumer has not yet delivered. No protocol can deliver a destroyed record, so Parsley fails closed
+rather than guessing: every causal source is configured with `AutoOffsetReset.none()`, and a
+consumer whose committed position has fallen below the log-start offset fails fast with Kafka's
+out-of-range error instead of silently jumping past the destroyed causes. Parsley seeds log-start
+offsets only on a genuine first start — a group whose offsets merely expired while its state
+survived is refused, because replaying from log-start into surviving state could reorder history.
+
+The result is a crash-loop until an operator intervenes. That is deliberate: a liveness stall,
+never a reorder. Recovery is an explicit operator decision — accept the history loss and reset the
+application (delete its state and offsets, so it genuinely first-starts against the log that still
+exists), or restore the missing history from upstream if you can. Prevent it by sizing retention
+on causal topics to comfortably exceed the longest consumer outage or replay you intend to
+survive. A joiner that first-starts against an already-truncated log is fine: the expunged prefix
+is skipped soundly (the frontier seeds at log-start), but what was lost is lost.
+
+---
+
 ## Sustained buffer growth
 
 If `buffer-depth` (see [Configuration](configuration.md#metrics)) grows without bound instead of
@@ -125,3 +145,11 @@ producing topic that was deleted. The buffer is unconditionally unbounded, so a 
 accumulates records rather than being evicted or dropped. Each held record's debug-level `Holding` log
 line identifies the specific coordinate still missing at the time; correlate it against the lagging
 topic-partition's own consumer lag.
+
+A sharper signal for one class of stall: the `records-held-above-highest-received` gauge counts
+held records whose missing dependency is *above* the highest offset ever received on its channel —
+nothing received so far can satisfy the claim, which is the signature of a producer whose send
+failed after being stamped elsewhere, or of a channel that has gone permanently silent (a
+conservative over-claim in a stamp waits out the same way). The hold is fail-safe, never unsafe,
+but the delay is unbounded until that channel produces again, so the gauge (and its `WARN` log
+line) is the thing to alert on when buffer growth has no matching consumer lag.

@@ -1,5 +1,16 @@
 # Migration
 
+## Upgrading Parsley itself: pre-1.0 has no upgrade path
+
+Pre-1.0 versions of Parsley have no upgrade path between versions. Wire formats (headers, state
+store blobs) and the public API change without compatibility aliases, so upgrading a pre-1.0
+deployment is a fresh start: reset the application (new state, new offsets — typically new topics
+or a full application reset) rather than restarting the new version over the old version's state
+and in-flight records. Records stamped by an older version are not readable by a newer one, and
+persisted state from an older version is not loaded. A stable upgrade path begins at 1.0.
+
+## Adopting the guarantee in an existing cluster
+
 Adopting Parsley in a cluster where some producers do not yet stamp the
 `parsley-causal-clock` header requires no special configuration. A record with a missing
 header is treated as having an empty, vacuously satisfied dependency set and is forwarded immediately.

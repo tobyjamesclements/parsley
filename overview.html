@@ -39,15 +39,16 @@ parsley.coordination.*} keys of earlier versions fail startup loudly if present.
   which are protocol metadata rather than business records.</dd>
 
   <dt><strong>Completeness frontier</strong></dt>
-  <dd>A node's own contiguous frontier max-merged with every input channel's advertised clock — the
-  <em>outbound stamp</em>, carrying transitive ancestry downstream for each receiver's own gate to
-  verify locally. The delivery gate itself checks the node's own contiguous frontier alone: a record
-  is delivered once this node has itself delivered every coordinate the record depends on, and a
-  peer's advertised claim never substitutes for local delivery. A dependency naming a coordinate this
-  node has no input channel for is never treated as vacuously satisfied; it fails the task fast
-  instead, so every input branch of a node must be able to observe every coordinate any branch's
-  records depend on. The frontier is internal to Parsley's processor engine and is not a separate
-  public type.</dd>
+  <dd>A node's own contiguous frontier max-merged with every input channel's advertised clock and
+  the node's own acknowledged output positions — the <em>outbound stamp</em>, carrying transitive
+  ancestry downstream for each receiver's own gate to verify locally. The delivery gate itself
+  checks the node's own contiguous frontier alone: a record is delivered once this node has itself
+  delivered every coordinate the record depends on that it consumes, and a peer's advertised claim
+  never substitutes for local delivery. A dependency naming a coordinate this node does not consume
+  is ignored, unconditionally — sound because stamps are transitively complete and merged
+  unconditionally, so any consumed causal ancestor is claimed directly in the same clock; each
+  ignore is counted by a metric, never a failure. The frontier is internal to Parsley's processor
+  machinery and is not a separate public type.</dd>
 
   <dt><strong>Protocol null message</strong></dt>
   <dd>A record with a null value, keyed with the triggering record's key, marked with a
@@ -62,9 +63,9 @@ parsley.coordination.*} keys of earlier versions fail startup loudly if present.
   <dt><strong>Causal buffer</strong></dt>
   <dd>Records whose dependencies are not yet satisfied are held in an unbounded, changelog-backed
   buffer and released as soon as the frontier catches up. There is no configuration that trades causal
-  order for liveness: a record whose dependencies are proven impossible — an undecodable payload or
-  dependencies header, or a dependency naming a coordinate this node has no channel for — unconditionally
-  fails the task rather than being dropped, evicted, or delivered out of order.</dd>
+  order for liveness: a record that cannot be evaluated at all — an undecodable payload or an
+  undecodable causal-clock header — unconditionally fails the task rather than being dropped,
+  evicted, or delivered out of order.</dd>
 </dl>
 
 <h2>Entry points</h2>

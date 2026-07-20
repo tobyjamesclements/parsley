@@ -69,6 +69,15 @@ operations such as a `groupBy` or a join on a derived key belong outside the cau
 or an HTTP call that is not gated on the frontier, can act on a causal premise that the consumer has
 not confirmed.
 
+**Every processor between causally related topics must stamp.** Causal order is guaranteed only
+along paths where every intermediate processor participates — a Parsley stage, or a client using
+the `CausalClock` edge operations. A service that consumes stamped topics and re-produces
+unstamped output severs the causal chain: its outputs are causally minimal by definition, and the
+severance is undetectable at runtime, because an unstamped record is indistinguishable from a
+genuine external event. Producers that only *originate* events need no participation — a record
+that stamps nothing claims nothing and is delivered immediately. This is environmental assumption
+E3 of the [causal consistency model](internals/causal-consistency.md#environmental-assumptions).
+
 **Forward uniformly to all children.** A causal processor advertises its progress downstream by
 stamping its business output, or by emitting a protocol null message when the delegate forwards nothing
 for a delivered input. That null message reaches every downstream child. If the delegate routes business
@@ -140,3 +149,14 @@ when upgrading.
   rather than being forced out of causal order. There is no configuration that trades causal order for
   liveness. Monitor buffer depth in production — an unbounded buffer means a genuinely stuck dependency
   (for example, a producing topic that was deleted) grows without limit rather than being dropped.
+- **Size retention so it never destroys causally-live history.** A record some running or future
+  consumer still needs must not be expunged before that consumer has delivered it — no protocol can
+  deliver a destroyed record. Retention on causal topics must comfortably exceed the longest
+  consumer outage, lag, or replay you intend to survive. Parsley fails closed on the detectable
+  half: causal sources use `AutoOffsetReset.none()`, so a consumer whose position falls out of
+  range crashes rather than silently jumping past destroyed causes, and log-start offsets are
+  seeded only on a genuine first start (offset expiry is not a first start). Mid-replay expiry is
+  therefore a loud crash-loop until an operator resets — a liveness stall by design, never a
+  reorder. This is environmental assumption E2 of the
+  [causal consistency model](internals/causal-consistency.md#environmental-assumptions); see
+  [Troubleshooting](troubleshooting.md#retention-outran-a-causal-consumer) for recovery.

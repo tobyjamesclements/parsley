@@ -34,9 +34,9 @@ is forwarded immediately. If it does not, the record is held in a causal buffer 
 catches up.
 
 The causal buffer is unbounded — there is no configuration that trades causal order for liveness. A
-record whose dependencies are proven impossible to satisfy (an undecodable payload or dependencies
-header, or a dependency naming a coordinate this node has no channel for) unconditionally fails the
-task rather than being delivered out of order. The [Troubleshooting](troubleshooting.md) page covers
+record that cannot be evaluated at all (an undecodable payload or an undecodable causal-clock
+header) unconditionally fails the task rather than being delivered out of order; a dependency on a
+coordinate this node does not consume is ignored, soundly, with a metric. The [Troubleshooting](troubleshooting.md) page covers
 recovery, and [Configuration](configuration.md) covers the resulting metrics.
 
 ## Public API
