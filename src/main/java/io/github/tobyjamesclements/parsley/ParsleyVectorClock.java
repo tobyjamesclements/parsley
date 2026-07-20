@@ -93,21 +93,6 @@ final class ParsleyVectorClock {
     }
 
     /**
-     * Returns the per-coordinate minimum of this clock and {@code other}, treating an absent
-     * coordinate as unknown rather than zero: a coordinate present in just one clock is kept at its
-     * value (the absent side does not constrain it, and never drags it to zero); a coordinate present
-     * in both takes {@code Math.min}. Used to fold a topology-epoch floor
-     * across the running members' published completeness clocks ({@code ParsleyEpochLog}) — the
-     * committed floor is bounded by the slowest member.
-     */
-    ParsleyVectorClock mergeMin(ParsleyVectorClock other) {
-        Map<Uuid, Map<Integer, Long>> merged = mutableCopy();
-        other.forEach((topicId, partition, offset) ->
-                merged.computeIfAbsent(topicId, k -> new HashMap<>()).merge(partition, offset, Math::min));
-        return new ParsleyVectorClock(freeze(merged));
-    }
-
-    /**
      * Returns a copy of this clock with the {@code (topicId, partition)} coordinate removed, if
      * present. Used to strip a record's self-reference before the admissibility check.
      */

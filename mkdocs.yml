@@ -55,7 +55,6 @@ nav:
     - Internals:
       - Overview: internals/overview.md
       - Causal consistency model: internals/causal-consistency.md
-      - Topology epochs: internals/topology-epochs.md
       - Wire format: internals/wire-format.md
       - The engine: internals/engine.md
       - The processor: internals/streams.md

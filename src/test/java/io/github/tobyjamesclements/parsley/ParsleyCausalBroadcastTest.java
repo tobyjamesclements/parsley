@@ -26,7 +26,7 @@ class ParsleyCausalBroadcastTest {
     private static final Uuid T1_ID = Uuid.randomUuid();
     private static final Uuid T2_ID = Uuid.randomUuid();
     // T3 is never channelled by this node — a stand-in for a downstream/sibling node's own input
-    // coordinate, folded into a DAG-wide committed epoch floor via mergeMin over every member.
+    // coordinate, the kind an inbound clock can name without this node consuming it.
     private static final Uuid T3_ID = Uuid.randomUuid();
 
     // A consumed scope owning partition 0 of t1 and t2 — what a Streams task sees for these sources.

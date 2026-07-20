@@ -122,10 +122,10 @@ order, and its truthful stamps make its outputs correctly gated everywhere from 
 There is no join barrier, no admission wait, and nothing to configure.
 
 Earlier versions coordinated joins through a topology-epoch subsystem (`requestEpochTransition()`,
-the `parsley.coordination.*` keys). It contributed nothing to causal safety and has been removed:
-the keys are accepted but inert (a warning is logged when one is present) and are deleted outright
-in the next release, and `requestEpochTransition()` now always throws. Delete the keys and any
-`requestEpochTransition()` calls when upgrading.
+the `parsley.coordination.*` keys). It contributed nothing to causal safety and has been removed
+entirely: `requestEpochTransition()` no longer exists, and startup fails loudly if a
+`parsley.coordination.*` key is present. Delete the keys and any `requestEpochTransition()` calls
+when upgrading.
 
 ## Operating notes
 

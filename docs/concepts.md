@@ -120,4 +120,4 @@ its truthful stamps make its outputs correctly gated everywhere from its first e
 record with old dependencies simply sits low in the causal partial order — correct, not a hazard.
 There is no join barrier, no admission, no membership roster, and no epoch. (Earlier versions
 coordinated joins through a topology-epoch subsystem; it contributed nothing to causal safety and
-has been removed. Its `parsley.coordination.*` keys are inert and pending removal.)
+has been removed. Its `parsley.coordination.*` keys fail startup loudly if present — delete them.)

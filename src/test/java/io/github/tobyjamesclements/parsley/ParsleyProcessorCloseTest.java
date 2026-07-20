@@ -64,7 +64,7 @@ class ParsleyProcessorCloseTest {
         ParsleyProcessor<String, String, String, String> processor = new ParsleyProcessor<>(
                 delegate, serializer,
                 "frontier", "buffer", "candidate-index", "forwarded-index",
-                Set.of("t1"), Set.of(), Set.of(), List.of(),
+                Set.of("t1"), Set.of(), List.of(),
                 configs -> { throw new IllegalStateException("broker unreachable (test)"); },
                 ParsleyConfig.from(new Properties()), null);
 
@@ -74,7 +74,6 @@ class ParsleyProcessorCloseTest {
         context.addStateStore(bufferStore);
         context.addStateStore(candidateIndexStore);
         context.addStateStore(forwardedIndexStore);
-        context.addStateStore(new ParsleyCommittedCompleteness("frontier-commit-hook"));
 
         AtomicReference<Throwable> initError = new AtomicReference<>();
         try {

@@ -1,6 +1,5 @@
 package io.github.tobyjamesclements.parsley;
 
-import org.jspecify.annotations.Nullable;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -55,67 +54,26 @@ final class ParsleyConfig {
     static final String TOPOLOGY_VALIDATION = "parsley.topology.validation";
 
     /**
-     * {@code parsley.coordination.epoch-events-topic} — <strong>inert</strong>: topology-epoch
-     * coordination has been removed from the causal protocol (the two-branch delivery gate needs no
-     * membership, no epochs, and no join barrier — joins are coordination-free). The key is still
-     * accepted so a configured deployment starts, but it wires nothing; {@link CausalStreams} logs a
-     * warning when it is present. Deleted outright — startup will then fail loudly on it — in the
-     * next release.
+     * The removed {@code parsley.coordination.*} key prefix. Topology-epoch coordination is no longer
+     * part of the causal protocol (the two-branch delivery gate needs no membership, no epochs, and no
+     * join barrier — joins are coordination-free), and its configuration keys are deleted outright:
+     * {@link #from(Properties)} fails loudly when any key under this prefix is present, so a stale
+     * deployment learns about the removal at startup instead of silently running with dead keys.
      */
-    static final String COORDINATION_EPOCH_EVENTS_TOPIC = "parsley.coordination.epoch-events-topic";
-
-    /**
-     * {@code parsley.coordination.domain-topics} — <strong>inert</strong>, like
-     * {@link #COORDINATION_EPOCH_EVENTS_TOPIC}: the passthrough auto-wiring this key used to drive
-     * existed so a member's subscriptions could cover a coordinated domain, a requirement the
-     * two-branch gate dissolved (a dependency on an unconsumed topic is soundly ignored — D1).
-     * Accepted, ignored, warned about; deleted in the next release.
-     */
-    static final String COORDINATION_DOMAIN_TOPICS = "parsley.coordination.domain-topics";
-
-    /**
-     * {@code parsley.coordination.member-apps} — <strong>inert</strong>, like
-     * {@link #COORDINATION_EPOCH_EVENTS_TOPIC}: there is no membership roster because there is no
-     * membership. Accepted, ignored, warned about; deleted in the next release.
-     */
-    static final String COORDINATION_MEMBER_APPS = "parsley.coordination.member-apps";
+    static final String REMOVED_COORDINATION_PREFIX = "parsley.coordination.";
 
     /** How {@link #TOPOLOGY_VALIDATION} reacts to a detectable topology misconfiguration. */
     enum ValidationMode { OFF, WARN, STRICT }
 
     private final ValidationMode topologyValidation;
-    private final @Nullable String coordinationEpochEventsTopic;
-    private final Set<String> coordinationDomainTopics;
-    private final Set<String> coordinationMemberApps;
 
-    private ParsleyConfig(ValidationMode topologyValidation, @Nullable String coordinationEpochEventsTopic,
-                          Set<String> coordinationDomainTopics, Set<String> coordinationMemberApps) {
+    private ParsleyConfig(ValidationMode topologyValidation) {
         this.topologyValidation = topologyValidation;
-        this.coordinationEpochEventsTopic = coordinationEpochEventsTopic;
-        this.coordinationDomainTopics = coordinationDomainTopics;
-        this.coordinationMemberApps = coordinationMemberApps;
     }
 
     /** How to react to a detectable topology misconfiguration at startup. */
     ValidationMode topologyValidation() {
         return topologyValidation;
-    }
-
-    /** The shared epoch-events log topic, or {@code null} if topology-epoch coordination is not configured. */
-    @Nullable String coordinationEpochEventsTopic() {
-        return coordinationEpochEventsTopic;
-    }
-
-    /** The full coordinated domain's topic set, or empty if topology-epoch coordination is not configured. */
-    Set<String> coordinationDomainTopics() {
-        return coordinationDomainTopics;
-    }
-
-    /** The authoritative member-app roster (every {@code application.id} in the domain), or empty when
-     * {@link #COORDINATION_MEMBER_APPS} is not configured — the caller then defaults to a single-app
-     * roster of the app's own id. */
-    Set<String> coordinationMemberApps() {
-        return coordinationMemberApps;
     }
 
     /** Loads from the {@code parsley.properties} classpath resource, or defaults if it is absent. */
@@ -142,37 +100,37 @@ final class ParsleyConfig {
     }
 
     /**
-     * Builds from explicit properties (programmatic override / tests). The {@code
-     * parsley.coordination.*} keys are inert but still parsed — {@link CausalStreams} reads them
-     * only to warn that they wire nothing; the old set-without-epoch-events-topic cross-checks are
-     * gone with the subsystem's protocol role (an inert key cannot be misconfigured).
+     * Builds from explicit properties (programmatic override / tests).
+     *
+     * @throws IllegalStateException if any removed {@code parsley.coordination.*} key is present
+     *         (see {@link #rejectRemovedCoordinationKeys})
      */
     static ParsleyConfig from(Properties props) {
-        String epochEventsTopic = props.getProperty(COORDINATION_EPOCH_EVENTS_TOPIC);
-        String resolvedEpochEventsTopic =
-                (epochEventsTopic == null || epochEventsTopic.isBlank()) ? null : epochEventsTopic.trim();
-        Set<String> domainTopics = domainTopics(props);
-        Set<String> memberApps = commaSeparated(props, COORDINATION_MEMBER_APPS);
-        return new ParsleyConfig(validationMode(props), resolvedEpochEventsTopic, domainTopics, memberApps);
+        rejectRemovedCoordinationKeys(props);
+        return new ParsleyConfig(validationMode(props));
     }
 
-    private static Set<String> domainTopics(Properties props) {
-        return commaSeparated(props, COORDINATION_DOMAIN_TOPICS);
-    }
-
-    private static Set<String> commaSeparated(Properties props, String key) {
-        String value = props.getProperty(key);
-        if (value == null || value.isBlank()) {
-            return Set.of();
-        }
-        Set<String> items = new LinkedHashSet<>();
-        for (String item : value.split(",")) {
-            String trimmed = item.trim();
-            if (!trimmed.isEmpty()) {
-                items.add(trimmed);
+    /**
+     * Fails loudly when any removed {@code parsley.coordination.*} key is present. Topology-epoch
+     * coordination has been removed from the causal protocol, so the keys wire nothing — and a key
+     * that wires nothing must not parse quietly, or an operator who believes their deployment is
+     * coordinated would never learn otherwise. There is no migration path: an existing coordinated
+     * deployment upgrades by deleting its coordination configuration (behaviour becomes strictly
+     * more available — joins need zero coordination).
+     */
+    private static void rejectRemovedCoordinationKeys(Properties props) {
+        Set<String> removed = new LinkedHashSet<>();
+        for (String name : props.stringPropertyNames()) {
+            if (name.startsWith(REMOVED_COORDINATION_PREFIX)) {
+                removed.add(name);
             }
         }
-        return Set.copyOf(items);
+        if (!removed.isEmpty()) {
+            throw new IllegalStateException("removed configuration " + removed + ": topology-epoch "
+                    + "coordination has been removed from the causal protocol — joins need zero "
+                    + "coordination, so there is no epoch-events log, no domain, and no member roster. "
+                    + "Delete every parsley.coordination.* key; no replacement configuration is needed.");
+        }
     }
 
     private static ValidationMode validationMode(Properties props) {

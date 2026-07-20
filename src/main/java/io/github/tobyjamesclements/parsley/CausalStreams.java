@@ -7,7 +7,6 @@ import org.apache.kafka.streams.Topology;
 import org.apache.kafka.streams.TopologyDescription;
 import org.apache.kafka.streams.errors.StreamsUncaughtExceptionHandler;
 import org.jspecify.annotations.Nullable;
-import org.slf4j.LoggerFactory;
 
 import java.time.Duration;
 import java.util.ArrayList;
@@ -40,12 +39,10 @@ import java.util.function.Supplier;
  * Runtime.getRuntime().addShutdownHook(new Thread(causalStreams::close));
  * }</pre>
  *
- * <p><strong>Topology-epoch coordination has been removed from the causal protocol</strong>: the
- * two-branch delivery gate needs no membership, no epochs, and no join barrier, so joins need zero
- * coordination — a fresh application simply starts consuming, and its replay self-gates into causal
- * order. The {@code parsley.coordination.*} keys are accepted but <em>inert</em> (a warning is logged
- * when one is present); they are deleted outright — startup will then fail loudly on them — in the
- * next release.
+ * <p><strong>Joins need zero coordination</strong>: a fresh application simply starts consuming, and
+ * its replay self-gates into causal order. There is no membership, no epoch, and no join barrier; the
+ * removed {@code parsley.coordination.*} keys of earlier versions fail startup loudly if present
+ * (see {@link ParsleyConfig}).
  *
  * <p><strong>{@link #close()}</strong> always runs the full graceful shutdown: it waits for every task's
  * causal buffer to drain through the ordinary delivery path before stopping the underlying
@@ -78,8 +75,7 @@ public final class CausalStreams implements AutoCloseable {
      */
     public CausalStreams(CausalTopology topology, Properties props) {
         this.quiesce = new ParsleyQuiesce();
-        warnOnInertCoordinationConfig(props);
-        Topology assembled = topology.assemble(props, quiesce, null);
+        Topology assembled = topology.assemble(props, quiesce);
         this.ownOutputRegistryId = registerOwnOutputTracking(topology, props);
         this.kafkaStreams = new KafkaStreams(assembled, props);
         this.applicationId = props.getProperty(StreamsConfig.APPLICATION_ID_CONFIG);
@@ -155,27 +151,6 @@ public final class CausalStreams implements AutoCloseable {
     }
 
     /**
-     * Logs a warning when any {@code parsley.coordination.*} key is present: the coordination
-     * subsystem no longer participates in the causal protocol (the two-branch gate needs no
-     * membership — joins are coordination-free), so the keys are accepted but wire nothing. They
-     * are deleted outright — startup will then fail loudly on them — in the next release.
-     */
-    private static void warnOnInertCoordinationConfig(Properties props) {
-        Properties merged = ParsleyConfig.loadProperties();
-        merged.putAll(props);
-        ParsleyConfig config = ParsleyConfig.from(merged);
-        if (config.coordinationEpochEventsTopic() != null
-                || !config.coordinationDomainTopics().isEmpty()
-                || !config.coordinationMemberApps().isEmpty()) {
-            LoggerFactory.getLogger(CausalStreams.class)
-                    .warn("parsley.coordination.* configuration is inert: topology-epoch coordination "
-                            + "has been removed from the causal protocol (joins need zero coordination). "
-                            + "Delete these keys — they are removed for good, with a loud startup "
-                            + "failure, in the next release.");
-        }
-    }
-
-    /**
      * Seeds any un-committed causal source offset for a genuine first start, then starts the underlying
      * {@code KafkaStreams} instance. The seeding runs first, and before the group is joined, so a first
      * start does not trip the {@code AutoOffsetReset.none()} every causal source is declared with; a real
@@ -213,19 +188,6 @@ public final class CausalStreams implements AutoCloseable {
      */
     public void setUncaughtExceptionHandler(StreamsUncaughtExceptionHandler handler) {
         kafkaStreams.setUncaughtExceptionHandler(handler);
-    }
-
-    /**
-     * Always throws: topology-epoch coordination has been removed from the causal protocol, so there
-     * is no epoch to transition. The method survives only so a caller still compiled against it gets
-     * a clear message; it is deleted outright in the next release.
-     *
-     * @throws IllegalStateException always
-     */
-    public void requestEpochTransition() {
-        throw new IllegalStateException("topology-epoch coordination has been removed from the causal "
-                + "protocol — there are no epochs to transition; delete this call and any "
-                + "parsley.coordination.* configuration");
     }
 
     /**

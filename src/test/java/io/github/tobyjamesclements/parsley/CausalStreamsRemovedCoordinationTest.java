@@ -11,24 +11,24 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * The {@code parsley.coordination.*} keys are inert at the {@link CausalStreams} runtime: they are
- * accepted (a configured deployment still constructs and would start), wire no coordination, and the
- * epoch-transition entry point reports the removal instead of pretending an epoch exists. The keys
- * are deleted outright in the next release (T3.3); this test pins the one-release inert behaviour.
+ * The removed {@code parsley.coordination.*} keys fail {@link CausalStreams} construction loudly:
+ * topology-epoch coordination has been deleted from the causal protocol (joins need zero
+ * coordination), so a deployment still carrying its configuration must learn about the removal at
+ * startup — from a message naming the key and the removal — rather than silently running
+ * uncoordinated while its operator believes otherwise.
  */
-class CausalStreamsInertCoordinationTest {
+class CausalStreamsRemovedCoordinationTest {
 
     private static final ParsleyTopicAdmin ADMIN = TestTopicAdmin.of(
             Map.of("t1", org.apache.kafka.common.Uuid.randomUuid()));
 
     /**
-     * A topology configured with every {@code parsley.coordination.*} key still constructs — the keys
-     * must not fail startup while they remain accepted — and {@link
-     * CausalStreams#requestEpochTransition()} always throws, naming the removal rather than "not
-     * configured" (the caller did configure it; the truthful message is that the subsystem is gone).
+     * Constructing a {@link CausalStreams} over properties that still carry a removed
+     * {@code parsley.coordination.*} key throws {@code IllegalStateException} before any Kafka
+     * Streams instance is built, and the message names both the offending key and the removal.
      */
     @Test
-    void coordinationConfigConstructsInertAndEpochTransitionReportsTheRemoval() {
+    void removedCoordinationKeyFailsConstructionLoudly() {
         CausalTopology topology = new CausalStreamsBuilder().topicAdmin(ADMIN)
                 .stream("t1", Serdes.String(), Serdes.String())
                 .process(PassthroughProcessor::new)
@@ -36,22 +36,20 @@ class CausalStreamsInertCoordinationTest {
                 .build();
 
         Properties props = new Properties();
-        props.put(StreamsConfig.APPLICATION_ID_CONFIG, "inert-coordination-test");
+        props.put(StreamsConfig.APPLICATION_ID_CONFIG, "removed-coordination-test");
         props.put(StreamsConfig.BOOTSTRAP_SERVERS_CONFIG, "localhost:9092");
         props.put(StreamsConfig.PROCESSING_GUARANTEE_CONFIG, StreamsConfig.EXACTLY_ONCE_V2);
         props.put(StreamsConfig.STATE_DIR_CONFIG, System.getProperty("java.io.tmpdir"));
         props.put("parsley.coordination.epoch-events-topic", "epoch-events");
-        props.put("parsley.coordination.domain-topics", "t1,out");
-        props.put("parsley.coordination.member-apps", "inert-coordination-test");
 
-        try (CausalStreams streams = new CausalStreams(topology, props)) {
-            IllegalStateException thrown = assertThrows(IllegalStateException.class,
-                    streams::requestEpochTransition,
-                    "requestEpochTransition must throw: there is no epoch subsystem to transition");
-            assertTrue(thrown.getMessage().contains("removed"),
-                    "the message must name the removal, not claim coordination is unconfigured: "
-                            + thrown.getMessage());
-        }
+        IllegalStateException thrown = assertThrows(IllegalStateException.class,
+                () -> new CausalStreams(topology, props),
+                "a removed parsley.coordination.* key must fail CausalStreams construction");
+        assertTrue(thrown.getMessage().contains("parsley.coordination.epoch-events-topic"),
+                "the failure must name the offending key: " + thrown.getMessage());
+        assertTrue(thrown.getMessage().contains("removed"),
+                "the failure must name the removal, not read as an unknown-key typo: "
+                        + thrown.getMessage());
     }
 
     /** A delegate that forwards its input unchanged — the topology shape is all this test needs. */

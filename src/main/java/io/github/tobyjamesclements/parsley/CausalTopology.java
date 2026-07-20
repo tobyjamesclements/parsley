@@ -1,7 +1,6 @@
 package io.github.tobyjamesclements.parsley;
 
 import org.apache.kafka.common.serialization.Serde;
-import org.apache.kafka.common.serialization.Serdes;
 import org.apache.kafka.streams.AutoOffsetReset;
 import org.apache.kafka.streams.StreamsConfig;
 import org.apache.kafka.streams.Topology;
@@ -20,7 +19,7 @@ import java.util.Set;
  * source topics, processor, sink(s), and partitioner. This is a specification, not yet a real Kafka
  * Streams {@link Topology} — {@link #assemble} builds that once a {@link CausalStreams} runtime supplies
  * its {@code props}, which is when a stage's default-serde-deferred sources/sinks, and the runtime's
- * quiesce/coordination wiring, become known. Construct one with {@link CausalStreamsBuilder}; hand it to
+ * quiesce wiring, become known. Construct one with {@link CausalStreamsBuilder}; hand it to
  * {@code new CausalStreams(topology, props)}.
  *
  * <p><strong>{@code processing.guarantee=exactly_once_v2} is required, unconditionally.</strong> {@link
@@ -38,16 +37,15 @@ public final class CausalTopology {
 
     /**
      * Assembles the real {@link Topology}: resolves Parsley's configuration and every stage's
-     * default-serde-deferred sources/sinks from {@code props}, wires {@code quiesce} and (if configured)
-     * {@code coordination} into every stage, and adds each stage's source/processor/sink nodes.
+     * default-serde-deferred sources/sinks from {@code props}, wires {@code quiesce} into every stage,
+     * and adds each stage's source/processor/sink nodes.
      *
-     * @param props        standard Kafka Streams configuration plus Parsley's {@code parsley.*} keys
-     * @param quiesce      the shared quiesce coordinator every stage's tasks register with
-     * @param coordination the shared topology-epoch coordination handle, or {@code null} to run in epoch 0
+     * @param props   standard Kafka Streams configuration plus Parsley's {@code parsley.*} keys
+     * @param quiesce the shared quiesce coordinator every stage's tasks register with
      * @return the assembled {@code Topology}
      * @throws IllegalStateException if {@code props} does not configure {@code exactly_once_v2}
      */
-    Topology assemble(Properties props, ParsleyQuiesce quiesce, @Nullable ParsleyCoordination coordination) {
+    Topology assemble(Properties props, ParsleyQuiesce quiesce) {
         requireExactlyOnce(props);
         requireFailClosedExceptionHandlers(props);
         ParsleyConfig config = resolveConfig(props);
@@ -60,7 +58,7 @@ public final class CausalTopology {
         for (ParsleyStageSpec<?, ?, ?, ?> stage : stages) {
             index++;
             String name = stage.explicitName != null ? stage.explicitName : stagePrefix + index;
-            assembleStage(topology, stage, name, config, defaults, quiesce, coordination);
+            assembleStage(topology, stage, name, config, defaults, quiesce);
         }
         return topology;
     }
@@ -145,7 +143,7 @@ public final class CausalTopology {
 
     private <KIn, VIn, KOut, VOut> void assembleStage(
             Topology topology, ParsleyStageSpec<KIn, VIn, KOut, VOut> stage, String name, ParsleyConfig config,
-            DefaultSerdes defaults, ParsleyQuiesce quiesce, @Nullable ParsleyCoordination coordination) {
+            DefaultSerdes defaults, ParsleyQuiesce quiesce) {
         Map<String, ParsleySource<KIn, VIn>> sources = new LinkedHashMap<>();
         stage.sources.forEach((topic, source) -> sources.put(topic, new ParsleySource<>(topic,
                 source.keySerde() != null ? source.keySerde() : defaults.key(),
@@ -155,61 +153,34 @@ public final class CausalTopology {
         stage.sinks.forEach(sink -> sinkTopics.add(sink.topic()));
         List<String> sinkNodeNames = stage.sinks.stream().map(ParsleyStageSpec.SinkSpec::name).toList();
 
-        // A domain topic this stage neither consumes nor produces: wired below as an extra, raw
-        // byte[]/byte[] source into this SAME processor node (see ParsleyProcessor's passthrough-record
-        // handling), so this stage's declared subscriptions can cover the full coordinated domain
-        // (ParsleyProcessor#validateFullMeshCoverage) without hand-wiring an "independent input" stage for
-        // it. Empty whenever domain-topics is not configured — no behaviour change then.
-        Set<String> passthroughTopics = new LinkedHashSet<>(config.coordinationDomainTopics());
-        passthroughTopics.removeAll(sources.keySet());
-        passthroughTopics.removeAll(sinkTopics);
-        if (coordination == null) {
-            passthroughTopics = Set.of();
-        }
-
         ParsleyProcessorSupplier.Builder<KIn, VIn, KOut, VOut> causalBuilder = ParsleyProcessorSupplier.builder(stage.userSupplier)
                 .addBufferStore(name)
                 .addSources(sources.values())
-                .declareTopics(passthroughTopics)
                 .config(config)
                 .sinkTopics(sinkTopics)
                 .sinkNodeNames(sinkNodeNames)
                 .withQuiesce(quiesce);
-        if (coordination != null) {
-            causalBuilder.withCoordination(coordination);
-        }
         if (topicAdminOverride != null) {
             causalBuilder.topicAdmin(topicAdminOverride);
         }
         ParsleyProcessorSupplier<KIn, VIn, KOut, VOut> supplier = causalBuilder.build();
 
         String processorName = name + "-processor";
-        String[] sourceNames = new String[sources.size() + passthroughTopics.size()];
+        String[] sourceNames = new String[sources.size()];
         int i = 0;
-        // Every causal source — business and passthrough alike — is declared with AutoOffsetReset.none()
-        // so Kafka Streams never silently resets a partition whose committed offset has fallen out of
-        // range (retention or deleteRecords outrunning a lagging consumer). Such a reset would jump the
-        // consumer forward over real committed records, and the skip-bridge (ParsleyChannels.bridge)
-        // would fold those lost records as if they were transaction markers — releasing dependents before
-        // their causes (a silent causal-order violation). With none() the consumer fails fast at fetch
-        // instead, before any jumped record is delivered, so the bridge needs no runtime log-start check.
-        // A genuine first start (no committed offset) is handled by CausalStreams' pre-start seeding, which
-        // commits the log-start offset so none() does not trip on absence. Passthrough sources are NOT
-        // exempt: they are finite-retention business topics of peer apps (the eternal epoch-events log is a
-        // side-channel raw consumer, not a Streams source), equally exposed to the jump.
+        // Every causal source is declared with AutoOffsetReset.none() so Kafka Streams never silently
+        // resets a partition whose committed offset has fallen out of range (retention or deleteRecords
+        // outrunning a lagging consumer). Such a reset would jump the consumer forward over real
+        // committed records, and the skip-bridge (ParsleyChannels.bridge) would fold those lost records
+        // as if they were transaction markers — releasing dependents before their causes (a silent
+        // causal-order violation). With none() the consumer fails fast at fetch instead, before any
+        // jumped record is delivered, so the bridge needs no runtime log-start check. A genuine first
+        // start (no committed offset) is handled by CausalStreams' pre-start seeding, which commits the
+        // log-start offset so none() does not trip on absence.
         for (ParsleySource<KIn, VIn> buffer : sources.values()) {
             String sourceName = name + "-source-" + buffer.topic();
             topology.addSource(AutoOffsetReset.none(), sourceName,
                     buffer.keySerde().deserializer(), buffer.valueSerde().deserializer(), buffer.topic());
-            sourceNames[i++] = sourceName;
-        }
-        for (String passthroughTopic : passthroughTopics) {
-            String sourceName = name + "-passthrough-source-" + passthroughTopic;
-            // Raw byte[]/byte[] regardless of this stage's own KIn/VIn — a passthrough topic's value
-            // schema is unrelated to this stage's business types. ParsleyProcessor recognises it by its
-            // own source topic and never hands it to the delegate; see its class Javadoc.
-            topology.addSource(AutoOffsetReset.none(), sourceName,
-                    Serdes.ByteArray().deserializer(), Serdes.ByteArray().deserializer(), passthroughTopic);
             sourceNames[i++] = sourceName;
         }
         topology.addProcessor(processorName, supplier, sourceNames);

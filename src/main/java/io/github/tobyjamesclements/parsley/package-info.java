@@ -16,8 +16,8 @@
  *   <li><strong>Coordination-free joins.</strong> There is no membership, no epoch, and no join
  *       barrier: a new application simply starts consuming, its replay self-gates into causal
  *       delivery order through the ordinary hold-back queue, and its truthful stamps make its
- *       outputs correctly gated everywhere from the first emission. The {@code
- *       parsley.coordination.*} keys of earlier versions are inert and pending removal.</li>
+ *       outputs correctly gated everywhere from the first emission. The removed {@code
+ *       parsley.coordination.*} keys of earlier versions fail startup loudly if present.</li>
  *   <li><strong>Schema handling.</strong> A held record's key and value are (de)serialised with the
  *       {@code Serde} registered for its own <em>source</em> topic, never the buffer's internal changelog
  *       topic, so topic-scoped serdes — Avro plus Schema Registry {@code TopicNameStrategy} in particular
@@ -36,8 +36,7 @@
  *   <li>{@link io.github.tobyjamesclements.parsley.CausalTopology} &mdash; the built causal topology, ready
  *       for {@code new CausalStreams(topology, props)}</li>
  *   <li>{@link io.github.tobyjamesclements.parsley.CausalStreams} &mdash; the runtime: wraps the underlying
- *       {@code KafkaStreams} instance, and owns graceful causal drain on {@code close()} and (when
- *       {@code parsley.coordination.epoch-events-topic} is configured) topology-epoch coordination</li>
+ *       {@code KafkaStreams} instance, and owns graceful causal drain on {@code close()}</li>
  * </ul>
  *
  * <h2>Edge operations</h2>

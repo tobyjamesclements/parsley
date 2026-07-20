@@ -18,8 +18,8 @@ declares one or more causal stages, {@code .build()} produces a
 
 <p>Joining a running topology needs no coordination: a new application simply starts consuming, its
 replay self-gates into causal delivery order through the ordinary hold-back queue, and its truthful
-stamps make its outputs correctly gated everywhere from its first emission. The {@code
-parsley.coordination.*} keys of earlier versions are inert and pending removal.</p>
+stamps make its outputs correctly gated everywhere from its first emission. The removed {@code
+parsley.coordination.*} keys of earlier versions fail startup loudly if present.</p>
 
 <h2>Core concepts</h2>
 <dl>

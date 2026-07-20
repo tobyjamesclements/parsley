@@ -7,6 +7,7 @@ import java.util.Set;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
  * Tests {@link ParsleyConfig}'s own configuration loading: building from explicit properties via
@@ -69,42 +70,30 @@ class ParsleyConfigTest {
     }
 
     /**
-     * The inert {@code parsley.coordination.*} keys still parse — {@code CausalStreams} reads them
-     * only to warn that they wire nothing — and no combination of them fails startup: an inert key
-     * cannot be misconfigured, so the old set-without-epoch-events-topic cross-checks are gone with
-     * the subsystem's protocol role.
+     * Every removed {@code parsley.coordination.*} key fails loudly at parse: the coordination
+     * subsystem is deleted (joins need zero coordination), and a key that wires nothing must not be
+     * accepted quietly — an operator who believes their deployment is coordinated should learn about
+     * the removal at startup, from a message naming the offending key.
      *
-     * Asserts each key parses alone without an exception, and domain-topics still parses as a
-     * trimmed, deduplicated comma-separated set.
+     * Asserts each removed key alone throws {@code IllegalStateException} naming both the key and
+     * the removal.
      */
     @Test
-    void inertCoordinationKeysParseWithoutCrossChecks() {
-        Properties domainAlone = new Properties();
-        domainAlone.setProperty("parsley.coordination.domain-topics", " t1, t2 ,t3,, t2");
-        assertEquals(Set.of("t1", "t2", "t3"), ParsleyConfig.from(domainAlone).coordinationDomainTopics(),
-                "domain-topics must parse as a trimmed, deduplicated comma-separated set, with no "
-                        + "epoch-events-topic cross-check (the key is inert)");
-
-        Properties memberAppsAlone = new Properties();
-        memberAppsAlone.setProperty("parsley.coordination.member-apps", "app-a,app-b");
-        assertEquals(Set.of("app-a", "app-b"), ParsleyConfig.from(memberAppsAlone).coordinationMemberApps(),
-                "member-apps must parse alone without an epoch-events-topic cross-check (the key is inert)");
-
-        Properties topicAlone = new Properties();
-        topicAlone.setProperty("parsley.coordination.epoch-events-topic", "epoch-events");
-        assertEquals("epoch-events", ParsleyConfig.from(topicAlone).coordinationEpochEventsTopic(),
-                "epoch-events-topic must still parse (CausalStreams reads it to warn)");
-    }
-
-    /**
-     * With no coordination key set, {@link ParsleyConfig#coordinationDomainTopics()} is empty — the
-     * common case, unaffected by the inert keys' continued existence.
-     *
-     * Asserts the default is an empty set.
-     */
-    @Test
-    void coordinationDomainTopicsDefaultsToEmpty() {
-        assertEquals(Set.of(), ParsleyConfig.load().coordinationDomainTopics(),
-                "domain-topics must default to empty when the key is not set");
+    void fromRejectsEveryRemovedCoordinationKey() {
+        for (String key : Set.of(
+                "parsley.coordination.epoch-events-topic",
+                "parsley.coordination.domain-topics",
+                "parsley.coordination.member-apps")) {
+            Properties props = new Properties();
+            props.setProperty(key, "anything");
+            IllegalStateException thrown = assertThrows(IllegalStateException.class,
+                    () -> ParsleyConfig.from(props),
+                    "the removed key " + key + " must fail configuration parsing loudly");
+            assertTrue(thrown.getMessage().contains(key),
+                    "the failure must name the offending key: " + thrown.getMessage());
+            assertTrue(thrown.getMessage().contains("removed"),
+                    "the failure must name the removal, not read as an unknown-key typo: "
+                            + thrown.getMessage());
+        }
     }
 }

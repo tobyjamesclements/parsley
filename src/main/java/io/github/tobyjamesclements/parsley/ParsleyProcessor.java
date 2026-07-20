@@ -48,25 +48,12 @@ import java.util.function.Function;
  * A marker's own delivery is never itself treated as a reason to relay further — unlike a genuine
  * business record, whose delivery always unconditionally causes this node to emit something on its own
  * sink (see {@link #delivered}). Gating on data-taught-something rather than on "a record was delivered"
- * is what keeps a topology cycle — a marker-only passthrough channel included — from ping-ponging the
+ * is what keeps a topology cycle — a marker-only channel included — from ping-ponging the
  * same marker forever: a node that has already converged with its peers has nothing new to say, and
  * simply stops, rather than needing separate per-edge "have I already relayed this" bookkeeping. A
  * dependency can only ever be created after something real has already been observed, so a marker that
  * taught nothing new could not have just formed a new dependency on that non-event either — skipping
  * the re-emission strands nothing.
- *
- * <p><strong>Passthrough topics.</strong> {@code passthroughTopics} (a subset of {@code topics})
- * names a topic this stage does not otherwise consume or produce — declared solely so its causal
- * progress reaches this task's frontier. It is wired as an ordinary extra source into this same processor node,
- * deserialised as raw {@code byte[]}/{@code byte[]} (never the stage's own {@code KIn}/{@code VIn} —
- * a passthrough topic's value schema is unrelated to this stage's business types). {@link #process}
- * and {@link #delivered} recognise it by its own source topic (never a header) and route it through the
- * ordinary {@link ParsleyCausalBroadcast} gate exactly like any other channel, but skip {@code delegate.process}
- * for it specifically, emitting a watermark instead. Critically, this check is per <em>released</em>
- * message, not per triggering record: a passthrough record's own delivery can, as a side effect of the
- * shared buffer/candidate-index, release an unrelated held business record in the very same batch — that
- * business record still reaches the real delegate correctly, on its own turn through {@link #delivered}'s
- * loop, keyed by its own topic, never the passthrough record that happened to trigger the drain.
  *
  * @param <KIn>  the input key type
  * @param <VIn>  the input value type
@@ -89,10 +76,6 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
     private final String candidateIndexStoreName;
     private final String forwardedIndexStoreName;
     private final Set<String> topics;
-    // A subset of topics wired as extra, raw byte[]/byte[] sources into this same processor node — a
-    // topic this stage does not otherwise consume or produce (see the class Javadoc's "Passthrough
-    // topics" paragraph). Empty for the ordinary case.
-    private final Set<String> passthroughTopics;
     // The topics this stage produces. Feeds the partition-count parity check.
     private final Set<String> sinkTopics;
     // Every child node this processor forwards a control-plane record (watermark) to by
@@ -138,15 +121,10 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
     private @Nullable KIn lastSeenKey;
 
     private ProcessorContext<KOut, VOut> context;
-    // The task's one causal-broadcast core, built once at init() over the task's state stores. Exactly one Processor
-    // instance ever touches these stores within a task (passthrough topics are wired as extra sources
-    // into this SAME node, never as a separate processor node), so the cached ParsleyChannels's
+    // The task's one causal-broadcast core, built once at init() over the task's state stores. Exactly
+    // one Processor instance ever touches these stores within a task, so the cached ParsleyChannels's
     // in-memory copy of the persisted state cannot diverge from a concurrent writer — there is none.
     private ParsleyCausalBroadcast<KIn, VIn> causalBroadcast;
-    // The completeness as of the task's last committed transaction, snapshotted at each commit-cycle
-    // flush (see ParsleyCommittedCompleteness). The store survives until the coordination subsystem
-    // is deleted outright (T3.3); nothing reads the snapshot any more.
-    private ParsleyCommittedCompleteness commitHook;
     private KeyValueStore<String, byte[]> frontierStore;
     private KeyValueStore<Long, byte[]> bufferStore;
     private KeyValueStore<byte[], byte[]> candidateIndexStore;
@@ -178,27 +156,8 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
                      Function<Map<String, Object>, ParsleyTopicAdmin> adminFactory,
                      ParsleyConfig config,
                      @Nullable ParsleyQuiesce quiesce) {
-        this(delegate, serializer, frontierStoreName, bufferStoreName, candidateIndexStoreName,
-                forwardedIndexStoreName, topics, Set.of(), sinkTopics, sinkNodeNames,
-                adminFactory, config, quiesce);
-    }
-
-    ParsleyProcessor(Processor<KIn, VIn, KOut, VOut> delegate,
-                     ParsleySerializer<KIn, VIn> serializer,
-                     String frontierStoreName,
-                     String bufferStoreName,
-                     String candidateIndexStoreName,
-                     String forwardedIndexStoreName,
-                     Set<String> topics,
-                     Set<String> passthroughTopics,
-                     Set<String> sinkTopics,
-                     List<String> sinkNodeNames,
-                     Function<Map<String, Object>, ParsleyTopicAdmin> adminFactory,
-                     ParsleyConfig config,
-                     @Nullable ParsleyQuiesce quiesce) {
         this.delegate = delegate;
         this.serializer = serializer;
-        this.passthroughTopics = passthroughTopics;
         this.frontierStoreName = frontierStoreName;
         this.bufferStoreName = bufferStoreName;
         this.candidateIndexStoreName = candidateIndexStoreName;
@@ -219,7 +178,6 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
         this.bufferStore = context.getStateStore(bufferStoreName);
         this.candidateIndexStore = context.getStateStore(candidateIndexStoreName);
         this.forwardedIndexStore = context.getStateStore(forwardedIndexStoreName);
-        this.commitHook = context.getStateStore(ParsleyStores.commitHookName(frontierStoreName));
 
         boolean restored = frontierStore.get(ParsleyStores.FRONTIER_KEY) != null;
 
@@ -244,12 +202,6 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
         } else {
             log.info("Processor initialized [task: {}] — frontier empty (fresh start)", context.taskId());
         }
-
-        // Seed the commit hook with the restored completeness (rebuilt from the committed changelog,
-        // durable by definition) and hand it the live supplier it snapshots at each commit-cycle
-        // flush. Nothing reads the snapshot any more; the store dies with the coordination
-        // subsystem's deletion (T3.3).
-        commitHook.bind(() -> causalBroadcast().completeness(), causalBroadcast.completeness());
 
         this.stampingContext = new ParsleyProcessorContext<>(
                 context, causalBroadcast, () -> Optional.ofNullable(deliveryMetadata), sinkNodeNames);
@@ -301,12 +253,10 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
      * cached for the processor's whole lifetime.
      *
      * <p>Caching is sound because exactly one {@link Processor} instance ever touches this task's
-     * causal state stores: passthrough topics are wired as extra <em>sources into this same processor
-     * node</em> ({@link CausalTopology}), never as a separate processor node sharing the stores. (An
-     * earlier design anticipated such a separate node and rebuilt the core — a full buffer scan,
-     * candidate re-index, and frontier-blob re-persist — at the top of every operation to keep two
-     * hypothetical instances coherent; that made every operation O(buffer-depth) for a sharer that was
-     * never built.)
+     * causal state stores — there is no other processor node sharing them. (An earlier design
+     * anticipated such a sharer and rebuilt the core — a full buffer scan, candidate re-index, and
+     * frontier-blob re-persist — at the top of every operation to keep two hypothetical instances
+     * coherent; that made every operation O(buffer-depth) for a sharer that was never built.)
      */
     private ParsleyCausalBroadcast<KIn, VIn> causalBroadcast() {
         return causalBroadcast;
@@ -448,14 +398,9 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
             }
             case BUSINESS -> { }
         }
-        // A passthrough record's key/value are raw bytes, not genuine KIn/VIn values (see the class
-        // Javadoc's "Passthrough topics" paragraph) — never recorded as the most-recent business key.
-        boolean passthrough = isPassthroughRecord(record);
-        if (!passthrough) {
-            // Remember the most-recent business key seen on this task's owned partition; a source-layer
-            // task reuses it to route a self-injected marker back onto that partition lane.
-            lastSeenKey = record.key();
-        }
+        // Remember the most-recent business key seen on this task's owned partition; a source-layer
+        // task reuses it to route a self-injected marker back onto that partition lane.
+        lastSeenKey = record.key();
         ParsleyMessage<KIn, VIn> ingested = ingest(record);
         ParsleyVectorClock completenessBefore = causalBroadcast().completeness();
         ParsleyCausalBroadcast.Outcome<KIn, VIn> outcome = causalBroadcast().receive(ingested);
@@ -468,24 +413,9 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
         // held record does not flood downstream with no-op watermarks.
         if (outcome.delivered().isEmpty() && !causalBroadcast().completeness().equals(completenessBefore)) {
             // Key the heartbeat with the buffered record's own key so it routes to that record's
-            // partition, matching where its eventual business output will land — except a passthrough
-            // record, whose own key is not a genuine KIn/KOut value; lastSeenKey routes just as well
-            // (ParsleyMarkerPartition ignores the key for routing regardless).
-            forwardMarker(ParsleyHeader.WATERMARK, new byte[0], passthrough ? lastSeenKey : record.key());
+            // partition, matching where its eventual business output will land.
+            forwardMarker(ParsleyHeader.WATERMARK, new byte[0], record.key());
         }
-    }
-
-    /**
-     * Returns {@code true} if {@code record} arrived on a {@link #passthroughTopics} source — a domain
-     * topic this stage does not otherwise consume or produce, wired only so its causal progress reaches
-     * this task's frontier (see the class Javadoc's "Passthrough topics" paragraph). Its key/value are raw
-     * bytes, never genuine {@code KIn}/{@code VIn} values.
-     */
-    private boolean isPassthroughRecord(Record<KIn, VIn> record) {
-        if (passthroughTopics.isEmpty()) {
-            return false;
-        }
-        return context.recordMetadata().map(RecordMetadata::topic).map(passthroughTopics::contains).orElse(false);
     }
 
     @Override
@@ -514,32 +444,19 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
             // input branches (never a per-record frontier-snapshot merged with inbound deps, which was
             // correct only in single-layer topologies).
             deliveryMetadata = new ParsleyRecordMetadata(message.topic(), message.partition(), message.offset());
-            if (passthroughTopics.contains(message.topic())) {
-                // A passthrough message never reaches the delegate — its key/value are raw bytes, not a
-                // genuine KIn/VIn value the delegate could make sense of (see the class Javadoc's
-                // "Passthrough topics" paragraph). Its own delivery still needs advertising, exactly like a
-                // genuinely non-emitting delegate invocation; lastSeenKey (not this message's own raw key)
-                // keeps the watermark's routing key well-typed. This also correctly delivers a *different*
-                // message this passthrough delivery released as a side effect (e.g. a held business
-                // record depending on this coordinate) through the real delegate below, on that message's
-                // own turn through this same loop — every released message is routed by its own topic,
-                // never by whichever message triggered the drain.
-                forwardMarker(ParsleyHeader.WATERMARK, new byte[0], lastSeenKey);
-            } else {
-                // User headers + the producer's dependencies only; the source coordinate is surfaced via
-                // context.recordMetadata(), and ParsleyProcessorContext re-stamps the frontier on forward.
-                stampingContext.resetForwardCount();
-                delegate.process(new Record<>(message.key(), message.value(), message.timestamp(),
-                        message.headersWithDependencies()));
-                // If the delegate did not forward any business record for this input, emit a watermark
-                // carrying the current completeness frontier so that downstream nodes still learn about
-                // this node's causal progress. Without this, a non-emitting processor silently stalls
-                // downstream completeness, breaking the inductive correctness of multi-layer topologies.
-                if (stampingContext.forwardCount() == 0) {
-                    // Reuse the delivered record's key so the stand-in watermark routes to the same
-                    // partition its business output would have.
-                    forwardMarker(ParsleyHeader.WATERMARK, new byte[0], message.key());
-                }
+            // User headers + the producer's dependencies only; the source coordinate is surfaced via
+            // context.recordMetadata(), and ParsleyProcessorContext re-stamps the frontier on forward.
+            stampingContext.resetForwardCount();
+            delegate.process(new Record<>(message.key(), message.value(), message.timestamp(),
+                    message.headersWithDependencies()));
+            // If the delegate did not forward any business record for this input, emit a watermark
+            // carrying the current completeness frontier so that downstream nodes still learn about
+            // this node's causal progress. Without this, a non-emitting processor silently stalls
+            // downstream completeness, breaking the inductive correctness of multi-layer topologies.
+            if (stampingContext.forwardCount() == 0) {
+                // Reuse the delivered record's key so the stand-in watermark routes to the same
+                // partition its business output would have.
+                forwardMarker(ParsleyHeader.WATERMARK, new byte[0], message.key());
             }
         }
         deliveryMetadata = null;
@@ -650,7 +567,7 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
      * business records on this path still advertises its causal progress, so a grandchild node's
      * channel clock can advance without any business record on the path. But a watermark's own delivery
      * is never itself a reason to relay further — only a genuine change to what this channel knows is —
-     * or a topology cycle (a marker-only passthrough channel included) would ping-pong the same
+     * or a topology cycle (a marker-only channel included) would ping-pong the same
      * watermark forever (clock-invisible markers; see the class Javadoc).
      */
     private void handleWatermark(Record<KIn, VIn> record) {
@@ -698,7 +615,7 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
         headers.add(markerHeader, markerValue);
         // Stamped with the current wall clock, never 0L: a marker's timestamp carries no causal
         // meaning (only its headers do), but it does drive broker time-based retention — a sink
-        // segment holding only 0L-timestamped markers (a marker-only passthrough channel) would look
+        // segment holding only 0L-timestamped markers (a marker-only channel) would look
         // expired the moment it rolled and be deleted before a slow consumer read it. A marker's
         // destination is exact — every sink at this task's own partition — so its crossing wait
         // excludes exactly that set (see the markerDestinations field).
@@ -923,8 +840,8 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
      * ParsleyMarkerPartitioner} routes a protocol marker to this task's own owned partition
      * ({@code taskId().partition()}) unconditionally, so a sink with fewer partitions than a source
      * makes the marker produce fail outright, crash-looping the task. {@code strict} turns that
-     * into the startup failure it really is; the default stays {@code warn} for parity with the
-     * pre-coordination behaviour (the escalation that rode on the epoch subsystem left with it).
+     * into the startup failure it really is; the default stays {@code warn} so an existing
+     * deployment that tolerates the mismatch keeps starting.
      */
     private void validatePartitionParity(Map<String, Integer> partitionCounts) {
         ParsleyConfig.ValidationMode mode = config.topologyValidation();

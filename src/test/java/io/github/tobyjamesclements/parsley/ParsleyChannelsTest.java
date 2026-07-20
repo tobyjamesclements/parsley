@@ -353,7 +353,7 @@ class ParsleyChannelsTest {
      * {@link ParsleyChannels#stamp()} is {@code completeness ∪ ownOutputs} (D2): the outbound
      * vector timestamp carries the acked own-output positions, and equally serves as the node's
      * total knowledge (the I6 relay bound), while {@code completeness()} itself stays free of
-     * {@code ownOutputs} (the interim epoch-floor publication path reads it).
+     * {@code ownOutputs} (it reports what this node has delivered, never what it produced).
      *
      * Asserts stamp = completeness merged with ownOutputs and completeness excludes ownOutputs.
      */

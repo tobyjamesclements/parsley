@@ -90,7 +90,7 @@ class CausalStreamsTopologyTest {
 
     private static Topology assemble(
             CausalStreamsBuilder builder, ParsleyTopicAdmin admin, Properties props, ParsleyQuiesce quiesce) {
-        return builder.topicAdmin(admin).build().assemble(props, quiesce, null);
+        return builder.topicAdmin(admin).build().assemble(props, quiesce);
     }
 
     private static Properties strictValidation() {
@@ -322,7 +322,7 @@ class CausalStreamsTopologyTest {
         CausalTopology topology = builder.topicAdmin(ADMIN).build();
 
         IllegalArgumentException e = assertThrows(IllegalArgumentException.class,
-                () -> topology.assemble(config(), new ParsleyQuiesce(), null),
+                () -> topology.assemble(config(), new ParsleyQuiesce()),
                 "assemble() must reject an already-decorated supplier");
         assertTrue(e.getMessage().contains("ParsleyProcessorSupplier"),
                 "the message must name the double-decoration: " + e.getMessage());
@@ -346,7 +346,7 @@ class CausalStreamsTopologyTest {
                 LogAndContinueExceptionHandler.class);
 
         IllegalStateException e = assertThrows(IllegalStateException.class,
-                () -> topology.assemble(props, new ParsleyQuiesce(), null),
+                () -> topology.assemble(props, new ParsleyQuiesce()),
                 "assemble() must reject a record-skipping deserialization handler");
         assertTrue(e.getMessage().contains("skips records"),
                 "the message must explain the skip hazard: " + e.getMessage());
@@ -369,7 +369,7 @@ class CausalStreamsTopologyTest {
                 LogAndContinueProcessingExceptionHandler.class.getName());
 
         IllegalStateException e = assertThrows(IllegalStateException.class,
-                () -> topology.assemble(props, new ParsleyQuiesce(), null),
+                () -> topology.assemble(props, new ParsleyQuiesce()),
                 "assemble() must reject a record-skipping processing handler");
         assertTrue(e.getMessage().contains("skips records"),
                 "the message must explain the skip hazard: " + e.getMessage());
@@ -396,7 +396,7 @@ class CausalStreamsTopologyTest {
         config().forEach(props::put);                   // base config (incl. EOS) in the top layer
 
         IllegalStateException e = assertThrows(IllegalStateException.class,
-                () -> topology.assemble(props, new ParsleyQuiesce(), null),
+                () -> topology.assemble(props, new ParsleyQuiesce()),
                 "a skipping handler in a Properties defaults layer must still be rejected");
         assertTrue(e.getMessage().contains("record-skipping handler"),
                 "the message must explain the skip hazard: " + e.getMessage());

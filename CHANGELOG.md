@@ -6,6 +6,29 @@ All notable changes to this project are documented in this file. The format is b
 
 ## [Unreleased]
 
+### Removed
+- **BREAKING: the topology-epoch coordination subsystem is deleted (decisions D4 + D7).** Causal
+  safety never depended on it: the two-branch delivery gate (consumed dependencies gate on the
+  local frontier; all others are soundly ignored under invariants I2 + I9) is the whole safety
+  story, and joins need zero coordination — a fresh application starts consuming and its replay
+  self-gates into causal delivery order. Removed outright: the epoch-events log and its
+  deterministic fold, epoch floors and transition windows, snapshot/boundary markers and their
+  header kinds, the genesis cohort barrier, the member-app roster, the join barrier, leave-drain,
+  the commit-time completeness snapshot store, the `mergeMin` floor fold, and the domain-topics
+  passthrough sources (fourteen main classes, among them `ParsleyCoordination`,
+  `ParsleyEpochRuntime`, `ParsleyEpochLog`, `KafkaEpochTransport`, and
+  `ParsleyQuiesceTracker` — shutdown quiesce via `CausalStreams.close()` is
+  membership-independent and survives unchanged). `CausalStreams.requestEpochTransition()` no
+  longer exists. The `parsley.coordination.*` configuration keys are deleted, not renamed:
+  **startup fails loudly** naming the offending key when one is present. An existing coordinated
+  deployment upgrades by deleting its coordination configuration; behaviour becomes strictly more
+  available (no join barrier, no genesis wait). Two capabilities are knowingly dropped with the
+  subsystem, as misconfiguration detection rather than safety: the split-domain loud failure
+  (cross-deployment coupling between compliant apps is causally sound) and fail-fast on unknown
+  coordinates (replaced by the `deps-out-of-scope-ignored` metric and startup topology
+  validation). The `docs/internals/topology-epochs.md` page is deleted with the machinery it
+  described.
+
 ### Fixed
 - **The outbound stamp now claims records delivered out of order above a contiguous-frontier gap:
   the `highestDelivered` clock (T2.4, invariant I2).** Delivery within a partition is deliberately

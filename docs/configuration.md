@@ -44,18 +44,15 @@ absent file, or an absent key, falls back to the defaults below.
 #   strict             fails the task fast at startup
 #   off                disables the checks
 parsley.topology.validation = warn
-
-# The parsley.coordination.* keys of earlier versions (epoch-events-topic, domain-topics,
-# member-apps) are INERT: topology-epoch coordination has been removed from the causal protocol —
-# joins need zero coordination. The keys are still accepted so a configured deployment starts (a
-# warning is logged), and they are deleted outright — with a loud startup failure — in the next
-# release. Delete them from your configuration.
 ```
 
 | Key | Default | Values |
 |---|---|---|
 | `parsley.topology.validation` | `warn` | `off`, `warn`, `strict` |
-| `parsley.coordination.*` | (unset) | inert; pending removal |
+
+The `parsley.coordination.*` keys of earlier versions are removed: topology-epoch coordination is no
+longer part of the causal protocol — joins need zero coordination. Startup fails loudly if one is
+present; delete the keys. No replacement configuration is needed.
 
 `parsley.topology.validation = warn` logs a prominent warning at startup when the causal input topics
 do not share a partition count, which makes co-partitioning impossible, and lets the task start. This
