@@ -79,7 +79,7 @@ K up to k itself — see [why local delivery is required](#why-local-delivery-is
 
 A record is delivered when this node's own contiguous frontier dominates its dependency clock, with
 only the record's own self-cycle removed (a record never waits on its own offset). That is the
-entire gate, `ParsleyEngine.isDeliverable()`:
+entire gate, `ParsleyCausalBroadcast.isDeliverable()`:
 
 ```java
 frontier().dominates(deps.withoutSelfReference())
@@ -93,8 +93,8 @@ buffered.
 
 The **completeness clock** is this node's own delivered frontier, max-merged with every input
 channel's advertised dependencies (`ParsleyVectorClock.merge`), computed in `ParsleyChannels.completeness()`.
-Each channel contributes the dependencies its records and watermarks have advertised (the pairwise-max
-over what it has seen on that channel). Forwarded records and protocol watermarks are stamped with
+Each channel contributes the dependencies its records and null messages have advertised (the pairwise-max
+over what it has seen on that channel). Forwarded records and protocol null messages are stamped with
 this clock (`ParsleyProcessor` reads `engine.completeness()`): it carries *transitive ancestry* — a
 coordinate an upstream node delivered that this node's stamp must keep advertising — downstream,
 where each receiving node's own gate verifies every coordinate it names against its own delivery
@@ -132,20 +132,19 @@ clock already states, and ignoring it loses no ordering observable at this node.
 fail-fast on such coordinates added no safety and made joining a running topology need
 coordination; it is retired.)
 
-### The topology contract
+### Topology consequences
 
-Every coordinate any of a node's dependency clocks could ever name must be reachable to that node
-through **at least one** input channel — directly, or transitively through a channel that has itself
-genuinely observed it. This is the metadata overhead of causal consistency without built-in total
-visibility, placed on topology construction rather than hidden in the engine.
+There is no topology contract to satisfy: with the two-branch gate, a dependency on a coordinate no
+input channel of this node ever observes is simply ignored (counted by the
+`deps-out-of-scope-ignored` metric), and the consumed ancestry the clock carries alongside it gates
+normally. Nothing needs to be routed, declared, or passed through for such a record to be
+deliverable.
 
 - **Independent inputs.** A node joining unrelated sources can receive a record depending on a
-  coordinate no input channel of this node ever observes — nothing here can ever confirm it, so the
-  completeness clock never includes it. Rather than buffer such a record forever (an undiagnosable,
-  permanent stall) or admit it on the unproven assumption that the coordinate is irrelevant, this fails
-  the task fast immediately. To make such a record genuinely deliverable, route the coordinate through
-  some input branch instead — have it consume and pass the coordinate through, emitting watermarks even
-  when it runs no business logic.
+  coordinate no input channel of this node ever observes. The coordinate falls to the gate's ignore
+  branch — sound because any consumed causal ancestor is claimed directly in the same clock (I2 +
+  I9) — so the record delivers as soon as its consumed dependencies are locally satisfied, and the
+  ignored entries surface only in the metric.
 - **Consuming both an ancestor and its own descendant is fine.** A node may consume both a topic `T`
   and a topic derived from `T`. A descendant record's dependency on `T` is satisfied by the node's
   own `T` channel delivering up to it — the ordinary gate, no special case; the descendant's stamp
@@ -153,26 +152,26 @@ visibility, placed on topology construction rather than hidden in the engine.
   gate. (An earlier version of this contract forbade this pattern; that restriction was a consequence
   of the retired intersection-based gate, not a fundamental limit — see the changelog.)
 
-### Protocol watermarks (heartbeats)
+### Protocol null messages (heartbeats)
 
 The completeness stamp advances only as this node's own frontier or its channels advertise progress,
 so a node must keep advertising even when it produces no business output. A consumed message that
 yields no business record — a filter that drops it, a record held in the buffer, a not-yet-ready
-aggregate — emits a *protocol watermark*: a record with a null value, marked with the
-`_parsley_watermark` header, carrying the node's current completeness frontier (emitted when a held
+aggregate — emits a *protocol null message*: a record with a null value, marked with the
+`_parsley_null_message` header, carrying the node's current completeness frontier (emitted when a held
 record advances completeness,
-or when a delivered record produces no forward). The watermark is keyed with the triggering record's
+or when a delivered record produces no forward). The null message is keyed with the triggering record's
 key so it routes to the same partition that record's business output would, which keeps completeness
 propagation correct across a sink boundary; it is identified by the header, never by its key. A
-downstream node delivers the watermark's *own offset* on its source channel — advancing that
+downstream node delivers the null message's *own offset* on its source channel — advancing that
 channel's contiguous frontier exactly like a business record's own coordinate, which is what can
 release held records — and folds the carried frontier into that channel's advertised clock, feeding
-its own outbound stamp (never its gate). It then re-emits its own watermark only when the carried
+its own outbound stamp (never its gate). It then re-emits its own null message only when the carried
 clock taught it something new, so progress propagates contiguously through layers that produce no
 business records without ping-ponging around a cycle. Parsley's own processors
-consume watermarks internally (`ParsleyProcessor` / `ParsleyEngine.onWatermark`); a plain Kafka
-client folds them into its running frontier with `CausalDependencies.observe` while skipping them as
-business records, which it detects with `CausalDependencies.isWatermark`.
+consume null messages internally (`ParsleyProcessor` / `ParsleyGossip.receive`); a plain Kafka
+client folds them into its running frontier with `CausalClock.observe` while skipping them as
+business records, which it detects with `CausalClock.isNullMessage`.
 
 ### Each channel's own coordinate is a contiguous boundary
 
@@ -184,7 +183,7 @@ the frontier is exactly what the `dominates` gate checks: if a coordinate jumped
 record waiting on an offset inside the gap would be released on bookkeeping alone, without the
 record at that offset having been delivered. The contiguous boundary ensures the gate reflects
 actual delivery history, not observed-but-undelivered offsets. (It is distinct from the *protocol
-watermark* records above, which carry a completeness frontier between nodes.)
+null message* records above, which carry a completeness frontier between nodes.)
 
 ## Violations
 

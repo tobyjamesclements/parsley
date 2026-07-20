@@ -41,9 +41,9 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 
 /**
  * End-to-end proof, against a real broker, that the causal processor delivers records in causal order
- * when fed by plain Kafka clients using the {@link CausalDependencies} edge API. A record produced on
+ * when fed by plain Kafka clients using the {@link CausalClock} edge API. A record produced on
  * {@code IN} after "consuming" {@code PREREQ@0} (its dependencies derived with
- * {@link CausalDependencies#from}) must not reach the output topic before the {@code PREREQ} record
+ * {@link CausalClock#from}) must not reach the output topic before the {@code PREREQ} record
  * it depends on — even when it is produced first.
  *
  * <p>This replaces the deleted standalone producer/consumer round-trip ITs: ordering is now a
@@ -89,13 +89,13 @@ class CausalProcessorOrderingIT {
             // Dependencies a producer would attach after consuming PREREQ@0 (carries its position).
             ConsumerRecord<String, String> prereqConsumed =
                     new ConsumerRecord<>(PREREQ, 0, 0L, "pk", "prereq");
-            CausalDependencies orderDeps = CausalDependencies.using(resolverProps).observe(prereqConsumed);
+            CausalClock orderDeps = CausalClock.using(resolverProps).observe(prereqConsumed);
 
             try (KafkaProducer<String, String> producer = new KafkaProducer<>(producerConfig(bootstrap))) {
                 // Produce the dependent record FIRST — it must be buffered, not delivered early.
                 producer.send(orderDeps.stamp(new ProducerRecord<>(IN, "ik", "order"))).get();
                 // Then the prerequisite it depends on (lands at PREREQ@0), unblocking it.
-                producer.send(CausalDependencies.empty().stamp(new ProducerRecord<>(PREREQ, "pk", "prereq"))).get();
+                producer.send(CausalClock.empty().stamp(new ProducerRecord<>(PREREQ, "pk", "prereq"))).get();
             }
 
             try (KafkaConsumer<String, String> consumer = new KafkaConsumer<>(consumerConfig(bootstrap))) {
@@ -108,7 +108,7 @@ class CausalProcessorOrderingIT {
     }
 
     /**
-     * A resolver backed by a live broker (via {@link CausalDependencies#using(Properties)}) rejects a
+     * A resolver backed by a live broker (via {@link CausalClock#using(Properties)}) rejects a
      * topic that does not exist with an {@code IllegalArgumentException} (mapping the broker's
      * {@code UnknownTopicOrPartitionException}).
      *
@@ -119,7 +119,7 @@ class CausalProcessorOrderingIT {
         String bootstrap = kafka.getBootstrapServers();
         Properties resolverProps = new Properties();
         resolverProps.put("bootstrap.servers", bootstrap);
-        CausalDependencies deps = CausalDependencies.using(resolverProps);
+        CausalClock deps = CausalClock.using(resolverProps);
         assertThrows(IllegalArgumentException.class,
                 () -> deps.observe(new ConsumerRecord<>("no-such-topic-" + UUID.randomUUID(), 0, 0L, "k", "v")),
                 "a resolver must reject a non-existent topic with IllegalArgumentException");

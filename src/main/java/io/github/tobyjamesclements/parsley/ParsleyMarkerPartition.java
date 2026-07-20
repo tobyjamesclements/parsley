@@ -6,7 +6,7 @@ import org.jspecify.annotations.Nullable;
  * A thread-local side channel that lets a shared {@link ParsleyMarkerPartitioner} — one {@link
  * org.apache.kafka.streams.processor.StreamPartitioner} instance registered once at topology-build time,
  * reused across every parallel task instance of a sink node — know which partition to route a Parsley
- * protocol marker (a watermark) to for the task currently forwarding one.
+ * protocol marker (a null message) to for the task currently forwarding one.
  * {@link ParsleyProcessor#forwardToSinks} sets this immediately before, and clears it immediately after,
  * every marker forward.
  *

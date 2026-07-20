@@ -35,7 +35,7 @@ interface ParsleyMetrics {
     void recordDeserializationError();
 
     /**
-     * An inbound record's {@code parsley-causal-dependencies} header could not be decoded into a clock
+     * An inbound record's {@code parsley-causal-clock} header could not be decoded into a clock
      * at ingest (a corrupt or truncated header). This counts the occurrence.
      */
     void recordClockResolutionError();

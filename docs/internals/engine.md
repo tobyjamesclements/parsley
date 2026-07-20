@@ -1,7 +1,7 @@
 # The engine
 
-`ParsleyEngine<K,V>` is the core of the causal guarantee — the receive-and-deliver half of the classic
-causal broadcast algorithm (see [causal consistency model](causal-consistency.md)). It classifies
+`ParsleyCausalBroadcast<K,V>` is the core of the causal guarantee — the receive-and-deliver half of the
+classic causal broadcast algorithm (see [causal consistency model](causal-consistency.md)). It classifies
 incoming records, manages the causal frontier and the held-record buffer, cascades releases as the
 frontier advances, and fails the task fast on any dependency it can prove will never be satisfiable.
 There is no eviction, no buffer limit, and no timeout: a record whose dependencies are not yet satisfied
@@ -35,12 +35,12 @@ receive(record):
 
     return out
 
-onWatermark(channel, offset, carriedFrontier):
-    learnedSomethingNew = !stamp().dominates(carriedFrontier)  # I6: new against total knowledge
-    channelStore.update(channel, carriedFrontier)      # stamp-only: feeds completeness(), not the gate
-    channels.delivered(channel, offset)                   # the marker's OWN offset genuinely delivered
-    propagate(channel)                                  # releases via the frontier advance alone
-    return (delivered, learnedSomethingNew)             # caller relays downstream only if genuinely new
+ParsleyGossip.receive(channel, offset, carried):       # the L3 module, layered over this core
+    learnedSomethingNew = !stamp().dominates(carried)  # I6: new against total knowledge
+    channelStore.update(channel, carried)              # stamp-only: feeds completeness(), not the gate
+    channels.delivered(channel, offset)                # the null message's OWN offset genuinely delivered
+    propagate(channel)                                 # releases via the frontier advance alone
+    return (delivered, learnedSomethingNew)            # caller relays downstream only if genuinely new
 ```
 
 The gate is `frontier.dominates(consumedDependencies)`: this node's own contiguous delivered
@@ -77,7 +77,7 @@ channel delivered that this node may not itself consume — flows through to dow
 whose own gates verify it against their own delivery history. The delivery gate here is
 `frontier.dominates(consumedDependencies(deps))` — this node's own contiguous frontier, exclusively;
 an advertised claim never substitutes for local delivery of the cause. The same `completeness()`
-stamps forwarded records and protocol watermarks. See the
+stamps forwarded records and protocol null messages. See the
 [causal consistency model](causal-consistency.md) for the soundness argument and the topology
 contract it implies.
 

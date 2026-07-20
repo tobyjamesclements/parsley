@@ -37,7 +37,7 @@ import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * Tests for the two-part causal gate and the watermark protocol.
+ * Tests for the two-part causal gate and the null message protocol.
  *
  * <p>Every record is checked against this node's actual, already-proven state — never against a stamp
  * the same record just supplied — so a fan-in record depending on a shared ancestor genuinely holds
@@ -50,11 +50,11 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * <ol>
  *   <li>A shared-ancestor dependency is held until the ancestor's own channel genuinely, contiguously
  *       reaches the required offset, then releases, stamped with the offset actually reached.</li>
- *   <li>Watermark emission: a non-forwarding (filter) delegate still results in a protocol watermark
+ *   <li>Null message emission: a non-forwarding (filter) delegate still results in a protocol null message
  *       reaching downstream so completeness progress is not silently lost.</li>
- *   <li>A watermark carrying no business record still advances completeness, visible in a later,
+ *   <li>A null message carrying no business record still advances completeness, visible in a later,
  *       unrelated record's own outgoing stamp.</li>
- *   <li>Watermark propagation through a non-subscribing relay layer.</li>
+ *   <li>Null message propagation through a non-subscribing relay layer.</li>
  * </ol>
  */
 class CausalReconvergenceTopologyTest {
@@ -102,7 +102,7 @@ class CausalReconvergenceTopologyTest {
 
     /**
      * Single-input topology with a filter delegate that discards all records (no forward), so every
-     * delivered input produces a watermark to {@code out} instead of a business record.
+     * delivered input produces a null message to {@code out} instead of a business record.
      */
     private static Topology filterTopology() {
         StreamsBuilder builder = new StreamsBuilder();
@@ -150,7 +150,7 @@ class CausalReconvergenceTopologyTest {
             TestOutputTopic<String, String> out =
                     driver.createOutputTopic("out", new StringDeserializer(), new StringDeserializer());
 
-            CausalDependencies depsAnc3 = CausalDependencies.builder(TOPICS).require(T_ANC, 0, 3).build();
+            CausalClock depsAnc3 = CausalClock.builder(TOPICS).require(T_ANC, 0, 3).build();
 
             // fast@0 requires anc@3 — held, nothing has genuinely delivered anc yet.
             fastIn.pipeInput(new TestRecord<>("k", "fast0", depsHeader(depsAnc3)));
@@ -159,7 +159,7 @@ class CausalReconvergenceTopologyTest {
 
             // anc@0..3 genuinely, contiguously deliver — releases the held fast@0.
             for (long offset = 0; offset <= 3; offset++) {
-                ancIn.pipeInput(new TestRecord<>("ak", "anc" + offset, depsHeader(CausalDependencies.empty())));
+                ancIn.pipeInput(new TestRecord<>("ak", "anc" + offset, depsHeader(CausalClock.empty())));
             }
             assertTrue(businessRecords(out).stream().anyMatch(r -> "FAST0".equals(r.value())),
                     "fast0 must be released once anc genuinely reaches offset 3");
@@ -170,18 +170,18 @@ class CausalReconvergenceTopologyTest {
                     "slow@0 must deliver immediately: anc@3 is already genuinely satisfied");
 
             // fast@1 requires anc@7, higher than anc's current frontier (3) — held again.
-            CausalDependencies depsAnc7 = CausalDependencies.builder(TOPICS).require(T_ANC, 0, 7).build();
+            CausalClock depsAnc7 = CausalClock.builder(TOPICS).require(T_ANC, 0, 7).build();
             fastIn.pipeInput(new TestRecord<>("k", "fast1", depsHeader(depsAnc7)));
             assertTrue(businessRecords(out).stream().noneMatch(r -> "FAST1".equals(r.value())),
                     "fast@1 must be held: anc has only genuinely reached 3, not 7");
 
             // anc@4..7 genuinely deliver — releases fast@1.
             for (long offset = 4; offset <= 7; offset++) {
-                ancIn.pipeInput(new TestRecord<>("ak", "anc" + offset, depsHeader(CausalDependencies.empty())));
+                ancIn.pipeInput(new TestRecord<>("ak", "anc" + offset, depsHeader(CausalClock.empty())));
             }
             TestRecord<String, String> fast1 = businessRecords(out).stream()
                     .filter(r -> "FAST1".equals(r.value())).findFirst().orElseThrow();
-            CausalDependencies fast1Stamp = CausalDependencies.fromHeaders(fast1.headers()).orElseThrow();
+            CausalClock fast1Stamp = CausalClock.fromHeaders(fast1.headers()).orElseThrow();
             assertEquals(7L, fast1Stamp.clock().offsetFor(ANC_ID, 0),
                     "fast1's released stamp must carry anc@7 — the offset anc's own frontier had "
                             + "genuinely reached");
@@ -189,23 +189,23 @@ class CausalReconvergenceTopologyTest {
     }
 
     /**
-     * Watermark emission — a filter processor that discards all business records still emits a
-     * protocol watermark for each delivered input.
+     * Null message emission — a filter processor that discards all business records still emits a
+     * protocol null message for each delivered input.
      *
      * <p>A delegate that calls no {@code ctx.forward()} (a pure filter) causes the decorating
-     * {@link ParsleyProcessor} to emit one {@code _parsley_watermark} record per delivered input.
-     * The watermark carries the current completeness frontier in the
-     * {@code parsley-causal-dependencies} header.
+     * {@link ParsleyProcessor} to emit one {@code _parsley_null_message} record per delivered input.
+     * The null message carries the current completeness frontier in the
+     * {@code parsley-causal-clock} header.
      *
      * <p>This test uses a {@link MockProcessorContext} rather than {@link TopologyTestDriver} so that
-     * the watermark emitted directly via the outer processor context is captured and inspectable.
+     * the null message emitted directly via the outer processor context is captured and inspectable.
      *
-     * Asserts the output topic contains a watermark record (keyed with the triggering record's key so
+     * Asserts the output topic contains a null message record (keyed with the triggering record's key so
      * it co-routes to that record's partition, null value, marker header) and no business value, even
      * though a genuine business record was delivered to the delegate.
      */
     @Test
-    void filterProcessorEmitsWatermarkForEveryDeliveredInput() {
+    void filterProcessorEmitsNullMessageForEveryDeliveredInput() {
         try (TopologyTestDriver driver = new TopologyTestDriver(filterTopology(), testConfig())) {
             TestInputTopic<String, String> in =
                     driver.createInputTopic(T1, new StringSerializer(), new StringSerializer());
@@ -214,42 +214,42 @@ class CausalReconvergenceTopologyTest {
 
             // A record with no deps — admitted immediately; delegate filters it (no forward).
             in.pipeInput(new TestRecord<>("k", "will-be-filtered",
-                    depsHeader(CausalDependencies.empty())));
+                    depsHeader(CausalClock.empty())));
 
-            // Output must contain exactly one watermark and zero business records.
+            // Output must contain exactly one null message and zero business records.
             List<TestRecord<String, String>> allOut = out.readRecordsToList();
-            List<TestRecord<String, String>> watermarks = watermarkRecords(allOut);
+            List<TestRecord<String, String>> nullMessages = nullMessageRecords(allOut);
             List<TestRecord<String, String>> business = businessRecords(allOut);
 
-            assertEquals(1, watermarks.size(),
-                    "one watermark must be emitted because the filter delegate forwarded nothing");
+            assertEquals(1, nullMessages.size(),
+                    "one null message must be emitted because the filter delegate forwarded nothing");
             assertEquals(0, business.size(),
                     "no business records must appear: the filter dropped the input");
-            assertEquals("k", watermarks.get(0).key(),
-                    "watermark must reuse the triggering record's key so it co-routes to that partition");
-            assertNull(watermarks.get(0).value(),
-                    "watermark value must be null");
-            assertTrue(hasWatermarkHeader(watermarks.get(0)),
-                    "watermark must carry the _parsley_watermark header");
+            assertEquals("k", nullMessages.get(0).key(),
+                    "null message must reuse the triggering record's key so it co-routes to that partition");
+            assertNull(nullMessages.get(0).value(),
+                    "null message value must be null");
+            assertTrue(hasNullMessageHeader(nullMessages.get(0)),
+                    "null message must carry the _parsley_null_message header");
         }
     }
 
     /**
-     * A watermark carrying no business record still genuinely advances completeness — visible in a
+     * A null message carrying no business record still genuinely advances completeness — visible in a
      * later, unrelated record's own outgoing stamp, not merely in admission.
      *
-     * <p>A record's own dependency claim always self-satisfies (see the previous test), so a watermark
+     * <p>A record's own dependency claim always self-satisfies (see the previous test), so a null message
      * can no longer be demonstrated by "releasing a held record". What remains real and testable: a
      * completely unrelated record — one whose own declared deps say nothing about {@code ANC} at all —
      * still has {@code ANC} appear in its own outgoing stamp, because completeness max-merges every
-     * channel's knowledge, including a channel that has only ever received a watermark, never a
+     * channel's knowledge, including a channel that has only ever received a null message, never a
      * business record.
      *
      * Asserts a record with no ANC dependency of its own still stamps ANC at the level a sibling
-     * channel's watermark-only advertisement established.
+     * channel's null message-only advertisement established.
      */
     @Test
-    void watermarkAloneAdvancesCompletenessVisibleInALaterUnrelatedRecordsStamp() {
+    void nullMessageAloneAdvancesCompletenessVisibleInALaterUnrelatedRecordsStamp() {
         try (TopologyTestDriver driver = new TopologyTestDriver(fanInTopology(), testConfig())) {
             TestInputTopic<String, String> fastIn =
                     driver.createInputTopic(T_FAST, new StringSerializer(), new StringSerializer());
@@ -258,24 +258,24 @@ class CausalReconvergenceTopologyTest {
             TestOutputTopic<String, String> out =
                     driver.createOutputTopic("out", new StringDeserializer(), new StringDeserializer());
 
-            // The slow branch advertises ANC@10 via a watermark alone — no business record ever
+            // The slow branch advertises ANC@10 via a null message alone — no business record ever
             // flows on slow carrying this fact.
-            slowIn.pipeInput(watermarkRecord(ParsleyVectorClock.empty().observe(ANC_ID, 0, 10)));
-            assertEquals(0, businessRecords(out).size(), "a watermark alone must not itself be a business record");
+            slowIn.pipeInput(nullMessageRecord(ParsleyVectorClock.empty().observe(ANC_ID, 0, 10)));
+            assertEquals(0, businessRecords(out).size(), "a null message alone must not itself be a business record");
 
             // A fast record with empty deps of its own — no ANC claim at all — still delivers, and its
-            // own stamp must reflect ANC@10, learned purely from the slow channel's watermark.
-            fastIn.pipeInput(new TestRecord<>("k", "unrelated", depsHeader(CausalDependencies.empty())));
+            // own stamp must reflect ANC@10, learned purely from the slow channel's null message.
+            fastIn.pipeInput(new TestRecord<>("k", "unrelated", depsHeader(CausalClock.empty())));
             List<TestRecord<String, String>> delivered = businessRecords(out);
             assertEquals(1, delivered.size(), "the unrelated fast record must deliver immediately");
             assertEquals("UNRELATED", delivered.get(0).value(),
                     "the delivered value must be the upper-cased form of the input");
 
-            CausalDependencies stamp = CausalDependencies.fromHeaders(
+            CausalClock stamp = CausalClock.fromHeaders(
                     delivered.get(0).headers()).orElseThrow();
             assertEquals(10L, stamp.clock().offsetFor(ANC_ID, 0),
                     "the unrelated record's own stamp must carry ANC@10, learned purely from the slow "
-                            + "channel's watermark, even though its own declared deps never mentioned ANC");
+                            + "channel's null message, even though its own declared deps never mentioned ANC");
         }
     }
 
@@ -287,53 +287,54 @@ class CausalReconvergenceTopologyTest {
     // reconvergence proof — a real, independent witness (here, anc's own channel) is required instead.
 
     /**
-     * Watermark propagation — a non-subscribing relay layer re-emits received watermarks, so a
-     * grandchild node's completeness advances even when no business record flows on that path.
+     * Null-message propagation — a non-subscribing relay layer re-emits received null messages, so
+     * a grandchild node's completeness advances even when no business record flows on that path.
      *
-     * <p>This is tested at the {@link ParsleyCausalBroadcast} level over a channel-tracking {@link
-     * ParsleyChannels}: after {@link ParsleyCausalBroadcast#onWatermark} is called with a frontier carrying an
+     * <p>This is tested at the {@link ParsleyGossip} level over a channel-tracking {@link
+     * ParsleyChannels}: after {@link ParsleyGossip#receive} is called with a frontier carrying an
      * ancestor coordinate, {@link ParsleyCausalBroadcast#completeness()} must reflect it. This proves the
-     * channel clock is updated by the watermark receipt, which is the mechanism that enables inductive
+     * channel clock is updated by the null-message receipt, which is the mechanism that enables inductive
      * propagation through non-subscribing layers. Also asserts {@link
-     * ParsleyCausalBroadcast.WatermarkOutcome#learnedSomethingNew()} reports {@code true} — the signal {@link
-     * ParsleyProcessor} gates further relay on (clock-invisible markers; see its class Javadoc) — since
-     * this watermark genuinely taught the channel something it did not already know.
+     * ParsleyGossip.Reception#learnedSomethingNew()} reports {@code true} — the signal {@link
+     * ParsleyProcessor} gates further relay on (clock-invisible null messages; see its class Javadoc) —
+     * since this null message genuinely taught the channel something it did not already know.
      *
-     * Asserts that completeness rises to include the watermark's ancestor coordinate immediately
-     * after {@code onWatermark} is called, even though no business record was delivered.
+     * Asserts that completeness rises to include the null message's ancestor coordinate immediately
+     * after {@code ParsleyGossip.receive} is called, even though no business record was delivered.
      */
     @Test
-    void onWatermarkAdvancesChannelClockAndCompleteness() {
+    void nullMessageReceiveAdvancesChannelClockAndCompleteness() {
         // T1 is the only subscribed topic. ANC_ID is an out-of-scope ancestor.
         ParsleyVectorClock.CoordinatePredicate scope = (topicId, partition) ->
                 partition == 0 && topicId.equals(T1_ID);
         MockBufferStore<String, String> buffer = new MockBufferStore<>();
 
+        ParsleyChannels channels = new ParsleyChannels(ParsleyVectorClock.empty(), new MockForwardedIndex());
         ParsleyCausalBroadcast<String, String> causalBroadcast = new ParsleyCausalBroadcast<>(
-                new ParsleyChannels(ParsleyVectorClock.empty(), new MockForwardedIndex()),
-                buffer, new MockCandidateIndex(), ParsleyMetrics.NOOP,
+                channels, buffer, new MockCandidateIndex(), ParsleyMetrics.NOOP,
                 System::currentTimeMillis);
+        ParsleyGossip<String, String> gossip = new ParsleyGossip<>(channels, causalBroadcast, Set.of());
 
-        // Before any watermark, completeness has no ANC coordinate.
+        // Before any null message, completeness has no ANC coordinate.
         assertEquals(-1L, causalBroadcast.completeness().offsetFor(ANC_ID, 0),
-                "completeness must not know ANC before any watermark arrives");
+                "completeness must not know ANC before any null message arrives");
 
-        // Receive a watermark at T1/0 offset 0, carrying {ANC@5}.
-        ParsleyVectorClock watermarkFrontier = ParsleyVectorClock.empty().observe(ANC_ID, 0, 5);
-        ParsleyCausalBroadcast.WatermarkOutcome<String, String> watermarkOutcome =
-                causalBroadcast.onWatermark(T1_ID, 0, 0, watermarkFrontier);
-        List<ParsleyMessage<String, String>> released = watermarkOutcome.outcome().delivered();
+        // Receive a null message at T1/0 offset 0, carrying {ANC@5}.
+        ParsleyVectorClock carriedFrontier = ParsleyVectorClock.empty().observe(ANC_ID, 0, 5);
+        ParsleyGossip.Reception<String, String> reception =
+                gossip.receive(T1_ID, 0, 0, carriedFrontier);
+        List<ParsleyMessage<String, String>> released = reception.delivered();
 
         // No records were buffered, so nothing is released.
         assertEquals(0, released.size(),
-                "no records buffered, so onWatermark must return an empty release list");
-        assertTrue(watermarkOutcome.learnedSomethingNew(),
-                "the node knew nothing of ANC before, so this watermark must report genuinely new "
+                "no records buffered, so the null-message receive must return an empty release list");
+        assertTrue(reception.learnedSomethingNew(),
+                "the node knew nothing of ANC before, so this null message must report genuinely new "
                         + "knowledge (I6)");
 
         // The channel clock for T1/0 now knows ANC@5, which must appear in completeness().
         assertEquals(5L, causalBroadcast.completeness().offsetFor(ANC_ID, 0),
-                "completeness must rise to ANC@5 after the watermark advances the channel clock");
+                "completeness must rise to ANC@5 after the null message advances the channel clock");
     }
 
     // --- helpers -----------------------------------------------------------------------------
@@ -347,35 +348,35 @@ class CausalReconvergenceTopologyTest {
         return props;
     }
 
-    private static Headers depsHeader(CausalDependencies deps) {
+    private static Headers depsHeader(CausalClock deps) {
         Headers headers = ParsleyHeader.mutableHeaders();
-        headers.add(ParsleyHeader.CAUSAL_DEPENDENCIES, deps.toBytes());
+        headers.add(ParsleyHeader.CAUSAL_CLOCK, deps.toBytes());
         return headers;
     }
 
     /**
-     * Builds a watermark {@link TestRecord}: null key, null value, carrying the given frontier
-     * clock in both the {@code _parsley_watermark} marker header and the
-     * {@code parsley-causal-dependencies} header.
+     * Builds a null message {@link TestRecord}: null key, null value, carrying the given frontier
+     * clock in both the {@code _parsley_null_message} marker header and the
+     * {@code parsley-causal-clock} header.
      */
-    @SuppressWarnings("NullAway") // watermark TestRecord intentionally has null key/value
-    private static TestRecord<String, String> watermarkRecord(ParsleyVectorClock frontier) {
+    @SuppressWarnings("NullAway") // nullMessage TestRecord intentionally has null key/value
+    private static TestRecord<String, String> nullMessageRecord(ParsleyVectorClock frontier) {
         Headers wm = ParsleyHeader.mutableHeaders();
-        wm.add(ParsleyHeader.WATERMARK, new byte[0]);
-        wm.add(ParsleyHeader.CAUSAL_DEPENDENCIES, frontier.toBytes());
+        wm.add(ParsleyHeader.NULL_MESSAGE, new byte[0]);
+        wm.add(ParsleyHeader.CAUSAL_CLOCK, frontier.toBytes());
         return new TestRecord<>(null, null, wm);
     }
 
-    private static boolean hasWatermarkHeader(TestRecord<?, ?> record) {
+    private static boolean hasNullMessageHeader(TestRecord<?, ?> record) {
         for (Header h : record.headers()) {
-            if (ParsleyHeader.WATERMARK.equals(h.key())) {
+            if (ParsleyHeader.NULL_MESSAGE.equals(h.key())) {
                 return true;
             }
         }
         return false;
     }
 
-    /** Filters the given records to those that are NOT watermarks (business records). */
+    /** Filters the given records to those that are NOT null messages (business records). */
     private static List<TestRecord<String, String>> businessRecords(
             TestOutputTopic<String, String> topic) {
         return businessRecords(topic.readRecordsToList());
@@ -385,18 +386,18 @@ class CausalReconvergenceTopologyTest {
             List<TestRecord<String, String>> records) {
         List<TestRecord<String, String>> out = new ArrayList<>();
         for (TestRecord<String, String> r : records) {
-            if (!hasWatermarkHeader(r)) {
+            if (!hasNullMessageHeader(r)) {
                 out.add(r);
             }
         }
         return out;
     }
 
-    private static List<TestRecord<String, String>> watermarkRecords(
+    private static List<TestRecord<String, String>> nullMessageRecords(
             List<TestRecord<String, String>> records) {
         List<TestRecord<String, String>> out = new ArrayList<>();
         for (TestRecord<String, String> r : records) {
-            if (hasWatermarkHeader(r)) {
+            if (hasNullMessageHeader(r)) {
                 out.add(r);
             }
         }
@@ -422,7 +423,7 @@ class CausalReconvergenceTopologyTest {
 
     /**
      * A user processor that records each input value but does NOT forward — a pure filter. This
-     * causes the decorating {@link ParsleyProcessor} to emit a watermark for every delivered input.
+     * causes the decorating {@link ParsleyProcessor} to emit a null message for every delivered input.
      */
     private static ProcessorSupplier<String, String, String, String> filter() {
         return () -> new Processor<>() {

@@ -42,8 +42,8 @@ class ParsleyHeaderTest {
      * Asserts {@code isInternal()} is {@code false} for the causal-dependencies key.
      */
     @Test
-    void theCausalDependenciesHeaderIsNotInternal() {
-        assertFalse(new ParsleyHeader(ParsleyHeader.CAUSAL_DEPENDENCIES, new byte[0]).isInternal(),
+    void theCausalClockHeaderIsNotInternal() {
+        assertFalse(new ParsleyHeader(ParsleyHeader.CAUSAL_CLOCK, new byte[0]).isInternal(),
                 "the causal-dependencies header must not be treated as internal");
     }
 

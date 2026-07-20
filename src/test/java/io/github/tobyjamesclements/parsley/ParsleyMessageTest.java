@@ -23,7 +23,7 @@ class ParsleyMessageTest {
     private static final Uuid DEP_ID = Uuid.randomUuid();
 
     /**
-     * {@code from} decodes the {@code parsley-causal-dependencies} header into the typed clock and
+     * {@code from} decodes the {@code parsley-causal-clock} header into the typed clock and
      * keeps the user headers, dropping the dependency header from the user set.
      *
      * Asserts the coordinate, dependencies, and user headers are populated as expected.
@@ -33,7 +33,7 @@ class ParsleyMessageTest {
         ParsleyVectorClock deps = ParsleyVectorClock.empty().observe(DEP_ID, 0, 5);
         Headers headers = ParsleyHeader.mutableHeaders();
         headers.add("user", "u".getBytes());
-        headers.add(ParsleyHeader.CAUSAL_DEPENDENCIES, deps.toBytes());
+        headers.add(ParsleyHeader.CAUSAL_CLOCK, deps.toBytes());
 
         ParsleyMessage<String, String> message =
                 ParsleyMessage.from(new Record<>("k", "v", 42L, headers), T1, 7L, T1_ID);
@@ -70,7 +70,7 @@ class ParsleyMessageTest {
     @Test
     void fromThrowsOnUndecodableDependencies() {
         Headers headers = ParsleyHeader.mutableHeaders();
-        headers.add(ParsleyHeader.CAUSAL_DEPENDENCIES, new byte[]{9, 9, 9});
+        headers.add(ParsleyHeader.CAUSAL_CLOCK, new byte[]{9, 9, 9});
 
         ParsleyVectorClockResolutionException thrown = assertThrows(ParsleyVectorClockResolutionException.class,
                 () -> ParsleyMessage.from(new Record<>("k", "v", 0L, headers), T1, 0L, T1_ID),
@@ -92,7 +92,7 @@ class ParsleyMessageTest {
     void fromWithExplicitDependenciesSkipsDecoding() {
         Headers headers = ParsleyHeader.mutableHeaders();
         headers.add("user", "u".getBytes());
-        headers.add(ParsleyHeader.CAUSAL_DEPENDENCIES, new byte[]{9, 9, 9});
+        headers.add(ParsleyHeader.CAUSAL_CLOCK, new byte[]{9, 9, 9});
 
         ParsleyMessage<String, String> message = ParsleyMessage.from(
                 new Record<>("k", "v", 0L, headers), T1, 0L, T1_ID, ParsleyVectorClock.empty());

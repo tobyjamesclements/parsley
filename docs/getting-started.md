@@ -44,7 +44,7 @@ frontier catches up. See [Streams integration](streams.md) for the full setup.
 ## Stamping causal context onto produced records
 
 At the edges of a topology, where plain Kafka producers feed records in, a node has no Parsley engine
-maintaining a frontier for it, so it maintains one itself. A `CausalDependencies` value is that
+maintaining a frontier for it, so it maintains one itself. A `CausalClock` value is that
 frontier: the running set of positions the node has observed. Bind one with `using`, giving it the
 Kafka client configuration to resolve topic UUIDs through, fold in each record you consume with
 `observe`, and attach the result to each record you produce with `stamp`. Topic UUID resolution is
@@ -54,7 +54,7 @@ yourself.
 
 ```java
 // the trigger's own dependencies plus its own position
-CausalDependencies deps = CausalDependencies.using(props).observe(trigger);
+CausalClock deps = CausalClock.using(props).observe(trigger);
 producer.send(deps.stamp(new ProducerRecord<>("orders", key, value)));
 ```
 
@@ -64,7 +64,7 @@ before it delivers anything stamped here. The resolver bound by `using` carries 
 `observe`, so a fan-in — where an output is caused by several inputs — chains an `observe` per input.
 
 ```java
-CausalDependencies deps = CausalDependencies.using(props)
+CausalClock deps = CausalClock.using(props)
         .observe(priceUpdate)
         .observe(inventoryChange);
 producer.send(deps.stamp(record));
@@ -77,7 +77,7 @@ To declare a dependency on a specific upstream position that you did not consume
 explicitly.
 
 ```java
-CausalDependencies deps = CausalDependencies.builder(props)
+CausalClock deps = CausalClock.builder(props)
         .require("prices", /* partition */ 0, /* offset */ 42)
         .build();
 ```
@@ -90,18 +90,18 @@ The serialised dependencies header grows with the number of topic-partitions it 
 
 ## Propagating causal context across services
 
-A `CausalDependencies` value is a portable causal token. To gate a read in a downstream service on
+A `CausalClock` value is a portable causal token. To gate a read in a downstream service on
 what an upstream record depended on, serialise the dependencies and send them over your transport.
 
 ```java
 // Sender. Extract the relevant dependencies and serialise them.
-CausalDependencies context = CausalDependencies.fromRecord(consumedRecord)
-        .orElse(CausalDependencies.empty());
+CausalClock context = CausalClock.fromRecord(consumedRecord)
+        .orElse(CausalClock.empty());
 byte[] token = context.toBytes();
 // Send the token over HTTP, gRPC, or another transport, applying your own encryption.
 
 // Receiver. Rebuild the dependencies.
-CausalDependencies required = CausalDependencies.fromBytes(receivedToken);
+CausalClock required = CausalClock.fromBytes(receivedToken);
 ```
 
 Parsley ships no encryption or transport layer. Securing and routing the token is the application's

@@ -38,7 +38,7 @@ topology might be reordered later.
 `to(topic)` declares a sink. A stage may declare more than one; `withPartitioner` applies one
 `StreamPartitioner` uniformly across every sink the stage declares (default: Kafka's own key-hash
 partitioner) so causal sinks in the same stage never drift onto different partitioners. The partitioner
-must read only the key, never the value — a protocol watermark carries a null value and reuses its
+must read only the key, never the value — a protocol null message carries a null value and reuses its
 triggering record's key, so a value-based partitioner cannot route it.
 
 Unlike the Kafka Streams DSL, sources and sinks here take plain key/value `Serde`s rather than
@@ -70,12 +70,12 @@ or an HTTP call that is not gated on the frontier, can act on a causal premise t
 not confirmed.
 
 **Forward uniformly to all children.** A causal processor advertises its progress downstream by
-stamping its business output, or by emitting a protocol watermark when the delegate forwards nothing
-for a delivered input. That watermark reaches every downstream child. If the delegate routes business
-records selectively to some named children and not others, the children that received nothing are not
-separately watermarked, so keep a causal processor's forwarding uniform across its children.
+stamping its business output, or by emitting a protocol null message when the delegate forwards nothing
+for a delivered input. That null message reaches every downstream child. If the delegate routes business
+records selectively to some named children and not others, the children that received nothing do not
+separately receive a null message, so keep a causal processor's forwarding uniform across its children.
 
-**Watermark-bearing topics must not be compacted.** A protocol watermark has a null value, so log
+**Null-message-bearing topics must not be compacted.** A protocol null message has a null value, so log
 compaction treats it as a tombstone and may delete it before a slow consumer reads it, dropping the
 completeness signal. Set `cleanup.policy=delete` on any sink topic of a causal stage. `CausalTopology`
 checks this for you at startup; see [Startup validation](#startup-validation).

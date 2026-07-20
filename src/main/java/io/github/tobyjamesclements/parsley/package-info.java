@@ -11,7 +11,7 @@
  *       related events across topics in the order they actually happened, not merely in per-partition
  *       order. The classic broadcast/receive/deliver vocabulary and where each lives in this package is
  *       spelled out in {@link io.github.tobyjamesclements.parsley.ParsleyCausalBroadcast}'s Javadoc. See {@link
- *       io.github.tobyjamesclements.parsley.CausalDependencies} for the wire contract and the edge
+ *       io.github.tobyjamesclements.parsley.CausalClock} for the wire contract and the edge
  *       operations below for talking to a Parsley topology from plain Kafka clients.</li>
  *   <li><strong>Coordination-free joins.</strong> There is no membership, no epoch, and no join
  *       barrier: a new application simply starts consuming, its replay self-gates into causal
@@ -41,16 +41,16 @@
  *
  * <h2>Edge operations</h2>
  * To talk to a Parsley topology from plain Kafka clients, stamp and propagate causal dependencies
- * directly with {@link io.github.tobyjamesclements.parsley.CausalDependencies}:
+ * directly with {@link io.github.tobyjamesclements.parsley.CausalClock}:
  * <ul>
- *   <li>{@link io.github.tobyjamesclements.parsley.CausalDependencies#using(java.util.Properties) using}
+ *   <li>{@link io.github.tobyjamesclements.parsley.CausalClock#using(java.util.Properties) using}
  *       &mdash; bind a resolver (topic name &rarr; stable Kafka UUID, resolved internally through the
  *       given Kafka client configuration) and start accumulating a consumer-side frontier</li>
- *   <li>{@link io.github.tobyjamesclements.parsley.CausalDependencies#observe(org.apache.kafka.clients.consumer.ConsumerRecord)
+ *   <li>{@link io.github.tobyjamesclements.parsley.CausalClock#observe(org.apache.kafka.clients.consumer.ConsumerRecord)
  *       observe} &mdash; fold a consumed record's dependencies and own position into the accumulator</li>
- *   <li>{@link io.github.tobyjamesclements.parsley.CausalDependencies#stamp(org.apache.kafka.clients.producer.ProducerRecord)
+ *   <li>{@link io.github.tobyjamesclements.parsley.CausalClock#stamp(org.apache.kafka.clients.producer.ProducerRecord)
  *       stamp} &mdash; attach the accumulated dependencies to an outbound {@code ProducerRecord}</li>
- *   <li>{@link io.github.tobyjamesclements.parsley.CausalDependencies#merge(io.github.tobyjamesclements.parsley.CausalDependencies) merge} &mdash;
+ *   <li>{@link io.github.tobyjamesclements.parsley.CausalClock#merge(io.github.tobyjamesclements.parsley.CausalClock) merge} &mdash;
  *       combine dependency sets for a fan-in</li>
  * </ul>
  *
@@ -59,8 +59,12 @@
  * of Cachin–Guerraoui–Rodrigues (<em>Introduction to Reliable and Secure Distributed Programming</em>):
  * requests in, indications out, properties guaranteed. The channels module
  * ({@link io.github.tobyjamesclements.parsley.ParsleyChannels}) adapts Kafka topic-partitions into the
- * reliable FIFO channels classical causal broadcast assumes. Two Parsley-wide deviations from the
- * textbook presentation apply to every module, stated once here:
+ * reliable FIFO channels classical causal broadcast assumes; the causal-broadcast module
+ * ({@link io.github.tobyjamesclements.parsley.ParsleyCausalBroadcast}) is Birman–Schiper–Stephenson
+ * causal delivery over those channels; the gossip module
+ * ({@link io.github.tobyjamesclements.parsley.ParsleyGossip}) disseminates clock progress as null
+ * messages so completeness keeps flowing through non-emitting paths. Two Parsley-wide deviations
+ * from the textbook presentation apply to every module, stated once here:
  * <ul>
  *   <li><strong>Indications are pulled, not pushed.</strong> Deliveries come back as ordered return
  *       values rather than through an upcall, because Kafka Streams' threading is synchronous. Same
@@ -74,7 +78,7 @@
  *
  * <h2>Key value types</h2>
  * <ul>
- *   <li>{@link io.github.tobyjamesclements.parsley.CausalDependencies} &mdash; the causal requirements stamped on a record
+ *   <li>{@link io.github.tobyjamesclements.parsley.CausalClock} &mdash; the causal requirements stamped on a record
  *       (what the consumer must have observed before the record may be delivered). Its serialised size
  *       grows with the number of relevant topic-partitions and counts against Kafka's
  *       {@code message.max.bytes}. Topic-UUID resolution is an internal detail of {@code using}/

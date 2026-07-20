@@ -77,7 +77,7 @@ class ParsleyCyclicQuiesceIT {
             streams.start();
 
             try (KafkaProducer<String, String> input = new KafkaProducer<>(producerConfig(bootstrap))) {
-                input.send(CausalDependencies.empty().stamp(new ProducerRecord<>(T1, "k", "hello"))).get();
+                input.send(CausalClock.empty().stamp(new ProducerRecord<>(T1, "k", "hello"))).get();
             }
 
             // The business record must traverse the cycle: T1's delivery forwards s:hello onto the
@@ -89,7 +89,7 @@ class ParsleyCyclicQuiesceIT {
                 consumer.subscribe(List.of(LOOP));
                 await().atMost(Duration.ofSeconds(90)).until(() -> {
                     consumer.poll(Duration.ofMillis(500)).forEach(record -> {
-                        if (record.value() != null && record.headers().lastHeader(ParsleyHeader.WATERMARK) == null) {
+                        if (record.value() != null && record.headers().lastHeader(ParsleyHeader.NULL_MESSAGE) == null) {
                             loopValues.add(record.value());
                         }
                     });

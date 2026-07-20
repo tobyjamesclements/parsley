@@ -48,7 +48,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * <ol>
  *   <li><strong>An upstream client reliably maintains a max frontier.</strong> A plain
  *       {@link KafkaConsumer} reading several topics folds every record into one running
- *       {@link CausalDependencies} with {@link CausalDependencies#observe(ConsumerRecord)}, ending at
+ *       {@link CausalClock} with {@link CausalClock#observe(ConsumerRecord)}, ending at
  *       the per-coordinate maximum of everything it has seen, and stamps that onto its outbound
  *       records.</li>
  *   <li><strong>Each processor maintains its own contiguous, scoped frontier.</strong> Two
@@ -85,7 +85,7 @@ class CausalFanOutScopedFrontierIT {
 
     /**
      * A client consuming several topics with a plain {@link KafkaConsumer} maintains a single running
-     * frontier by {@link CausalDependencies#observe(ConsumerRecord) observing} every record it reads.
+     * frontier by {@link CausalClock#observe(ConsumerRecord) observing} every record it reads.
      * After draining three records from {@code SRC1} and two from {@code SRC2}, the accumulated
      * frontier must be the per-coordinate maximum ({@code SRC1@2}, {@code SRC2@1}), and stamping an
      * outbound record must carry exactly that frontier.
@@ -120,12 +120,12 @@ class CausalFanOutScopedFrontierIT {
         }
 
         // Fold every consumed record into one running frontier — the consumer-side max frontier.
-        CausalDependencies frontier = CausalDependencies.using(topics);
+        CausalClock frontier = CausalClock.using(topics);
         for (ConsumerRecord<String, String> record : consumed) {
             frontier = frontier.observe(record);
         }
 
-        CausalDependencies expected = CausalDependencies.builder(topics)
+        CausalClock expected = CausalClock.builder(topics)
                 .require(SRC1, 0, 2)
                 .require(SRC2, 0, 1)
                 .build();
@@ -135,7 +135,7 @@ class CausalFanOutScopedFrontierIT {
         // The frontier the client maintains is exactly what rides outbound records it produces.
         ProducerRecord<String, String> outbound =
                 frontier.stamp(new ProducerRecord<>(A_ONLY, "k", "v"));
-        assertEquals(Optional.of(expected), CausalDependencies.fromHeaders(outbound.headers()),
+        assertEquals(Optional.of(expected), CausalClock.fromHeaders(outbound.headers()),
                 "the maintained max frontier must be what gets stamped onto outbound records");
     }
 
@@ -180,7 +180,7 @@ class CausalFanOutScopedFrontierIT {
             resolverProps.put("bootstrap.servers", bootstrap);
             ParsleyTopics topics = ParsleyTopics.of(resolverProps);
 
-            CausalDependencies afterShared1 = CausalDependencies.builder(topics).require(SHARED, 0, 1).build();
+            CausalClock afterShared1 = CausalClock.builder(topics).require(SHARED, 0, 1).build();
 
             try (KafkaProducer<String, String> producer = new KafkaProducer<>(producerConfig(bootstrap))) {
                 // Unique-topic records depend on SHARED@1 — genuinely buffered until it arrives.
@@ -188,8 +188,8 @@ class CausalFanOutScopedFrontierIT {
                 producer.send(afterShared1.stamp(new ProducerRecord<>(B_ONLY, "bk", "b0"))).get();
                 // SHARED@0 then SHARED@1, in that order, advancing both scoped frontiers contiguously
                 // and releasing the held unique-topic records once SHARED@1 genuinely delivers.
-                producer.send(CausalDependencies.empty().stamp(new ProducerRecord<>(SHARED, "sk", "s0"))).get();
-                producer.send(CausalDependencies.empty().stamp(new ProducerRecord<>(SHARED, "sk", "s1"))).get();
+                producer.send(CausalClock.empty().stamp(new ProducerRecord<>(SHARED, "sk", "s0"))).get();
+                producer.send(CausalClock.empty().stamp(new ProducerRecord<>(SHARED, "sk", "s1"))).get();
             }
 
             // SHARED@1's delivery and the cascade release of the held unique-topic record happen in
@@ -202,8 +202,8 @@ class CausalFanOutScopedFrontierIT {
                  KafkaConsumer<String, byte[]> bConsumer = new KafkaConsumer<>(stampConsumerConfig(bootstrap))) {
                 aConsumer.subscribe(List.of(A_OUT));
                 bConsumer.subscribe(List.of(B_OUT));
-                Map<String, CausalDependencies> aStamps = pollStamps(aConsumer, 3);
-                Map<String, CausalDependencies> bStamps = pollStamps(bConsumer, 3);
+                Map<String, CausalClock> aStamps = pollStamps(aConsumer, 3);
+                Map<String, CausalClock> bStamps = pollStamps(bConsumer, 3);
 
                 for (String output : List.of("S1", "A0")) {
                     ParsleyVectorClock stamp = clockOf(aStamps.get(output));
@@ -280,17 +280,17 @@ class CausalFanOutScopedFrontierIT {
 
     /** Polls until {@code count} stamped records are seen, keyed by their (upper-cased) value. */
     /** The underlying vector clock of a wire stamp, for per-entry assertions. */
-    private static ParsleyVectorClock clockOf(CausalDependencies stamp) {
+    private static ParsleyVectorClock clockOf(CausalClock stamp) {
         return ParsleyVectorClock.fromBytes(stamp.toBytes());
     }
 
-    private static Map<String, CausalDependencies> pollStamps(KafkaConsumer<String, byte[]> consumer, int count) {
-        Map<String, CausalDependencies> byValue = new HashMap<>();
+    private static Map<String, CausalClock> pollStamps(KafkaConsumer<String, byte[]> consumer, int count) {
+        Map<String, CausalClock> byValue = new HashMap<>();
         await().atMost(Duration.ofSeconds(60)).until(() -> {
             ConsumerRecords<String, byte[]> records = consumer.poll(Duration.ofMillis(500));
             for (ConsumerRecord<String, byte[]> record : records) {
                 byValue.put(new String(record.value()),
-                        CausalDependencies.fromHeaders(record.headers()).orElseThrow());
+                        CausalClock.fromHeaders(record.headers()).orElseThrow());
             }
             return byValue.size() >= count;
         });

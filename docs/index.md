@@ -50,7 +50,7 @@ there is no low-level public entry point to build a topology around by hand.
 |---|---|
 | `CausalStreamsBuilder` / `CausalTopology` | Declare a causal topology — one or more stages, each a set of source topics feeding a processor and forwarding to sink(s) — the same way `StreamsBuilder`/`Topology` declare a plain Kafka Streams one. |
 | `CausalStreams` | The runtime: wraps the underlying `KafkaStreams` instance around the causal guarantee. Owns graceful causal drain on `close()`. |
-| `CausalDependencies.using` / `observe` / `stamp` / `merge` | Maintain a consumer-side frontier and stamp causal context onto records produced to plain Kafka clients at the topology edge. Topic names are resolved to their stable Kafka UUIDs internally. |
+| `CausalClock.using` / `observe` / `stamp` / `merge` | Maintain a consumer-side frontier and stamp causal context onto records produced to plain Kafka clients at the topology edge. Topic names are resolved to their stable Kafka UUIDs internally. |
 
 ## Where to go next
 

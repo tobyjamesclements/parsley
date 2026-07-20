@@ -170,7 +170,7 @@ class CausalScopeChangeIT {
             ConsumerRecord<String, String> postShrink = outputs.stream()
                     .filter(record -> "A2".equals(record.value()))
                     .findFirst().orElseThrow();
-            Header stamp = postShrink.headers().lastHeader(ParsleyHeader.CAUSAL_DEPENDENCIES);
+            Header stamp = postShrink.headers().lastHeader(ParsleyHeader.CAUSAL_CLOCK);
             assertNotNull(stamp, "every causal output must carry the dependency stamp header");
             ParsleyVectorClock clock = ParsleyVectorClock.fromBytes(stamp.value());
             assertEquals(0L, clock.offsetFor(t3Id, 0),
@@ -212,7 +212,7 @@ class CausalScopeChangeIT {
                 ProducerConfig.BOOTSTRAP_SERVERS_CONFIG, bootstrap,
                 ProducerConfig.KEY_SERIALIZER_CLASS_CONFIG, StringSerializer.class.getName(),
                 ProducerConfig.VALUE_SERIALIZER_CLASS_CONFIG, StringSerializer.class.getName()))) {
-            producer.send(CausalDependencies.empty().stamp(new ProducerRecord<>(topic, "k", value))).get();
+            producer.send(CausalClock.empty().stamp(new ProducerRecord<>(topic, "k", value))).get();
         }
     }
 

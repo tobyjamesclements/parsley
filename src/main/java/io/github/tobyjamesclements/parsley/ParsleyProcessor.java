@@ -41,19 +41,20 @@ import java.util.function.Function;
  * otherwise be lost). The frontier-before-forward invariant from {@link ParsleyCausalBroadcast} is preserved
  * on both the admit and punctuator paths.
  *
- * <p><strong>Clock-invisible markers.</strong> A received watermark
- * ({@link #handleWatermark}) is relayed downstream only when it genuinely
+ * <p><strong>Clock-invisible null messages.</strong> A received null message
+ * ({@link #handleNullMessage}) is relayed downstream only when it genuinely
  * taught this node's channel something it did not already know
- * ({@link ParsleyCausalBroadcast.WatermarkOutcome#learnedSomethingNew()}, via {@link #foldMarkerCompleteness}).
- * A marker's own delivery is never itself treated as a reason to relay further — unlike a genuine
+ * ({@link ParsleyGossip.Reception#learnedSomethingNew()} — the I6 relay rule, stated once on
+ * {@link ParsleyGossip}). A null message's own delivery is never itself treated as a reason to relay
+ * further — unlike a genuine
  * business record, whose delivery always unconditionally causes this node to emit something on its own
- * sink (see {@link #delivered}). Gating on data-taught-something rather than on "a record was delivered"
- * is what keeps a topology cycle — a marker-only channel included — from ping-ponging the
- * same marker forever: a node that has already converged with its peers has nothing new to say, and
+ * sink (see {@link #deliver}). Gating on data-taught-something rather than on "a record was delivered"
+ * is what keeps a topology cycle — a null-message-only channel included — from ping-ponging the
+ * same message forever: a node that has already converged with its peers has nothing new to say, and
  * simply stops, rather than needing separate per-edge "have I already relayed this" bookkeeping. A
- * dependency can only ever be created after something real has already been observed, so a marker that
- * taught nothing new could not have just formed a new dependency on that non-event either — skipping
- * the re-emission strands nothing.
+ * dependency can only ever be created after something real has already been observed, so a null
+ * message that taught nothing new could not have just formed a new dependency on that non-event
+ * either — skipping the re-emission strands nothing.
  *
  * @param <KIn>  the input key type
  * @param <VIn>  the input value type
@@ -78,7 +79,7 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
     private final Set<String> topics;
     // The topics this stage produces. Feeds the partition-count parity check.
     private final Set<String> sinkTopics;
-    // Every child node this processor forwards a control-plane record (watermark) to by
+    // Every child node this processor forwards a control-plane record (a null message) to by
     // name — a stage's processor node addresses every such forward explicitly rather than a zero-arg
     // broadcast. See ParsleyProcessorContext.forward.
     private final List<String> sinkNodeNames;
@@ -109,17 +110,6 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
     // hold above highestReceived is a genuine stall, not latency). Leaning on the existing producer
     // config rather than a new knob — its deadline is exactly the boundary both uses care about.
     private long deliveryTimeoutMs = DEFAULT_DELIVERY_TIMEOUT_MS;
-    // A marker forward's exact destination set — every declared sink at this task's own partition
-    // (ParsleyMarkerPartition routes every marker there) — excluded from the marker stamp's crossing
-    // wait: same-coordinate pending sends are covered by partition FIFO + I3, and the cross-sink
-    // exemption is O4's recorded null-message exemption. Business forwards never get an exclusion
-    // (their destination partition is unknowable at stamp time; see ParsleyCausalBroadcast#broadcast).
-    private Set<TopicPartition> markerDestinations = Set.of();
-
-    // The most-recent business key seen on this task's owned partition — reused to route a self-injected
-    // marker back to that partition lane (null until the first record).
-    private @Nullable KIn lastSeenKey;
-
     // The instance-wide topic-identity watch (E1 / T3.0 A13), resolved from config at init() like
     // the own-output registry; null when no CausalStreams instance minted one (TopologyTestDriver
     // runs, low-level supplier wirings) — every check is then a no-op. Consulted before ingesting
@@ -132,6 +122,10 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
     // one Processor instance ever touches these stores within a task, so the cached ParsleyChannels's
     // in-memory copy of the persisted state cannot diverge from a concurrent writer — there is none.
     private ParsleyCausalBroadcast<KIn, VIn> causalBroadcast;
+    // The task's L3 gossip module, built at init() over the same core: receives null messages
+    // (handleNullMessage) and builds this node's own (advertise). Owns the I6 relay rule and the
+    // null-message destination set (every declared sink at this task's own partition).
+    private ParsleyGossip<KIn, VIn> gossip;
     private KeyValueStore<String, byte[]> frontierStore;
     private KeyValueStore<Long, byte[]> bufferStore;
     private KeyValueStore<byte[], byte[]> candidateIndexStore;
@@ -143,7 +137,7 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
     // — or dereferencing the still-null wiredMetrics — would mask the real init failure. See close().
     private boolean delegateInitialized;
     // The stamping proxy context handed to the delegate. Held here so deliver() can check the
-    // per-record forward count and emit a watermark when the delegate forwarded nothing. The stamp
+    // per-record forward count and emit a null message when the delegate forwarded nothing. The stamp
     // itself comes from causalBroadcast.broadcast() — the single stamping site, read live at forward
     // time — confined to the task thread (both the delegate's forwards and its punctuator fires run on
     // the StreamThread).
@@ -191,20 +185,27 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
 
         this.wiredMetrics = ParsleyMetrics.wire(context);
 
-        // The crossing-wait bound / A9 stall threshold, and every marker forward's destination set —
-        // both fixed for the task's lifetime, resolved before the causal-broadcast core binds them.
+        // The crossing-wait bound / A9 stall threshold, and every null-message forward's destination
+        // set — both fixed for the task's lifetime, resolved before the causal-broadcast core binds
+        // them. The destination set — every declared sink at this task's own partition
+        // (ParsleyMarkerPartition routes every null message there) — is excluded from the null
+        // message's stamp crossing wait: same-coordinate pending sends are covered by partition FIFO
+        // + I3, and the cross-sink exemption is O4's recorded null-message exemption. Business
+        // forwards never get an exclusion (their destination partition is unknowable at stamp time;
+        // see ParsleyCausalBroadcast#broadcast).
         this.deliveryTimeoutMs = deliveryTimeoutMs(context.appConfigs());
         Set<TopicPartition> destinations = new HashSet<>();
         for (String sink : sinkTopics) {
             destinations.add(new TopicPartition(sink, context.taskId().partition()));
         }
-        this.markerDestinations = Set.copyOf(destinations);
 
         // Build the task's one causal-broadcast core: constructs the real ParsleyChannels (restoring from the store if
         // restored is true), prunes/seeds it to this task's current scope, and persists. Cached for the
-        // processor's whole lifetime — see buildCausalBroadcast().
+        // processor's whole lifetime — see buildCausalBroadcast(). The L3 gossip module layers over
+        // the same core and channel state.
         this.causalBroadcast = buildCausalBroadcast();
         ParsleyCausalBroadcast<KIn, VIn> causalBroadcast = this.causalBroadcast;
+        this.gossip = new ParsleyGossip<>(causalBroadcast.channels(), causalBroadcast, destinations);
         if (restored) {
             log.info("Processor initialized [task: {}] — frontier restored: {}", context.taskId(), causalBroadcast.frontier());
         } else {
@@ -543,29 +544,27 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
         // be mislabelled, so the task must die now (E1 / T3.0 A13).
         ensureTopicIdentityIntact();
         switch (classify(record)) {
-            case WATERMARK -> {
-                handleWatermark(record);
+            case NULL_MESSAGE -> {
+                handleNullMessage(record);
                 return;
             }
             case BUSINESS -> { }
         }
-        // Remember the most-recent business key seen on this task's owned partition; a source-layer
-        // task reuses it to route a self-injected marker back onto that partition lane.
-        lastSeenKey = record.key();
         ParsleyMessage<KIn, VIn> ingested = ingest(record);
         ParsleyVectorClock completenessBefore = causalBroadcast().completeness();
         ParsleyCausalBroadcast.Outcome<KIn, VIn> outcome = causalBroadcast().receive(ingested);
         deliver(outcome.delivered());
-        // Advertise this node's progress so downstream channel clocks advance gap-free. A delivered
-        // record advertises through its business output's completeness stamp — or, if the delegate
-        // forwarded nothing, the watermark emitted in deliver(). A consumed record that was buffered
-        // produces neither, so emit a heartbeat watermark — but only when receiving it genuinely
-        // advanced completeness (a coordinate's first sighting seeds the frontier), so an unrelated
-        // held record does not flood downstream with no-op watermarks.
+        // Advertise this node's progress so downstream channel clocks advance gap-free (L3's
+        // emission rule). A delivered record advertises through its business output's completeness
+        // stamp — or, if the delegate forwarded nothing, the null message emitted in deliver(). A
+        // consumed record that was buffered produces neither, so emit a heartbeat null message — but
+        // only when receiving it genuinely advanced completeness (a coordinate's first sighting
+        // seeds the frontier), so an unrelated held record does not flood downstream with no-op
+        // null messages.
         if (outcome.delivered().isEmpty() && !causalBroadcast().completeness().equals(completenessBefore)) {
             // Key the heartbeat with the buffered record's own key so it routes to that record's
             // partition, matching where its eventual business output will land.
-            forwardMarker(ParsleyHeader.WATERMARK, new byte[0], record.key());
+            advertise(record.key());
         }
     }
 
@@ -600,14 +599,15 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
             stampingContext.resetForwardCount();
             delegate.process(new Record<>(message.key(), message.value(), message.timestamp(),
                     message.headersWithDependencies()));
-            // If the delegate did not forward any business record for this input, emit a watermark
-            // carrying the current completeness frontier so that downstream nodes still learn about
-            // this node's causal progress. Without this, a non-emitting processor silently stalls
-            // downstream completeness, breaking the inductive correctness of multi-layer topologies.
+            // If the delegate did not forward any business record for this input, emit a null
+            // message carrying the current completeness frontier so that downstream nodes still
+            // learn about this node's causal progress (L3's emission rule). Without this, a
+            // non-emitting processor silently stalls downstream completeness, breaking the inductive
+            // correctness of multi-layer topologies.
             if (stampingContext.forwardCount() == 0) {
-                // Reuse the delivered record's key so the stand-in watermark routes to the same
+                // Reuse the delivered record's key so the stand-in null message routes to the same
                 // partition its business output would have.
-                forwardMarker(ParsleyHeader.WATERMARK, new byte[0], message.key());
+                advertise(message.key());
             }
         }
         deliveryMetadata = null;
@@ -629,163 +629,138 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
         }
     }
 
-    /** Which Parsley protocol marker, if any, {@link #classify} identified a record as. */
-    private enum RecordKind { WATERMARK, BUSINESS }
+    /** Which Parsley protocol record, if any, {@link #classify} identified a record as. */
+    private enum RecordKind { NULL_MESSAGE, BUSINESS }
 
     /**
-     * Classifies {@code record} by a single pass over its headers, identifying a Parsley protocol
-     * watermark ({@link ParsleyHeader#WATERMARK}) —
-     * never by a record's key, which for a marker carries the triggering record's key for routing. A
-     * marker carries no business payload and must never be forwarded to the user delegate or buffered —
-     * a watermark exists only to propagate causal completeness progress through non-emitting layers.
-     * Anything else is {@link RecordKind#BUSINESS}.
+     * Classifies {@code record} by a single pass over its headers, identifying a Parsley null
+     * message ({@link ParsleyHeader#NULL_MESSAGE}) —
+     * never by a record's key, which for a null message carries the triggering record's key for
+     * routing. A null message carries no business payload and must never be forwarded to the user
+     * delegate or buffered — it exists only to propagate causal completeness progress through
+     * non-emitting layers ({@link ParsleyGossip}). Anything else is {@link RecordKind#BUSINESS}.
      */
     private RecordKind classify(Record<KIn, VIn> record) {
         for (Header h : record.headers()) {
-            if (ParsleyHeader.WATERMARK.equals(h.key())) {
-                return RecordKind.WATERMARK;
+            if (ParsleyHeader.NULL_MESSAGE.equals(h.key())) {
+                return RecordKind.NULL_MESSAGE;
             }
         }
         return RecordKind.BUSINESS;
     }
 
     /**
-     * The one path every received marker takes through the
-     * core's {@link ParsleyCausalBroadcast#onWatermark channel-clock fold}. It does two independent things, and
-     * the distinction is the crux of correctness here:
-     * <ol>
-     *   <li><strong>Always</strong> delivers the marker's own offset into this channel's contiguous
-     *       frontier (via {@code onWatermark}), releasing anything that offset satisfies. A marker
-     *       occupies a real offset on its partition, so the frontier's gap-free absorb walk must count
-     *       it or it stalls below the marker forever — stranding every later record on that channel that
-     *       waits on anything. This happens even when the completeness header is absent or corrupt.</li>
-     *   <li>Folds the marker's carried completeness (the {@link ParsleyHeader#CAUSAL_DEPENDENCIES}
-     *       header, present on every relayed marker) into the channel clock — the outbound-stamp input,
-     *       never the gate. A missing or undecodable header is treated as an <em>empty</em> clock: the
-     *       marker teaches the channel no new peer progress, but its offset is still absorbed.</li>
-     * </ol>
+     * Handles a received null message — the one path every one takes through the gossip module's
+     * {@link ParsleyGossip#receive receive}: decodes its carried completeness clock, folds it, and
+     * relays this node's own null message downstream iff the received one genuinely taught this node
+     * something (the I6 relay rule on {@link ParsleyGossip}). The null message is never forwarded to
+     * the user delegate and never buffered. Two decode guards precede the fold, and the distinction
+     * between decode failure and delivery failure is the crux of correctness here:
+     * <ul>
+     *   <li>A null message on an unregistered topic is ignored with a warning — not expected in a
+     *       correctly wired topology, but fail safe rather than crash so a misconfiguration does not
+     *       fail a healthy task.</li>
+     *   <li>A missing or undecodable {@link ParsleyHeader#CAUSAL_CLOCK} header is treated as an
+     *       <em>empty</em> clock: the message teaches the channel no new peer progress, but its own
+     *       offset is <strong>still delivered</strong> into the channel's contiguous frontier — a
+     *       null message occupies a real offset on its partition, so the frontier's gap-free absorb
+     *       walk must count it or it stalls below the message forever, stranding every later record
+     *       on that channel. Treating a decode failure as empty-but-still-delivered (rather than an
+     *       early return) is what fixed the bug where a corrupt message permanently gapped the
+     *       frontier.</li>
+     * </ul>
      *
-     * <p>Treating a decode failure as empty-but-still-delivered (rather than an early return) is what
-     * fixed the bug where a corrupt marker permanently gapped the frontier.
+     * <p>The {@link ParsleyGossip#receive} call and the delivery of its released records run
+     * deliberately OUTSIDE the decode catch: past that point a failure is a delivery failure, not a
+     * decode failure — the gossip fold has already advanced the frontier and removed released
+     * records from the buffer, so swallowing an exception from the user delegate (or the core's own
+     * fail-fast paths) would let the task commit past records the delegate never processed, silently
+     * losing them. Fail-closed: let it kill the task.
      *
-     * @return whether the carried clock genuinely taught this channel something new
-     *         ({@link ParsleyCausalBroadcast.WatermarkOutcome#learnedSomethingNew()}) — {@code false} for an
-     *         unregistered topic, an absent/undecodable header, or a clock this channel already
-     *         dominates. This is the clock-news signal watermark relay gates on (see the
-     *         class Javadoc); it is never the offset-delivery signal, which is unconditional.
+     * <p>The downstream relay (inductive propagation) ensures that a node which never produces
+     * business records on this path still advertises its causal progress, so a grandchild node's
+     * channel clock can advance without any business record on the path. But a null message's own
+     * delivery is never itself a reason to relay further — only a genuine change to what this node
+     * knows is — or a topology cycle (a null-message-only channel included) would ping-pong the same
+     * message forever (clock-invisible null messages; see the class Javadoc).
      */
-    private boolean foldMarkerCompleteness(Record<KIn, VIn> record) {
+    private void handleNullMessage(Record<KIn, VIn> record) {
         RecordMetadata meta = requireRecordMetadata();
         String topic = meta.topic();
         int partition = meta.partition();
         long offset = meta.offset();
         Uuid topicId = topicUuids.get(topic);
         if (topicId == null) {
-            // Not expected in a correctly wired topology, but fail safe rather than crash so a
-            // misconfiguration does not fail a healthy task.
-            log.warn("Received marker on unregistered topic '{}'; ignoring", topic);
-            return false;
+            log.warn("Received null message on unregistered topic '{}'; ignoring", topic);
+            return;
         }
-        ParsleyVectorClock frontierClock = ParsleyVectorClock.empty();
-        Header dependencies = record.headers().lastHeader(ParsleyHeader.CAUSAL_DEPENDENCIES);
-        if (dependencies != null && dependencies.value() != null) {
+        ParsleyVectorClock carried = ParsleyVectorClock.empty();
+        Header clockHeader = record.headers().lastHeader(ParsleyHeader.CAUSAL_CLOCK);
+        if (clockHeader != null && clockHeader.value() != null) {
             try {
-                frontierClock = ParsleyVectorClock.fromBytes(dependencies.value());
+                carried = ParsleyVectorClock.fromBytes(clockHeader.value());
             } catch (Exception e) {
-                log.warn("Failed to decode marker completeness on {}-{}; treating as empty",
+                log.warn("Failed to decode null-message carried clock on {}-{}; treating as empty",
                         topic, partition, e);
             }
         }
-        // Deliberately OUTSIDE the decode catch: past this point a failure is a delivery failure, not a
-        // decode failure — onWatermark has already advanced the frontier and removed released records
-        // from the buffer, so swallowing an exception from the user delegate (or the core's own
-        // fail-fast paths) would let the task commit past records the delegate never processed, silently
-        // losing them. Fail-closed: let it kill the task.
-        ParsleyCausalBroadcast.WatermarkOutcome<KIn, VIn> watermarkOutcome =
-                causalBroadcast().onWatermark(topicId, partition, offset, frontierClock);
-        deliver(watermarkOutcome.outcome().delivered());
-        return watermarkOutcome.learnedSomethingNew();
-    }
-
-    /**
-     * Handles a received protocol watermark: decodes its carried completeness frontier, updates the
-     * per-channel clock for the watermark's source channel, releases any records newly satisfying the
-     * gate, and re-emits a watermark downstream carrying this node's updated completeness frontier —
-     * but only when this watermark genuinely taught the channel something new. The watermark is never
-     * forwarded to the user delegate and never buffered.
-     *
-     * <p>The downstream re-emission (inductive propagation) ensures that a node which never produces
-     * business records on this path still advertises its causal progress, so a grandchild node's
-     * channel clock can advance without any business record on the path. But a watermark's own delivery
-     * is never itself a reason to relay further — only a genuine change to what this channel knows is —
-     * or a topology cycle (a marker-only channel included) would ping-pong the same
-     * watermark forever (clock-invisible markers; see the class Javadoc).
-     */
-    private void handleWatermark(Record<KIn, VIn> record) {
-        // Fold the carried completeness and absorb the watermark's own offset (see foldMarkerCompleteness),
-        // then re-emit downstream only when this watermark genuinely advanced the channel, so the
+        ParsleyGossip.Reception<KIn, VIn> reception = gossip.receive(topicId, partition, offset, carried);
+        deliver(reception.delivered());
+        // Relay only when this null message genuinely advanced this node's total knowledge, so the
         // completeness boundary still propagates through non-subscribing layers when it carries real
-        // news, without ping-ponging a marker that taught this node nothing around a topology cycle.
-        // Reuse the incoming watermark's own key: upstream keyed it to route to this partition, so
-        // re-emitting under the same key keeps the propagated watermark on the co-partitioned
+        // news, without ping-ponging a message that taught this node nothing around a topology
+        // cycle. Reuse the incoming message's own key: upstream keyed it to route to this partition,
+        // so re-emitting under the same key keeps the relayed message on the co-partitioned
         // downstream partition.
-        if (foldMarkerCompleteness(record)) {
-            forwardMarker(ParsleyHeader.WATERMARK, new byte[0], record.key());
+        if (reception.learnedSomethingNew()) {
+            advertise(record.key());
         }
     }
 
     /**
-     * Forwards a protocol watermark ({@link ParsleyHeader#WATERMARK}) carrying this node's current
-     * {@link ParsleyCausalBroadcast#completeness() completeness} in the {@link ParsleyHeader#CAUSAL_DEPENDENCIES}
-     * header, so one record both signals the marker and advances the downstream channel clock.
+     * Forwards this node's null message ({@link ParsleyGossip#advertise}) — its current outbound
+     * vector timestamp in the {@link ParsleyHeader#CAUSAL_CLOCK} header, marked by
+     * {@link ParsleyHeader#NULL_MESSAGE} — so one record both signals the protocol kind and advances
+     * the downstream channel clock.
      *
      * <p>Sent to every business sink ({@link #sinkNodeNames} — never a zero-arg broadcast, so a sibling
      * child node with an incompatible type never receives one; see {@link ParsleyProcessorContext}),
      * keyed with {@code triggerKey} — the key of the input record that triggered this emission, carried
      * through as informational wire content, not for routing: {@link ParsleyMarkerPartition} (set by
-     * {@link #forwardToSinks}) routes the marker to this task's own owned partition regardless of
+     * {@link #forwardToSinks}) routes the null message to this task's own owned partition regardless of
      * {@code triggerKey}, including when it is {@code null} — so a downstream task's channel clock for
      * that partition always advances across a sink boundary, never dependent on a business key having
      * been observed yet.
      *
-     * <p>The marker carries a null value and is distinguished from a business tombstone by its
-     * {@code markerHeader}; downstream Parsley consumers skip it by that header, not by its key. It
-     * bypasses the business-forward counter in {@link ParsleyProcessorContext} (it is forwarded through
-     * the raw context, not the stamping proxy) so it does not prevent watermark emission for a
-     * genuinely non-emitting delegate invocation. Its completeness header is attached by the same
+     * <p>The null message is distinguished from a business tombstone by its marker header; downstream
+     * Parsley consumers skip it by that header, not by its key. It bypasses the business-forward
+     * counter in {@link ParsleyProcessorContext} (it is forwarded through the raw context, not the
+     * stamping proxy) so it does not prevent null-message emission for a genuinely non-emitting
+     * delegate invocation. Its clock header is attached by the same
      * {@link ParsleyCausalBroadcast#broadcast} request that stamps business forwards — the single
-     * stamping site — so a marker's stamp and a business record's stamp cannot diverge by construction.
+     * stamping site — so a null message's stamp and a business record's stamp cannot diverge by
+     * construction.
      *
      * <p>The {@code KIn}-to-{@code KOut} cast is sound under the co-partitioning contract: a causal
      * processor must not change the key across the node (doing so reshards the causally-related
      * events), so the input and output key types coincide.
      */
-    @SuppressWarnings({"NullAway", "unchecked"}) // null value by design; KIn==KOut under the co-partitioning contract
-    private void forwardMarker(String markerHeader, byte[] markerValue, @Nullable KIn triggerKey) {
-        Headers headers = ParsleyHeader.mutableHeaders();
-        headers.add(markerHeader, markerValue);
-        // Stamped with the current wall clock, never 0L: a marker's timestamp carries no causal
-        // meaning (only its headers do), but it does drive broker time-based retention — a sink
-        // segment holding only 0L-timestamped markers (a marker-only channel) would look
-        // expired the moment it rolled and be deleted before a slow consumer read it. A marker's
-        // destination is exact — every sink at this task's own partition — so its crossing wait
-        // excludes exactly that set (see the markerDestinations field).
-        forwardToSinks(causalBroadcast().broadcast(
-                new Record<>((KOut) (Object) triggerKey, null, context.currentSystemTimeMs(), headers),
-                markerDestinations));
+    @SuppressWarnings("unchecked") // KIn==KOut under the co-partitioning contract
+    private void advertise(@Nullable KIn triggerKey) {
+        forwardToSinks(gossip.advertise((KOut) (Object) triggerKey, context.currentSystemTimeMs()));
     }
 
     /**
-     * Forwards a control-plane record (a watermark) to every business sink by name, or
+     * Forwards a control-plane record (a null message) to every business sink by name, or
      * broadcasts (Kafka Streams' own zero-arg {@code forward}) when {@link #sinkNodeNames} is empty —
      * the common case, with no incompatibly-typed sibling sink configured. Named forwarding is required
      * the moment one is a sibling child of this processor's business sink(s): see
      * {@link ParsleyProcessorContext}.
      *
-     * <p>The sole call site for every marker forward (business forwards go through the stamping proxy,
-     * never here), so this is also the sole place {@link ParsleyMarkerPartition} is set: {@link
+     * <p>The sole call site for every null-message forward (business forwards go through the stamping
+     * proxy, never here), so this is also the sole place {@link ParsleyMarkerPartition} is set: {@link
      * CausalTopology} installs a {@link ParsleyMarkerPartitioner} on every sink this stage declares,
-     * which reads this override to route the marker to this task's own owned partition — {@code
+     * which reads this override to route the null message to this task's own owned partition — {@code
      * context.taskId().partition()} — regardless of {@code record}'s key. Set immediately before, cleared
      * immediately after (a {@code finally}, so an exception mid-forward never leaks the override onto a
      * later, unrelated business forward on this thread).
@@ -840,14 +815,14 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
     }
 
     /**
-     * Handles an inbound record whose causal-dependencies header could not be decoded. Its real
+     * Handles an inbound record whose causal-clock header could not be decoded. Its real
      * dependencies are unknown, so forwarding it on the ordinary path would deliver on an unknown
      * premise — never permitted, so this fails the task fast: the record was never buffered and its
      * source offset is not committed past it, so it is reprocessed on restart.
      */
     private ParsleyVectorClockResolutionException onUnresolvableClock(ParsleyVectorClockResolutionException e) {
         wiredMetrics.metrics().recordClockResolutionError();
-        log.error("Unresolvable causal-dependencies header on {}-{} @{}; failing fast (fail-closed). "
+        log.error("Unresolvable causal-clock header on {}-{} @{}; failing fast (fail-closed). "
                 + "The record was not forwarded and is reprocessed on restart. {}",
                 e.topic(), e.partition(), e.offset(), e.details(), e);
         return e;
@@ -1036,7 +1011,7 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
 
     /**
      * Warns or fails (per {@code parsley.topology.validation}) when a {@link CausalStreams} sink
-     * topic's {@code cleanup.policy} includes {@code compact}. A protocol watermark is a null-key,
+     * topic's {@code cleanup.policy} includes {@code compact}. A protocol null message is a null-key,
      * null-value record wire-indistinguishable from a compaction tombstone, so under compaction it
      * can be removed from the log before a slow consumer reads it — silently losing the completeness
      * frontier it carried. {@code compact,delete} is equally unsafe: compaction still runs.
@@ -1085,7 +1060,7 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
                 continue;
             }
             String detail = "sink topic '" + entry.getKey() + "' has cleanup.policy=" + policy
-                    + "; a Parsley watermark is a null-value record wire-indistinguishable from a "
+                    + "; a Parsley null message is a null-value record wire-indistinguishable from a "
                     + "compaction tombstone and can be compacted away before a slow consumer reads it "
                     + "— set cleanup.policy=delete";
             if (mode == ParsleyConfig.ValidationMode.STRICT) {

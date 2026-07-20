@@ -46,7 +46,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 
 /**
  * End-to-end Avro round trip against a <strong>real Confluent Schema Registry</strong> through the
- * causal processor. An {@link Order} produced (stamped via the {@link CausalDependencies} edge API)
+ * causal processor. An {@link Order} produced (stamped via the {@link CausalClock} edge API)
  * before the {@link Price} it depends on is held in the changelog-backed buffer — Avro-serialised
  * under its own {@code orders-value} subject against the live registry — and drains in causal order
  * once the Price arrives, deserialised back to an equal {@code Order}.
@@ -111,14 +111,14 @@ class CausalProcessorAvroIT {
             // The Order's dependencies, as derived after consuming prices@0.
             ConsumerRecord<String, SpecificRecord> priceConsumed =
                     new ConsumerRecord<>(PRICES, 0, 0L, "ACME", price);
-            CausalDependencies orderDeps = CausalDependencies.using(resolverProps).observe(priceConsumed);
+            CausalClock orderDeps = CausalClock.using(resolverProps).observe(priceConsumed);
 
             try (KafkaProducer<String, SpecificRecord> producer =
                          new KafkaProducer<>(producerConfig(bootstrap, registryUrl))) {
                 // Produce the dependent Order FIRST — it must be buffered, not delivered early.
                 producer.send(orderDeps.stamp(new ProducerRecord<>(ORDERS, "o-buf", order))).get();
                 // Then the Price it depends on (lands at prices@0), unblocking it.
-                producer.send(CausalDependencies.empty()
+                producer.send(CausalClock.empty()
                         .stamp(new ProducerRecord<>(PRICES, "ACME", price))).get();
             }
 

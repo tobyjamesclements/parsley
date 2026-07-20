@@ -83,7 +83,7 @@ class ParsleyLateJoinerHistoricalOrderIT {
             a.start();
             try (KafkaProducer<String, String> input = new KafkaProducer<>(producerConfig(bootstrap))) {
                 for (int i = 0; i < RECORDS; i++) {
-                    input.send(CausalDependencies.empty()
+                    input.send(CausalClock.empty()
                             .stamp(new ProducerRecord<>(T1, "k", "v" + i))).get();
                 }
             }
@@ -180,7 +180,7 @@ class ParsleyLateJoinerHistoricalOrderIT {
 
     /** A record with a value and no Parsley marker header — a business record, not a null message. */
     private static boolean isBusinessRecord(org.apache.kafka.clients.consumer.ConsumerRecord<String, String> record) {
-        return record.value() != null && record.headers().lastHeader(ParsleyHeader.WATERMARK) == null;
+        return record.value() != null && record.headers().lastHeader(ParsleyHeader.NULL_MESSAGE) == null;
     }
 
     private static Properties streamsConfig(String bootstrap, String appPrefix) {

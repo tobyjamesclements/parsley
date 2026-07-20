@@ -94,7 +94,7 @@ class ParsleyOwnSinkAncestryIT {
             observer.start();
 
             try (KafkaProducer<String, String> input = new KafkaProducer<>(producerConfig(bootstrap))) {
-                input.send(CausalDependencies.empty().stamp(new ProducerRecord<>(T1, "k", "hello"))).get();
+                input.send(CausalClock.empty().stamp(new ProducerRecord<>(T1, "k", "hello"))).get();
             }
 
             // The wire evidence (#22): the derived business record's stamp claims the shared
@@ -188,11 +188,11 @@ class ParsleyOwnSinkAncestryIT {
 
     /** A record with a value and no Parsley marker header — a business record, not a null message. */
     private static boolean isBusinessRecord(ConsumerRecord<String, String> record) {
-        return record.value() != null && record.headers().lastHeader(ParsleyHeader.WATERMARK) == null;
+        return record.value() != null && record.headers().lastHeader(ParsleyHeader.NULL_MESSAGE) == null;
     }
 
     private static ParsleyVectorClock wireClock(ConsumerRecord<String, String> record) {
-        Header header = record.headers().lastHeader(ParsleyHeader.CAUSAL_DEPENDENCIES);
+        Header header = record.headers().lastHeader(ParsleyHeader.CAUSAL_CLOCK);
         assertNotNull(header, "every stamped business record must carry the causal-dependencies header");
         return ParsleyVectorClock.fromBytes(header.value());
     }

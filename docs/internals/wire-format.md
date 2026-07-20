@@ -2,9 +2,9 @@
 
 All binary encodings are big-endian. All lengths are in bytes.
 
-## `parsley-causal-dependencies` header
+## `parsley-causal-clock` header
 
-The public `CausalDependencies` facade and the internal `ParsleyVectorClock` (node frontier) share this
+The public `CausalClock` facade and the internal `ParsleyVectorClock` (node frontier) share this
 encoding.
 
 ```
@@ -21,11 +21,11 @@ Size: `5 + 28 × n` bytes. The wire version is `0x01`, and deserialization throw
 
 Topic IDs are Kafka `Uuid` values stored as two `long` fields (most-significant bits, then least-significant bits).
 
-On a forwarded business record this header carries the producing node's **completeness frontier** (`ParsleyEngine.completeness()`), not just the record's own dependencies. The encoding is identical; only the value's meaning differs by context.
+On a forwarded business record this header carries the producing node's **completeness frontier** (`ParsleyCausalBroadcast.completeness()`), not just the record's own dependencies. The encoding is identical; only the value's meaning differs by context.
 
-## `_parsley_watermark` header (protocol watermark)
+## `_parsley_null_message` header (protocol null message)
 
-A protocol watermark is a record with a null value, keyed with the triggering record's key, carrying two headers: `_parsley_watermark` (an empty-byte marker) and `parsley-causal-dependencies` (the emitting node's completeness frontier, encoded exactly as above). A node emits one in place of a business record when a delivered input produced no downstream output, so completeness still propagates through non-emitting layers. The key is reused so the watermark routes to the same partition the record's business output would; consumers identify it by the header, never by its key. Consumers identify a watermark by the presence of the `_parsley_watermark` header (`CausalDependencies.isWatermark`); a non-Parsley consumer sees a tombstone-shaped record and should skip it.
+A protocol null message is a record with a null value, keyed with the triggering record's key, carrying two headers: `_parsley_null_message` (an empty-byte marker) and `parsley-causal-clock` (the emitting node's completeness frontier, encoded exactly as above). A node emits one in place of a business record when a delivered input produced no downstream output, so completeness still propagates through non-emitting layers. The key is reused so the null message routes to the same partition the record's business output would; consumers identify it by the header, never by its key. Consumers identify a null message by the presence of the `_parsley_null_message` header (`CausalClock.isNullMessage`); a non-Parsley consumer sees a tombstone-shaped record and should skip it.
 
 ## Buffer record (`ParsleySerializer` v3)
 
@@ -52,7 +52,7 @@ which is distinct from the outer `bufferedAt` and written independently of it.
 [partition     :4]
 [offset        :8]
 [deps-len      :4]   -1 if absent (the empty clock still encodes as 5 bytes)
-[deps          :deps-len]    parsley-causal-dependencies encoding
+[deps          :deps-len]    parsley-causal-clock encoding
 [header-count  :4]
 per user header:
   [key-len     :2]
@@ -65,7 +65,7 @@ per user header:
 [value         :value-len]
 ```
 
-`ParsleyEngine`'s startup index rebuild decodes only the outer `bufferedAt` and the `deps` field,
+`ParsleyCausalBroadcast`'s startup index rebuild decodes only the outer `bufferedAt` and the `deps` field,
 through `ParsleySerializer.deserializeIndexMetadata`, and never the key or value bytes. A record whose
 user serde can no longer decode it therefore does not block restore or the drain scan — it only fails
 once actually forwarded, via `ParsleySerializer.deserialize`.
@@ -108,7 +108,7 @@ change; the changelog dedups repeated puts by key per commit):
 ```
 
 The frontier clock is the node's contiguous delivered frontier. Each channel clock is the dependencies
-advertised on that input channel `(topicId, partition)`, max-merged over the records and watermarks
+advertised on that input channel `(topicId, partition)`, max-merged over the records and null messages
 received on it. `completeness()` — the max-merge of the frontier clock and every channel's advertised
 clock, so a single genuine witness to a coordinate is enough, with no requirement that every channel
 independently corroborate it — is computed from this value in memory. The forwarded-offset index stays
@@ -126,10 +126,10 @@ The real UUID Kafka assigned to the topic is what's used. A topic deleted and re
 same name gets a new UUID, so records stamped against the old incarnation correctly fail to satisfy
 dependencies on the new one.
 
-When building `CausalDependencies` explicitly at the edge, topic names are resolved to UUIDs
-internally through `CausalDependencies.using(props)` / `.builder(props)`, which cache each lookup.
+When building `CausalClock` explicitly at the edge, topic names are resolved to UUIDs
+internally through `CausalClock.using(props)` / `.builder(props)`, which cache each lookup.
 The UUID names a coordinate in the dependency clock.
 
 Tests without a live broker (`TopologyTestDriver`, unit tests) may use any stable `Uuid`, e.g.
-`Uuid.randomUuid()` via `CausalDependencies.using(Map.of(...))`, as long as the same value is used
+`Uuid.randomUuid()` via `CausalClock.using(Map.of(...))`, as long as the same value is used
 consistently wherever that topic's identity is referenced.

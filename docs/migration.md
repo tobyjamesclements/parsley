@@ -1,7 +1,7 @@
 # Migration
 
 Adopting Parsley in a cluster where some producers do not yet stamp the
-`parsley-causal-dependencies` header requires no special configuration. A record with a missing
+`parsley-causal-clock` header requires no special configuration. A record with a missing
 header is treated as having an empty, vacuously satisfied dependency set and is forwarded immediately.
 Because such a record is never buffered, there is no migration setting to choose and nothing to
 tighten later.
@@ -11,19 +11,19 @@ tighten later.
 ### Phase 1: introduce a causal topology and tolerate unstamped producers
 
 Build the topology with `CausalStreamsBuilder` against the full topic set immediately. Records from
-producers that do not yet stamp the `parsley-causal-dependencies` header pass straight through,
+producers that do not yet stamp the `parsley-causal-clock` header pass straight through,
 unbuffered, because their empty dependency set is vacuously satisfied. Records that already arrive
 stamped are held until their dependencies are satisfied. The two kinds of producer coexist on the same
 topics without any configuration distinguishing them.
 
 ### Phase 2: migrate producers one service at a time
 
-Have each producer stamp its records — accumulate a `CausalDependencies` with `using`/`observe` (or
+Have each producer stamp its records — accumulate a `CausalClock` with `using`/`observe` (or
 `builder`/`require`) and attach it with `.stamp(record)` — one service at a time. As a service
 migrates, its records start arriving with a valid header and are held until their dependencies are
 satisfied. The remaining unmigrated services continue to pass through unbuffered.
 
-To track migration progress, inspect the `parsley-causal-dependencies` header directly on records
+To track migration progress, inspect the `parsley-causal-clock` header directly on records
 from a given topic, for example with a side consumer or a temporary log. A topic with no producers
 left stamping it has fully adopted the guarantee.
 

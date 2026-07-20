@@ -8,7 +8,7 @@ from plain Kafka clients, all backed by a shared internal implementation.
 | API | Backed by |
 |---|---|
 | `CausalStreamsBuilder` / `CausalTopology` / `CausalStreams` | `ParsleyProcessorSupplier` / `ParsleyProcessor` (package-private) |
-| `CausalDependencies` edge ops (`using` / `observe` / `stamp` / `merge`) | `ParsleyVectorClock` (no wrapper objects); `using`/`builder` resolve topic UUIDs internally, caching each name against a short-lived Kafka admin client opened on first use |
+| `CausalClock` edge ops (`using` / `observe` / `stamp` / `merge`) | `ParsleyVectorClock` (no wrapper objects); `using`/`builder` resolve topic UUIDs internally, caching each name against a short-lived Kafka admin client opened on first use |
 
 All share a common set of value types and a single causal engine.
 
@@ -20,23 +20,24 @@ All share a common set of value types and a single causal engine.
 |---|---|
 | `CausalStreamsBuilder` | Declares one or more causal stages: `stream(...)` source topics, `.process(supplier)`, `.to(...)` sink(s); `.build()` produces a `CausalTopology` |
 | `CausalStream` / `CausalProcessedStream` | Fluent intermediate types `CausalStreamsBuilder` returns while declaring a stage (`merge`, `process`, `to`, `withPartitioner`) |
-| `CausalTopology` | The built, immutable topology specification; `assemble(props, quiesce)` produces the real Kafka Streams `Topology` (a vestigial third parameter survives until the coordination subsystem's deletion) |
+| `CausalTopology` | The built, immutable topology specification; `assemble(props, quiesce)` produces the real Kafka Streams `Topology` |
 | `CausalStreams` | The runtime: wraps the underlying `KafkaStreams` instance, owns graceful causal drain on `close()` |
-| `CausalDependencies` | Public facade over a `ParsleyVectorClock`: the causal requirements stamped onto each record, plus the `using`/`observe`/`stamp`/`merge` edge operations and `isWatermark` for skipping protocol watermarks on the consumer side |
+| `CausalClock` | Public facade over a `ParsleyVectorClock`: the causal requirements stamped onto each record, plus the `using`/`observe`/`stamp`/`merge` edge operations and `isNullMessage` for skipping protocol null messages on the consumer side |
 
 ### Package-private implementation
 
 | Class | Role |
 |---|---|
-| `ParsleyTopics` / `KafkaTopics` | Resolves topic names to their stable Kafka UUIDs (through a short-lived Kafka admin client, cached), backing `CausalDependencies`'s `using`/`builder` |
+| `ParsleyTopics` / `KafkaTopics` | Resolves topic names to their stable Kafka UUIDs (through a short-lived Kafka admin client, cached), backing `CausalClock`'s `using`/`builder` |
 | `ParsleySource` | One registered causal source: topic name + the serdes the buffer round-trips held records with (the topic's UUID is resolved from the broker) |
-| `ParsleyEngine` | Causal buffer engine: classify, buffer, cascade, fail-closed. No eviction, no buffer limit, no timeout |
+| `ParsleyCausalBroadcast` | The causal-broadcast core (Birman–Schiper–Stephenson): gate, buffer, cascade, fail-closed. No eviction, no buffer limit, no timeout |
+| `ParsleyGossip` | The gossip module: receives null messages (own offset delivered, carried clock folded stamp-side only) and builds this node's own; owns the I6 relay rule (relay iff the carried clock taught this node something outside its total knowledge) |
 | `ParsleyVectorClock` | The one vector clock: node frontier *and* dependency representation, keyed on `(Uuid, int)` primitives |
 | `ParsleyMessage` | Typed engine envelope: source coordinate + dependency clock as fields, user headers separate |
 | `ParsleyHeader` | A `(key, value)` header plus the header-key vocabulary (`_parsley_*`, reserved keys, factories) |
-| `ParsleyProcessor` | Kafka Streams processor wrapping the user processor and driving the engine; emits and consumes protocol watermarks |
+| `ParsleyProcessor` | Kafka Streams processor wrapping the user processor and driving the engine; emits and consumes protocol null messages |
 | `ParsleyProcessorSupplier` | Processor factory; registers Parsley's four state stores |
-| `ParsleyProcessorContext` | Stamping proxy: replaces the context given to the user processor; counts business forwards to drive watermark emission |
+| `ParsleyProcessorContext` | Stamping proxy: replaces the context given to the user processor; counts business forwards to drive null message emission |
 | `ParsleyBufferStore` / `StoreBackedBufferStore` | Durable buffer of held records |
 | `ParsleyCandidateIndex` / `StoreBackedCandidateIndex` | Secondary index: coordinate -> candidate record IDs |
 | `ParsleyForwardedIndex` / `StoreBackedForwardedIndex` | Offsets forwarded ahead of the contiguous frontier, so the boundary stays gap-free across restarts |
@@ -47,16 +48,16 @@ All share a common set of value types and a single causal engine.
 
 ```
 Edge (plain Kafka producer)
-  CausalDependencies.using(props).observe(trigger) / .observe(...) / .builder(props).require(...)
-    -> CausalDependencies.stamp(record)
-         -> stamps parsley-causal-dependencies header
+  CausalClock.using(props).observe(trigger) / .observe(...) / .builder(props).require(...)
+    -> CausalClock.stamp(record)
+         -> stamps parsley-causal-clock header
     -> producer.send(record)
 
 Causal processor (Streams)
   ParsleyProcessor.process(record)
-    -> watermark? -> advance channel clock, drain, relay onward only if it genuinely advanced
+    -> null message? -> advance channel clock, drain, relay onward only if it genuinely advanced
     -> ingest: wrap in ParsleyMessage, embed source coordinates
-    -> gate:   ParsleyEngine.receive()
+    -> gate:   ParsleyCausalBroadcast.receive()
                  frontier.dominates(deps) — this node's own contiguous delivered frontier; a
                    dependency is satisfied only by local delivery of the cause, never by a claim
                    advertised on another channel's clock (that feeds only the outbound stamp)
@@ -67,7 +68,7 @@ Causal processor (Streams)
                                   (consumed ancestry is claimed directly by the same clock)
     -> deliver: user processor receives records via ParsleyProcessorContext
                 forwarded records carry the node's completeness frontier
-                an input that emits no business record -> a protocol watermark instead
+                an input that emits no business record -> a protocol null message instead
                 (Streams sinks carry the header out to the output topic)
 ```
 

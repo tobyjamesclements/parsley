@@ -912,7 +912,7 @@ class ParsleyCausalBroadcastTest {
                         + "exclusion (its destination partition is unknowable at stamp time)");
         assertEquals(11L, channels.ownOutputs().offsetFor(sinkId, 0),
                 "broadcast must fold the pending ack into ownOutputs before stamping");
-        byte[] stampBytes = stamped.headers().lastHeader(ParsleyHeader.CAUSAL_DEPENDENCIES).value();
+        byte[] stampBytes = stamped.headers().lastHeader(ParsleyHeader.CAUSAL_CLOCK).value();
         ParsleyVectorClock stamp = ParsleyVectorClock.fromBytes(stampBytes);
         assertEquals(causalBroadcast.completeness().merge(channels.ownOutputs()), stamp,
                 "the stamp must be completeness ∪ ownOutputs (D2, T2.3)");
@@ -1137,7 +1137,7 @@ class ParsleyCausalBroadcastTest {
         Record<String, String> stamped = causalBroadcast.broadcast(new Record<>("k", "v", 0L));
 
         ParsleyVectorClock stamp = ParsleyVectorClock.fromBytes(
-                stamped.headers().lastHeader(ParsleyHeader.CAUSAL_DEPENDENCIES).value());
+                stamped.headers().lastHeader(ParsleyHeader.CAUSAL_CLOCK).value());
         assertEquals(2L, causalBroadcast.frontier().offsetFor(T1_ID, 0),
                 "the gate's contiguous frontier must stay below the gap at t1:3");
         assertTrue(stamp.dominates(ParsleyVectorClock.empty().observe(T1_ID, 0, 4)),

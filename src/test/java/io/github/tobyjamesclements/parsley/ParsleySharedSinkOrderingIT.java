@@ -111,8 +111,8 @@ class ParsleySharedSinkOrderingIT {
             try (KafkaProducer<String, String> input = new KafkaProducer<>(producerConfig(bootstrap))) {
                 // A seed for A so `shared` is genuinely A's sink in this run, then the trigger
                 // for the B → C → A causal chain.
-                input.send(CausalDependencies.empty().stamp(new ProducerRecord<>(T1, "k", "seed:x"))).get();
-                input.send(CausalDependencies.empty().stamp(new ProducerRecord<>(TY, "k", "y"))).get();
+                input.send(CausalClock.empty().stamp(new ProducerRecord<>(T1, "k", "seed:x"))).get();
+                input.send(CausalClock.empty().stamp(new ProducerRecord<>(TY, "k", "y"))).get();
             }
 
             // The wire evidence: the effect C derives claims B's exact shared coordinate.
@@ -223,11 +223,11 @@ class ParsleySharedSinkOrderingIT {
 
     /** A record with a value and no Parsley marker header — a business record, not a null message. */
     private static boolean isBusinessRecord(ConsumerRecord<String, String> record) {
-        return record.value() != null && record.headers().lastHeader(ParsleyHeader.WATERMARK) == null;
+        return record.value() != null && record.headers().lastHeader(ParsleyHeader.NULL_MESSAGE) == null;
     }
 
     private static ParsleyVectorClock wireClock(ConsumerRecord<String, String> record) {
-        Header header = record.headers().lastHeader(ParsleyHeader.CAUSAL_DEPENDENCIES);
+        Header header = record.headers().lastHeader(ParsleyHeader.CAUSAL_CLOCK);
         assertNotNull(header, "every stamped business record must carry the causal-dependencies header");
         return ParsleyVectorClock.fromBytes(header.value());
     }

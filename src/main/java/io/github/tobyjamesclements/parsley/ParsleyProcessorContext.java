@@ -68,7 +68,7 @@ final class ParsleyProcessorContext<KOut, VOut> implements ProcessorContext<KOut
     // overwhelming majority of callers keep today's exact broadcast behaviour with zero change.
     private final List<String> sinkNodeNames;
     // Counts business forward() calls since the last resetForwardCount(); read by ParsleyProcessor
-    // to detect non-emitting delegate invocations and emit a watermark in their place.
+    // to detect non-emitting delegate invocations and emit a null message in their place.
     private int forwardCount = 0;
     // Fails the forward fast if the topic-identity watch has detected a mid-run recreation (E1 /
     // T3.0 A13) — a punctuator-driven forward is the one stamped path that does not pass through
@@ -99,7 +99,7 @@ final class ParsleyProcessorContext<KOut, VOut> implements ProcessorContext<KOut
     /**
      * Returns the number of business {@link #forward} calls made since the last
      * {@link #resetForwardCount()}. Zero means the delegate did not forward anything for the
-     * current input record, triggering watermark emission in {@link ParsleyProcessor}.
+     * current input record, triggering null-message emission in {@link ParsleyProcessor}.
      */
     int forwardCount() {
         return forwardCount;

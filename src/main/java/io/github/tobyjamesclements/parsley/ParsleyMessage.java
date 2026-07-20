@@ -16,7 +16,7 @@ import java.util.List;
  * source coordinate ({@code topic}/{@code topicId}/{@code partition}/{@code offset}) and the causal
  * {@code dependencies} are first-class fields. They are written as typed framing fields (never
  * headers) when a message is persisted to the buffer store ({@link ParsleySerializer}), and the
- * dependencies re-materialise as the {@code parsley-causal-dependencies} header only for the
+ * dependencies re-materialise as the {@code parsley-causal-clock} header only for the
  * delegate's view ({@link #headersWithDependencies}).
  *
  * @param <K> the record key type
@@ -32,7 +32,7 @@ record ParsleyMessage<K, V>(String topic, Uuid topicId, int partition, long offs
 
     /**
      * Builds a message from an inbound Kafka Streams {@link Record} at its source coordinate. The
-     * record's {@code parsley-causal-dependencies} header is decoded into {@link #dependencies}
+     * record's {@code parsley-causal-clock} header is decoded into {@link #dependencies}
      * (absent → empty, vacuously satisfied), and all other non-internal headers are carried as user
      * headers.
      *
@@ -57,7 +57,7 @@ record ParsleyMessage<K, V>(String topic, Uuid topicId, int partition, long offs
     private static List<ParsleyHeader> userHeaders(Record<?, ?> record) {
         List<ParsleyHeader> userHeaders = new ArrayList<>();
         for (Header header : record.headers()) {
-            if (!ParsleyHeader.CAUSAL_DEPENDENCIES.equals(header.key())
+            if (!ParsleyHeader.CAUSAL_CLOCK.equals(header.key())
                     && !header.key().startsWith(ParsleyHeader.INTERNAL_PREFIX)) {
                 userHeaders.add(new ParsleyHeader(header.key(), header.value()));
             }
@@ -66,18 +66,18 @@ record ParsleyMessage<K, V>(String topic, Uuid topicId, int partition, long offs
     }
 
     private static byte @Nullable [] encodedDependencies(Record<?, ?> record) {
-        Header header = record.headers().lastHeader(ParsleyHeader.CAUSAL_DEPENDENCIES);
+        Header header = record.headers().lastHeader(ParsleyHeader.CAUSAL_CLOCK);
         return header == null ? null : header.value();
     }
 
     /**
-     * The user headers plus the {@code parsley-causal-dependencies} header carrying
+     * The user headers plus the {@code parsley-causal-clock} header carrying
      * {@link #dependencies} — the header set a delegate processor sees. Carries no
      * {@code _parsley_*}-prefixed internal marker headers.
      */
     Headers headersWithDependencies() {
         Headers out = userHeadersView();
-        out.add(ParsleyHeader.CAUSAL_DEPENDENCIES, dependencies.toBytes());
+        out.add(ParsleyHeader.CAUSAL_CLOCK, dependencies.toBytes());
         return out;
     }
 
@@ -98,7 +98,7 @@ record ParsleyMessage<K, V>(String topic, Uuid topicId, int partition, long offs
             return ParsleyVectorClock.fromBytes(encoded);
         } catch (Exception e) {
             throw new ParsleyVectorClockResolutionException(source.topic(), topicId, source.partition(), offset,
-                    encoded, "encoded causal-dependencies header length " + encoded.length, e);
+                    encoded, "encoded causal-clock header length " + encoded.length, e);
         }
     }
 }

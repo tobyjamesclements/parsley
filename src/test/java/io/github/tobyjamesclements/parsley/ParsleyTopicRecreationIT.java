@@ -229,7 +229,7 @@ class ParsleyTopicRecreationIT {
             await().atMost(Duration.ofSeconds(90)).until(() -> {
                 consumer.poll(Duration.ofMillis(500)).forEach(record -> {
                     if (record.value() != null
-                            && record.headers().lastHeader(ParsleyHeader.WATERMARK) == null) {
+                            && record.headers().lastHeader(ParsleyHeader.NULL_MESSAGE) == null) {
                         outputs.add(record);
                     }
                 });

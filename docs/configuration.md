@@ -13,16 +13,16 @@ that looks like operationally and how to recover from it.
 
 ## Header size
 
-The serialised `parsley-causal-dependencies` header is `5 + 28 × entries` bytes. It counts against
+The serialised `parsley-causal-clock` header is `5 + 28 × entries` bytes. It counts against
 Kafka's record-size limit (`message.max.bytes` and `max.request.size`, around 1 MB by default), and
 there is no separate header budget.
 
 - **Automatic Streams stamping** stamps the node's completeness frontier, which is bounded by the
   number of source topics in the subtopology, at one partition per topic per task. This stays small
   under normal topologies.
-- **`CausalDependencies.fromRecord(trigger)`** carries only the partitions the upstream producer
+- **`CausalClock.fromRecord(trigger)`** carries only the partitions the upstream producer
   depended on. This is the recommended way to propagate causal context from a plain Kafka client.
-- **A manually built `CausalDependencies`** is as wide as the coordinates you `require(...)`. Watch
+- **A manually built `CausalClock`** is as wide as the coordinates you `require(...)`. Watch
   this on records that legitimately depend on many topic-partitions.
 
 Parsley never truncates the dependencies header, because truncation would silently break the
@@ -59,7 +59,7 @@ do not share a partition count, which makes co-partitioning impossible, and lets
 is visible without breaking a deployment that already ran with the mismatch. Set it to `strict` to
 fail the task fast instead, or `off` to skip the checks. `CausalTopology`-assembled stages also fold
 their sink topics' partition counts into the same parity check and check each sink's `cleanup.policy`
-for `compact` (a protocol watermark is a null-value record wire-indistinguishable from a compaction
+for `compact` (a protocol null message is a null-value record wire-indistinguishable from a compaction
 tombstone). Each sink is resolved independently, so one sink that does not exist yet never masks a
 genuine misconfiguration on a different sink in the same stage, even under `strict`; both sink-side
 checks are skipped entirely (no admin round-trip) when validation is `off`. Note that a sink with
@@ -78,7 +78,7 @@ Parsley wires a handful of Kafka Streams `Sensor`s per task, under the `stream-p
 | `records-buffered` | rate/total | Records admitted into the causal buffer (held, not yet delivered). |
 | `records-released` | rate/total | Records released from the buffer once their dependencies were satisfied. |
 | `deserialization-errors` | rate/total | Records that failed to deserialise on the forward path. |
-| `clock-resolution-errors` | rate/total | Records whose `parsley-causal-dependencies` header could not be decoded. |
+| `clock-resolution-errors` | rate/total | Records whose `parsley-causal-clock` header could not be decoded. |
 | `deps-out-of-scope-ignored` | rate/total | Dependency coordinates on channels this node does not consume, ignored by the gate (one count per coordinate). Routine in topologies whose consumers have narrower scopes than their ancestors' stamps; a sustained unexpected rate can indicate a cross-wired deployment or a co-partitioning mistake. |
 | `buffer-depth` | gauge | Current number of records held in the causal buffer. |
 | `buffer-oldest-buffered-at-ms` | gauge | Timestamp the oldest currently-held record was buffered at. |

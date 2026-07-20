@@ -26,16 +26,16 @@ parsley.coordination.*} keys of earlier versions fail startup loudly if present.
   <dt><strong>Causal dependencies</strong></dt>
   <dd>The positions a consumer must have observed before a record stamped with them may be delivered.
   They are a producer's snapshot of what it had seen when it sent the record. They are carried as
-  {@link io.github.tobyjamesclements.parsley.CausalDependencies} in a
-  {@code parsley-causal-dependencies} header. Build one from a consumed record by starting with
-  {@link io.github.tobyjamesclements.parsley.CausalDependencies#using(java.util.Properties) using} to
+  {@link io.github.tobyjamesclements.parsley.CausalClock} in a
+  {@code parsley-causal-clock} header. Build one from a consumed record by starting with
+  {@link io.github.tobyjamesclements.parsley.CausalClock#using(java.util.Properties) using} to
   bind a topic resolver, then folding in each record with
-  {@link io.github.tobyjamesclements.parsley.CausalDependencies#observe observe}. Combine several
-  for a fan-in with {@link io.github.tobyjamesclements.parsley.CausalDependencies#merge merge}, and
+  {@link io.github.tobyjamesclements.parsley.CausalClock#observe observe}. Combine several
+  for a fan-in with {@link io.github.tobyjamesclements.parsley.CausalClock#merge merge}, and
   attach the result to an outbound record with
-  {@link io.github.tobyjamesclements.parsley.CausalDependencies#stamp stamp}. When consuming a topic
+  {@link io.github.tobyjamesclements.parsley.CausalClock#stamp stamp}. When consuming a topic
   a Parsley topology produces, fold every record in with {@code observe} but skip those for which
-  {@link io.github.tobyjamesclements.parsley.CausalDependencies#isWatermark isWatermark} returns true,
+  {@link io.github.tobyjamesclements.parsley.CausalClock#isNullMessage isNullMessage} returns true,
   which are protocol metadata rather than business records.</dd>
 
   <dt><strong>Completeness frontier</strong></dt>
@@ -49,15 +49,15 @@ parsley.coordination.*} keys of earlier versions fail startup loudly if present.
   records depend on. The frontier is internal to Parsley's processor engine and is not a separate
   public type.</dd>
 
-  <dt><strong>Protocol watermark</strong></dt>
+  <dt><strong>Protocol null message</strong></dt>
   <dd>A record with a null value, keyed with the triggering record's key, marked with a
-  {@code _parsley_watermark} header, that carries a node's completeness frontier downstream when a
+  {@code _parsley_null_message} header, that carries a node's completeness frontier downstream when a
   delivered input produced no business output. Reusing the key routes it to the same partition the
   record's output would. It keeps causal progress flowing through filters and not-yet-emitting
   aggregates, and relays further downstream only when the receiving channel's clock genuinely
   advanced — never unconditionally, which is what keeps a cyclic topology's marker traffic from
-  ping-ponging forever. Parsley's processors handle watermarks internally; a plain Kafka client detects
-  them with {@link io.github.tobyjamesclements.parsley.CausalDependencies#isWatermark isWatermark}.</dd>
+  ping-ponging forever. Parsley's processors handle null messages internally; a plain Kafka client detects
+  them with {@link io.github.tobyjamesclements.parsley.CausalClock#isNullMessage isNullMessage}.</dd>
 
   <dt><strong>Causal buffer</strong></dt>
   <dd>Records whose dependencies are not yet satisfied are held in an unbounded, changelog-backed
@@ -74,7 +74,7 @@ parsley.coordination.*} keys of earlier versions fail startup loudly if present.
     <tr><td>{@link io.github.tobyjamesclements.parsley.CausalStreamsBuilder}</td><td>Declares one or more causal stages: {@code stream(...)} one or more source topics, {@code .process(supplier)} to bind them to a causal-decorated processor, {@code .to(...)} to declare its sink(s). {@code .build()} produces a {@link io.github.tobyjamesclements.parsley.CausalTopology}.</td></tr>
     <tr><td>{@link io.github.tobyjamesclements.parsley.CausalTopology}</td><td>The built causal topology — a specification, not yet a real Kafka Streams {@code Topology} — ready for {@code new CausalStreams(topology, props)}.</td></tr>
     <tr><td>{@link io.github.tobyjamesclements.parsley.CausalStreams}</td><td>The runtime: wraps the underlying {@code KafkaStreams} instance, and owns graceful causal drain on {@code close()}.</td></tr>
-    <tr><td>{@link io.github.tobyjamesclements.parsley.CausalDependencies}</td><td>Stamps and reads causal dependencies directly on plain {@code ProducerRecord} and {@code ConsumerRecord} objects, for talking to a Parsley topology from outside Kafka Streams.</td></tr>
+    <tr><td>{@link io.github.tobyjamesclements.parsley.CausalClock}</td><td>Stamps and reads causal dependencies directly on plain {@code ProducerRecord} and {@code ConsumerRecord} objects, for talking to a Parsley topology from outside Kafka Streams.</td></tr>
   </tbody>
 </table>
 
@@ -93,7 +93,7 @@ causalStreams.start();
 Runtime.getRuntime().addShutdownHook(new Thread(causalStreams::close));
 
 // At the edge, from a plain Kafka client
-CausalDependencies deps = CausalDependencies.using(props).observe(consumedRecord);
+CausalClock deps = CausalClock.using(props).observe(consumedRecord);
 producer.send(deps.stamp(new ProducerRecord<>("orders", key, value)));
 }</pre>
 </body>

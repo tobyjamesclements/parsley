@@ -75,7 +75,7 @@ class ParsleyDataLossFailClosedIT {
         try (KafkaProducer<String, String> producer = new KafkaProducer<>(producerConfig(bootstrap))) {
             for (int i = 0; i < 10; i++) {
                 ProducerRecord<String, String> record = new ProducerRecord<>(IN, "k", "v" + i);
-                record.headers().add(ParsleyHeader.CAUSAL_DEPENDENCIES, ParsleyVectorClock.empty().toBytes());
+                record.headers().add(ParsleyHeader.CAUSAL_CLOCK, ParsleyVectorClock.empty().toBytes());
                 producer.send(record).get();
             }
         }

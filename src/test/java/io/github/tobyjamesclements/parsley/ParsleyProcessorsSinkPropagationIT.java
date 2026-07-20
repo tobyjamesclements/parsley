@@ -105,7 +105,7 @@ class ParsleyProcessorsSinkPropagationIT {
                     ProducerConfig.KEY_SERIALIZER_CLASS_CONFIG, StringSerializer.class.getName(),
                     ProducerConfig.VALUE_SERIALIZER_CLASS_CONFIG, StringSerializer.class.getName()))) {
                 ProducerRecord<String, String> record = new ProducerRecord<>(IN, "k", "hello");
-                record.headers().add("parsley-causal-dependencies", CausalDependencies.empty().toBytes());
+                record.headers().add("parsley-causal-clock", CausalClock.empty().toBytes());
                 producer.send(record).get();
             }
 
@@ -120,8 +120,8 @@ class ParsleyProcessorsSinkPropagationIT {
                 ConsumerRecord<String, byte[]> out = poll(consumer);
                 assertEquals("HELLO", new String(out.value()), "the delegate's transform reached the sink");
 
-                Optional<CausalDependencies> stamped = CausalDependencies.fromHeaders(out.headers());
-                assertEquals(Optional.of(CausalDependencies.builder(topics).require(IN, 0, 0).build()), stamped,
+                Optional<CausalClock> stamped = CausalClock.fromHeaders(out.headers());
+                assertEquals(Optional.of(CausalClock.builder(topics).require(IN, 0, 0).build()), stamped,
                         "the dependencies stamped at forward must survive the sink to the output topic");
             }
         }

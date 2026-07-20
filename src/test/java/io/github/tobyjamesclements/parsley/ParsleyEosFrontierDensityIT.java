@@ -89,7 +89,7 @@ class ParsleyEosFrontierDensityIT {
                 producer.beginTransaction();
                 for (int i = 0; i < 3; i++) {
                     ProducerRecord<String, String> record = new ProducerRecord<>(SRC, "k", "v" + batch + i);
-                    record.headers().add(ParsleyHeader.CAUSAL_DEPENDENCIES, ParsleyVectorClock.empty().toBytes());
+                    record.headers().add(ParsleyHeader.CAUSAL_CLOCK, ParsleyVectorClock.empty().toBytes());
                     producer.send(record).get();
                 }
                 producer.commitTransaction();
@@ -105,7 +105,7 @@ class ParsleyEosFrontierDensityIT {
                 out.subscribe(List.of(OUT));
                 await().atMost(Duration.ofSeconds(60)).until(() -> {
                     for (ConsumerRecord<String, String> record : out.poll(Duration.ofMillis(300))) {
-                        Header stamp = record.headers().lastHeader(ParsleyHeader.CAUSAL_DEPENDENCIES);
+                        Header stamp = record.headers().lastHeader(ParsleyHeader.CAUSAL_CLOCK);
                         if (stamp != null) {
                             srcOffsetsInStamps.add(ParsleyVectorClock.fromBytes(stamp.value()).offsetFor(srcId, 0));
                         }

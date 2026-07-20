@@ -99,9 +99,9 @@ class CausalStreamsTopologyTest {
         return props;
     }
 
-    private static Headers depsHeader(CausalDependencies deps) {
+    private static Headers depsHeader(CausalClock deps) {
         Headers headers = ParsleyHeader.mutableHeaders();
-        headers.add("parsley-causal-dependencies", deps.toBytes());
+        headers.add("parsley-causal-clock", deps.toBytes());
         return headers;
     }
 
@@ -146,7 +146,7 @@ class CausalStreamsTopologyTest {
             TestOutputTopic<String, String> out =
                     driver.createOutputTopic("out", new StringDeserializer(), new StringDeserializer());
 
-            t1.pipeInput(new TestRecord<>("k", "hello", depsHeader(CausalDependencies.empty())));
+            t1.pipeInput(new TestRecord<>("k", "hello", depsHeader(CausalClock.empty())));
 
             assertEquals(List.of("hello"), processed, "delegate.process must run for an admitted record");
             TestRecord<String, String> emitted = out.readRecord();
@@ -176,8 +176,8 @@ class CausalStreamsTopologyTest {
             TestOutputTopic<String, String> out =
                     driver.createOutputTopic("out", new StringDeserializer(), new StringDeserializer());
 
-            t1.pipeInput(new TestRecord<>("k", "fromT1", depsHeader(CausalDependencies.empty())));
-            t2.pipeInput(new TestRecord<>("k", "fromT2", depsHeader(CausalDependencies.empty())));
+            t1.pipeInput(new TestRecord<>("k", "fromT1", depsHeader(CausalClock.empty())));
+            t2.pipeInput(new TestRecord<>("k", "fromT2", depsHeader(CausalClock.empty())));
 
             assertEquals(List.of("fromT1", "fromT2"), processed,
                     "both sources must feed the same processor node");
@@ -468,8 +468,8 @@ class CausalStreamsTopologyTest {
             TestInputTopic<String, String> t1 =
                     driver.createInputTopic("t1", new StringSerializer(), new StringSerializer());
 
-            t1.pipeInput(new TestRecord<>("k", "toA", depsHeader(CausalDependencies.empty())));
-            t1.pipeInput(new TestRecord<>("k", "toB", depsHeader(CausalDependencies.empty())));
+            t1.pipeInput(new TestRecord<>("k", "toA", depsHeader(CausalClock.empty())));
+            t1.pipeInput(new TestRecord<>("k", "toB", depsHeader(CausalClock.empty())));
 
             assertTrue(recorder.invocations.contains("out-a:k"),
                     "the custom partitioner must be invoked for sink-a's topic");
@@ -486,12 +486,12 @@ class CausalStreamsTopologyTest {
      * task's own owned partition — and never reaches the stage's own partitioner at all.
      *
      * <p>A single "drop" input is never forwarded by the delegate, so Parsley emits exactly one stand-in
-     * watermark to reach "out". Proving the recording partitioner is genuinely wired into this sink but
-     * never invoked for the watermark is the whole point of this test: {@code TopologyTestDriver}'s
+     * null message to reach "out". Proving the recording partitioner is genuinely wired into this sink but
+     * never invoked for the null message is the whole point of this test: {@code TopologyTestDriver}'s
      * single-partition topic can't otherwise distinguish "routed by the override" from "routed by the
      * delegate" by outcome alone, since both land on the same (only) partition either way.
      *
-     * Asserts the watermark still reaches the output topic, and the recording partitioner was never
+     * Asserts the null message still reaches the output topic, and the recording partitioner was never
      * invoked for it.
      */
     @Test
@@ -504,7 +504,7 @@ class CausalStreamsTopologyTest {
 
             @Override
             public void process(Record<String, String> record) {
-                // forwards nothing -- Parsley emits a stand-in watermark for this input
+                // forwards nothing -- Parsley emits a stand-in null message for this input
             }
         };
 
@@ -521,9 +521,9 @@ class CausalStreamsTopologyTest {
             TestOutputTopic<String, String> out =
                     driver.createOutputTopic("out", new StringDeserializer(), new StringDeserializer());
 
-            t1.pipeInput(new TestRecord<>("k", "drop", depsHeader(CausalDependencies.empty())));
+            t1.pipeInput(new TestRecord<>("k", "drop", depsHeader(CausalClock.empty())));
 
-            assertTrue(isWatermark(out.readRecord()), "the stand-in watermark must still reach the sink");
+            assertTrue(isNullMessage(out.readRecord()), "the stand-in null message must still reach the sink");
             assertTrue(recorder.invocations.isEmpty(),
                     "the marker forward must never reach the stage's own partitioner — "
                             + "ParsleyMarkerPartition must have intercepted it first");
@@ -532,18 +532,18 @@ class CausalStreamsTopologyTest {
 
     /**
      * A delivered record the delegate forwards to only ONE named sink still causes Parsley's
-     * stand-in watermark (emitted because the delegate's forward count for this input was zero — see
+     * stand-in null message (emitted because the delegate's forward count for this input was zero — see
      * {@link ParsleyProcessor#deliver}) to reach EVERY sink connected to the processor node, not just
      * the one the delegate targeted. This is Kafka Streams' own broadcast behaviour for an unqualified
-     * {@code context.forward(record)} (used for watermark emission, unlike the delegate's own
+     * {@code context.forward(record)} (used for null message emission, unlike the delegate's own
      * possibly-named business forward) — exercised here through a real multi-sink
      * {@link CausalStreamsBuilder} topology, not just a raw {@code context.forward} call.
      *
      * Asserts: the record that IS forwarded (business output) reaches only its named sink, and the
-     * record that is NOT forwarded triggers a watermark reaching BOTH sinks.
+     * record that is NOT forwarded triggers a null message reaching BOTH sinks.
      */
     @Test
-    void watermarkForANonEmittingRecordReachesEverySinkNotJustTheNamedOne() {
+    void nullMessageForANonEmittingRecordReachesEverySinkNotJustTheNamedOne() {
         ProcessorSupplier<String, String, String, String> brancher = () -> new Processor<>() {
             private ProcessorContext<String, String> ctx;
 
@@ -557,7 +557,7 @@ class CausalStreamsTopologyTest {
                 if (record.value().equals("emit")) {
                     ctx.forward(record, "sink-a");
                 }
-                // "drop": forward nothing — Parsley must emit a stand-in watermark for this input.
+                // "drop": forward nothing — Parsley must emit a stand-in null message for this input.
             }
         };
 
@@ -576,32 +576,32 @@ class CausalStreamsTopologyTest {
             TestOutputTopic<String, String> outB =
                     driver.createOutputTopic("out-b", new StringDeserializer(), new StringDeserializer());
 
-            t1.pipeInput(new TestRecord<>("k", "emit", depsHeader(CausalDependencies.empty())));
-            t1.pipeInput(new TestRecord<>("k", "drop", depsHeader(CausalDependencies.empty())));
+            t1.pipeInput(new TestRecord<>("k", "emit", depsHeader(CausalClock.empty())));
+            t1.pipeInput(new TestRecord<>("k", "drop", depsHeader(CausalClock.empty())));
 
             TestRecord<String, String> businessRecord = outA.readRecord();
             assertEquals("emit", businessRecord.value(), "the named-sink forward must reach sink-a");
 
-            TestRecord<String, String> watermarkOnA = outA.readRecord();
-            assertTrue(isWatermark(watermarkOnA), "the non-emitting record's watermark must reach sink-a");
-            TestRecord<String, String> watermarkOnB = outB.readRecord();
-            assertTrue(isWatermark(watermarkOnB),
-                    "the non-emitting record's watermark must ALSO reach sink-b, not just the named sink-a — "
-                            + "Parsley's watermark forward is unqualified and Kafka Streams broadcasts it to "
+            TestRecord<String, String> nullMessageOnA = outA.readRecord();
+            assertTrue(isNullMessage(nullMessageOnA), "the non-emitting record's null message must reach sink-a");
+            TestRecord<String, String> nullMessageOnB = outB.readRecord();
+            assertTrue(isNullMessage(nullMessageOnB),
+                    "the non-emitting record's null message must ALSO reach sink-b, not just the named sink-a — "
+                            + "Parsley's null message forward is unqualified and Kafka Streams broadcasts it to "
                             + "every sink connected to the processor node");
         }
     }
 
-    /** Whether {@code record} carries Parsley's protocol-watermark header. */
-    private static boolean isWatermark(TestRecord<String, String> record) {
-        return record.headers().lastHeader(ParsleyHeader.WATERMARK) != null;
+    /** Whether {@code record} carries Parsley's protocol-null message header. */
+    private static boolean isNullMessage(TestRecord<String, String> record) {
+        return record.headers().lastHeader(ParsleyHeader.NULL_MESSAGE) != null;
     }
 
     /**
      * A stage assembled with a {@link ParsleyQuiesce} keeps that quiesce's readiness signal in sync
      * with its actual buffer depth: a held record (unsatisfied dependency) must keep
      * {@code isSafeToClose} false even after quiesce is requested, and delivering that record via the
-     * ordinary satisfying-message path (never a synthetic watermark) must flip it back to true.
+     * ordinary satisfying-message path (never a synthetic null message) must flip it back to true.
      *
      * <p>The held record's dependency ({@code t2@0}) is genuinely unmet, not merely undeclared: every
      * record is checked against this node's actual current state, never against its own declared
@@ -627,14 +627,14 @@ class CausalStreamsTopologyTest {
             // Depends on t2@0, a channel this stage consumes but has not yet seen any traffic on —
             // held until a real t2 record arrives.
             t1.pipeInput(new TestRecord<>("k", "held",
-                    depsHeader(CausalDependencies.builder(TOPICS).require("t2", 0, 0).build())));
+                    depsHeader(CausalClock.builder(TOPICS).require("t2", 0, 0).build())));
 
             quiesce.requestQuiesce();
             assertEquals(false, quiesce.isSafeToClose(), "a held record must keep the stage unsafe to close");
 
             // Satisfies the held record's dependency (t2@0) — draining the buffer to empty through
-            // the ordinary delivery path, never a synthetic watermark.
-            t2.pipeInput(new TestRecord<>("k", "trigger", depsHeader(CausalDependencies.empty())));
+            // the ordinary delivery path, never a synthetic null message.
+            t2.pipeInput(new TestRecord<>("k", "trigger", depsHeader(CausalClock.empty())));
 
             assertEquals(List.of("trigger", "held"), processed,
                     "the held record must drain once its dependency is satisfied");
@@ -672,7 +672,7 @@ class CausalStreamsTopologyTest {
             // Delivered immediately (no dependencies) — the buffer is already empty long before quiesce
             // is ever requested, with nothing further ever delivered to trigger a fresh depth-changing
             // event afterward.
-            t1.pipeInput(new TestRecord<>("k", "already-drained", depsHeader(CausalDependencies.empty())));
+            t1.pipeInput(new TestRecord<>("k", "already-drained", depsHeader(CausalClock.empty())));
             assertEquals(List.of("already-drained"), processed);
 
             quiesce.requestQuiesce();
@@ -731,7 +731,7 @@ class CausalStreamsTopologyTest {
 
         try (TopologyTestDriver driver = new TopologyTestDriver(topology, config())) {
             driver.createInputTopic("t1", new StringSerializer(), new StringSerializer())
-                    .pipeInput(new TestRecord<>("k", "live", depsHeader(CausalDependencies.empty())));
+                    .pipeInput(new TestRecord<>("k", "live", depsHeader(CausalClock.empty())));
             assertEquals(List.of("live"), processed,
                     "warn-mode validation must not fail startup: the task starts and processes normally");
         }
@@ -756,7 +756,7 @@ class CausalStreamsTopologyTest {
 
         try (TopologyTestDriver driver = new TopologyTestDriver(topology, config())) {
             driver.createInputTopic("t1", new StringSerializer(), new StringSerializer())
-                    .pipeInput(new TestRecord<>("k", "live", depsHeader(CausalDependencies.empty())));
+                    .pipeInput(new TestRecord<>("k", "live", depsHeader(CausalClock.empty())));
             assertEquals(List.of("live"), processed,
                     "an unresolvable sink partition count must be skipped, not fail even strict validation");
         }
@@ -764,7 +764,7 @@ class CausalStreamsTopologyTest {
 
     /**
      * Under {@code parsley.topology.validation=strict}, a sink topic whose {@code cleanup.policy}
-     * includes {@code compact} fails startup fast — a protocol watermark is a null-value record
+     * includes {@code compact} fails startup fast — a protocol null message is a null-value record
      * wire-indistinguishable from a compaction tombstone and could otherwise be compacted away
      * before a slow consumer reads it.
      *
@@ -792,7 +792,7 @@ class CausalStreamsTopologyTest {
 
     /**
      * A sink topic's {@code cleanup.policy=compact,delete} is equally unsafe as plain {@code compact}
-     * — compaction still runs and can remove a watermark before it is read — so it must also fail
+     * — compaction still runs and can remove a null message before it is read — so it must also fail
      * strict validation.
      *
      * Asserts driver construction throws for a {@code compact,delete} sink under strict validation.
@@ -832,7 +832,7 @@ class CausalStreamsTopologyTest {
 
         try (TopologyTestDriver driver = new TopologyTestDriver(topology, config())) {
             driver.createInputTopic("t1", new StringSerializer(), new StringSerializer())
-                    .pipeInput(new TestRecord<>("k", "live", depsHeader(CausalDependencies.empty())));
+                    .pipeInput(new TestRecord<>("k", "live", depsHeader(CausalClock.empty())));
             assertEquals(List.of("live"), processed,
                     "warn-mode validation must not fail startup: the task starts and processes normally");
         }
@@ -854,7 +854,7 @@ class CausalStreamsTopologyTest {
 
         try (TopologyTestDriver driver = new TopologyTestDriver(topology, config())) {
             driver.createInputTopic("t1", new StringSerializer(), new StringSerializer())
-                    .pipeInput(new TestRecord<>("k", "live", depsHeader(CausalDependencies.empty())));
+                    .pipeInput(new TestRecord<>("k", "live", depsHeader(CausalClock.empty())));
             assertEquals(List.of("live"), processed,
                     "strict validation must pass for a delete-policy sink: the task processes normally");
         }
@@ -964,14 +964,14 @@ class CausalStreamsTopologyTest {
 
         try (TopologyTestDriver driver = new TopologyTestDriver(topology, config())) {
             driver.createInputTopic("t1", new StringSerializer(), new StringSerializer())
-                    .pipeInput(new TestRecord<>("k", "live", depsHeader(CausalDependencies.empty())));
+                    .pipeInput(new TestRecord<>("k", "live", depsHeader(CausalClock.empty())));
             assertEquals(0, admin.sinkPartitionCountCalls, "off must skip the sink partition-count admin call entirely");
             assertEquals(0, admin.sinkCleanupPolicyCalls, "off must skip the sink cleanup-policy admin call entirely");
         }
     }
 
     /**
-     * A corrupted {@code parsley-causal-dependencies} header fails the whole assembled topology closed —
+     * A corrupted {@code parsley-causal-clock} header fails the whole assembled topology closed —
      * proving the fail-closed model collapses correctly through the full stack ({@link
      * CausalStreamsBuilder} → {@link CausalTopology} → real {@link Topology}), not just at the core
      * unit-test level. There is no dead-letter sink to divert to: an undecodable header always crashes
@@ -993,7 +993,7 @@ class CausalStreamsTopologyTest {
                     driver.createInputTopic("t1", new StringSerializer(), new StringSerializer());
 
             Headers corrupted = ParsleyHeader.mutableHeaders();
-            corrupted.add(ParsleyHeader.CAUSAL_DEPENDENCIES, new byte[] {(byte) 0xFF});
+            corrupted.add(ParsleyHeader.CAUSAL_CLOCK, new byte[] {(byte) 0xFF});
 
             StreamsException thrown = assertThrows(StreamsException.class,
                     () -> t1.pipeInput(new TestRecord<>("k", "v", corrupted)),
@@ -1080,11 +1080,11 @@ class CausalStreamsTopologyTest {
                     driver.createInputTopic("t1", new StringSerializer(), new StringSerializer());
             TestOutputTopic<String, String> out =
                     driver.createOutputTopic("out", new StringDeserializer(), new StringDeserializer());
-            t1.pipeInput(new TestRecord<>("k", "hello", depsHeader(CausalDependencies.empty())));
+            t1.pipeInput(new TestRecord<>("k", "hello", depsHeader(CausalClock.empty())));
 
             TestRecord<String, String> emitted = out.readRecord();
             ParsleyVectorClock stamp = ParsleyVectorClock.fromBytes(
-                    emitted.headers().lastHeader(ParsleyHeader.CAUSAL_DEPENDENCIES).value());
+                    emitted.headers().lastHeader(ParsleyHeader.CAUSAL_CLOCK).value());
             assertEquals(4L, stamp.offsetFor(outId, 0),
                     "the seeded own-output coordinate must ride the stamp (completeness ∪ "
                             + "ownOutputs — D2, T2.3)");

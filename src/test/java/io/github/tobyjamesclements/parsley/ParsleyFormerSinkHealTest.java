@@ -234,13 +234,13 @@ class ParsleyFormerSinkHealTest {
             MockProcessorContext<String, String> context) {
         context.setRecordMetadata("t2", 0, 0);
         Headers headers = ParsleyHeader.mutableHeaders();
-        headers.add(ParsleyHeader.CAUSAL_DEPENDENCIES, ParsleyVectorClock.empty().toBytes());
+        headers.add(ParsleyHeader.CAUSAL_CLOCK, ParsleyVectorClock.empty().toBytes());
         processor.process(new Record<>("k", "v", 0L, headers));
 
         List<MockProcessorContext.CapturedForward<? extends String, ? extends String>> forwarded =
                 context.forwarded();
         assertFalse(forwarded.isEmpty(), "the delegate's forward must have been captured");
-        Header stamped = forwarded.get(0).record().headers().lastHeader(ParsleyHeader.CAUSAL_DEPENDENCIES);
+        Header stamped = forwarded.get(0).record().headers().lastHeader(ParsleyHeader.CAUSAL_CLOCK);
         assertNotNull(stamped, "every business forward must carry a causal-dependencies stamp");
         return ParsleyVectorClock.fromBytes(stamped.value());
     }

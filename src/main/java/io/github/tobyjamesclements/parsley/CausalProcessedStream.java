@@ -80,10 +80,10 @@ public final class CausalProcessedStream<K, V> {
     /**
      * Sets the {@link StreamPartitioner} applied to <strong>every</strong> sink this stage declares
      * (default: Kafka's own key-hash partitioner) — never configurable per-sink, so two sinks in the
-     * same stage can never drift onto different partitioners. A watermark carries a null value and
+     * same stage can never drift onto different partitioners. A null message carries a null value and
      * reuses its triggering record's key, so {@code partitioner} must read only the key (never the
      * value) — a coarser-than-key shard function is the intended use, not a value-based one, which
-     * cannot route a null-value watermark.
+     * cannot route a null-value null message.
      *
      * @param partitioner the partitioner to apply uniformly to every sink; must read only the key
      * @return this

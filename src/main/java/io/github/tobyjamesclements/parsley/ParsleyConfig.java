@@ -16,11 +16,12 @@ import java.util.Set;
  * consequences with no Streams equivalent, so they are not mapped from Streams' exception handlers.
  *
  * <p>Causal delivery has exactly two dispositions, never a third: a record is <strong>forwarded</strong>
- * once its dependencies are satisfied; while unsatisfied it stays <strong>buffered</strong>, unbounded,
- * changelog-backed. A record whose dependencies are proven impossible (an undecodable payload or
- * dependency header, or a dependency naming a coordinate this node has no channel for) unconditionally
- * fails the task. There is no configuration that trades causal safety for liveness, and no diversion —
- * proven impossibility always fails fast, never on pressure or time.
+ * once its consumed dependencies are satisfied (a dependency on a coordinate this node does not
+ * consume is unconditionally ignored, with a metric — sound by I2/I9, never a failure); while
+ * unsatisfied it stays <strong>buffered</strong>, unbounded, changelog-backed. A record whose
+ * dependencies are proven impossible to evaluate (an undecodable payload or clock header)
+ * unconditionally fails the task. There is no configuration that trades causal safety for liveness,
+ * and no diversion — proven impossibility always fails fast, never on pressure or time.
  *
  * <p>An absent file, or absent keys, fall back to defaults. {@link #from(Properties)} builds one from
  * explicit properties (programmatic override / tests).
@@ -37,7 +38,7 @@ final class ParsleyConfig {
      * can detect at startup: the causal topics not sharing a partition count (co-partitioning is
      * impossible — each task cannot own the complete partition set for a causally-related group), and,
      * for a {@link CausalStreamsBuilder} stage's sink topics, a {@code cleanup.policy} that includes
-     * {@code compact} (a protocol watermark is a null-value record wire-indistinguishable from a
+     * {@code compact} (a protocol null message is a null-value record wire-indistinguishable from a
      * compaction tombstone and can be compacted away before a slow consumer reads it):
      * <ul>
      *   <li>{@code off}: no check.</li>

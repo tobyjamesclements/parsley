@@ -169,7 +169,7 @@ class ParsleyProducerAckMechanicsIT {
 
             try (KafkaProducer<String, String> producer =
                          new KafkaProducer<>(plainProducerConfig(bootstrap))) {
-                producer.send(CausalDependencies.empty()
+                producer.send(CausalClock.empty()
                         .stamp(new ProducerRecord<>(T1, "k", "ping"))).get();
             }
 

@@ -68,7 +68,7 @@ class ParsleyProcessorsTopologyTest {
     private static final ParsleyTopicAdmin ADMIN = TestTopicAdmin.of(Map.of(
             "t1", T1_ID, "t2", T2_ID, "t3", T3_ID, "t4", T4_ID, "t5", T5_ID));
 
-    // Resolver mapping the same test topic names to their UUIDs, for building CausalDependencies.
+    // Resolver mapping the same test topic names to their UUIDs, for building CausalClock.
     private static final ParsleyTopics TOPICS = ParsleyTopics.of(Map.of(
             "t1", T1_ID, "t2", T2_ID, "t3", T3_ID, "t4", T4_ID, "t5", T5_ID, "ghost", GHOST_ID));
 
@@ -88,9 +88,9 @@ class ParsleyProcessorsTopologyTest {
         return props;
     }
 
-    private static Headers depsHeader(CausalDependencies deps) {
+    private static Headers depsHeader(CausalClock deps) {
         Headers headers = ParsleyHeader.mutableHeaders();
-        headers.add("parsley-causal-dependencies", deps.toBytes());
+        headers.add("parsley-causal-clock", deps.toBytes());
         return headers;
     }
 
@@ -131,8 +131,8 @@ class ParsleyProcessorsTopologyTest {
         return builder.build();
     }
 
-    private static CausalDependencies outDeps(TestRecord<String, String> record) {
-        return CausalDependencies.fromHeaders(record.headers()).orElseThrow();
+    private static CausalClock outDeps(TestRecord<String, String> record) {
+        return CausalClock.fromHeaders(record.headers()).orElseThrow();
     }
 
     // --- tests ---------------------------------------------------------------------------------
@@ -157,12 +157,12 @@ class ParsleyProcessorsTopologyTest {
             TestOutputTopic<String, String> out =
                     driver.createOutputTopic("out", new StringDeserializer(), new StringDeserializer());
 
-            t1.pipeInput(new TestRecord<>("k", "hello", depsHeader(CausalDependencies.empty())));
+            t1.pipeInput(new TestRecord<>("k", "hello", depsHeader(CausalClock.empty())));
 
             assertEquals(List.of("hello"), processed, "delegate.process must run for an admitted record");
             TestRecord<String, String> emitted = out.readRecord();
             assertEquals("HELLO", emitted.value(), "delegate's transform must be applied");
-            assertEquals(CausalDependencies.builder(TOPICS).require("t1", 0, 0).build(), outDeps(emitted),
+            assertEquals(CausalClock.builder(TOPICS).require("t1", 0, 0).build(), outDeps(emitted),
                     "forward must be stamped with the frontier as of admission");
         }
     }
@@ -198,14 +198,14 @@ class ParsleyProcessorsTopologyTest {
                     "a record with no dependency header must be admitted immediately, not held");
             TestRecord<String, String> emitted = out.readRecord();
             assertEquals("RAW", emitted.value(), "the admitted record must flow through the delegate");
-            assertEquals(CausalDependencies.builder(TOPICS).require("t1", 0, 0).build(), outDeps(emitted),
+            assertEquals(CausalClock.builder(TOPICS).require("t1", 0, 0).build(), outDeps(emitted),
                     "the absent header is treated as empty and the frontier is bumped through the source coordinate");
         }
     }
 
     /**
      * A record whose dependencies were derived at the edge with
-     * {@link CausalDependencies#from(ParsleyTopics, org.apache.kafka.clients.consumer.ConsumerRecord)}
+     * {@link CausalClock#from(ParsleyTopics, org.apache.kafka.clients.consumer.ConsumerRecord)}
      * is gated on the triggering record's own position: it is held until the processor observes that
      * position, then delivered. This proves the edge API's own-coordinate semantic against the real
      * gate — a record produced after consuming {@code t2@0} must not be delivered before {@code t2@0}
@@ -220,7 +220,7 @@ class ParsleyProcessorsTopologyTest {
         // The dependencies a downstream producer would attach after consuming t2@0 (no carried deps).
         org.apache.kafka.clients.consumer.ConsumerRecord<String, String> trigger =
                 new org.apache.kafka.clients.consumer.ConsumerRecord<>("t2", 0, 0L, "tk", "tv");
-        CausalDependencies stampedFromTrigger = CausalDependencies.using(TOPICS).observe(trigger);
+        CausalClock stampedFromTrigger = CausalClock.using(TOPICS).observe(trigger);
 
         Topology topology = topology(
                 ParsleyProcessorSupplier.builder(upperCaser()).addBufferStore("parsley")
@@ -241,7 +241,7 @@ class ParsleyProcessorsTopologyTest {
                     "a record stamped via from(t2@0) must be held until t2@0 is observed");
 
             // The triggering coordinate arrives (lands at t2 offset 0), draining the held record.
-            t2.pipeInput(new TestRecord<>("tk", "trigger", depsHeader(CausalDependencies.empty())));
+            t2.pipeInput(new TestRecord<>("tk", "trigger", depsHeader(CausalClock.empty())));
             assertEquals(List.of("trigger", "held"), processed,
                     "once t2@0 is observed, the record stamped via from(t2@0) must drain in causal order");
         }
@@ -274,13 +274,13 @@ class ParsleyProcessorsTopologyTest {
 
             // t3-record depends on t2-0 offset 0, which hasn't arrived: held, not delivered.
             t3.pipeInput(new TestRecord<>("k", "t3-val",
-                    depsHeader(CausalDependencies.builder(TOPICS).require("t2", 0, 0).build())));
+                    depsHeader(CausalClock.builder(TOPICS).require("t2", 0, 0).build())));
             assertTrue(processed.isEmpty(), "held record must not reach the delegate");
             assertTrue(out.isEmpty(), "held record must not appear in the output topic");
             assertEquals(1, storeSize(bufferStore), "held record must be persisted to the buffer store");
 
             // t2-record arrives and advances the frontier, draining the t3-record through the delegate.
-            t2.pipeInput(new TestRecord<>("k", "t2-val", depsHeader(CausalDependencies.empty())));
+            t2.pipeInput(new TestRecord<>("k", "t2-val", depsHeader(CausalClock.empty())));
 
             assertEquals(List.of("t2-val", "t3-val"), processed,
                     "delegate must see both records in causal order after the dependency arrives");
@@ -316,8 +316,8 @@ class ParsleyProcessorsTopologyTest {
             TestOutputTopic<String, String> out =
                     driver.createOutputTopic("out", new StringDeserializer(), new StringDeserializer());
 
-            t2.pipeInput(new TestRecord<>("k", "t2-val", depsHeader(CausalDependencies.empty())));
-            t3.pipeInput(new TestRecord<>("k", "t3-val", depsHeader(CausalDependencies.empty())));
+            t2.pipeInput(new TestRecord<>("k", "t2-val", depsHeader(CausalClock.empty())));
+            t3.pipeInput(new TestRecord<>("k", "t3-val", depsHeader(CausalClock.empty())));
 
             assertEquals(List.of("T2-VAL", "T3-VAL"), out.readValuesToList(),
                     "both buffers registered via the collection overload must admit and forward their records");
@@ -395,8 +395,8 @@ class ParsleyProcessorsTopologyTest {
                     driver.createInputTopic("t2", new StringSerializer(), new StringSerializer());
 
             // Two independent records, each with no dependencies — each delivers on its own.
-            t2.pipeInput(new TestRecord<>("k", "t2-val", depsHeader(CausalDependencies.empty())));
-            t1.pipeInput(new TestRecord<>("k", "t1-val", depsHeader(CausalDependencies.empty())));
+            t2.pipeInput(new TestRecord<>("k", "t2-val", depsHeader(CausalClock.empty())));
+            t1.pipeInput(new TestRecord<>("k", "t1-val", depsHeader(CausalClock.empty())));
 
             assertEquals(List.of("t2-0@0", "t1-0@0"), reportedSources,
                     "each record's delivery must report its own source coordinate");
@@ -426,8 +426,8 @@ class ParsleyProcessorsTopologyTest {
                 Headers headers = ParsleyHeader.mutableHeaders();
                 headers.add("user-h", "keep".getBytes());
                 // A stale dependencies header the user happens to carry — stamping must replace, not duplicate it.
-                headers.add("parsley-causal-dependencies",
-                        CausalDependencies.builder(TOPICS).require("t2", 0, 5).build().toBytes());
+                headers.add("parsley-causal-clock",
+                        CausalClock.builder(TOPICS).require("t2", 0, 5).build().toBytes());
                 ctx.forward(record.withHeaders(headers));
             }
         };
@@ -442,12 +442,12 @@ class ParsleyProcessorsTopologyTest {
             TestOutputTopic<String, String> out =
                     driver.createOutputTopic("out", new StringDeserializer(), new StringDeserializer());
 
-            t1.pipeInput(new TestRecord<>("k", "v", depsHeader(CausalDependencies.empty())));
+            t1.pipeInput(new TestRecord<>("k", "v", depsHeader(CausalClock.empty())));
 
             TestRecord<String, String> emitted = out.readRecord();
-            assertEquals(1, count(emitted.headers(), "parsley-causal-dependencies"),
+            assertEquals(1, count(emitted.headers(), "parsley-causal-clock"),
                     "exactly one dependencies header — stamping must replace, not duplicate");
-            assertEquals(CausalDependencies.builder(TOPICS).require("t1", 0, 0).build(), outDeps(emitted),
+            assertEquals(CausalClock.builder(TOPICS).require("t1", 0, 0).build(), outDeps(emitted),
                     "the stamped dependencies must be the frontier, not the user's stale value");
             assertEquals("keep", new String(emitted.headers().lastHeader("user-h").value()),
                     "user headers must be preserved");
@@ -489,13 +489,13 @@ class ParsleyProcessorsTopologyTest {
             TestOutputTopic<String, String> out =
                     driver.createOutputTopic("out", new StringDeserializer(), new StringDeserializer());
 
-            t1.pipeInput(new TestRecord<>("k", "v", depsHeader(CausalDependencies.empty())));
+            t1.pipeInput(new TestRecord<>("k", "v", depsHeader(CausalClock.empty())));
             out.readRecord(); // the live record
             driver.advanceWallClockTime(Duration.ofSeconds(1));
 
             TestRecord<String, String> punctuated = out.readRecord();
             assertEquals("punct", punctuated.value(), "punctuator output must reach the topic");
-            assertEquals(CausalDependencies.builder(TOPICS).require("t1", 0, 0).build(), outDeps(punctuated),
+            assertEquals(CausalClock.builder(TOPICS).require("t1", 0, 0).build(), outDeps(punctuated),
                     "punctuator forwards must be stamped with the live frontier");
         }
     }
@@ -549,7 +549,7 @@ class ParsleyProcessorsTopologyTest {
             TestOutputTopic<String, String> out =
                     driver.createOutputTopic("out", new StringDeserializer(), new StringDeserializer());
 
-            t1.pipeInput(new TestRecord<>("k", "v", depsHeader(CausalDependencies.empty())));
+            t1.pipeInput(new TestRecord<>("k", "v", depsHeader(CausalClock.empty())));
 
             assertEquals("v@t1", out.readValue(),
                     "getStateStore and recordMetadata must pass through the proxy context");
@@ -601,8 +601,8 @@ class ParsleyProcessorsTopologyTest {
             TestOutputTopic<String, String> t2Out =
                     driver.createOutputTopic("t2-out", new StringDeserializer(), new StringDeserializer());
 
-            t3.pipeInput(new TestRecord<>("k", "t3-val", depsHeader(CausalDependencies.empty())));
-            t2.pipeInput(new TestRecord<>("k", "t2-val", depsHeader(CausalDependencies.empty())));
+            t3.pipeInput(new TestRecord<>("k", "t3-val", depsHeader(CausalClock.empty())));
+            t2.pipeInput(new TestRecord<>("k", "t2-val", depsHeader(CausalClock.empty())));
 
             assertEquals(List.of("T3-VAL"), t3Out.readValuesToList(),
                     "t3 processor must forward to its own output topic");
@@ -646,9 +646,9 @@ class ParsleyProcessorsTopologyTest {
                     driver.createInputTopic("t3", new StringSerializer(), new StringSerializer());
 
             for (int i = 0; i < 50; i++) {
-                t1.pipeInput(new TestRecord<>("k", "v" + i, depsHeader(CausalDependencies.empty())));
-                t2.pipeInput(new TestRecord<>("k", "v" + i, depsHeader(CausalDependencies.empty())));
-                t3.pipeInput(new TestRecord<>("k", "v" + i, depsHeader(CausalDependencies.empty())));
+                t1.pipeInput(new TestRecord<>("k", "v" + i, depsHeader(CausalClock.empty())));
+                t2.pipeInput(new TestRecord<>("k", "v" + i, depsHeader(CausalClock.empty())));
+                t3.pipeInput(new TestRecord<>("k", "v" + i, depsHeader(CausalClock.empty())));
             }
 
             ParsleyVectorClock frontier = frontierIn(driver, "parsley-frontier");
@@ -670,11 +670,11 @@ class ParsleyProcessorsTopologyTest {
      */
     @Test
     void manyDependenciesOnAnUnconsumedTopicAreIgnoredAndDeliver() {
-        CausalDependencies.Builder bigBuilder = CausalDependencies.builder(TOPICS);
+        CausalClock.Builder bigBuilder = CausalClock.builder(TOPICS);
         for (int p = 0; p < 500; p++) {
             bigBuilder.require("ghost", p, 1_000 + p);
         }
-        CausalDependencies big = bigBuilder.build();
+        CausalClock big = bigBuilder.build();
 
         Topology topology = topology(
                 ParsleyProcessorSupplier.builder(upperCaser()).addBufferStore("parsley")
@@ -709,7 +709,7 @@ class ParsleyProcessorsTopologyTest {
      */
     @Test
     void dependenciesOnUnconsumedCoordinatesAreIgnoredAndDeliver() {
-        CausalDependencies deps = CausalDependencies.builder(TOPICS)
+        CausalClock deps = CausalClock.builder(TOPICS)
                 .require("ghost", 0, 5)     // un-consumed topic
                 .require("t1", 7, 9)        // consumed topic, but a partition this task does not own
                 .build();
@@ -755,9 +755,9 @@ class ParsleyProcessorsTopologyTest {
 
             // Buffer one t3-record (depends on t2-0 offset 0, not yet arrived).
             t3.pipeInput(new TestRecord<>("k", "t3-val",
-                    depsHeader(CausalDependencies.builder(TOPICS).require("t2", 0, 0).build())));
+                    depsHeader(CausalClock.builder(TOPICS).require("t2", 0, 0).build())));
             // Release it (the t2-record arrives and advances the frontier).
-            t2.pipeInput(new TestRecord<>("k", "t2-val", depsHeader(CausalDependencies.empty())));
+            t2.pipeInput(new TestRecord<>("k", "t2-val", depsHeader(CausalClock.empty())));
 
             assertEquals(1.0, parsleyMetric(driver, "records-buffered-total"), 0.001,
                     "one record was added to the buffer");
@@ -793,7 +793,7 @@ class ParsleyProcessorsTopologyTest {
 
             // Dependencies require T1_ID/0@0 — exactly the record's own source coordinate.
             t1.pipeInput(new TestRecord<>("k", "hello",
-                    depsHeader(CausalDependencies.builder(TOPICS).require("t1", 0, 0).build())));
+                    depsHeader(CausalClock.builder(TOPICS).require("t1", 0, 0).build())));
 
             assertEquals(List.of("HELLO"), out.readValuesToList(),
                     "self-dep stripped → effective dependencies empty → forwarded immediately");
@@ -840,7 +840,7 @@ class ParsleyProcessorsTopologyTest {
             TestOutputTopic<String, String> out =
                     driver.createOutputTopic("out", new StringDeserializer(), new StringDeserializer());
 
-            t1.pipeInput(new TestRecord<>("k", "hello", depsHeader(CausalDependencies.empty())));
+            t1.pipeInput(new TestRecord<>("k", "hello", depsHeader(CausalClock.empty())));
 
             assertEquals(List.of("HELLO"), out.readValuesToList(),
                     "record must flow through both processors and reach the output");
@@ -918,11 +918,11 @@ class ParsleyProcessorsTopologyTest {
             // being held — a single genuine witness (even a record's own claim) suffices under
             // single-witness merge.
             t3.pipeInput(new TestRecord<>("k", "t3-val",
-                    depsHeader(CausalDependencies.builder(TOPICS).require("t2", 0, 0).build())));
+                    depsHeader(CausalClock.builder(TOPICS).require("t2", 0, 0).build())));
 
             // Phase 2: t2-record arrives, delivering at both layers too.
             t2.pipeInput(new TestRecord<>("k", "t2-val",
-                    depsHeader(CausalDependencies.empty())));
+                    depsHeader(CausalClock.empty())));
 
             // Both layers empty; nothing was ever buffered.
             assertEquals(0, storeSize(driver.getKeyValueStore("node1-buffer")),
@@ -1012,10 +1012,10 @@ class ParsleyProcessorsTopologyTest {
             // into its own channel before its own gate check runs, at both proc1 and proc2
             // independently, so it delivers immediately at both.
             t3.pipeInput(new TestRecord<>("k", "t3-val",
-                    depsHeader(CausalDependencies.builder(TOPICS).require("t2", 0, 0).build())));
+                    depsHeader(CausalClock.builder(TOPICS).require("t2", 0, 0).build())));
 
             // Phase 2: t2-record arrives, delivering at both layers too.
-            t2.pipeInput(new TestRecord<>("k", "t2-val", depsHeader(CausalDependencies.empty())));
+            t2.pipeInput(new TestRecord<>("k", "t2-val", depsHeader(CausalClock.empty())));
 
             // Neither layer ever buffered anything (the deadlock #15 describes would manifest as a
             // non-zero node2-buffer size here).
@@ -1088,14 +1088,14 @@ class ParsleyProcessorsTopologyTest {
 
             // t5-record depends on t1@0 which hasn't been processed yet — must be buffered.
             t5.pipeInput(new TestRecord<>("k", "t5-val",
-                    depsHeader(CausalDependencies.builder(TOPICS).require("t1", 0, 0).build())));
+                    depsHeader(CausalClock.builder(TOPICS).require("t1", 0, 0).build())));
             assertTrue(out.isEmpty(), "sidecar must be held: T1_ID@0 not yet in proc2's frontier");
             assertEquals(1, storeSize(driver.getKeyValueStore("node2-buffer")),
                     "sidecar must be in proc2's buffer");
 
             // "t1"@0 arrives: proc1 admits it, stamps frontier {T1_ID@0}, fuses to proc2.
             // proc2's core strips the self-dep → admits → frontier has T1_ID@0 → sidecar drains.
-            t1.pipeInput(new TestRecord<>("k", "t1-val", depsHeader(CausalDependencies.empty())));
+            t1.pipeInput(new TestRecord<>("k", "t1-val", depsHeader(CausalClock.empty())));
 
             assertEquals(0, storeSize(driver.getKeyValueStore("node2-buffer")),
                     "sidecar must have drained once T1_ID@0 was in proc2's frontier");
@@ -1144,7 +1144,7 @@ class ParsleyProcessorsTopologyTest {
                     "unclocked record must never enter the buffer");
 
             // Fused proc1 output flows through proc2 normally alongside the earlier unclocked record.
-            t1.pipeInput(new TestRecord<>("k", "t1-val", depsHeader(CausalDependencies.empty())));
+            t1.pipeInput(new TestRecord<>("k", "t1-val", depsHeader(CausalClock.empty())));
             assertEquals(List.of("T1-VAL"), out.readValuesToList(),
                     "clocked t1-val must flow through both processors normally");
         }
@@ -1171,7 +1171,7 @@ class ParsleyProcessorsTopologyTest {
                     driver.createInputTopic("ghost", new StringSerializer(), new StringSerializer());
 
             StreamsException thrown = assertThrows(StreamsException.class,
-                    () -> ghost.pipeInput(new TestRecord<>("k", "v", depsHeader(CausalDependencies.empty()))),
+                    () -> ghost.pipeInput(new TestRecord<>("k", "v", depsHeader(CausalClock.empty()))),
                     "a record on an unregistered topic must not be silently admitted");
             assertEquals(IllegalStateException.class, thrown.getCause().getClass(),
                     "the wrapped cause must be the intake guard's exception");
@@ -1250,17 +1250,17 @@ class ParsleyProcessorsTopologyTest {
     }
 
     /**
-     * A non-emitting delegate produces one protocol watermark per delivered input, and that watermark
+     * A non-emitting delegate produces one protocol null message per delivered input, and that null message
      * reuses the triggering record's key so it routes, through whatever partitioner the business
      * records use, to the same partition the record's output would have landed on. With a null key
      * (the previous behaviour) a sink partitioner would send it to an arbitrary partition and a
      * downstream task could starve.
      *
-     * Asserts the emitted watermark carries the triggering key ("alpha"), a null value, and the
-     * watermark marker header.
+     * Asserts the emitted null message carries the triggering key ("alpha"), a null value, and the
+     * null message marker header.
      */
     @Test
-    void watermarkReusesTriggeringRecordKeySoItCoRoutesWithThatKeysRecords() {
+    void nullMessageReusesTriggeringRecordKeySoItCoRoutesWithThatKeysRecords() {
         Topology topology = topology(
                 ParsleyProcessorSupplier.builder(dropper()).addBufferStore("parsley")
                         .addSource(new ParsleySource<>("t1", Serdes.String(), Serdes.String())).topicAdmin(ADMIN).build(),
@@ -1272,16 +1272,16 @@ class ParsleyProcessorsTopologyTest {
             TestOutputTopic<String, String> out =
                     driver.createOutputTopic("out", new StringDeserializer(), new StringDeserializer());
 
-            t1.pipeInput(new TestRecord<>("alpha", "dropped", depsHeader(CausalDependencies.empty())));
+            t1.pipeInput(new TestRecord<>("alpha", "dropped", depsHeader(CausalClock.empty())));
 
             List<TestRecord<String, String>> emitted = out.readRecordsToList();
-            assertEquals(1, emitted.size(), "a non-emitting delegate must emit exactly one watermark");
-            TestRecord<String, String> watermark = emitted.get(0);
-            assertTrue(watermark.headers().lastHeader(ParsleyHeader.WATERMARK) != null,
-                    "the emitted record must carry the _parsley_watermark marker header");
-            assertEquals("alpha", watermark.key(),
-                    "the watermark must reuse the triggering record's key so it co-routes to that partition");
-            assertEquals(null, watermark.value(), "a watermark carries no business value");
+            assertEquals(1, emitted.size(), "a non-emitting delegate must emit exactly one null message");
+            TestRecord<String, String> nullMessage = emitted.get(0);
+            assertTrue(nullMessage.headers().lastHeader(ParsleyHeader.NULL_MESSAGE) != null,
+                    "the emitted record must carry the _parsley_null_message marker header");
+            assertEquals("alpha", nullMessage.key(),
+                    "the null message must reuse the triggering record's key so it co-routes to that partition");
+            assertEquals(null, nullMessage.value(), "a null message carries no business value");
         }
     }
 
@@ -1306,7 +1306,7 @@ class ParsleyProcessorsTopologyTest {
         // Construction runs init(); warn mode must not throw, and the task must be live afterwards.
         try (TopologyTestDriver driver = new TopologyTestDriver(topology, config(null))) {
             driver.createInputTopic("t2", new StringSerializer(), new StringSerializer())
-                    .pipeInput(new TestRecord<>("k", "live", depsHeader(CausalDependencies.empty())));
+                    .pipeInput(new TestRecord<>("k", "live", depsHeader(CausalClock.empty())));
             assertEquals(List.of("live"), processed,
                     "warn-mode validation must not fail startup: the task starts and processes normally");
         }
@@ -1364,7 +1364,7 @@ class ParsleyProcessorsTopologyTest {
 
         try (TopologyTestDriver driver = new TopologyTestDriver(topology, config(null))) {
             driver.createInputTopic("t2", new StringSerializer(), new StringSerializer())
-                    .pipeInput(new TestRecord<>("k", "ok", depsHeader(CausalDependencies.empty())));
+                    .pipeInput(new TestRecord<>("k", "ok", depsHeader(CausalClock.empty())));
             assertEquals(List.of("ok"), processed,
                     "strict validation must pass when input partition counts match: the task processes normally");
         }

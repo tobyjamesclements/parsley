@@ -57,16 +57,16 @@ config to set instead — recovery is always the schema-fix-and-restart path abo
 
 ---
 
-## An inbound record's causal-dependencies header cannot be decoded
+## An inbound record's causal-clock header cannot be decoded
 
-A record's causal dependencies travel in its `parsley-causal-dependencies` header. When that header is
+A record's causal dependencies travel in its `parsley-causal-clock` header. When that header is
 present but cannot be decoded into a clock — a corrupt or truncated header, or one written in an
 unsupported wire version — Parsley fails the task fast at ingest rather than forward the record on an
 unknown premise. The record was never buffered and its source offset is not committed past it, so it is
 reprocessed on the next attempt, after a restart or once the upstream is fixed.
 
 ```
-Unresolvable causal-dependencies header on orders-0 @42; failing fast (fail-closed). ...
+Unresolvable causal-clock header on orders-0 @42; failing fast (fail-closed). ...
 ```
 
 Recovery is the same shape as the poison-record case: fix or roll back whatever upstream change

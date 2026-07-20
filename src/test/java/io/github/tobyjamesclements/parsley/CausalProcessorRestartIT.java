@@ -82,7 +82,7 @@ class CausalProcessorRestartIT {
         resolverProps.put("bootstrap.servers", bootstrap);
         // Dependencies a producer would attach after consuming PREREQ@0.
         ConsumerRecord<String, String> prereqConsumed = new ConsumerRecord<>(PREREQ, 0, 0L, "pk", "prereq");
-        CausalDependencies orderDeps = CausalDependencies.using(resolverProps).observe(prereqConsumed);
+        CausalClock orderDeps = CausalClock.using(resolverProps).observe(prereqConsumed);
 
         // Phase 1: buffer the dependent record, confirm it is held, then shut the instance down cleanly.
         try (KafkaStreams streams = new KafkaStreams(newTopology(), streamsConfig(bootstrap, appId, stateDir1))) {
@@ -101,7 +101,7 @@ class CausalProcessorRestartIT {
         try (KafkaStreams streams = new KafkaStreams(newTopology(), streamsConfig(bootstrap, appId, stateDir2))) {
             streams.start();
             try (KafkaProducer<String, String> producer = new KafkaProducer<>(producerConfig(bootstrap))) {
-                producer.send(CausalDependencies.empty().stamp(new ProducerRecord<>(PREREQ, "pk", "prereq"))).get();
+                producer.send(CausalClock.empty().stamp(new ProducerRecord<>(PREREQ, "pk", "prereq"))).get();
             }
             try (KafkaConsumer<String, String> out = new KafkaConsumer<>(consumerConfig(bootstrap))) {
                 out.subscribe(List.of(OUT));

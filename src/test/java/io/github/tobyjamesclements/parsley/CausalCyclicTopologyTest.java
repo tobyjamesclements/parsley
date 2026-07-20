@@ -37,7 +37,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * ancestor with its own descendant", {@code docs/internals/causal-consistency.md}) — the tightest possible
  * shape of it: a single node directly self-consuming its own sink.
  *
- * <p>This also exercises relay convergence on a self-loop: a node observing its own watermark
+ * <p>This also exercises relay convergence on a self-loop: a node observing its own null message
  * reflected back at it must not relay it onward again (an infinite loop this test caught during
  * development, historically closed by an own-coordinate strip). Convergence now rests on the I6
  * knowledge-based relay rule — a reflected marker's carried clock is this node's own past stamp,
@@ -123,9 +123,9 @@ class CausalCyclicTopologyTest {
                             + "delivery, in order — proving the self-consumed record is genuinely "
                             + "delivered, not dropped");
 
-            // The business record (derived:hello) plus a trailing heartbeat watermark (null value) that
+            // The business record (derived:hello) plus a trailing heartbeat null message (null value) that
             // the self-loop's own non-emitting p-out-sourced delivery produces — see deliver()'s
-            // "nothing forwarded" path. The watermark itself must not trigger a further relay (that is
+            // "nothing forwarded" path. The null message itself must not trigger a further relay (that is
             // exactly the bug this fix closes): the driver returning here at all, rather than hanging,
             // is itself part of what this test proves.
             List<TestRecord<String, String>> emitted = pOut.readRecordsToList();
@@ -144,13 +144,13 @@ class CausalCyclicTopologyTest {
 
     private static Headers emptyDeps() {
         Headers headers = ParsleyHeader.mutableHeaders();
-        headers.add(ParsleyHeader.CAUSAL_DEPENDENCIES, ParsleyVectorClock.empty().toBytes());
+        headers.add(ParsleyHeader.CAUSAL_CLOCK, ParsleyVectorClock.empty().toBytes());
         return headers;
     }
 
     private static ParsleyVectorClock dependenciesOf(TestRecord<String, String> record) {
         for (org.apache.kafka.common.header.Header header : record.headers()) {
-            if (ParsleyHeader.CAUSAL_DEPENDENCIES.equals(header.key()) && header.value() != null) {
+            if (ParsleyHeader.CAUSAL_CLOCK.equals(header.key()) && header.value() != null) {
                 return ParsleyVectorClock.fromBytes(header.value());
             }
         }

@@ -460,7 +460,7 @@ final class ParsleyChannels {
      * only because Kafka's EOS commit markers occupy offsets. Called once per received record,
      * <em>before</em> that record's own
      * delivery, on every channel the causal-broadcast core advances a frontier on ({@link ParsleyCausalBroadcast#receive} and
-     * {@link ParsleyCausalBroadcast#onWatermark}). Returns {@code true} if the contiguous frontier advanced — the
+     * {@link ParsleyGossip#receive}). Returns {@code true} if the contiguous frontier advanced — the
      * caller must then cascade ({@link ParsleyCausalBroadcast#propagate}), since a held record may have been waiting
      * on exactly a bridged offset.
      *

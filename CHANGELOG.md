@@ -6,6 +6,29 @@ All notable changes to this project are documented in this file. The format is b
 
 ## [Unreleased]
 
+### Changed
+- **BREAKING: the protocol vocabulary moves to its academic names — wire format and public API
+  (T4.1).** Parsley's progress marker is a *null message* in the Chandy–Misra–Bryant sense (a
+  timestamp-carrying record whose value is literally null), and the type stamped on records is a
+  *vector clock*, so both now say so. On the wire: the marker header `_parsley_watermark` is
+  renamed `_parsley_null_message`, and the clock header `parsley-causal-dependencies` is renamed
+  `parsley-causal-clock` (encodings unchanged). In the public API: `CausalDependencies` is renamed
+  `CausalClock` — the type plays both classical vector-clock roles (attached to a record it is the
+  message timestamp VT(m); accumulated at an edge it is the process clock VT(p)) and
+  "dependencies" misdescribed the accumulating half — and `isWatermark(record)` is renamed
+  `isNullMessage(record)`. No compatibility aliases and no migration path: pre-1.0 versions have
+  no upgrade path (upgrades are fresh starts), so old-header records are simply unreadable by this
+  version. Documentation vocabulary updated throughout.
+
+### Changed (internal)
+- **The L3 gossip module is extracted as `ParsleyGossip` (T4.1, design §1b).** The null-message
+  receive path (deliver the message's own offset, fold its carried clock stamp-side only) and the
+  emission of this node's own null messages move out of `ParsleyCausalBroadcast`/`ParsleyProcessor`
+  into one package-private module, so the I6 relay rule — relay a received null message onward iff
+  its carried clock taught this node something outside its total knowledge — is stated exactly
+  once. Behaviour is unchanged; the write-only `lastSeenKey` field (its reader died with the
+  coordination subsystem) is removed.
+
 ### Added
 - **Mid-run topic recreation now fails the application fast (T3.4, assumption E1).** Topic names
   resolve to their stable Kafka UUIDs once, at task initialisation, so deleting and recreating a

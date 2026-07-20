@@ -57,7 +57,7 @@ class ParsleyClocklessProducerIT {
     private static final String OUT = "out";
 
     /**
-     * Two records produced with no {@code parsley-causal-dependencies} header at all must deliver
+     * Two records produced with no {@code parsley-causal-clock} header at all must deliver
      * to the delegate immediately and in order, and the derived outputs' wire clocks must claim
      * the clockless records' exact input coordinates — stamped on consumption.
      *
@@ -80,7 +80,7 @@ class ParsleyClocklessProducerIT {
             streams.start();
 
             try (KafkaProducer<String, String> input = new KafkaProducer<>(producerConfig(bootstrap))) {
-                // Deliberately NOT CausalDependencies.empty().stamp(...): no clock header at all.
+                // Deliberately NOT CausalClock.empty().stamp(...): no clock header at all.
                 input.send(new ProducerRecord<>(T1, "k", "one")).get();
                 input.send(new ProducerRecord<>(T1, "k", "two")).get();
             }
@@ -127,11 +127,11 @@ class ParsleyClocklessProducerIT {
 
     /** A record with a value and no Parsley marker header — a business record, not a null message. */
     private static boolean isBusinessRecord(ConsumerRecord<String, String> record) {
-        return record.value() != null && record.headers().lastHeader(ParsleyHeader.WATERMARK) == null;
+        return record.value() != null && record.headers().lastHeader(ParsleyHeader.NULL_MESSAGE) == null;
     }
 
     private static ParsleyVectorClock wireClock(ConsumerRecord<String, String> record) {
-        Header header = record.headers().lastHeader(ParsleyHeader.CAUSAL_DEPENDENCIES);
+        Header header = record.headers().lastHeader(ParsleyHeader.CAUSAL_CLOCK);
         assertNotNull(header, "every stamped business record must carry the causal-dependencies header");
         return ParsleyVectorClock.fromBytes(header.value());
     }

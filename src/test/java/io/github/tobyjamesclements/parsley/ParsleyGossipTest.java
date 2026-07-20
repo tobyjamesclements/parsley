@@ -5,22 +5,23 @@ import org.apache.kafka.common.Uuid;
 import org.junit.jupiter.api.Test;
 
 import java.util.List;
+import java.util.Set;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * Tests for {@link ParsleyCausalBroadcast#onWatermark}: a watermark's carried clock feeds the
- * outbound stamp ({@link ParsleyCausalBroadcast#completeness()}) and the {@code learnedSomethingNew} relay signal,
- * but never the delivery gate — a peer's claim that a coordinate was delivered <em>there</em> is not
- * proof it was delivered <em>here</em>, so a held record releases only once this node's own contiguous
- * frontier genuinely reaches its dependencies. Gating on the max-merged completeness used to let a
- * watermark claiming a sibling channel's coordinate release a held record before this node had itself
- * delivered that cause — an effect-before-cause delivery to the delegate, violating the causal-order
- * guarantee for a processor subscribing to both topics.
+ * Tests for {@link ParsleyGossip#receive}: a null message's carried clock feeds the outbound stamp
+ * ({@link ParsleyCausalBroadcast#completeness()}) and the {@code learnedSomethingNew} relay signal
+ * (I6), but never the delivery gate — a peer's claim that a coordinate was delivered <em>there</em>
+ * is not proof it was delivered <em>here</em>, so a held record releases only once this node's own
+ * contiguous frontier genuinely reaches its dependencies. Gating on the max-merged completeness
+ * used to let a null message claiming a sibling channel's coordinate release a held record before
+ * this node had itself delivered that cause — an effect-before-cause delivery to the delegate,
+ * violating the causal-order guarantee for a processor subscribing to both topics.
  */
-class ParsleyCausalBroadcastWatermarkTest {
+class ParsleyGossipTest {
 
     private static final TopicPartition T1 = new TopicPartition("t1", 0);
     private static final TopicPartition T2 = new TopicPartition("t2", 0);
@@ -36,28 +37,28 @@ class ParsleyCausalBroadcastWatermarkTest {
     private final MockBufferStore<String, String> buffer = new MockBufferStore<>();
 
     /**
-     * A held T1 record depending on sibling coordinate T2@3 must NOT be released by a watermark on the
-     * T1 channel whose carried clock merely claims T2@3 — the claim proves a peer delivered T2@3, not
-     * that this node did, and the delegate would otherwise process the effect before its cause. The
-     * record releases only once T2@0..3 genuinely deliver on this node's own T2 channel.
+     * A held T1 record depending on sibling coordinate T2@3 must NOT be released by a null message
+     * on the T1 channel whose carried clock merely claims T2@3 — the claim proves a peer delivered
+     * T2@3, not that this node did, and the delegate would otherwise process the effect before its
+     * cause. The record releases only once T2@0..3 genuinely deliver on this node's own T2 channel.
      */
     @Test
-    void watermarkClaimOnASiblingChannelDoesNotReleaseAHeldRecord() {
+    void carriedClaimOnASiblingChannelDoesNotReleaseAHeldRecord() {
         ParsleyChannels frontier = newFrontier();
         frontier.channelUpdate(T1_ID, 0, ParsleyVectorClock.empty());
         frontier.channelUpdate(T2_ID, 0, ParsleyVectorClock.empty());
         ParsleyCausalBroadcast<String, String> causalBroadcast = causalBroadcastOver(frontier);
+        ParsleyGossip<String, String> gossip = gossipOver(frontier, causalBroadcast);
 
         List<ParsleyMessage<String, String>> held =
                 causalBroadcast.receive(record(T1, 0, T1_ID, clock(T2_ID, 3))).delivered();
         assertEquals(List.of(), held, "T1@0 must be held: this node has not delivered T2@3 itself");
 
-        ParsleyCausalBroadcast.WatermarkOutcome<String, String> watermark =
-                causalBroadcast.onWatermark(T1_ID, 0, 1, clock(T2_ID, 3));
-        assertEquals(List.of(), watermark.outcome().delivered(),
-                "a watermark's carried claim of T2@3 must not release the held record — a peer's "
+        ParsleyGossip.Reception<String, String> reception = gossip.receive(T1_ID, 0, 1, clock(T2_ID, 3));
+        assertEquals(List.of(), reception.delivered(),
+                "a null message's carried claim of T2@3 must not release the held record — a peer's "
                         + "delivery is not this node's delivery");
-        assertTrue(watermark.learnedSomethingNew(),
+        assertTrue(reception.learnedSomethingNew(),
                 "the carried clock did teach the channel something new, so the relay signal is true "
                         + "even though nothing was released");
 
@@ -74,18 +75,19 @@ class ParsleyCausalBroadcastWatermarkTest {
     }
 
     /**
-     * The carried clock still feeds the outbound stamp: a watermark claiming foreign ancestor T3@5
-     * surfaces in {@link ParsleyCausalBroadcast#completeness()} (transitive ancestry a downstream node's own
-     * gate verifies for itself) without releasing anything here.
+     * The carried clock still feeds the outbound stamp: a null message claiming foreign ancestor
+     * T3@5 surfaces in {@link ParsleyCausalBroadcast#completeness()} (transitive ancestry a
+     * downstream node's own gate verifies for itself) without releasing anything here.
      */
     @Test
-    void watermarkClaimStillEntersTheOutboundStampCompleteness() {
+    void carriedClaimStillEntersTheOutboundStampCompleteness() {
         ParsleyChannels frontier = newFrontier();
         frontier.channelUpdate(T1_ID, 0, ParsleyVectorClock.empty());
         frontier.channelUpdate(T2_ID, 0, ParsleyVectorClock.empty());
         ParsleyCausalBroadcast<String, String> causalBroadcast = causalBroadcastOver(frontier);
+        ParsleyGossip<String, String> gossip = gossipOver(frontier, causalBroadcast);
 
-        causalBroadcast.onWatermark(T1_ID, 0, 0, clock(T3_ID, 5));
+        gossip.receive(T1_ID, 0, 0, clock(T3_ID, 5));
 
         assertEquals(5L, causalBroadcast.completeness().offsetFor(T3_ID, 0),
                 "the carried foreign-ancestor claim must surface in the outbound stamp for "
@@ -95,33 +97,35 @@ class ParsleyCausalBroadcastWatermarkTest {
     }
 
     /**
-     * A watermark's own offset is genuinely delivered on its source channel (it occupies a real
+     * A null message's own offset is genuinely delivered on its source channel (it occupies a real
      * offset this node consumed), so a held record depending on that channel's coordinate releases
-     * through the ordinary frontier advance — marker-only (passthrough) channel liveness.
+     * through the ordinary frontier advance — null-message-only (non-emitting-path) channel
+     * liveness.
      */
     @Test
-    void watermarkOwnOffsetAdvancesItsChannelAndReleasesDependents() {
+    void nullMessageOwnOffsetAdvancesItsChannelAndReleasesDependents() {
         ParsleyChannels frontier = newFrontier();
         frontier.channelUpdate(T1_ID, 0, ParsleyVectorClock.empty());
         frontier.channelUpdate(T2_ID, 0, ParsleyVectorClock.empty());
         ParsleyCausalBroadcast<String, String> causalBroadcast = causalBroadcastOver(frontier);
+        ParsleyGossip<String, String> gossip = gossipOver(frontier, causalBroadcast);
 
         assertEquals(List.of(), causalBroadcast.receive(record(T2, 0, T2_ID, clock(T1_ID, 0))).delivered(),
                 "T2@0 must be held: T1@0 has not been delivered yet");
 
-        ParsleyCausalBroadcast.WatermarkOutcome<String, String> watermark =
-                causalBroadcast.onWatermark(T1_ID, 0, 0, ParsleyVectorClock.empty());
+        ParsleyGossip.Reception<String, String> reception =
+                gossip.receive(T1_ID, 0, 0, ParsleyVectorClock.empty());
 
-        assertEquals(1, watermark.outcome().delivered().size(),
-                "the watermark's own offset genuinely delivers T1@0, releasing the held T2@0 — "
-                        + "a marker-only channel still advances its own frontier");
-        assertFalse(watermark.learnedSomethingNew(),
+        assertEquals(1, reception.delivered().size(),
+                "the null message's own offset genuinely delivers T1@0, releasing the held T2@0 — "
+                        + "a null-message-only channel still advances its own frontier");
+        assertFalse(reception.learnedSomethingNew(),
                 "an empty carried clock taught the channel nothing, so the relay signal stays false "
-                        + "even though the marker's own delivery released a record");
+                        + "even though the message's own delivery released a record");
     }
 
     /**
-     * The I6 relay rule with own outputs: a watermark reflecting this node's own produced
+     * The I6 relay rule with own outputs: a null message reflecting this node's own produced
      * coordinate back at it (a downstream stamp echoing around a topology cycle) at or below the
      * {@code ownOutputs} clock teaches nothing — this node produced that position — so the relay
      * signal settles {@code false} on first sight, without the old stamp-side own-sink strip. The
@@ -135,9 +139,9 @@ class ParsleyCausalBroadcastWatermarkTest {
         ParsleyCausalBroadcast<String, String> causalBroadcast = new ParsleyCausalBroadcast<>(
                 channels, buffer, new MockCandidateIndex(), ParsleyMetrics.NOOP,
                 System::currentTimeMillis, SCOPE, (topicId, partition) -> topicId.equals(sinkId));
+        ParsleyGossip<String, String> gossip = gossipOver(channels, causalBroadcast);
 
-        ParsleyCausalBroadcast.WatermarkOutcome<String, String> reflected =
-                causalBroadcast.onWatermark(T1_ID, 0, 0, clock(sinkId, 7));
+        ParsleyGossip.Reception<String, String> reflected = gossip.receive(T1_ID, 0, 0, clock(sinkId, 7));
 
         assertFalse(reflected.learnedSomethingNew(),
                 "a claim at or below ownOutputs is this node's own knowledge — relaying it would "
@@ -156,13 +160,15 @@ class ParsleyCausalBroadcastWatermarkTest {
      */
     @Test
     void repeatedForeignClaimRelaysOnFirstSightOnly() {
-        ParsleyCausalBroadcast<String, String> causalBroadcast = causalBroadcastOver(newFrontier());
+        ParsleyChannels frontier = newFrontier();
+        ParsleyCausalBroadcast<String, String> causalBroadcast = causalBroadcastOver(frontier);
+        ParsleyGossip<String, String> gossip = gossipOver(frontier, causalBroadcast);
 
-        assertTrue(causalBroadcast.onWatermark(T1_ID, 0, 0, clock(T3_ID, 5)).learnedSomethingNew(),
+        assertTrue(gossip.receive(T1_ID, 0, 0, clock(T3_ID, 5)).learnedSomethingNew(),
                 "first sight of the foreign claim is genuinely new knowledge — it must relay");
-        assertFalse(causalBroadcast.onWatermark(T1_ID, 0, 1, clock(T3_ID, 5)).learnedSomethingNew(),
+        assertFalse(gossip.receive(T1_ID, 0, 1, clock(T3_ID, 5)).learnedSomethingNew(),
                 "the identical claim taught nothing the second time — it must settle, not ping-pong");
-        assertFalse(causalBroadcast.onWatermark(T2_ID, 0, 0, clock(T3_ID, 5)).learnedSomethingNew(),
+        assertFalse(gossip.receive(T2_ID, 0, 0, clock(T3_ID, 5)).learnedSomethingNew(),
                 "the same claim arriving on a DIFFERENT channel is still already-known — I6 "
                         + "compares against total knowledge, never a single channel's clock");
     }
@@ -177,6 +183,11 @@ class ParsleyCausalBroadcastWatermarkTest {
         return new ParsleyCausalBroadcast<>(frontier, buffer,
                 new MockCandidateIndex(), ParsleyMetrics.NOOP,
                 System::currentTimeMillis, SCOPE);
+    }
+
+    private static ParsleyGossip<String, String> gossipOver(ParsleyChannels channels,
+                                                            ParsleyCausalBroadcast<String, String> broadcast) {
+        return new ParsleyGossip<>(channels, broadcast, Set.of());
     }
 
     private static ParsleyMessage<String, String> record(TopicPartition tp, long offset,

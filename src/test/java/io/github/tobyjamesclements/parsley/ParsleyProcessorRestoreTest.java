@@ -87,7 +87,7 @@ class ParsleyProcessorRestoreTest {
         // init() had started the core from an empty frontier. Offset 10 avoids the self-ref strip.
         context.setRecordMetadata("t1", 0, 10);
         Headers headers = ParsleyHeader.mutableHeaders();
-        headers.add(ParsleyHeader.CAUSAL_DEPENDENCIES, restoredFrontier.toBytes());
+        headers.add(ParsleyHeader.CAUSAL_CLOCK, restoredFrontier.toBytes());
         processor.process(new Record<>("k", "v", 0L, headers));
 
         assertEquals(List.of("v"), processed,

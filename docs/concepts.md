@@ -2,12 +2,12 @@
 
 ## Causal dependencies
 
-`CausalDependencies` is a snapshot of what a producer had observed when it sent a record. It is a map
+`CausalClock` is a snapshot of what a producer had observed when it sent a record. It is a map
 from a `(topicId, partition)` coordinate to the highest offset the producer had seen on that
 coordinate. Parsley serialises this map as a compact binary header named
-`parsley-causal-dependencies` and attaches it to every outgoing record.
+`parsley-causal-clock` and attaches it to every outgoing record.
 
-On the consumer side the header is decoded back into a `CausalDependencies` value. It describes the
+On the consumer side the header is decoded back into a `CausalClock` value. It describes the
 minimum frontier a downstream consumer must reach before the record may be delivered. A record is
 causally ready once the consumer's frontier has observed at least the offset the dependencies require
 on every coordinate.
@@ -38,18 +38,18 @@ everything already forwarded above it.
 The node's internal frontier is an implementation detail, and there is no public type for it: it is
 contiguous (the highest offset delivered without a gap), which is specific to how the engine releases
 held records. A node consuming with a plain Kafka client maintains its own frontier instead, as an
-accumulating `CausalDependencies` value. Bind a resolver once with `CausalDependencies.using(props)`,
+accumulating `CausalClock` value. Bind a resolver once with `CausalClock.using(props)`,
 fold in each record you consume with `observe(record)`, and stamp the result onto each record you
 produce. A one-to-one relay is `using(props).observe(record)`; a fan-in chains an `observe` per
 input; a stateful node keeps one instance and observes into it across records. To read back the
 dependencies a record already carries, without folding in a new position, use
-`CausalDependencies.fromRecord(record)`.
+`CausalClock.fromRecord(record)`.
 
-When you consume a topic a Parsley topology produces, some records are *protocol watermarks*: null
+When you consume a topic a Parsley topology produces, some records are *protocol null messages*: null
 key and value, carrying a completeness frontier so causal progress flows through processors that
 produce no output for a given input. Still `observe(record)` them, so your frontier advances across a
-service that emitted only watermarks on this path, but skip them as business records — test with
-`CausalDependencies.isWatermark(record)` and `continue` past those it flags.
+service that emitted only null messages on this path, but skip them as business records — test with
+`CausalClock.isNullMessage(record)` and `continue` past those it flags.
 
 The frontier is persisted before each record is forwarded, so it survives restarts and rebalances.
 
@@ -68,7 +68,7 @@ further releases occur.
 A record is delivered once this node's **own contiguous frontier** — the positions it has itself
 delivered, gap-free — dominates the record's dependencies. A dependency is satisfied only by this
 node having delivered the cause locally; a claim carried on another channel's clock (a peer's
-watermark advertising a coordinate the peer delivered) never substitutes for local delivery, or the
+null message advertising a coordinate the peer delivered) never substitutes for local delivery, or the
 processor could see an effect before the cause it directly subscribes to. This covers a record
 delivered immediately and a record delivered after a wait; a record that claims no dependencies (an
 empty dependency set) is trivially satisfied.
@@ -108,7 +108,7 @@ partition count, so that causally related messages, which share a key, land on t
 number across topics and each instance owns partition `N` everywhere. The key is the shard: the unit
 that keeps causally related events together on one partition. An advanced user can partition by a
 coarser function of the key with a custom `StreamPartitioner`, provided the partitioner reads the key
-rather than the value, since a protocol watermark carries no value to read.
+rather than the value, since a protocol null message carries no value to read.
 
 Parsley does not enforce co-partitioning end to end, and most of it cannot be checked, so a
 misconfigured topology evaluates against an incomplete partition set. At startup, `parsley.topology.validation`

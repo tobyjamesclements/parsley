@@ -8,15 +8,15 @@ import java.util.Set;
 
 /**
  * A Decorator (GoF) over a stage's own sink {@link StreamPartitioner} (or the default key-hash
- * partitioner, if the stage declared none), routing a Parsley protocol marker to the forwarding task's
+ * partitioner, if the stage declared none), routing a Parsley null message to the forwarding task's
  * own owned partition —
  * {@link ParsleyMarkerPartition#get()} — instead of whatever the wrapped partitioner would compute from
- * the marker's key. {@link CausalTopology} installs one of these on every sink a stage declares, in place
- * of {@code stage.partitioner} directly, so a marker forward — {@code forwardMarker} in
+ * the message's key. {@link CausalTopology} installs one of these on every sink a stage declares, in place
+ * of {@code stage.partitioner} directly, so a null-message forward — {@code advertise} in
  * {@link ParsleyProcessor}, funnelled through
  * {@code forwardToSinks} — always reaches the correct partition, never depending on a business key being
- * available ({@code lastSeenKey} non-null) or on the wrapped partitioner happening to preserve the
- * co-partitioning contract for a marker's borrowed key.
+ * available or on the wrapped partitioner happening to preserve the
+ * co-partitioning contract for a null message's borrowed key.
  *
  * <p>A business forward is untouched: {@link ParsleyMarkerPartition#get()} is non-null only for the
  * duration of a marker's own {@code context.forward} call, so every other record still routes through the

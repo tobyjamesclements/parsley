@@ -46,9 +46,10 @@ import java.util.function.LongSupplier;
  * delegate by {@code ParsleyProcessor#deliver}. <em>Broadcast</em> is {@link #broadcast}: the single
  * stamping site every outbound record — a delegate's business forward and a protocol marker alike —
  * passes through; the send itself is Kafka's own {@code ProducerRecord}/{@code context.forward()} (a
- * partition's total order and replication are already a reliable-broadcast substrate). {@link
- * #onWatermark} sits on top of this algorithm as a
- * liveness layer — a protocol extension, not part of the CBCAST core.
+ * partition's total order and replication are already a reliable-broadcast substrate). The L3
+ * gossip module ({@link ParsleyGossip}) sits on top of this algorithm as a liveness layer — a
+ * protocol extension, not part of the CBCAST core — through the package-private seam
+ * {@link #propagate} / {@link #recordReflectedClaims} / {@link #channels()}.
  *
  * <p>The processor feeds incoming records to {@link #receive} and forwards the returned records
  * downstream, in order. The delivery gate is the two-branch dispatch of D1, evaluated per
@@ -69,7 +70,7 @@ import java.util.function.LongSupplier;
  * causally valid or silently discarded. There is no diversion sink: this is the single, simple
  * failure model — any error is a hard stop, never a partial or best-effort continuation.
  *
- * <p><strong>The frontier is a contiguous watermark, not a running max.</strong> This class does
+ * <p><strong>The frontier is a contiguous high-water mark, not a running max.</strong> This class does
  * not head-of-line block: a later-offset record on a partition may forward before an earlier one
  * still held on the same partition. So a coordinate's frontier offset must only ever advance once
  * every offset up to it has actually been forwarded — never past a gap, or a record elsewhere
@@ -147,7 +148,7 @@ final class ParsleyCausalBroadcast<K, V> {
     // historical gate-side strip this predicate used to drive died at T3.1 with the two-branch
     // dispatch — its vacuous satisfaction of claims about OTHER producers' records on a shared
     // sink topic was finding (iii) — and the stamp-side strip died at T2.3 (#22); relay settling
-    // rests on the I6 knowledge-based rule (see onWatermark), where a reflected own claim is
+    // rests on the I6 knowledge-based rule (ParsleyGossip), where a reflected own claim is
     // dominated by ownOutputs and so teaches nothing. Defaults to "nothing is ever this node's
     // own sink"; ParsleyProcessor passes its real per-stage sink-topic predicate.
     private final ParsleyVectorClock.CoordinatePredicate ownSinkTopics;
@@ -278,24 +279,6 @@ final class ParsleyCausalBroadcast<K, V> {
      * @param <V> the record value type
      */
     record Outcome<K, V>(List<ParsleyMessage<K, V>> delivered) {
-    }
-
-    /**
-     * {@link #onWatermark}'s result: the ordinary {@link Outcome}, plus whether the marker's carried
-     * clock genuinely taught this node something outside its <em>total knowledge</em> — the I6 relay
-     * rule ({@code frontier ∪ channel clocks ∪ carried ancestry ∪ ownOutputs}, i.e.
-     * {@link ParsleyChannels#stamp()}), never a single channel's clock. A marker's own delivery must
-     * never itself count as a reason to relay further — only genuinely new knowledge does — or a
-     * cyclic topology (a marker-only passthrough channel included) would ping-pong the same marker
-     * forever; relay on strict advance is the convergence argument for emulating broadcast on a graph
-     * with cycles (each relay strictly shrinks the set of unknown facts, so any cycle quiesces). See
-     * {@link ParsleyProcessor}'s marker handlers, which gate their downstream relay on
-     * {@link #learnedSomethingNew}.
-     *
-     * @param <K> the record key type
-     * @param <V> the record value type
-     */
-    record WatermarkOutcome<K, V>(Outcome<K, V> outcome, boolean learnedSomethingNew) {
     }
 
     /**
@@ -448,72 +431,12 @@ final class ParsleyCausalBroadcast<K, V> {
     }
 
     /**
-     * Handles a received protocol watermark: marks the marker's own position genuinely delivered
-     * (unconditionally, exactly like a business record's own coordinate — see below), updates the
-     * per-channel clock for the source channel with the carried frontier, and releases any buffered
-     * records the advance now permits.
-     *
-     * <p>The marker's own {@code (sourceTopicId, sourcePartition, offset)} is delivered the same way
-     * {@link #receive} delivers a genuine business record's own coordinate — {@link
-     * #seedIfFirstSeen} then {@link ParsleyChannels#delivered} then {@link #propagate} — so a marker-only
-     * (passthrough) channel's own frontier still advances even though no business record ever flows on
-     * it; without this, such a channel would be stuck at its seed offset forever, and this node's own
-     * completeness could never include it.
-     *
-     * <p><strong>The carried clock never releases anything by itself.</strong> It is folded into the
-     * channel clock for the outbound stamp only — a peer's claim that a coordinate was delivered
-     * <em>there</em> is not proof it was delivered <em>here</em>, and the delivery gate
-     * ({@link #isDeliverable}) checks this node's own contiguous frontier exclusively. Releases on this
-     * path come only from the marker's own offset advancing its channel's frontier
-     * ({@link #propagate}). Gating on the max-merged completeness here used to let a
-     * watermark claiming a sibling channel's coordinate release a held record before this node had
-     * itself delivered that cause — an effect-before-cause delivery to the delegate.
-     *
-     * <p>Records released here are delivered via the normal {@link ParsleyProcessor#deliver} path. The
-     * returned {@link WatermarkOutcome#learnedSomethingNew()} tells the caller ({@link ParsleyProcessor})
-     * whether this marker taught this node anything genuinely new — the caller relays a downstream
-     * watermark only when it did, since a marker's own delivery must never itself be treated as a
-     * reason to relay further (that would ping-pong forever around any cycle in the topology).
-     *
-     * <p><strong>The relay signal is knowledge-based (I6):</strong> "new" is defined against this
-     * node's <em>total knowledge</em> — {@code frontier ∪ channel clocks ∪ carried ancestry ∪
-     * ownOutputs} ({@link ParsleyChannels#stamp()}) — never against the single source channel's clock.
-     * This one rule replaces the old per-channel comparison <em>and</em> the own-sink strip the
-     * carried clock used to pass through: a reflected own coordinate (a downstream's stamp echoing
-     * this node's own produced position around a cycle) is dominated by {@code ownOutputs}, so it
-     * teaches nothing and the relay settles — without the strip that erased real ancestors from the
-     * advertised fold (#22). The whole carried clock is folded into the channel's advertised view
-     * (I9: the merge may not strip); the producer-ack registry is drained first so the {@code
-     * ownOutputs} side of the comparison is current.
-     *
-     * @param sourceTopicId  the topic UUID of the watermark's source channel
-     * @param sourcePartition the partition of the watermark's source channel
-     * @param offset         the watermark record's own offset on its source channel
-     * @param frontierClock  the completeness frontier carried by the watermark
-     * @return the records released in the process, plus whether the carried clock taught this node
-     *         something outside its total knowledge (I6)
+     * The L1 module this core runs over — the L3 seam: {@link ParsleyGossip} folds a received null
+     * message's offset and carried clock into the same channel state this core gates and stamps
+     * from, and takes the I6 comparison against {@link ParsleyChannels#stamp()}.
      */
-    WatermarkOutcome<K, V> onWatermark(Uuid sourceTopicId, int sourcePartition, long offset, ParsleyVectorClock frontierClock) {
-        List<ParsleyMessage<K, V>> out = new ArrayList<>();
-
-        // A watermark's own channel is transactional too (Parsley forwards it under EOS), so it carries
-        // the same commit-marker holes; the L1 receive request seeds and bridges them before the marker's
-        // own offset is delivered.
-        if (channels.receive(sourceTopicId, sourcePartition, offset)) {
-            propagate(out, sourceTopicId, sourcePartition);
-        }
-
-        recordReflectedClaims(frontierClock);
-        // The I6 comparison, taken BEFORE the carried clock is folded below (afterwards it is
-        // dominated by construction). Fold pending acks first so ownOutputs is current — a carried
-        // clock reflecting this node's own recent output must read as already known.
-        channels.foldAcknowledgedOutputs();
-        boolean learnedSomethingNew = !channels.stamp().dominates(frontierClock);
-        channels.channelUpdate(sourceTopicId, sourcePartition, frontierClock);
-        channels.delivered(sourceTopicId, sourcePartition, offset);
-        propagate(out, sourceTopicId, sourcePartition);
-
-        return new WatermarkOutcome<>(new Outcome<>(out), learnedSomethingNew);
+    ParsleyChannels channels() {
+        return channels;
     }
 
     /** The buffer's metadata index, oldest-first (by insertion sequence); never decodes a value. */
@@ -577,7 +500,7 @@ final class ParsleyCausalBroadcast<K, V> {
      * The causal broadcast <em>broadcast</em> request (see the class Javadoc's module box): stamps
      * {@code record} with this node's current outbound vector timestamp —
      * {@code completeness ∪ ownOutputs} ({@link ParsleyChannels#stamp()}, D2), read live at stamp
-     * time — replacing any {@link ParsleyHeader#CAUSAL_DEPENDENCIES} header already present. The
+     * time — replacing any {@link ParsleyHeader#CAUSAL_CLOCK} header already present. The
      * send itself is not performed here (it is Kafka's produce, via {@code context.forward()}); in
      * Birman–Schiper–Stephenson terms this is the timestamp-assignment half of {@code broadcast(m)},
      * and the sender's own clock increment is the broker's offset assignment, learned only
@@ -619,7 +542,7 @@ final class ParsleyCausalBroadcast<K, V> {
         channels.awaitOwnOutputQuiescence(destinations);
         channels.foldAcknowledgedOutputs();
         return record.withHeaders(
-                ParsleyHeader.replacingDependencies(record.headers(), channels.stamp().toBytes()));
+                ParsleyHeader.replacingClock(record.headers(), channels.stamp().toBytes()));
     }
 
     /**
@@ -632,8 +555,11 @@ final class ParsleyCausalBroadcast<K, V> {
      * <p>A candidate whose value cannot be decoded on this forward attempt fails the task fast — the
      * same unconditional failure {@link #drainSatisfied} applies. A candidate is only ever evaluated
      * once per level (the {@code seen} guard).
+     *
+     * <p>Package-private for L3 ({@link ParsleyGossip}), which delivers a null message's own offset
+     * into its channel's frontier and cascades the releases through this same path.
      */
-    private void propagate(List<ParsleyMessage<K, V>> out, Uuid topicId, int partition) {
+    void propagate(List<ParsleyMessage<K, V>> out, Uuid topicId, int partition) {
         Map<Uuid, Set<Integer>> toScan = new HashMap<>();
         toScan.computeIfAbsent(topicId, k -> new HashSet<>()).add(partition);
         int totalReleased = 0;
@@ -755,10 +681,11 @@ final class ParsleyCausalBroadcast<K, V> {
      * pending acks are folded; a claim above it means the own-output view is stale (a torn restore
      * beyond what the end-offset seed healed) or a peer's clock is not truthful — worth seeing,
      * never worth failing over (O3 dissolved: the gate treats the claim like any other, and a stale
-     * view only ever delays). Checked once per inbound record and once per marker; the cheap
-     * first pass avoids the ack fold unless a candidate is actually above the current view.
+     * view only ever delays). Checked once per inbound record ({@link #receive}) and once per null
+     * message ({@link ParsleyGossip#receive} — the package-private access); the cheap first pass
+     * avoids the ack fold unless a candidate is actually above the current view.
      */
-    private void recordReflectedClaims(ParsleyVectorClock clock) {
+    void recordReflectedClaims(ParsleyVectorClock clock) {
         if (!reflectsAboveOwnOutputs(clock)) {
             return;
         }

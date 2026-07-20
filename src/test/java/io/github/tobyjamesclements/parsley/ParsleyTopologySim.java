@@ -23,7 +23,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * {@link ParsleyChannels} + {@link ParsleyCausalBroadcast} pair over store-backed persistence
  * (restarts are genuine reconstructions from the {@code "f"} blob and the durable buffer /
  * candidate / forwarded-index stores), driven through the production entry points:
- * {@code receive} for business records, {@code onWatermark} for null messages, {@code broadcast}
+ * {@code receive} for business records, {@code ParsleyGossip.receive} for null messages, {@code broadcast}
  * for every stamped emission, {@code rescope} at every (re)start, and the
  * {@code bindOwnOutputSource} seams for producer acks and the crossing wait. Topics are
  * single-partition append logs; the scheduler interleaves per-node channel polls, ack arrivals,
@@ -138,6 +138,7 @@ final class ParsleyTopologySim {
 
         ParsleyChannels channels;
         ParsleyCausalBroadcast<String, String> core;
+        ParsleyGossip<String, String> gossip;
         SimProducer producer = new SimProducer();
 
         // Ground truth (logical node state — survives restarts, exactly like the durable stores).
@@ -193,6 +194,7 @@ final class ParsleyTopologySim {
                     ParsleyMetrics.NOOP, () -> ++simTimeMs,
                     (topicId, partition) -> partition == PARTITION && inputUuids.contains(topicId),
                     (topicId, partition) -> sinkUuids.contains(topicId));
+            gossip = new ParsleyGossip<>(channels, core, Set.of());
             frontierAtStart = channels.frontier();
         }
 
@@ -391,17 +393,17 @@ final class ParsleyTopologySim {
     }
 
     private void deliverNullMessage(SimNode node, SimRecord record) {
-        ParsleyCausalBroadcast.WatermarkOutcome<String, String> outcome =
-                node.core.onWatermark(record.topicId(), PARTITION, record.offset(), record.stamp());
+        ParsleyGossip.Reception<String, String> outcome =
+                node.gossip.receive(record.topicId(), PARTITION, record.offset(), record.stamp());
         nullMessagesDelivered++;
         node.carriedClocksFolded++;
         // The carried clock folds into the stamp (knowledge), so the stamp must dominate it from
         // now on — but it creates no delegate-visible obligation (no truePast contribution).
         node.obligation = node.obligation.merge(record.stamp());
-        boolean anyBusinessOutput = processDeliveries(node, outcome.outcome().delivered());
+        boolean anyBusinessOutput = processDeliveries(node, outcome.delivered());
         // The I6 relay (strictly new knowledge propagates onward), and the silent-delegate
         // advertisement for any released records — at most one null message per poll.
-        if (outcome.learnedSomethingNew() || (!anyBusinessOutput && !outcome.outcome().delivered().isEmpty())) {
+        if (outcome.learnedSomethingNew() || (!anyBusinessOutput && !outcome.delivered().isEmpty())) {
             emitNullMessage(node);
         }
     }
@@ -499,7 +501,7 @@ final class ParsleyTopologySim {
     private ParsleyVectorClock stampThrough(SimNode node, Set<TopicPartition> destinations) {
         Record<String, String> stamped = node.core.broadcast(new Record<>("k", "v", 0L), destinations);
         ParsleyVectorClock stamp = ParsleyVectorClock.fromBytes(
-                stamped.headers().lastHeader(ParsleyHeader.CAUSAL_DEPENDENCIES).value());
+                stamped.headers().lastHeader(ParsleyHeader.CAUSAL_CLOCK).value());
         emissions++;
         assertTrue(stamp.dominates(node.obligation),
                 runLabel + node.name + ": stamp must dominate the dependency clocks and coordinates "

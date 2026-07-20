@@ -3,7 +3,7 @@ package io.github.tobyjamesclements.parsley;
 import org.apache.kafka.common.Uuid;
 
 /**
- * Thrown at ingest when an inbound record's {@code parsley-causal-dependencies} header is present but
+ * Thrown at ingest when an inbound record's {@code parsley-causal-clock} header is present but
  * cannot be decoded into a {@link ParsleyVectorClock} — a corrupt or truncated header, or one written in an
  * unsupported wire version.
  *
@@ -23,7 +23,7 @@ final class ParsleyVectorClockResolutionException extends ParsleyCoordinateExcep
 
     ParsleyVectorClockResolutionException(String topic, Uuid topicId, int partition, long offset,
                                     byte[] encodedDependencies, String details, Throwable cause) {
-        super("failed to resolve the causal-dependencies header on " + topic + "-" + partition + "@" + offset
+        super("failed to resolve the causal-clock header on " + topic + "-" + partition + "@" + offset
                 + "; the record was not forwarded", cause, topic, topicId, partition, offset);
         this.encodedDependencies = encodedDependencies;
         this.details = details;
