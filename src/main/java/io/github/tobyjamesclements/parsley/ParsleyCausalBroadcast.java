@@ -234,7 +234,7 @@ final class ParsleyCausalBroadcast<K, V> {
         // (an effect-before-cause delivery). Seeding at the lowest held offset reproduces exactly
         // what the first in-run sighting did: marks the coordinate seen, and never seeds past a held
         // record. Out-of-scope coordinates are skipped — a held record on one fails the drain fast
-        // anyway, and re-seeding an entry pruneToScope just removed would resurrect it.
+        // anyway, and re-seeding an entry rescope just pruned would resurrect it in the gate view.
         Map<Uuid, Map<Integer, Long>> lowestHeld = new HashMap<>();
         for (ParsleyBufferStore.IndexEntry entry : restored) {
             lowestHeld.computeIfAbsent(entry.topicId(), k -> new HashMap<>())
@@ -308,6 +308,27 @@ final class ParsleyCausalBroadcast<K, V> {
      * @return the records to forward downstream, in order
      */
     Outcome<K, V> receive(ParsleyMessage<K, V> message) {
+        // Replay skip guard: a record this node has already delivered (at or below the contiguous
+        // frontier, or still marked in the forwarded index) must not reach the delegate a second
+        // time. Routine while an added input's re-fetched prefix replays past the carried-ancestry
+        // seed (ParsleyChannels#rescope — "skip what you already ignored", T3.0 A5); otherwise the
+        // fail-safe net for a redelivery exactly_once_v2 should make impossible (A11). Checked
+        // before the unreachable-dependency dispatch deliberately: a replayed record's clock may
+        // name coordinates that have since left this node's scope, and an already-delivered record
+        // must skip, never crash the task. The L1 receive bookkeeping still runs (it keeps
+        // highestReceived exact for bridge()'s skip detection; on an already-delivered offset it
+        // cannot advance the frontier past anything undelivered).
+        if (channels.alreadyDelivered(message.topicId(), message.partition(), message.offset())) {
+            List<ParsleyMessage<K, V>> out = new ArrayList<>();
+            if (channels.receive(message.topicId(), message.partition(), message.offset())) {
+                propagate(out, message.topicId(), message.partition());
+            }
+            metrics.recordReplaySkipped();
+            log.debug("Skipping {}-{} @{} (already delivered; replay)",
+                    message.topic(), message.partition(), message.offset());
+            return new Outcome<>(out);
+        }
+
         // A record whose dependencies name a coordinate this node has no channel for at all can never
         // be checked here no matter how long it waits. Fail-closed rather than vacuously satisfied:
         // this node can prove it cannot check the coordinate, never that the coordinate is irrelevant.

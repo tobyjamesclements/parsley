@@ -6,6 +6,7 @@ import org.junit.jupiter.api.Test;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
+import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -56,48 +57,168 @@ class ParsleyChannelsTest {
     }
 
     /**
-     * {@code pruneToScope} prunes each surviving channel's advertised clock to the scope, not just
-     * the frontier entries and the channel keys. A channel's clock is monotonic (channelUpdate only
-     * ever max-merges) and feeds completeness — the outbound stamp — so a transitive entry for a
-     * coordinate that has left the topology (a retired topic, or one recreated under a new UUID)
-     * would otherwise be re-advertised downstream forever, where every receiver's fail-closed gate
-     * rejects it as an unreachable dependency: a permanent crash loop regenerated from this store on
-     * every restart.
+     * {@code rescope} re-homes — never drops — the ancestry a scope shrink retires (T3.0 A6). A
+     * channel-clock entry for a topic that has left the input set folds into the carried-ancestry
+     * clock, so completeness (the outbound stamp) is unchanged by the prune: dropping it, as the old
+     * {@code pruneToScope} did, would under-claim every subsequent stamp (I2) and let a third party
+     * downstream reorder the retired channel's causes against their effects (I9).
      *
-     * Asserts that after pruning to a scope without the retired ancestor coordinate, completeness no
-     * longer carries it — while the in-scope channel entry and frontier survive — and that the prune
-     * persists (a reload sees the same pruned completeness).
+     * Asserts that after rescoping to an input set without the retired ancestor's channel,
+     * completeness still carries the ancestor at its full value, the frontier no longer gates on the
+     * retired coordinate, and the re-homed value persists across a reload.
      */
     @Test
-    void pruneToScopeAlsoPrunesRetiredCoordinatesOutOfChannelClockValues() {
+    void rescopeReHomesRetiredAncestryIntoTheCarriedAncestryClock() {
         TestKeyValueStore<String, byte[]> store =
                 new TestKeyValueStore<String, byte[]>(Comparator.naturalOrder(), "frontier");
-        ParsleyChannels frontier = new ParsleyChannels(store, new MockForwardedIndex());
+        ParsleyChannels channels = new ParsleyChannels(store, new MockForwardedIndex());
 
         // T1's channel advertises transitive ancestry on ANC (an upstream topic) and on T2 (a
-        // consumed sibling); ANC is then retired from the topology.
-        frontier.delivered(T1_ID, 0, 0);
-        frontier.delivered(T1_ID, 0, 1);
-        frontier.channelUpdate(T1_ID, 0,
+        // consumed sibling); ANC is delivered on directly too, then retired from the input set.
+        channels.rescope(Map.of("T1", T1_ID, "T2", T2_ID, "ANC", ANC_ID), 0);
+        channels.delivered(T1_ID, 0, 0);
+        channels.delivered(T1_ID, 0, 1);
+        channels.seedIfFirstSeen(ANC_ID, 0, 9);
+        channels.delivered(ANC_ID, 0, 9);
+        channels.channelUpdate(T1_ID, 0,
                 ParsleyVectorClock.empty().observe(ANC_ID, 0, 4).observe(T2_ID, 0, 2));
-        assertEquals(4L, frontier.completeness().offsetFor(ANC_ID, 0),
-                "precondition: the retired ancestor is advertised before the prune");
+        assertEquals(9L, channels.completeness().offsetFor(ANC_ID, 0),
+                "precondition: the soon-retired ancestor is delivered and advertised before the rescope");
 
-        // The new scope: T1 and T2 on partition 0 — ANC has left the topology.
-        frontier.pruneToScope((topicId, partition) ->
-                partition == 0 && (topicId.equals(T1_ID) || topicId.equals(T2_ID)));
+        // The new input set: T1 and T2 only — ANC has left the topology.
+        channels.rescope(Map.of("T1", T1_ID, "T2", T2_ID), 0);
 
-        assertEquals(-1L, frontier.completeness().offsetFor(ANC_ID, 0),
-                "the retired coordinate must be pruned out of the channel clock's value, or the stamp "
-                        + "would re-advertise it downstream forever");
-        assertEquals(2L, frontier.completeness().offsetFor(T2_ID, 0),
-                "live transitive ancestry inside the same channel clock must survive the prune");
-        assertEquals(1L, frontier.frontier().offsetFor(T1_ID, 0),
-                "the in-scope frontier entry must survive the prune");
+        assertEquals(9L, channels.completeness().offsetFor(ANC_ID, 0),
+                "the retired coordinate must re-home into the carried ancestry at its full delivered "
+                        + "value — dropping it would under-claim the stamp (I2/I9, T3.0 A6)");
+        assertEquals(-1L, channels.frontier().offsetFor(ANC_ID, 0),
+                "the retired coordinate must leave the frontier — the gate view — even as the stamp "
+                        + "keeps carrying it");
+        assertEquals(2L, channels.completeness().offsetFor(T2_ID, 0),
+                "live transitive ancestry inside the surviving channel clock must survive the rescope");
+        assertEquals(1L, channels.frontier().offsetFor(T1_ID, 0),
+                "the in-scope frontier entry must survive the rescope");
 
         ParsleyChannels reloaded = new ParsleyChannels(store, new MockForwardedIndex());
-        assertEquals(-1L, reloaded.completeness().offsetFor(ANC_ID, 0),
-                "the prune must persist: a reload must not resurrect the retired coordinate");
+        assertEquals(9L, reloaded.completeness().offsetFor(ANC_ID, 0),
+                "the carried ancestry must persist in the \"f\" blob: a reload must keep stamping it");
+    }
+
+    /**
+     * {@code rescope} treats a recreated input — the same topic name declared with a different UUID —
+     * as provably destroyed: the old UUID's entries leave the frontier, the channel clocks, and the
+     * carried ancestry outright (E1: a recreated topic's offsets rebind to different records, so no
+     * receiver can ever deliver them), while everything else re-homes as usual.
+     *
+     * Asserts the old UUID vanishes from completeness after the rescope and the new UUID starts
+     * fresh, with the destruction persisted.
+     */
+    @Test
+    void rescopeDestroysARecreatedInputsOldUuidOutright() {
+        TestKeyValueStore<String, byte[]> store =
+                new TestKeyValueStore<String, byte[]>(Comparator.naturalOrder(), "frontier");
+        ParsleyChannels channels = new ParsleyChannels(store, new MockForwardedIndex());
+
+        channels.rescope(Map.of("T1", T1_ID, "T2", T2_ID), 0);
+        channels.seedIfFirstSeen(T1_ID, 0, 5);
+        channels.delivered(T1_ID, 0, 5);
+        channels.channelUpdate(T2_ID, 0, ParsleyVectorClock.empty().observe(T1_ID, 0, 3));
+        assertEquals(5L, channels.completeness().offsetFor(T1_ID, 0),
+                "precondition: the soon-destroyed UUID is delivered and advertised before the rescope");
+
+        // T1 is deleted and recreated: same name, new UUID.
+        Uuid recreatedT1 = Uuid.randomUuid();
+        channels.rescope(Map.of("T1", recreatedT1, "T2", T2_ID), 0);
+
+        assertEquals(-1L, channels.completeness().offsetFor(T1_ID, 0),
+                "the destroyed UUID must leave every stamp-feeding structure — it can never be "
+                        + "delivered by any receiver (E1), so re-homing it would carry a dead claim forever");
+        assertEquals(-1L, channels.frontier().offsetFor(recreatedT1, 0),
+                "the recreated topic's new UUID has no carried ancestry, so it starts unseeded");
+
+        ParsleyChannels reloaded = new ParsleyChannels(store, new MockForwardedIndex());
+        assertEquals(-1L, reloaded.completeness().offsetFor(T1_ID, 0),
+                "the destruction must persist: a reload must not resurrect the dead UUID");
+    }
+
+    /**
+     * {@code rescope} seeds an added input's frontier at the node's carried-ancestry value for that
+     * coordinate (T3.0 A5 — "skip what you already ignored"): an input removed in one deployment and
+     * re-added in a later one must not re-deliver the prefix this node already delivered or carried,
+     * and the forwarded index is pruned at or below the seed to match. A genuinely new input with no
+     * carried entry seeds nothing and starts like any first sighting.
+     *
+     * Asserts the re-added coordinate's frontier seeds at the re-homed value, the new topic stays
+     * unseeded, and {@code alreadyDelivered} then reports the carried prefix as delivered.
+     */
+    @Test
+    void rescopeSeedsAnAddedInputsFrontierFromCarriedAncestryNeverLogStart() {
+        TestKeyValueStore<String, byte[]> store =
+                new TestKeyValueStore<String, byte[]>(Comparator.naturalOrder(), "frontier");
+        MockForwardedIndex forwardedIndex = new MockForwardedIndex();
+        ParsleyChannels channels = new ParsleyChannels(store, forwardedIndex);
+
+        // Deployment 1: T1 and T2 consumed; T2 delivered up to 7.
+        channels.rescope(Map.of("T1", T1_ID, "T2", T2_ID), 0);
+        channels.delivered(T1_ID, 0, 0);
+        channels.seedIfFirstSeen(T2_ID, 0, 7);
+        channels.delivered(T2_ID, 0, 7);
+        // A stale out-of-order forwarded entry for T2 below the eventual seed survives in its store.
+        forwardedIndex.mark(T2_ID, 0, 5);
+
+        // Deployment 2: T2 removed — its history re-homes into the carried ancestry.
+        channels.rescope(Map.of("T1", T1_ID), 0);
+        assertEquals(-1L, channels.frontier().offsetFor(T2_ID, 0),
+                "precondition: the removed input left the frontier at the shrink");
+
+        // Deployment 3: T2 re-added — the frontier seeds at the carried value, not log-start.
+        channels.rescope(Map.of("T1", T1_ID, "T2", T2_ID, "T3", ANC_ID), 0);
+
+        assertEquals(7L, channels.frontier().offsetFor(T2_ID, 0),
+                "the re-added input must seed at the carried-ancestry value 7 — replaying the prefix "
+                        + "at or below what this node already delivered would be cause-after-effect (A5)");
+        assertFalse(forwardedIndex.contains(T2_ID, 0, 5),
+                "the forwarded index must be pruned at or below the seed, mirroring the restore-time sweep");
+        assertEquals(-1L, channels.frontier().offsetFor(ANC_ID, 0),
+                "a genuinely new input with no carried ancestry seeds nothing — its history has no "
+                        + "delivered descendants here (I2), so replaying it is ordinary delivery");
+        assertTrue(channels.alreadyDelivered(T2_ID, 0, 7),
+                "the seeded prefix must read as already delivered, so the receive path skips its replay");
+        assertFalse(channels.alreadyDelivered(T2_ID, 0, 8),
+                "the first offset above the seed is undelivered — replay resumes normal delivery there");
+    }
+
+    /**
+     * The declared input set and the carried ancestry are trailing-optional sections of the {@code
+     * "f"} blob: a blob written before they existed (simulated by serialising with none recorded)
+     * still loads, reporting an empty declared set — so the first {@code rescope} over an upgraded
+     * store has nothing to diff and simply records the current declaration without seeding anything.
+     *
+     * Asserts a pre-section blob loads with empty declared inputs and that the first rescope over it
+     * neither seeds nor destroys surviving state.
+     */
+    @Test
+    void aBlobWithoutTheDeclaredInputSectionLoadsAndRescopesAsUnchanged() {
+        TestKeyValueStore<String, byte[]> store =
+                new TestKeyValueStore<String, byte[]>(Comparator.naturalOrder(), "frontier");
+        ParsleyChannels original = new ParsleyChannels(store, new MockForwardedIndex());
+        // No rescope ever ran here: the blob carries frontier/channel state but an empty declared set,
+        // standing in for a pre-T1.3 blob (the sections are also simply absent on truncation — load()
+        // treats both identically).
+        original.seedIfFirstSeen(T1_ID, 0, 3);
+        original.delivered(T1_ID, 0, 3);
+
+        ParsleyChannels reloaded = new ParsleyChannels(store, new MockForwardedIndex());
+        assertTrue(reloaded.declaredInputs().isEmpty(),
+                "a blob with nothing declared must load as an empty input set, not fail");
+
+        reloaded.rescope(Map.of("T1", T1_ID, "T2", T2_ID), 0);
+        assertEquals(3L, reloaded.frontier().offsetFor(T1_ID, 0),
+                "the first rescope over an undeclared blob must keep surviving in-scope state");
+        assertEquals(-1L, reloaded.frontier().offsetFor(T2_ID, 0),
+                "with no persisted declaration there is no added-input diff, so nothing seeds");
+        assertEquals(Map.of("T1", T1_ID, "T2", T2_ID), reloaded.declaredInputs(),
+                "the rescope must record the current declaration for the next init to diff against");
     }
 
     // --- Epoch flooring (WS1) -------------------------------------------------------------------
@@ -460,6 +581,11 @@ class ParsleyChannelsTest {
             }
 
             @Override
+            public boolean contains(Uuid topicId, int partition, long offset) {
+                return delegate.contains(topicId, partition, offset);
+            }
+
+            @Override
             public void unmark(Uuid topicId, int partition, long offset) {
                 // A fresh frontier over the same store sees only what has actually been written —
                 // not this call's own in-progress in-memory state.
@@ -501,6 +627,11 @@ class ParsleyChannelsTest {
             @Override
             public List<Long> forwardedAfter(Uuid topicId, int partition, long frontierOffset) {
                 return delegate.forwardedAfter(topicId, partition, frontierOffset);
+            }
+
+            @Override
+            public boolean contains(Uuid topicId, int partition, long offset) {
+                return delegate.contains(topicId, partition, offset);
             }
 
             @Override
@@ -591,6 +722,11 @@ class ParsleyChannelsTest {
             @Override
             public List<Long> forwardedAfter(Uuid topicId, int partition, long frontierOffset) {
                 return delegate.forwardedAfter(topicId, partition, frontierOffset);
+            }
+
+            @Override
+            public boolean contains(Uuid topicId, int partition, long offset) {
+                return delegate.contains(topicId, partition, offset);
             }
 
             @Override

@@ -35,9 +35,16 @@ import java.util.Set;
  *                                                     the interim below-floor strip (until T3.2)
  *             acknowledge(topic, partition, offset)   producer ack → ownOutputs (D2; stub until
  *                                                     Phase 2)
+ *             rescope(currentInputs, taskPartition)   reconcile restored state with the declared
+ *                                                     input set: re-home retired ancestry into the
+ *                                                     carried-ancestry clock (A6), seed added
+ *                                                     channels from carried ancestry (A5)
  * queries:    frontier() → ParsleyVectorClock         the delivered vector VT(p)
  *             ownOutputs() → ParsleyVectorClock       the node's own acked output positions (D2;
  *                                                     empty until Phase 2)
+ *             alreadyDelivered(topicId, partition,    membership in the delivered set (frontier ∪
+ *                 offset) → boolean                   forwarded index); the receive path's replay
+ *                                                     skip guard
  * properties: I3 (per-producer stamp monotonicity), I4 (contiguous frontier), I5 (normalised
  *             clocks), I8 (stamp over-claim soundness), I9 (unconditional merge, restore-side)
  * </pre>
@@ -78,6 +85,20 @@ final class ParsleyChannels {
     private ParsleyVectorClock frontier;
     // Per input channel (topicId, partition) -> the dependencies advertised on it (max-merged).
     private final Map<CoordKey, ParsleyVectorClock> channels = new HashMap<>();
+    // Causal ancestry this node once delivered or carried on coordinates that have since left its
+    // consumption scope, re-homed here by rescope() so the outbound stamp keeps dominating it (I2/I9:
+    // carried ancestry may be skipped, never dropped — T3.0 A6). The term is this project's coinage
+    // (from the redesign doc); the nearest literature concept is the vector time of the node's causal
+    // past, restricted to retired channels. Stamp-side only: merged into completeness(), never
+    // consulted by the delivery gate, never advanced by deliveries. Persisted in the "f" blob.
+    private ParsleyVectorClock carriedAncestry = ParsleyVectorClock.empty();
+    // The input-topic set (name -> UUID) this node's persisted state was written under, updated by
+    // rescope() and persisted in the "f" blob. Comparing it against the currently declared inputs is
+    // what makes a scope change detectable at init (the #21 fix: restart-vs-scope-change keys on
+    // "input set unchanged since the blob", not on blob presence alone). Names are recorded alongside
+    // UUIDs so a recreated topic (same name, new UUID) is provably destroyed rather than merely
+    // out of scope.
+    private final Map<String, Uuid> declaredInputs = new HashMap<>();
     // Per input channel (topicId, partition) -> the highest offset ever physically received on it. Persisted
     // in the "f" blob (part of the EOS transaction, so exact across restart) and consulted by bridge(): the
     // open interval between the previous highest and a newly-received offset was skipped by the
@@ -245,7 +266,10 @@ final class ParsleyChannels {
 
     /**
      * The causal completeness clock: this node's own contiguous frontier, max-merged with every input
-     * channel's advertised dependencies. This is the <em>outbound stamp</em> — the boundary this node
+     * channel's advertised dependencies and with the {@link #carriedAncestry} re-homed from any
+     * coordinates that have left this node's scope (a retired channel's history must keep riding in
+     * the stamp — I9's "never dropped, only re-homed"). This is the <em>outbound stamp</em> — the
+     * boundary this node
      * advertises downstream, carrying transitive ancestry (coordinates a channel has advertised that
      * this node may not itself have delivered yet) for each receiver's own gate to verify locally. It
      * is <em>not</em> the delivery gate: the gate ({@link ParsleyCausalBroadcast}) checks {@link #frontier()}
@@ -259,7 +283,7 @@ final class ParsleyChannels {
      * and a below-floor origin a downstream might see is floored out by that downstream's own gate.
      */
     ParsleyVectorClock completeness() {
-        ParsleyVectorClock result = frontier;
+        ParsleyVectorClock result = frontier.merge(carriedAncestry);
         for (ParsleyVectorClock advertised : channels.values()) {
             result = result.merge(advertised);
         }
@@ -461,7 +485,7 @@ final class ParsleyChannels {
      * {@link #completeness()} is a plain max-merge now, so a channel with nothing advertised simply
      * contributes nothing rather than excluding a coordinate every other channel has confirmed. What a
      * seeded-but-silent channel entry still does is give {@link #tryAdvanceEpoch}'s per-channel
-     * marker-seen bookkeeping and {@link #pruneToScope} something to check against.
+     * marker-seen bookkeeping and {@link #rescope} something to check against.
      */
     void channelUpdate(Uuid topicId, int partition, ParsleyVectorClock clock) {
         if (!trackChannels) {
@@ -515,7 +539,7 @@ final class ParsleyChannels {
      * dependency clock only ever spans a node's own input channels). Comparing the unfiltered floor
      * against this node's completeness would therefore never dominate at any non-terminal stage. When
      * channel tracking is on (the production case; see {@link #trackChannels}), the floor is filtered
-     * here to {@link #channels}' own coordinates — the same scoping {@link #pruneToScope} already
+     * here to {@link #channels}' own coordinates — the same scoping {@link #rescope} already
      * applies to the frontier — before the dominance check. A coordinate that <em>is</em> in scope but
      * not yet delivered here is deliberately left in the filtered floor rather than dropped:
      * {@link ParsleyVectorClock#dominates} then reads it as unsatisfied (an absent coordinate is never
@@ -550,32 +574,135 @@ final class ParsleyChannels {
     }
 
     /**
-     * Prunes causal state to the coordinates {@code inScope} accepts: retains the frontier clock,
-     * drops any channel whose coordinate is out of scope (e.g. a topic dropped and recreated with a
-     * new UUID), and prunes each surviving channel's <em>advertised clock</em> to the same scope.
-     * Called once at init before seeding the current input channels.
+     * Reconciles restored causal state with the currently declared input set — the scope-change step
+     * run once at init, before the current input channels are seeded. Replaces the earlier
+     * {@code pruneToScope}, whose outright dropping of out-of-scope entries under-claimed the stamp
+     * and broke I2 at third parties (T3.0 A6). The one principle both directions share: <em>the
+     * causal past a node has delivered or carried may be skipped, but never dropped and never
+     * re-entered.</em> Four cases, diffed against the persisted {@link #declaredInputs}:
      *
-     * <p>Pruning the channel <em>values</em> is what lets a coordinate ever be retired from the DAG.
-     * A channel's advertised clock is monotonic ({@link #channelUpdate} only ever max-merges) and
-     * feeds {@link #completeness()} — the outbound stamp — so an entry for a topic that has left the
-     * topology would otherwise be re-advertised downstream forever, where every receiver's gate fails
-     * it fast as an unreachable dependency (a permanent crash loop regenerated from this store on
-     * every restart). The prune is safe because a live advertised coordinate is always in scope here:
-     * every stage channels its whole causal ancestry (the full-mesh/ancestry contract the causal-broadcast core's
-     * fail-closed unreachable check enforces), upstream stamps are co-partitioned onto this task's
-     * own partition, and this node's own sink coordinates were already stripped before folding
-     * ({@code ParsleyCausalBroadcast#advertised}) — so an out-of-scope entry inside a channel clock can only
-     * be a retired or recreated coordinate, never live transitive ancestry.
+     * <ol>
+     *   <li><strong>Destroyed coordinates.</strong> A topic name declared both then and now whose
+     *       UUID changed was deleted and recreated; the old UUID's entries can never be delivered by
+     *       any receiver (E1: offsets rebind to different records), so they are the only entries
+     *       removed outright — from the frontier, the channel keys and values, the highest-received
+     *       map, and the carried ancestry. The new UUID starts as an added channel (below).</li>
+     *   <li><strong>Out-of-scope re-homing (shrink, A6).</strong> Every other entry leaving scope —
+     *       a removed input's frontier entry, a retired channel's full advertised clock, an
+     *       out-of-scope entry inside a surviving channel's clock — max-merges into
+     *       {@link #carriedAncestry} before it is pruned, so {@link #completeness()} (the stamp) is
+     *       unchanged by the prune except at destroyed coordinates. Without this, a receiver
+     *       downstream of this node could see an effect stamped as if its retired-channel cause never
+     *       existed, and reorder them.</li>
+     *   <li><strong>Added channels (growth, A5).</strong> An input declared now but not in the
+     *       persisted set seeds its frontier at this node's carried-ancestry value for the
+     *       coordinate — {@code completeness()} after the re-homing above — never at log-start:
+     *       "skip what you already ignored". The prefix at or below what this node previously
+     *       carried must never be delivered into its surviving state (an operator who wants that
+     *       history performs a full reset); the forwarded index is pruned at or below the seed to
+     *       match. A coordinate with no carried entry seeds nothing — a genuinely new topic's
+     *       history has no delivered descendants here (I2), so replaying it is ordinary delivery,
+     *       not reordering.</li>
+     *   <li><strong>No persisted input set</strong> (a fresh store, or a blob from before this
+     *       section existed): nothing to diff — no seeding, no destruction; the current set is
+     *       simply recorded. Pre-release, no migration path (O6).</li>
+     * </ol>
+     *
+     * <p>The current input set is persisted at the end, so the next init diffs against what this run
+     * declared.
+     *
+     * @param currentInputs the currently declared input topics, name → UUID (passthrough included)
+     * @param taskPartition the partition this task owns on every input (Streams co-partitions a
+     *                      sub-topology's sources)
      */
-    void pruneToScope(ParsleyVectorClock.CoordinatePredicate inScope) {
+    /**
+     * The input-topic set (name → UUID) the persisted state was written under — the previous run's
+     * declaration, empty on a fresh store or a pre-T1.3 blob. Read it <em>before</em> {@link #rescope}
+     * (which overwrites it with the current set) to report the scope diff at init.
+     */
+    Map<String, Uuid> declaredInputs() {
+        return Map.copyOf(declaredInputs);
+    }
+
+    void rescope(Map<String, Uuid> currentInputs, int taskPartition) {
+        // 1 — destroyed: recreated inputs' old UUIDs leave every stamp-feeding structure for good.
+        Set<Uuid> destroyed = new HashSet<>();
+        for (Map.Entry<String, Uuid> declared : declaredInputs.entrySet()) {
+            Uuid current = currentInputs.get(declared.getKey());
+            if (current != null && !current.equals(declared.getValue())) {
+                destroyed.add(declared.getValue());
+            }
+        }
+        if (!destroyed.isEmpty()) {
+            ParsleyVectorClock.CoordinatePredicate notDestroyed =
+                    (topicId, partition) -> !destroyed.contains(topicId);
+            frontier = frontier.retaining(notDestroyed);
+            carriedAncestry = carriedAncestry.retaining(notDestroyed);
+            channels.keySet().removeIf(key -> destroyed.contains(key.topicId()));
+            channels.replaceAll((key, clock) -> clock.retaining(notDestroyed));
+            highestReceived.keySet().removeIf(key -> destroyed.contains(key.topicId()));
+        }
+
+        // 2 — shrink: fold everything else leaving scope into the carried ancestry, then prune it.
+        // A retired/recreated coordinate must also leave the highest-received map, or its dead
+        // CoordKey would be re-serialised into the "f" blob on every persist forever.
+        Set<Uuid> currentUuids = new HashSet<>(currentInputs.values());
+        ParsleyVectorClock.CoordinatePredicate inScope = (topicId, partition) ->
+                partition == taskPartition && currentUuids.contains(topicId);
+        ParsleyVectorClock.CoordinatePredicate outOfScope = (topicId, partition) ->
+                !inScope.test(topicId, partition);
+        carriedAncestry = carriedAncestry.merge(frontier.retaining(outOfScope));
+        for (Map.Entry<CoordKey, ParsleyVectorClock> channel : channels.entrySet()) {
+            boolean channelRetired = outOfScope.test(channel.getKey().topicId(), channel.getKey().partition());
+            carriedAncestry = carriedAncestry.merge(
+                    channelRetired ? channel.getValue() : channel.getValue().retaining(outOfScope));
+        }
         frontier = frontier.retaining(inScope);
-        channels.keySet().removeIf(key -> !inScope.test(key.topicId(), key.partition()));
+        channels.keySet().removeIf(key -> outOfScope.test(key.topicId(), key.partition()));
         channels.replaceAll((key, clock) -> clock.retaining(inScope));
-        // A retired/recreated coordinate must also leave the highest-received map, or its dead CoordKey
-        // would be re-serialised into the "f" blob on every persist forever. No misapplication is possible
-        // (a recreated topic has a new UUID, hence a new key), but the leak contradicts the scope prune.
-        highestReceived.keySet().removeIf(key -> !inScope.test(key.topicId(), key.partition()));
+        highestReceived.keySet().removeIf(key -> outOfScope.test(key.topicId(), key.partition()));
+
+        // 3 — growth: an added channel skips the prefix this node already carried.
+        if (!declaredInputs.isEmpty()) {
+            for (Map.Entry<String, Uuid> current : currentInputs.entrySet()) {
+                if (declaredInputs.containsKey(current.getKey())) {
+                    continue;
+                }
+                Uuid topicId = current.getValue();
+                long carried = completeness().offsetFor(topicId, taskPartition);
+                if (carried > frontier.offsetFor(topicId, taskPartition)) {
+                    frontier = frontier.observe(topicId, taskPartition, carried);
+                    forwardedIndex.pruneAtOrBelow(topicId, taskPartition, carried);
+                }
+            }
+        }
+
+        declaredInputs.clear();
+        declaredInputs.putAll(currentInputs);
         persist();
+    }
+
+    /**
+     * Whether {@code (topicId, partition, offset)} has already been delivered by this node: at or
+     * below the contiguous frontier, or forwarded out of order (still marked in the forwarded index,
+     * above the frontier but not yet absorbed). The receive path consults this to <em>skip</em> a
+     * replayed already-delivered record instead of forwarding it to the delegate a second time —
+     * routine after {@link #rescope}'s growth seeding (the consumer re-fetches an added input from
+     * log-start while the seeded frontier already covers the carried prefix), and otherwise the
+     * fail-safe net for an at-or-below-watermark arrival that {@code exactly_once_v2} should make
+     * impossible (T3.0 A11).
+     *
+     * <p>A below-floor offset is never reported as delivered: under a live epoch floor the frontier
+     * sits at the epoch origin without any below-floor record having been delivered, and below-floor
+     * replay must keep feeding delegate state exactly as {@link #delivered}'s below-floor no-op
+     * intends (interim — the clause dies with the floors, D4).
+     */
+    boolean alreadyDelivered(Uuid topicId, int partition, long offset) {
+        if (offset < epoch.startsAt(topicId, partition)) {
+            return false;
+        }
+        return offset <= frontier.offsetFor(topicId, partition)
+                || forwardedIndex.contains(topicId, partition, offset);
     }
 
     private void persist() {
@@ -596,6 +723,13 @@ final class ParsleyChannels {
      * highest-received offsets are persisted so {@link #bridge}'s skip detection is exact across a restart
      * (the map is written inside the same EOS transaction as the frontier and forwarded index), rather than
      * reconstructed and possibly having to re-bridge already-forwarded offsets.
+     *
+     * <p>Two further trailing sections (both written together, both optional on read):
+     * {@code [carried-ancestry-len:4][carried-ancestry bytes]} — the {@link #carriedAncestry} clock,
+     * persisted because it is stamp-feeding state (I9: dropping it on restart would under-claim every
+     * subsequent stamp) — then {@code [input-count:4]} with per input {@code [name UTF][topicId MSB:8]
+     * [topicId LSB:8]} — the {@link #declaredInputs} set, which is what makes a scope change
+     * detectable at the next init ({@link #rescope}).
      */
     private byte[] toBytes() {
         try (ByteArrayOutputStream baos = new ByteArrayOutputStream();
@@ -618,6 +752,12 @@ final class ParsleyChannels {
                 ParsleyByteUtils.writeUuid(dos, entry.getKey().topicId());
                 dos.writeInt(entry.getKey().partition());
                 dos.writeLong(entry.getValue());
+            }
+            ParsleyByteUtils.writeBytes(dos, carriedAncestry.toBytes());
+            dos.writeInt(declaredInputs.size());
+            for (Map.Entry<String, Uuid> entry : declaredInputs.entrySet()) {
+                dos.writeUTF(entry.getKey());
+                ParsleyByteUtils.writeUuid(dos, entry.getValue());
             }
             dos.flush();
             return baos.toByteArray();
@@ -658,6 +798,18 @@ final class ParsleyChannels {
                     int partition = dis.readInt();
                     long offset = dis.readLong();
                     highestReceived.put(new CoordKey(topicId, partition), offset);
+                }
+            }
+            // The carried-ancestry and declared-input sections are trailing and optional as one unit
+            // (always written together since they exist): a pre-T1.3 blob simply ends before them,
+            // loading an empty carried ancestry (nothing was ever re-homed) and an empty declared
+            // input set (rescope then has nothing to diff and just records the current declaration).
+            if (dis.available() > 0) {
+                carriedAncestry = ParsleyVectorClock.fromBytes(ParsleyByteUtils.readBytes(dis));
+                int inputCount = dis.readInt();
+                for (int i = 0; i < inputCount; i++) {
+                    String name = dis.readUTF();
+                    declaredInputs.put(name, ParsleyByteUtils.readUuid(dis));
                 }
             }
         } catch (IOException e) {

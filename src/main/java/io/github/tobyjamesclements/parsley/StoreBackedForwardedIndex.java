@@ -54,6 +54,11 @@ final class StoreBackedForwardedIndex implements ParsleyForwardedIndex {
     }
 
     @Override
+    public boolean contains(Uuid topicId, int partition, long offset) {
+        return store.get(key(topicId, partition, offset)) != null;
+    }
+
+    @Override
     public void unmark(Uuid topicId, int partition, long offset) {
         store.delete(key(topicId, partition, offset));
     }

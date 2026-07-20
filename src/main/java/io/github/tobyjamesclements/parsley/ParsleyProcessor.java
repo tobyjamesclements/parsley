@@ -26,6 +26,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
+import java.util.TreeSet;
 import java.util.function.Function;
 
 /**
@@ -486,14 +487,19 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
         ParsleyVectorClock.CoordinatePredicate inScope = (topicId, partition) ->
                 partition == taskPartition && consumedTopicIds.contains(topicId);
 
-        // Prune restored causal state to the current scope — topic UUIDs change when a topic is
-        // dropped and recreated, leaving stale frontier/channel entries that would pin the completeness
-        // min on a coordinate that can never advance. Then seed an entry for every consumed input
+        // Reconcile restored causal state with the currently declared input set (the #21 fix: the
+        // scope decision keys on "input set unchanged since the persisted blob", not blob presence
+        // alone). Retired ancestry re-homes into the carried-ancestry clock the stamp keeps merging
+        // (A6); an added input's frontier seeds at the carried-ancestry value so its already-carried
+        // prefix is skipped, never replayed as live (A5); a recreated input's old UUID is destroyed.
+        // Then seed an entry for every consumed input
         // channel so a channel that has not yet advertised anything is present in the min (holding it
         // down until it does), rather than absent — which would let a record deliver before that
-        // channel confirmed the dependency. Idempotent against an already-pruned/seeded store (the
+        // channel confirmed the dependency. Idempotent against an already-rescoped/seeded store (the
         // common case, every call after the first), so this costs a redundant write, never a wrong one.
-        channels.pruneToScope(inScope);
+        Map<String, Uuid> previousInputs = channels.declaredInputs();
+        channels.rescope(topicUuids, taskPartition);
+        logScopeDiff(previousInputs);
         for (Uuid topicId : consumedTopicIds) {
             channels.channelUpdate(topicId, taskPartition, ParsleyVectorClock.empty());
         }
@@ -506,6 +512,39 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
 
         return new ParsleyCausalBroadcast<>(channels, buffer, candidateIndex,
                 wiredMetrics.metrics(), context::currentSystemTimeMs, inScope, ownSinkTopics);
+    }
+
+    /**
+     * Reports the input-set diff {@link ParsleyChannels#rescope} just reconciled: which inputs were
+     * added, removed, or recreated (same name, new UUID) relative to the persisted declaration. An
+     * empty {@code previousInputs} (a fresh store, or a blob predating the declared-input section)
+     * has nothing to compare — nothing is logged; an unchanged set logs at debug.
+     */
+    private void logScopeDiff(Map<String, Uuid> previousInputs) {
+        if (previousInputs.isEmpty()) {
+            return;
+        }
+        Set<String> added = new TreeSet<>();
+        Set<String> recreated = new TreeSet<>();
+        for (Map.Entry<String, Uuid> current : topicUuids.entrySet()) {
+            Uuid previous = previousInputs.get(current.getKey());
+            if (previous == null) {
+                added.add(current.getKey());
+            } else if (!previous.equals(current.getValue())) {
+                recreated.add(current.getKey());
+            }
+        }
+        Set<String> removed = new TreeSet<>(previousInputs.keySet());
+        removed.removeAll(topicUuids.keySet());
+        if (added.isEmpty() && removed.isEmpty() && recreated.isEmpty()) {
+            log.debug("Input set unchanged since the persisted state [task: {}]", context.taskId());
+            return;
+        }
+        log.info("Input set changed since the persisted state [task: {}] — added: {}, removed: {}, "
+                + "recreated: {}. Removed inputs' ancestry re-homes into the carried-ancestry clock "
+                + "(stamps keep dominating it); added inputs skip the prefix at or below this node's "
+                + "carried ancestry (a full reset is the opt-in for processing that history).",
+                context.taskId(), added, removed, recreated);
     }
 
     /**

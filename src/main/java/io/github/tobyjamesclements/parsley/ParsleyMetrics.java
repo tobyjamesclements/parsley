@@ -47,6 +47,15 @@ interface ParsleyMetrics {
     void recordUnreachableDependencyError();
 
     /**
+     * A received record's offset was already delivered here (at or below the contiguous frontier, or
+     * still marked in the forwarded index) and was skipped instead of being forwarded to the delegate
+     * again. Routine while an added input's re-fetched prefix is replayed past the carried-ancestry
+     * seed ({@code ParsleyChannels#rescope}); otherwise a redelivery {@code exactly_once_v2} should
+     * make impossible — sustained counts outside a scope-change replay warrant investigation.
+     */
+    void recordReplaySkipped();
+
+    /**
      * Reports the buffer's current observable state. Called after every depth-changing event and,
      * independently, on a periodic refresh tick — so the oldest-record gauge stays current even on a
      * buffer that is idle (no admits or releases) between ticks.
@@ -63,6 +72,7 @@ interface ParsleyMetrics {
         @Override public void recordDeserializationError() {}
         @Override public void recordClockResolutionError() {}
         @Override public void recordUnreachableDependencyError() {}
+        @Override public void recordReplaySkipped() {}
         @Override public void reportState(int depth, OptionalLong oldestBufferedAtMs) {}
     };
 
@@ -93,6 +103,8 @@ interface ParsleyMetrics {
         Sensor clockResErr = sm.addRateTotalSensor("parsley", taskId, "clock-resolution-errors", Sensor.RecordingLevel.INFO);
         Sensor unreachableDepErr = sm.addRateTotalSensor("parsley", taskId, "unreachable-dependency-errors",
                 Sensor.RecordingLevel.INFO);
+        Sensor replaySkipped = sm.addRateTotalSensor("parsley", taskId, "replays-skipped",
+                Sensor.RecordingLevel.INFO);
 
         Sensor depth = gauge(sm, parsleyId, "buffer-depth",
                 "Current number of records held in the causal buffer");
@@ -100,7 +112,7 @@ interface ParsleyMetrics {
                 "Buffer-admission time (epoch millis) of the oldest held record, or 0 if the buffer is empty");
 
         List<Sensor> sensors = new ArrayList<>(List.of(buffered, released, deserErr,
-                clockResErr, unreachableDepErr, depth, oldestBufferedAt));
+                clockResErr, unreachableDepErr, replaySkipped, depth, oldestBufferedAt));
 
         ParsleyMetrics metrics = new ParsleyMetrics() {
             @Override public void recordBuffered()             { buffered.record(); }
@@ -108,6 +120,7 @@ interface ParsleyMetrics {
             @Override public void recordDeserializationError() { deserErr.record(); }
             @Override public void recordClockResolutionError() { clockResErr.record(); }
             @Override public void recordUnreachableDependencyError() { unreachableDepErr.record(); }
+            @Override public void recordReplaySkipped()        { replaySkipped.record(); }
             @Override public void reportState(int d, OptionalLong oldest) {
                 depth.record(d);
                 oldestBufferedAt.record(oldest.isPresent() ? oldest.getAsLong() : 0L);

@@ -95,6 +95,77 @@ class ParsleyOffsetSeederTest {
     }
 
     /**
+     * An added input topic — surviving state, but the uncommitted partitions all belong to a topic
+     * this group has never committed on while another source topic is fully committed — is seeded to
+     * log-start rather than refused. This is the redeploy-with-added-input case (#21 / T3.0 A5): the
+     * processor's rescope seeds the added channel's frontier at the carried ancestry and the receive
+     * path skips already-delivered offsets, so the log-start replay is fetched but never redelivered.
+     */
+    @Test
+    void anAddedInputTopicWithSurvivingStateSeedsToLogStart() throws Exception {
+        FakeSeedAdmin admin = new FakeSeedAdmin();
+        admin.topics.add(CHANGELOG);                             // surviving causal state
+        admin.partitionCounts.put(T1, 2);
+        admin.partitionCounts.put("t3", 2);
+        admin.committed.put(new TopicPartition(T1, 0), 5L);      // the incumbent input is committed
+        admin.committed.put(new TopicPartition(T1, 1), 7L);
+        admin.earliest.put(new TopicPartition("t3", 0), 40L);    // the added input has no offsets at all
+        admin.earliest.put(new TopicPartition("t3", 1), 40L);
+
+        ParsleyOffsetSeeder.seed(admin, APP, Set.of(T1, "t3"), CHANGELOGS);
+
+        assertEquals(1, admin.commitCalls.size(), "the added topic must be seeded in one commit");
+        assertEquals(Map.of(new TopicPartition("t3", 0), 40L, new TopicPartition("t3", 1), 40L),
+                admin.commitCalls.get(0),
+                "only the added topic's partitions may be seeded, at their log-start offsets");
+    }
+
+    /**
+     * A topic with SOME committed partitions and some missing is never treated as an added input —
+     * partial commitment means the group has consumed the topic (added partitions, or a partial
+     * manual delete), so the surviving-state refusal stands and directs the operator to the manual
+     * remedies.
+     */
+    @Test
+    void aPartiallyCommittedTopicWithSurvivingStateStillFailsLoudly() {
+        FakeSeedAdmin admin = new FakeSeedAdmin();
+        admin.topics.add(CHANGELOG);
+        admin.partitionCounts.put(T1, 2);
+        admin.committed.put(new TopicPartition(T1, 0), 5L);      // partition 1 has no committed offset
+        admin.earliest.put(new TopicPartition(T1, 1), 400L);
+
+        IllegalStateException thrown = assertThrows(IllegalStateException.class,
+                () -> ParsleyOffsetSeeder.seed(admin, APP, Set.of(T1), CHANGELOGS),
+                "a partially committed topic must keep the surviving-state refusal");
+        assertTrue(thrown.getMessage().contains("surviving"),
+                "the failure must explain the surviving-state refusal: " + thrown.getMessage());
+        assertTrue(admin.commitCalls.isEmpty(), "nothing may be seeded for a partially committed topic");
+    }
+
+    /**
+     * When EVERY source topic is uncommitted while causal state survives, nothing distinguishes an
+     * added input from whole-group offset expiry (which takes every topic's offsets together), so the
+     * refusal stands — this is exactly the offset-expiry shape the guard exists for, and the
+     * added-input path must never widen into it.
+     */
+    @Test
+    void allTopicsUncommittedWithSurvivingStateStillFailsLoudly() {
+        FakeSeedAdmin admin = new FakeSeedAdmin();
+        admin.topics.add(CHANGELOG);
+        admin.partitionCounts.put(T1, 1);
+        admin.partitionCounts.put("t3", 1);
+        admin.earliest.put(new TopicPartition(T1, 0), 400L);
+        admin.earliest.put(new TopicPartition("t3", 0), 40L);
+
+        IllegalStateException thrown = assertThrows(IllegalStateException.class,
+                () -> ParsleyOffsetSeeder.seed(admin, APP, Set.of(T1, "t3"), CHANGELOGS),
+                "all topics uncommitted with surviving state is offset expiry, not an added input");
+        assertTrue(thrown.getMessage().contains("surviving"),
+                "the failure must explain the surviving-state refusal: " + thrown.getMessage());
+        assertTrue(admin.commitCalls.isEmpty(), "nothing may be seeded on the offset-expiry shape");
+    }
+
+    /**
      * A peer instance's concurrent first start: this instance sees the peer's just-created changelog
      * (surviving state) but its initial offset list predates the peer's seed commit. The guard's re-list —
      * a fresh coordinator read, guaranteed to observe a commit that happens-before the changelog it already

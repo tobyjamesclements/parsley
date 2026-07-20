@@ -130,7 +130,8 @@ final class ParsleyVectorClock {
      * {@code this} unchanged when every coordinate is kept (so the common all-in-scope case allocates
      * nothing). Used on recorded state a processor owns — pruning a restored frontier/pending-epoch
      * clock down to the coordinates currently in scope after a topic UUID change or scope narrowing
-     * ({@link ParsleyChannels#pruneToScope}) — never used to silently drop a coordinate this node
+     * ({@link ParsleyChannels#rescope}, which re-homes what it prunes into the carried-ancestry
+     * clock rather than dropping it) — never used to silently drop a coordinate this node
      * merely has no channel for from an inbound record's own dependency clock: a dependency naming a
      * coordinate outside scope is not something to silently drop, see {@link ParsleyCausalBroadcast}'s
      * fail-closed handling of that case. The one narrower, different exception is {@link

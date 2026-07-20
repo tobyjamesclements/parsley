@@ -33,6 +33,12 @@ final class MockForwardedIndex implements ParsleyForwardedIndex {
     }
 
     @Override
+    public boolean contains(Uuid topicId, int partition, long offset) {
+        NavigableSet<Long> offsets = index.get(new CoordKey(topicId, partition));
+        return offsets != null && offsets.contains(offset);
+    }
+
+    @Override
     public void unmark(Uuid topicId, int partition, long offset) {
         CoordKey key = new CoordKey(topicId, partition);
         NavigableSet<Long> offsets = index.get(key);

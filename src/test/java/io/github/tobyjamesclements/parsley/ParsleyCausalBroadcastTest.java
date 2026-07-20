@@ -187,6 +187,7 @@ class ParsleyCausalBroadcastTest {
             @Override public void recordDeserializationError()  {}
             @Override public void recordClockResolutionError()  {}
             @Override public void recordUnreachableDependencyError() {}
+            @Override public void recordReplaySkipped() {}
             @Override public void reportState(int depth, OptionalLong oldest) { reportedDepths.add(depth); }
         };
         ParsleyCausalBroadcast<String, String> causalBroadcast = new ParsleyCausalBroadcast<>(
@@ -201,6 +202,100 @@ class ParsleyCausalBroadcastTest {
         causalBroadcast.receive(incomingRecord(T1, 3, ParsleyVectorClock.empty()));
         assertEquals(List.of(1), releasedCounts, "recordReleased must fire with the count of drained records");
         assertEquals(List.of(1, 0), reportedDepths, "reportState must report the post-drain buffer depth");
+    }
+
+    /**
+     * A replayed record whose offset is at or below the contiguous frontier — an offset this node
+     * has already delivered — is skipped, never forwarded to the delegate a second time. This is the
+     * receive path's replay skip guard: routine while an added input's re-fetched prefix replays
+     * past the carried-ancestry seed ({@code ParsleyChannels#rescope}, T3.0 A5), and otherwise the
+     * fail-safe net for a redelivery {@code exactly_once_v2} should make impossible (A11). The skip
+     * is checked before the unreachable-dependency dispatch, so a replayed record whose clock names
+     * a coordinate now out of scope skips rather than crashing the task.
+     *
+     * Asserts the replay is not forwarded and not buffered, the frontier is unchanged, and the
+     * replay-skipped metric fires — including for a replay carrying an out-of-scope dependency.
+     */
+    @Test
+    void alreadyDeliveredReplayIsSkippedNotForwardedAgain() {
+        List<Integer> replaySkips = new ArrayList<>();
+        ParsleyMetrics capturing = new ParsleyMetrics() {
+            @Override public void recordBuffered() {}
+            @Override public void recordReleased(int c) {}
+            @Override public void recordDeserializationError() {}
+            @Override public void recordClockResolutionError() {}
+            @Override public void recordUnreachableDependencyError() {}
+            @Override public void recordReplaySkipped() { replaySkips.add(1); }
+            @Override public void reportState(int depth, OptionalLong oldest) {}
+        };
+        ParsleyCausalBroadcast<String, String> causalBroadcast = new ParsleyCausalBroadcast<>(
+                ParsleyVectorClock.empty(), buffer, new MockCandidateIndex(), forwardedIndex,
+                capturing, System::currentTimeMillis);
+        processRecord(causalBroadcast, incomingRecord(T1, 0, ParsleyVectorClock.empty()));
+        assertEquals(1, forwarded.size(), "precondition: the original delivery forwards once");
+
+        // The same offset again — carrying a dependency on a coordinate this node has no channel
+        // for, as a replayed pre-scope-change record legitimately can.
+        processRecord(causalBroadcast, incomingRecord(T1, 0, ParsleyVectorClock.empty().observe(T3_ID, 0, 2)));
+
+        assertEquals(1, forwarded.size(),
+                "an already-delivered offset must be skipped, never forwarded to the delegate again");
+        assertEquals(0, buffer.size(), "a skipped replay must not enter the buffer");
+        assertEquals(ParsleyVectorClock.empty().observe(T1_ID, 0, 0), causalBroadcast.frontier(),
+                "a skipped replay must not move the frontier");
+        assertEquals(List.of(1), replaySkips, "the replay-skipped metric must count the skip");
+    }
+
+    /**
+     * The skip guard's second clause: a record delivered out of order — above the contiguous
+     * frontier, its offset still marked in the forwarded index — is equally "already delivered", so
+     * its replay is skipped too. Without the forwarded-index clause a replay of such a record would
+     * pass the frontier test (it sits above the watermark) and reach the delegate twice.
+     *
+     * Asserts the out-of-order-delivered offset's replay is not forwarded again while the earlier
+     * offset is still held.
+     */
+    @Test
+    void replayOfAForwardedButUnabsorbedOffsetIsSkipped() {
+        ParsleyCausalBroadcast<String, String> causalBroadcast = causalBroadcastWith();
+
+        processRecord(causalBroadcast, incomingRecord(T1, 0, ParsleyVectorClock.empty()));
+        // T1@1 held on an unmet dependency; T1@2 then delivers out of order past it.
+        processRecord(causalBroadcast, incomingRecord(T1, 1, ParsleyVectorClock.empty().observe(T2_ID, 0, 5)));
+        processRecord(causalBroadcast, incomingRecord(T1, 2, ParsleyVectorClock.empty()));
+        assertEquals(2, forwarded.size(), "precondition: offsets 0 and 2 delivered, 1 held");
+        assertEquals(0L, causalBroadcast.frontier().offsetFor(T1_ID, 0),
+                "precondition: the held offset 1 pins the frontier below the out-of-order 2");
+
+        processRecord(causalBroadcast, incomingRecord(T1, 2, ParsleyVectorClock.empty()));
+
+        assertEquals(2, forwarded.size(),
+                "a replay of the out-of-order-delivered offset 2 must be skipped — it is still marked "
+                        + "in the forwarded index, so it was already delivered despite sitting above "
+                        + "the frontier");
+    }
+
+    /**
+     * The skip guard never fires on a below-floor record: under a live epoch floor the frontier sits
+     * at the epoch origin without any below-floor offset having been delivered, and below-floor
+     * replay must keep feeding delegate state exactly as {@code delivered}'s below-floor no-op
+     * intends (a joiner rebuilding state replays pre-epoch history through the delegate on every
+     * pass; interim behaviour — the floor clause dies with D4).
+     *
+     * Asserts a below-floor record is forwarded on both its first receive and its replay.
+     */
+    @Test
+    void belowFloorReplayIsStillForwardedNotSkipped() {
+        ParsleyEpoch floorT1At100 = (topicId, partition) ->
+                topicId.equals(T1_ID) ? 100L : ParsleyEpoch.NO_BOUND;
+        ParsleyCausalBroadcast<String, String> causalBroadcast = causalBroadcastWithEpoch(floorT1At100);
+
+        processRecord(causalBroadcast, incomingRecord(T1, 5, ParsleyVectorClock.empty()));
+        processRecord(causalBroadcast, incomingRecord(T1, 5, ParsleyVectorClock.empty()));
+
+        assertEquals(2, forwarded.size(),
+                "a below-floor record must forward on every receive — the origin-anchored frontier is "
+                        + "not proof of delivery, and below-floor replay feeds delegate state by design");
     }
 
     /**

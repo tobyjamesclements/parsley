@@ -42,6 +42,19 @@ interface ParsleyForwardedIndex {
     List<Long> forwardedAfter(Uuid topicId, int partition, long frontierOffset);
 
     /**
+     * Returns {@code true} if {@code (topicId, partition, offset)} is currently marked — i.e. the
+     * offset was forwarded (out of order, above the contiguous frontier) and has not yet been folded
+     * into it. Together with "at or below the frontier", this is the exact membership test for "was
+     * this offset already delivered here" ({@link ParsleyChannels#alreadyDelivered}).
+     *
+     * @param topicId   the coordinate's topic UUID
+     * @param partition the coordinate's partition
+     * @param offset    the offset to test
+     * @return whether the offset is marked
+     */
+    boolean contains(Uuid topicId, int partition, long offset);
+
+    /**
      * Removes a single marked offset, once the causal-broadcast core has folded it into the contiguous frontier.
      *
      * @param topicId   the coordinate's topic UUID

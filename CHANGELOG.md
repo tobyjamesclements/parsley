@@ -6,6 +6,28 @@ All notable changes to this project are documented in this file. The format is b
 
 ## [Unreleased]
 
+### Fixed
+- **Scope-change safety: a redeploy that changes the input-topic set no longer mishandles surviving
+  causal state (#21; T3.0 attacks A5/A6).** The persisted frontier blob now records the declared
+  input set (topic name → UUID) and a **carried-ancestry clock**, both as trailing sections, so a
+  restart is distinguished from a scope change by "input set unchanged since the blob", not by blob
+  presence alone. On a shrink, a removed input's delivered ancestry — its frontier entry and its
+  channel's advertised clock — re-homes into the carried-ancestry clock that every outbound stamp
+  keeps merging: stamps still dominate the retired channel's history, where the old scope prune
+  silently dropped it (an under-claim that could reorder a third party downstream). On a growth, an
+  added input with surviving state seeds its frontier at the node's carried-ancestry value — never
+  log-start — so the prefix at or below what this node already delivered or carried is skipped, not
+  replayed as live into the surviving state (a full reset is the opt-in for processing that
+  history); a recreated input (same name, new UUID) has its old, undeliverable coordinates removed
+  outright. The receive path gains the matching skip guard: an already-delivered offset (at or below
+  the contiguous frontier, or still marked in the forwarded index) is skipped with a new
+  `replays-skipped` metric instead of being forwarded to the delegate again. The pre-start offset
+  seeder now permits the added-input redeploy — a topic this group has never committed on, while
+  another source topic is committed, seeds to log-start (the skip guard makes the replay safe);
+  every other surviving-state refusal is unchanged. Interim note, until T3.1's two-branch gate
+  lands: a downstream Parsley app that does not consume a removed topic fails fast on the re-homed
+  coordinates it now (correctly) sees in stamps — fail-closed, never out-of-order.
+
 ### Changed (internal)
 - **The L2 causal-broadcast module is named: `ParsleyEngine` becomes `ParsleyCausalBroadcast`.** Third
   structural step of the three-protocol redesign (T1.2b, decisions D5 and O4). The class is the
