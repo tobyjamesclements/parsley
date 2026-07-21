@@ -7,6 +7,22 @@ All notable changes to this project are documented in this file. The format is b
 ## [Unreleased]
 
 ### Changed
+- **The artifact now targets Java 21.** `maven.compiler.release` drops from 25 to 21: no main
+  source used a post-21 API, so the 25 floor only excluded consumers pinned to an LTS. Building
+  from source still requires JDK 25 for the Error Prone / NullAway toolchain, and the build now
+  enforces that with maven-enforcer-plugin (JDK 25+, Maven 3.9+, dependency convergence — with
+  `slf4j-api` pinned to the 2.x line over kafka-clients' 1.7.36 declaration — and duplicate
+  dependency declarations banned).
+- **The published POM is now consumer-facing, and builds are reproducible.** flatten-maven-plugin
+  rewrites the deployed POM to drop the build machinery — most importantly the Confluent
+  repository, which serves test-scope dependencies only but which every downstream build would
+  otherwise consult during resolution. A fixed `project.build.outputTimestamp` makes rebuilding a
+  tag yield byte-identical artifacts. The JMH annotation processor is scoped to test compilation
+  instead of running over main sources. The getting-started page no longer claims `kafka-streams`
+  arrives transitively — it is an optional dependency: an application using the `CausalStreams`
+  runtime declares it itself, and `CausalClock` edge stamping needs only `kafka-clients`. The
+  stale POM comment justifying the optional flag with class names deleted in the redesign is
+  rewritten against the current types.
 - **Adversarial-review follow-ups.** The strict partition-parity failure now names the
   `parsley.topology.validation=warn` opt-down for intentionally mismatched (re-keyed fan-out)
   topologies; the held-records-from-a-removed-input failure and its troubleshooting entry state

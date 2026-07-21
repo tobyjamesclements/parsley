@@ -4,6 +4,9 @@
 # Target directories
 target/
 
+# flatten-maven-plugin output (the consumer-facing POM generated on every build)
+.flattened-pom.xml
+
 # MkDocs build output
 site/
 

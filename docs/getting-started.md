@@ -2,7 +2,8 @@
 
 ## Prerequisites
 
-- Java 25 (`--release 25`)
+- Java 21 or later (the artifact is compiled with `--release 21`; building Parsley from source
+  needs JDK 25)
 - Maven 3.9 or later, or the included `./mvnw` wrapper
 
 ## Installation
@@ -32,7 +33,10 @@ the dependency in your `pom.xml`.
 Once a tagged `0.1.0` release ships, this repository block is no longer needed, because Central's
 default repository, which is already in every Maven setup, covers real releases.
 
-`parsley` pulls in `kafka-streams` and `kafka-clients` transitively.
+`parsley` pulls in `kafka-clients` transitively. `kafka-streams` is an optional dependency and does
+not arrive transitively: an application using the `CausalStreams` runtime declares `kafka-streams`
+itself (a Kafka Streams application already does), while edge stamping with `CausalClock` needs only
+`kafka-clients`.
 
 ## Ordering records causally
 

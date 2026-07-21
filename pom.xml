@@ -55,7 +55,13 @@
         <kafka.version>4.3.1</kafka.version>
         <confluent.version>8.3.0</confluent.version>
         <avro.version>1.12.1</avro.version>
-        <maven.compiler.release>25</maven.compiler.release>
+        <!-- Bytecode targets the current LTS so 21-based consumers can depend on the artifact; the
+             build itself still requires JDK 25 (enforced below) because the Error Prone / NullAway
+             toolchain is configured for it. -->
+        <maven.compiler.release>21</maven.compiler.release>
+        <!-- Reproducible builds: a fixed timestamp for archive entries so rebuilding the same tag
+             yields byte-identical artifacts. Bump alongside the version on each release. -->
+        <project.build.outputTimestamp>2026-07-21T00:00:00Z</project.build.outputTimestamp>
         <jspecify.version>1.0.0</jspecify.version>
         <!-- NullAway 0.13.7 requires Error Prone >= 2.50.0; both run on JDK 25. -->
         <errorprone.version>2.50.0</errorprone.version>
@@ -78,6 +84,14 @@
                 <type>pom</type>
                 <scope>import</scope>
             </dependency>
+            <!-- kafka-clients still declares slf4j-api 1.7.36; pin the whole graph to the 2.x API
+                 this project compiles against (the enforcer's dependencyConvergence rule keeps
+                 this honest). -->
+            <dependency>
+                <groupId>org.slf4j</groupId>
+                <artifactId>slf4j-api</artifactId>
+                <version>2.0.18</version>
+            </dependency>
         </dependencies>
     </dependencyManagement>
 
@@ -94,8 +108,10 @@
             <artifactId>kafka-clients</artifactId>
             <version>${kafka.version}</version>
         </dependency>
-        <!-- Optional: only CausalConsumer and CausalProcessorSupplier users need this at runtime.
-             Producer-only dependents should not receive it transitively. -->
+        <!-- Optional: only the Streams runtime (CausalStreamsBuilder / CausalTopology /
+             CausalStreams) touches kafka-streams, and a Streams application already declares it
+             itself. Edge stamping via CausalClock needs only kafka-clients, so producer-only
+             dependents should not receive kafka-streams transitively. -->
         <dependency>
             <groupId>org.apache.kafka</groupId>
             <artifactId>kafka-streams</artifactId>
@@ -333,28 +349,26 @@
                 <configuration>
                     <proc>full</proc>
                     <fork>true</fork>
-                    <annotationProcessorPaths>
-                        <path>
-                            <groupId>org.openjdk.jmh</groupId>
-                            <artifactId>jmh-generator-annprocess</artifactId>
-                            <version>1.37</version>
-                        </path>
-                        <path>
-                            <groupId>com.google.errorprone</groupId>
-                            <artifactId>error_prone_core</artifactId>
-                            <version>${errorprone.version}</version>
-                        </path>
-                        <path>
-                            <groupId>com.uber.nullaway</groupId>
-                            <artifactId>nullaway</artifactId>
-                            <version>${nullaway.version}</version>
-                        </path>
-                    </annotationProcessorPaths>
                 </configuration>
                 <executions>
                     <execution>
                         <id>default-compile</id>
                         <configuration>
+                            <!-- Main sources need only the Error Prone / NullAway stack; the JMH
+                                 annotation processor is test-only (benchmarks live in src/test) and
+                                 is listed on the default-testCompile execution below. -->
+                            <annotationProcessorPaths>
+                                <path>
+                                    <groupId>com.google.errorprone</groupId>
+                                    <artifactId>error_prone_core</artifactId>
+                                    <version>${errorprone.version}</version>
+                                </path>
+                                <path>
+                                    <groupId>com.uber.nullaway</groupId>
+                                    <artifactId>nullaway</artifactId>
+                                    <version>${nullaway.version}</version>
+                                </path>
+                            </annotationProcessorPaths>
                             <compilerArgs>
                                 <arg>-XDcompilePolicy=simple</arg>
                                 <arg>--should-stop=ifError=FLOW</arg>
@@ -375,6 +389,23 @@
                     <execution>
                         <id>default-testCompile</id>
                         <configuration>
+                            <annotationProcessorPaths>
+                                <path>
+                                    <groupId>org.openjdk.jmh</groupId>
+                                    <artifactId>jmh-generator-annprocess</artifactId>
+                                    <version>1.37</version>
+                                </path>
+                                <path>
+                                    <groupId>com.google.errorprone</groupId>
+                                    <artifactId>error_prone_core</artifactId>
+                                    <version>${errorprone.version}</version>
+                                </path>
+                                <path>
+                                    <groupId>com.uber.nullaway</groupId>
+                                    <artifactId>nullaway</artifactId>
+                                    <version>${nullaway.version}</version>
+                                </path>
+                            </annotationProcessorPaths>
                             <compilerArgs>
                                 <arg>-XDcompilePolicy=simple</arg>
                                 <arg>--should-stop=ifError=FLOW</arg>
@@ -527,6 +558,69 @@
                             <goal>integration-test</goal>
                             <goal>verify</goal>
                         </goals>
+                    </execution>
+                </executions>
+            </plugin>
+            <!-- Rewrites the POM that ships with the artifact into a consumer-facing one: the ossrh
+                 mode keeps the Central-required metadata (name, description, url, licenses,
+                 developers, scm) and drops everything build-only — critically the <repositories>
+                 block above, which would otherwise make every downstream build consult the
+                 Confluent repository during resolution. -->
+            <plugin>
+                <groupId>org.codehaus.mojo</groupId>
+                <artifactId>flatten-maven-plugin</artifactId>
+                <version>1.7.1</version>
+                <configuration>
+                    <flattenMode>ossrh</flattenMode>
+                    <pomElements>
+                        <!-- ossrh mode keeps <repositories> by default; the Confluent repository
+                             serves test-scope dependencies only, so consumers must not inherit it. -->
+                        <repositories>remove</repositories>
+                    </pomElements>
+                </configuration>
+                <executions>
+                    <execution>
+                        <id>flatten</id>
+                        <phase>process-resources</phase>
+                        <goals>
+                            <goal>flatten</goal>
+                        </goals>
+                    </execution>
+                    <execution>
+                        <id>flatten-clean</id>
+                        <phase>clean</phase>
+                        <goals>
+                            <goal>clean</goal>
+                        </goals>
+                    </execution>
+                </executions>
+            </plugin>
+            <!-- Build-environment gates. requireJavaVersion pins the *build* JDK (the Error Prone /
+                 NullAway toolchain above is configured for 25) even though the artifact targets
+                 release 21; dependencyConvergence institutionalises the Jackson BOM fix above by
+                 failing the build if transitive versions ever diverge again. -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-enforcer-plugin</artifactId>
+                <version>3.5.0</version>
+                <executions>
+                    <execution>
+                        <id>enforce-build-environment</id>
+                        <goals>
+                            <goal>enforce</goal>
+                        </goals>
+                        <configuration>
+                            <rules>
+                                <requireMavenVersion>
+                                    <version>[3.9,)</version>
+                                </requireMavenVersion>
+                                <requireJavaVersion>
+                                    <version>[25,)</version>
+                                </requireJavaVersion>
+                                <dependencyConvergence/>
+                                <banDuplicatePomDependencyVersions/>
+                            </rules>
+                        </configuration>
                     </execution>
                 </executions>
             </plugin>

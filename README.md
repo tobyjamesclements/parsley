@@ -28,7 +28,7 @@ suite that exercises it under crashes, rebalances, and partitions lands in 1.0. 
 have no upgrade path between versions: upgrading is a fresh start (new state, new offsets), because
 wire formats and the public API change without compatibility aliases until 1.0.
 
-Requires Java 25. Build from source with `./mvnw install`.
+Requires Java 21 or later. Building from source needs JDK 25; build with `./mvnw install`.
 
 ## Docs
 
