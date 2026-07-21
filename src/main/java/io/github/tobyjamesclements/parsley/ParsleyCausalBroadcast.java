@@ -230,7 +230,9 @@ final class ParsleyCausalBroadcast<K, V> {
                     + "declared (records per topic: " + outOfScope + "). They can neither be "
                     + "delivered (no registered source) nor silently discarded (fail-closed). "
                     + "Either redeclare the input topic(s) so the held records drain through "
-                    + "ordinary causal delivery, or perform a full application reset.");
+                    + "ordinary causal delivery (if a topic was also deleted, redeclaring its "
+                    + "recreated successor purges the held records as destroyed history instead), "
+                    + "or perform a full application reset.");
         }
         if (!purgedCoordinates.isEmpty()) {
             log.info("Purged {} held record(s) produced by destroyed source incarnation(s) — the "

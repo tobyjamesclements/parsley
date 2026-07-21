@@ -305,10 +305,9 @@ final class ParsleyChannels {
      * (acks arrive keyed by topic name; the clock is keyed by UUID identity, E1). Called once at
      * init by {@code ParsleyProcessor}; never called for test-fixture instances, whose
      * {@code ownOutputs} then advances only through direct {@link #acknowledge} calls. Sink
-     * resolution is strict at init (an unresolvable sink fails init), so {@code sinkTopicIds}
-     * always covers every sink this stage declares; an acked topic without a translation belongs
-     * to another stage sharing the application-wide registry, and its acks fold in that stage's
-     * own tasks.
+     * resolution is strict at init (an unresolvable sink fails init) and a topology is exactly one
+     * stage, so {@code sinkTopicIds} always covers every topic the registry tracks — the ack
+     * fold's missing-translation skip is a defensive guard, not a load-bearing filter.
      *
      * @param source                the acked-offsets view {@link #foldAcknowledgedOutputs()} drains
      * @param pendingSends          the pending-send view {@link #awaitOwnOutputQuiescence} waits on
@@ -598,11 +597,10 @@ final class ParsleyChannels {
     }
 
     /**
-     * Records the currently declared (resolved) sink set and persists, so the next init can heal
-     * exactly the coordinates whose acks may have trailed this run's final transaction. Called once
-     * at init, after the previous declaration has been read and healed. A sink that failed
-     * best-effort UUID resolution this run is absent — its acks are not tracked this run either,
-     * so there is nothing new to heal next time beyond what this call's absent entry already says.
+     * Records the currently declared sink set and persists, so the next init can heal exactly the
+     * coordinates whose acks may have trailed this run's final transaction. Called once at init,
+     * after the previous declaration has been read and healed. Sink resolution is strict at init
+     * (an unresolvable sink fails init), so this always records the full declared set.
      */
     void declareSinks(Map<String, Uuid> currentSinks) {
         declaredSinks.clear();

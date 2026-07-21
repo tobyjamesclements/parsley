@@ -7,6 +7,15 @@ All notable changes to this project are documented in this file. The format is b
 ## [Unreleased]
 
 ### Changed
+- **Adversarial-review follow-ups.** The strict partition-parity failure now names the
+  `parsley.topology.validation=warn` opt-down for intentionally mismatched (re-keyed fan-out)
+  topologies; the held-records-from-a-removed-input failure and its troubleshooting entry state
+  what happens when the removed topic was also deleted (redeclaring the recreated successor purges
+  the records as destroyed history rather than draining them); two Javadoc leftovers from the
+  strict-sink-resolution change are corrected (`declareSinks` no longer describes best-effort
+  resolution, and the ack fold's missing-translation skip is documented as a defensive guard, not
+  a multi-stage filter — a topology is exactly one stage); and the `delivery.timeout.ms`
+  resolution's happy paths are pinned directly.
 - **Hygiene sweep.** `CausalStreams` now works on a copy of the caller's `Properties`, so
   constructing two instances from one object can no longer duplicate the producer-interceptor
   entry or cross-wire registry ids. Test-only machinery left main: `ParsleyCausalBroadcast` keeps
@@ -33,7 +42,8 @@ All notable changes to this project are documented in this file. The format is b
   source into a wider, re-keyed sink) must now set `warn` explicitly. Also strict:
   a malformed `delivery.timeout.ms` override now fails startup naming the key and value instead of
   silently falling back to 120 s — it bounds the crossing wait and the stall diagnostic, so a typo
-  must not quietly become the default (an absent key still defaults to Kafka's 120 s). Kafka
+  must not quietly become the default (an absent key still defaults to Kafka's 120 s).
+- **Null messages carry the triggering record's timestamp instead of the wall clock.** Kafka
   Streams advances downstream stream time from every polled record's timestamp before any
   processor classifies it, so a wall-clock-stamped null message emitted during a reprocessing run
   over historic event times yanked downstream delegates' windows, grace periods, and suppressions
@@ -45,6 +55,7 @@ All notable changes to this project are documented in this file. The format is b
   which retention on causal topics must already cover (E2's existing sizing constraint), and an
   undersized retention now fails as `AutoOffsetReset.none()`'s loud stall rather than silent
   event-time corruption.
+- **Restored held records whose source topic left scope get an explicit disposition at startup.**
   Previously a supported redeploy could strand them: a held record from a removed input crashed
   the task on an untyped serde error at every restart (recoverable only by a full reset), or hung
   `close()` forever if its dependencies never resolved, and a held record from a recreated input's

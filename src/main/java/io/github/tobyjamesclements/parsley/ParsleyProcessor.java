@@ -1032,7 +1032,9 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
                 + "; co-partitioning requires an equal partition count across all causally-related "
                 + "topics so each task owns the complete partition set for a related group";
         if (mode == ParsleyConfig.ValidationMode.STRICT) {
-            throw new IllegalStateException("parsley.topology.validation=strict: " + detail);
+            throw new IllegalStateException("parsley.topology.validation=strict: " + detail
+                    + ". An intentionally mismatched topology (e.g. fanning a source into a wider, "
+                    + "re-keyed sink) opts down with parsley.topology.validation=warn.");
         }
         log.warn("parsley.topology.validation=warn: {}", detail);
     }
@@ -1040,9 +1042,10 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
     /**
      * The effective producer {@code delivery.timeout.ms}: the {@code producer.}-prefixed override
      * wins, then the un-prefixed client config Streams also passes through, then Kafka's default.
-     * See the {@link #deliveryTimeoutMs} field for the two uses (crossing-wait bound, A9 threshold).
+     * See the {@link #deliveryTimeoutMs} field for the two uses (crossing-wait bound, A9
+     * threshold). Package-private so the resolution branches are pinned directly.
      */
-    private static long deliveryTimeoutMs(Map<String, Object> appConfigs) {
+    static long deliveryTimeoutMs(Map<String, Object> appConfigs) {
         Object configured = appConfigs.get("producer." + ProducerConfig.DELIVERY_TIMEOUT_MS_CONFIG);
         if (configured == null) {
             configured = appConfigs.get(ProducerConfig.DELIVERY_TIMEOUT_MS_CONFIG);

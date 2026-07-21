@@ -133,7 +133,9 @@ causal delivery, or perform a full application reset.
 The two remedies are exactly those: add the topic back to the stage's declared inputs and start —
 the held records restore, their dependencies resolve, and they drain through ordinary causal
 delivery, after which the input can be removed again in a later, quiescent redeploy — or perform a
-full application reset and accept the loss of the held records. Removing an input is safest when
+full application reset and accept the loss of the held records. If the topic itself was also
+deleted, redeclaring its recreated successor purges the held records as destroyed history at the
+next start (the recreation case below) rather than draining them. Removing an input is safest when
 the stage is quiescent (no held records from it), which the previous run's `buffer-depth` gauge
 shows.
 

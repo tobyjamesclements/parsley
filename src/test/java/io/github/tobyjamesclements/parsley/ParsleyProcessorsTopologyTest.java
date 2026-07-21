@@ -1638,6 +1638,30 @@ class ParsleyProcessorsTopologyTest {
     }
 
     /**
+     * The {@code delivery.timeout.ms} resolution's happy paths, pinned directly (the value bounds
+     * the crossing wait and is the stall-diagnostic threshold): a {@code producer.}-prefixed
+     * override wins whether it arrives as a {@link Number} or a numeric string, the un-prefixed
+     * client key Streams passes through is honoured next, and an absent key resolves to Kafka's
+     * 120 s default.
+     *
+     * Asserts each source of the value resolves to exactly the configured milliseconds.
+     */
+    @Test
+    void deliveryTimeoutResolutionHonoursOverridesAndDefaults() {
+        assertEquals(45_000L, ParsleyProcessor.deliveryTimeoutMs(
+                        Map.of("producer.delivery.timeout.ms", 45_000)),
+                "a Number-typed producer.-prefixed override must win");
+        assertEquals(45_000L, ParsleyProcessor.deliveryTimeoutMs(
+                        Map.of("producer.delivery.timeout.ms", " 45000 ")),
+                "a numeric-string producer.-prefixed override must parse (trimmed)");
+        assertEquals(30_000L, ParsleyProcessor.deliveryTimeoutMs(
+                        Map.of("delivery.timeout.ms", "30000")),
+                "the un-prefixed client key Streams passes through must be honoured");
+        assertEquals(120_000L, ParsleyProcessor.deliveryTimeoutMs(Map.of()),
+                "an absent key must resolve to Kafka's 120 s default");
+    }
+
+    /**
      * Under {@code parsley.topology.validation=strict}, causal input topics with mismatched partition
      * counts fail startup fast, since co-partitioning is impossible and the completeness frontier
      * would evaluate against an incomplete partition set.
