@@ -76,6 +76,16 @@
  *       coordinate.</li>
  * </ul>
  *
+ * <h2>Naming convention</h2>
+ * Every public type is named {@code Causal*}; the one exception is
+ * {@link io.github.tobyjamesclements.parsley.ParsleyOwnOutputInterceptor}, public only because Kafka
+ * instantiates producer interceptors reflectively and is not public API. Package-private machinery
+ * is named {@code Parsley*}, except implementations of a {@code Parsley*} seam interface, which are
+ * named for their backing: {@code KafkaTopics} implements {@code ParsleyTopics}, and
+ * {@code StoreBackedBufferStore} / {@code StoreBackedCandidateIndex} /
+ * {@code StoreBackedForwardedIndex} implement their {@code Parsley*} store interfaces over any
+ * Kafka Streams {@code KeyValueStore}.
+ *
  * <h2>Key value types</h2>
  * <ul>
  *   <li>{@link io.github.tobyjamesclements.parsley.CausalClock} &mdash; the causal requirements stamped on a record
