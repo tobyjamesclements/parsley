@@ -61,9 +61,11 @@ is visible without breaking a deployment that already ran with the mismatch. Set
 fail the task fast instead, or `off` to skip the checks. `CausalTopology`-assembled stages also fold
 their sink topics' partition counts into the same parity check and check each sink's `cleanup.policy`
 for `compact` (a protocol null message is a null-value record wire-indistinguishable from a compaction
-tombstone). Each sink is resolved independently, so one sink that does not exist yet never masks a
-genuine misconfiguration on a different sink in the same stage, even under `strict`; both sink-side
-checks are skipped entirely (no admin round-trip) when validation is `off`. Note that a sink with
+tombstone). Each sink is checked independently, so a transient describe failure on one sink never
+masks a genuine misconfiguration on a different sink in the same stage, even under `strict`; both
+sink-side checks are skipped entirely (no admin round-trip) when validation is `off`. Sink existence
+itself is not governed by this key: a declared sink that cannot be resolved fails startup
+unconditionally, even under `off`, because own-output stamping depends on its resolved identity. Note that a sink with
 fewer partitions than a source fails protocol-marker produces at runtime (markers route to the
 task's own partition), so under `warn` a mismatched deployment crash-loops at the produce instead of
 failing at startup — `strict` surfaces it once, clearly, at init. See

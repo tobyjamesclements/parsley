@@ -7,6 +7,16 @@ All notable changes to this project are documented in this file. The format is b
 ## [Unreleased]
 
 ### Changed
+- **BREAKING: a declared sink topic must exist before the application starts.** Sink UUID and
+  end-offset resolution at startup is now strict: a sink that cannot be resolved — the topic does
+  not exist, or the admin call fails — fails startup with an `IllegalStateException` naming the
+  sink and the remedy, the same treatment inputs already get. Previously both failures logged a
+  warning and continued, which silently disabled own-output stamping for that sink for the task's
+  entire run (and, for a failed end-offset read, skipped the seed that covers the previous run's
+  final-transaction acknowledgements) — stamps then under-claimed the node's own outputs, and a
+  downstream consumer of two sinks could deliver an effect before its cause. Broker auto-creation
+  on first produce is no longer a supported path for causal sinks; create all topics, sinks
+  included, before first start.
 - **Redesign cleanup (T4.3).** Dead code left behind by the coordination-subsystem deletion is
   removed: the unused string-set wire helpers in `ParsleyByteUtils` (only the deleted epoch roster
   section read or wrote them), the unreferenced `ParsleyChannels.channelGet` accessor, the

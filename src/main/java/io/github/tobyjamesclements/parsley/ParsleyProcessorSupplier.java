@@ -278,11 +278,13 @@ final class ParsleyProcessorSupplier<KIn, VIn, KOut, VOut>
         }
 
         /**
-         * Declares the topics this stage produces. Their partition counts are folded into the startup
-         * co-partitioning check ({@code parsley.topology.validation}) alongside the registered input
-         * sources, without consuming them or resolving their UUIDs. A topic that cannot be described
-         * (e.g. a sink not yet created) is skipped rather than failing the task — unlike a registered
-         * input source, a sink is not required to exist before the stage starts.
+         * Declares the topics this stage produces. Each declared sink's UUID and end offsets are
+         * resolved strictly at init — like a registered input source, a causal sink must exist
+         * before the stage starts (they feed own-output stamping, load-bearing for causal order);
+         * an unresolvable sink fails init. Sink partition counts and cleanup policies are also
+         * folded into the startup topology lints ({@code parsley.topology.validation}), which stay
+         * best-effort per topic: a describe failure there skips that lint rather than failing the
+         * task, since lint strictness is the validation mode's call.
          * {@link CausalTopology#assemble} sets this automatically from a stage's
          * {@code CausalProcessedStream#to(...)} declarations.
          *

@@ -260,7 +260,7 @@ class ParsleyFormerSinkHealTest {
             @Override public Map<String, String> cleanupPolicies(List<String> topics) {
                 return delegate.cleanupPolicies(topics);
             }
-            @Override public Map<Integer, Long> endOffsets(String topic) {
+            @Override public Map<Integer, Long> endOffsets(String topic) throws Exception {
                 return delegate.endOffsets(topic);
             }
             @Override public void close() {}

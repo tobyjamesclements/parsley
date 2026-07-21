@@ -114,7 +114,11 @@ acknowledgements — so the module reconstructs the sender's own slot after the 
 - **The init-time end-offset seed.** The persisted `ownOutputs` can trail the final transaction's
   acknowledgements (state store caches flush before the producer flush completes acks), so at
   initialisation the clock is seeded from each sink's end offset — a deliberate over-claim on real
-  appended offsets, delay-only and therefore sound.
+  appended offsets, delay-only and therefore sound. The seed is unconditional: sink resolution is
+  strict at initialisation, so a declared sink whose UUID or end offsets cannot be resolved fails
+  init loudly rather than starting with the seed and the acknowledgement fold silently off — which
+  would under-claim the node's own outputs for the task's whole lifetime. A causal sink must
+  therefore exist before the application starts.
 - **The former-sink heal.** The end-offset seed covers only currently declared sinks, so the blob
   also records the declared sink set. At initialisation every previous sink that is no longer one
   is healed: end-offset acknowledgement when the topic survives under its recorded UUID, a purge

@@ -9,6 +9,12 @@ or a full application reset) rather than restarting the new version over the old
 and in-flight records. Records stamped by an older version are not readable by a newer one, and
 persisted state from an older version is not loaded. A stable upgrade path begins at 1.0.
 
+One behavioural break to note when moving a deployment forward: every declared sink topic must now
+exist before the application starts. Earlier versions logged a warning for a sink that could not be
+resolved at startup and ran without own-output tracking for it; startup now fails loudly instead,
+because the missing tracking silently weakened the causal guarantee. Create all topics — sinks
+included — as part of deployment, before the first start.
+
 ## Adopting the guarantee in an existing cluster
 
 Adopting Parsley in a cluster where some producers do not yet stamp the

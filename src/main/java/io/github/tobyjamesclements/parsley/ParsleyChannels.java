@@ -329,10 +329,11 @@ final class ParsleyChannels {
      * interceptor registry in production — together with this node's sink-name → UUID resolution
      * (acks arrive keyed by topic name; the clock is keyed by UUID identity, E1). Called once at
      * init by {@code ParsleyProcessor}; never called for in-memory/test instances, whose
-     * {@code ownOutputs} then advances only through direct {@link #acknowledge} calls. A sink
-     * whose UUID could not be resolved at init (the topic does not exist yet) is simply absent
-     * from {@code sinkTopicIds}: its acks are skipped until a restart re-resolves it — the same
-     * exposure, and the same heal, as the own-sink predicate's unresolved-sink caveat.
+     * {@code ownOutputs} then advances only through direct {@link #acknowledge} calls. Sink
+     * resolution is strict at init (an unresolvable sink fails init), so {@code sinkTopicIds}
+     * always covers every sink this stage declares; an acked topic without a translation belongs
+     * to another stage sharing the application-wide registry, and its acks fold in that stage's
+     * own tasks.
      *
      * @param source                the acked-offsets view {@link #foldAcknowledgedOutputs()} drains
      * @param pendingSends          the pending-send view {@link #awaitOwnOutputQuiescence} waits on

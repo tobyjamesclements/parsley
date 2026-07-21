@@ -39,7 +39,9 @@ default repository, which is already in every Maven setup, covers real releases.
 Parsley delivers records in causal order inside a Kafka Streams topology. Declare your topology with
 `CausalStreamsBuilder`, binding your own processor to a causal-decorated stage with `.process(...)`,
 and it holds any record whose dependencies have not yet been observed, releasing the record once the
-frontier catches up. See [Streams integration](streams.md) for the full setup.
+frontier catches up. Create every topic the topology touches — sink topics included — before the
+first start: a declared sink that does not exist fails startup, because causal stamping depends on
+its resolved identity. See [Streams integration](streams.md) for the full setup.
 
 ## Stamping causal context onto produced records
 

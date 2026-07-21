@@ -54,8 +54,14 @@ class CausalStreamsTopologyTest {
     // t1/t2 = single- and dual-source test topics; out = the sink.
     private static final Uuid T1_ID = Uuid.randomUuid();
     private static final Uuid T2_ID = Uuid.randomUuid();
+    private static final Uuid OUT_ID = Uuid.randomUuid();
+    private static final Uuid OUT_A_ID = Uuid.randomUuid();
+    private static final Uuid OUT_B_ID = Uuid.randomUuid();
 
-    private static final ParsleyTopicAdmin ADMIN = TestTopicAdmin.of(Map.of("t1", T1_ID, "t2", T2_ID));
+    // Sink resolution is strict at init (a declared sink must exist), so the shared admin resolves
+    // the sink topics the tests declare, not just the sources.
+    private static final ParsleyTopicAdmin ADMIN = TestTopicAdmin.of(Map.of(
+            "t1", T1_ID, "t2", T2_ID, "out", OUT_ID, "out-a", OUT_A_ID, "out-b", OUT_B_ID));
     private static final ParsleyTopics TOPICS = ParsleyTopics.of(Map.of("t1", T1_ID, "t2", T2_ID));
 
     private final List<String> processed = new ArrayList<>();
@@ -697,7 +703,7 @@ class CausalStreamsTopologyTest {
     @Test
     void mismatchedSinkPartitionCountFailsStartupUnderStrictValidation() throws IOException {
         ParsleyTopicAdmin mismatched = TestTopicAdmin.of(
-                Map.of("t1", T1_ID), Map.of("t1", 2, "out", 3));
+                Map.of("t1", T1_ID, "out", OUT_ID), Map.of("t1", 2, "out", 3));
         CausalStreamsBuilder builder = new CausalStreamsBuilder();
         builder.stream("t1", Serdes.String(), Serdes.String())
                 .process(upperCaser())
@@ -722,7 +728,7 @@ class CausalStreamsTopologyTest {
     @Test
     void mismatchedSinkPartitionCountWarnsButStartsUnderDefaultValidation() {
         ParsleyTopicAdmin mismatched = TestTopicAdmin.of(
-                Map.of("t1", T1_ID), Map.of("t1", 2, "out", 3));
+                Map.of("t1", T1_ID, "out", OUT_ID), Map.of("t1", 2, "out", 3));
         CausalStreamsBuilder builder = new CausalStreamsBuilder();
         builder.stream("t1", Serdes.String(), Serdes.String())
                 .process(upperCaser())
@@ -738,16 +744,20 @@ class CausalStreamsTopologyTest {
     }
 
     /**
-     * A sink topic whose partition count cannot be resolved (e.g. not yet created) is skipped for
-     * the co-partitioning check rather than failing the task — unlike a registered input buffer, a
-     * sink is not required to exist before the stage starts, even under strict validation.
+     * A sink topic whose partition count cannot be described (a transient admin failure) is skipped
+     * for the co-partitioning check rather than failing the task, even under strict validation: the
+     * lints are per-topic best-effort, their strictness governed by {@code
+     * parsley.topology.validation}. Sink identity itself is not — the sink's UUID and end offsets
+     * still resolve here, and an unresolvable sink fails init regardless of validation mode (see
+     * the strict-sink-resolution tests below).
      *
      * Asserts the topology constructs and processes normally under strict validation despite the
-     * sink's partition count being unresolvable.
+     * sink's partition count being undescribable.
      */
     @Test
-    void unresolvableSinkPartitionCountIsSkippedEvenUnderStrictValidation() {
-        ParsleyTopicAdmin admin = FlakySinkAdmin.withUnresolvable(Map.of("t1", T1_ID), Set.of("out"));
+    void undescribableSinkPartitionCountIsSkippedEvenUnderStrictValidation() {
+        ParsleyTopicAdmin admin = FlakySinkAdmin.withUndescribable(
+                Map.of("t1", T1_ID, "out", OUT_ID), Set.of("out"));
         CausalStreamsBuilder builder = new CausalStreamsBuilder();
         builder.stream("t1", Serdes.String(), Serdes.String())
                 .process(upperCaser())
@@ -758,7 +768,7 @@ class CausalStreamsTopologyTest {
             driver.createInputTopic("t1", new StringSerializer(), new StringSerializer())
                     .pipeInput(new TestRecord<>("k", "live", depsHeader(CausalClock.empty())));
             assertEquals(List.of("live"), processed,
-                    "an unresolvable sink partition count must be skipped, not fail even strict validation");
+                    "an undescribable sink partition count must be skipped, not fail even strict validation");
         }
     }
 
@@ -774,7 +784,7 @@ class CausalStreamsTopologyTest {
     @Test
     void compactedSinkCleanupPolicyFailsStartupUnderStrictValidation() throws IOException {
         ParsleyTopicAdmin compacted = TestTopicAdmin.of(
-                Map.of("t1", T1_ID), Map.of(), Map.of("out", "compact"));
+                Map.of("t1", T1_ID, "out", OUT_ID), Map.of(), Map.of("out", "compact"));
         CausalStreamsBuilder builder = new CausalStreamsBuilder();
         builder.stream("t1", Serdes.String(), Serdes.String())
                 .process(upperCaser())
@@ -800,7 +810,7 @@ class CausalStreamsTopologyTest {
     @Test
     void compactAndDeleteSinkCleanupPolicyFailsStartupUnderStrictValidation() throws IOException {
         ParsleyTopicAdmin compacted = TestTopicAdmin.of(
-                Map.of("t1", T1_ID), Map.of(), Map.of("out", "compact,delete"));
+                Map.of("t1", T1_ID, "out", OUT_ID), Map.of(), Map.of("out", "compact,delete"));
         CausalStreamsBuilder builder = new CausalStreamsBuilder();
         builder.stream("t1", Serdes.String(), Serdes.String())
                 .process(upperCaser())
@@ -823,7 +833,7 @@ class CausalStreamsTopologyTest {
     @Test
     void compactedSinkCleanupPolicyWarnsButStartsUnderDefaultValidation() {
         ParsleyTopicAdmin compacted = TestTopicAdmin.of(
-                Map.of("t1", T1_ID), Map.of(), Map.of("out", "compact"));
+                Map.of("t1", T1_ID, "out", OUT_ID), Map.of(), Map.of("out", "compact"));
         CausalStreamsBuilder builder = new CausalStreamsBuilder();
         builder.stream("t1", Serdes.String(), Serdes.String())
                 .process(upperCaser())
@@ -874,7 +884,7 @@ class CausalStreamsTopologyTest {
     @Test
     void compactedSourceCleanupPolicyFailsStartupEvenUnderValidationOff() throws IOException {
         ParsleyTopicAdmin compactedSource = TestTopicAdmin.of(
-                Map.of("t1", T1_ID), Map.of(), Map.of("t1", "compact"));
+                Map.of("t1", T1_ID, "out", OUT_ID), Map.of(), Map.of("t1", "compact"));
         Properties props = config();
         props.put(ParsleyConfig.TOPOLOGY_VALIDATION, "off");
         CausalStreamsBuilder builder = new CausalStreamsBuilder();
@@ -893,18 +903,19 @@ class CausalStreamsTopologyTest {
     }
 
     /**
-     * A sink whose partition count cannot be resolved must not mask a genuine partition-count
+     * A sink whose partition count cannot be described must not mask a genuine partition-count
      * mismatch on a DIFFERENT sink in the same stage: each sink is checked independently, so one
-     * not-yet-created sink cannot hide another sink's real misconfiguration, even under strict
-     * validation.
+     * sink's transient describe failure cannot hide another sink's real misconfiguration, even
+     * under strict validation.
      *
      * Asserts driver construction still throws for {@code out-a}'s mismatch despite {@code out-b}
-     * being unresolvable.
+     * being undescribable.
      */
     @Test
-    void unresolvableSinkDoesNotMaskAPartitionMismatchOnAnotherSink() throws IOException {
+    void undescribableSinkDoesNotMaskAPartitionMismatchOnAnotherSink() throws IOException {
         ParsleyTopicAdmin admin = new FlakySinkAdmin(
-                Map.of("t1", T1_ID), Map.of("t1", 2, "out-a", 3), Map.of(), Set.of("out-b"));
+                Map.of("t1", T1_ID, "out-a", OUT_A_ID, "out-b", OUT_B_ID),
+                Map.of("t1", 2, "out-a", 3), Map.of(), Set.of("out-b"));
         CausalStreamsBuilder builder = new CausalStreamsBuilder();
         builder.stream("t1", Serdes.String(), Serdes.String())
                 .process(upperCaser())
@@ -914,23 +925,24 @@ class CausalStreamsTopologyTest {
 
         StreamsException thrown = assertThrows(StreamsException.class,
                 () -> new TopologyTestDriver(topology, config(tempStateDir())),
-                "strict validation must still catch out-a's mismatch despite out-b being unresolvable");
+                "strict validation must still catch out-a's mismatch despite out-b being undescribable");
         assertTrue(thrown.getCause().getMessage().contains("mismatched partition counts"),
                 "the message must name the mismatch: " + thrown.getCause().getMessage());
     }
 
     /**
-     * A sink whose cleanup.policy cannot be resolved must not mask a genuine {@code compact} policy
+     * A sink whose cleanup.policy cannot be described must not mask a genuine {@code compact} policy
      * on a DIFFERENT sink in the same stage — the same independent-per-sink guarantee as partition
      * counts, for the cleanup-policy check.
      *
      * Asserts driver construction still throws for {@code out-a}'s compact policy despite
-     * {@code out-b} being unresolvable.
+     * {@code out-b} being undescribable.
      */
     @Test
-    void unresolvableSinkDoesNotMaskACompactPolicyOnAnotherSink() throws IOException {
+    void undescribableSinkDoesNotMaskACompactPolicyOnAnotherSink() throws IOException {
         ParsleyTopicAdmin admin = new FlakySinkAdmin(
-                Map.of("t1", T1_ID), Map.of(), Map.of("out-a", "compact"), Set.of("out-b"));
+                Map.of("t1", T1_ID, "out-a", OUT_A_ID, "out-b", OUT_B_ID),
+                Map.of(), Map.of("out-a", "compact"), Set.of("out-b"));
         CausalStreamsBuilder builder = new CausalStreamsBuilder();
         builder.stream("t1", Serdes.String(), Serdes.String())
                 .process(upperCaser())
@@ -940,7 +952,7 @@ class CausalStreamsTopologyTest {
 
         StreamsException thrown = assertThrows(StreamsException.class,
                 () -> new TopologyTestDriver(topology, config(tempStateDir())),
-                "strict validation must still catch out-a's compact policy despite out-b being unresolvable");
+                "strict validation must still catch out-a's compact policy despite out-b being undescribable");
         assertTrue(thrown.getCause().getMessage().contains("cleanup.policy=compact"),
                 "the message must name out-a's policy: " + thrown.getCause().getMessage());
     }
@@ -949,11 +961,12 @@ class CausalStreamsTopologyTest {
      * Under {@code parsley.topology.validation=off}, sink validation must not even attempt the admin
      * round-trips for partition counts or cleanup policies — not merely discard their results.
      *
-     * Asserts a sink admin that fails every call is never actually invoked when validation is off.
+     * Asserts a counting sink admin records zero lint round-trips when validation is off.
      */
     @Test
     void validationOffNeverCallsTheSinkAdminAtAll() {
-        CountingSinkAdmin admin = new CountingSinkAdmin(Map.of("t1", T1_ID));
+        CountingSinkAdmin admin = new CountingSinkAdmin(
+                Map.of("t1", T1_ID, "out", OUT_ID), Set.of("t1"));
         Properties props = config();
         props.put(ParsleyConfig.TOPOLOGY_VALIDATION, "off");
         CausalStreamsBuilder builder = new CausalStreamsBuilder();
@@ -968,6 +981,88 @@ class CausalStreamsTopologyTest {
             assertEquals(0, admin.sinkPartitionCountCalls, "off must skip the sink partition-count admin call entirely");
             assertEquals(0, admin.sinkCleanupPolicyCalls, "off must skip the sink cleanup-policy admin call entirely");
         }
+    }
+
+    // --- strict sink resolution at init (R1: sinks must exist at startup) ----------------------
+
+    /**
+     * A declared sink whose UUID lookup fails at init — the topic does not exist, or the admin
+     * call fails — fails init loudly instead of silently disabling own-output tracking for the
+     * task's lifetime: an unresolved sink would drop every acknowledgement fold for it, so stamps
+     * would under-claim this node's own outputs and a downstream consumer could deliver an effect
+     * before its cause. Not gated by {@code parsley.topology.validation}.
+     *
+     * Asserts driver construction throws, with an {@link IllegalStateException} in the chain
+     * naming the sink and the sinks-must-exist remedy.
+     */
+    @Test
+    void aSinkWhoseUuidLookupFailsFailsInitNamingTheSink() throws IOException {
+        ParsleyTopicAdmin admin = TestTopicAdmin.of(Map.of("t1", T1_ID));
+        CausalStreamsBuilder builder = new CausalStreamsBuilder();
+        builder.stream("t1", Serdes.String(), Serdes.String())
+                .process(upperCaser())
+                .to("out-sink", "out", Serdes.String(), Serdes.String());
+        Topology topology = assemble(builder, admin);
+
+        StreamsException thrown = assertThrows(StreamsException.class,
+                () -> new TopologyTestDriver(topology, config(tempStateDir())),
+                "a declared sink that cannot be resolved must fail init, not start with own-output "
+                        + "tracking silently off");
+        assertTrue(thrown.getCause().getMessage().contains("declared sink topic 'out'"),
+                "the failure must name the unresolvable sink: " + thrown.getCause().getMessage());
+        assertTrue(thrown.getCause().getMessage().contains("must exist before the stage starts"),
+                "the failure must state the sinks-must-exist rule: " + thrown.getCause().getMessage());
+    }
+
+    /**
+     * The broker answering the sink lookup without a UUID (no exception, no id — e.g. a describe
+     * response missing the topic) is the same failure as a thrown lookup: the sink is unresolved,
+     * so init must fail rather than proceed without own-output tracking for it.
+     *
+     * Asserts driver construction throws naming the sink.
+     */
+    @Test
+    void aSinkResolvedWithoutAUuidFailsInitNamingTheSink() throws IOException {
+        ParsleyTopicAdmin admin = FlakySinkAdmin.withUndescribable(Map.of("t1", T1_ID), Set.of());
+        CausalStreamsBuilder builder = new CausalStreamsBuilder();
+        builder.stream("t1", Serdes.String(), Serdes.String())
+                .process(upperCaser())
+                .to("out-sink", "out", Serdes.String(), Serdes.String());
+        Topology topology = assemble(builder, admin);
+
+        StreamsException thrown = assertThrows(StreamsException.class,
+                () -> new TopologyTestDriver(topology, config(tempStateDir())),
+                "a sink the broker answered without a UUID must fail init like a thrown lookup");
+        assertTrue(thrown.getCause().getMessage().contains("declared sink topic 'out'"),
+                "the failure must name the unresolved sink: " + thrown.getCause().getMessage());
+    }
+
+    /**
+     * A declared sink whose end offsets cannot be read at init fails init loudly instead of
+     * skipping the {@code ownOutputs} seed: the persisted clock deliberately trails the previous
+     * run's final-transaction acks, and only the end-offset seed heals that window — live acks
+     * never cover it — so starting unseeded could stamp under-claims of the node's own
+     * last-transaction outputs.
+     *
+     * Asserts driver construction throws, with an {@link IllegalStateException} in the chain
+     * naming the sink and the seed.
+     */
+    @Test
+    void aSinkWhoseEndOffsetsCannotBeReadFailsInit() throws IOException {
+        ParsleyTopicAdmin admin = TestTopicAdmin.of(Map.of("t1", T1_ID, "out", OUT_ID))
+                .withFailingEndOffsets(Set.of("out"));
+        CausalStreamsBuilder builder = new CausalStreamsBuilder();
+        builder.stream("t1", Serdes.String(), Serdes.String())
+                .process(upperCaser())
+                .to("out-sink", "out", Serdes.String(), Serdes.String());
+        Topology topology = assemble(builder, admin);
+
+        StreamsException thrown = assertThrows(StreamsException.class,
+                () -> new TopologyTestDriver(topology, config(tempStateDir())),
+                "a failed sink end-offset read must fail init — the ownOutputs seed cannot be skipped");
+        assertTrue(thrown.getCause().getMessage().contains("end offsets for declared sink topic 'out'"),
+                "the failure must name the sink whose end offsets failed: "
+                        + thrown.getCause().getMessage());
     }
 
     /**
@@ -1158,31 +1253,34 @@ class CausalStreamsTopologyTest {
     }
 
     /**
-     * A {@link ParsleyTopicAdmin} test double that resolves the given topic UUIDs and reports the
+     * A {@link ParsleyTopicAdmin} test double that resolves the given topic UUIDs ({@code null} for
+     * a topic absent from the map — the broker answered, but knows no such topic) and reports the
      * given per-topic partition counts (default 1) and cleanup policies (default {@code "delete"}),
      * but throws when {@code partitionCounts}/{@code cleanupPolicies} is asked about any topic in
-     * {@code unresolvableTopics} — simulating a sink that does not exist yet. Unlike
+     * {@code undescribableTopics} — simulating a transient describe failure against a sink. Unlike
      * {@link TestTopicAdmin}, this throws <strong>per call</strong> if ANY requested topic is
-     * unresolvable (matching the real {@code Admin}'s all-or-nothing batch behaviour), which is what
-     * exercises {@link ParsleyProcessor}'s per-topic resolution of sink checks.
+     * undescribable (matching the real {@code Admin}'s all-or-nothing batch behaviour), which is what
+     * exercises {@link ParsleyProcessor}'s per-topic resolution of the sink lints. {@code endOffsets}
+     * always succeeds (an empty topic), so init's strict sink resolution passes for any sink whose
+     * UUID is in {@code topicIds}.
      */
     private static final class FlakySinkAdmin implements ParsleyTopicAdmin {
 
         private final Map<String, Uuid> topicIds;
         private final Map<String, Integer> partitionCounts;
         private final Map<String, String> cleanupPolicies;
-        private final Set<String> unresolvableTopics;
+        private final Set<String> undescribableTopics;
 
         FlakySinkAdmin(Map<String, Uuid> topicIds, Map<String, Integer> partitionCounts,
-                Map<String, String> cleanupPolicies, Set<String> unresolvableTopics) {
+                Map<String, String> cleanupPolicies, Set<String> undescribableTopics) {
             this.topicIds = topicIds;
             this.partitionCounts = partitionCounts;
             this.cleanupPolicies = cleanupPolicies;
-            this.unresolvableTopics = unresolvableTopics;
+            this.undescribableTopics = undescribableTopics;
         }
 
-        static FlakySinkAdmin withUnresolvable(Map<String, Uuid> topicIds, Set<String> unresolvableTopics) {
-            return new FlakySinkAdmin(topicIds, Map.of(), Map.of(), unresolvableTopics);
+        static FlakySinkAdmin withUndescribable(Map<String, Uuid> topicIds, Set<String> undescribableTopics) {
+            return new FlakySinkAdmin(topicIds, Map.of(), Map.of(), undescribableTopics);
         }
 
         @Override
@@ -1194,7 +1292,7 @@ class CausalStreamsTopologyTest {
 
         @Override
         public Map<String, Integer> partitionCounts(List<String> topics) throws Exception {
-            failIfAnyUnresolvable(topics);
+            failIfAnyUndescribable(topics);
             Map<String, Integer> counts = new HashMap<>();
             topics.forEach(t -> counts.put(t, partitionCounts.getOrDefault(t, 1)));
             return counts;
@@ -1202,23 +1300,22 @@ class CausalStreamsTopologyTest {
 
         @Override
         public Map<String, String> cleanupPolicies(List<String> topics) throws Exception {
-            failIfAnyUnresolvable(topics);
+            failIfAnyUndescribable(topics);
             Map<String, String> policies = new HashMap<>();
             topics.forEach(t -> policies.put(t, cleanupPolicies.getOrDefault(t, "delete")));
             return policies;
         }
 
-        private void failIfAnyUnresolvable(List<String> topics) throws Exception {
+        private void failIfAnyUndescribable(List<String> topics) throws Exception {
             for (String topic : topics) {
-                if (unresolvableTopics.contains(topic)) {
-                    throw new Exception("topic '" + topic + "' does not exist");
+                if (undescribableTopics.contains(topic)) {
+                    throw new Exception("transient describe failure for topic '" + topic + "'");
                 }
             }
         }
 
         @Override
-        public Map<Integer, Long> endOffsets(String topic) throws Exception {
-            failIfAnyUnresolvable(List.of(topic));
+        public Map<Integer, Long> endOffsets(String topic) {
             return Map.of();
         }
 
@@ -1229,20 +1326,23 @@ class CausalStreamsTopologyTest {
     }
 
     /**
-     * A {@link ParsleyTopicAdmin} test double that resolves the given (input) topic UUIDs and counts
-     * how many times it is asked for a SINK's partition count or cleanup.policy — i.e. any
-     * {@code partitionCounts}/{@code cleanupPolicies} call whose topics are not all known input
-     * topics. Used to prove {@code parsley.topology.validation=off} skips the sink admin round-trips
-     * entirely, not merely discards their results.
+     * A {@link ParsleyTopicAdmin} test double that resolves the given topic UUIDs (inputs and
+     * sinks — strict sink resolution needs the sinks resolvable even under validation {@code off})
+     * and counts how many times it is asked for a SINK's partition count or cleanup.policy — i.e.
+     * any {@code partitionCounts}/{@code cleanupPolicies} call whose topics are not all in
+     * {@code inputTopics}. Used to prove {@code parsley.topology.validation=off} skips the sink
+     * lint round-trips entirely, not merely discards their results.
      */
     private static final class CountingSinkAdmin implements ParsleyTopicAdmin {
 
         private final Map<String, Uuid> topicIds;
+        private final Set<String> inputTopics;
         int sinkPartitionCountCalls = 0;
         int sinkCleanupPolicyCalls = 0;
 
-        CountingSinkAdmin(Map<String, Uuid> topicIds) {
+        CountingSinkAdmin(Map<String, Uuid> topicIds, Set<String> inputTopics) {
             this.topicIds = topicIds;
+            this.inputTopics = inputTopics;
         }
 
         @Override
@@ -1254,7 +1354,7 @@ class CausalStreamsTopologyTest {
 
         @Override
         public Map<String, Integer> partitionCounts(List<String> topics) {
-            if (!topicIds.keySet().containsAll(topics)) {
+            if (!inputTopics.containsAll(topics)) {
                 sinkPartitionCountCalls++;
             }
             Map<String, Integer> counts = new HashMap<>();
@@ -1267,7 +1367,7 @@ class CausalStreamsTopologyTest {
             // cleanupPolicies is called for source topics too now (the unconditional compacted-source
             // guard), so — mirroring partitionCounts above — only a call whose topics are not all known
             // inputs is a sink-validation call; the source guard's call over the inputs is not counted.
-            if (!topicIds.keySet().containsAll(topics)) {
+            if (!inputTopics.containsAll(topics)) {
                 sinkCleanupPolicyCalls++;
             }
             Map<String, String> policies = new HashMap<>();

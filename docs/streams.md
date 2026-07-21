@@ -108,9 +108,12 @@ you make independently of the causal guarantee, it is required by it.
 `parsley.topology.validation` controls how a causal processor reacts at startup to a detectable
 topology misconfiguration: the causal topics not sharing a partition count, and, for a stage's sink
 topics, a `cleanup.policy` that includes `compact`. The default `warn` logs a mismatch and continues,
-`strict` fails the task fast, and `off` disables the checks. Each sink is resolved independently, so
-one sink that does not exist yet never masks a genuine misconfiguration on a different sink in the same
-stage, even under `strict`. See [Configuration](configuration.md) for the full key reference.
+`strict` fails the task fast, and `off` disables the checks. Each sink is checked independently, so
+a transient describe failure on one sink never masks a genuine misconfiguration on a different sink
+in the same stage, even under `strict`. Sink existence itself is not governed by this key: every
+topic a stage declares — inputs and sinks alike — must exist before the application starts, and a
+declared sink that cannot be resolved fails startup unconditionally, because own-output stamping
+depends on its resolved identity. See [Configuration](configuration.md) for the full key reference.
 
 ## Restart and recovery
 
@@ -138,6 +141,11 @@ when upgrading.
 
 ## Operating notes
 
+- **Create every causal topic — sinks included — before the application starts.** Inputs must exist
+  for the sources to resolve, and a declared sink must exist too: its UUID and end offsets feed
+  own-output stamping, so an unresolvable sink fails startup loudly rather than running with stamps
+  that under-claim the node's own outputs. Relying on broker auto-creation at first produce is not
+  a supported path for causal sinks.
 - A causal processor only helps when records arrive from multiple partitions concurrently, whether
   from multiple topics or from multiple partitions on one instance. With a single partition from a
   single topic, Kafka already provides total order and Parsley only adds overhead.

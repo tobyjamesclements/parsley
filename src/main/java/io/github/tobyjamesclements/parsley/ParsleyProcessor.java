@@ -92,17 +92,18 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
     // Source topic name -> stable UUID, resolved from the broker at init() (the topology decorator
     // has no broker config until then). Used by ingest() to stamp each record's causal identity.
     private Map<String, Uuid> topicUuids = Map.of();
-    // This stage's own sink topics, name -> UUID, best-effort resolved at init() (see
-    // resolveSinkTopicUuids) — the UUIDs feed causalBroadcast() so ParsleyCausalBroadcast can strip a node's own
+    // This stage's own sink topics, name -> UUID, strictly resolved at init() (see
+    // resolveSinkTopicUuids: an unresolvable sink fails init, so every declared sink is present) —
+    // the UUIDs feed causalBroadcast() so ParsleyCausalBroadcast can strip a node's own
     // produced coordinates from any inbound dependency/marker clock, and the name keys translate the
     // producer-ack registry's topic names into UUID identity for the ownOutputs fold (D2). Never used
     // to route or gate an inbound record by itself.
     private Map<String, Uuid> sinkTopicUuids = Map.of();
-    // Each resolved sink topic's per-partition end offsets, captured at init() alongside the UUID
-    // resolution (same best-effort admin session) — the ownOutputs seed claims endOffset - 1, the
-    // sink's last appended position, per partition (D2/O1; an over-claim that is I8-sound and heals
-    // the "f" blob trailing the last transaction's acks). A sink that could not be described is
-    // simply absent, like its UUID.
+    // Each declared sink topic's per-partition end offsets, captured at init() alongside the UUID
+    // resolution (same admin session, same strictness: an unreadable sink fails init) — the
+    // ownOutputs seed claims endOffset - 1, the sink's last appended position, per partition
+    // (D2/O1; an over-claim that is I8-sound and heals the "f" blob trailing the last
+    // transaction's acks).
     private Map<String, Map<Integer, Long>> sinkEndOffsets = Map.of();
     // The effective producer delivery.timeout.ms, resolved at init(). Bounds the crossing wait (a
     // send unacked past it has failed — the wait must throw, A8) and doubles as the A9 stall
@@ -320,8 +321,9 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
         // fold can translate acked sink names to UUID identity — the registry is also the
         // pending-send view the crossing wait blocks on before each stamp (O1/A7), bounded by the
         // producer's delivery.timeout.ms (past it the unacked send has failed, so the wait throws
-        // and the transaction dies with it, A8) — then seed each resolved sink
-        // partition at its end offset - 1 — the sink's last appended position. The seed is an
+        // and the transaction dies with it, A8) — then seed each declared sink partition (sink
+        // resolution is strict at init, so every declared sink is resolved and read) at its end
+        // offset - 1 — the sink's last appended position. The seed is an
         // over-claim (it covers siblings' records on a shared sink, aborted tails, and markers) and
         // is I8-sound for exactly that reason; it also heals the restored blob trailing the last
         // transaction's acks. Runs after rescope so a recreated input-sink's destroyed UUID is
@@ -343,11 +345,8 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
                     + "end-offset seed; crossing wait inactive [task: {}]", registryId, context.taskId());
         }
         for (Map.Entry<String, Uuid> sink : sinkTopicUuids.entrySet()) {
-            Map<Integer, Long> ends = sinkEndOffsets.get(sink.getKey());
-            if (ends == null) {
-                continue;
-            }
-            for (Map.Entry<Integer, Long> end : ends.entrySet()) {
+            for (Map.Entry<Integer, Long> end
+                    : sinkEndOffsets.getOrDefault(sink.getKey(), Map.of()).entrySet()) {
                 if (end.getValue() > 0) {
                     channels.acknowledge(sink.getValue(), end.getKey(), end.getValue() - 1);
                 }
@@ -380,7 +379,8 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
     /**
      * Resolves this instance's {@link ParsleyTopicIdentityWatch} (minted by {@link CausalStreams};
      * absent under TopologyTestDriver and low-level wirings) and registers the name → UUID bindings
-     * this task just resolved — every input and every resolved sink — as its expectations. Sinks are
+     * this task just resolved — every input and every declared sink (sink resolution is strict at
+     * init, so the watch always covers the full declared set) — as its expectations. Sinks are
      * included because a mid-run <em>sink</em> recreation is as unsafe as an input's: the ack
      * registry folds by topic name through a stale UUID map, and the recreated topic's restarted
      * offsets make every fold a monotone no-op, so stamps silently stop claiming this node's own
@@ -840,17 +840,27 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
         Map<String, String> cleanupPolicies;
         Map<String, String> sourceCleanupPolicies;
         try (ParsleyTopicAdmin admin = adminFactory.apply(context.appConfigs())) {
-            resolved = admin.topicIds(topicList);
-            Map<String, Integer> sourcePartitionCounts = admin.partitionCounts(topicList);
-            partitionCounts = new HashMap<>(sourcePartitionCounts);
-            partitionCounts.putAll(additionalTopicInfo(admin, "partition count", ParsleyTopicAdmin::partitionCounts));
-            cleanupPolicies = additionalTopicInfo(admin, "cleanup.policy", ParsleyTopicAdmin::cleanupPolicies);
-            // Source cleanup.policy is resolved separately, over the input topics (which must already
-            // exist), and always — never gated by parsley.topology.validation — because a compacted
-            // source is a correctness hazard for the skip-bridge, not a topology lint (see
-            // validateSourcesNotCompacted).
-            sourceCleanupPolicies = admin.cleanupPolicies(topicList);
+            try {
+                resolved = admin.topicIds(topicList);
+                Map<String, Integer> sourcePartitionCounts = admin.partitionCounts(topicList);
+                partitionCounts = new HashMap<>(sourcePartitionCounts);
+                partitionCounts.putAll(additionalTopicInfo(admin, "partition count", ParsleyTopicAdmin::partitionCounts));
+                cleanupPolicies = additionalTopicInfo(admin, "cleanup.policy", ParsleyTopicAdmin::cleanupPolicies);
+                // Source cleanup.policy is resolved separately, over the input topics (which must already
+                // exist), and always — never gated by parsley.topology.validation — because a compacted
+                // source is a correctness hazard for the skip-bridge, not a topology lint (see
+                // validateSourcesNotCompacted).
+                sourceCleanupPolicies = admin.cleanupPolicies(topicList);
+            } catch (Exception e) {
+                throw new IllegalStateException(
+                        "failed to resolve topic metadata for causal buffers " + topics
+                                + "; ensure the topics exist and the broker is reachable", e);
+            }
+            // Outside the wrap above, so a strict sink-resolution failure surfaces naming the sink
+            // and its remedy rather than as a generic buffer-metadata error.
             this.sinkTopicUuids = resolveSinkTopicUuids(admin);
+        } catch (RuntimeException e) {
+            throw e;
         } catch (Exception e) {
             throw new IllegalStateException(
                     "failed to resolve topic metadata for causal buffers " + topics
@@ -870,57 +880,69 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
     }
 
     /**
-     * Best-effort, per-topic UUID resolution over {@link #sinkTopics} — unlike {@link
+     * Strict, per-topic UUID resolution over {@link #sinkTopics} — unlike {@link
      * #additionalTopicInfo}, this always runs, never gated by {@code parsley.topology.validation}: it
      * feeds the {@code ownOutputs} fold's name → UUID translation (D2) and {@link
      * #causalBroadcast}'s I8 reflected-claim diagnostic — correctness and observability
-     * mechanisms, not topology-misconfiguration lints. Also captures each resolved sink's
+     * mechanisms, not topology-misconfiguration lints. Also captures each sink's
      * per-partition end offsets ({@link #sinkEndOffsets}) in the same admin session, for the
      * {@code ownOutputs} init-time seed.
      *
-     * <p>A sink that does not exist yet is skipped, and — because this resolution runs once, at
-     * {@code init()}, and is never re-attempted — the ownOutputs fold and the reflected-claim
-     * diagnostic for that topic stay off for this task instance's whole lifetime, until the next
-     * restart re-runs {@code init()}. Delivery safety never depends on this resolution: a
-     * dependency reflecting the not-yet-resolved sink is handled by the ordinary two-branch gate
-     * (consumed → gated on local delivery; unconsumed → ignored, D1). Nothing can depend on the
-     * sink before its first record exists, so the exposure starts only at first produce and ends
-     * at the next init.
+     * <p>A declared sink that cannot be resolved to a UUID — the topic does not exist, or the
+     * admin call fails — fails init loudly, as does a failed end-offset read. Both feed the stamp's
+     * own-output claims, load-bearing for I2 (the stamp must dominate the dependency clocks of
+     * everything this node delivered, including its own outputs, current and previous-run), and
+     * this resolution runs once, at {@code init()}: a skipped sink would silently stamp
+     * under-claims for the task's whole lifetime — the same reasoning that fails init in
+     * {@link #healFormerSinkOwnOutputs}. A causal sink must therefore exist before the stage
+     * starts; auto-creation on first produce is not a supported path. Every declared sink then
+     * always appears in {@link #sinkTopicUuids} and {@link #sinkEndOffsets}, so the ack fold, the
+     * reflected-claim diagnostic, and the identity watch cover the full declared set.
      */
     private Map<String, Uuid> resolveSinkTopicUuids(ParsleyTopicAdmin admin) {
         Map<String, Uuid> ids = new HashMap<>();
         Map<String, Map<Integer, Long>> endOffsets = new HashMap<>();
         for (String topic : sinkTopics) {
-            Uuid id = null;
+            Uuid id;
             try {
                 id = admin.topicIds(List.of(topic)).get(topic);
             } catch (Exception e) {
-                log.warn("Could not resolve topic id for sink topic '{}' (it may not exist yet); "
-                        + "own-output tracking and the reflected-claim diagnostic for it stay off "
-                        + "until the next restart re-resolves it", topic, e);
+                throw new IllegalStateException(sinkResolutionFailure(topic), e);
             }
             if (id == null) {
-                continue;
+                throw new IllegalStateException(sinkResolutionFailure(topic));
             }
             ids.put(topic, id);
             try {
                 endOffsets.put(topic, Map.copyOf(admin.endOffsets(topic)));
             } catch (Exception e) {
-                log.warn("Could not read end offsets for sink topic '{}'; the ownOutputs seed for it "
-                        + "is skipped this start (live acks still fold; the next restart re-seeds)",
-                        topic, e);
+                throw new IllegalStateException("failed to read end offsets for declared sink topic '"
+                        + topic + "'; the ownOutputs init-time seed cannot be skipped — the persisted "
+                        + "clock can trail the final transaction's acks, so starting unseeded could "
+                        + "stamp under-claims of this node's own outputs. Check broker reachability.",
+                        e);
             }
         }
         this.sinkEndOffsets = Map.copyOf(endOffsets);
         return ids;
     }
 
+    /** The strict sink-resolution failure message: names the sink, the rule, and the remedy. */
+    private static String sinkResolutionFailure(String topic) {
+        return "failed to resolve the topic id for declared sink topic '" + topic + "'; a causal "
+                + "sink must exist before the stage starts (create the topic, and check broker "
+                + "reachability) — own-output stamping depends on its resolved identity, and "
+                + "starting without it would stamp under-claims of this node's own outputs";
+    }
+
     /**
      * Best-effort, per-topic resolution of {@code describe} over {@link #sinkTopics}
      * — extra topics (e.g. a {@link CausalStreams} sink) folded into validation without being
-     * consumed. Unlike a registered input buffer, such a topic is not required to exist yet (a sink
-     * is often auto-created on first write), so a topic that cannot be described is logged and
-     * omitted from the result rather than failing the task.
+     * consumed. Unlike {@link #resolveSinkTopicUuids} (strict: a sink must exist and resolve, it
+     * feeds correctness mechanisms), these describes feed only the topology lints, whose strictness
+     * is governed by {@code parsley.topology.validation} — so a topic that cannot be described is
+     * logged and omitted from the result rather than failing the task here; {@code strict} mode
+     * then judges whatever was resolved.
      *
      * <p>Resolved <strong>one topic at a time</strong>, deliberately not batched: the real
      * {@link ParsleyTopicAdmin} calls this delegates to (via {@code describeTopics}/
@@ -941,8 +963,8 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
             try {
                 result.putAll(describe.describe(admin, List.of(topic)));
             } catch (Exception e) {
-                log.warn("Could not resolve {} for sink topic '{}' (it may not exist yet); "
-                        + "skipping the check for it", what, topic, e);
+                log.warn("Could not resolve {} for sink topic '{}'; skipping the topology check "
+                        + "for it", what, topic, e);
             }
         }
         return result;
