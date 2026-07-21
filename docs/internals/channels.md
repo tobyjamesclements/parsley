@@ -158,6 +158,15 @@ carried may be skipped, but never dropped and never re-entered.** Four cases:
    skips the re-fetched prefix during the replay (counted by the `replays-skipped` sensor).
 4. **Fresh store.** Nothing to diff; the current declaration is recorded.
 
+`rescope` reconciles clocks only. Restored held *records* whose source left scope get their own
+disposition, applied in the causal-broadcast constructor immediately after the rescope:
+
+| Held record's source | Disposition |
+|---|---|
+| A current input (this task's partition) | Restored unchanged: seed replay, candidate re-index. |
+| A recreated input's old incarnation (destroyed UUID) | Purged from the buffer, with an INFO log carrying the count and coordinates. The incarnation is deleted, so no receiver can ever deliver these records; delivering them here would re-enter a destroyed coordinate the rescope just purged. History loss, never reordering. |
+| A removed but still-existing input | Init fails loudly, naming the topics and per-topic counts. The records can neither be delivered (no registered source) nor silently discarded (fail-closed). Remedies: redeclare the input so they drain through ordinary causal delivery, or perform a full reset. |
+
 ## Persistence
 
 The module self-persists the single `"f"` value inside every mutating request, before control

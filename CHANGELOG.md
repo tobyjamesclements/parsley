@@ -7,6 +7,16 @@ All notable changes to this project are documented in this file. The format is b
 ## [Unreleased]
 
 ### Changed
+- **Restored held records whose source topic left scope get an explicit disposition at startup.**
+  Previously a supported redeploy could strand them: a held record from a removed input crashed
+  the task on an untyped serde error at every restart (recoverable only by a full reset), or hung
+  `close()` forever if its dependencies never resolved, and a held record from a recreated input's
+  old incarnation could deliver a destroyed record and re-enter its purged coordinate into the
+  frontier. Now, at initialisation: a current input's records restore unchanged; a recreated
+  input's old-incarnation records are purged with an INFO log (deleted history — never delivered,
+  never reordered); and a removed-but-alive input's records fail startup loudly, naming the topics
+  and counts and the two remedies (redeclare the input so they drain through ordinary delivery, or
+  perform a full reset). See the new troubleshooting entry.
 - **A null message with an undecodable clock header, or on an unregistered topic, now fails the
   task.** Both branches previously warned and continued: an undecodable carried clock was treated
   as empty (folding nothing while still delivering the offset — permanently dropping the emitting

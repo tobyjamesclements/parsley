@@ -201,6 +201,19 @@ final class ParsleyTopologySim {
         boolean hasPollableInput() {
             return inputs.stream().anyMatch(input -> cursors.get(input) < topic(input).log.size());
         }
+
+        /**
+         * The source topic names of this node's currently held (buffered, undelivered) records —
+         * read straight from the durable buffer store, for the held-record disposition properties.
+         */
+        Set<String> heldSourceTopics() {
+            Set<String> topics = new HashSet<>();
+            new StoreBackedBufferStore<>(bufferStore,
+                    new ParsleySerializer<String, String>(
+                            new ParsleyResolver<>(t -> Serdes.String(), t -> Serdes.String())))
+                    .indexEntries().forEach(entry -> topics.add(entry.topic()));
+            return topics;
+        }
     }
 
     private final Map<String, SimTopic> topics = new LinkedHashMap<>();
@@ -279,10 +292,18 @@ final class ParsleyTopologySim {
 
     /** Runs {@code steps} random scheduler steps, draining all remaining channel backlog at the end. */
     void run(int steps) {
+        runWithoutDrain(steps);
+        drain();
+    }
+
+    /**
+     * As {@link #run} but without the final settle {@link #drain} — buffered records stay held, so
+     * a scope-change property can exercise the held-record disposition at the following restart.
+     */
+    void runWithoutDrain(int steps) {
         for (int i = 0; i < steps; i++) {
             step();
         }
-        drain();
     }
 
     private void step() {

@@ -688,6 +688,11 @@ final class ParsleyChannels {
      * <p>The current input set is persisted at the end, so the next init diffs against what this run
      * declared.
      *
+     * <p>This method reconciles <em>clocks</em> only. The disposition of restored held
+     * <em>records</em> whose source left scope — purge a destroyed incarnation's, fail init on a
+     * removed-but-alive input's — lives in the L2 constructor
+     * ({@code ParsleyCausalBroadcast}): L1 owns clock state, not the buffer.
+     *
      * @param currentInputs the currently declared input topics, name → UUID
      * @param taskPartition the partition this task owns on every input (Streams co-partitions a
      *                      sub-topology's sources)

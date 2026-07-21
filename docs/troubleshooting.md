@@ -117,6 +117,33 @@ incarnation's history reads as lost, never reordered.
 
 ---
 
+## Startup fails: the restored buffer holds records from a removed input
+
+A redeploy can remove an input topic from a stage's declared set while the stage's state survives.
+If records from that input were still held in the causal buffer when the previous run stopped,
+the next start fails with:
+
+```
+the restored buffer holds N record(s) from input topic(s) no longer declared (records per topic:
+{orders=N}). They can neither be delivered (no registered source) nor silently discarded
+(fail-closed). Either redeclare the input topic(s) so the held records drain through ordinary
+causal delivery, or perform a full application reset.
+```
+
+The two remedies are exactly those: add the topic back to the stage's declared inputs and start —
+the held records restore, their dependencies resolve, and they drain through ordinary causal
+delivery, after which the input can be removed again in a later, quiescent redeploy — or perform a
+full application reset and accept the loss of the held records. Removing an input is safest when
+the stage is quiescent (no held records from it), which the previous run's `buffer-depth` gauge
+shows.
+
+A held record from a *recreated* input (deleted and re-created under the same name across the
+restart) does not fail startup: the old incarnation's records are provably destroyed history, so
+they are purged at initialisation with an INFO log carrying the count and coordinates — the same
+history-loss-never-reordering outcome as the recreation itself.
+
+---
+
 ## Retention outran a causal consumer
 
 Kafka retention (or an explicit `deleteRecords`) can expunge records a lagging or replaying causal

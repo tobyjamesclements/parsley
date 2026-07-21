@@ -203,22 +203,15 @@ final class ParsleyCausalBroadcast<K, V> {
                  ParsleyMetrics metrics,
                  LongSupplier clock,
                  ParsleyVectorClock.CoordinatePredicate consumed) {
-        this(channels, buffer, candidateIndex, metrics, clock, consumed, (topicId, partition) -> false);
+        this(channels, buffer, candidateIndex, metrics, clock, consumed, (topicId, partition) -> false,
+                Set.of());
     }
 
     /**
-     * Full constructor. Takes a pre-built {@link ParsleyChannels} — the single owner of the frontier
-     * clock, channel clocks, and forwarded index — so callers control its persistence (a store-backed
-     * frontier in production, an in-memory one in tests).
-     *
-     * @param consumed      the consumed(c) predicate of the two-branch gate (D1): a registered
-     *                      input channel of this task, on the partition this task owns. A
-     *                      dependency on a consumed coordinate is gated on this node's own
-     *                      contiguous frontier; a dependency on any other coordinate is ignored,
-     *                      with a metric — see this field's own Javadoc.
-     * @param ownSinkTopics coordinates for a topic this node itself produces. Feeds only the I8
-     *                      reflected-claim diagnostic — never the gate, the channel folds, or the
-     *                      stamp; see this field's own Javadoc.
+     * As {@link #ParsleyCausalBroadcast(ParsleyChannels, ParsleyBufferStore, ParsleyCandidateIndex,
+     * ParsleyMetrics, LongSupplier, ParsleyVectorClock.CoordinatePredicate,
+     * ParsleyVectorClock.CoordinatePredicate, Set) the full constructor}, with no destroyed source
+     * incarnations — for callers/tests whose restored buffer predates no input recreation.
      */
     ParsleyCausalBroadcast(ParsleyChannels channels,
                  ParsleyBufferStore<K, V> buffer,
@@ -227,6 +220,56 @@ final class ParsleyCausalBroadcast<K, V> {
                  LongSupplier clock,
                  ParsleyVectorClock.CoordinatePredicate consumed,
                  ParsleyVectorClock.CoordinatePredicate ownSinkTopics) {
+        this(channels, buffer, candidateIndex, metrics, clock, consumed, ownSinkTopics, Set.of());
+    }
+
+    /**
+     * Full constructor. Takes a pre-built {@link ParsleyChannels} — the single owner of the frontier
+     * clock, channel clocks, and forwarded index — so callers control its persistence (a store-backed
+     * frontier in production, an in-memory one in tests).
+     *
+     * <p><strong>Held-record disposition.</strong> Every restored held record is classified by its
+     * source coordinate before anything is seeded or indexed:
+     * <ul>
+     *   <li><strong>Consumed</strong> (a current input on this task's partition) — restored
+     *       unchanged: seed replay, then candidate re-index.</li>
+     *   <li><strong>Destroyed</strong> (its source topicId is in {@code destroyedSources} — a
+     *       recreated input's old incarnation) — purged from the buffer, with an INFO log carrying
+     *       the count and coordinates. E1's precedent: a destroyed UUID's entries are the one
+     *       removal I9 permits from stamp-feeding state; the incarnation that produced these
+     *       records is deleted, and delivering them would both forward a record from a dead
+     *       incarnation and re-enter its destroyed coordinate into the frontier, which rescope
+     *       just purged. Purging keeps recreation-across-a-restart self-healing: history loss,
+     *       never reordering.</li>
+     *   <li><strong>Out of scope but alive</strong> (a removed input's records) — init fails
+     *       loudly, naming the topics and per-record counts. Silently dropping them would violate
+     *       the fail-closed contract; delivering them is impossible (the removed topic has no
+     *       registered serde) and undesirable (the operator removed the input). The remedies are
+     *       in the message: redeclare the input so the records drain through ordinary delivery, or
+     *       perform a full reset.</li>
+     * </ul>
+     *
+     * @param consumed         the consumed(c) predicate of the two-branch gate (D1): a registered
+     *                         input channel of this task, on the partition this task owns. A
+     *                         dependency on a consumed coordinate is gated on this node's own
+     *                         contiguous frontier; a dependency on any other coordinate is ignored,
+     *                         with a metric — see this field's own Javadoc.
+     * @param ownSinkTopics    coordinates for a topic this node itself produces. Feeds only the I8
+     *                         reflected-claim diagnostic — never the gate, the channel folds, or the
+     *                         stamp; see this field's own Javadoc.
+     * @param destroyedSources the old topic UUIDs of inputs recreated across the restart (same
+     *                         name, new UUID — the destroyed incarnations whose channel state
+     *                         {@link ParsleyChannels#rescope} purges); drives the held-record
+     *                         disposition above
+     */
+    ParsleyCausalBroadcast(ParsleyChannels channels,
+                 ParsleyBufferStore<K, V> buffer,
+                 ParsleyCandidateIndex candidateIndex,
+                 ParsleyMetrics metrics,
+                 LongSupplier clock,
+                 ParsleyVectorClock.CoordinatePredicate consumed,
+                 ParsleyVectorClock.CoordinatePredicate ownSinkTopics,
+                 Set<Uuid> destroyedSources) {
         this.channels = channels;
         this.buffer = buffer;
         this.candidateIndex = candidateIndex;
@@ -234,7 +277,35 @@ final class ParsleyCausalBroadcast<K, V> {
         this.clock = clock;
         this.consumed = consumed;
         this.ownSinkTopics = ownSinkTopics;
-        List<ParsleyBufferStore.IndexEntry> restored = buffer.indexEntries();
+        // Held-record disposition (see the constructor Javadoc): destroyed incarnations are purged,
+        // a removed-but-alive input's records fail init, and only consumed records go on to the
+        // seed replay and candidate re-index below.
+        List<ParsleyBufferStore.IndexEntry> kept = new ArrayList<>();
+        List<String> purgedCoordinates = new ArrayList<>();
+        Map<String, Integer> outOfScope = new java.util.TreeMap<>();
+        for (ParsleyBufferStore.IndexEntry entry : buffer.indexEntries()) {
+            if (destroyedSources.contains(entry.topicId())) {
+                buffer.remove(entry.sequence());
+                purgedCoordinates.add(entry.topic() + "-" + entry.partition() + "@" + entry.offset());
+            } else if (consumed.test(entry.topicId(), entry.partition())) {
+                kept.add(entry);
+            } else {
+                outOfScope.merge(entry.topic(), 1, Integer::sum);
+            }
+        }
+        if (!outOfScope.isEmpty()) {
+            throw new IllegalStateException("the restored buffer holds " + outOfScope.values().stream()
+                    .mapToInt(Integer::intValue).sum() + " record(s) from input topic(s) no longer "
+                    + "declared (records per topic: " + outOfScope + "). They can neither be "
+                    + "delivered (no registered source) nor silently discarded (fail-closed). "
+                    + "Either redeclare the input topic(s) so the held records drain through "
+                    + "ordinary causal delivery, or perform a full application reset.");
+        }
+        if (!purgedCoordinates.isEmpty()) {
+            log.info("Purged {} held record(s) produced by destroyed source incarnation(s) — the "
+                    + "recreated input's old records are deleted history, never delivered (E1): {}",
+                    purgedCoordinates.size(), purgedCoordinates);
+        }
         // Replay receive()'s first-sighting seed for every restored held record's source coordinate,
         // at its lowest held offset, BEFORE anything else can. ParsleyChannels's "seen" guard is
         // in-memory and does not survive a restart, so without this a post-restart record arriving on
@@ -244,18 +315,15 @@ final class ParsleyCausalBroadcast<K, V> {
         // module's purview" — releasing records that depend on it before it has ever been delivered
         // (an effect-before-cause delivery). Seeding at the lowest held offset reproduces exactly
         // what the first in-run sighting did: marks the coordinate seen, and never seeds past a held
-        // record. Unconsumed coordinates are skipped — re-seeding an entry rescope just pruned
-        // would resurrect it in the gate view.
+        // record. Only consumed coordinates remain after the disposition above, so every kept
+        // record's coordinate seeds.
         Map<Uuid, Map<Integer, Long>> lowestHeld = new HashMap<>();
-        for (ParsleyBufferStore.IndexEntry entry : restored) {
+        for (ParsleyBufferStore.IndexEntry entry : kept) {
             lowestHeld.computeIfAbsent(entry.topicId(), k -> new HashMap<>())
                     .merge(entry.partition(), entry.offset(), Math::min);
         }
-        lowestHeld.forEach((topicId, byPartition) -> byPartition.forEach((partition, offset) -> {
-            if (consumed.test(topicId, partition)) {
-                channels.seedIfFirstSeen(topicId, partition, offset);
-            }
-        }));
+        lowestHeld.forEach((topicId, byPartition) -> byPartition.forEach((partition, offset) ->
+                channels.seedIfFirstSeen(topicId, partition, offset)));
         // Populate the candidate index for any records already in the buffer (e.g., restored from
         // a state store after a restart). This is a one-time O(n) pass at construction. It decodes
         // only the dependency clock (never the user-serde key/value), so a record whose value can no
@@ -265,7 +333,7 @@ final class ParsleyCausalBroadcast<K, V> {
         // coordinate a channel merely claims (satisfied by completeness but not by the frontier)
         // must stay indexed, or the frontier advance that eventually genuinely proves it would find
         // no candidate to release.
-        for (ParsleyBufferStore.IndexEntry entry : restored) {
+        for (ParsleyBufferStore.IndexEntry entry : kept) {
             candidateIndex.index(entry.sequence(),
                     consumedDependencies(entry.dependencies(), entry.topicId(), entry.partition(), entry.offset()),
                     channels.frontier());

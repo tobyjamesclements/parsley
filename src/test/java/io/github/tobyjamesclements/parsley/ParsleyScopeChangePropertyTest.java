@@ -6,6 +6,7 @@ import java.util.List;
 import java.util.Set;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
@@ -152,5 +153,52 @@ class ParsleyScopeChangePropertyTest {
                     "[seed " + seed + "] vacuity guard: the post-restart cycle must deliver X's "
                             + "newer own outputs back to it");
         }
+    }
+
+    /**
+     * The held-record disposition rule at a scope shrink: a restart that removes an input while
+     * records from that input are still held must fail init loudly (they can be neither delivered
+     * — no registered source — nor silently discarded), and a restart with no such held records
+     * proceeds cleanly with the A6 re-homing intact. Runs the random schedule WITHOUT the settle
+     * drain, so seeds genuinely reach the restart with records still held.
+     *
+     * Asserts, per seed, whichever branch the interleaving produced — with a vacuity guard that
+     * at least one seed exercised the loud-failure branch.
+     */
+    @Test
+    void scopeShrinkWithHeldRecordsFromTheRemovedInputFailsInitLoudly() {
+        int loudFailures = 0;
+        for (long seed = 9000; seed < 9000 + SEEDS; seed++) {
+            ParsleyTopologySim sim = new ParsleyTopologySim(seed);
+            sim.externalTopic("t1");
+            sim.node("A", Set.of("t1"), List.of("t2"), 0.8);
+            sim.node("X", Set.of("t1", "t2"), List.of("t3"), 0.8);
+            ParsleyTopologySim.SimNode x = sim.nodeNamed("X");
+            // Walk the schedule in short bursts, stopping the moment X holds a t2 record — a
+            // transient state a fixed-length run would usually sail past (holds resolve quickly).
+            for (int burst = 0; burst < 50 && !x.heldSourceTopics().contains("t2"); burst++) {
+                sim.runWithoutDrain(5);
+            }
+
+            if (x.heldSourceTopics().contains("t2")) {
+                IllegalStateException thrown = assertThrows(IllegalStateException.class,
+                        () -> sim.restartWithInputs("X", Set.of("t1")),
+                        "[seed " + seed + "] a shrink that would orphan held t2 records must fail "
+                                + "init loudly, never restore them undeliverable or drop them");
+                assertTrue(thrown.getMessage().contains("t2"),
+                        "[seed " + seed + "] the failure must name the removed topic: "
+                                + thrown.getMessage());
+                loudFailures++;
+            } else {
+                ParsleyVectorClock stampBefore = x.channels.stamp();
+                sim.restartWithInputs("X", Set.of("t1"));
+                assertTrue(x.channels.stamp().dominates(stampBefore),
+                        "[seed " + seed + "] a legal shrink (no held t2 records) must keep the A6 "
+                                + "re-homing: the post-shrink stamp dominates the pre-shrink stamp");
+            }
+        }
+        assertTrue(loudFailures > 0,
+                "vacuity guard: at least one seed must reach the shrink with held t2 records, or "
+                        + "the disposition rule was never exercised");
     }
 }

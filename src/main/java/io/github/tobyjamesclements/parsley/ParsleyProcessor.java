@@ -312,6 +312,17 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
         Map<String, Uuid> previousInputs = channels.declaredInputs();
         channels.rescope(topicUuids, taskPartition);
         logScopeDiff(previousInputs);
+        // The destroyed source incarnations: inputs recreated across the restart (same name, new
+        // UUID) — the same diff logScopeDiff just reported and rescope just purged from channel
+        // state. Passed to the L2 constructor, which owns the held-record disposition (purge a
+        // destroyed incarnation's records; fail init on a removed-but-alive input's records).
+        Set<Uuid> destroyedSources = new HashSet<>();
+        for (Map.Entry<String, Uuid> previous : previousInputs.entrySet()) {
+            Uuid current = topicUuids.get(previous.getKey());
+            if (current != null && !current.equals(previous.getValue())) {
+                destroyedSources.add(previous.getValue());
+            }
+        }
         for (Uuid topicId : consumedTopicIds) {
             channels.channelUpdate(topicId, taskPartition, ParsleyVectorClock.empty());
         }
@@ -373,7 +384,8 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
         ParsleyVectorClock.CoordinatePredicate ownSinkTopics = (topicId, partition) -> ownSinkTopicIds.contains(topicId);
 
         return new ParsleyCausalBroadcast<>(channels, buffer, candidateIndex,
-                wiredMetrics.metrics(), context::currentSystemTimeMs, inScope, ownSinkTopics);
+                wiredMetrics.metrics(), context::currentSystemTimeMs, inScope, ownSinkTopics,
+                destroyedSources);
     }
 
     /**
