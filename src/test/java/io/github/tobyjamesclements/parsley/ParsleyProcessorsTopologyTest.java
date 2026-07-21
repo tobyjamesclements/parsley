@@ -1181,6 +1181,118 @@ class ParsleyProcessorsTopologyTest {
     }
 
     /**
+     * A null message whose {@code parsley-causal-clock} header is present but undecodable fails the
+     * task exactly like a business record's ({@link ParsleyVectorClockResolutionException}): the
+     * carried clock is the emitting node's stamp, so folding nothing while delivering the offset
+     * would permanently drop the peer's progress claims from this node's channel fold — a later
+     * stamp here would under-claim them. The transaction aborts, so the offset is not committed and
+     * the message is refetched on restart.
+     *
+     * Asserts piping the corrupt null message throws (wrapped in a {@code StreamsException}) with a
+     * {@link ParsleyVectorClockResolutionException} cause naming the coordinate.
+     */
+    @Test
+    @SuppressWarnings("NullAway") // the null message TestRecord intentionally has null key/value
+    void corruptNullMessageClockHeaderFailsTheTask() throws IOException {
+        Topology topology = topology(
+                ParsleyProcessorSupplier.builder(upperCaser()).addBufferStore("parsley")
+                        .addSource(new ParsleySource<>("t1", Serdes.String(), Serdes.String()))
+                        .topicAdmin(ADMIN).build(),
+                List.of("t1"));
+
+        try (TopologyTestDriver driver = new TopologyTestDriver(topology, config(tempStateDir()))) {
+            TestInputTopic<String, String> t1 =
+                    driver.createInputTopic("t1", new StringSerializer(), new StringSerializer());
+
+            Headers corrupt = ParsleyHeader.mutableHeaders();
+            corrupt.add(ParsleyHeader.NULL_MESSAGE, new byte[0]);
+            corrupt.add(ParsleyHeader.CAUSAL_CLOCK, new byte[] {(byte) 0xFF});
+
+            StreamsException thrown = assertThrows(StreamsException.class,
+                    () -> t1.pipeInput(new TestRecord<>(null, null, corrupt)),
+                    "an undecodable null-message carried clock must fail the task, never fold as empty");
+            assertEquals(ParsleyVectorClockResolutionException.class, thrown.getCause().getClass(),
+                    "the wrapped cause must be the clock-resolution guard's exception, mirroring the "
+                            + "business path");
+            assertTrue(thrown.getCause().getMessage().contains("t1-0@0"),
+                    "the failure must name the null message's coordinate: " + thrown.getCause().getMessage());
+        }
+    }
+
+    /**
+     * A null message with an <em>absent</em> clock header stays deliverable: an empty carried clock
+     * teaches the channel nothing, but the message's own offset is still delivered into the
+     * frontier — a producer that stamps nothing claims nothing, matching the business-path
+     * semantics for an absent header. Pins the absent/undecodable distinction the fail-fast rule
+     * turns on.
+     *
+     * Asserts a business record depending on the clockless null message's offset is subsequently
+     * delivered — the offset entered the frontier.
+     */
+    @Test
+    @SuppressWarnings("NullAway") // the null message TestRecord intentionally has null key/value
+    void absentNullMessageClockHeaderStillDeliversTheOffset() throws IOException {
+        Topology topology = topology(
+                ParsleyProcessorSupplier.builder(upperCaser()).addBufferStore("parsley")
+                        .addSource(new ParsleySource<>("t1", Serdes.String(), Serdes.String()))
+                        .addSource(new ParsleySource<>("t2", Serdes.String(), Serdes.String()))
+                        .topicAdmin(ADMIN).build(),
+                List.of("t1", "t2"));
+
+        try (TopologyTestDriver driver = new TopologyTestDriver(topology, config(tempStateDir()))) {
+            TestInputTopic<String, String> t1 =
+                    driver.createInputTopic("t1", new StringSerializer(), new StringSerializer());
+            TestInputTopic<String, String> t2 =
+                    driver.createInputTopic("t2", new StringSerializer(), new StringSerializer());
+
+            Headers clockless = ParsleyHeader.mutableHeaders();
+            clockless.add(ParsleyHeader.NULL_MESSAGE, new byte[0]);
+            t1.pipeInput(new TestRecord<>(null, null, clockless));
+
+            t2.pipeInput(new TestRecord<>("k", "dependent",
+                    depsHeader(CausalClock.builder(TOPICS).require("t1", 0, 0).build())));
+
+            assertEquals(List.of("dependent"), processed,
+                    "the clockless null message's own offset must have entered the frontier, so a "
+                            + "record depending on t1@0 is deliverable");
+        }
+    }
+
+    /**
+     * A null message arriving on a topic with no registered {@link ParsleySource} fails the task
+     * with the same intake-guard {@code IllegalStateException} as a business record
+     * ({@link #ingestThrowsForATopicWithNoRegisteredBuffer}): skipping it would commit the offset
+     * past a record on a channel this node claims not to know.
+     *
+     * Asserts piping the null message on the unregistered topic throws with a cause naming it.
+     */
+    @Test
+    @SuppressWarnings("NullAway") // the null message TestRecord intentionally has null key/value
+    void nullMessageOnAnUnregisteredTopicFailsTheTask() throws IOException {
+        Topology topology = topology(
+                ParsleyProcessorSupplier.builder(upperCaser()).addBufferStore("parsley")
+                        .addSource(new ParsleySource<>("t1", Serdes.String(), Serdes.String()))
+                        .topicAdmin(ADMIN).build(),
+                List.of("t1", "ghost"));
+
+        try (TopologyTestDriver driver = new TopologyTestDriver(topology, config(tempStateDir()))) {
+            TestInputTopic<String, String> ghost =
+                    driver.createInputTopic("ghost", new StringSerializer(), new StringSerializer());
+
+            Headers marker = ParsleyHeader.mutableHeaders();
+            marker.add(ParsleyHeader.NULL_MESSAGE, new byte[0]);
+
+            StreamsException thrown = assertThrows(StreamsException.class,
+                    () -> ghost.pipeInput(new TestRecord<>(null, null, marker)),
+                    "a null message on an unregistered topic must fail the task, not be skipped past");
+            assertEquals(IllegalStateException.class, thrown.getCause().getClass(),
+                    "the wrapped cause must be the intake guard's exception, mirroring the business path");
+            assertTrue(thrown.getCause().getMessage().contains("no ParsleySource registered for topic 'ghost'"),
+                    "the cause must name the unregistered topic: " + thrown.getCause().getMessage());
+        }
+    }
+
+    /**
      * The broker (via {@link ParsleyTopicAdmin}) fails to return a UUID for one of the registered
      * causal-buffer topics at startup — a defensive guard against an admin implementation that
      * returns successfully but with an incomplete result.

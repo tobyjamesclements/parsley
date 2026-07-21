@@ -654,20 +654,24 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
      * {@link ParsleyGossip#receive receive}: decodes its carried completeness clock, folds it, and
      * relays this node's own null message downstream iff the received one genuinely taught this node
      * something (the I6 relay rule on {@link ParsleyGossip}). The null message is never forwarded to
-     * the user delegate and never buffered. Two decode guards precede the fold, and the distinction
-     * between decode failure and delivery failure is the crux of correctness here:
+     * the user delegate and never buffered. The two pre-fold guards mirror the business path
+     * exactly — a null message is a protocol record on the same channels, and a decode or wiring
+     * failure is no more tolerable for it than for a business record:
      * <ul>
-     *   <li>A null message on an unregistered topic is ignored with a warning — not expected in a
-     *       correctly wired topology, but fail safe rather than crash so a misconfiguration does not
-     *       fail a healthy task.</li>
-     *   <li>A missing or undecodable {@link ParsleyHeader#CAUSAL_CLOCK} header is treated as an
-     *       <em>empty</em> clock: the message teaches the channel no new peer progress, but its own
-     *       offset is <strong>still delivered</strong> into the channel's contiguous frontier — a
-     *       null message occupies a real offset on its partition, so the frontier's gap-free absorb
-     *       walk must count it or it stalls below the message forever, stranding every later record
-     *       on that channel. Treating a decode failure as empty-but-still-delivered (rather than an
-     *       early return) is what fixed the bug where a corrupt message permanently gapped the
-     *       frontier.</li>
+     *   <li>A null message on an unregistered topic fails the task with the same
+     *       {@code IllegalStateException} the business path throws in {@link #ingest}: the offset
+     *       would otherwise be committed past a record on a channel this node claims not to know —
+     *       a misconfiguration that must stop the task, not be skipped.</li>
+     *   <li>A <em>present but undecodable</em> {@link ParsleyHeader#CAUSAL_CLOCK} header fails the
+     *       task via {@link #onUnresolvableClock}, exactly like a business record's: the carried
+     *       clock is the emitting node's stamp, and folding nothing while delivering the offset
+     *       would permanently drop the peer's progress claims from this node's channel fold — a
+     *       later stamp here would under-claim them (an I2 hole downstream). The transaction
+     *       aborts, the offset is not committed, and the message is refetched and retried on
+     *       restart; a successful retry delivers the offset normally, so the historical
+     *       frontier-gap bug (a skip-and-commit) does not return. An <em>absent</em> header stays
+     *       an empty clock whose offset is still delivered — a producer that stamps nothing claims
+     *       nothing, matching the business-path semantics for an absent header.</li>
      * </ul>
      *
      * <p>The {@link ParsleyGossip#receive} call and the delivery of its released records run
@@ -691,8 +695,9 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
         long offset = meta.offset();
         Uuid topicId = topicUuids.get(topic);
         if (topicId == null) {
-            log.warn("Received null message on unregistered topic '{}'; ignoring", topic);
-            return;
+            throw new IllegalStateException(
+                    "no ParsleySource registered for topic '" + topic
+                            + "'; call addSource(...) on the ParsleyProcessorSupplier builder for every input topic");
         }
         ParsleyVectorClock carried = ParsleyVectorClock.empty();
         Header clockHeader = record.headers().lastHeader(ParsleyHeader.CAUSAL_CLOCK);
@@ -700,8 +705,9 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
             try {
                 carried = ParsleyVectorClock.fromBytes(clockHeader.value());
             } catch (Exception e) {
-                log.warn("Failed to decode null-message carried clock on {}-{}; treating as empty",
-                        topic, partition, e);
+                throw onUnresolvableClock(new ParsleyVectorClockResolutionException(topic, topicId,
+                        partition, offset, clockHeader.value(),
+                        "encoded causal-clock header length " + clockHeader.value().length, e));
             }
         }
         ParsleyGossip.Reception<KIn, VIn> reception = gossip.receive(topicId, partition, offset, carried);

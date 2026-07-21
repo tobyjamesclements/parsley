@@ -73,6 +73,18 @@ retention: a segment holding only null messages must not look expired the moment
    proof it was delivered *here*, and gating on it would let an effect reach the delegate before
    its locally subscribed cause.
 
+Decoding the carried clock happens upstream of `receive`, and it fails fast exactly like the
+business path: a present but undecodable clock header fails the task, and a null message arriving
+on a topic the node has not registered fails it too. The carried clock is the emitting node's
+stamp, so treating an undecodable one as empty would permanently drop that peer's progress claims
+from this node's channel fold — a later stamp here would under-claim them, and a downstream
+consumer could deliver an effect before its cause. Failing the task instead leaves the offset
+uncommitted, so the message is refetched and retried on restart; a successful retry delivers the
+offset normally. The historical frontier-gap bug — a corrupt message permanently stalling its
+channel — was a skip-and-commit, not a fail-and-retry, and does not return under this rule. Only
+an *absent* header reads as an empty clock whose offset is still delivered: a producer that stamps
+nothing claims nothing.
+
 ## The relay rule
 
 A received null message is relayed onward only when its carried clock taught this node something

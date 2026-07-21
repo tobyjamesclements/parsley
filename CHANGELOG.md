@@ -7,6 +7,16 @@ All notable changes to this project are documented in this file. The format is b
 ## [Unreleased]
 
 ### Changed
+- **A null message with an undecodable clock header, or on an unregistered topic, now fails the
+  task.** Both branches previously warned and continued: an undecodable carried clock was treated
+  as empty (folding nothing while still delivering the offset — permanently dropping the emitting
+  peer's progress claims from the channel fold, so later stamps under-claimed them), and an
+  unregistered-topic null message was skipped (committing the offset past a record on a channel the
+  node claims not to know). Both now mirror the business path exactly: the present-but-undecodable
+  header throws `ParsleyVectorClockResolutionException`, the unregistered topic throws the same
+  `IllegalStateException` as business ingest, the transaction aborts, and the record is refetched
+  on restart. An absent header is unchanged: an empty carried clock whose offset is still
+  delivered — a producer that stamps nothing claims nothing.
 - **BREAKING: a declared sink topic must exist before the application starts.** Sink UUID and
   end-offset resolution at startup is now strict: a sink that cannot be resolved — the topic does
   not exist, or the admin call fails — fails startup with an `IllegalStateException` naming the

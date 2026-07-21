@@ -132,7 +132,7 @@ final class ParsleyGossip<K, V> {
      * @param partition the partition of the null message's source channel
      * @param offset    the null message's own offset on its source channel
      * @param carried   the completeness clock the null message carried (empty when the header was
-     *                  absent or undecodable — the offset is still delivered)
+     *                  absent — an undecodable header fails the task upstream, before this call)
      * @return the records released in the process, plus the I6 relay signal
      */
     Reception<K, V> receive(Uuid channelId, int partition, long offset, ParsleyVectorClock carried) {
