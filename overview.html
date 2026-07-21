@@ -10,7 +10,7 @@ been observed.</p>
 <p>The entire public surface lives in a single package, {@link io.github.tobyjamesclements.parsley}.
 The topology-level entry point is three roles mirroring Kafka Streams' own {@code StreamsBuilder} /
 {@code Topology} / {@code KafkaStreams}: {@link io.github.tobyjamesclements.parsley.CausalStreamsBuilder}
-declares one or more causal stages, {@code .build()} produces a
+declares the topology's single causal stage, the fluent chain's terminal {@code .build()} produces a
 {@link io.github.tobyjamesclements.parsley.CausalTopology}, and
 {@link io.github.tobyjamesclements.parsley.CausalStreams} is the runtime that wraps the underlying
 {@code KafkaStreams} instance. The low-level processor decorator that powers it,
@@ -21,7 +21,7 @@ replay self-gates into causal delivery order through the ordinary hold-back queu
 stamps make its outputs correctly gated everywhere from its first emission. The removed {@code
 parsley.coordination.*} keys of earlier versions fail startup loudly if present.</p>
 
-<h2>Core concepts</h2>
+<h1>Core concepts</h1>
 <dl>
   <dt><strong>Causal dependencies</strong></dt>
   <dd>The positions a consumer must have observed before a record stamped with them may be delivered.
@@ -68,26 +68,25 @@ parsley.coordination.*} keys of earlier versions fail startup loudly if present.
   evicted, or delivered out of order.</dd>
 </dl>
 
-<h2>Entry points</h2>
+<h1>Entry points</h1>
 <table>
+  <caption>The public entry-point types and their roles</caption>
   <thead><tr><th>Type</th><th>Purpose</th></tr></thead>
   <tbody>
-    <tr><td>{@link io.github.tobyjamesclements.parsley.CausalStreamsBuilder}</td><td>Declares one or more causal stages: {@code stream(...)} one or more source topics, {@code .process(supplier)} to bind them to a causal-decorated processor, {@code .to(...)} to declare its sink(s). {@code .build()} produces a {@link io.github.tobyjamesclements.parsley.CausalTopology}.</td></tr>
+    <tr><td>{@link io.github.tobyjamesclements.parsley.CausalStreamsBuilder}</td><td>Declares the topology's single causal stage: {@code stream(...)} one or more source topics, {@code .process(supplier)} to bind them to a causal-decorated processor, {@code .to(...)} to declare its sink(s). The chain's terminal {@code .build()} produces a {@link io.github.tobyjamesclements.parsley.CausalTopology}.</td></tr>
     <tr><td>{@link io.github.tobyjamesclements.parsley.CausalTopology}</td><td>The built causal topology — a specification, not yet a real Kafka Streams {@code Topology} — ready for {@code new CausalStreams(topology, props)}.</td></tr>
     <tr><td>{@link io.github.tobyjamesclements.parsley.CausalStreams}</td><td>The runtime: wraps the underlying {@code KafkaStreams} instance, and owns graceful causal drain on {@code close()}.</td></tr>
     <tr><td>{@link io.github.tobyjamesclements.parsley.CausalClock}</td><td>Stamps and reads causal dependencies directly on plain {@code ProducerRecord} and {@code ConsumerRecord} objects, for talking to a Parsley topology from outside Kafka Streams.</td></tr>
   </tbody>
 </table>
 
-<h2>Typical usage</h2>
+<h1>Typical usage</h1>
 <pre>{@code
-CausalStreamsBuilder builder = new CausalStreamsBuilder();
-
-builder.stream(List.of("prices", "orders"), Serdes.String(), orderSerde)
-       .process(new EnrichOrderSupplier())
-       .to("enriched-output", Serdes.String(), enrichedSerde);
-
-CausalTopology topology = builder.build();
+CausalTopology topology = new CausalStreamsBuilder()
+        .stream(List.of("prices", "orders"), Serdes.String(), orderSerde)
+        .process(new EnrichOrderSupplier())
+        .to("enriched-output", Serdes.String(), enrichedSerde)
+        .build();
 
 CausalStreams causalStreams = new CausalStreams(topology, props);
 causalStreams.start();

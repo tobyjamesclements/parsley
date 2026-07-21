@@ -23,6 +23,14 @@ All notable changes to this project are documented in this file. The format is b
   runtime declares it itself, and `CausalClock` edge stamping needs only `kafka-clients`. The
   stale POM comment justifying the optional flag with class names deleted in the redesign is
   rewritten against the current types.
+- **Javadoc doclint is on (`all,-missing`).** Broken links, malformed HTML, and bad references now
+  fail the Javadoc build instead of rotting silently; only exhaustive `@param`/`@return` tagging
+  stays unchecked, since the documentation style here is prose. Turning it on surfaced real drift
+  in `overview.html`: the usage example still called `build()` on the builder and the text still
+  said a builder declares "one or more" causal stages — both stale since the one-stage redesign
+  made the fluent chain's terminal `.build()` (on `CausalProcessedStream`) the only way to produce
+  a topology. The example and both descriptions are corrected, the section headings sit at the
+  level doclint expects for an overview page, and the entry-points table gains its caption.
 - **Adversarial-review follow-ups.** The strict partition-parity failure now names the
   `parsley.topology.validation=warn` opt-down for intentionally mismatched (re-keyed fan-out)
   topologies; the held-records-from-a-removed-input failure and its troubleshooting entry state

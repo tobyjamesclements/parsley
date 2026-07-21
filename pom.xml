@@ -642,7 +642,11 @@
                 <version>3.12.0</version>
                 <configuration>
                     <encoding>UTF-8</encoding>
-                    <doclint>none</doclint>
+                    <!-- 'missing' stays off deliberately: the documentation style here is prose
+                         sentences, not exhaustive @param/@return tagging. Everything else lints
+                         (broken @links, malformed HTML, bad references) so the Javadoc cannot rot
+                         silently. -->
+                    <doclint>all,-missing</doclint>
                     <overview>${project.basedir}/overview.html</overview>
                     <!-- avro-maven-plugin registers its test-avro output dir as a main compile source
                          root too (see comment above build-helper-maven-plugin); those test-only
