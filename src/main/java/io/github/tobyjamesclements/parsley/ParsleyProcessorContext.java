@@ -34,7 +34,7 @@ import java.util.function.Supplier;
  * site every outbound record passes through, protocol markers included — which reads the completeness
  * <strong>live</strong> at stamp time, so a forward during record admission sees the post-admit
  * completeness and a forward from a punctuator sees the completeness as of fire time. Stamping is
- * idempotent — any existing {@link ParsleyHeader#CAUSAL_DEPENDENCIES} header is replaced, never
+ * idempotent — any existing {@link ParsleyHeader#CAUSAL_CLOCK} header is replaced, never
  * accumulated — and never mutates the incoming record's headers (a fresh header set is built and
  * applied via {@link Record#withHeaders}).
  *

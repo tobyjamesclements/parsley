@@ -7,6 +7,17 @@ All notable changes to this project are documented in this file. The format is b
 ## [Unreleased]
 
 ### Changed
+- **Redesign cleanup (T4.3).** Dead code left behind by the coordination-subsystem deletion is
+  removed: the unused string-set wire helpers in `ParsleyByteUtils` (only the deleted epoch roster
+  section read or wrote them), the unreferenced `ParsleyChannels.channelGet` accessor, the
+  test-only `ParsleyHeader.isInternal()` predicate (the intake rule it mirrored is enforced via
+  `INTERNAL_PREFIX` and covered end-to-end by the topology tests), and the uncalled
+  `withConfigs(Map)`/`withConfig(Properties)` convenience overloads on the internal processor
+  builder. `rescope`'s Javadoc, stranded above an unrelated accessor when the former-sink heal
+  methods were inserted between it and its method, is reattached. Remaining pre-redesign prose is
+  corrected: the builder's "sharing a coordination log" guidance (there is no coordination log —
+  multi-stage pipelines are applications chained topic to topic), three "passthrough" asides, and
+  a Javadoc link still naming the renamed `CAUSAL_DEPENDENCIES` header constant.
 - **BREAKING: the protocol vocabulary moves to its academic names — wire format and public API
   (T4.1).** Parsley's progress marker is a *null message* in the Chandy–Misra–Bryant sense (a
   timestamp-carrying record whose value is literally null), and the type stamped on records is a

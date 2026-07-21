@@ -230,32 +230,6 @@ final class ParsleyProcessorSupplier<KIn, VIn, KOut, VOut>
         }
 
         /**
-         * Sets Parsley's own configuration from a map of key/value pairs, mirroring how Kafka Streams
-         * configuration is supplied. Keys are overlaid on top of any {@code parsley.properties}
-         * classpath resource. See {@link ParsleyConfig} for the recognised keys.
-         *
-         * @param configs the configuration entries; values are recorded as their string form
-         * @return this builder
-         */
-        Builder<KIn, VIn, KOut, VOut> withConfigs(Map<String, Object> configs) {
-            configs.forEach((key, value) -> config.setProperty(key, String.valueOf(value)));
-            return this;
-        }
-
-        /**
-         * Sets Parsley's own configuration from a {@link Properties}, as you might load from a
-         * properties file. Keys are overlaid on top of any {@code parsley.properties} classpath
-         * resource. See {@link ParsleyConfig} for the recognised keys.
-         *
-         * @param props the configuration properties
-         * @return this builder
-         */
-        Builder<KIn, VIn, KOut, VOut> withConfig(Properties props) {
-            props.forEach((key, value) -> config.setProperty(String.valueOf(key), String.valueOf(value)));
-            return this;
-        }
-
-        /**
          * Sets a single Parsley configuration entry, overlaid on top of any {@code parsley.properties}
          * classpath resource. See {@link ParsleyConfig} for the recognised keys.
          *

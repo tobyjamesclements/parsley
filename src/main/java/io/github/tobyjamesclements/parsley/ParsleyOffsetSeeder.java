@@ -69,8 +69,7 @@ final class ParsleyOffsetSeeder {
      *
      * @param admin           the narrow admin seam
      * @param applicationId   the Streams {@code application.id} (the consumer group id)
-     * @param sourceTopics    every causal source topic (business and passthrough) whose partitions feed a
-     *                        causal stage
+     * @param sourceTopics    every causal source topic whose partitions feed a causal stage
      * @param changelogTopics this application's exact state-store changelog topic names — the marker of
      *                        surviving causal state; any one of them existing means this is not a first start
      */

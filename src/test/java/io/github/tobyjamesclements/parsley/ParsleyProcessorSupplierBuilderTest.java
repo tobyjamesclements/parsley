@@ -7,8 +7,6 @@ import org.apache.kafka.streams.processor.api.Record;
 import org.apache.kafka.streams.state.StoreBuilder;
 import org.junit.jupiter.api.Test;
 
-import java.util.Map;
-import java.util.Properties;
 import java.util.Set;
 import java.util.stream.Collectors;
 
@@ -129,33 +127,6 @@ class ParsleyProcessorSupplierBuilderTest {
                         .build();
         assertEquals(ParsleyConfig.ValidationMode.WARN, supplier.config().topologyValidation(),
                 "the default topology-validation mode is 'warn'");
-    }
-
-    /**
-     * The {@code withConfigs(Map)} and {@code withConfig(Properties)} overloads both feed the
-     * effective Parsley configuration, exactly as {@code withConfig(key, value)} does.
-     *
-     * Asserts the {@code strict} validation mode lands via both the map and the properties overload.
-     */
-    @Test
-    void withConfigsMapAndPropertiesApplied() {
-        ParsleyProcessorSupplier<String, String, String, String> fromMap =
-                (ParsleyProcessorSupplier<String, String, String, String>) builderWith()
-                        .addSource(new ParsleySource<>("t1", Serdes.String(), Serdes.String()))
-                        .withConfigs(Map.of(TOPOLOGY_VALIDATION, "strict"))
-                        .build();
-        assertEquals(ParsleyConfig.ValidationMode.STRICT, fromMap.config().topologyValidation(),
-                "withConfigs(Map) must apply the supplied value");
-
-        Properties props = new Properties();
-        props.setProperty(TOPOLOGY_VALIDATION, "strict");
-        ParsleyProcessorSupplier<String, String, String, String> fromProps =
-                (ParsleyProcessorSupplier<String, String, String, String>) builderWith()
-                        .addSource(new ParsleySource<>("t2", Serdes.String(), Serdes.String()))
-                        .withConfig(props)
-                        .build();
-        assertEquals(ParsleyConfig.ValidationMode.STRICT, fromProps.config().topologyValidation(),
-                "withConfig(Properties) must apply the supplied value");
     }
 
     /**

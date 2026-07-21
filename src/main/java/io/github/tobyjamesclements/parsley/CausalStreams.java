@@ -73,8 +73,8 @@ public final class CausalStreams implements AutoCloseable {
     private @Nullable ScheduledExecutorService identityPollExecutor;
     private @Nullable ParsleyTopicAdmin identityPollAdmin;
     // Everything the pre-start offset seeding needs, captured at construction: the consumer group id
-    // (application.id), every causal source topic to seed (business and passthrough alike, read off the
-    // assembled topology), and the admin configuration to reach the broker. See seedSourceOffsets().
+    // (application.id), every causal source topic to seed (read off the assembled topology), and the
+    // admin configuration to reach the broker. See seedSourceOffsets().
     private final @Nullable String applicationId;
     private final Set<String> sourceTopics;
     private final Set<String> changelogTopics;

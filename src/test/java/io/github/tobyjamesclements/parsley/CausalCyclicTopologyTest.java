@@ -51,8 +51,8 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * proved instead in {@link ParsleyCyclicReflectionIT} — a single-Topology, two-stage
  * {@link TopologyTestDriver} version of that scenario is not meaningful: Kafka Streams allows only one
  * source node per topic per {@code Topology}, so two logically-separate stages sharing one root topic
- * (one directly, one via passthrough) cannot coexist in one {@code Topology} the way two genuinely
- * separate applications' independent topologies can.
+ * cannot coexist in one {@code Topology} the way two genuinely separate applications' independent
+ * topologies can.
  */
 class CausalCyclicTopologyTest {
 

@@ -585,12 +585,6 @@ final class ParsleyChannels {
         return highest == null ? -1L : highest;
     }
 
-    /** The clock advertised on channel {@code (topicId, partition)}, or empty if never updated. */
-    ParsleyVectorClock channelGet(Uuid topicId, int partition) {
-        ParsleyVectorClock clock = channels.get(new CoordKey(topicId, partition));
-        return clock == null ? ParsleyVectorClock.empty() : clock;
-    }
-
     /**
      * Max-merges {@code clock} into channel {@code (topicId, partition)}'s advertised dependencies
      * (monotonic: the stored clock never decreases) and persists. A first call for a channel
@@ -611,48 +605,6 @@ final class ParsleyChannels {
         persist();
     }
 
-    /**
-     * Reconciles restored causal state with the currently declared input set — the scope-change step
-     * run once at init, before the current input channels are seeded. Replaces the earlier
-     * {@code pruneToScope}, whose outright dropping of out-of-scope entries under-claimed the stamp
-     * and broke I2 at third parties (T3.0 A6). The one principle both directions share: <em>the
-     * causal past a node has delivered or carried may be skipped, but never dropped and never
-     * re-entered.</em> Four cases, diffed against the persisted {@link #declaredInputs}:
-     *
-     * <ol>
-     *   <li><strong>Destroyed coordinates.</strong> A topic name declared both then and now whose
-     *       UUID changed was deleted and recreated; the old UUID's entries can never be delivered by
-     *       any receiver (E1: offsets rebind to different records), so they are the only entries
-     *       removed outright — from the frontier, the channel keys and values, the highest-received
-     *       map, and the carried ancestry. The new UUID starts as an added channel (below).</li>
-     *   <li><strong>Out-of-scope re-homing (shrink, A6).</strong> Every other entry leaving scope —
-     *       a removed input's frontier entry, a retired channel's full advertised clock, an
-     *       out-of-scope entry inside a surviving channel's clock — max-merges into
-     *       {@link #carriedAncestry} before it is pruned, so {@link #completeness()} (the stamp) is
-     *       unchanged by the prune except at destroyed coordinates. Without this, a receiver
-     *       downstream of this node could see an effect stamped as if its retired-channel cause never
-     *       existed, and reorder them.</li>
-     *   <li><strong>Added channels (growth, A5).</strong> An input declared now but not in the
-     *       persisted set seeds its frontier at this node's carried-ancestry value for the
-     *       coordinate — {@code completeness()} after the re-homing above — never at log-start:
-     *       "skip what you already ignored". The prefix at or below what this node previously
-     *       carried must never be delivered into its surviving state (an operator who wants that
-     *       history performs a full reset); the forwarded index is pruned at or below the seed to
-     *       match. A coordinate with no carried entry seeds nothing — a genuinely new topic's
-     *       history has no delivered descendants here (I2), so replaying it is ordinary delivery,
-     *       not reordering.</li>
-     *   <li><strong>No persisted input set</strong> (a fresh store, or a blob from before this
-     *       section existed): nothing to diff — no seeding, no destruction; the current set is
-     *       simply recorded. Pre-release, no migration path (O6).</li>
-     * </ol>
-     *
-     * <p>The current input set is persisted at the end, so the next init diffs against what this run
-     * declared.
-     *
-     * @param currentInputs the currently declared input topics, name → UUID (passthrough included)
-     * @param taskPartition the partition this task owns on every input (Streams co-partitions a
-     *                      sub-topology's sources)
-     */
     /**
      * The input-topic set (name → UUID) the persisted state was written under — the previous run's
      * declaration, empty on a fresh store or a pre-T1.3 blob. Read it <em>before</em> {@link #rescope}
@@ -697,6 +649,48 @@ final class ParsleyChannels {
         persist();
     }
 
+    /**
+     * Reconciles restored causal state with the currently declared input set — the scope-change step
+     * run once at init, before the current input channels are seeded. Replaces the earlier
+     * {@code pruneToScope}, whose outright dropping of out-of-scope entries under-claimed the stamp
+     * and broke I2 at third parties (T3.0 A6). The one principle both directions share: <em>the
+     * causal past a node has delivered or carried may be skipped, but never dropped and never
+     * re-entered.</em> Four cases, diffed against the persisted {@link #declaredInputs}:
+     *
+     * <ol>
+     *   <li><strong>Destroyed coordinates.</strong> A topic name declared both then and now whose
+     *       UUID changed was deleted and recreated; the old UUID's entries can never be delivered by
+     *       any receiver (E1: offsets rebind to different records), so they are the only entries
+     *       removed outright — from the frontier, the channel keys and values, the highest-received
+     *       map, and the carried ancestry. The new UUID starts as an added channel (below).</li>
+     *   <li><strong>Out-of-scope re-homing (shrink, A6).</strong> Every other entry leaving scope —
+     *       a removed input's frontier entry, a retired channel's full advertised clock, an
+     *       out-of-scope entry inside a surviving channel's clock — max-merges into
+     *       {@link #carriedAncestry} before it is pruned, so {@link #completeness()} (the stamp) is
+     *       unchanged by the prune except at destroyed coordinates. Without this, a receiver
+     *       downstream of this node could see an effect stamped as if its retired-channel cause never
+     *       existed, and reorder them.</li>
+     *   <li><strong>Added channels (growth, A5).</strong> An input declared now but not in the
+     *       persisted set seeds its frontier at this node's carried-ancestry value for the
+     *       coordinate — {@code completeness()} after the re-homing above — never at log-start:
+     *       "skip what you already ignored". The prefix at or below what this node previously
+     *       carried must never be delivered into its surviving state (an operator who wants that
+     *       history performs a full reset); the forwarded index is pruned at or below the seed to
+     *       match. A coordinate with no carried entry seeds nothing — a genuinely new topic's
+     *       history has no delivered descendants here (I2), so replaying it is ordinary delivery,
+     *       not reordering.</li>
+     *   <li><strong>No persisted input set</strong> (a fresh store, or a blob from before this
+     *       section existed): nothing to diff — no seeding, no destruction; the current set is
+     *       simply recorded. Pre-release, no migration path (O6).</li>
+     * </ol>
+     *
+     * <p>The current input set is persisted at the end, so the next init diffs against what this run
+     * declared.
+     *
+     * @param currentInputs the currently declared input topics, name → UUID
+     * @param taskPartition the partition this task owns on every input (Streams co-partitions a
+     *                      sub-topology's sources)
+     */
     void rescope(Map<String, Uuid> currentInputs, int taskPartition) {
         // 1 — destroyed: recreated inputs' old UUIDs leave every stamp-feeding structure for good.
         Set<Uuid> destroyed = new HashSet<>();

@@ -51,11 +51,6 @@ record ParsleyHeader(String key, byte @Nullable [] value) {
         this.value = value;
     }
 
-    /** Returns {@code true} if this is a Parsley-internal routing header (the {@code _parsley_} prefix). */
-    boolean isInternal() {
-        return key.startsWith(INTERNAL_PREFIX);
-    }
-
     /**
      * Returns a fresh, empty, mutable {@link Headers} to populate via {@code add(String, byte[])}.
      * Kafka exposes no public {@code Headers} factory and its only implementation lives in an

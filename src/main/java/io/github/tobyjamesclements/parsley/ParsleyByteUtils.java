@@ -6,8 +6,6 @@ import java.io.DataInputStream;
 import java.io.DataOutputStream;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
-import java.util.LinkedHashSet;
-import java.util.Set;
 
 /**
  * Wire-primitive read/write helpers shared by every Parsley type that hand-rolls its own binary
@@ -53,21 +51,4 @@ final class ParsleyByteUtils {
         return new String(readBytes(dis), StandardCharsets.UTF_8);
     }
 
-    /** Writes {@code strings} as {@code [count:4]} then each string via {@link #writeString}. */
-    static void writeStringSet(DataOutputStream dos, Set<String> strings) throws IOException {
-        dos.writeInt(strings.size());
-        for (String s : strings) {
-            writeString(dos, s);
-        }
-    }
-
-    /** Reads a string set written by {@link #writeStringSet}. */
-    static Set<String> readStringSet(DataInputStream dis) throws IOException {
-        int count = dis.readInt();
-        Set<String> strings = new LinkedHashSet<>();
-        for (int i = 0; i < count; i++) {
-            strings.add(readString(dis));
-        }
-        return strings;
-    }
 }
