@@ -277,7 +277,7 @@ class ParsleyCausalBroadcastCompletenessTest {
     // --- helpers --------------------------------------------------------------------------------
 
     private static ParsleyChannels newFrontier() {
-        return new ParsleyChannels(ParsleyVectorClock.empty(), new MockForwardedIndex());
+        return ParsleyTestFixtures.channels(ParsleyVectorClock.empty(), new MockForwardedIndex());
     }
 
     /** Genuinely, contiguously delivers offsets {@code 0..upTo} on {@code topicId}'s channel. */
@@ -289,7 +289,7 @@ class ParsleyCausalBroadcastCompletenessTest {
 
     private ParsleyCausalBroadcast<String, String> causalBroadcastOver(ParsleyChannels frontier,
                                                      ParsleyVectorClock.CoordinatePredicate scope) {
-        return new ParsleyCausalBroadcast<>(frontier, buffer,
+        return ParsleyTestFixtures.broadcast(frontier, buffer,
                 new MockCandidateIndex(), ParsleyMetrics.NOOP,
                 System::currentTimeMillis, scope);
     }

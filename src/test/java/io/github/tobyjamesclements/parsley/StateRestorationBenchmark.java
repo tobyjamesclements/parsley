@@ -108,7 +108,7 @@ public class StateRestorationBenchmark {
 
         // Pre-populate the buffer store with bufferSize records, each with an unsatisfied
         // dependency, as if a crash occurred with that many held records.
-        ParsleyCausalBroadcast<String, String> causalBroadcast = new ParsleyCausalBroadcast<>(
+        ParsleyCausalBroadcast<String, String> causalBroadcast = ParsleyTestFixtures.broadcast(
                 ParsleyVectorClock.empty(),
                 new StoreBackedBufferStore<>(bufferKV, serializer), new StoreBackedCandidateIndex(waitKV),
                 new StoreBackedForwardedIndex(forwardedKV), ParsleyMetrics.NOOP);
@@ -146,7 +146,7 @@ public class StateRestorationBenchmark {
         StoreBackedBufferStore<String, String> buf = new StoreBackedBufferStore<>(bufferKV, serializer);
         StoreBackedCandidateIndex idx = new StoreBackedCandidateIndex(waitKV);
         StoreBackedForwardedIndex fwd = new StoreBackedForwardedIndex(forwardedKV);
-        return new ParsleyCausalBroadcast<>(ParsleyVectorClock.empty(),
+        return ParsleyTestFixtures.broadcast(ParsleyVectorClock.empty(),
                 buf, idx, fwd, ParsleyMetrics.NOOP);
     }
 

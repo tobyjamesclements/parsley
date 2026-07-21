@@ -195,7 +195,7 @@ class ParsleyCausalBroadcastTest {
             @Override public void reportHeldAboveHighestReceived(int count) {}
             @Override public void reportState(int depth, OptionalLong oldest) { reportedDepths.add(depth); }
         };
-        ParsleyCausalBroadcast<String, String> causalBroadcast = new ParsleyCausalBroadcast<>(
+        ParsleyCausalBroadcast<String, String> causalBroadcast = ParsleyTestFixtures.broadcast(
                 ParsleyVectorClock.empty(), buffer,
                 new MockCandidateIndex(), forwardedIndex, capturing);
 
@@ -235,7 +235,7 @@ class ParsleyCausalBroadcastTest {
             @Override public void reportHeldAboveHighestReceived(int count) {}
             @Override public void reportState(int depth, OptionalLong oldest) {}
         };
-        ParsleyCausalBroadcast<String, String> causalBroadcast = new ParsleyCausalBroadcast<>(
+        ParsleyCausalBroadcast<String, String> causalBroadcast = ParsleyTestFixtures.broadcast(
                 ParsleyVectorClock.empty(), buffer, new MockCandidateIndex(), forwardedIndex,
                 capturing, System::currentTimeMillis);
         processRecord(causalBroadcast, incomingRecord(T1, 0, ParsleyVectorClock.empty()));
@@ -582,7 +582,7 @@ class ParsleyCausalBroadcastTest {
         MockForwardedIndex sharedForwardedIndex = new MockForwardedIndex();
         MockBufferStore<String, String> sharedBuffer = new MockBufferStore<>();
 
-        ParsleyCausalBroadcast<String, String> first = new ParsleyCausalBroadcast<>(ParsleyVectorClock.empty(), sharedBuffer, new MockCandidateIndex(),
+        ParsleyCausalBroadcast<String, String> first = ParsleyTestFixtures.broadcast(ParsleyVectorClock.empty(), sharedBuffer, new MockCandidateIndex(),
                 sharedForwardedIndex, ParsleyMetrics.NOOP);
 
         // T1@5 is held; T1@6, T1@7, T1@8 each forward immediately, piling up above the gap.
@@ -598,7 +598,7 @@ class ParsleyCausalBroadcastTest {
         // buffer restored from the changelog (still holding T1@5), and the SAME forwarded-index
         // contents (standing in for "restored from its own changelog") — no separate "ceiling"
         // value is needed; the forwarded index alone remembers that 6, 7, and 8 already went out.
-        ParsleyCausalBroadcast<String, String> restarted = new ParsleyCausalBroadcast<>(persistedFrontier, sharedBuffer, new MockCandidateIndex(),
+        ParsleyCausalBroadcast<String, String> restarted = ParsleyTestFixtures.broadcast(persistedFrontier, sharedBuffer, new MockCandidateIndex(),
                 sharedForwardedIndex, ParsleyMetrics.NOOP);
 
         List<ParsleyMessage<String, String>> released =
@@ -628,7 +628,7 @@ class ParsleyCausalBroadcastTest {
     void aCrashBetweenFrontierPersistAndBufferRemovalRedeliversAsAHarmlessDuplicateNeverAWedge() {
         SwallowingRemoveBufferStore<String, String> crashyBuffer = new SwallowingRemoveBufferStore<>(0L);
 
-        ParsleyCausalBroadcast<String, String> beforeCrash = new ParsleyCausalBroadcast<>(ParsleyVectorClock.empty(), crashyBuffer,
+        ParsleyCausalBroadcast<String, String> beforeCrash = ParsleyTestFixtures.broadcast(ParsleyVectorClock.empty(), crashyBuffer,
                 new MockCandidateIndex(), new MockForwardedIndex(), ParsleyMetrics.NOOP);
 
         // T2@0 depends on T1@5 and is held (sequence 0 in the buffer).
@@ -654,7 +654,7 @@ class ParsleyCausalBroadcastTest {
         MockBufferStore<String, String> restoredBuffer = new MockBufferStore<>();
         restoredBuffer.add(incomingRecord(T2, 0, ParsleyVectorClock.empty().observe(T1_ID, 0, 5)), 0L);
 
-        ParsleyCausalBroadcast<String, String> restarted = new ParsleyCausalBroadcast<>(persistedFrontier, restoredBuffer,
+        ParsleyCausalBroadcast<String, String> restarted = ParsleyTestFixtures.broadcast(persistedFrontier, restoredBuffer,
                 new MockCandidateIndex(), new MockForwardedIndex(), ParsleyMetrics.NOOP);
 
         List<ParsleyMessage<String, String>> releasedAfterRestart = restarted.drainAfterRestore().delivered();
@@ -707,7 +707,7 @@ class ParsleyCausalBroadcastTest {
     @Test
     void baselineSeedNeverRefiresWhenTheRestoredFrontierAlreadyHasRealProgress() {
         ParsleyVectorClock restoredFrontier = ParsleyVectorClock.empty().observe(T1_ID, 0, 0);
-        ParsleyCausalBroadcast<String, String> causalBroadcast = new ParsleyCausalBroadcast<>(restoredFrontier, buffer, new MockCandidateIndex(),
+        ParsleyCausalBroadcast<String, String> causalBroadcast = ParsleyTestFixtures.broadcast(restoredFrontier, buffer, new MockCandidateIndex(),
                 forwardedIndex, ParsleyMetrics.NOOP);
 
         // The first record this (restarted) instance ever sees on T1/0 is offset 10 — far above
@@ -741,7 +741,7 @@ class ParsleyCausalBroadcastTest {
         TopicPartition t3 = new TopicPartition("t3", 0);
         MockBufferStore<String, String> sharedBuffer = new MockBufferStore<>();
         MockForwardedIndex sharedIndex = new MockForwardedIndex();
-        ParsleyCausalBroadcast<String, String> first = new ParsleyCausalBroadcast<>(ParsleyVectorClock.empty(), sharedBuffer,
+        ParsleyCausalBroadcast<String, String> first = ParsleyTestFixtures.broadcast(ParsleyVectorClock.empty(), sharedBuffer,
                 new MockCandidateIndex(), sharedIndex, ParsleyMetrics.NOOP);
 
         // T1@0 held on T3@0 (never arriving pre-crash); d = T2@0 held on its cause T1@0.
@@ -752,7 +752,7 @@ class ParsleyCausalBroadcastTest {
                 "nothing on T1 was delivered, so the persisted frontier must have no T1 entry");
 
         // Restart: fresh core (fresh seen-set) over the restored buffer and persisted frontier.
-        ParsleyCausalBroadcast<String, String> restarted = new ParsleyCausalBroadcast<>(first.frontier(), sharedBuffer,
+        ParsleyCausalBroadcast<String, String> restarted = ParsleyTestFixtures.broadcast(first.frontier(), sharedBuffer,
                 new MockCandidateIndex(), sharedIndex, ParsleyMetrics.NOOP);
 
         // The first post-restart record on T1 arrives at offset 5, dependency-free.
@@ -787,7 +787,7 @@ class ParsleyCausalBroadcastTest {
         TopicPartition t4 = new TopicPartition("t4", 0);
         Uuid t4Id = Uuid.randomUuid();
         PoisonableBufferStore<String, String> buffer = new PoisonableBufferStore<>();
-        ParsleyCausalBroadcast<String, String> causalBroadcast = new ParsleyCausalBroadcast<>(ParsleyVectorClock.empty(), buffer,
+        ParsleyCausalBroadcast<String, String> causalBroadcast = ParsleyTestFixtures.broadcast(ParsleyVectorClock.empty(), buffer,
                 new MockCandidateIndex(), new MockForwardedIndex(), ParsleyMetrics.NOOP,
                 System::currentTimeMillis);
 
@@ -829,8 +829,8 @@ class ParsleyCausalBroadcastTest {
         // Only T1 is consumed; T2 and T3 are coordinates this node has no channel for at all.
         ParsleyVectorClock.CoordinatePredicate onlyT1 = (topicId, partition) -> partition == 0 && topicId.equals(T1_ID);
         MockBufferStore<String, String> localBuffer = new MockBufferStore<>();
-        ParsleyCausalBroadcast<String, String> causalBroadcast = new ParsleyCausalBroadcast<>(
-                new ParsleyChannels(ParsleyVectorClock.empty(), new MockForwardedIndex()),
+        ParsleyCausalBroadcast<String, String> causalBroadcast = ParsleyTestFixtures.broadcast(
+                ParsleyTestFixtures.channels(ParsleyVectorClock.empty(), new MockForwardedIndex()),
                 localBuffer, new MockCandidateIndex(), capturing, System::currentTimeMillis, onlyT1);
 
         ParsleyVectorClock needsT2AndT3 =
@@ -861,8 +861,8 @@ class ParsleyCausalBroadcastTest {
         ParsleyVectorClock.CoordinatePredicate scope = (topicId, partition) ->
                 partition == 0 && (topicId.equals(T1_ID) || topicId.equals(T2_ID));
         MockBufferStore<String, String> localBuffer = new MockBufferStore<>();
-        ParsleyCausalBroadcast<String, String> causalBroadcast = new ParsleyCausalBroadcast<>(
-                new ParsleyChannels(ParsleyVectorClock.empty(), new MockForwardedIndex()),
+        ParsleyCausalBroadcast<String, String> causalBroadcast = ParsleyTestFixtures.broadcast(
+                ParsleyTestFixtures.channels(ParsleyVectorClock.empty(), new MockForwardedIndex()),
                 localBuffer, new MockCandidateIndex(), ParsleyMetrics.NOOP, System::currentTimeMillis, scope);
 
         // T3@9 is unconsumed (ignored); T2@0 is consumed and not yet delivered here (gates).
@@ -896,10 +896,10 @@ class ParsleyCausalBroadcastTest {
     void broadcastWaitsFoldsAndStampsCompletenessUnionOwnOutputs() {
         Uuid sinkId = Uuid.randomUuid();
         List<Set<TopicPartition>> waits = new ArrayList<>();
-        ParsleyChannels channels = new ParsleyChannels(ParsleyVectorClock.empty(), forwardedIndex);
+        ParsleyChannels channels = ParsleyTestFixtures.channels(ParsleyVectorClock.empty(), forwardedIndex);
         channels.bindOwnOutputSource(consumer -> consumer.accept("out", 0, 11),
                 (except, timeoutMs) -> waits.add(except), Map.of("out", sinkId), 1_000L);
-        ParsleyCausalBroadcast<String, String> causalBroadcast = new ParsleyCausalBroadcast<>(
+        ParsleyCausalBroadcast<String, String> causalBroadcast = ParsleyTestFixtures.broadcast(
                 channels, buffer, new MockCandidateIndex(), ParsleyMetrics.NOOP,
                 System::currentTimeMillis);
         causalBroadcast.receive(incomingRecord(T1, 3, ParsleyVectorClock.empty()));
@@ -927,12 +927,12 @@ class ParsleyCausalBroadcastTest {
      */
     @Test
     void broadcastPropagatesACrossingWaitFailureWithoutStamping() {
-        ParsleyChannels channels = new ParsleyChannels(ParsleyVectorClock.empty(), forwardedIndex);
+        ParsleyChannels channels = ParsleyTestFixtures.channels(ParsleyVectorClock.empty(), forwardedIndex);
         channels.bindOwnOutputSource(consumer -> { },
                 (except, timeoutMs) -> {
                     throw new ParsleyPendingAckException("pending ack failed (test)");
                 }, Map.of(), 1_000L);
-        ParsleyCausalBroadcast<String, String> causalBroadcast = new ParsleyCausalBroadcast<>(
+        ParsleyCausalBroadcast<String, String> causalBroadcast = ParsleyTestFixtures.broadcast(
                 channels, buffer, new MockCandidateIndex(), ParsleyMetrics.NOOP,
                 System::currentTimeMillis);
 
@@ -951,10 +951,10 @@ class ParsleyCausalBroadcastTest {
     @Test
     void markerBroadcastExcludesItsDestinationsFromTheCrossingWait() {
         List<Set<TopicPartition>> waits = new ArrayList<>();
-        ParsleyChannels channels = new ParsleyChannels(ParsleyVectorClock.empty(), forwardedIndex);
+        ParsleyChannels channels = ParsleyTestFixtures.channels(ParsleyVectorClock.empty(), forwardedIndex);
         channels.bindOwnOutputSource(consumer -> { },
                 (except, timeoutMs) -> waits.add(except), Map.of(), 1_000L);
-        ParsleyCausalBroadcast<String, String> causalBroadcast = new ParsleyCausalBroadcast<>(
+        ParsleyCausalBroadcast<String, String> causalBroadcast = ParsleyTestFixtures.broadcast(
                 channels, buffer, new MockCandidateIndex(), ParsleyMetrics.NOOP,
                 System::currentTimeMillis);
 
@@ -975,8 +975,8 @@ class ParsleyCausalBroadcastTest {
     @Test
     void ownSinkClaimInADeliveredRecordsClockRidesTheStampUnstripped() {
         Uuid sinkId = Uuid.randomUuid();
-        ParsleyChannels channels = new ParsleyChannels(ParsleyVectorClock.empty(), forwardedIndex);
-        ParsleyCausalBroadcast<String, String> causalBroadcast = new ParsleyCausalBroadcast<>(
+        ParsleyChannels channels = ParsleyTestFixtures.channels(ParsleyVectorClock.empty(), forwardedIndex);
+        ParsleyCausalBroadcast<String, String> causalBroadcast = ParsleyTestFixtures.broadcast(
                 channels, buffer, new MockCandidateIndex(), ParsleyMetrics.NOOP,
                 System::currentTimeMillis,
                 (topicId, partition) -> partition == 0 && topicId.equals(T1_ID),
@@ -1005,8 +1005,8 @@ class ParsleyCausalBroadcastTest {
         Uuid sinkId = Uuid.randomUuid();
         TopicPartition sink = new TopicPartition("sink", 0);
         MockBufferStore<String, String> localBuffer = new MockBufferStore<>();
-        ParsleyCausalBroadcast<String, String> causalBroadcast = new ParsleyCausalBroadcast<>(
-                new ParsleyChannels(ParsleyVectorClock.empty(), new MockForwardedIndex()),
+        ParsleyCausalBroadcast<String, String> causalBroadcast = ParsleyTestFixtures.broadcast(
+                ParsleyTestFixtures.channels(ParsleyVectorClock.empty(), new MockForwardedIndex()),
                 localBuffer, new MockCandidateIndex(), ParsleyMetrics.NOOP,
                 System::currentTimeMillis,
                 (topicId, partition) -> partition == 0 && (topicId.equals(T1_ID) || topicId.equals(sinkId)),
@@ -1047,9 +1047,9 @@ class ParsleyCausalBroadcastTest {
             @Override public void reportHeldAboveHighestReceived(int count) {}
             @Override public void reportState(int depth, OptionalLong oldest) {}
         };
-        ParsleyChannels channels = new ParsleyChannels(ParsleyVectorClock.empty(), forwardedIndex);
+        ParsleyChannels channels = ParsleyTestFixtures.channels(ParsleyVectorClock.empty(), forwardedIndex);
         channels.acknowledge(sinkId, 0, 7);
-        ParsleyCausalBroadcast<String, String> causalBroadcast = new ParsleyCausalBroadcast<>(
+        ParsleyCausalBroadcast<String, String> causalBroadcast = ParsleyTestFixtures.broadcast(
                 channels, buffer, new MockCandidateIndex(), capturing,
                 System::currentTimeMillis, (topicId, partition) -> true,
                 (topicId, partition) -> topicId.equals(sinkId));
@@ -1085,8 +1085,8 @@ class ParsleyCausalBroadcastTest {
             @Override public void reportState(int depth, OptionalLong oldest) {}
         };
         AtomicLong now = new AtomicLong(0);
-        ParsleyChannels channels = new ParsleyChannels(ParsleyVectorClock.empty(), forwardedIndex);
-        ParsleyCausalBroadcast<String, String> causalBroadcast = new ParsleyCausalBroadcast<>(
+        ParsleyChannels channels = ParsleyTestFixtures.channels(ParsleyVectorClock.empty(), forwardedIndex);
+        ParsleyCausalBroadcast<String, String> causalBroadcast = ParsleyTestFixtures.broadcast(
                 channels, buffer, new MockCandidateIndex(), capturing, now::get);
 
         // T1@5 delivers (frontier and highest received at 5); T1@8 arrives with an unsatisfiable
@@ -1146,19 +1146,19 @@ class ParsleyCausalBroadcastTest {
     }
 
     private ParsleyCausalBroadcast<String, String> causalBroadcastWith() {
-        return new ParsleyCausalBroadcast<>(ParsleyVectorClock.empty(), buffer,
+        return ParsleyTestFixtures.broadcast(ParsleyVectorClock.empty(), buffer,
                 new MockCandidateIndex(), forwardedIndex, ParsleyMetrics.NOOP,
                 System::currentTimeMillis);
     }
 
     private ParsleyCausalBroadcast<String, String> causalBroadcastConsuming(ParsleyVectorClock.CoordinatePredicate inScope) {
-        return new ParsleyCausalBroadcast<>(ParsleyVectorClock.empty(), buffer,
+        return ParsleyTestFixtures.broadcast(ParsleyVectorClock.empty(), buffer,
                 new MockCandidateIndex(), forwardedIndex, ParsleyMetrics.NOOP,
                 System::currentTimeMillis);
     }
 
     private ParsleyCausalBroadcast<String, String> causalBroadcastWithClock(java.util.function.LongSupplier clock) {
-        return new ParsleyCausalBroadcast<>(ParsleyVectorClock.empty(), buffer,
+        return ParsleyTestFixtures.broadcast(ParsleyVectorClock.empty(), buffer,
                 new MockCandidateIndex(), forwardedIndex, ParsleyMetrics.NOOP, clock);
     }
 

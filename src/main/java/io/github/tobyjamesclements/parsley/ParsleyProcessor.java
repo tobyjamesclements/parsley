@@ -206,7 +206,7 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
         // the same core and channel state.
         this.causalBroadcast = buildCausalBroadcast();
         ParsleyCausalBroadcast<KIn, VIn> causalBroadcast = this.causalBroadcast;
-        this.gossip = new ParsleyGossip<>(causalBroadcast.channels(), causalBroadcast, destinations);
+        this.gossip = new ParsleyGossip<>(causalBroadcast, destinations);
         if (restored) {
             log.info("Processor initialized [task: {}] — frontier restored: {}", context.taskId(), causalBroadcast.frontier());
         } else {
@@ -1066,13 +1066,6 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
     }
 
     /**
-     * Warns or fails (per {@code parsley.topology.validation}) when a {@link CausalStreams} sink
-     * topic's {@code cleanup.policy} includes {@code compact}. A protocol null message is a null-key,
-     * null-value record wire-indistinguishable from a compaction tombstone, so under compaction it
-     * can be removed from the log before a slow consumer reads it — silently losing the completeness
-     * frontier it carried. {@code compact,delete} is equally unsafe: compaction still runs.
-     */
-    /**
      * Fails the task, unconditionally, when a causal <em>source</em> topic has {@code cleanup.policy}
      * including {@code compact}. Unlike {@link #validateCleanupPolicy} (a sink lint, gated by {@code
      * parsley.topology.validation}), this is a correctness guard on the skip-bridge and is never gated —
@@ -1105,6 +1098,13 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
         }
     }
 
+    /**
+     * Warns or fails (per {@code parsley.topology.validation}) when a {@link CausalStreams} sink
+     * topic's {@code cleanup.policy} includes {@code compact}. A protocol null message is a null-key,
+     * null-value record wire-indistinguishable from a compaction tombstone, so under compaction it
+     * can be removed from the log before a slow consumer reads it — silently losing the completeness
+     * frontier it carried. {@code compact,delete} is equally unsafe: compaction still runs.
+     */
     private void validateCleanupPolicy(Map<String, String> cleanupPolicies) {
         ParsleyConfig.ValidationMode mode = config.topologyValidation();
         if (mode == ParsleyConfig.ValidationMode.OFF) {

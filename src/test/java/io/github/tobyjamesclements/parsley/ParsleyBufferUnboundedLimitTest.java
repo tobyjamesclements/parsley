@@ -32,7 +32,7 @@ class ParsleyBufferUnboundedLimitTest {
     @Test
     void unboundedLimitNeverEvictsAndReleasesInCausalOrderWhenDependenciesSatisfied() {
         MockBufferStore<String, String> buffer = new MockBufferStore<>();
-        ParsleyCausalBroadcast<String, String> causalBroadcast = new ParsleyCausalBroadcast<>(
+        ParsleyCausalBroadcast<String, String> causalBroadcast = ParsleyTestFixtures.broadcast(
                 ParsleyVectorClock.empty(),
                 buffer, new MockCandidateIndex(), new MockForwardedIndex(), ParsleyMetrics.NOOP,
                 System::currentTimeMillis);

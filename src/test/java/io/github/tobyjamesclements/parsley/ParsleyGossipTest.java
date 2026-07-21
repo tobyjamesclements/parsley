@@ -136,7 +136,7 @@ class ParsleyGossipTest {
         Uuid sinkId = Uuid.randomUuid();
         ParsleyChannels channels = newFrontier();
         channels.acknowledge(sinkId, 0, 7);
-        ParsleyCausalBroadcast<String, String> causalBroadcast = new ParsleyCausalBroadcast<>(
+        ParsleyCausalBroadcast<String, String> causalBroadcast = ParsleyTestFixtures.broadcast(
                 channels, buffer, new MockCandidateIndex(), ParsleyMetrics.NOOP,
                 System::currentTimeMillis, SCOPE, (topicId, partition) -> topicId.equals(sinkId));
         ParsleyGossip<String, String> gossip = gossipOver(channels, causalBroadcast);
@@ -176,18 +176,18 @@ class ParsleyGossipTest {
     // --- helpers --------------------------------------------------------------------------------
 
     private static ParsleyChannels newFrontier() {
-        return new ParsleyChannels(ParsleyVectorClock.empty(), new MockForwardedIndex());
+        return ParsleyTestFixtures.channels(ParsleyVectorClock.empty(), new MockForwardedIndex());
     }
 
     private ParsleyCausalBroadcast<String, String> causalBroadcastOver(ParsleyChannels frontier) {
-        return new ParsleyCausalBroadcast<>(frontier, buffer,
+        return ParsleyTestFixtures.broadcast(frontier, buffer,
                 new MockCandidateIndex(), ParsleyMetrics.NOOP,
                 System::currentTimeMillis, SCOPE);
     }
 
     private static ParsleyGossip<String, String> gossipOver(ParsleyChannels channels,
                                                             ParsleyCausalBroadcast<String, String> broadcast) {
-        return new ParsleyGossip<>(channels, broadcast, Set.of());
+        return new ParsleyGossip<>(broadcast, Set.of());
     }
 
     private static ParsleyMessage<String, String> record(TopicPartition tp, long offset,

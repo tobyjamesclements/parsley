@@ -309,11 +309,11 @@ class CausalReconvergenceTopologyTest {
                 partition == 0 && topicId.equals(T1_ID);
         MockBufferStore<String, String> buffer = new MockBufferStore<>();
 
-        ParsleyChannels channels = new ParsleyChannels(ParsleyVectorClock.empty(), new MockForwardedIndex());
-        ParsleyCausalBroadcast<String, String> causalBroadcast = new ParsleyCausalBroadcast<>(
+        ParsleyChannels channels = ParsleyTestFixtures.channels(ParsleyVectorClock.empty(), new MockForwardedIndex());
+        ParsleyCausalBroadcast<String, String> causalBroadcast = ParsleyTestFixtures.broadcast(
                 channels, buffer, new MockCandidateIndex(), ParsleyMetrics.NOOP,
                 System::currentTimeMillis);
-        ParsleyGossip<String, String> gossip = new ParsleyGossip<>(channels, causalBroadcast, Set.of());
+        ParsleyGossip<String, String> gossip = new ParsleyGossip<>(causalBroadcast, Set.of());
 
         // Before any null message, completeness has no ANC coordinate.
         assertEquals(-1L, causalBroadcast.completeness().offsetFor(ANC_ID, 0),

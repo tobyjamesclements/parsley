@@ -360,7 +360,7 @@ class ParsleyChannelsTest {
     @Test
     void stampIsCompletenessMergedWithOwnOutputs() {
         ParsleyChannels channels =
-                new ParsleyChannels(ParsleyVectorClock.empty(), new MockForwardedIndex());
+                ParsleyTestFixtures.channels(ParsleyVectorClock.empty(), new MockForwardedIndex());
         channels.seedIfFirstSeen(T1_ID, 0, 3);
         channels.delivered(T1_ID, 0, 3);
         channels.acknowledge(SINK_ID, 0, 6);
@@ -423,7 +423,7 @@ class ParsleyChannelsTest {
     @Test
     void acknowledgeFoldsMonotonicallyIntoOwnOutputs() {
         ParsleyChannels channels =
-                new ParsleyChannels(ParsleyVectorClock.empty(), new MockForwardedIndex());
+                ParsleyTestFixtures.channels(ParsleyVectorClock.empty(), new MockForwardedIndex());
 
         channels.acknowledge(SINK_ID, 0, 5);
         assertEquals(5L, channels.ownOutputs().offsetFor(SINK_ID, 0),
@@ -451,7 +451,7 @@ class ParsleyChannelsTest {
     @Test
     void ownOutputsDoesNotLeakIntoCompletenessBeforeStampIntegration() {
         ParsleyChannels channels =
-                new ParsleyChannels(ParsleyVectorClock.empty(), new MockForwardedIndex());
+                ParsleyTestFixtures.channels(ParsleyVectorClock.empty(), new MockForwardedIndex());
         channels.delivered(T1_ID, 0, 0);
         ParsleyVectorClock before = channels.completeness();
 
@@ -525,7 +525,7 @@ class ParsleyChannelsTest {
     @Test
     void endOffsetSeedOverClaimsSoundlyAndNeverRecedes() {
         ParsleyChannels channels =
-                new ParsleyChannels(ParsleyVectorClock.empty(), new MockForwardedIndex());
+                ParsleyTestFixtures.channels(ParsleyVectorClock.empty(), new MockForwardedIndex());
 
         // Seed from end offset 42 (last appended position 41) with nothing produced by this task.
         channels.acknowledge(SINK_ID, 0, 41);
@@ -547,7 +547,7 @@ class ParsleyChannelsTest {
     @Test
     void foldAcknowledgedOutputsDrainsTheBoundSourceThroughTheNameToUuidMap() {
         ParsleyChannels channels =
-                new ParsleyChannels(ParsleyVectorClock.empty(), new MockForwardedIndex());
+                ParsleyTestFixtures.channels(ParsleyVectorClock.empty(), new MockForwardedIndex());
         channels.foldAcknowledgedOutputs();
         assertTrue(channels.ownOutputs().isEmpty(),
                 "an unbound fold must be a no-op, not a failure");
@@ -678,7 +678,7 @@ class ParsleyChannelsTest {
      */
     @Test
     void bridgeCrossesAConsumerSkippedOffsetSoTheContiguousWalkReachesTheEnd() {
-        ParsleyChannels frontier = new ParsleyChannels(ParsleyVectorClock.empty(), new MockForwardedIndex());
+        ParsleyChannels frontier = ParsleyTestFixtures.channels(ParsleyVectorClock.empty(), new MockForwardedIndex());
 
         for (long offset : new long[] {0, 1, 2, 4, 5, 6}) {   // 3 is a commit marker the consumer skips
             receiveAndDeliver(frontier, T1_ID, 0, offset);
@@ -696,7 +696,7 @@ class ParsleyChannelsTest {
      */
     @Test
     void bridgeReturnsTrueOnlyWhenItAdvancesTheFrontier() {
-        ParsleyChannels frontier = new ParsleyChannels(ParsleyVectorClock.empty(), new MockForwardedIndex());
+        ParsleyChannels frontier = ParsleyTestFixtures.channels(ParsleyVectorClock.empty(), new MockForwardedIndex());
 
         assertFalse(frontier.bridge(T1_ID, 0, 0),
                 "the first sighting of a channel bridges nothing (its baseline is the seed's concern)");
@@ -722,7 +722,7 @@ class ParsleyChannelsTest {
      */
     @Test
     void bridgeDoesNotAdvancePastAHeldBusinessRecord() {
-        ParsleyChannels frontier = new ParsleyChannels(ParsleyVectorClock.empty(), new MockForwardedIndex());
+        ParsleyChannels frontier = ParsleyTestFixtures.channels(ParsleyVectorClock.empty(), new MockForwardedIndex());
 
         receiveAndDeliver(frontier, T1_ID, 0, 0);
         receiveAndDeliver(frontier, T1_ID, 0, 1);
@@ -750,7 +750,7 @@ class ParsleyChannelsTest {
     @Test
     void bridgeFastPathFoldsALargeSkippedRunWithoutMarkingEachOffset() {
         MockForwardedIndex forwardedIndex = new MockForwardedIndex();
-        ParsleyChannels frontier = new ParsleyChannels(ParsleyVectorClock.empty(), forwardedIndex);
+        ParsleyChannels frontier = ParsleyTestFixtures.channels(ParsleyVectorClock.empty(), forwardedIndex);
 
         receiveAndDeliver(frontier, T1_ID, 0, 0);          // frontier and highest-received both at 0
 
@@ -891,7 +891,7 @@ class ParsleyChannelsTest {
                 delegate.pruneAtOrBelow(topicId, partition, watermark);
             }
         };
-        ParsleyChannels frontier = new ParsleyChannels(ParsleyVectorClock.empty(), crashyIndex);
+        ParsleyChannels frontier = ParsleyTestFixtures.channels(ParsleyVectorClock.empty(), crashyIndex);
 
         frontier.delivered(T1_ID, 0, 0);
 
@@ -923,7 +923,7 @@ class ParsleyChannelsTest {
     @Test
     void replayingAnAlreadyDeliveredOffsetLeavesNoForwardedIndexEntry() {
         MockForwardedIndex forwardedIndex = new MockForwardedIndex();
-        ParsleyChannels frontier = new ParsleyChannels(ParsleyVectorClock.empty(), forwardedIndex);
+        ParsleyChannels frontier = ParsleyTestFixtures.channels(ParsleyVectorClock.empty(), forwardedIndex);
 
         frontier.delivered(T1_ID, 0, 0);
         frontier.delivered(T1_ID, 0, 1);

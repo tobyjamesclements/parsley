@@ -75,18 +75,18 @@ final class ParsleyGossip<K, V> {
     private final Set<TopicPartition> destinations;
 
     /**
-     * @param channels     the L1 module — the total-knowledge clock ({@code stamp()}) the I6 relay
-     *                     rule compares against, and the frontier/channel state a received null
-     *                     message's offset and carried clock fold into
      * @param broadcast    the L2 core this layer extends — supplies the release cascade for a null
-     *                     message's own delivered offset, the reflected-claim diagnostic, and the
-     *                     single stamping site {@link ParsleyCausalBroadcast#broadcast}
+     *                     message's own delivered offset, the reflected-claim diagnostic, the
+     *                     single stamping site {@link ParsleyCausalBroadcast#broadcast}, and (via
+     *                     {@link ParsleyCausalBroadcast#channels()}) the L1 module: the
+     *                     total-knowledge clock ({@code stamp()}) the I6 relay rule compares
+     *                     against, and the frontier/channel state a received null message's offset
+     *                     and carried clock fold into
      * @param destinations every declared sink at this task's own partition — a null message's exact
      *                     destination set, excluded from its stamp's crossing wait (see the field)
      */
-    ParsleyGossip(ParsleyChannels channels, ParsleyCausalBroadcast<K, V> broadcast,
-                  Set<TopicPartition> destinations) {
-        this.channels = channels;
+    ParsleyGossip(ParsleyCausalBroadcast<K, V> broadcast, Set<TopicPartition> destinations) {
+        this.channels = broadcast.channels();
         this.broadcast = broadcast;
         this.destinations = Set.copyOf(destinations);
     }

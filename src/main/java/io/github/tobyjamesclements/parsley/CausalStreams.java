@@ -89,18 +89,29 @@ public final class CausalStreams implements AutoCloseable {
      */
     public CausalStreams(CausalTopology topology, Properties props) {
         this.quiesce = new ParsleyQuiesce();
-        Topology assembled = topology.assemble(props, quiesce);
-        this.ownOutputRegistryId = registerOwnOutputTracking(topology, props);
+        // Work on a copy of the caller's Properties: the interceptor entry and the minted
+        // registry/watch ids are injected below, so mutating the caller's object would let a
+        // second instance built from the same Properties duplicate the interceptor and
+        // cross-wire the ids.
+        Properties effective = new Properties();
+        props.forEach(effective::put);
+        Topology assembled = topology.assemble(effective, quiesce);
+        this.ownOutputRegistryId = registerOwnOutputTracking(topology, effective);
         this.topicIdentityWatchId = UUID.randomUUID().toString();
         this.topicIdentityWatch = new ParsleyTopicIdentityWatch();
         ParsleyTopicIdentityWatch.register(topicIdentityWatchId, topicIdentityWatch);
-        props.put("producer." + ParsleyTopicIdentityWatch.CONFIG_KEY, topicIdentityWatchId);
-        this.kafkaStreams = new KafkaStreams(assembled, props);
-        this.applicationId = props.getProperty(StreamsConfig.APPLICATION_ID_CONFIG);
+        effective.put("producer." + ParsleyTopicIdentityWatch.CONFIG_KEY, topicIdentityWatchId);
+        this.kafkaStreams = new KafkaStreams(assembled, effective);
+        this.applicationId = effective.getProperty(StreamsConfig.APPLICATION_ID_CONFIG);
         this.sourceTopics = sourceTopicsOf(assembled);
         this.changelogTopics = changelogTopicsOf(assembled, applicationId);
         this.adminConfigs = new HashMap<>();
-        props.forEach((key, value) -> adminConfigs.put(String.valueOf(key), value));
+        effective.forEach((key, value) -> adminConfigs.put(String.valueOf(key), value));
+    }
+
+    /** The minted id this instance's producer-ack registry is registered under. Test seam. */
+    String ownOutputRegistryId() {
+        return ownOutputRegistryId;
     }
 
     /** Every source topic the assembled topology consumes — the causal sources to seed before start. */
@@ -150,7 +161,9 @@ public final class CausalStreams implements AutoCloseable {
      *
      * @return the minted registry id, for {@link #close()} to unregister
      */
-    private static String registerOwnOutputTracking(CausalTopology topology, Properties props) {
+    // Package-private for direct unit coverage: the effective Properties a KafkaStreams instance
+    // is built from are a construction-time copy, no longer observable through the caller's object.
+    static String registerOwnOutputTracking(CausalTopology topology, Properties props) {
         String registryId = UUID.randomUUID().toString();
         ParsleyOwnOutputRegistry.register(registryId, new ParsleyOwnOutputRegistry(topology.sinkTopics()));
         String interceptorsKey = "producer." + ProducerConfig.INTERCEPTOR_CLASSES_CONFIG;

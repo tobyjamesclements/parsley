@@ -153,80 +153,11 @@ final class ParsleyCausalBroadcast<K, V> {
     // own sink"; ParsleyProcessor passes its real per-stage sink-topic predicate.
     private final ParsleyVectorClock.CoordinatePredicate ownSinkTopics;
 
-    // --- Convenience constructors: build an in-memory ParsleyChannels from an initial clock and a
-    // forwarded index. Production and restart-style callers pass a pre-built ParsleyChannels to the
-    // full constructor below (so channel + frontier state can be shared/persisted). ---
-
-    ParsleyCausalBroadcast(ParsleyVectorClock initialFrontier,
-                 ParsleyBufferStore<K, V> buffer,
-                 ParsleyCandidateIndex candidateIndex,
-                 ParsleyForwardedIndex forwardedIndex,
-                 ParsleyMetrics metrics) {
-        this(initialFrontier, buffer, candidateIndex, forwardedIndex, metrics, System::currentTimeMillis);
-    }
-
-    ParsleyCausalBroadcast(ParsleyVectorClock initialFrontier,
-                 ParsleyBufferStore<K, V> buffer,
-                 ParsleyCandidateIndex candidateIndex,
-                 ParsleyForwardedIndex forwardedIndex,
-                 ParsleyMetrics metrics,
-                 LongSupplier clock) {
-        this(new ParsleyChannels(initialFrontier, forwardedIndex, false),
-                buffer, candidateIndex, metrics, clock);
-    }
-
     /**
-     * As {@link #ParsleyCausalBroadcast(ParsleyChannels, ParsleyBufferStore, ParsleyCandidateIndex,
-     * ParsleyMetrics, LongSupplier, ParsleyVectorClock.CoordinatePredicate,
-     * ParsleyVectorClock.CoordinatePredicate) the full constructor}, with every coordinate consumed
-     * and nothing treated as this node's own sink — for callers/tests that do not need to exercise
-     * the gate's ignore branch or the reflected-claim diagnostic.
-     */
-    ParsleyCausalBroadcast(ParsleyChannels channels,
-                 ParsleyBufferStore<K, V> buffer,
-                 ParsleyCandidateIndex candidateIndex,
-                 ParsleyMetrics metrics,
-                 LongSupplier clock) {
-        this(channels, buffer, candidateIndex, metrics, clock,
-                (topicId, partition) -> true, (topicId, partition) -> false);
-    }
-
-    /**
-     * As {@link #ParsleyCausalBroadcast(ParsleyChannels, ParsleyBufferStore, ParsleyCandidateIndex,
-     * ParsleyMetrics, LongSupplier, ParsleyVectorClock.CoordinatePredicate,
-     * ParsleyVectorClock.CoordinatePredicate) the full constructor}, with nothing ever treated as this node's
-     * own sink — for callers/tests that do not need to exercise the reflected-claim diagnostic.
-     */
-    ParsleyCausalBroadcast(ParsleyChannels channels,
-                 ParsleyBufferStore<K, V> buffer,
-                 ParsleyCandidateIndex candidateIndex,
-                 ParsleyMetrics metrics,
-                 LongSupplier clock,
-                 ParsleyVectorClock.CoordinatePredicate consumed) {
-        this(channels, buffer, candidateIndex, metrics, clock, consumed, (topicId, partition) -> false,
-                Set.of());
-    }
-
-    /**
-     * As {@link #ParsleyCausalBroadcast(ParsleyChannels, ParsleyBufferStore, ParsleyCandidateIndex,
-     * ParsleyMetrics, LongSupplier, ParsleyVectorClock.CoordinatePredicate,
-     * ParsleyVectorClock.CoordinatePredicate, Set) the full constructor}, with no destroyed source
-     * incarnations — for callers/tests whose restored buffer predates no input recreation.
-     */
-    ParsleyCausalBroadcast(ParsleyChannels channels,
-                 ParsleyBufferStore<K, V> buffer,
-                 ParsleyCandidateIndex candidateIndex,
-                 ParsleyMetrics metrics,
-                 LongSupplier clock,
-                 ParsleyVectorClock.CoordinatePredicate consumed,
-                 ParsleyVectorClock.CoordinatePredicate ownSinkTopics) {
-        this(channels, buffer, candidateIndex, metrics, clock, consumed, ownSinkTopics, Set.of());
-    }
-
-    /**
-     * Full constructor. Takes a pre-built {@link ParsleyChannels} — the single owner of the frontier
-     * clock, channel clocks, and forwarded index — so callers control its persistence (a store-backed
-     * frontier in production, an in-memory one in tests).
+     * The one constructor. Takes a pre-built {@link ParsleyChannels} — the single owner of the
+     * frontier clock, channel clocks, and forwarded index — so callers control its persistence
+     * (the task's changelog-backed store in production, an in-memory store double in tests; the
+     * test fixture factory provides the defaulted convenience shapes tests use).
      *
      * <p><strong>Held-record disposition.</strong> Every restored held record is classified by its
      * source coordinate before anything is seeded or indexed:

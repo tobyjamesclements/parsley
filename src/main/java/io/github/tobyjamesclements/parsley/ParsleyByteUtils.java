@@ -5,7 +5,6 @@ import org.apache.kafka.common.Uuid;
 import java.io.DataInputStream;
 import java.io.DataOutputStream;
 import java.io.IOException;
-import java.nio.charset.StandardCharsets;
 
 /**
  * Wire-primitive read/write helpers shared by every Parsley type that hand-rolls its own binary
@@ -39,16 +38,6 @@ final class ParsleyByteUtils {
     /** Reads a {@link Uuid} written by {@link #writeUuid}. */
     static Uuid readUuid(DataInputStream dis) throws IOException {
         return new Uuid(dis.readLong(), dis.readLong());
-    }
-
-    /** Writes {@code s} length-prefixed as UTF-8: {@code [length:4][utf8 bytes]}. */
-    static void writeString(DataOutputStream dos, String s) throws IOException {
-        writeBytes(dos, s.getBytes(StandardCharsets.UTF_8));
-    }
-
-    /** Reads a length-prefixed UTF-8 string written by {@link #writeString}. */
-    static String readString(DataInputStream dis) throws IOException {
-        return new String(readBytes(dis), StandardCharsets.UTF_8);
     }
 
 }

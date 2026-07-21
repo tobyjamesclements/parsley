@@ -111,12 +111,12 @@ final class ParsleyChannels {
     private ParsleyVectorClock ownOutputs = ParsleyVectorClock.empty();
     // The acknowledged-outputs source foldAcknowledgedOutputs() drains (the interceptor registry in
     // production), with the sink-name → UUID resolution fixed at bind time; null until
-    // bindOwnOutputSource, and permanently null for in-memory/test instances and TopologyTestDriver
+    // bindOwnOutputSource, and permanently null for test-fixture instances and TopologyTestDriver
     // runs (no registry exists there — ownOutputs then advances only via direct acknowledge calls).
     private @Nullable AckedOutputs ackedOutputs;
     // The pending-send view the crossing wait blocks on (the same registry object as ackedOutputs in
     // production); null until bindOwnOutputSource, making awaitOwnOutputQuiescence a no-op wherever
-    // no producer registry exists (in-memory/test instances, TopologyTestDriver runs).
+    // no producer registry exists (test-fixture instances, TopologyTestDriver runs).
     private @Nullable PendingSends pendingSends;
     private long crossingWaitTimeoutMs;
     private Map<String, Uuid> ownOutputTopicIds = Map.of();
@@ -163,34 +163,10 @@ final class ParsleyChannels {
     // Coordinates observed at least once; guards the one-time baseline seed in seedIfFirstSeen.
     private final Set<CoordKey> seenCoordinates = new HashSet<>();
     private final ParsleyForwardedIndex forwardedIndex;
-    // The frontier state store, holding this frontier+channels blob at key "f"; null for in-memory
-    // (test) instances, which skip persistence.
-    private final @Nullable KeyValueStore<String, byte[]> store;
-    // When false, channel clocks are not tracked: channelUpdate is a no-op and completeness() is the
-    // node's own frontier (single-layer, frontier-only gating). Used to exercise the frontier/buffer
-    // mechanics in isolation, without the cross-channel completeness layer.
-    private final boolean trackChannels;
-
-    /**
-     * In-memory instance that tracks channel clocks: starts from {@code initial} with no channels and
-     * no persistence. Used by tests exercising {@link #completeness()} and any caller that does not
-     * need a durable frontier.
-     */
-    ParsleyChannels(ParsleyVectorClock initial, ParsleyForwardedIndex forwardedIndex) {
-        this(initial, forwardedIndex, true);
-    }
-
-    /**
-     * In-memory instance with channel tracking optionally disabled. With
-     * {@code trackChannels = false}, {@link #completeness()} is the node's own frontier and
-     * {@link #channelUpdate} is a no-op.
-     */
-    ParsleyChannels(ParsleyVectorClock initial, ParsleyForwardedIndex forwardedIndex, boolean trackChannels) {
-        this.frontier = initial;
-        this.forwardedIndex = forwardedIndex;
-        this.store = null;
-        this.trackChannels = trackChannels;
-    }
+    // The frontier state store, holding this frontier+channels blob at key "f". Production always
+    // passes the task's changelog-backed store; tests pass an in-memory KeyValueStore double
+    // (see the test fixture factory) — there is no store-less mode.
+    private final KeyValueStore<String, byte[]> store;
 
     /**
      * Durable instance: loads the frontier clock and channel clocks from key {@code "f"} of
@@ -207,7 +183,6 @@ final class ParsleyChannels {
     ParsleyChannels(KeyValueStore<String, byte[]> store, ParsleyForwardedIndex forwardedIndex) {
         this.store = store;
         this.forwardedIndex = forwardedIndex;
-        this.trackChannels = true;
         byte[] blob = store.get(ParsleyStores.FRONTIER_KEY);
         this.frontier = ParsleyVectorClock.empty();
         if (blob != null) {
@@ -328,7 +303,7 @@ final class ParsleyChannels {
      * Wires the acknowledged-outputs source {@link #foldAcknowledgedOutputs()} drains — the
      * interceptor registry in production — together with this node's sink-name → UUID resolution
      * (acks arrive keyed by topic name; the clock is keyed by UUID identity, E1). Called once at
-     * init by {@code ParsleyProcessor}; never called for in-memory/test instances, whose
+     * init by {@code ParsleyProcessor}; never called for test-fixture instances, whose
      * {@code ownOutputs} then advances only through direct {@link #acknowledge} calls. Sink
      * resolution is strict at init (an unresolvable sink fails init), so {@code sinkTopicIds}
      * always covers every sink this stage declares; an acked topic without a translation belongs
@@ -368,7 +343,7 @@ final class ParsleyChannels {
      * <p><strong>Never stamp-and-proceed</strong> (T3.0 A8): the bound wait throws
      * {@link ParsleyPendingAckException} on timeout or on an observed acknowledgement failure —
      * the caller's EOS transaction must die rather than emit a potentially under-claiming stamp.
-     * A no-op until {@link #bindOwnOutputSource} is called (in-memory/test instances and
+     * A no-op until {@link #bindOwnOutputSource} is called (test-fixture instances and
      * TopologyTestDriver runs, which have no producer registry and therefore no pending sends).
      */
     void awaitOwnOutputQuiescence(Set<TopicPartition> exceptDestinations) {
@@ -597,9 +572,6 @@ final class ParsleyChannels {
      * seeded-but-silent channel entry still does is give {@link #rescope} something to check against.
      */
     void channelUpdate(Uuid topicId, int partition, ParsleyVectorClock clock) {
-        if (!trackChannels) {
-            return;
-        }
         CoordKey key = new CoordKey(topicId, partition);
         ParsleyVectorClock existing = channels.get(key);
         channels.put(key, existing == null ? clock : existing.merge(clock));
@@ -785,9 +757,7 @@ final class ParsleyChannels {
     }
 
     private void persist() {
-        if (store != null) {
-            store.put(ParsleyStores.FRONTIER_KEY, toBytes());
-        }
+        store.put(ParsleyStores.FRONTIER_KEY, toBytes());
     }
 
     /**

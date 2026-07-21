@@ -99,7 +99,7 @@ public class BufferReleaseBenchmark {
                                                        KeyValueStore<byte[], byte[]> waitKV,
                                                        KeyValueStore<byte[], byte[]> forwardedKV,
                                                        ParsleySerializer<String, String> serializer) {
-        return new ParsleyCausalBroadcast<>(
+        return ParsleyTestFixtures.broadcast(
                 ParsleyVectorClock.empty(),
                 new StoreBackedBufferStore<>(bufferKV, serializer),
                 new StoreBackedCandidateIndex(waitKV),

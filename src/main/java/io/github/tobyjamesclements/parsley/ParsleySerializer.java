@@ -53,7 +53,7 @@ final class ParsleySerializer<K, V> {
             out.writeByte(FORMAT_VERSION);
             out.writeLong(message.timestamp());
             writeString(out, topic);
-            out.write(ParsleyHeader.uuidToBytes(message.topicId()));
+            ParsleyByteUtils.writeUuid(out, message.topicId());
             out.writeInt(message.partition());
             out.writeLong(message.offset());
             writeNullable(out, message.dependencies().toBytes());
@@ -82,9 +82,7 @@ final class ParsleySerializer<K, V> {
             }
             long timestamp = in.readLong();
             String topic = readString(in);
-            byte[] topicIdBytes = new byte[16];
-            in.readFully(topicIdBytes);
-            Uuid topicId = ParsleyHeader.uuidFromBytes(topicIdBytes);
+            Uuid topicId = ParsleyByteUtils.readUuid(in);
             int partition = in.readInt();
             long offset = in.readLong();
             // Dependencies are always framed non-null (serialize() writes dependencies().toBytes()).
@@ -152,9 +150,7 @@ final class ParsleySerializer<K, V> {
             }
             in.readLong();               // timestamp
             String topic = readString(in);
-            byte[] topicIdBytes = new byte[16];
-            in.readFully(topicIdBytes);
-            Uuid topicId = ParsleyHeader.uuidFromBytes(topicIdBytes);
+            Uuid topicId = ParsleyByteUtils.readUuid(in);
             int partition = in.readInt();
             long offset = in.readLong();
             // Dependencies are always framed non-null (serialize() writes dependencies().toBytes()).

@@ -7,6 +7,23 @@ All notable changes to this project are documented in this file. The format is b
 ## [Unreleased]
 
 ### Changed
+- **Hygiene sweep.** `CausalStreams` now works on a copy of the caller's `Properties`, so
+  constructing two instances from one object can no longer duplicate the producer-interceptor
+  entry or cross-wire registry ids. Test-only machinery left main: `ParsleyCausalBroadcast` keeps
+  only its full constructor and `ParsleyChannels` only its store-backed one (the in-memory and
+  predicate-defaulting convenience shapes moved to a test fixture factory, and the unused
+  `trackChannels=false` mode is deleted). `ParsleyGossip`'s constructor takes the broadcast core
+  alone and reads the channels module through it. Duplicate codecs consolidated: the dead
+  string helpers in `ParsleyByteUtils` are deleted and `ParsleySerializer` uses
+  `ParsleyByteUtils`' UUID codec, retiring `ParsleyHeader`'s copy. An orphaned Javadoc block is
+  reattached to `validateCleanupPolicy`. And `performance.md` gains a fourth cost category —
+  crossing-wait produce serialization: a multi-forward delegate pays roughly
+  N × (linger + replication round trip) per invocation, because each business forward's stamp
+  waits for the previous forward's acknowledgement; with Kafka Streams' default
+  `producer.linger.ms` of 100 ms this dominates every other documented cost, so the section
+  carries the tuning guidance (lower linger for multi-forward delegates) and why a per-partition
+  exemption is impossible (a business forward's destination partition is unknowable at stamp
+  time).
 - **BREAKING: `parsley.topology.validation` now defaults to `strict`.** A detectable topology
   misconfiguration — the causal topics not sharing a partition count, or a sink whose
   `cleanup.policy` includes `compact` — now fails startup unless the deployment explicitly opts

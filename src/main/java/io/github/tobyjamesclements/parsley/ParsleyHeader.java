@@ -1,12 +1,10 @@
 package io.github.tobyjamesclements.parsley;
 
-import org.apache.kafka.common.Uuid;
 import org.apache.kafka.common.header.Header;
 import org.apache.kafka.common.header.Headers;
 import org.apache.kafka.clients.producer.ProducerRecord;
 import org.jspecify.annotations.Nullable;
 
-import java.nio.ByteBuffer;
 import java.util.Objects;
 
 /**
@@ -78,14 +76,4 @@ record ParsleyHeader(String key, byte @Nullable [] value) {
         return stamped;
     }
 
-    static byte[] uuidToBytes(Uuid id) {
-        return ByteBuffer.allocate(16)
-                .putLong(id.getMostSignificantBits())
-                .putLong(id.getLeastSignificantBits())
-                .array();
-    }
-
-    static Uuid uuidFromBytes(byte[] b) {
-        return new Uuid(ByteBuffer.wrap(b, 0, 8).getLong(), ByteBuffer.wrap(b, 8, 8).getLong());
-    }
 }

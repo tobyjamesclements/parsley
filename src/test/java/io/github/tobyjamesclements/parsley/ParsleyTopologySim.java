@@ -187,14 +187,14 @@ final class ParsleyTopologySim {
             channels.bindOwnOutputSource(producer, producer, sinkIds, 60_000L);
             Set<Uuid> inputUuids = new HashSet<>(inputIds.values());
             Set<Uuid> sinkUuids = new HashSet<>(sinkIds.values());
-            core = new ParsleyCausalBroadcast<>(channels,
+            core = ParsleyTestFixtures.broadcast(channels,
                     new StoreBackedBufferStore<>(bufferStore,
                             new ParsleySerializer<>(new ParsleyResolver<>(t -> Serdes.String(), t -> Serdes.String()))),
                     new StoreBackedCandidateIndex(candidateStore),
                     ParsleyMetrics.NOOP, () -> ++simTimeMs,
                     (topicId, partition) -> partition == PARTITION && inputUuids.contains(topicId),
                     (topicId, partition) -> sinkUuids.contains(topicId));
-            gossip = new ParsleyGossip<>(channels, core, Set.of());
+            gossip = new ParsleyGossip<>(core, Set.of());
             frontierAtStart = channels.frontier();
         }
 

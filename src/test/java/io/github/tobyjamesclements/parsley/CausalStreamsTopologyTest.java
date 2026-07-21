@@ -1222,19 +1222,59 @@ class CausalStreamsTopologyTest {
     }
 
     /**
-     * {@link CausalStreams} construction wires the own-output ack machinery through public
-     * configuration alone (O1): it appends {@link ParsleyOwnOutputInterceptor} to the
+     * {@link CausalStreams#registerOwnOutputTracking} wires the own-output ack machinery through
+     * public configuration alone (O1): it appends {@link ParsleyOwnOutputInterceptor} to the
      * user-configured {@code producer.interceptor.classes} — never replacing them — injects the
      * minted registry id under the {@code producer.} prefix, and registers a registry tracking
-     * exactly the declared sink topics; {@code close()} unregisters it.
+     * exactly the declared sink topics. Unit-covered directly because the construction path now
+     * applies it to a copy of the caller's Properties, which is not observable from outside.
      *
-     * Asserts the user's interceptor is preserved ahead of Parsley's, the registry id resolves to
-     * a registry tracking the sink (and not the source), and the id no longer resolves after close.
+     * Asserts the user's interceptor is preserved ahead of Parsley's and the registry id resolves
+     * to a registry tracking the sink (and not the source).
      */
     @Test
-    void causalStreamsAppendsTheOwnOutputInterceptorAndManagesTheRegistryLifecycle() throws IOException {
+    void registerOwnOutputTrackingAppendsTheInterceptorAfterTheUsers() {
         CausalStreamsBuilder builder = new CausalStreamsBuilder();
         builder.stream("t1", Serdes.String(), Serdes.String())
+                .process(upperCaser())
+                .to("out-sink", "out", Serdes.String(), Serdes.String());
+        Properties props = config();
+        String interceptorsKey = "producer." + ProducerConfig.INTERCEPTOR_CLASSES_CONFIG;
+        props.put(interceptorsKey, UserNoopInterceptor.class.getName());
+
+        String registryId = CausalStreams.registerOwnOutputTracking(builder.build(), props);
+        try {
+            assertEquals(UserNoopInterceptor.class.getName() + "," + ParsleyOwnOutputInterceptor.class.getName(),
+                    props.get(interceptorsKey),
+                    "Parsley's interceptor must be appended after the user's, never replacing it");
+            assertEquals(registryId, props.get("producer." + ParsleyOwnOutputRegistry.CONFIG_KEY),
+                    "the minted registry id must ride the producer. prefix for tasks to resolve");
+            ParsleyOwnOutputRegistry registry = ParsleyOwnOutputRegistry.lookup(registryId);
+            assertNotNull(registry, "the minted registry id must resolve while registered");
+            assertTrue(registry.tracks("out"), "the registry must track the declared sink topic");
+            assertFalse(registry.tracks("t1"), "a source topic is not an own-output coordinate");
+        } finally {
+            ParsleyOwnOutputRegistry.unregister(registryId);
+        }
+    }
+
+    /**
+     * {@link CausalStreams} construction works on a copy of the caller's {@link Properties}: the
+     * interceptor entry and the minted registry/watch ids are injected into the copy only, so the
+     * caller's object is never mutated and two instances built from one {@code Properties} cannot
+     * duplicate the interceptor entry or cross-wire each other's registry ids.
+     *
+     * Asserts the caller's Properties gain no Parsley wiring keys, the two instances mint distinct
+     * registries each tracking the sink, and {@code close()} unregisters each.
+     */
+    @Test
+    void causalStreamsCopiesTheCallersPropertiesAndManagesTheRegistryLifecycle() throws IOException {
+        CausalStreamsBuilder firstBuilder = new CausalStreamsBuilder();
+        firstBuilder.stream("t1", Serdes.String(), Serdes.String())
+                .process(upperCaser())
+                .to("out-sink", "out", Serdes.String(), Serdes.String());
+        CausalStreamsBuilder secondBuilder = new CausalStreamsBuilder();
+        secondBuilder.stream("t1", Serdes.String(), Serdes.String())
                 .process(upperCaser())
                 .to("out-sink", "out", Serdes.String(), Serdes.String());
         Properties props = config(tempStateDir());
@@ -1245,19 +1285,37 @@ class CausalStreamsTopologyTest {
         String interceptorsKey = "producer." + ProducerConfig.INTERCEPTOR_CLASSES_CONFIG;
         props.put(interceptorsKey, UserNoopInterceptor.class.getName());
 
-        String registryId;
-        try (CausalStreams streams = new CausalStreams(builder.build(), props)) {
-            assertEquals(UserNoopInterceptor.class.getName() + "," + ParsleyOwnOutputInterceptor.class.getName(),
-                    props.get(interceptorsKey),
-                    "Parsley's interceptor must be appended after the user's, never replacing it");
-            registryId = String.valueOf(props.get("producer." + ParsleyOwnOutputRegistry.CONFIG_KEY));
-            ParsleyOwnOutputRegistry registry = ParsleyOwnOutputRegistry.lookup(registryId);
-            assertNotNull(registry, "the injected registry id must resolve while the instance lives");
-            assertTrue(registry.tracks("out"), "the registry must track the declared sink topic");
-            assertFalse(registry.tracks("t1"), "a source topic is not an own-output coordinate");
+        String firstId;
+        try (CausalStreams first = new CausalStreams(firstBuilder.build(), props)) {
+            assertEquals(UserNoopInterceptor.class.getName(), props.get(interceptorsKey),
+                    "the caller's interceptor entry must be untouched — no Parsley append");
+            assertNull(props.get("producer." + ParsleyOwnOutputRegistry.CONFIG_KEY),
+                    "the caller's Properties must not gain the minted registry id");
+            firstId = first.ownOutputRegistryId();
+            ParsleyOwnOutputRegistry firstRegistry = ParsleyOwnOutputRegistry.lookup(firstId);
+            assertNotNull(firstRegistry, "the first instance's registry id must resolve while it lives");
+            assertTrue(firstRegistry.tracks("out"), "the registry must track the declared sink topic");
         }
-        assertNull(ParsleyOwnOutputRegistry.lookup(registryId),
+        assertNull(ParsleyOwnOutputRegistry.lookup(firstId),
                 "close() must unregister the registry so the JVM-wide map cannot leak instances");
+
+        // The same, still-unmutated Properties object builds a second cleanly wired instance — the
+        // duplicated-interceptor / cross-wired-id bug this copy guards against. (Sequential, not
+        // concurrent: two live instances from one config would collide on the state directory at
+        // the Kafka Streams level regardless.)
+        String secondId;
+        try (CausalStreams second = new CausalStreams(secondBuilder.build(), props)) {
+            assertEquals(UserNoopInterceptor.class.getName(), props.get(interceptorsKey),
+                    "the caller's interceptor entry must still be untouched after a second construction");
+            secondId = second.ownOutputRegistryId();
+            assertFalse(firstId.equals(secondId),
+                    "each construction must mint its own registry — ids must never cross-wire");
+            ParsleyOwnOutputRegistry secondRegistry = ParsleyOwnOutputRegistry.lookup(secondId);
+            assertNotNull(secondRegistry, "the second instance's registry id must resolve while it lives");
+            assertTrue(secondRegistry.tracks("out"), "the registry must track the declared sink topic");
+        }
+        assertNull(ParsleyOwnOutputRegistry.lookup(secondId),
+                "close() must unregister the second registry so the JVM-wide map cannot leak instances");
     }
 
     /**
