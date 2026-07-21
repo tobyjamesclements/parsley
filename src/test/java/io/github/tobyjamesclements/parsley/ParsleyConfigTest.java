@@ -23,30 +23,31 @@ class ParsleyConfigTest {
     /**
      * With no {@code parsley.topology.validation} set, {@link ParsleyConfig#load()} reads the
      * {@code parsley.properties} classpath resource (absent in this project's test classpath) and
-     * falls back to the default {@code warn} mode rather than throwing — detectable
-     * misconfigurations are logged but do not fail the task, so an existing deployment is never
-     * broken by the check.
+     * falls back to the default {@code strict} mode — a detectable topology misconfiguration is a
+     * deferred failure anyway (a parity mismatch crash-loops the marker produce at runtime; a
+     * compacted sink silently loses null messages), so the default fails once, clearly, at init.
      *
-     * Asserts the default validation mode is {@code WARN}.
+     * Asserts the default validation mode is {@code STRICT}.
      */
     @Test
-    void topologyValidationDefaultsToWarn() {
-        assertEquals(ParsleyConfig.ValidationMode.WARN, ParsleyConfig.load().topologyValidation(),
-                "with no parsley.topology.validation set, the default mode must be 'warn'");
+    void topologyValidationDefaultsToStrict() {
+        assertEquals(ParsleyConfig.ValidationMode.STRICT, ParsleyConfig.load().topologyValidation(),
+                "with no parsley.topology.validation set, the default mode must be 'strict'");
     }
 
     /**
-     * Setting {@code parsley.topology.validation} to {@code strict} overrides the default so a
-     * detectable topology misconfiguration fails the task fast; {@code off} disables the check.
+     * Setting {@code parsley.topology.validation} to {@code warn} opts down from the strict
+     * default so a detectable topology misconfiguration is logged but does not fail the task;
+     * {@code off} disables the check entirely.
      *
      * Asserts both explicit modes parse to their enum values.
      */
     @Test
     void fromAppliesExplicitTopologyValidationModes() {
-        Properties strict = new Properties();
-        strict.setProperty(TOPOLOGY_VALIDATION, "strict");
-        assertEquals(ParsleyConfig.ValidationMode.STRICT, ParsleyConfig.from(strict).topologyValidation(),
-                "an explicit 'strict' topology-validation mode must parse to STRICT");
+        Properties warn = new Properties();
+        warn.setProperty(TOPOLOGY_VALIDATION, "warn");
+        assertEquals(ParsleyConfig.ValidationMode.WARN, ParsleyConfig.from(warn).topologyValidation(),
+                "an explicit 'warn' topology-validation mode must parse to WARN");
 
         Properties off = new Properties();
         off.setProperty(TOPOLOGY_VALIDATION, "off");

@@ -115,18 +115,18 @@ class ParsleyProcessorSupplierBuilderTest {
 
     /**
      * With no Parsley configuration supplied, the effective config falls back to its defaults, where
-     * {@code parsley.topology.validation} is {@code warn}.
+     * {@code parsley.topology.validation} is {@code strict}.
      *
-     * Asserts the default effective config reports WARN.
+     * Asserts the default effective config reports STRICT.
      */
     @Test
-    void defaultConfigUsesWarnValidation() {
+    void defaultConfigUsesStrictValidation() {
         ParsleyProcessorSupplier<String, String, String, String> supplier =
                 (ParsleyProcessorSupplier<String, String, String, String>) builderWith()
                         .addSource(new ParsleySource<>("t1", Serdes.String(), Serdes.String()))
                         .build();
-        assertEquals(ParsleyConfig.ValidationMode.WARN, supplier.config().topologyValidation(),
-                "the default topology-validation mode is 'warn'");
+        assertEquals(ParsleyConfig.ValidationMode.STRICT, supplier.config().topologyValidation(),
+                "the default topology-validation mode is 'strict'");
     }
 
     /**

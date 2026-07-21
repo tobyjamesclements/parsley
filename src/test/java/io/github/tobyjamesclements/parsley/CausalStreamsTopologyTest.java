@@ -85,7 +85,7 @@ class CausalStreamsTopologyTest {
         return props;
     }
 
-    /** Assembles {@code builder} against {@code admin} and default (warn) topology validation. */
+    /** Assembles {@code builder} against {@code admin} and default (strict) topology validation. */
     private static Topology assemble(CausalStreamsBuilder builder, ParsleyTopicAdmin admin) {
         return assemble(builder, admin, config(), new ParsleyQuiesce());
     }
@@ -102,6 +102,12 @@ class CausalStreamsTopologyTest {
     private static Properties strictValidation() {
         Properties props = config();
         props.put(ParsleyConfig.TOPOLOGY_VALIDATION, "strict");
+        return props;
+    }
+
+    private static Properties warnValidation() {
+        Properties props = config();
+        props.put(ParsleyConfig.TOPOLOGY_VALIDATION, "warn");
         return props;
     }
 
@@ -720,20 +726,22 @@ class CausalStreamsTopologyTest {
     }
 
     /**
-     * Under the default {@code parsley.topology.validation=warn}, a sink topic with a mismatched
-     * partition count is logged but does not fail startup.
+     * Under an explicit {@code parsley.topology.validation=warn} opt-down, a sink topic with a
+     * mismatched partition count is logged but does not fail startup. (The default is
+     * {@code strict} — pinned by {@code ParsleyConfigTest} and, end to end, by
+     * {@code ParsleyProcessorsTopologyTest}'s default-validation mismatch test.)
      *
      * Asserts the topology constructs and processes normally despite the mismatch.
      */
     @Test
-    void mismatchedSinkPartitionCountWarnsButStartsUnderDefaultValidation() {
+    void mismatchedSinkPartitionCountWarnsButStartsUnderWarnValidation() {
         ParsleyTopicAdmin mismatched = TestTopicAdmin.of(
                 Map.of("t1", T1_ID, "out", OUT_ID), Map.of("t1", 2, "out", 3));
         CausalStreamsBuilder builder = new CausalStreamsBuilder();
         builder.stream("t1", Serdes.String(), Serdes.String())
                 .process(upperCaser())
                 .to("out-sink", "out", Serdes.String(), Serdes.String());
-        Topology topology = assemble(builder, mismatched);
+        Topology topology = assemble(builder, mismatched, warnValidation());
 
         try (TopologyTestDriver driver = new TopologyTestDriver(topology, config())) {
             driver.createInputTopic("t1", new StringSerializer(), new StringSerializer())
@@ -825,20 +833,20 @@ class CausalStreamsTopologyTest {
     }
 
     /**
-     * Under the default {@code parsley.topology.validation=warn}, a compacted sink is logged but does
-     * not fail startup.
+     * Under an explicit {@code parsley.topology.validation=warn} opt-down, a compacted sink is
+     * logged but does not fail startup. (The default is {@code strict}.)
      *
      * Asserts the topology constructs and processes normally despite the compacted sink.
      */
     @Test
-    void compactedSinkCleanupPolicyWarnsButStartsUnderDefaultValidation() {
+    void compactedSinkCleanupPolicyWarnsButStartsUnderWarnValidation() {
         ParsleyTopicAdmin compacted = TestTopicAdmin.of(
                 Map.of("t1", T1_ID, "out", OUT_ID), Map.of(), Map.of("out", "compact"));
         CausalStreamsBuilder builder = new CausalStreamsBuilder();
         builder.stream("t1", Serdes.String(), Serdes.String())
                 .process(upperCaser())
                 .to("out-sink", "out", Serdes.String(), Serdes.String());
-        Topology topology = assemble(builder, compacted);
+        Topology topology = assemble(builder, compacted, warnValidation());
 
         try (TopologyTestDriver driver = new TopologyTestDriver(topology, config())) {
             driver.createInputTopic("t1", new StringSerializer(), new StringSerializer())

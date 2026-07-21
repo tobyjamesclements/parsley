@@ -1016,9 +1016,9 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
      * <p>Note the produce-time consequence a mismatch carries under {@code warn}: {@link
      * ParsleyMarkerPartitioner} routes a protocol marker to this task's own owned partition
      * ({@code taskId().partition()}) unconditionally, so a sink with fewer partitions than a source
-     * makes the marker produce fail outright, crash-looping the task. {@code strict} turns that
-     * into the startup failure it really is; the default stays {@code warn} so an existing
-     * deployment that tolerates the mismatch keeps starting.
+     * makes the marker produce fail outright, crash-looping the task. {@code strict} — the default
+     * — turns that into the startup failure it really is; {@code warn} is the explicit opt-down
+     * for a deployment that knowingly tolerates the mismatch.
      */
     private void validatePartitionParity(Map<String, Integer> partitionCounts) {
         ParsleyConfig.ValidationMode mode = config.topologyValidation();
@@ -1053,8 +1053,13 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
         if (configured instanceof String text && !text.isBlank()) {
             try {
                 return Long.parseLong(text.trim());
-            } catch (NumberFormatException ignored) {
-                // Malformed override — fall back to the default rather than fail init on a config typo.
+            } catch (NumberFormatException e) {
+                // Never silently defaulted: this value bounds the crossing wait and is the A9
+                // stall threshold — a typo that quietly became 120 s would misconfigure both.
+                throw new IllegalStateException("malformed " + ProducerConfig.DELIVERY_TIMEOUT_MS_CONFIG
+                        + " value '" + text + "'; it bounds the crossing wait and the stall "
+                        + "diagnostic, so it must parse as a long (an absent key defaults to Kafka's "
+                        + DEFAULT_DELIVERY_TIMEOUT_MS + " ms)", e);
             }
         }
         return DEFAULT_DELIVERY_TIMEOUT_MS;

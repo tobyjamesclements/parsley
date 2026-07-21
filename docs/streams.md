@@ -107,8 +107,8 @@ you make independently of the causal guarantee, it is required by it.
 
 `parsley.topology.validation` controls how a causal processor reacts at startup to a detectable
 topology misconfiguration: the causal topics not sharing a partition count, and, for a stage's sink
-topics, a `cleanup.policy` that includes `compact`. The default `warn` logs a mismatch and continues,
-`strict` fails the task fast, and `off` disables the checks. Each sink is checked independently, so
+topics, a `cleanup.policy` that includes `compact`. The default `strict` fails the task fast,
+`warn` logs the mismatch and continues (the explicit opt-down), and `off` disables the checks. Each sink is checked independently, so
 a transient describe failure on one sink never masks a genuine misconfiguration on a different sink
 in the same stage, even under `strict`. Sink existence itself is not governed by this key: every
 topic a stage declares — inputs and sinks alike — must exist before the application starts, and a

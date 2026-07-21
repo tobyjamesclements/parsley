@@ -7,7 +7,16 @@ All notable changes to this project are documented in this file. The format is b
 ## [Unreleased]
 
 ### Changed
-- **Null messages carry the triggering record's timestamp instead of the wall clock.** Kafka
+- **BREAKING: `parsley.topology.validation` now defaults to `strict`.** A detectable topology
+  misconfiguration — the causal topics not sharing a partition count, or a sink whose
+  `cleanup.policy` includes `compact` — now fails startup unless the deployment explicitly opts
+  down to `warn` or `off`. Both misconfigurations were deferred failures anyway: a parity mismatch
+  crash-loops the protocol-marker produce at runtime, and a compacted sink can silently lose null
+  messages. A topology that *intentionally* mismatches partition counts (for example fanning a
+  source into a wider, re-keyed sink) must now set `warn` explicitly. Also strict:
+  a malformed `delivery.timeout.ms` override now fails startup naming the key and value instead of
+  silently falling back to 120 s — it bounds the crossing wait and the stall diagnostic, so a typo
+  must not quietly become the default (an absent key still defaults to Kafka's 120 s). Kafka
   Streams advances downstream stream time from every polled record's timestamp before any
   processor classifies it, so a wall-clock-stamped null message emitted during a reprocessing run
   over historic event times yanked downstream delegates' windows, grace periods, and suppressions

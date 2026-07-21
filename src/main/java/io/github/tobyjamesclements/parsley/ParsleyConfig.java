@@ -42,15 +42,19 @@ final class ParsleyConfig {
      * compaction tombstone and can be compacted away before a slow consumer reads it):
      * <ul>
      *   <li>{@code off}: no check.</li>
-     *   <li>{@code warn} (default): log a prominent warning and continue — visible without breaking an
-     *       existing deployment that silently relied on the misconfiguration.</li>
-     *   <li>{@code strict}: fail the task fast at {@code init()}.</li>
+     *   <li>{@code warn}: log a prominent warning and continue — the opt-down for a deployment that
+     *       knowingly runs with the misconfiguration.</li>
+     *   <li>{@code strict} (default): fail the task fast at {@code init()}. Both detectable
+     *       misconfigurations are startup-shaped failures anyway — a partition-parity mismatch
+     *       makes the protocol-marker produce crash-loop at runtime, and a compacted sink can
+     *       silently lose null messages — so failing once, clearly, at init is the safer default.</li>
      * </ul>
      *
      * <p>Only the constraints the processor can observe are checked here — it knows its registered
      * input buffers, and, when built through the topology-owning {@code CausalStreamsBuilder} API, that
-     * stage's sink topics too. A sink not yet created is skipped for both checks rather than failing the
-     * task.
+     * stage's sink topics too. A sink whose describe transiently fails is skipped for both lints
+     * rather than failing the task (sink existence itself is enforced unconditionally, outside this
+     * key — see {@code ParsleyProcessor#resolveSinkTopicUuids}).
      */
     static final String TOPOLOGY_VALIDATION = "parsley.topology.validation";
 
@@ -135,7 +139,7 @@ final class ParsleyConfig {
     }
 
     private static ValidationMode validationMode(Properties props) {
-        String value = props.getProperty(TOPOLOGY_VALIDATION, "warn").trim();
+        String value = props.getProperty(TOPOLOGY_VALIDATION, "strict").trim();
         try {
             return ValidationMode.valueOf(value.toUpperCase(Locale.ROOT));
         } catch (IllegalArgumentException e) {

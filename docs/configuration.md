@@ -41,24 +41,24 @@ absent file, or an absent key, falls back to the defaults below.
 # How a causal processor reacts at startup to a detectable topology misconfiguration: the causal
 # input topics not sharing a partition count (co-partitioning impossible), and, for a
 # CausalStreamsBuilder stage, its sink topics' partition counts and cleanup.policy too.
-#   warn     (default) logs the mismatch and continues
-#   strict             fails the task fast at startup
+#   strict   (default) fails the task fast at startup
+#   warn               logs the mismatch and continues (the explicit opt-down)
 #   off                disables the checks
-parsley.topology.validation = warn
+parsley.topology.validation = strict
 ```
 
 | Key | Default | Values |
 |---|---|---|
-| `parsley.topology.validation` | `warn` | `off`, `warn`, `strict` |
+| `parsley.topology.validation` | `strict` | `off`, `warn`, `strict` |
 
 The `parsley.coordination.*` keys of earlier versions are removed: topology-epoch coordination is no
 longer part of the causal protocol — joins need zero coordination. Startup fails loudly if one is
 present; delete the keys. No replacement configuration is needed.
 
-`parsley.topology.validation = warn` logs a prominent warning at startup when the causal input topics
-do not share a partition count, which makes co-partitioning impossible, and lets the task start. This
-is visible without breaking a deployment that already ran with the mismatch. Set it to `strict` to
-fail the task fast instead, or `off` to skip the checks. `CausalTopology`-assembled stages also fold
+`parsley.topology.validation = strict` (the default) fails the task fast at startup when the causal
+input topics do not share a partition count, which makes co-partitioning impossible. Set it to
+`warn` to log a prominent warning and start anyway — the explicit opt-down for a deployment that
+knowingly runs with the mismatch — or `off` to skip the checks. `CausalTopology`-assembled stages also fold
 their sink topics' partition counts into the same parity check and check each sink's `cleanup.policy`
 for `compact` (a protocol null message is a null-value record wire-indistinguishable from a compaction
 tombstone). Each sink is checked independently, so a transient describe failure on one sink never

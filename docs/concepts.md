@@ -123,7 +123,7 @@ rather than the value, since a protocol null message carries no value to read.
 
 Parsley does not enforce co-partitioning end to end, and most of it cannot be checked, so a
 misconfigured topology evaluates against an incomplete partition set. At startup, `parsley.topology.validation`
-(`warn` by default, `strict` to fail fast, `off` to disable) checks that a stage's causal input topics
+(`strict` by default, `warn` to log and continue, `off` to disable) checks that a stage's causal input topics
 share a partition count, and, since a stage built through `CausalStreamsBuilder` owns its sinks too,
 folds sink partition counts into the same check and applies one partitioner uniformly across every sink
 a stage declares so a shard cannot drift onto different partitions across topics by accident. See the

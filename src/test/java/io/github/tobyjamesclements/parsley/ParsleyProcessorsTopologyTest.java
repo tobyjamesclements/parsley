@@ -1553,20 +1553,22 @@ class ParsleyProcessorsTopologyTest {
     }
 
     /**
-     * Under the default {@code parsley.topology.validation=warn}, causal input topics with mismatched
-     * partition counts are logged but do not fail startup — visible without breaking a deployment that
-     * silently relied on the misconfiguration.
+     * Under an explicit {@code parsley.topology.validation=warn} opt-down, causal input topics with
+     * mismatched partition counts are logged but do not fail startup — for a deployment that
+     * knowingly runs with the misconfiguration. (The default is {@code strict}, pinned by
+     * {@link #mismatchedInputPartitionCountsFailStartupUnderDefaultValidation}.)
      *
      * Asserts the topology constructs (init completes) despite t2 and t3 having different counts.
      */
     @Test
-    void mismatchedInputPartitionCountsWarnButStartUnderDefaultValidation() {
+    void mismatchedInputPartitionCountsWarnButStartUnderWarnValidation() {
         ParsleyTopicAdmin mismatched = TestTopicAdmin.of(
                 Map.of("t2", T2_ID, "t3", T3_ID), Map.of("t2", 2, "t3", 3));
         Topology topology = topology(
                 ParsleyProcessorSupplier.builder(upperCaser()).addBufferStore("parsley")
                         .addSource(new ParsleySource<>("t2", Serdes.String(), Serdes.String()))
                         .addSource(new ParsleySource<>("t3", Serdes.String(), Serdes.String()))
+                        .withConfig(ParsleyConfig.TOPOLOGY_VALIDATION, "warn")
                         .topicAdmin(mismatched).build(),
                 List.of("t2", "t3"));
 
@@ -1577,6 +1579,62 @@ class ParsleyProcessorsTopologyTest {
             assertEquals(List.of("live"), processed,
                     "warn-mode validation must not fail startup: the task starts and processes normally");
         }
+    }
+
+    /**
+     * With no {@code parsley.topology.validation} configured at all, a partition-count mismatch
+     * fails startup: the default is {@code strict}. A mismatch was always a deferred failure —
+     * the protocol-marker produce crash-loops at runtime — so the default surfaces it once,
+     * clearly, at init; {@code warn} is the explicit opt-down.
+     *
+     * Asserts driver construction throws with the strict-validation failure without any explicit
+     * validation configuration.
+     */
+    @Test
+    void mismatchedInputPartitionCountsFailStartupUnderDefaultValidation() throws IOException {
+        ParsleyTopicAdmin mismatched = TestTopicAdmin.of(
+                Map.of("t2", T2_ID, "t3", T3_ID), Map.of("t2", 2, "t3", 3));
+        Topology topology = topology(
+                ParsleyProcessorSupplier.builder(upperCaser()).addBufferStore("parsley")
+                        .addSource(new ParsleySource<>("t2", Serdes.String(), Serdes.String()))
+                        .addSource(new ParsleySource<>("t3", Serdes.String(), Serdes.String()))
+                        .topicAdmin(mismatched).build(),
+                List.of("t2", "t3"));
+
+        StreamsException thrown = assertThrows(StreamsException.class,
+                () -> new TopologyTestDriver(topology, config(tempStateDir())),
+                "the default validation mode must be strict: a mismatch fails startup unconfigured");
+        assertTrue(thrown.getCause().getMessage().contains("mismatched partition counts"),
+                "the failure must name the mismatch: " + thrown.getCause().getMessage());
+    }
+
+    /**
+     * A malformed {@code delivery.timeout.ms} override fails init naming the key and the value,
+     * instead of silently falling back to Kafka's 120 s default: the value bounds the crossing
+     * wait and is the stall-diagnostic threshold, so a typo that quietly became the default would
+     * misconfigure both. (An absent key still defaults to Kafka's 120 s.)
+     *
+     * Asserts driver construction throws with an {@link IllegalStateException} naming the key and
+     * the malformed value.
+     */
+    @Test
+    void malformedDeliveryTimeoutFailsInitNamingTheKeyAndValue() throws IOException {
+        Topology topology = topology(
+                ParsleyProcessorSupplier.builder(upperCaser()).addBufferStore("parsley")
+                        .addSource(new ParsleySource<>("t1", Serdes.String(), Serdes.String()))
+                        .topicAdmin(ADMIN).build(),
+                List.of("t1"));
+        Properties props = config(tempStateDir());
+        props.put("producer.delivery.timeout.ms", "not-a-number");
+
+        StreamsException thrown = assertThrows(StreamsException.class,
+                () -> new TopologyTestDriver(topology, props),
+                "a malformed delivery.timeout.ms must fail init, never silently default");
+        assertEquals(IllegalStateException.class, thrown.getCause().getClass(),
+                "the wrapped cause must be the malformed-timeout guard's exception");
+        assertTrue(thrown.getCause().getMessage().contains("delivery.timeout.ms")
+                        && thrown.getCause().getMessage().contains("not-a-number"),
+                "the failure must name the key and the malformed value: " + thrown.getCause().getMessage());
     }
 
     /**
