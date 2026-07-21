@@ -81,7 +81,7 @@ and why ignoring unconsumed coordinates is sound.
 1. The dependency clock is decoded once at the boundary (`ParsleyMessage.from`): a missing header
    becomes an empty, vacuously satisfied clock. An undecodable header is handled by
    `ParsleyProcessor.onUnresolvableClock()` before this module is called — the task fails fast
-   (`ParsleyVectorClockResolutionException`); a record is never forwarded on an unknown premise.
+   (`CausalVectorClockResolutionException`); a record is never forwarded on an unknown premise.
    The module always receives a typed `ParsleyVectorClock`.
 2. `channels.receive` establishes the coordinate's baseline if this is its first sighting
    (consumption need not start at offset 0) and bridges any consumer-skipped run below the record,
@@ -165,13 +165,13 @@ node does not consume is *not* a failure: it falls to the gate's ignore branch, 
 `deps-out-of-scope-ignored` metric — see the
 [causal consistency model](causal-consistency.md)):
 
-- **A poisoned buffered record** (`ParsleyBufferDeserializationException`) — a held record's key or
+- **A poisoned buffered record** (`CausalBufferDeserializationException`) — a held record's key or
   value can no longer be deserialised on the forward path (typically an incompatible Schema
   Registry change while the record was buffered). Deserialisation happens only once a record is
   proven deliverable, so a held, undecodable record that is *not* yet releasable never surfaces
   this — it only fires on an actual forward attempt. The record remains in the buffer changelog
   for recovery once the schema is fixed or rolled back.
-- **An unresolvable dependency header** (`ParsleyVectorClockResolutionException`) — handled by
+- **An unresolvable dependency header** (`CausalVectorClockResolutionException`) — handled by
   `ParsleyProcessor` before this module is ever called (see step 1 of the `receive()` algorithm
   above); unconditionally fails the task, never forwarded on an unknown premise.
 

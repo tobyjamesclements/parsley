@@ -36,7 +36,7 @@ record ParsleyMessage<K, V>(String topic, Uuid topicId, int partition, long offs
      * (absent → empty, vacuously satisfied), and all other non-internal headers are carried as user
      * headers.
      *
-     * @throws ParsleyVectorClockResolutionException if the dependencies header is present but cannot be
+     * @throws CausalVectorClockResolutionException if the dependencies header is present but cannot be
      *     decoded; the caller fails the task fast rather than forward the record on an unknown premise
      */
     static <K, V> ParsleyMessage<K, V> from(Record<K, V> record, TopicPartition source,
@@ -97,7 +97,7 @@ record ParsleyMessage<K, V>(String topic, Uuid topicId, int partition, long offs
         try {
             return ParsleyVectorClock.fromBytes(encoded);
         } catch (Exception e) {
-            throw new ParsleyVectorClockResolutionException(source.topic(), topicId, source.partition(), offset,
+            throw new CausalVectorClockResolutionException(source.topic(), topicId, source.partition(), offset,
                     encoded, "encoded causal-clock header length " + encoded.length, e);
         }
     }

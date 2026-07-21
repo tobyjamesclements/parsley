@@ -779,7 +779,7 @@ class ParsleyCausalBroadcastTest {
      * A poison record (undecodable on the forward path) always fails the task — the regression guard for
      * the mutation-before-throw hazard: the buffer must not be touched before the throw.
      *
-     * Asserts {@code receive} throws {@link ParsleyBufferDeserializationException} and the poisoned
+     * Asserts {@code receive} throws {@link CausalBufferDeserializationException} and the poisoned
      * record remains in the buffer (not removed).
      */
     @Test
@@ -795,7 +795,7 @@ class ParsleyCausalBroadcastTest {
         causalBroadcast.receive(incomingRecordWithId(T1, 5, T1_ID, needsT4));
         buffer.poison(0L); // the only sequence added so far
 
-        assertThrows(ParsleyBufferDeserializationException.class,
+        assertThrows(CausalBufferDeserializationException.class,
                 () -> causalBroadcast.receive(incomingRecordWithId(t4, 0, t4Id, ParsleyVectorClock.empty())),
                 "a poison record on the forward path must fail the task");
         assertEquals(1, buffer.size(), "the poisoned record must remain in the buffer for recovery, not be removed");
@@ -930,13 +930,13 @@ class ParsleyCausalBroadcastTest {
         ParsleyChannels channels = ParsleyTestFixtures.channels(ParsleyVectorClock.empty(), forwardedIndex);
         channels.bindOwnOutputSource(consumer -> { },
                 (except, timeoutMs) -> {
-                    throw new ParsleyPendingAckException("pending ack failed (test)");
+                    throw new CausalPendingAckException("pending ack failed (test)");
                 }, Map.of(), 1_000L);
         ParsleyCausalBroadcast<String, String> causalBroadcast = ParsleyTestFixtures.broadcast(
                 channels, buffer, new MockCandidateIndex(), ParsleyMetrics.NOOP,
                 System::currentTimeMillis);
 
-        assertThrows(ParsleyPendingAckException.class,
+        assertThrows(CausalPendingAckException.class,
                 () -> causalBroadcast.broadcast(new Record<>("k", "v", 0L, ParsleyHeader.mutableHeaders())),
                 "a failed crossing wait must fail the broadcast — never stamp-and-proceed (A8)");
     }

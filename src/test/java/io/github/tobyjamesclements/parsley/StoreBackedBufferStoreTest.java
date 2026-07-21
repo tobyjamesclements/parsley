@@ -103,7 +103,7 @@ class StoreBackedBufferStoreTest {
         ParsleyVectorClock deps = ParsleyVectorClock.empty().observe(T1_ID, 0, 3);
         long seq = store.add(record(T1, 0, deps), 100L);
 
-        assertThrows(ParsleyBufferDeserializationException.class, () -> store.get(seq),
+        assertThrows(CausalBufferDeserializationException.class, () -> store.get(seq),
                 "get() decodes the value and must fail on a poison record");
 
         List<ParsleyBufferStore.IndexEntry> indexEntries =

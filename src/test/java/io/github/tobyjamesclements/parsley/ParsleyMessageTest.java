@@ -61,7 +61,7 @@ class ParsleyMessageTest {
     }
 
     /**
-     * {@code from} throws {@link ParsleyVectorClockResolutionException} when the dependency header is
+     * {@code from} throws {@link CausalVectorClockResolutionException} when the dependency header is
      * present but cannot be decoded — the caller applies
      * {@code parsley.clock.resolution.failure.policy} rather than {@code from} silently degrading.
      *
@@ -72,7 +72,7 @@ class ParsleyMessageTest {
         Headers headers = ParsleyHeader.mutableHeaders();
         headers.add(ParsleyHeader.CAUSAL_CLOCK, new byte[]{9, 9, 9});
 
-        ParsleyVectorClockResolutionException thrown = assertThrows(ParsleyVectorClockResolutionException.class,
+        CausalVectorClockResolutionException thrown = assertThrows(CausalVectorClockResolutionException.class,
                 () -> ParsleyMessage.from(new Record<>("k", "v", 0L, headers), T1, 0L, T1_ID),
                 "an undecodable dependencies header must throw rather than decode as empty");
         assertEquals("t1", thrown.topic(), "the exception must carry the source topic");

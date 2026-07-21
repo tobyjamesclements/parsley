@@ -23,7 +23,20 @@ All notable changes to this project are documented in this file. The format is b
   runtime declares it itself, and `CausalClock` edge stamping needs only `kafka-clients`. The
   stale POM comment justifying the optional flag with class names deleted in the redesign is
   rewritten against the current types.
-- **Javadoc doclint is on (`all,-missing`).** Broken links, malformed HTML, and bad references now
+- **BREAKING: the exceptions that escape into the application's uncaught-exception handler are now
+  public API, under one root.** Parsley's fail-closed throws always propagated out of Kafka Streams
+  into the handler `CausalStreams.setUncaughtExceptionHandler` exposes, but the types were
+  package-private — a handler deciding thread-replace vs shutdown could only string-match class
+  names, and the source-coordinate diagnostics on the shared base were unreachable. The hierarchy
+  is now public and unified: `CausalDeliveryException` (the root; extends `RuntimeException`) —
+  with `CausalCoordinateException` (abstract; exposes the `topic`/`topicId`/`partition`/`offset`
+  quartet) over `CausalBufferDeserializationException` and `CausalVectorClockResolutionException`,
+  and `CausalTopicRecreatedException` and `CausalPendingAckException` directly under the root. The
+  renames follow the public-API naming convention (`Parsley*` → `Causal*`), the two types that
+  extended `IllegalStateException` no longer do (the ad-hoc second root is gone; a handler that
+  matched on `IllegalStateException` must match `CausalDeliveryException` instead), constructors
+  stay package-private (only Parsley raises them), and each type's Javadoc now states whether a
+  restart heals the condition. `encodedDependencies()` returns a defensive copy. Broken links, malformed HTML, and bad references now
   fail the Javadoc build instead of rotting silently; only exhaustive `@param`/`@return` tagging
   stays unchecked, since the documentation style here is prose. Turning it on surfaced real drift
   in `overview.html`: the usage example still called `build()` on the builder and the text still
@@ -95,7 +108,7 @@ All notable changes to this project are documented in this file. The format is b
   peer's progress claims from the channel fold, so later stamps under-claimed them), and an
   unregistered-topic null message was skipped (committing the offset past a record on a channel the
   node claims not to know). Both now mirror the business path exactly: the present-but-undecodable
-  header throws `ParsleyVectorClockResolutionException`, the unregistered topic throws the same
+  header throws `CausalVectorClockResolutionException`, the unregistered topic throws the same
   `IllegalStateException` as business ingest, the transaction aborts, and the record is refetched
   on restart. An absent header is unchanged: an empty carried clock whose offset is still
   delivered — a producer that stamps nothing claims nothing.
@@ -171,7 +184,7 @@ All notable changes to this project are documented in this file. The format is b
   own new outputs. `CausalStreams` now runs a background topic-identity poll comparing the
   broker's current topic IDs — inputs and sinks — against what each task resolved at
   initialisation; on a detected change or deletion every task fails fast before ingesting or
-  stamping anything further (`ParsleyTopicRecreatedException`). Detection is bounded by the poll
+  stamping anything further (`CausalTopicRecreatedException`). Detection is bounded by the poll
   interval (5 seconds), not instantaneous, so live recreation of a causal topic remains an
   operational error — the guard makes it loud and bounded instead of silent and indefinite.
   Restarting after a recreation stays safe: identity is re-resolved at initialisation, and the

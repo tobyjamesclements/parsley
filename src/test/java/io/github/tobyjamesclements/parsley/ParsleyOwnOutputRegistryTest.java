@@ -173,7 +173,7 @@ class ParsleyOwnOutputRegistryTest {
         ParsleyOwnOutputInterceptor interceptor = configuredInterceptor();
         interceptor.onSend(new ProducerRecord<>(OUT, 0, "k", "v"));
 
-        assertThrows(ParsleyPendingAckException.class,
+        assertThrows(CausalPendingAckException.class,
                 () -> registry.awaitQuiescentExcept(Set.of(), 50),
                 "with no excludable destination, any pending send must hold the wait");
 
@@ -225,7 +225,7 @@ class ParsleyOwnOutputRegistryTest {
         ParsleyOwnOutputInterceptor interceptor = configuredInterceptor();
         interceptor.onSend(new ProducerRecord<>(OUT, 1, "k", "v"));
 
-        assertThrows(ParsleyPendingAckException.class,
+        assertThrows(CausalPendingAckException.class,
                 () -> registry.awaitQuiescentExcept(Set.of(new TopicPartition(OUT, 0)), 50),
                 "an expired crossing wait must fail the transaction, never stamp-and-proceed");
         interceptor.close();
@@ -252,7 +252,7 @@ class ParsleyOwnOutputRegistryTest {
         }, "test-abort-network-thread");
         abortThread.start();
 
-        assertThrows(ParsleyPendingAckException.class,
+        assertThrows(CausalPendingAckException.class,
                 () -> registry.awaitQuiescentExcept(Set.of(new TopicPartition(OUT, 0)), 5_000),
                 "a failed pending ack must surface as a throw, not as a satisfied wait");
         assertFalse(ackedOf(registry).containsKey(new TopicPartition(OUT, 1)),
@@ -272,7 +272,7 @@ class ParsleyOwnOutputRegistryTest {
         ParsleyOwnOutputInterceptor interceptor = configuredInterceptor();
         interceptor.onSend(new ProducerRecord<>(OUT, null, "k", "v"));
 
-        assertThrows(ParsleyPendingAckException.class,
+        assertThrows(CausalPendingAckException.class,
                 () -> registry.awaitQuiescentExcept(Set.of(new TopicPartition(OUT, 0)), 50),
                 "an unknown-partition pending send might target another partition — the wait must "
                         + "hold it (conservatively) rather than exclude it");

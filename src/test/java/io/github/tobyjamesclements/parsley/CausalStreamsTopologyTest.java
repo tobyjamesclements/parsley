@@ -1081,7 +1081,7 @@ class CausalStreamsTopologyTest {
      * the task.
      *
      * Asserts processing the record throws (wrapped by Kafka Streams in a {@code StreamsException}) with
-     * a {@link ParsleyVectorClockResolutionException} cause, and the delegate never runs.
+     * a {@link CausalVectorClockResolutionException} cause, and the delegate never runs.
      */
     @Test
     void unresolvableClockHeaderFailsTheWholeTopologyClosed() {
@@ -1101,7 +1101,7 @@ class CausalStreamsTopologyTest {
             StreamsException thrown = assertThrows(StreamsException.class,
                     () -> t1.pipeInput(new TestRecord<>("k", "v", corrupted)),
                     "an undecodable causal-dependencies header must fail the task rather than be diverted");
-            assertEquals(ParsleyVectorClockResolutionException.class, thrown.getCause().getClass(),
+            assertEquals(CausalVectorClockResolutionException.class, thrown.getCause().getClass(),
                     "the wrapped cause must be the clock-resolution guard's exception");
             assertTrue(processed.isEmpty(), "the delegate must never run on a record that fails closed at ingest");
         }

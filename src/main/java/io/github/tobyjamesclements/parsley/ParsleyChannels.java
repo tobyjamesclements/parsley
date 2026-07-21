@@ -340,7 +340,7 @@ final class ParsleyChannels {
      * whose cross-sink exemption O4's recorded null-message exemption covers).
      *
      * <p><strong>Never stamp-and-proceed</strong> (T3.0 A8): the bound wait throws
-     * {@link ParsleyPendingAckException} on timeout or on an observed acknowledgement failure —
+     * {@link CausalPendingAckException} on timeout or on an observed acknowledgement failure —
      * the caller's EOS transaction must die rather than emit a potentially under-claiming stamp.
      * A no-op until {@link #bindOwnOutputSource} is called (test-fixture instances and
      * TopologyTestDriver runs, which have no producer registry and therefore no pending sends).
@@ -916,7 +916,7 @@ final class ParsleyChannels {
 
         /**
          * Blocks until no send to any tracked coordinate outside {@code exceptDestinations} is
-         * unacknowledged; empty means full quiescence. Throws {@link ParsleyPendingAckException}
+         * unacknowledged; empty means full quiescence. Throws {@link CausalPendingAckException}
          * on timeout or on an acknowledgement failure observed while waiting (T3.0 A8) — never
          * returns normally without genuine quiescence.
          */

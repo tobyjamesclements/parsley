@@ -719,7 +719,7 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
             try {
                 carried = ParsleyVectorClock.fromBytes(clockHeader.value());
             } catch (Exception e) {
-                throw onUnresolvableClock(new ParsleyVectorClockResolutionException(topic, topicId,
+                throw onUnresolvableClock(new CausalVectorClockResolutionException(topic, topicId,
                         partition, offset, clockHeader.value(),
                         "encoded causal-clock header length " + clockHeader.value().length, e));
             }
@@ -824,7 +824,7 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
         }
         try {
             return ParsleyMessage.from(record, source, meta.offset(), topicId);
-        } catch (ParsleyVectorClockResolutionException e) {
+        } catch (CausalVectorClockResolutionException e) {
             throw onUnresolvableClock(e);
         }
     }
@@ -849,7 +849,7 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
      * premise — never permitted, so this fails the task fast: the record was never buffered and its
      * source offset is not committed past it, so it is reprocessed on restart.
      */
-    private ParsleyVectorClockResolutionException onUnresolvableClock(ParsleyVectorClockResolutionException e) {
+    private CausalVectorClockResolutionException onUnresolvableClock(CausalVectorClockResolutionException e) {
         wiredMetrics.metrics().recordClockResolutionError();
         log.error("Unresolvable causal-clock header on {}-{} @{}; failing fast (fail-closed). "
                 + "The record was not forwarded and is reprocessed on restart. {}",

@@ -165,7 +165,7 @@ class ParsleyTopicRecreationIT {
             await().atMost(Duration.ofSeconds(60)).until(() -> streams.state() == KafkaStreams.State.ERROR);
             Throwable failure = uncaught.get();
             assertNotNull(failure, "the member must die with an uncaught exception, not stall silently");
-            assertTrue(chainContains(failure, ParsleyTopicRecreatedException.class),
+            assertTrue(chainContains(failure, CausalTopicRecreatedException.class),
                     "the failure must be the identity watch's recreation detection: " + failure);
             assertTrue(chainMessageContains(failure, OUT),
                     "the failure must name the recreated sink topic: " + failure);
@@ -177,7 +177,7 @@ class ParsleyTopicRecreationIT {
      * none(), or Streams' own missing-source-topic rebalance failure (the deletion window itself).
      */
     private static boolean isRecreationFailFast(Throwable failure) {
-        if (chainContains(failure, ParsleyTopicRecreatedException.class)) {
+        if (chainContains(failure, CausalTopicRecreatedException.class)) {
             return true;
         }
         for (Throwable t = failure; t != null; t = t.getCause()) {

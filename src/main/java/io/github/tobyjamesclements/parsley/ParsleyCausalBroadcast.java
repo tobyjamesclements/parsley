@@ -399,7 +399,7 @@ final class ParsleyCausalBroadcast<K, V> {
             ParsleyBufferStore.Entry<K, V> entry;
             try {
                 entry = buffer.get(meta.sequence());
-            } catch (ParsleyBufferDeserializationException e) {
+            } catch (CausalBufferDeserializationException e) {
                 failPoison(e);                                             // fail closed
                 throw e;
             }
@@ -579,7 +579,7 @@ final class ParsleyCausalBroadcast<K, V> {
                         ParsleyBufferStore.Entry<K, V> entry;
                         try {
                             entry = buffer.get(candidate.recordId());
-                        } catch (ParsleyBufferDeserializationException e) {
+                        } catch (CausalBufferDeserializationException e) {
                             failPoison(e);                                     // fail closed
                             throw e;
                         }
@@ -763,7 +763,7 @@ final class ParsleyCausalBroadcast<K, V> {
      * fail-closed — the record is not dropped and not forwarded; it remains in the buffer changelog and
      * the task fails, so it can be recovered once the schema is fixed or rolled back.
      */
-    private void failPoison(ParsleyBufferDeserializationException e) {
+    private void failPoison(CausalBufferDeserializationException e) {
         metrics.recordDeserializationError();
         log.error("Buffered record could not be deserialised; failing fast (fail-closed). "
                 + "It remains in the buffer changelog for recovery. {}", e.details(), e);

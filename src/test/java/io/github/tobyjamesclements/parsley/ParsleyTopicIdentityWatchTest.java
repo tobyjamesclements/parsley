@@ -95,8 +95,8 @@ class ParsleyTopicIdentityWatchTest {
 
         watch.poll(new FixedIdsAdmin().with("t1", recreated));
 
-        ParsleyTopicRecreatedException failure =
-                assertThrows(ParsleyTopicRecreatedException.class, watch::ensureIntact,
+        CausalTopicRecreatedException failure =
+                assertThrows(CausalTopicRecreatedException.class, watch::ensureIntact,
                         "a changed topic UUID must fail every subsequent identity check");
         assertTrue(failure.getMessage().contains("t1"),
                 "the failure must name the recreated topic: " + failure.getMessage());
@@ -119,7 +119,7 @@ class ParsleyTopicIdentityWatchTest {
         watch.poll(new FixedIdsAdmin().failing("t1",
                 new ExecutionException(new UnknownTopicOrPartitionException("gone"))));
 
-        assertThrows(ParsleyTopicRecreatedException.class, watch::ensureIntact,
+        assertThrows(CausalTopicRecreatedException.class, watch::ensureIntact,
                 "a provably deleted causal topic must fail the identity check");
     }
 
@@ -151,7 +151,7 @@ class ParsleyTopicIdentityWatchTest {
         watch.expect("t1", T1_ID);
         watch.expect("t1", Uuid.randomUuid());
 
-        assertThrows(ParsleyTopicRecreatedException.class, watch::ensureIntact,
+        assertThrows(CausalTopicRecreatedException.class, watch::ensureIntact,
                 "conflicting init-time resolutions of one topic name must break the watch without a poll");
     }
 
@@ -168,7 +168,7 @@ class ParsleyTopicIdentityWatchTest {
 
         watch.poll(new FixedIdsAdmin().with("t1", T1_ID));
 
-        assertThrows(ParsleyTopicRecreatedException.class, watch::ensureIntact,
+        assertThrows(CausalTopicRecreatedException.class, watch::ensureIntact,
                 "identity, once broken, must stay broken for the process lifetime — a flapping broker "
                         + "view must not silently resume a member that already mislabelled");
     }

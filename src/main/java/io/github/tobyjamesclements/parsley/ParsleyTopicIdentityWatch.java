@@ -120,7 +120,7 @@ final class ParsleyTopicIdentityWatch {
     }
 
     /**
-     * Throws {@link ParsleyTopicRecreatedException} if any violation has been detected — called by
+     * Throws {@link CausalTopicRecreatedException} if any violation has been detected — called by
      * every task before ingesting a record and before stamping a forward, so the member fails fast
      * (the EOS transaction aborts with it) rather than continuing to mislabel coordinates. A no-op
      * while identity is intact: one volatile read on the hot path.
@@ -128,7 +128,7 @@ final class ParsleyTopicIdentityWatch {
     void ensureIntact() {
         String detail = broken;
         if (detail != null) {
-            throw new ParsleyTopicRecreatedException(detail + ". Channel identity is bound per "
+            throw new CausalTopicRecreatedException(detail + ". Channel identity is bound per "
                     + "process lifetime (E1): records of a recreated topic would be ingested and "
                     + "stamped under the old UUID, rebinding causal coordinates. Failing fast; "
                     + "restarting re-resolves identity (the recreated topic's lost history is an "

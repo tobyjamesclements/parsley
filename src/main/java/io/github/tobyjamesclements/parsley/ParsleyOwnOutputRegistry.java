@@ -132,7 +132,7 @@ final class ParsleyOwnOutputRegistry implements ParsleyChannels.AckedOutputs, Pa
      * never sent) returns immediately.
      *
      * <p><strong>Never stamp-and-proceed</strong> (T3.0 A8): this method returns normally only on
-     * genuine quiescence. It throws {@link ParsleyPendingAckException} when {@code timeoutMs}
+     * genuine quiescence. It throws {@link CausalPendingAckException} when {@code timeoutMs}
      * elapses first — the unacked send has effectively failed, so the potentially under-claiming
      * stamp must die with the transaction — and when any acknowledgement failure is observed during
      * the wait, since T2.1 confirmed an aborting transaction fails each pending send with exactly
@@ -209,7 +209,7 @@ final class ParsleyOwnOutputRegistry implements ParsleyChannels.AckedOutputs, Pa
             long deadlineNanos = System.nanoTime() + timeoutMs * 1_000_000L;
             while (true) {
                 if (failures > failuresAtStart) {
-                    throw new ParsleyPendingAckException("a pending own-output send failed while "
+                    throw new CausalPendingAckException("a pending own-output send failed while "
                             + "waiting to stamp a send (destinations " + exceptDestinations
                             + "); failing the transaction rather than stamping (T3.0 A8)");
                 }
@@ -218,7 +218,7 @@ final class ParsleyOwnOutputRegistry implements ParsleyChannels.AckedOutputs, Pa
                 }
                 long remainingNanos = deadlineNanos - System.nanoTime();
                 if (remainingNanos <= 0) {
-                    throw new ParsleyPendingAckException("own-output acknowledgements still pending "
+                    throw new CausalPendingAckException("own-output acknowledgements still pending "
                             + "on a coordinate outside the stamped send's destinations "
                             + exceptDestinations + " after " + timeoutMs + " ms; failing the "
                             + "transaction rather than stamping with a potentially incomplete "
@@ -228,7 +228,7 @@ final class ParsleyOwnOutputRegistry implements ParsleyChannels.AckedOutputs, Pa
                     wait(remainingNanos / 1_000_000L + 1);
                 } catch (InterruptedException e) {
                     Thread.currentThread().interrupt();
-                    throw new ParsleyPendingAckException(
+                    throw new CausalPendingAckException(
                             "interrupted while waiting for pending own-output acknowledgements", e);
                 }
             }

@@ -1185,14 +1185,14 @@ class ParsleyProcessorsTopologyTest {
 
     /**
      * A null message whose {@code parsley-causal-clock} header is present but undecodable fails the
-     * task exactly like a business record's ({@link ParsleyVectorClockResolutionException}): the
+     * task exactly like a business record's ({@link CausalVectorClockResolutionException}): the
      * carried clock is the emitting node's stamp, so folding nothing while delivering the offset
      * would permanently drop the peer's progress claims from this node's channel fold — a later
      * stamp here would under-claim them. The transaction aborts, so the offset is not committed and
      * the message is refetched on restart.
      *
      * Asserts piping the corrupt null message throws (wrapped in a {@code StreamsException}) with a
-     * {@link ParsleyVectorClockResolutionException} cause naming the coordinate.
+     * {@link CausalVectorClockResolutionException} cause naming the coordinate.
      */
     @Test
     @SuppressWarnings("NullAway") // the null message TestRecord intentionally has null key/value
@@ -1214,7 +1214,7 @@ class ParsleyProcessorsTopologyTest {
             StreamsException thrown = assertThrows(StreamsException.class,
                     () -> t1.pipeInput(new TestRecord<>(null, null, corrupt)),
                     "an undecodable null-message carried clock must fail the task, never fold as empty");
-            assertEquals(ParsleyVectorClockResolutionException.class, thrown.getCause().getClass(),
+            assertEquals(CausalVectorClockResolutionException.class, thrown.getCause().getClass(),
                     "the wrapped cause must be the clock-resolution guard's exception, mirroring the "
                             + "business path");
             assertTrue(thrown.getCause().getMessage().contains("t1-0@0"),

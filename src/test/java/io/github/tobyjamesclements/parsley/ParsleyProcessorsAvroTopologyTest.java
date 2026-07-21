@@ -135,7 +135,7 @@ class ParsleyProcessorsAvroTopologyTest {
     /**
      * When a buffered Avro record can no longer be deserialised — modelling the registry's schema for
      * its subject changing incompatibly while the record was buffered — Parsley fails fast with a
-     * typed {@link ParsleyBufferDeserializationException} (a {@link RuntimeException}, so the JVM is
+     * typed {@link CausalBufferDeserializationException} (a {@link RuntimeException}, so the JVM is
      * never crashed) rather than dropping the record.
      *
      * <p>Exercised directly against {@link StoreBackedBufferStore} with the real {@link SpecificAvroSerde}
@@ -149,7 +149,7 @@ class ParsleyProcessorsAvroTopologyTest {
      * buffered record would have gone through, including the writer-schema-id extraction in the
      * exception.
      *
-     * Asserts that decoding raises {@code ParsleyBufferDeserializationException}, naming the record's
+     * Asserts that decoding raises {@code CausalBufferDeserializationException}, naming the record's
      * source topic {@code orders}, and that {@code indexEntries()} (which never touches the value
      * serde) still succeeds despite the undecodable value.
      */
@@ -186,8 +186,8 @@ class ParsleyProcessorsAvroTopologyTest {
         Exception thrown = org.junit.jupiter.api.Assertions.assertThrows(Exception.class,
                 () -> poisonedView.get(seq), "an undecodable buffered record must surface an exception on decode");
 
-        ParsleyBufferDeserializationException cause = causeOfType(thrown, ParsleyBufferDeserializationException.class);
-        assertTrue(cause != null, "the failure must be a typed ParsleyBufferDeserializationException; got " + thrown);
+        CausalBufferDeserializationException cause = causeOfType(thrown, CausalBufferDeserializationException.class);
+        assertTrue(cause != null, "the failure must be a typed CausalBufferDeserializationException; got " + thrown);
         assertEquals(ORDERS, cause.topic(), "the exception must name the record's source topic");
 
         List<ParsleyBufferStore.IndexEntry> indexEntries = org.junit.jupiter.api.Assertions.assertDoesNotThrow(
