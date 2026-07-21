@@ -1,6 +1,8 @@
 package io.github.tobyjamesclements.parsley;
 
 import org.apache.kafka.clients.producer.ProducerConfig;
+import org.apache.kafka.common.Metric;
+import org.apache.kafka.common.MetricName;
 import org.apache.kafka.streams.KafkaStreams;
 import org.apache.kafka.streams.StreamsConfig;
 import org.apache.kafka.streams.Topology;
@@ -248,6 +250,24 @@ public final class CausalStreams implements AutoCloseable {
     /** The underlying {@code KafkaStreams} instance's current state. */
     public KafkaStreams.State state() {
         return kafkaStreams.state();
+    }
+
+    /**
+     * The underlying {@code KafkaStreams} instance's metrics, Parsley's own per-task sensors
+     * included (records buffered and released, deserialization and clock-resolution failures,
+     * ignored out-of-scope dependencies, and the rest of the {@code parsley} group) — the
+     * in-process way to reach them without going through JMX.
+     */
+    public Map<MetricName, ? extends Metric> metrics() {
+        return kafkaStreams.metrics();
+    }
+
+    /**
+     * Registers a listener notified on each state transition of the underlying
+     * {@code KafkaStreams}, delegating to it. Set it before {@link #start()}.
+     */
+    public void setStateListener(KafkaStreams.StateListener listener) {
+        kafkaStreams.setStateListener(listener);
     }
 
     /**

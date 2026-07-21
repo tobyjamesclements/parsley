@@ -48,7 +48,13 @@ All notable changes to this project are documented in this file. The format is b
   building the `KafkaStreams` instance, whose constructor throws on a bad Streams configuration —
   and a failed construction hands the caller no instance to `close()`, so both registrations
   leaked for the JVM's lifetime. The constructor now rolls them back on the way out.
-- **Javadoc doclint is on (`all,-missing`).** Broken links, malformed HTML, and bad references now
+- **`CausalStreams` passes through `metrics()` and `setStateListener`.** Parsley registers its
+  per-task sensors (records buffered and released, deserialization and clock-resolution failures,
+  ignored out-of-scope dependencies, and the rest of the `parsley` group) on the wrapped
+  instance's registry, but the facade offered no in-process way to reach them — an operator had to
+  go through JMX. `metrics()` now exposes the registry and `setStateListener` the state
+  transitions, alongside the existing `state()` and `setUncaughtExceptionHandler`; the facade
+  still deliberately stops short of re-exposing the whole `KafkaStreams` surface. Broken links, malformed HTML, and bad references now
   fail the Javadoc build instead of rotting silently; only exhaustive `@param`/`@return` tagging
   stays unchecked, since the documentation style here is prose. Turning it on surfaced real drift
   in `overview.html`: the usage example still called `build()` on the builder and the text still
