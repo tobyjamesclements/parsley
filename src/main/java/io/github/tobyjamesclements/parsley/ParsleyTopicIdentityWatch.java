@@ -51,7 +51,8 @@ final class ParsleyTopicIdentityWatch {
     static final String CONFIG_KEY = "__parsley.topic-identity.watch__";
 
     /** Live watches by minted id; registered at {@link CausalStreams} construction, removed at close. */
-    private static final ConcurrentHashMap<String, ParsleyTopicIdentityWatch> WATCHES = new ConcurrentHashMap<>();
+    // Package-private (not private) purely so tests can observe registration leaks by size.
+    static final ConcurrentHashMap<String, ParsleyTopicIdentityWatch> WATCHES = new ConcurrentHashMap<>();
 
     /** Every name → UUID binding some task of this instance resolved at its init. */
     private final ConcurrentHashMap<String, Uuid> expected = new ConcurrentHashMap<>();

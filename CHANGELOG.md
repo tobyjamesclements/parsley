@@ -36,7 +36,19 @@ All notable changes to this project are documented in this file. The format is b
   extended `IllegalStateException` no longer do (the ad-hoc second root is gone; a handler that
   matched on `IllegalStateException` must match `CausalDeliveryException` instead), constructors
   stay package-private (only Parsley raises them), and each type's Javadoc now states whether a
-  restart heals the condition. `encodedDependencies()` returns a defensive copy. Broken links, malformed HTML, and bad references now
+  restart heals the condition. `encodedDependencies()` returns a defensive copy.
+- **`CausalStreams` gains a bounded `close(Duration)`, and a failed construction no longer leaks
+  its JVM-wide registrations.** The new overload budgets the whole shutdown — the causal drain
+  wait, then stopping the underlying `KafkaStreams` with whatever remains, mirroring
+  `KafkaStreams.close(Duration)` — for callers that cannot block unbounded, a JVM shutdown hook
+  above all. Giving up on the drain never delivers a record early: a truncated drain leaves held
+  records in the changelog-backed buffer to replay in causal order on the next start, so the
+  no-arg `close()` remains the routine path. Separately, the constructor registers this instance
+  in two JVM-wide registries (the producer interceptor resolves them from config) *before*
+  building the `KafkaStreams` instance, whose constructor throws on a bad Streams configuration —
+  and a failed construction hands the caller no instance to `close()`, so both registrations
+  leaked for the JVM's lifetime. The constructor now rolls them back on the way out.
+- **Javadoc doclint is on (`all,-missing`).** Broken links, malformed HTML, and bad references now
   fail the Javadoc build instead of rotting silently; only exhaustive `@param`/`@return` tagging
   stays unchecked, since the documentation style here is prose. Turning it on surfaced real drift
   in `overview.html`: the usage example still called `build()` on the builder and the text still

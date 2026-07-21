@@ -14,12 +14,14 @@ import java.util.HashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Properties;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
+import java.util.function.LongSupplier;
 import java.util.function.Supplier;
 
 /**
@@ -49,7 +51,9 @@ import java.util.function.Supplier;
  *
  * <p><strong>{@link #close()}</strong> always runs the full graceful shutdown: it waits for every task's
  * causal buffer to drain through the ordinary delivery path before stopping the underlying
- * {@code KafkaStreams}.
+ * {@code KafkaStreams}. <strong>{@link #close(Duration)}</strong> is the bounded form for callers
+ * that cannot block unbounded — a JVM shutdown hook above all. It never delivers a record early to
+ * meet its deadline; a truncated drain only defers held records to the next start's replay.
  */
 public final class CausalStreams implements AutoCloseable {
 
@@ -101,7 +105,18 @@ public final class CausalStreams implements AutoCloseable {
         this.topicIdentityWatch = new ParsleyTopicIdentityWatch();
         ParsleyTopicIdentityWatch.register(topicIdentityWatchId, topicIdentityWatch);
         effective.put("producer." + ParsleyTopicIdentityWatch.CONFIG_KEY, topicIdentityWatchId);
-        this.kafkaStreams = new KafkaStreams(assembled, effective);
+        // The two JVM-wide registrations above precede this throwing constructor (a bad Streams
+        // config throws here), and a failed construction hands the caller no instance to close() —
+        // so the registrations must be rolled back on the way out or they leak forever.
+        KafkaStreams streams;
+        try {
+            streams = new KafkaStreams(assembled, effective);
+        } catch (RuntimeException e) {
+            ParsleyOwnOutputRegistry.unregister(ownOutputRegistryId);
+            ParsleyTopicIdentityWatch.unregister(topicIdentityWatchId);
+            throw e;
+        }
+        this.kafkaStreams = streams;
         this.applicationId = effective.getProperty(StreamsConfig.APPLICATION_ID_CONFIG);
         this.sourceTopics = sourceTopicsOf(assembled);
         this.changelogTopics = changelogTopicsOf(assembled, applicationId);
@@ -262,6 +277,48 @@ public final class CausalStreams implements AutoCloseable {
             awaitDrain(quiesce, kafkaStreams::state);
         }
         kafkaStreams.close();
+        releaseResources();
+    }
+
+    /**
+     * Gracefully shuts down within a time budget, for callers that cannot block unbounded — a JVM
+     * shutdown hook above all. The budget spans the whole shutdown: first the causal drain wait,
+     * then stopping the underlying {@code KafkaStreams} with whatever remains, mirroring
+     * {@link KafkaStreams#close(Duration)}.
+     *
+     * <p>Giving up on the drain is always causally safe — records are <em>never</em> delivered
+     * early to beat the deadline. A truncated drain only leaves held records in the changelog-backed
+     * buffer, exactly as an ungraceful stop would, to be replayed and delivered in causal order on
+     * the next start (see {@link ParsleyQuiesce}: the drain is a stall-avoidance optimisation, not a
+     * correctness requirement). Prefer {@link #close()} for routine shutdown, where an
+     * unbounded-but-progressing drain avoids that replay cost.
+     *
+     * @param timeout the maximum time to spend on drain plus shutdown; {@code Duration.ZERO} skips
+     *                straight to an immediate close
+     * @return {@code true} if the underlying streams instance fully stopped within the budget
+     */
+    public boolean close(Duration timeout) {
+        Objects.requireNonNull(timeout, "timeout");
+        if (timeout.isNegative()) {
+            throw new IllegalArgumentException("timeout must not be negative: " + timeout);
+        }
+        long deadlineNanos = System.nanoTime() + timeout.toNanos();
+        if (kafkaStreams.state() != KafkaStreams.State.CREATED) {
+            quiesce.requestQuiesce();
+            awaitDrain(quiesce, kafkaStreams::state, deadlineNanos, System::nanoTime);
+        }
+        long remainingMs = Math.max(0L, TimeUnit.NANOSECONDS.toMillis(deadlineNanos - System.nanoTime()));
+        boolean stopped = kafkaStreams.close(Duration.ofMillis(remainingMs));
+        releaseResources();
+        return stopped;
+    }
+
+    /**
+     * Tears down everything {@code close} must release regardless of how the drain ended: the
+     * JVM-wide registry and watch registrations, the identity-poll executor, and its admin client.
+     * Idempotent, so a bounded close after an unbounded one (or vice versa) is harmless.
+     */
+    private void releaseResources() {
         ParsleyOwnOutputRegistry.unregister(ownOutputRegistryId);
         ScheduledExecutorService executor = identityPollExecutor;
         if (executor != null) {
@@ -295,6 +352,30 @@ public final class CausalStreams implements AutoCloseable {
             }
             sleep();
         }
+    }
+
+    /**
+     * The deadline-bounded variant {@link #close(Duration)} uses: identical to
+     * {@link #awaitDrain(ParsleyQuiesce, Supplier)} except the wait also ends once {@code nanoTime}
+     * reaches {@code deadlineNanos}. Giving up never delivers anything early — the un-drained
+     * records stay in the changelog-backed buffer for the next start. {@code nanoTime} is a seam so
+     * tests drive the deadline without real waiting; production passes {@code System::nanoTime}.
+     *
+     * @return {@code true} if every registered task drained, {@code false} on the deadline or the
+     *         dead-instance escape
+     */
+    static boolean awaitDrain(ParsleyQuiesce quiesce, Supplier<KafkaStreams.State> state,
+                              long deadlineNanos, LongSupplier nanoTime) {
+        while (!quiesce.isSafeToClose()) {
+            if (!canStillDrain(state.get())) {
+                return false;
+            }
+            if (nanoTime.getAsLong() - deadlineNanos >= 0) {
+                return false;
+            }
+            sleep();
+        }
+        return true;
     }
 
     /** Whether tasks in {@code state} can still deliver records — the liveness rule

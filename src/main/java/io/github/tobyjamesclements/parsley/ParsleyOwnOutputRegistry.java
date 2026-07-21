@@ -63,7 +63,8 @@ final class ParsleyOwnOutputRegistry implements ParsleyChannels.AckedOutputs, Pa
     static final String CONFIG_KEY = "__parsley.own-output.registry__";
 
     /** Live registries by minted id; registered at {@link CausalStreams} construction, removed at close. */
-    private static final ConcurrentHashMap<String, ParsleyOwnOutputRegistry> REGISTRIES = new ConcurrentHashMap<>();
+    // Package-private (not private) purely so tests can observe registration leaks by size.
+    static final ConcurrentHashMap<String, ParsleyOwnOutputRegistry> REGISTRIES = new ConcurrentHashMap<>();
 
     /** Sink topic names whose sends this registry tracks; everything else is ignored outright. */
     private final Set<String> trackedTopics;

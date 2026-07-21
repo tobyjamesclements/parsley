@@ -6,7 +6,9 @@ import org.junit.jupiter.api.Test;
 import java.time.Duration;
 import java.util.concurrent.atomic.AtomicReference;
 
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTimeoutPreemptively;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
  * Tests for {@link CausalStreams#awaitDrain}: the graceful-shutdown drain wait is unbounded only
@@ -71,6 +73,65 @@ class CausalStreamsCloseTest {
         assertTimeoutPreemptively(TEST_TIMEOUT,
                 () -> CausalStreams.awaitDrain(quiesce, () -> KafkaStreams.State.RUNNING),
                 "awaitDrain must return once every registered task reports drained");
+    }
+
+    /**
+     * The bounded wait {@link CausalStreams#close(Duration)} uses gives up once the deadline
+     * passes while a task is still undrained — returning {@code false} rather than hanging a
+     * shutdown hook forever on a buffer that can never drain (a dependency that will never
+     * arrive). Giving up delivers nothing early; the held records replay on the next start.
+     */
+    @Test
+    void boundedDrainWaitGivesUpAtTheDeadlineAndReportsFalse() {
+        ParsleyQuiesce quiesce = new ParsleyQuiesce();
+        quiesce.requestQuiesce();
+        quiesce.register("0_0");
+        // Fake clock: first poll sees 600 (before the 1000 deadline), the next sees 1200 (past it).
+        java.util.concurrent.atomic.AtomicLong nanos = new java.util.concurrent.atomic.AtomicLong();
+
+        boolean drained = assertTimeoutPreemptively(TEST_TIMEOUT,
+                () -> CausalStreams.awaitDrain(quiesce, () -> KafkaStreams.State.RUNNING,
+                        1_000L, () -> nanos.addAndGet(600L)),
+                "the bounded drain wait must end at its deadline even while the instance is RUNNING "
+                        + "with an undrained task");
+        assertFalse(drained, "a wait ended by the deadline must report the drain as incomplete");
+    }
+
+    /**
+     * The bounded wait reports {@code true} when every registered task is already drained: the
+     * deadline is a bound, not a mandatory delay, so a drained instance closes immediately.
+     */
+    @Test
+    void boundedDrainWaitReportsTrueOnceDrained() {
+        ParsleyQuiesce quiesce = new ParsleyQuiesce();
+        quiesce.requestQuiesce();
+        quiesce.register("0_0");
+        quiesce.setDrained("0_0", true);
+
+        boolean drained = assertTimeoutPreemptively(TEST_TIMEOUT,
+                () -> CausalStreams.awaitDrain(quiesce, () -> KafkaStreams.State.RUNNING,
+                        // A deadline already in the past: it must not matter, the drain is complete.
+                        Long.MIN_VALUE, () -> 0L),
+                "the bounded drain wait must return at once when every registered task is drained");
+        assertTrue(drained, "a completed drain must be reported as complete regardless of the deadline");
+    }
+
+    /**
+     * The bounded wait keeps the dead-instance escape: an instance in {@code ERROR} can never
+     * drain, so the wait ends (reporting {@code false}) without consuming the deadline budget.
+     */
+    @Test
+    void boundedDrainWaitKeepsTheDeadInstanceEscape() {
+        ParsleyQuiesce quiesce = new ParsleyQuiesce();
+        quiesce.requestQuiesce();
+        quiesce.register("0_0");
+
+        boolean drained = assertTimeoutPreemptively(TEST_TIMEOUT,
+                () -> CausalStreams.awaitDrain(quiesce, () -> KafkaStreams.State.ERROR,
+                        Long.MAX_VALUE, () -> 0L),
+                "the bounded drain wait must end promptly on a dead (ERROR) instance rather than "
+                        + "spending its whole deadline budget on a task that can never drain");
+        assertFalse(drained, "a wait ended by instance death must report the drain as incomplete");
     }
 
     /**
