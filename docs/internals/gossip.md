@@ -55,9 +55,23 @@ triggering record's key, stamped by the single stamping site
 (`ParsleyCausalBroadcast.broadcast`), so a null message's clock and a business record's clock
 cannot diverge by construction. `ParsleyMarkerPartition` routes it to the forwarding task's own
 owned partition on every sink regardless of key — any partition would be *safe* (carried clocks
-never gate), but own-partition routing gives deterministic per-partition coverage. Its timestamp
-is the current wall clock, which carries no causal meaning but drives broker time-based
-retention: a segment holding only null messages must not look expired the moment it rolls.
+never gate), but own-partition routing gives deterministic per-partition coverage.
+
+Its timestamp is the *triggering record's* timestamp — the delivered record's on the non-emitting
+path, the buffered record's on the heartbeat path, the received null message's own on the relay
+path — never the wall clock. A record's timestamp carries no causal meaning (only the headers do),
+but Kafka Streams advances downstream stream time from every polled record's timestamp before the
+record is classified, so a wall-clock-stamped null message emitted during a reprocessing run over
+historic event times would yank downstream delegates' windows, grace periods, and suppressions to
+now. Under trigger timestamps, downstream stream time advances only as the data's time does. The
+retention consequence: a sink segment holding only null messages looks old to broker time-based
+retention exactly when its triggers are old — a backfill — and during a backfill the business
+outputs on the same sink carry the same old timestamps, so retention on causal topics must already
+cover the backfill depth. That is
+[E2's retention-sizing constraint](causal-consistency.md#environmental-assumptions),
+restated, not a new one — and an undersized retention fails in the safe direction: expired null
+messages below a lagging consumer's position hit `AutoOffsetReset.none()`'s loud stall rather than
+silently corrupting downstream event-time results.
 
 ## Reception: the dual role of a null message
 

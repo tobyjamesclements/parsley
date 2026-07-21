@@ -20,6 +20,7 @@ import org.apache.kafka.streams.errors.StreamsException;
 import org.apache.kafka.streams.kstream.Consumed;
 import org.apache.kafka.streams.kstream.Produced;
 import org.apache.kafka.streams.processor.PunctuationType;
+import org.apache.kafka.streams.processor.api.MockProcessorContext;
 import org.apache.kafka.streams.processor.api.Processor;
 import org.apache.kafka.streams.processor.api.ProcessorContext;
 import org.apache.kafka.streams.processor.api.ProcessorSupplier;
@@ -36,6 +37,8 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.time.Duration;
 import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Comparator;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -1394,6 +1397,158 @@ class ParsleyProcessorsTopologyTest {
             assertEquals("alpha", nullMessage.key(),
                     "the null message must reuse the triggering record's key so it co-routes to that partition");
             assertEquals(null, nullMessage.value(), "a null message carries no business value");
+        }
+    }
+
+    /**
+     * A null message emitted for a delivered-but-unforwarded record (the non-emitting path)
+     * carries the triggering record's timestamp, never the wall clock: Kafka Streams advances
+     * downstream stream time from every polled record's timestamp, so a wall-clock stamp during a
+     * reprocessing run would expire downstream windows and suppressions.
+     *
+     * Asserts the emitted null message's timestamp equals the dropped record's.
+     */
+    @Test
+    void nullMessageCarriesTheTriggersTimestampOnTheNonEmittingPath() {
+        Topology topology = topology(
+                ParsleyProcessorSupplier.builder(dropper()).addBufferStore("parsley")
+                        .addSource(new ParsleySource<>("t1", Serdes.String(), Serdes.String())).topicAdmin(ADMIN).build(),
+                List.of("t1"));
+
+        try (TopologyTestDriver driver = new TopologyTestDriver(topology, config(null))) {
+            TestInputTopic<String, String> t1 =
+                    driver.createInputTopic("t1", new StringSerializer(), new StringSerializer());
+            TestOutputTopic<String, String> out =
+                    driver.createOutputTopic("out", new StringDeserializer(), new StringDeserializer());
+
+            t1.pipeInput(new TestRecord<>("k", "dropped", depsHeader(CausalClock.empty()), 1234L));
+
+            List<TestRecord<String, String>> emitted = out.readRecordsToList();
+            assertEquals(1, emitted.size(), "a non-emitting delegate must emit exactly one null message");
+            assertEquals(1234L, emitted.get(0).timestamp(),
+                    "the null message must carry the trigger's timestamp, not the wall clock");
+        }
+    }
+
+    /**
+     * A heartbeat null message — emitted for a record that was buffered (nothing delivered) but
+     * whose receipt still advanced completeness — carries the buffered record's own timestamp,
+     * the same trigger-timestamp rule as the non-emitting path. The heartbeat fires only when the
+     * receipt advanced completeness, i.e. a channel's first sighting at a nonzero offset (whose
+     * baseline seed lifts the frontier below it); a {@code TopologyTestDriver} cannot skip
+     * offsets, so this drives the processor directly through a {@link MockProcessorContext}.
+     *
+     * Asserts exactly one heartbeat is forwarded and its timestamp equals the held record's.
+     */
+    @Test
+    void heartbeatNullMessageCarriesTheHeldRecordsTimestamp() {
+        ParsleyProcessor<String, String, String, String> processor = new ParsleyProcessor<>(
+                upperCaser().get(),
+                new ParsleySerializer<>(new ParsleyResolver<>(t -> Serdes.String(), t -> Serdes.String())),
+                "frontier", "buffer", "candidate-index", "forwarded-index",
+                Set.of("t1", "t2"), Set.of(), List.of(),
+                configs -> ADMIN, ParsleyConfig.from(new Properties()), null);
+        MockProcessorContext<String, String> context = new MockProcessorContext<>();
+        context.setCurrentSystemTimeMs(1L);
+        context.addStateStore(new TestKeyValueStore<String, byte[]>(Comparator.naturalOrder(), "frontier"));
+        context.addStateStore(new TestKeyValueStore<Long, byte[]>(Comparator.naturalOrder(), "buffer"));
+        context.addStateStore(new TestKeyValueStore<byte[], byte[]>(Arrays::compareUnsigned, "candidate-index"));
+        context.addStateStore(new TestKeyValueStore<byte[], byte[]>(Arrays::compareUnsigned, "forwarded-index"));
+        processor.init(context);
+
+        // First sighting of t2 at offset 5: the baseline seed lifts the frontier to t2@4
+        // (completeness advances) while the unsatisfied t1 dependency holds the record.
+        context.setRecordMetadata("t2", 0, 5);
+        Headers headers = ParsleyHeader.mutableHeaders();
+        headers.add(ParsleyHeader.CAUSAL_CLOCK,
+                CausalClock.builder(TOPICS).require("t1", 0, 0).build().toBytes());
+        processor.process(new Record<>("k", "held", 5678L, headers));
+
+        List<MockProcessorContext.CapturedForward<? extends String, ? extends String>> forwarded =
+                context.forwarded();
+        assertEquals(1, forwarded.size(),
+                "a buffered record whose receipt advanced completeness must emit exactly one heartbeat");
+        Record<? extends String, ? extends String> heartbeat = forwarded.get(0).record();
+        assertTrue(heartbeat.headers().lastHeader(ParsleyHeader.NULL_MESSAGE) != null,
+                "the heartbeat must be a null message");
+        assertEquals(5678L, heartbeat.timestamp(),
+                "the heartbeat must carry the held record's timestamp, not the wall clock");
+    }
+
+    /**
+     * A relayed null message — re-emitted because the received one carried news — propagates the
+     * received message's own timestamp onward: a relay carries the original trigger's event time,
+     * never re-stamping it with this node's wall clock.
+     *
+     * Asserts the relayed null message's timestamp equals the received one's.
+     */
+    @Test
+    @SuppressWarnings("NullAway") // the null message TestRecord intentionally has null key/value
+    void relayedNullMessageCarriesTheReceivedMessagesTimestamp() {
+        Topology topology = topology(
+                ParsleyProcessorSupplier.builder(upperCaser()).addBufferStore("parsley")
+                        .addSource(new ParsleySource<>("t1", Serdes.String(), Serdes.String())).topicAdmin(ADMIN).build(),
+                List.of("t1"));
+
+        try (TopologyTestDriver driver = new TopologyTestDriver(topology, config(null))) {
+            TestInputTopic<String, String> t1 =
+                    driver.createInputTopic("t1", new StringSerializer(), new StringSerializer());
+            TestOutputTopic<String, String> out =
+                    driver.createOutputTopic("out", new StringDeserializer(), new StringDeserializer());
+
+            // Carries news (a claim on a coordinate this node knows nothing about), so it relays.
+            Headers newsworthy = ParsleyHeader.mutableHeaders();
+            newsworthy.add(ParsleyHeader.NULL_MESSAGE, new byte[0]);
+            newsworthy.add(ParsleyHeader.CAUSAL_CLOCK,
+                    CausalClock.builder(TOPICS).require("ghost", 0, 3).build().toBytes());
+            t1.pipeInput(new TestRecord<>(null, null, newsworthy, 4242L));
+
+            List<TestRecord<String, String>> emitted = out.readRecordsToList();
+            assertEquals(1, emitted.size(), "a null message carrying news must be relayed exactly once");
+            assertEquals(4242L, emitted.get(0).timestamp(),
+                    "the relay must propagate the received null message's own timestamp");
+        }
+    }
+
+    /**
+     * The event-time consequence the trigger-timestamp rule exists for: backfill-timestamped input
+     * through a non-emitting causal stage must not advance a downstream delegate's stream time to
+     * the wall clock. Kafka Streams advances partition/stream time from every polled record's
+     * timestamp — a null message included — before any processor classifies it, so a
+     * wall-clock-stamped null message would expire downstream windows, grace periods, and
+     * suppressions mid-backfill.
+     *
+     * Asserts the downstream stage's observed stream time equals the backfill timestamp, not the
+     * driver's wall clock.
+     */
+    @Test
+    void backfillThroughANonEmittingStageDoesNotAdvanceDownstreamStreamTimeToWallClock() {
+        StreamsBuilder builder = new StreamsBuilder();
+        builder.stream("t1", Consumed.with(Serdes.String(), Serdes.String()))
+                .process(ParsleyProcessorSupplier.builder(dropper()).addBufferStore("parsley")
+                        .addSource(new ParsleySource<>("t1", Serdes.String(), Serdes.String()))
+                        .topicAdmin(ADMIN).build())
+                .to("mid", Produced.with(Serdes.String(), Serdes.String()));
+        List<Long> downstreamStreamTimes = new ArrayList<>();
+        builder.stream("mid", Consumed.with(Serdes.String(), Serdes.String()))
+                .process(() -> new Processor<String, String, String, String>() {
+                    private ProcessorContext<String, String> ctx;
+                    @Override public void init(ProcessorContext<String, String> context) { this.ctx = context; }
+                    @Override public void process(Record<String, String> record) {
+                        downstreamStreamTimes.add(ctx.currentStreamTimeMs());
+                    }
+                });
+
+        try (TopologyTestDriver driver = new TopologyTestDriver(builder.build(), config(null))) {
+            TestInputTopic<String, String> t1 =
+                    driver.createInputTopic("t1", new StringSerializer(), new StringSerializer());
+
+            // A backfill-aged record: its event time is far behind the driver's wall clock.
+            t1.pipeInput(new TestRecord<>("k", "historic", depsHeader(CausalClock.empty()), 1000L));
+
+            assertEquals(List.of(1000L), downstreamStreamTimes,
+                    "the downstream stage's stream time must follow the data's event time through "
+                            + "the null message — never jump to the wall clock");
         }
     }
 

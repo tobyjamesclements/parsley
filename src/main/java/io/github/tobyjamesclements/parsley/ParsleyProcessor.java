@@ -575,8 +575,9 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
         // null messages.
         if (outcome.delivered().isEmpty() && !causalBroadcast().completeness().equals(completenessBefore)) {
             // Key the heartbeat with the buffered record's own key so it routes to that record's
-            // partition, matching where its eventual business output will land.
-            advertise(record.key());
+            // partition, matching where its eventual business output will land; carry the buffered
+            // record's own timestamp so downstream stream time follows the data's time.
+            advertise(record.key(), record.timestamp());
         }
     }
 
@@ -618,8 +619,9 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
             // correctness of multi-layer topologies.
             if (stampingContext.forwardCount() == 0) {
                 // Reuse the delivered record's key so the stand-in null message routes to the same
-                // partition its business output would have.
-                advertise(message.key());
+                // partition its business output would have, and its timestamp so downstream stream
+                // time advances with the data's time, not the wall clock.
+                advertise(message.key(), message.timestamp());
             }
         }
         deliveryMetadata = null;
@@ -729,9 +731,10 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
         // news, without ping-ponging a message that taught this node nothing around a topology
         // cycle. Reuse the incoming message's own key: upstream keyed it to route to this partition,
         // so re-emitting under the same key keeps the relayed message on the co-partitioned
-        // downstream partition.
+        // downstream partition. Its timestamp propagates too — a relay carries the original
+        // trigger's event time onward, never re-stamping it with this node's wall clock.
         if (reception.learnedSomethingNew()) {
-            advertise(record.key());
+            advertise(record.key(), record.timestamp());
         }
     }
 
@@ -759,13 +762,21 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
      * stamping site — so a null message's stamp and a business record's stamp cannot diverge by
      * construction.
      *
+     * <p>{@code triggerTimestamp} is the triggering record's own timestamp — the delivered
+     * message's on the non-emitting path, the buffered record's on the heartbeat path, the
+     * received null message's own on the relay path — never the wall clock: Kafka Streams advances
+     * downstream stream time from every polled record's timestamp before the record is classified,
+     * so a wall-clock-stamped null message emitted during a reprocessing run would yank downstream
+     * delegates' windows, grace periods, and suppressions to <em>now</em>. See
+     * {@link ParsleyGossip#advertise} for the retention-sizing consequence.
+     *
      * <p>The {@code KIn}-to-{@code KOut} cast is sound under the co-partitioning contract: a causal
      * processor must not change the key across the node (doing so reshards the causally-related
      * events), so the input and output key types coincide.
      */
     @SuppressWarnings("unchecked") // KIn==KOut under the co-partitioning contract
-    private void advertise(@Nullable KIn triggerKey) {
-        forwardToSinks(gossip.advertise((KOut) (Object) triggerKey, context.currentSystemTimeMs()));
+    private void advertise(@Nullable KIn triggerKey, long triggerTimestamp) {
+        forwardToSinks(gossip.advertise((KOut) (Object) triggerKey, triggerTimestamp));
     }
 
     /**

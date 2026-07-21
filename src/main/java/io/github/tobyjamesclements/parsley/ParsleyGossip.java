@@ -168,15 +168,24 @@ final class ParsleyGossip<K, V> {
      * <p>{@code key} is the triggering record's key, carried through as informational wire content,
      * not for routing: {@link ParsleyMarkerPartition} (set by the caller's forward path) routes the
      * message to this task's own owned partition regardless of key, including when it is
-     * {@code null}. {@code timestamp} is the current wall clock, never {@code 0L}: a null message's
-     * timestamp carries no causal meaning (only its headers do), but it does drive broker
-     * time-based retention — a sink segment holding only 0L-timestamped null messages (a
-     * null-message-only channel) would look expired the moment it rolled and be deleted before a
-     * slow consumer read it. The stamp's crossing wait excludes exactly this task's own sink
-     * partitions (see {@link #destinations}).
+     * {@code null}. {@code timestamp} is the <em>triggering record's</em> timestamp, never the wall
+     * clock: a null message's timestamp carries no causal meaning (only its headers do), but Kafka
+     * Streams advances downstream stream time from every polled record's timestamp before the
+     * record is classified, so a wall-clock stamp emitted during a reprocessing run over historic
+     * event times would yank downstream delegates' windows, grace periods, and suppressions to
+     * now. Under trigger timestamps, downstream stream time advances only as the data's time does.
+     * The retention trade this makes: a sink segment holding only null messages looks old to
+     * broker time-based retention exactly when its triggers are old — a backfill — and during a
+     * backfill the business outputs on the same sink carry the same old timestamps, so retention
+     * on causal topics must already cover the backfill depth (E2's retention-sizing constraint,
+     * restated, not a new one). An undersized retention then fails in the safe direction: expired
+     * null messages below a lagging consumer's position hit {@code AutoOffsetReset.none()}'s loud
+     * stall, where a wall-clock stamp silently corrupted downstream event-time results. The
+     * stamp's crossing wait excludes exactly this task's own sink partitions (see
+     * {@link #destinations}).
      *
      * @param key       the triggering record's key, or {@code null} when none has been observed
-     * @param timestamp the record timestamp (wall clock)
+     * @param timestamp the triggering record's timestamp
      * @param <KOut>    the outbound key type
      * @param <VOut>    the outbound value type
      * @return the stamped null message, ready to forward

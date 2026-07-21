@@ -7,7 +7,18 @@ All notable changes to this project are documented in this file. The format is b
 ## [Unreleased]
 
 ### Changed
-- **Restored held records whose source topic left scope get an explicit disposition at startup.**
+- **Null messages carry the triggering record's timestamp instead of the wall clock.** Kafka
+  Streams advances downstream stream time from every polled record's timestamp before any
+  processor classifies it, so a wall-clock-stamped null message emitted during a reprocessing run
+  over historic event times yanked downstream delegates' windows, grace periods, and suppressions
+  to now. All three emission paths now stamp the trigger's own timestamp: the delivered record's
+  on the non-emitting path, the buffered record's on the heartbeat path, and the received null
+  message's own on the relay path — downstream stream time then advances only as the data's time
+  does. The retention trade is documented in the gossip internals page: a segment holding only
+  null messages looks old to time-based retention exactly when its triggers are old (a backfill),
+  which retention on causal topics must already cover (E2's existing sizing constraint), and an
+  undersized retention now fails as `AutoOffsetReset.none()`'s loud stall rather than silent
+  event-time corruption.
   Previously a supported redeploy could strand them: a held record from a removed input crashed
   the task on an untyped serde error at every restart (recoverable only by a full reset), or hung
   `close()` forever if its dependencies never resolved, and a held record from a recreated input's
