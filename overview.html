@@ -18,8 +18,8 @@ declares the topology's single causal stage, the fluent chain's terminal {@code 
 
 <p>Joining a running topology needs no coordination: a new application simply starts consuming, its
 replay self-gates into causal delivery order through the ordinary hold-back queue, and its truthful
-stamps make its outputs correctly gated everywhere from its first emission. The removed {@code
-parsley.coordination.*} keys of earlier versions fail startup loudly if present.</p>
+stamps make its outputs correctly gated everywhere from its first emission. No key under {@code
+parsley.coordination.*} is part of the configuration surface; startup fails if one is present.</p>
 
 <h1>Core concepts</h1>
 <dl>
@@ -51,12 +51,13 @@ parsley.coordination.*} keys of earlier versions fail startup loudly if present.
   machinery and is not a separate public type.</dd>
 
   <dt><strong>Protocol null message</strong></dt>
-  <dd>A record with a null value, keyed with the triggering record's key, marked with a
+  <dd>A record with a null value, carrying the triggering record's key and a
   {@code _parsley_null_message} header, that carries a node's completeness frontier downstream when a
-  delivered input produced no business output. Reusing the key routes it to the same partition the
-  record's output would. It keeps causal progress flowing through filters and not-yet-emitting
-  aggregates, and relays further downstream only when the receiving channel's clock genuinely
-  advanced — never unconditionally, which is what keeps a cyclic topology's marker traffic from
+  delivered input produced no business output. Parsley routes each null message to the emitting
+  task's own partition on every sink; the key is informational only. It keeps causal progress
+  flowing through filters and not-yet-emitting aggregates, and a received null message is relayed
+  further downstream only when its carried clock taught this node something outside its total
+  knowledge — never unconditionally, which is what keeps a cyclic topology's marker traffic from
   ping-ponging forever. Parsley's processors handle null messages internally; a plain Kafka client detects
   them with {@link io.github.tobyjamesclements.parsley.CausalClock#isNullMessage isNullMessage}.</dd>
 

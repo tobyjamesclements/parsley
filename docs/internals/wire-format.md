@@ -27,7 +27,7 @@ own dependencies. The encoding is identical; only the value's meaning differs by
 
 ## `_parsley_null_message` header (protocol null message)
 
-A protocol null message is a record with a null value, keyed with the triggering record's key, carrying two headers: `_parsley_null_message` (an empty-byte marker) and `parsley-causal-clock` (the emitting node's completeness frontier, encoded exactly as above). A node emits one in place of a business record when a delivered input produced no downstream output, so completeness still propagates through non-emitting layers. The key is reused so the null message routes to the same partition the record's business output would; consumers identify it by the header, never by its key. Consumers identify a null message by the presence of the `_parsley_null_message` header (`CausalClock.isNullMessage`); a non-Parsley consumer sees a tombstone-shaped record and should skip it.
+A protocol null message is a record with a null value, carrying the triggering record's key and two headers: `_parsley_null_message` (an empty-byte marker) and `parsley-causal-clock` (the emitting node's completeness frontier, encoded exactly as above). A node emits one in place of a business record when a delivered input produced no downstream output, so completeness still propagates through non-emitting layers. The key is informational wire content only: routing does not depend on it, because `ParsleyMarkerPartition` directs every null message to the forwarding task's own partition on each sink. Consumers identify a null message by the presence of the `_parsley_null_message` header (`CausalClock.isNullMessage`), never by its key or null value; a non-Parsley consumer sees a tombstone-shaped record and should skip it as a business record while still observing it into any frontier it maintains.
 
 ## Buffer record (`ParsleySerializer` v3)
 
@@ -144,8 +144,7 @@ The sections, in order:
   a sink.
 
 Each section past the channel clocks is trailing and optional on read, so a blob written by an
-older layout loads with that section empty. There is no cross-version compatibility beyond that:
-pre-1.0 versions have no upgrade path.
+older layout loads with that section empty. There is no cross-version compatibility beyond that.
 
 The forwarded-offset index stays its own keyed store (`{ns}-forwarded-index`): it is growable and
 order-sensitive, so folding it into `"f"` would increase Rocks I/O.

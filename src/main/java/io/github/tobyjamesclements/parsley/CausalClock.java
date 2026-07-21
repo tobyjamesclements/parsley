@@ -244,8 +244,9 @@ public final class CausalClock {
 
     /**
      * Returns {@code true} if {@code record} is a Parsley null message (Chandy–Misra–Bryant sense):
-     * a metadata record that carries a node's completeness frontier but no business payload (null
-     * key, null value). A plain Kafka client should still {@link #observe(ConsumerRecord) observe}
+     * a metadata record that carries a node's completeness frontier but no business payload (its
+     * value is null; its key is borrowed from the record that triggered it). A plain Kafka client
+     * should still {@link #observe(ConsumerRecord) observe}
      * a null message — so its running frontier advances across a service that emitted only null
      * messages on this path — but must not surface it to application code as a business record. The
      * usual consumer loop is to {@code observe} every record and {@code continue} past those for

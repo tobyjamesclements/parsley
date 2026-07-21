@@ -33,9 +33,11 @@ guarantee. Keep the relevant-partition count within your record-size budget.
 
 ## `parsley.properties`
 
-Parsley reads its own behaviour from a `parsley.properties` resource on the classpath. This is kept
-separate from Kafka Streams configuration because these behaviours have no Streams equivalent. An
-absent file, or an absent key, falls back to the defaults below.
+Parsley reads its own behaviour from a `parsley.properties` resource on the classpath. A `parsley.*`
+key may also be set in the `Properties` passed to `CausalStreams`, which overrides the classpath
+resource key for key. The namespace is kept separate from Kafka Streams configuration because these
+behaviours have no Streams equivalent. An absent file, or an absent key, falls back to the defaults
+below; a key set to an unrecognised value fails startup with `IllegalStateException`.
 
 ```properties
 # How a causal processor reacts at startup to a detectable topology misconfiguration: the causal
@@ -51,9 +53,9 @@ parsley.topology.validation = strict
 |---|---|---|
 | `parsley.topology.validation` | `strict` | `off`, `warn`, `strict` |
 
-The `parsley.coordination.*` keys of earlier versions are removed: topology-epoch coordination is no
-longer part of the causal protocol — joins need zero coordination. Startup fails loudly if one is
-present; delete the keys. No replacement configuration is needed.
+No key under `parsley.coordination.*` is part of the configuration surface: joins need zero
+coordination, so there is no coordination subsystem to configure. Startup fails with
+`IllegalStateException`, naming the offending key, if one is present.
 
 `parsley.topology.validation = strict` (the default) fails the task fast at startup when the causal
 input topics do not share a partition count, which makes co-partitioning impossible. Set it to
@@ -74,7 +76,9 @@ failing at startup — `strict` surfaces it once, clearly, at init. See
 
 ## Metrics
 
-Parsley wires a handful of Kafka Streams `Sensor`s per task, under the `stream-parsley-metrics` group:
+Parsley wires a handful of Kafka Streams `Sensor`s per task, under the `stream-parsley-metrics`
+group. They are visible over JMX like any Kafka Streams metric, and in-process through
+`CausalStreams.metrics()`.
 
 | Sensor | Kind | Meaning |
 |---|---|---|
@@ -85,7 +89,7 @@ Parsley wires a handful of Kafka Streams `Sensor`s per task, under the `stream-p
 | `deps-out-of-scope-ignored` | rate/total | Dependency coordinates on channels this node does not consume, ignored by the gate (one count per coordinate). Routine in topologies whose consumers have narrower scopes than their ancestors' stamps; a sustained unexpected rate can indicate a cross-wired deployment or a co-partitioning mistake. |
 | `replays-skipped` | rate/total | Received records whose offset was already delivered here, skipped instead of being forwarded to the delegate again. Routine while an added input's re-fetched prefix replays past the carried-ancestry seed after a scope change; sustained counts outside that warrant investigation. |
 | `reflected-claims-above-own-outputs` | rate/total | Inbound clocks claiming one of this node's own sink coordinates above its own-outputs clock. Diagnostic only, never a failure: it means the own-output view is stale beyond the init-time heal, or a peer's stamp is not truthful. |
-| `records-held-above-highest-received` | gauge | Held records waiting past the stall threshold on a dependency above its channel's highest received offset — nothing received so far can satisfy the claim, so the delay is unbounded until that channel produces again. Fail-safe, never unsafe; also logged at `WARN` when the count changes. |
+| `records-held-above-highest-received` | gauge | Held records waiting past the stall threshold (the effective producer `delivery.timeout.ms`, 120 s unless overridden) on a dependency above its channel's highest received offset — nothing received so far can satisfy the claim, so the delay is unbounded until that channel produces again. Fail-safe, never unsafe; also logged at `WARN` when the count changes. |
 | `buffer-depth` | gauge | Current number of records held in the causal buffer. |
 | `buffer-oldest-buffered-at-ms` | gauge | Timestamp the oldest currently-held record was buffered at. |
 

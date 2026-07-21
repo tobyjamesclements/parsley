@@ -54,10 +54,11 @@ input; a stateful node keeps one instance and observes into it across records. T
 dependencies a record already carries, without folding in a new position, use
 `CausalClock.fromRecord(record)`.
 
-When you consume a topic a Parsley topology produces, some records are *protocol null messages*: null
-key and value, carrying a completeness frontier so causal progress flows through processors that
-produce no output for a given input. Still `observe(record)` them, so your frontier advances across a
-service that emitted only null messages on this path, but skip them as business records — test with
+When you consume a topic a Parsley topology produces, some records are *protocol null messages*: a
+record with a null value (its key is borrowed from the record that triggered it), carrying a
+completeness frontier so causal progress flows through processors that produce no output for a given
+input. Still `observe(record)` them, so your frontier advances across a service that emitted only
+null messages on this path, but skip them as business records — test with
 `CausalClock.isNullMessage(record)` and `continue` past those it flags.
 
 The frontier is persisted before each record is forwarded, so it survives restarts and rebalances.
@@ -93,10 +94,12 @@ partition a different task instance owns — is **ignored**, unconditionally. Th
 vacuous satisfaction: stamps are transitively complete and merged unconditionally, so any consumed
 causal ancestor of a record is claimed *directly* in that record's own clock — an unconsumed entry
 only ever proxies ancestry the same clock already states, and ignoring it loses no ordering
-observable at this node. Each ignore is counted by the `parsley.deps.out-of-scope-ignored` metric,
+observable at this node. Each ignore is counted by the `deps-out-of-scope-ignored` metric,
 never a failure. There is no restriction on a node consuming both a topic
 and a topic derived from it.
-See the [causal consistency model](internals/causal-consistency.md) for the full contract and why a
+This gate is the delivery condition of Birman–Schiper–Stephenson causal broadcast, evaluated over
+Kafka topic-partition coordinates rather than process identifiers. See the
+[causal consistency model](internals/causal-consistency.md) for the full contract and why a
 single witness suffices.
 
 ## Causal buffer is unbounded and fail-closed
@@ -118,8 +121,11 @@ standard way to arrange this is to partition related topics by the record key wi
 partition count, so that causally related messages, which share a key, land on the same partition
 number across topics and each instance owns partition `N` everywhere. The key is the shard: the unit
 that keeps causally related events together on one partition. An advanced user can partition by a
-coarser function of the key with a custom `StreamPartitioner`, provided the partitioner reads the key
-rather than the value, since a protocol null message carries no value to read.
+coarser function of the key with a custom `StreamPartitioner`, provided the partitioner computes the
+partition from the key alone: the key is the only field causally related records share across
+topics, so a partitioner that reads anything else cannot place them consistently. Protocol null
+messages do not pass through this partitioner at all; Parsley routes each one to the emitting
+task's own partition on every sink.
 
 Parsley does not enforce co-partitioning end to end, and most of it cannot be checked, so a
 misconfigured topology evaluates against an incomplete partition set. At startup, `parsley.topology.validation`
@@ -137,6 +143,5 @@ starts, its hold-back queue converts arbitrary cross-partition arrival into caus
 (replay is just arbitrarily delayed delivery, which causal broadcast absorbs by construction), and
 its truthful stamps make its outputs correctly gated everywhere from its first emission. A fresh
 record with old dependencies simply sits low in the causal partial order — correct, not a hazard.
-There is no join barrier, no admission, no membership roster, and no epoch. (Earlier versions
-coordinated joins through a topology-epoch subsystem; it contributed nothing to causal safety and
-has been removed. Its `parsley.coordination.*` keys fail startup loudly if present — delete them.)
+There is no join barrier, no admission, no membership roster, and no epoch. No key under
+`parsley.coordination.*` is part of the configuration surface; startup fails if one is present.

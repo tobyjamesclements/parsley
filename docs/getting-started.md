@@ -9,9 +9,11 @@
 ## Installation
 
 Parsley is published to [Maven Central](https://central.sonatype.com/artifact/io.github.tobyjamesclements/parsley).
-The current version is a snapshot, so it lives in Central's snapshot repository rather than the main
-one. No credentials are needed, because snapshots are publicly readable. Declare the repository and
-the dependency in your `pom.xml`.
+The latest tagged release is `0.1.0`, available from Central's default repository with no extra
+configuration. This documentation describes the current development version, `0.1.1-SNAPSHOT`,
+which lives in Central's snapshot repository. No credentials are needed, because snapshots are
+publicly readable. To use the snapshot, declare the repository and the dependency in your
+`pom.xml`.
 
 ```xml
 <repositories>
@@ -29,9 +31,6 @@ the dependency in your `pom.xml`.
   <version>0.1.1-SNAPSHOT</version>
 </dependency>
 ```
-
-Once a tagged `0.1.0` release ships, this repository block is no longer needed, because Central's
-default repository, which is already in every Maven setup, covers real releases.
 
 `parsley` pulls in `kafka-clients` transitively. `kafka-streams` is an optional dependency and does
 not arrive transitively: an application using the `CausalStreams` runtime declares `kafka-streams`

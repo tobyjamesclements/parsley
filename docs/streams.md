@@ -1,17 +1,15 @@
 # Streams integration
 
 `CausalStreamsBuilder`, `CausalTopology`, and `CausalStreams` are three roles mirroring Kafka Streams'
-own `StreamsBuilder`, `Topology`, and `KafkaStreams`. Declare one or more causal stages on the builder,
-build the topology, then hand it to a `CausalStreams` runtime.
+own `StreamsBuilder`, `Topology`, and `KafkaStreams`. Declare the topology's single causal stage as one
+fluent chain, terminate the chain with `.build()`, then hand the result to a `CausalStreams` runtime.
 
 ```java
-CausalStreamsBuilder builder = new CausalStreamsBuilder();
-
-builder.stream(List.of("prices", "orders"), Serdes.String(), orderSerde)
-       .process(new EnrichOrderSupplier())
-       .to("enriched-output", Serdes.String(), enrichedSerde);
-
-CausalTopology topology = builder.build();
+CausalTopology topology = new CausalStreamsBuilder()
+        .stream(List.of("prices", "orders"), Serdes.String(), orderSerde)
+        .process(new EnrichOrderSupplier())
+        .to("enriched-output", Serdes.String(), enrichedSerde)
+        .build();
 
 CausalStreams causalStreams = new CausalStreams(topology, props);
 causalStreams.start();
@@ -19,6 +17,12 @@ Runtime.getRuntime().addShutdownHook(new Thread(causalStreams::close));
 ```
 
 ## Building a causal topology
+
+A causal topology declares exactly one stage. The chain's terminal `.build()` lives on
+`CausalProcessedStream`, the object `process(...)` returns, and there is no public term to open a
+second stage: a second `process(...)` on one builder is rejected. A multi-stage causal pipeline is
+deployed as multiple applications, each one stage, chained topic to topic. Joins need zero
+coordination, so the split costs nothing beyond the intermediate topic.
 
 `stream(...)` registers one or more source topics as a stage's inputs. Multiple input topics are the
 norm — a single `stream(topics, keySerde, valueSerde)` call fans several co-partitioned topics sharing
@@ -37,9 +41,11 @@ topology might be reordered later.
 
 `to(topic)` declares a sink. A stage may declare more than one; `withPartitioner` applies one
 `StreamPartitioner` uniformly across every sink the stage declares (default: Kafka's own key-hash
-partitioner) so causal sinks in the same stage never drift onto different partitioners. The partitioner
-must read only the key, never the value — a protocol null message carries a null value and reuses its
-triggering record's key, so a value-based partitioner cannot route it.
+partitioner) so causal sinks in the same stage never drift onto different partitioners. The
+partitioner must compute the partition from the key alone, because the key is the only field
+causally related records share across topics. Protocol null messages never pass through it: Parsley
+wraps the partitioner in an internal decorator that routes each null message to the forwarding
+task's own partition on every sink.
 
 Unlike the Kafka Streams DSL, sources and sinks here take plain key/value `Serde`s rather than
 `Consumed`/`Produced`: neither exposes its serdes for reading back, and Parsley's causal buffer needs
@@ -95,7 +101,7 @@ dominates the record's dependencies on coordinates it consumes; another channel'
 never substitutes for local delivery. A dependency on a coordinate this node does not consume is
 ignored, unconditionally — sound because stamps are transitively complete and merged
 unconditionally, so any consumed causal ancestor is claimed directly in the same clock. Each ignore
-increments the `parsley.deps.out-of-scope-ignored` metric.
+increments the `deps-out-of-scope-ignored` metric.
 
 **`processing.guarantee=exactly_once_v2` is required.** Parsley's crash-safety reasoning narrows an
 at-least-once torn-write window across the buffer, frontier, and forwarded-index changelogs to a benign
@@ -125,22 +131,71 @@ a rebalance the following happens.
 - Held records are re-evaluated against the restored frontier. No re-fetch from the broker is
   required.
 
+## Shutdown
+
+`CausalStreams.close()` runs a graceful causal shutdown. It first asks every task to drain: held
+records keep releasing through the ordinary delivery path as their dependencies arrive, and the wait
+continues, unbounded, until every registered task reports an empty buffer. Only then is the
+underlying `KafkaStreams` stopped. The wait ends early in exactly one case: when the underlying
+instance leaves the `RUNNING`/`REBALANCING` states (it died in `ERROR`, or was already stopped), no
+task can ever deliver again, so waiting longer cannot drain anything and shutdown proceeds.
+
+`close(Duration)` is the bounded form, for callers that cannot block without limit, such as a JVM
+shutdown hook. The budget spans the whole shutdown: first the drain wait, then stopping the
+underlying `KafkaStreams` with whatever time remains, mirroring `KafkaStreams.close(Duration)`. It
+returns `true` if the instance fully stopped within the budget.
+
+Neither form ever trades causal order for a deadline. A truncated or abandoned drain leaves the
+still-held records in the changelog-backed buffer, exactly as an ungraceful stop would, and they are
+restored and delivered in causal order on the next start. The drain exists to avoid that replay
+cost, not to preserve correctness, so `close()` is the routine path and `close(Duration)` the
+bounded fallback.
+
+## Failure handling
+
+When the causal protocol cannot proceed soundly, Parsley fails the owning task rather than
+delivering out of order. The throw aborts the task's exactly-once transaction, Kafka Streams routes
+it to the application's `StreamsUncaughtExceptionHandler` (set via
+`CausalStreams.setUncaughtExceptionHandler`), and the handler decides between replacing the thread
+and shutting down. Every such exception is a subtype of the public root
+`CausalDeliveryException` (an unchecked exception; only Parsley constructs instances), so a handler
+can decide by type:
+
+| Exception | Condition | Does a restart heal it? |
+|---|---|---|
+| `CausalBufferDeserializationException` | A held record's key or value can no longer be deserialised on the forward path (typically a Schema Registry change while it was buffered). | No. The same record poisons the next drain until the external serde state is repaired; the record stays in the buffer changelog. |
+| `CausalVectorClockResolutionException` | An inbound record's `parsley-causal-clock` header is present but undecodable. The record was never forwarded and its offset was not committed. | No. The record is refetched and fails again until the producer that wrote the malformed header is fixed. |
+| `CausalTopicRecreatedException` | The background topic-identity watch detected that a causal topic was deleted or recreated mid-run. | The member cannot heal in place (do not replace the thread), but a restart is safe: identity is re-resolved and the recreation degrades to history loss, never reordering. |
+| `CausalPendingAckException` | The pre-stamp crossing wait timed out, observed a failed send, or was interrupted, so a stamp could have under-claimed the node's own outputs. | Usually, yes. The condition is normally transient and the aborted transaction is retried from its consumed offsets. |
+
+`CausalBufferDeserializationException` and `CausalVectorClockResolutionException` share the abstract
+base `CausalCoordinateException`, which exposes the failing record's `topic()`, `topicId()`,
+`partition()`, and `offset()`, plus a `details()` diagnostic string that never contains payload
+bytes. Startup-time misconfiguration (a missing `processing.guarantee=exactly_once_v2`, a
+record-skipping exception handler, an unresolvable topic, an invalid `parsley.*` value) throws
+`IllegalStateException` instead: those are configuration errors, not delivery failures.
+[Troubleshooting](troubleshooting.md) covers the operational recovery for each delivery failure.
+
+`CausalStreams` also passes through the underlying instance's `state()`, `metrics()` (including
+Parsley's own sensors, see [Configuration](configuration.md#metrics)), and `setStateListener` for
+in-process monitoring.
+
 ## Evolving a running topology
 
 A causal topology sometimes has to change while it runs: add a stage, replace a stage, or recompile
 one. Joining needs **zero coordination**: a new stage simply starts consuming from wherever the log
 starts, its hold-back queue converts arbitrary cross-partition replay arrival into causal delivery
 order, and its truthful stamps make its outputs correctly gated everywhere from its first emission.
-There is no join barrier, no admission wait, and nothing to configure.
-
-Earlier versions coordinated joins through a topology-epoch subsystem (`requestEpochTransition()`,
-the `parsley.coordination.*` keys). It contributed nothing to causal safety and has been removed
-entirely: `requestEpochTransition()` no longer exists, and startup fails loudly if a
-`parsley.coordination.*` key is present. Delete the keys and any `requestEpochTransition()` calls
-when upgrading.
+There is no join barrier, no admission wait, and nothing to configure. No key under
+`parsley.coordination.*` is part of the configuration surface; startup fails if one is present.
 
 ## Operating notes
 
+- **Parsley creates no topics of its own.** All causal metadata travels in record headers on the
+  topics the topology already declares, plus the standard Kafka Streams changelog topics backing
+  Parsley's four state stores (`{ns}-frontier`, `{ns}-buffer`, `{ns}-candidate-index`,
+  `{ns}-forwarded-index`, see [Wire format](internals/wire-format.md#state-store-names-and-serdes)).
+  There is no coordination log, no marker topic, and no separate metadata topic.
 - **Create every causal topic — sinks included — before the application starts.** Inputs must exist
   for the sources to resolve, and a declared sink must exist too: its UUID and end offsets feed
   own-output stamping, so an unresolvable sink fails startup loudly rather than running with stamps

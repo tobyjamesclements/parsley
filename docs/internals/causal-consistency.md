@@ -33,7 +33,8 @@ unit that carries a total order.
 
 ## How traditional algorithms work
 
-Systems like COPS and causal broadcast protocols build on vector clocks under one shared
+Systems like COPS (Lloyd et al., "Don't Settle for Eventual", 2011) and causal broadcast
+protocols build on vector clocks under one shared
 assumption: every node that must enforce causal ordering receives every write. In COPS, writes
 propagate to all datacenters, so the delivery predicate is always checkable — the coordinates in
 a dependency clock are coordinates this datacenter will eventually observe. In causal broadcast
@@ -100,7 +101,8 @@ definition — a producer that stamps nothing claims nothing — and is delivera
 
 ### Why local delivery is required
 
-This is the Birman–Schiper–Stephenson CBCAST delivery condition, instantiated on Kafka's own
+This is the Birman–Schiper–Stephenson CBCAST delivery condition (Birman, Schiper, and Stephenson,
+"Lightweight Causal and Atomic Group Multicast", 1991), instantiated on Kafka's own
 `(topicId, partition)` coordinates: in BSS, a process delivers a message only once *its own*
 delivered vector covers the message's timestamp — the condition is over the receiver's own
 delivery history, never over what a peer reports having delivered. The distinction matters
@@ -132,13 +134,10 @@ m₃'s clock claims m₁ *directly*. An unconsumed entry in a clock only ever pr
 same clock already states explicitly, and ignoring it loses no ordering observable at this node.
 Each ignore is counted by the `deps-out-of-scope-ignored` metric.
 
-Earlier versions instead failed the task fast on a dependency naming a coordinate the node had no
-channel for. That fail-fast added no safety — no execution exists, under the fault model stated
-below, in which it prevents a causal-order violation — and it actively manufactured a
-coordination problem: incumbents crashed whenever a new application's stamps first circulated, so
-joins needed admission, barriers, and membership. All of that machinery has been removed. Joining
-a running topology needs zero coordination (see
-[Concepts](../concepts.md#joining-a-running-topology)).
+The ignore branch is also what makes joins coordination-free. A new application's stamps routinely
+circulate coordinates that incumbent nodes have no channel for, and the gate ignores those soundly
+instead of treating them as an error, so joining a running topology needs no admission, no barrier,
+and no membership (see [Concepts](../concepts.md#joining-a-running-topology)).
 
 ## The outbound stamp
 

@@ -15,11 +15,11 @@ import java.util.Properties;
 import java.util.Set;
 
 /**
- * The immutable causal topology {@link CausalStreamsBuilder#build()} produces: every declared stage's
- * source topics, processor, sink(s), and partitioner. This is a specification, not yet a real Kafka
- * Streams {@link Topology} — {@link #assemble} builds that once a {@link CausalStreams} runtime supplies
- * its {@code props}, which is when a stage's default-serde-deferred sources/sinks, and the runtime's
- * quiesce wiring, become known. Construct one with {@link CausalStreamsBuilder}; hand it to
+ * The immutable causal topology {@link CausalProcessedStream#build()} produces: the single declared
+ * stage's source topics, processor, sink(s), and partitioner. This is a specification, not yet a real
+ * Kafka Streams {@link Topology} — {@link #assemble} builds that once a {@link CausalStreams} runtime
+ * supplies its {@code props}, which is when the stage's default-serde-deferred sources/sinks, and the
+ * runtime's quiesce wiring, become known. Construct one with {@link CausalStreamsBuilder}; hand it to
  * {@code new CausalStreams(topology, props)}.
  *
  * <p><strong>{@code processing.guarantee=exactly_once_v2} is required, unconditionally.</strong> {@link

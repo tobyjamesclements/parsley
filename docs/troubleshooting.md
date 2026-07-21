@@ -19,8 +19,11 @@ Delivery is unconditionally fail-closed: there is no configuration that trades c
 liveness, and no third disposition besides forward or buffer. A poison record always fails the task
 fast — the record is never dropped and never forwarded on an unproven premise.
 
-- The JVM is never crashed. The error is a `RuntimeException` that is fatal only to the task, which
-  Kafka Streams restarts.
+- The JVM is never crashed. The error is a `CausalBufferDeserializationException` (a public subtype
+  of `CausalDeliveryException`, see [Failure handling](streams.md#failure-handling)) that is fatal
+  only to the task, which Kafka Streams restarts. An uncaught-exception handler can read the failing
+  coordinate from the exception (`topic()`, `partition()`, `offset()`) and a payload-free
+  diagnostic from `details()`.
 - Startup is never blocked. Index restore decodes only Parsley's own framing and never your serde, so
   a poison record can be restored and only fails when it is actually forwarded.
 - An `ERROR` line is logged with the held record's metadata, and never with the payload bytes.
@@ -45,15 +48,19 @@ To inspect the exact bytes, read them from the buffer's changelog topic
 `{applicationId}-{storeName}-buffer-changelog`, where `storeName` is the stage's name, with a console
 consumer. Parsley never logs the payload itself.
 
-### Do not use Streams' exception handlers for this
+### Streams' record-skipping exception handlers are rejected
 
-Setting `processing.exception.handler=CONTINUE` does not help. Streams routes the failure through that
-handler, but its `CONTINUE` mode skips the innocent record currently being processed, which is the
-record whose arrival triggered the drain, rather than the buffered poison record. The poison record
-stays, the next trigger hits it again, and the application sheds healthy records in a livelock. The
-`deserialization.exception.handler` (`LogAndContinue`) does not apply either, because it covers
-source-topic consumption rather than records decoded from Parsley's state store. There is no Parsley
-config to set instead — recovery is always the schema-fix-and-restart path above.
+Configuring a record-skipping handler is not an escape hatch, and Parsley enforces that at startup:
+`CausalTopology` fails assembly with `IllegalStateException` if `processing.exception.handler` or a
+deserialization exception handler is set to one of Kafka Streams' built-in log-and-continue
+variants. Skipping is causally unsafe in general (Parsley's skip-bridge treats an offset the
+consumer never returned as a transaction marker, so a dropped record would let a dependent be
+delivered before its cause), and it also would not help here: a continue-mode processing handler
+skips the innocent record whose arrival triggered the drain, not the buffered poison record, so the
+poison record stays, the next trigger hits it again, and the application sheds healthy records in a
+livelock. A custom handler passes the startup check, but it must always fail; a custom handler that
+returns `CONTINUE` recreates the same livelock. There is no Parsley config to set instead —
+recovery is always the schema-fix-and-restart path above.
 
 ---
 
@@ -61,9 +68,11 @@ config to set instead — recovery is always the schema-fix-and-restart path abo
 
 A record's causal dependencies travel in its `parsley-causal-clock` header. When that header is
 present but cannot be decoded into a clock — a corrupt or truncated header, or one written in an
-unsupported wire version — Parsley fails the task fast at ingest rather than forward the record on an
-unknown premise. The record was never buffered and its source offset is not committed past it, so it is
-reprocessed on the next attempt, after a restart or once the upstream is fixed.
+unsupported wire version — Parsley fails the task fast at ingest
+(`CausalVectorClockResolutionException`, which carries the source coordinate and a copy of the
+undecodable header bytes) rather than forward the record on an unknown premise. The record was
+never buffered and its source offset is not committed past it, so it is reprocessed on the next
+attempt, after a restart or once the upstream is fixed.
 
 ```
 Unresolvable causal-clock header on orders-0 @42; failing fast (fail-closed). ...
@@ -97,8 +106,9 @@ topic.
 Topic names are resolved to their stable Kafka UUIDs once, at task initialisation, and causal
 identity is bound to the UUID for the process lifetime. If a causal topic — an input or a sink — is
 deleted (or deleted and recreated under the same name) while the application runs, `CausalStreams`
-detects the change through a background topic-identity poll and fails the application fast the next
-time a task processes or stamps a record:
+detects the change through a background topic-identity poll (every 5 seconds) and fails the
+application fast, with `CausalTopicRecreatedException`, the next time a task processes or stamps a
+record:
 
 ```
 causal topic 'prices' changed UUID from ... (resolved at init) to ... — it was deleted and
@@ -109,7 +119,10 @@ a recreated topic would be ingested and stamped under the old UUID, rebinding ca
 Depending on timing, the failure can instead surface as Kafka's own missing-source-topic rebalance
 error or, for a recreated input whose new log is still short, the out-of-range failure the
 `AutoOffsetReset.none()` sources fail closed under. All three are the same verdict: the member
-stops rather than processing the new incarnation's records under the old identity. Records fetched
+stops rather than processing the new incarnation's records under the old identity. An
+uncaught-exception handler receiving `CausalTopicRecreatedException` should shut down rather than
+replace the thread, because the member cannot heal in place: every further record would be
+mislabelled. Records fetched
 in the short window before detection are the residual exposure, so treat live deletion or
 recreation of a causal topic as an operational error, like letting retention outrun a lagging
 consumer. Restarting after a recreation is safe: identity is re-resolved at init, and the old

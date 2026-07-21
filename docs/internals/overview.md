@@ -51,11 +51,12 @@ why an outbound stamp cannot include the record's own coordinate).
 
 | Class | Role |
 |---|---|
-| `CausalStreamsBuilder` | Declares one or more causal stages: `stream(...)` source topics, `.process(supplier)`, `.to(...)` sink(s); `.build()` produces a `CausalTopology` |
-| `CausalStream` / `CausalProcessedStream` | Fluent intermediate types `CausalStreamsBuilder` returns while declaring a stage (`merge`, `process`, `to`, `withPartitioner`) |
+| `CausalStreamsBuilder` | Declares the topology's single causal stage: `stream(...)` source topics, `.process(supplier)`, `.to(...)` sink(s); the chain's terminal `.build()` (on `CausalProcessedStream`) produces a `CausalTopology` |
+| `CausalStream` / `CausalProcessedStream` | Fluent intermediate types `CausalStreamsBuilder` returns while declaring the stage (`merge`, `process`, `to`, `withPartitioner`, `build`) |
 | `CausalTopology` | The built, immutable topology specification; `assemble(props, quiesce)` produces the real Kafka Streams `Topology` |
-| `CausalStreams` | The runtime: wraps the underlying `KafkaStreams` instance, owns graceful causal drain on `close()` and the background topic-identity watch |
+| `CausalStreams` | The runtime: wraps the underlying `KafkaStreams` instance, owns graceful causal drain on `close()`/`close(Duration)` and the background topic-identity watch; passes through `state()`, `metrics()`, `setStateListener`, `setUncaughtExceptionHandler` |
 | `CausalClock` | Public facade over a `ParsleyVectorClock`: the causal requirements stamped onto each record, plus the `using`/`observe`/`stamp`/`merge` edge operations and `isNullMessage` for skipping protocol null messages on the consumer side |
+| `CausalDeliveryException` hierarchy | The fail-closed throws as public types: `CausalCoordinateException` (abstract, carries the source coordinate) over `CausalBufferDeserializationException` and `CausalVectorClockResolutionException`; `CausalTopicRecreatedException` and `CausalPendingAckException` directly under the root |
 
 ### Package-private implementation
 

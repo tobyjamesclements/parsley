@@ -172,6 +172,23 @@ All notable changes to this project are documented in this file. The format is b
   version. Documentation vocabulary updated throughout.
 
 ### Documentation
+- **A full audit pass over every documentation surface (mkdocs pages, Javadoc, `overview.html`,
+  README) fixes doc/code drift and deepens the explanations.** The topology examples now build
+  exactly one stage and call `build()` on `CausalProcessedStream` (the previous `builder.build()`
+  example did not compile). Null messages are described as the code implements them: they carry
+  the triggering record's key as information only and are routed to the forwarding task's own
+  partition on every sink, bypassing the user partitioner. The metrics tables cite the sensor as
+  `deps-out-of-scope-ignored`, matching `ParsleyMetrics`. `troubleshooting.md` states that startup
+  rejects the built-in record-skipping exception handlers rather than presenting handler choice as
+  free configuration, and explains why record-skipping is causally unsafe. `configuration.md`
+  documents that the `Properties` passed to `CausalStreams` overlay the classpath
+  `parsley.properties`. Design-history narration is removed in favour of present-tense
+  description, `migration.md` is replaced by `adoption.md` (incremental adoption of stamping;
+  unstamped records are vacuously deliverable), and `streams.md` gains Shutdown and Failure
+  handling sections covering `close()`/`close(Duration)` semantics and the public
+  `CausalDeliveryException` hierarchy. Citations are anchored where terms have exact literature
+  meanings (Birman–Schiper–Stephenson for the delivery condition, Lloyd et al. for COPS). The
+  README no longer forecasts a fault-injection suite for 1.0.
 - **The documentation is rewritten around the three protocol modules (T4.2).** The internals
   section now has one page per module — a new `internals/channels.md` (coordinates and identity,
   density, own outputs, scope changes), `internals/engine.md` renamed to

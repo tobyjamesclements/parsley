@@ -46,7 +46,7 @@ nav:
     - Getting started: getting-started.md
     - Streams integration: streams.md
     - Configuration: configuration.md
-    - Migration: migration.md
+    - Incremental adoption: adoption.md
   - Operations:
     - Performance: performance.md
     - Troubleshooting: troubleshooting.md
