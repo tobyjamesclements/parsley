@@ -43,12 +43,12 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
  * A genuine two-app topology cycle under the two-branch gate, with zero coordination (T3.1 IT c):
- * app A consumes {@code t1} and {@code tb} and produces {@code ta}; app B consumes {@code ta} and
+ * app A consumes {@code c1} and {@code tb} and produces {@code ta}; app B consumes {@code ta} and
  * produces {@code tb}. Each app's own produced coordinates reflect back at it around the cycle in
  * the other app's stamps — {@code ta} claims arrive at A (its own unconsumed sink → the ignore
  * branch, where the retired gate-side strip used to sit and the retired I7 fail-fast would
  * otherwise fire), {@code tb} claims arrive at B likewise — while the carried root ancestry
- * ({@code t1}) is genuinely gated at A's consumed branch. Before D7 this shape needed the
+ * ({@code c1}) is genuinely gated at A's consumed branch. Before D7 this shape needed the
  * coordination subsystem's {@code domain-topics} passthrough to avoid the fail-fast; here both
  * apps run with no coordination configuration at all, and the cycle both delivers and quiesces.
  */
@@ -59,31 +59,31 @@ class ParsleyCyclicReflectionIT {
     private final KafkaContainer kafka =
             new KafkaContainer(DockerImageName.parse("apache/kafka:3.7.0"));
 
-    private static final String T1 = "t1";
+    private static final String C1 = "c1";
     private static final String TA = "ta";
     private static final String TB = "tb";
     private static final String OBSERVED = "observed";
 
     /**
-     * One {@code t1} record traverses the cycle — A derives onto {@code ta}, B derives onto
+     * One {@code c1} record traverses the cycle — A derives onto {@code ta}, B derives onto
      * {@code tb}, and the {@code tb} record (whose clock reflects A's own {@code ta} coordinate
-     * and claims the {@code t1} root) is delivered back at A through the ignore/consumed
+     * and claims the {@code c1} root) is delivered back at A through the ignore/consumed
      * dispatch. The cycle must then quiesce: after the input stops, both cycle topics' end
      * offsets hold still and both apps are still RUNNING.
      *
      * Asserts the reflected {@code tb} record's wire clock names A's own {@code ta} coordinate
-     * and the {@code t1} root, A's delegate delivers the t1 cause before the looped-back tb
+     * and the {@code c1} root, A's delegate delivers the c1 cause before the looped-back tb
      * record, the cycle topics stop growing, and both Streams instances stay RUNNING.
      */
     @Test
     void twoAppCycleDeliversReflectedClaimsAndQuiescesWithoutCoordination() throws Exception {
         String bootstrap = kafka.getBootstrapServers();
-        createTopics(bootstrap, T1, TA, TB, OBSERVED);
-        Uuid t1Id = topicId(bootstrap, T1);
+        createTopics(bootstrap, C1, TA, TB, OBSERVED);
+        Uuid c1Id = topicId(bootstrap, C1);
         Uuid taId = topicId(bootstrap, TA);
 
         CausalTopology aTopology = new CausalStreamsBuilder()
-                .stream(List.of(T1, TB), Serdes.String(), Serdes.String())
+                .stream(List.of(C1, TB), Serdes.String(), Serdes.String())
                 .process(appAProcessor())
                 .to("ta-sink", TA, Serdes.String(), Serdes.String())
                 .to("observed-sink", OBSERVED, Serdes.String(), Serdes.String())
@@ -100,11 +100,11 @@ class ParsleyCyclicReflectionIT {
             b.start();
 
             try (KafkaProducer<String, String> input = new KafkaProducer<>(producerConfig(bootstrap))) {
-                input.send(CausalClock.empty().stamp(new ProducerRecord<>(T1, "k", "hello"))).get();
+                input.send(CausalClock.empty().stamp(new ProducerRecord<>(C1, "k", "hello"))).get();
             }
 
             // The record that traversed the cycle: B's tb output reflects A's own ta coordinate
-            // back at A (the ignore branch's input) and claims the t1 root (the consumed branch's
+            // back at A (the ignore branch's input) and claims the c1 root (the consumed branch's
             // input) — both in one clock.
             List<ConsumerRecord<String, String>> tbRecords = new ArrayList<>();
             try (KafkaConsumer<String, String> consumer = new KafkaConsumer<>(consumerConfig(bootstrap))) {
@@ -123,13 +123,13 @@ class ParsleyCyclicReflectionIT {
             assertTrue(tbClock.offsetFor(taId, 0) >= 0,
                     "the looped-back record must reflect A's own ta coordinate — the claim the "
                             + "ignore branch (not a strip, not a fail-fast) handles at A");
-            assertTrue(tbClock.offsetFor(t1Id, 0) >= 0,
-                    "the looped-back record must claim the t1 root (I2/I9 custody around the "
+            assertTrue(tbClock.offsetFor(c1Id, 0) >= 0,
+                    "the looped-back record must claim the c1 root (I2/I9 custody around the "
                             + "cycle) — the claim A's consumed branch genuinely gates");
 
             // The delivery evidence: A's delegate genuinely delivers the looped-back tb record —
-            // its reflected ta claim lands in the ignore branch, its t1 claim in the consumed
-            // branch — after the t1 cause. Under the retired I7 fail-fast this delivery crashed
+            // its reflected ta claim lands in the ignore branch, its c1 claim in the consumed
+            // branch — after the c1 cause. Under the retired I7 fail-fast this delivery crashed
             // the task instead.
             try (KafkaConsumer<String, String> consumer = new KafkaConsumer<>(consumerConfig(bootstrap))) {
                 consumer.subscribe(List.of(OBSERVED));
@@ -140,10 +140,10 @@ class ParsleyCyclicReflectionIT {
                             observed.add(record.value());
                         }
                     });
-                    return observed.contains(T1 + ":hello") && observed.contains(TB + ":b:a:hello");
+                    return observed.contains(C1 + ":hello") && observed.contains(TB + ":b:a:hello");
                 });
-                assertTrue(observed.indexOf(T1 + ":hello") < observed.indexOf(TB + ":b:a:hello"),
-                        "A must deliver the t1 cause before the looped-back derivative; observed: " + observed);
+                assertTrue(observed.indexOf(C1 + ":hello") < observed.indexOf(TB + ":b:a:hello"),
+                        "A must deliver the c1 cause before the looped-back derivative; observed: " + observed);
             }
 
             // Quiescence: after the input stops, the cycle's topics stop growing for a sustained
@@ -164,7 +164,7 @@ class ParsleyCyclicReflectionIT {
 
     /**
      * App A's delegate: every delivery is tagged {@code <sourceTopic>:<value>} to the observed
-     * sink; a {@code t1} record additionally derives {@code a:<value>} onto the {@code ta} sink,
+     * sink; a {@code c1} record additionally derives {@code a:<value>} onto the {@code ta} sink,
      * while a {@code tb}-sourced delivery (the looped-back derivative) is not re-derived, so the
      * business loop terminates after one round trip.
      */
@@ -181,7 +181,7 @@ class ParsleyCyclicReflectionIT {
             public void process(Record<String, String> record) {
                 String source = ctx.recordMetadata().orElseThrow().topic();
                 ctx.forward(record.withValue(source + ":" + record.value()), "observed-sink");
-                if (T1.equals(source)) {
+                if (C1.equals(source)) {
                     ctx.forward(record.withValue("a:" + record.value()), "ta-sink");
                 }
             }

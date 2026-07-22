@@ -22,14 +22,14 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 class CausalStreamsConstructionTest {
 
     private static final ParsleyTopicAdmin ADMIN = TestTopicAdmin.of(
-            Map.of("t1", Uuid.randomUuid(), "out", Uuid.randomUuid()));
+            Map.of("c1", Uuid.randomUuid(), "c2", Uuid.randomUuid()));
 
     /** A single-stage passthrough topology over the {@link TestTopicAdmin} double. */
     private static CausalTopology topology() {
         return new CausalStreamsBuilder().topicAdmin(ADMIN)
-                .stream("t1", Serdes.String(), Serdes.String())
+                .stream("c1", Serdes.String(), Serdes.String())
                 .process(PassthroughProcessor::new)
-                .to("out-sink", "out", Serdes.String(), Serdes.String())
+                .to("c2-sink", "c2", Serdes.String(), Serdes.String())
                 .build();
     }
 

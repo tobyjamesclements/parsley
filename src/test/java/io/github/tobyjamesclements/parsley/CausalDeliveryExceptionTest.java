@@ -19,7 +19,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  */
 class CausalDeliveryExceptionTest {
 
-    private static final Uuid T1_ID = Uuid.randomUuid();
+    private static final Uuid C1_ID = Uuid.randomUuid();
 
     /** Every concrete Parsley exception is catchable through the single public root. */
     @Test
@@ -60,9 +60,9 @@ class CausalDeliveryExceptionTest {
     @Test
     void coordinateAccessorsExposeTheSourceQuartet() {
         CausalCoordinateException e = new CausalBufferDeserializationException(
-                "t1", T1_ID, 3, 42L, 7, "details", new RuntimeException("serde"));
-        assertEquals("t1", e.topic(), "topic accessor must expose the source topic");
-        assertEquals(T1_ID, e.topicId(), "topicId accessor must expose the stable UUID");
+                "c1", C1_ID, 3, 42L, 7, "details", new RuntimeException("serde"));
+        assertEquals("c1", e.topic(), "topic accessor must expose the source topic");
+        assertEquals(C1_ID, e.topicId(), "topicId accessor must expose the stable UUID");
         assertEquals(3, e.partition(), "partition accessor must expose the source partition");
         assertEquals(42L, e.offset(), "offset accessor must expose the record's offset");
     }
@@ -76,7 +76,7 @@ class CausalDeliveryExceptionTest {
     void encodedDependenciesReturnsADefensiveCopy() {
         byte[] encoded = {1, 2, 3};
         CausalVectorClockResolutionException e = new CausalVectorClockResolutionException(
-                "t1", T1_ID, 0, 5L, encoded, "details", new RuntimeException("decode"));
+                "c1", C1_ID, 0, 5L, encoded, "details", new RuntimeException("decode"));
         byte[] first = e.encodedDependencies();
         first[0] = 99;
         assertEquals(1, e.encodedDependencies()[0],

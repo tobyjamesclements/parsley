@@ -31,10 +31,10 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
  */
 class ParsleyProcessorRestoreTest {
 
-    private static final Uuid T1_ID = Uuid.randomUuid();
+    private static final Uuid C1_ID = Uuid.randomUuid();
     private static final Uuid OTHER_ID = Uuid.randomUuid();
 
-    private static final ParsleyTopicAdmin ADMIN = TestTopicAdmin.of(Map.of("t1", T1_ID));
+    private static final ParsleyTopicAdmin ADMIN = TestTopicAdmin.of(Map.of("c1", C1_ID));
 
     /**
      * When the frontier store already holds a persisted frontier at {@code init()} (as after a
@@ -47,9 +47,9 @@ class ParsleyProcessorRestoreTest {
      */
     @Test
     void initRestoresAPersistedFrontierAndItGatesAdmissionImmediately() {
-        // Use an in-scope coordinate (T1_ID) so the restored frontier is not pruned away and
+        // Use an in-scope coordinate (C1_ID) so the restored frontier is not pruned away and
         // genuinely gates admission — the dep is satisfied by the frontier, not vacuously.
-        ParsleyVectorClock restoredFrontier = ParsleyVectorClock.empty().observe(T1_ID, 0, 5);
+        ParsleyVectorClock restoredFrontier = ParsleyVectorClock.empty().observe(C1_ID, 0, 5);
         TestKeyValueStore<String, byte[]> frontierStore =
                 new TestKeyValueStore<String, byte[]>(Comparator.naturalOrder(), "frontier");
         frontierStore.put(ParsleyStores.FRONTIER_KEY, frontierBlob(restoredFrontier));
@@ -70,7 +70,7 @@ class ParsleyProcessorRestoreTest {
         ParsleyProcessor<String, String, String, String> processor = new ParsleyProcessor<>(
                 delegate, serializer,
                 "frontier", "buffer", "candidate-index", "forwarded-index",
-                Set.of("t1"), Set.of(), List.of(),
+                Set.of("c1"), Set.of(), List.of(),
                 configs -> ADMIN, ParsleyConfig.from(new Properties()), null);
 
         MockProcessorContext<String, String> context = new MockProcessorContext<>();
@@ -82,10 +82,10 @@ class ParsleyProcessorRestoreTest {
 
         processor.init(context);
 
-        // A record whose only dependency (T1_ID/0@5) is exactly satisfied by the restored frontier
+        // A record whose only dependency (C1_ID/0@5) is exactly satisfied by the restored frontier
         // — it must be forwarded immediately rather than buffered, which would not be possible if
         // init() had started the core from an empty frontier. Offset 10 avoids the self-ref strip.
-        context.setRecordMetadata("t1", 0, 10);
+        context.setRecordMetadata("c1", 0, 10);
         Headers headers = ParsleyHeader.mutableHeaders();
         headers.add(ParsleyHeader.CAUSAL_CLOCK, restoredFrontier.toBytes());
         processor.process(new Record<>("k", "v", 0L, headers));

@@ -24,10 +24,10 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  */
 class CausalClockEdgeOpsTest {
 
-    private static final Uuid ORDERS_ID = Uuid.randomUuid();
-    private static final Uuid PRICES_ID = Uuid.randomUuid();
+    private static final Uuid C2_ID = Uuid.randomUuid();
+    private static final Uuid C1_ID = Uuid.randomUuid();
     private static final ParsleyTopics TOPICS =
-            ParsleyTopics.of(Map.of("orders", ORDERS_ID, "prices", PRICES_ID));
+            ParsleyTopics.of(Map.of("c2", C2_ID, "c1", C1_ID));
 
     /**
      * {@code stamp} writes the dependencies into the record's header in a form {@code fromRecord} can
@@ -37,8 +37,8 @@ class CausalClockEdgeOpsTest {
      */
     @Test
     void stampRoundTripsThroughFromRecord() {
-        CausalClock deps = CausalClock.builder(TOPICS).require("prices", 0, 7).build();
-        ProducerRecord<String, String> stamped = deps.stamp(new ProducerRecord<>("orders", "k", "v"));
+        CausalClock deps = CausalClock.builder(TOPICS).require("c1", 0, 7).build();
+        ProducerRecord<String, String> stamped = deps.stamp(new ProducerRecord<>("c2", "k", "v"));
 
         ConsumerRecord<String, String> consumed = asConsumerRecord(stamped);
         assertEquals(Optional.of(deps), CausalClock.fromRecord(consumed),
@@ -53,10 +53,10 @@ class CausalClockEdgeOpsTest {
      */
     @Test
     void stampReplacesAnExistingDependenciesHeaderWithoutDuplicating() {
-        CausalClock first = CausalClock.builder(TOPICS).require("prices", 0, 1).build();
-        CausalClock second = CausalClock.builder(TOPICS).require("prices", 0, 9).build();
+        CausalClock first = CausalClock.builder(TOPICS).require("c1", 0, 1).build();
+        CausalClock second = CausalClock.builder(TOPICS).require("c1", 0, 9).build();
 
-        ProducerRecord<String, String> once = first.stamp(new ProducerRecord<>("orders", "k", "v"));
+        ProducerRecord<String, String> once = first.stamp(new ProducerRecord<>("c2", "k", "v"));
         ProducerRecord<String, String> twice = second.stamp(once);
 
         List<Header> depHeaders = new ArrayList<>();
@@ -75,13 +75,13 @@ class CausalClockEdgeOpsTest {
      */
     @Test
     void stampDoesNotMutateTheInputRecord() {
-        ProducerRecord<String, String> input = new ProducerRecord<>("orders", "k", "v");
-        CausalClock deps = CausalClock.builder(TOPICS).require("prices", 0, 3).build();
+        ProducerRecord<String, String> m1 = new ProducerRecord<>("c2", "k", "v");
+        CausalClock deps = CausalClock.builder(TOPICS).require("c1", 0, 3).build();
 
-        ProducerRecord<String, String> stamped = deps.stamp(input);
+        ProducerRecord<String, String> stamped = deps.stamp(m1);
 
-        assertTrue(input != stamped, "stamp must return a new record, not the input");
-        assertEquals(null, input.headers().lastHeader(ParsleyHeader.CAUSAL_CLOCK),
+        assertTrue(m1 != stamped, "stamp must return a new record, not the input");
+        assertEquals(null, m1.headers().lastHeader(ParsleyHeader.CAUSAL_CLOCK),
                 "stamp must not write a header onto the input record");
         assertTrue(stamped.headers().lastHeader(ParsleyHeader.CAUSAL_CLOCK) != null,
                 "the returned record must carry the dependencies header");
@@ -97,11 +97,11 @@ class CausalClockEdgeOpsTest {
      */
     @Test
     void stampPreservesUnrelatedExistingHeaders() {
-        ProducerRecord<String, String> input = new ProducerRecord<>("orders", "k", "v");
-        input.headers().add("trace-id", "abc".getBytes());
-        CausalClock deps = CausalClock.builder(TOPICS).require("prices", 0, 3).build();
+        ProducerRecord<String, String> m1 = new ProducerRecord<>("c2", "k", "v");
+        m1.headers().add("trace-id", "abc".getBytes());
+        CausalClock deps = CausalClock.builder(TOPICS).require("c1", 0, 3).build();
 
-        ProducerRecord<String, String> stamped = deps.stamp(input);
+        ProducerRecord<String, String> stamped = deps.stamp(m1);
 
         assertEquals("abc", new String(stamped.headers().lastHeader("trace-id").value()),
                 "an unrelated header on the input record must be preserved by stamp");
@@ -118,12 +118,12 @@ class CausalClockEdgeOpsTest {
     @Test
     void mergeTakesTheMaximumOffsetPerCoordinate() {
         CausalClock a = CausalClock.builder(TOPICS)
-                .require("prices", 0, 5).require("orders", 0, 2).build();
+                .require("c1", 0, 5).require("c2", 0, 2).build();
         CausalClock b = CausalClock.builder(TOPICS)
-                .require("prices", 0, 8).build();
+                .require("c1", 0, 8).build();
 
         CausalClock expected = CausalClock.builder(TOPICS)
-                .require("prices", 0, 8).require("orders", 0, 2).build();
+                .require("c1", 0, 8).require("c2", 0, 2).build();
         assertEquals(expected, a.merge(b),
                 "merge must keep the per-coordinate maximum offset across both inputs");
     }
@@ -137,12 +137,12 @@ class CausalClockEdgeOpsTest {
      */
     @Test
     void observeUnionsCarriedDependenciesWithTheConsumedRecordsOwnPosition() {
-        CausalClock carried = CausalClock.builder(TOPICS).require("prices", 0, 4).build();
-        ConsumerRecord<String, String> consumed = new ConsumerRecord<>("orders", 0, 11L, "k", "v");
+        CausalClock carried = CausalClock.builder(TOPICS).require("c1", 0, 4).build();
+        ConsumerRecord<String, String> consumed = new ConsumerRecord<>("c2", 0, 11L, "k", "v");
         consumed.headers().add(ParsleyHeader.CAUSAL_CLOCK, carried.toBytes());
 
         CausalClock expected = CausalClock.builder(TOPICS)
-                .require("prices", 0, 4).require("orders", 0, 11).build();
+                .require("c1", 0, 4).require("c2", 0, 11).build();
         assertEquals(expected, CausalClock.using(TOPICS).observe(consumed),
                 "observe must union the carried dependencies with the consumed record's own position");
     }
@@ -155,9 +155,9 @@ class CausalClockEdgeOpsTest {
      */
     @Test
     void observeIncludesOwnPositionForARecordWithNoCarriedDependencies() {
-        ConsumerRecord<String, String> consumed = new ConsumerRecord<>("orders", 0, 6L, "k", "v");
+        ConsumerRecord<String, String> consumed = new ConsumerRecord<>("c2", 0, 6L, "k", "v");
 
-        CausalClock expected = CausalClock.builder(TOPICS).require("orders", 0, 6).build();
+        CausalClock expected = CausalClock.builder(TOPICS).require("c2", 0, 6).build();
         assertEquals(expected, CausalClock.using(TOPICS).observe(consumed),
                 "observe must record the consumed record's own position even with no carried dependencies");
     }
@@ -172,19 +172,19 @@ class CausalClockEdgeOpsTest {
      */
     @Test
     void observeAccumulatesAcrossRecordsAsARunningFrontier() {
-        ConsumerRecord<String, String> priceLow = new ConsumerRecord<>("prices", 0, 3L, "k", "v");
-        ConsumerRecord<String, String> priceHigh = new ConsumerRecord<>("prices", 0, 7L, "k", "v");
-        CausalClock orderCarried = CausalClock.builder(TOPICS).require("prices", 0, 2).build();
-        ConsumerRecord<String, String> order = new ConsumerRecord<>("orders", 0, 5L, "k", "v");
-        order.headers().add(ParsleyHeader.CAUSAL_CLOCK, orderCarried.toBytes());
+        ConsumerRecord<String, String> m1 = new ConsumerRecord<>("c1", 0, 3L, "k", "v");
+        ConsumerRecord<String, String> m2 = new ConsumerRecord<>("c1", 0, 7L, "k", "v");
+        CausalClock carried = CausalClock.builder(TOPICS).require("c1", 0, 2).build();
+        ConsumerRecord<String, String> m3 = new ConsumerRecord<>("c2", 0, 5L, "k", "v");
+        m3.headers().add(ParsleyHeader.CAUSAL_CLOCK, carried.toBytes());
 
         CausalClock frontier = CausalClock.using(TOPICS)
-                .observe(priceLow)
-                .observe(priceHigh)
-                .observe(order);
+                .observe(m1)
+                .observe(m2)
+                .observe(m3);
 
         CausalClock expected = CausalClock.builder(TOPICS)
-                .require("prices", 0, 7).require("orders", 0, 5).build();
+                .require("c1", 0, 7).require("c2", 0, 5).build();
         assertEquals(expected, frontier,
                 "a running observe(...) accumulator must keep the per-coordinate maximum across all observed records");
     }
@@ -197,7 +197,7 @@ class CausalClockEdgeOpsTest {
      */
     @Test
     void observeOnAnUnboundInstanceThrows() {
-        ConsumerRecord<String, String> consumed = new ConsumerRecord<>("orders", 0, 0L, "k", "v");
+        ConsumerRecord<String, String> consumed = new ConsumerRecord<>("c2", 0, 0L, "k", "v");
         assertThrows(IllegalStateException.class, () -> CausalClock.empty().observe(consumed),
                 "observe must throw when no ParsleyTopics resolver is bound");
     }
@@ -224,9 +224,9 @@ class CausalClockEdgeOpsTest {
      */
     @Test
     void isNullMessageDistinguishesNullMessagesFromBusinessRecords() {
-        ConsumerRecord<String, String> business = new ConsumerRecord<>("orders", 0, 1L, "k", "v");
+        ConsumerRecord<String, String> business = new ConsumerRecord<>("c2", 0, 1L, "k", "v");
         ConsumerRecord<String, String> nullMessage =
-                nullMessageRecord("orders", 0, 2L, CausalClock.empty());
+                nullMessageRecord("c2", 0, 2L, CausalClock.empty());
 
         assertFalse(CausalClock.isNullMessage(business),
                 "a business record must not be reported as a null message");
@@ -240,16 +240,16 @@ class CausalClockEdgeOpsTest {
      * so counting that offset would force downstream to wait on a record that delivers nothing. This
      * mirrors how a Parsley causal-broadcast core folds a received null message.
      *
-     * Asserts that observing a null message on {@code orders@99} carrying {@code prices@4} yields exactly
-     * {@code prices@4} — the carried frontier, with no {@code orders} coordinate from the null message's
+     * Asserts that observing a null message on {@code c2@99} carrying {@code c1@4} yields exactly
+     * {@code c1@4} — the carried frontier, with no {@code c2} coordinate from the null message's
      * own position.
      */
     @Test
     void observeFoldsANullMessagesCarriedFrontierButNotItsOwnPosition() {
-        CausalClock carriedFrontier = CausalClock.builder(TOPICS).require("prices", 0, 4).build();
-        ConsumerRecord<String, String> nullMessage = nullMessageRecord("orders", 0, 99L, carriedFrontier);
+        CausalClock carriedFrontier = CausalClock.builder(TOPICS).require("c1", 0, 4).build();
+        ConsumerRecord<String, String> nullMessage = nullMessageRecord("c2", 0, 99L, carriedFrontier);
 
-        CausalClock expected = CausalClock.builder(TOPICS).require("prices", 0, 4).build();
+        CausalClock expected = CausalClock.builder(TOPICS).require("c1", 0, 4).build();
         assertEquals(expected, CausalClock.using(TOPICS).observe(nullMessage),
                 "observe must fold a null message's carried frontier but not its own (topic, partition, offset)");
     }
@@ -259,19 +259,19 @@ class CausalClockEdgeOpsTest {
      * this path: the null message's carried frontier lifts the client's frontier to upstream completeness
      * the client never saw a business record for, keeping the per-coordinate maximum.
      *
-     * Asserts that after a business record on {@code prices@2} and then a null message carrying
-     * {@code prices@6}, the frontier is {@code prices@6} — advanced by the null message — with no
+     * Asserts that after a business record on {@code c1@2} and then a null message carrying
+     * {@code c1@6}, the frontier is {@code c1@6} — advanced by the null message — with no
      * coordinate for the null message's own topic.
      */
     @Test
     void observeAdvancesARunningFrontierAcrossANullMessageOnlyService() {
-        ConsumerRecord<String, String> price = new ConsumerRecord<>("prices", 0, 2L, "k", "v");
-        CausalClock upstreamComplete = CausalClock.builder(TOPICS).require("prices", 0, 6).build();
-        ConsumerRecord<String, String> nullMessage = nullMessageRecord("orders", 0, 50L, upstreamComplete);
+        ConsumerRecord<String, String> m1 = new ConsumerRecord<>("c1", 0, 2L, "k", "v");
+        CausalClock upstreamComplete = CausalClock.builder(TOPICS).require("c1", 0, 6).build();
+        ConsumerRecord<String, String> nullMessage = nullMessageRecord("c2", 0, 50L, upstreamComplete);
 
-        CausalClock frontier = CausalClock.using(TOPICS).observe(price).observe(nullMessage);
+        CausalClock frontier = CausalClock.using(TOPICS).observe(m1).observe(nullMessage);
 
-        CausalClock expected = CausalClock.builder(TOPICS).require("prices", 0, 6).build();
+        CausalClock expected = CausalClock.builder(TOPICS).require("c1", 0, 6).build();
         assertEquals(expected, frontier,
                 "a null message must advance the running frontier to the upstream completeness it carries");
     }

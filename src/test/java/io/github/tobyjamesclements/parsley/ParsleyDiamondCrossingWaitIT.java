@@ -52,7 +52,7 @@ class ParsleyDiamondCrossingWaitIT {
     private final KafkaContainer kafka =
             new KafkaContainer(DockerImageName.parse("apache/kafka:3.7.0"));
 
-    private static final String T1 = "t1";
+    private static final String C1 = "c1";
     private static final String OUT_A = "diamond-a";
     private static final String OUT_B = "diamond-b";
     private static final String OBSERVED = "observed";
@@ -68,17 +68,17 @@ class ParsleyDiamondCrossingWaitIT {
     @Test
     void secondOutputOfOneInvocationClaimsAndFollowsTheFirst() throws Exception {
         String bootstrap = kafka.getBootstrapServers();
-        createTopics(bootstrap, T1, OUT_A, OUT_B, OBSERVED);
+        createTopics(bootstrap, C1, OUT_A, OUT_B, OBSERVED);
         Uuid outAId = topicId(bootstrap, OUT_A);
 
         CausalTopology diamondTopology = new CausalStreamsBuilder()
-                .stream(List.of(T1), Serdes.String(), Serdes.String())
+                .stream(List.of(C1), Serdes.String(), Serdes.String())
                 .process(fanOutProcessor())
                 .to("a-sink", OUT_A, Serdes.String(), Serdes.String())
                 .to("b-sink", OUT_B, Serdes.String(), Serdes.String())
                 .build();
         CausalTopology observerTopology = new CausalStreamsBuilder()
-                .stream(List.of(T1, OUT_A, OUT_B), Serdes.String(), Serdes.String())
+                .stream(List.of(C1, OUT_A, OUT_B), Serdes.String(), Serdes.String())
                 .process(taggingProcessor())
                 .to(OBSERVED, Serdes.String(), Serdes.String())
                 .build();
@@ -89,7 +89,7 @@ class ParsleyDiamondCrossingWaitIT {
             observer.start();
 
             try (KafkaProducer<String, String> input = new KafkaProducer<>(producerConfig(bootstrap))) {
-                input.send(CausalClock.empty().stamp(new ProducerRecord<>(T1, "k", "hello"))).get();
+                input.send(CausalClock.empty().stamp(new ProducerRecord<>(C1, "k", "hello"))).get();
             }
 
             // Wire evidence of the crossing wait: b's stamp claims a's exact committed coordinate,

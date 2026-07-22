@@ -36,12 +36,12 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 /**
  * A joiner needs zero coordination (D7, T3.2 IT a): a fresh app joins an established, still-running
  * topology by simply starting to consume — no barrier, no admission, no join wait — and its
- * multi-partition replay lands in causal delivery order. App A ({@code t1} → {@code t2},
+ * multi-partition replay lands in causal delivery order. App A ({@code c1} → {@code c2},
  * key-preserving, both topics two partitions) builds derived history while running; joiner Z then
- * starts consuming {@code t1} and {@code t2} from log start. Each of Z's two tasks replays its
+ * starts consuming {@code c1} and {@code c2} from log start. Each of Z's two tasks replays its
  * partition pair in arbitrary cross-topic arrival order; the hold-back queue must convert that into
- * causal order — every derived {@code t2} record delivered after its {@code t1} cause — because the
- * {@code t2} records' truthful (unfloored) stamps claim their {@code t1} coordinates directly.
+ * causal order — every derived {@code c2} record delivered after its {@code c1} cause — because the
+ * {@code c2} records' truthful (unfloored) stamps claim their {@code c1} coordinates directly.
  */
 @Testcontainers(disabledWithoutDocker = true)
 class ParsleyBarrierlessJoinerReplayIT {
@@ -50,8 +50,8 @@ class ParsleyBarrierlessJoinerReplayIT {
     private final KafkaContainer kafka =
             new KafkaContainer(DockerImageName.parse("apache/kafka:3.7.0"));
 
-    private static final String T1 = "t1";
-    private static final String T2 = "t2";
+    private static final String C1 = "c1";
+    private static final String C2 = "c2";
     private static final String OBSERVED = "observed";
     private static final int PARTITIONS = 2;
     private static final int RECORDS = 6;
@@ -59,23 +59,23 @@ class ParsleyBarrierlessJoinerReplayIT {
     /**
      * Z joins while A is still running, with history already on both partitions of both topics, and
      * with no coordination configured anywhere. Z must start delivering without any barrier and,
-     * for every key on every partition, deliver the {@code t1} cause strictly before the derived
-     * {@code t2} effect, despite replaying both topics concurrently from log start.
+     * for every key on every partition, deliver the {@code c1} cause strictly before the derived
+     * {@code c2} effect, despite replaying both topics concurrently from log start.
      *
      * Asserts Z observes both records for every key, cause before effect per key.
      */
     @Test
     void joinerReplayAcrossPartitionsLandsInCausalOrderWithNoBarrier() throws Exception {
         String bootstrap = kafka.getBootstrapServers();
-        createTopics(bootstrap, PARTITIONS, T1, T2, OBSERVED);
+        createTopics(bootstrap, PARTITIONS, C1, C2, OBSERVED);
 
         CausalTopology aTopology = new CausalStreamsBuilder()
-                .stream(List.of(T1), Serdes.String(), Serdes.String())
+                .stream(List.of(C1), Serdes.String(), Serdes.String())
                 .process(prefixingProcessor("a:"))
-                .to(T2, Serdes.String(), Serdes.String())
+                .to(C2, Serdes.String(), Serdes.String())
                 .build();
         CausalTopology joinerTopology = new CausalStreamsBuilder()
-                .stream(List.of(T1, T2), Serdes.String(), Serdes.String())
+                .stream(List.of(C1, C2), Serdes.String(), Serdes.String())
                 .process(taggingProcessor())
                 .to(OBSERVED, Serdes.String(), Serdes.String())
                 .build();
@@ -83,12 +83,12 @@ class ParsleyBarrierlessJoinerReplayIT {
         try (CausalStreams a = new CausalStreams(aTopology, streamsConfig(bootstrap, "replay-a"))) {
             a.start();
 
-            // Build derived history on both partitions: same key on t1 and t2 → same partition
+            // Build derived history on both partitions: same key on c1 and c2 → same partition
             // (key-preserving stage, equal partition counts, default partitioner).
             try (KafkaProducer<String, String> input = new KafkaProducer<>(producerConfig(bootstrap))) {
                 for (int i = 0; i < RECORDS; i++) {
                     input.send(CausalClock.empty()
-                            .stamp(new ProducerRecord<>(T1, "k" + i, "v" + i))).get();
+                            .stamp(new ProducerRecord<>(C1, "k" + i, "v" + i))).get();
                 }
             }
             awaitDerivedHistory(bootstrap);
@@ -109,14 +109,14 @@ class ParsleyBarrierlessJoinerReplayIT {
                         return observed.size() >= 2 * RECORDS;
                     });
                     for (int i = 0; i < RECORDS; i++) {
-                        String cause = T1 + ":v" + i;
-                        String effect = T2 + ":a:v" + i;
+                        String cause = C1 + ":v" + i;
+                        String effect = C2 + ":a:v" + i;
                         assertTrue(observed.contains(cause),
-                                "Z must deliver the replayed t1 cause for k" + i + "; observed: " + observed);
+                                "Z must deliver the replayed c1 cause for k" + i + "; observed: " + observed);
                         assertTrue(observed.contains(effect),
-                                "Z must deliver the replayed derived t2 effect for k" + i + "; observed: " + observed);
+                                "Z must deliver the replayed derived c2 effect for k" + i + "; observed: " + observed);
                         assertTrue(observed.indexOf(cause) < observed.indexOf(effect),
-                                "the joiner's replay must deliver the t1 cause before its derived t2 "
+                                "the joiner's replay must deliver the c1 cause before its derived c2 "
                                         + "effect for k" + i + " — the hold-back queue converts arbitrary "
                                         + "cross-topic arrival into causal order; observed: " + observed);
                     }
@@ -125,10 +125,10 @@ class ParsleyBarrierlessJoinerReplayIT {
         }
     }
 
-    /** Waits until every derived record has been committed to {@code t2}, so the joiner faces real history. */
+    /** Waits until every derived record has been committed to {@code c2}, so the joiner faces real history. */
     private void awaitDerivedHistory(String bootstrap) {
         try (KafkaConsumer<String, String> consumer = new KafkaConsumer<>(consumerConfig(bootstrap))) {
-            consumer.subscribe(List.of(T2));
+            consumer.subscribe(List.of(C2));
             Set<String> derived = new HashSet<>();
             await().atMost(Duration.ofSeconds(90)).until(() -> {
                 consumer.poll(Duration.ofMillis(500)).forEach(record -> {

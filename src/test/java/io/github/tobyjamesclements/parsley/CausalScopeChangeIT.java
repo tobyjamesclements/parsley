@@ -58,9 +58,9 @@ class CausalScopeChangeIT {
     private final KafkaContainer kafka =
             new KafkaContainer(DockerImageName.parse("apache/kafka:3.7.0"));
 
-    private static final String T1 = "t1";
-    private static final String T3 = "t3";
-    private static final String OUT = "out";
+    private static final String C1 = "c1";
+    private static final String C3 = "c3";
+    private static final String C2 = "c2";
 
     /**
      * Growth (A5): an input consumed and delivered in deployment 1, removed in deployment 2, and
@@ -75,23 +75,23 @@ class CausalScopeChangeIT {
     @Test
     void reAddingAnInputSkipsTheAlreadyDeliveredPrefixAndDeliversFreshRecords() throws Exception {
         String bootstrap = kafka.getBootstrapServers();
-        createTopics(bootstrap, T1, T3, OUT);
+        createTopics(bootstrap, C1, C3, C2);
         String appId = "scope-growth-it-" + UUID.randomUUID();
 
-        // Deployment 1: consume T1 + T3; both records deliver.
+        // Deployment 1: consume C1 + C3; both records deliver.
         try (CausalStreams streams = new CausalStreams(
-                topology(List.of(T1, T3)), streamsConfig(bootstrap, appId))) {
+                topology(List.of(C1, C3)), streamsConfig(bootstrap, appId))) {
             streams.start();
-            produce(bootstrap, T3, "x1");
-            produce(bootstrap, T1, "a1");
+            produce(bootstrap, C3, "x1");
+            produce(bootstrap, C1, "a1");
             awaitOutputCount(bootstrap, 2);
         }
 
-        // Deployment 2: T3 removed; its delivered ancestry re-homes into the carried clock.
+        // Deployment 2: C3 removed; its delivered ancestry re-homes into the carried clock.
         try (CausalStreams streams = new CausalStreams(
-                topology(List.of(T1)), streamsConfig(bootstrap, appId))) {
+                topology(List.of(C1)), streamsConfig(bootstrap, appId))) {
             streams.start();
-            produce(bootstrap, T1, "a2");
+            produce(bootstrap, C1, "a2");
             awaitOutputCount(bootstrap, 3);
         }
 
@@ -103,18 +103,18 @@ class CausalScopeChangeIT {
 
         // The re-added input's committed offsets are gone (offset expiry / manual delete while the
         // causal state survives) — the exact shape that previously either refused to start or, keyed
-        // on blob presence alone, replayed T3's history as live (#21).
+        // on blob presence alone, replayed C3's history as live (#21).
         try (Admin admin = Admin.create(Map.of("bootstrap.servers", bootstrap))) {
-            admin.deleteConsumerGroupOffsets(appId, Set.of(new TopicPartition(T3, 0))).all().get();
+            admin.deleteConsumerGroupOffsets(appId, Set.of(new TopicPartition(C3, 0))).all().get();
         }
 
-        // Deployment 3: T3 re-added. The seeder's added-input branch seeds it to log-start; the
+        // Deployment 3: C3 re-added. The seeder's added-input branch seeds it to log-start; the
         // rescope seeds its frontier at the carried ancestry; the receive path skips the re-fetched
-        // prefix. A fresh T3 record then delivers normally.
+        // prefix. A fresh C3 record then delivers normally.
         try (CausalStreams streams = new CausalStreams(
-                topology(List.of(T1, T3)), streamsConfig(bootstrap, appId))) {
+                topology(List.of(C1, C3)), streamsConfig(bootstrap, appId))) {
             streams.start();
-            produce(bootstrap, T3, "x2");
+            produce(bootstrap, C3, "x2");
             List<ConsumerRecord<String, String>> outputs = awaitOutputCount(bootstrap, 4);
 
             List<String> values = new ArrayList<>();
@@ -142,29 +142,29 @@ class CausalScopeChangeIT {
     @Test
     void removingAnInputKeepsStampsDominatingItsDeliveredAncestry() throws Exception {
         String bootstrap = kafka.getBootstrapServers();
-        createTopics(bootstrap, T1, T3, OUT);
+        createTopics(bootstrap, C1, C3, C2);
         String appId = "scope-shrink-it-" + UUID.randomUUID();
-        Uuid t1Id;
-        Uuid t3Id;
+        Uuid c1Id;
+        Uuid c3Id;
         try (Admin admin = Admin.create(Map.of("bootstrap.servers", bootstrap))) {
-            t1Id = admin.describeTopics(List.of(T1, T3)).allTopicNames().get().get(T1).topicId();
-            t3Id = admin.describeTopics(List.of(T1, T3)).allTopicNames().get().get(T3).topicId();
+            c1Id = admin.describeTopics(List.of(C1, C3)).allTopicNames().get().get(C1).topicId();
+            c3Id = admin.describeTopics(List.of(C1, C3)).allTopicNames().get().get(C3).topicId();
         }
 
-        // Deployment 1: consume T1 + T3; T3@0 and T1@0 both deliver into the causal state.
+        // Deployment 1: consume C1 + C3; C3@0 and C1@0 both deliver into the causal state.
         try (CausalStreams streams = new CausalStreams(
-                topology(List.of(T1, T3)), streamsConfig(bootstrap, appId))) {
+                topology(List.of(C1, C3)), streamsConfig(bootstrap, appId))) {
             streams.start();
-            produce(bootstrap, T3, "x1");
-            produce(bootstrap, T1, "a1");
+            produce(bootstrap, C3, "x1");
+            produce(bootstrap, C1, "a1");
             awaitOutputCount(bootstrap, 2);
         }
 
-        // Deployment 2: T3 removed. The new output's stamp must still dominate T3@0.
+        // Deployment 2: C3 removed. The new output's stamp must still dominate C3@0.
         try (CausalStreams streams = new CausalStreams(
-                topology(List.of(T1)), streamsConfig(bootstrap, appId))) {
+                topology(List.of(C1)), streamsConfig(bootstrap, appId))) {
             streams.start();
-            produce(bootstrap, T1, "a2");
+            produce(bootstrap, C1, "a2");
             List<ConsumerRecord<String, String>> outputs = awaitOutputCount(bootstrap, 3);
 
             ConsumerRecord<String, String> postShrink = outputs.stream()
@@ -173,10 +173,10 @@ class CausalScopeChangeIT {
             Header stamp = postShrink.headers().lastHeader(ParsleyHeader.CAUSAL_CLOCK);
             assertNotNull(stamp, "every causal output must carry the dependency stamp header");
             ParsleyVectorClock clock = ParsleyVectorClock.fromBytes(stamp.value());
-            assertEquals(0L, clock.offsetFor(t3Id, 0),
+            assertEquals(0L, clock.offsetFor(c3Id, 0),
                     "the post-shrink stamp must still dominate the removed input's delivered "
-                            + "ancestry (T3@0) — carried ancestry re-homes, never drops (A6): " + clock);
-            assertTrue(clock.offsetFor(t1Id, 0) >= 1L,
+                            + "ancestry (C3@0) — carried ancestry re-homes, never drops (A6): " + clock);
+            assertTrue(clock.offsetFor(c1Id, 0) >= 1L,
                     "the post-shrink stamp must also cover the surviving input's frontier through "
                             + "the record that produced it: " + clock);
         }
@@ -186,7 +186,7 @@ class CausalScopeChangeIT {
         return new CausalStreamsBuilder()
                 .stream(inputs, Serdes.String(), Serdes.String())
                 .process(upperCaser())
-                .to(OUT, Serdes.String(), Serdes.String())
+                .to(C2, Serdes.String(), Serdes.String())
                 .build();
     }
 
@@ -217,7 +217,7 @@ class CausalScopeChangeIT {
     }
 
     /**
-     * Reads {@code OUT} from the beginning with a fresh {@code read_committed} consumer until it
+     * Reads {@code C2} from the beginning with a fresh {@code read_committed} consumer until it
      * holds {@code count} records, then keeps them (committed records only, so the count is exact
      * under EOS). Returns the records, headers included.
      */
@@ -230,7 +230,7 @@ class CausalScopeChangeIT {
                 ConsumerConfig.ISOLATION_LEVEL_CONFIG, "read_committed",
                 ConsumerConfig.KEY_DESERIALIZER_CLASS_CONFIG, StringDeserializer.class.getName(),
                 ConsumerConfig.VALUE_DESERIALIZER_CLASS_CONFIG, StringDeserializer.class.getName()))) {
-            consumer.subscribe(List.of(OUT));
+            consumer.subscribe(List.of(C2));
             await().atMost(Duration.ofSeconds(60)).until(() -> {
                 consumer.poll(Duration.ofMillis(500)).forEach(records::add);
                 return records.size() >= count;

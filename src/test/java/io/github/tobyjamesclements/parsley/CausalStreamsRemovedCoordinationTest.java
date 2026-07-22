@@ -20,7 +20,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 class CausalStreamsRemovedCoordinationTest {
 
     private static final ParsleyTopicAdmin ADMIN = TestTopicAdmin.of(
-            Map.of("t1", org.apache.kafka.common.Uuid.randomUuid()));
+            Map.of("c1", org.apache.kafka.common.Uuid.randomUuid()));
 
     /**
      * Constructing a {@link CausalStreams} over properties that still carry a removed
@@ -30,9 +30,9 @@ class CausalStreamsRemovedCoordinationTest {
     @Test
     void removedCoordinationKeyFailsConstructionLoudly() {
         CausalTopology topology = new CausalStreamsBuilder().topicAdmin(ADMIN)
-                .stream("t1", Serdes.String(), Serdes.String())
+                .stream("c1", Serdes.String(), Serdes.String())
                 .process(PassthroughProcessor::new)
-                .to("out-sink", "out", Serdes.String(), Serdes.String())
+                .to("c2-sink", "c2", Serdes.String(), Serdes.String())
                 .build();
 
         Properties props = new Properties();

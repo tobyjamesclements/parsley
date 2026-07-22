@@ -20,7 +20,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 class CausalClockTest {
 
     private static final ParsleyTopics TOPICS =
-            ParsleyTopics.of(Map.of("t1", Uuid.randomUuid(), "t2", Uuid.randomUuid()));
+            ParsleyTopics.of(Map.of("c1", Uuid.randomUuid(), "c2", Uuid.randomUuid()));
 
     /**
      * When two entries for the same (topic, partition) are added via the builder, the builder
@@ -32,10 +32,10 @@ class CausalClockTest {
     @Test
     void requireTakesTheMaximum() {
         CausalClock deps = CausalClock.builder(TOPICS)
-                .require("t1", 0, 5)
-                .require("t1", 0, 2)
+                .require("c1", 0, 5)
+                .require("c1", 0, 2)
                 .build();
-        assertEquals(CausalClock.builder(TOPICS).require("t1", 0, 5).build(), deps,
+        assertEquals(CausalClock.builder(TOPICS).require("c1", 0, 5).build(), deps,
                 "builder must retain only the maximum required offset per (topic, partition)");
     }
 
@@ -47,8 +47,8 @@ class CausalClockTest {
     @Test
     void serialisationRoundTrips() {
         CausalClock deps = CausalClock.builder(TOPICS)
-                .require("t1", 0, 42)
-                .require("t2", 0, 7)
+                .require("c1", 0, 42)
+                .require("c2", 0, 7)
                 .build();
         assertEquals(deps, CausalClock.fromBytes(deps.toBytes()),
                 "dependencies must round-trip through binary serialisation");
@@ -102,8 +102,8 @@ class CausalClockTest {
     @Test
     void fromHeadersReadsTheStampedClock() {
         CausalClock deps = CausalClock.builder(TOPICS)
-                .require("t1", 0, 12)
-                .require("t2", 0, 4)
+                .require("c1", 0, 12)
+                .require("c2", 0, 4)
                 .build();
         Headers headers = ParsleyHeader.mutableHeaders();
         headers.add(ParsleyHeader.CAUSAL_CLOCK, deps.toBytes());
@@ -136,11 +136,11 @@ class CausalClockTest {
      */
     @Test
     void fromRecordReadsTheStampedClock() {
-        CausalClock deps = CausalClock.builder(TOPICS).require("t1", 0, 27).build();
-        ConsumerRecord<String, String> record = new ConsumerRecord<>("t2", 0, 5L, "k", "v");
-        record.headers().add(ParsleyHeader.CAUSAL_CLOCK, deps.toBytes());
+        CausalClock deps = CausalClock.builder(TOPICS).require("c1", 0, 27).build();
+        ConsumerRecord<String, String> m1 = new ConsumerRecord<>("c2", 0, 5L, "k", "v");
+        m1.headers().add(ParsleyHeader.CAUSAL_CLOCK, deps.toBytes());
 
-        assertEquals(Optional.of(deps), CausalClock.fromRecord(record),
+        assertEquals(Optional.of(deps), CausalClock.fromRecord(m1),
                 "fromRecord must decode the dependency header");
     }
 
@@ -152,8 +152,8 @@ class CausalClockTest {
      */
     @Test
     void fromRecordIsEmptyWhenRecordCarriesNoClock() {
-        ConsumerRecord<String, String> record = new ConsumerRecord<>("t2", 0, 5L, "k", "v");
-        assertEquals(Optional.empty(), CausalClock.fromRecord(record),
+        ConsumerRecord<String, String> m1 = new ConsumerRecord<>("c2", 0, 5L, "k", "v");
+        assertEquals(Optional.empty(), CausalClock.fromRecord(m1),
                 "fromRecord must return empty when the record carries no dependency header");
     }
 }

@@ -50,7 +50,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * app C, consuming both the funnel topic and B's re-keyed derivative on the SAME task, gates the
  * second output's descendant on the first output through its consumed branch.
  *
- * <p>Topology (funnel and derived topics all two-partition): {@code t1} → app A →
+ * <p>Topology (funnel and derived topics all two-partition): {@code c1} → app A →
  * {@code funnel[p0,p1]}; app B re-keys every funnel record onto partition 0 of {@code rekeyed};
  * app C consumes {@code funnel} and {@code rekeyed} and tags every delivery to {@code observed}.
  */
@@ -61,7 +61,7 @@ class ParsleyFunnelDeliveryOrderIT {
     private final KafkaContainer kafka =
             new KafkaContainer(DockerImageName.parse("apache/kafka:3.7.0"));
 
-    private static final String T1 = "t1";
+    private static final String C1 = "c1";
     private static final String FUNNEL = "funnel";
     private static final String REKEYED = "rekeyed";
     private static final String OBSERVED = "observed";
@@ -80,13 +80,13 @@ class ParsleyFunnelDeliveryOrderIT {
     @Test
     void secondOutputsDescendantGatesOnTheFirstOutputAcrossTheFunnel() throws Exception {
         String bootstrap = kafka.getBootstrapServers();
-        createTopics(bootstrap, Map.of(T1, 1, FUNNEL, 2, REKEYED, 2, OBSERVED, 2));
+        createTopics(bootstrap, Map.of(C1, 1, FUNNEL, 2, REKEYED, 2, OBSERVED, 2));
         Uuid funnelId = topicId(bootstrap, FUNNEL);
         String keyForP0 = keyForPartition(0);
         String keyForP1 = keyForPartition(1);
 
         CausalTopology funnelTopology = new CausalStreamsBuilder()
-                .stream(List.of(T1), Serdes.String(), Serdes.String())
+                .stream(List.of(C1), Serdes.String(), Serdes.String())
                 .process(funnelProcessor(keyForP0, keyForP1))
                 .to(FUNNEL, Serdes.String(), Serdes.String())
                 .build();
@@ -109,7 +109,7 @@ class ParsleyFunnelDeliveryOrderIT {
             observer.start();
 
             try (KafkaProducer<String, String> input = new KafkaProducer<>(producerConfig(bootstrap))) {
-                input.send(CausalClock.empty().stamp(new ProducerRecord<>(T1, "k", "hello"))).get();
+                input.send(CausalClock.empty().stamp(new ProducerRecord<>(C1, "k", "hello"))).get();
             }
 
             // The custody evidence: the descendant of the SECOND output (derived by B's
@@ -163,7 +163,7 @@ class ParsleyFunnelDeliveryOrderIT {
     }
 
     /**
-     * App A's funnel delegate: each T1 record forwards {@code first:<value>} keyed onto partition
+     * App A's funnel delegate: each C1 record forwards {@code first:<value>} keyed onto partition
      * 0, then {@code second:<value>} keyed onto partition 1 of the single funnel sink — one
      * invocation, one transaction, two partitions.
      */

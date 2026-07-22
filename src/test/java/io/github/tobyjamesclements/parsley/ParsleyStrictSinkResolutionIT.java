@@ -52,8 +52,8 @@ class ParsleyStrictSinkResolutionIT {
     private final KafkaContainer kafka =
             new KafkaContainer(DockerImageName.parse("apache/kafka:3.7.0"));
 
-    private static final String IN = "in";
-    private static final String OUT = "out";
+    private static final String C1 = "c1";
+    private static final String C2 = "c2";
 
     /**
      * Startup against a not-yet-created sink topic fails the member fast with the strict
@@ -64,7 +64,7 @@ class ParsleyStrictSinkResolutionIT {
     @Test
     void aMissingSinkTopicFailsStartupAndCreatingItHealsTheNextStart() throws Exception {
         String bootstrap = kafka.getBootstrapServers();
-        createTopics(bootstrap, IN);
+        createTopics(bootstrap, C1);
         String applicationId = "strict-sink-it-" + UUID.randomUUID();
 
         AtomicReference<Throwable> uncaught = new AtomicReference<>();
@@ -81,17 +81,17 @@ class ParsleyStrictSinkResolutionIT {
                             + "with own-output stamping silently disabled");
             Throwable failure = uncaught.get();
             assertNotNull(failure, "the member must die with an uncaught exception, not stall silently");
-            assertTrue(chainMessageContains(failure, "declared sink topic '" + OUT + "'"),
+            assertTrue(chainMessageContains(failure, "declared sink topic '" + C2 + "'"),
                     "the failure must name the unresolvable sink: " + failure);
             assertTrue(chainMessageContains(failure, "must exist before the stage starts"),
                     "the failure must state the sinks-must-exist rule: " + failure);
         }
 
-        createTopics(bootstrap, OUT);
+        createTopics(bootstrap, C2);
         try (CausalStreams streams = causalApp(bootstrap, applicationId)) {
             streams.start();
             try (KafkaProducer<String, String> producer = new KafkaProducer<>(producerConfig(bootstrap))) {
-                producer.send(new ProducerRecord<>(IN, "k", "healed")).get();
+                producer.send(new ProducerRecord<>(C1, "k", "healed")).get();
             }
             List<String> outputs = awaitBusinessOutputs(bootstrap, 1);
             assertTrue(outputs.contains("healed"),
@@ -102,18 +102,18 @@ class ParsleyStrictSinkResolutionIT {
 
     private CausalStreams causalApp(String bootstrap, String applicationId) {
         CausalTopology topology = new CausalStreamsBuilder()
-                .stream(IN, Serdes.String(), Serdes.String())
+                .stream(C1, Serdes.String(), Serdes.String())
                 .process(passthrough())
-                .to(OUT, Serdes.String(), Serdes.String())
+                .to(C2, Serdes.String(), Serdes.String())
                 .build();
         return new CausalStreams(topology, streamsConfig(bootstrap, applicationId));
     }
 
-    /** Waits until {@code count} business records (non-null-message) reach OUT; returns their values. */
+    /** Waits until {@code count} business records (non-null-message) reach C2; returns their values. */
     private static List<String> awaitBusinessOutputs(String bootstrap, int count) {
         List<String> outputs = new ArrayList<>();
         try (KafkaConsumer<String, String> consumer = new KafkaConsumer<>(consumerConfig(bootstrap))) {
-            consumer.subscribe(List.of(OUT));
+            consumer.subscribe(List.of(C2));
             await().atMost(Duration.ofSeconds(90)).until(() -> {
                 consumer.poll(Duration.ofMillis(500)).forEach(record -> {
                     if (record.value() != null

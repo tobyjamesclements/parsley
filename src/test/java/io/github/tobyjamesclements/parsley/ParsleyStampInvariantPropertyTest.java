@@ -18,17 +18,17 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * deliveries above gaps, carried-clock folds, restarts) genuinely ran. A failure message always
  * carries the seed; re-running the single seed reproduces the schedule deterministically.
  *
- * <p>The standing topology (single-partition topics t1..t6):
+ * <p>The standing topology (single-partition topics c1..c6):
  * <pre>
- *   external → t1 (clockless producer: causally minimal by definition)
- *   A {t1} → t2          D {t1} → t2      (two producers sharing sink t2: interleaved stamps on
+ *   external → c1 (clockless producer: causally minimal by definition)
+ *   A {c1} → c2          D {c1} → c2      (two producers sharing sink c2: interleaved stamps on
  *                                          one partition are how out-of-order delivery above a
  *                                          contiguous-frontier gap arises downstream)
- *   B {t1,t2,t3} → t3                     (self-consuming cycle: reflected own-sink claims through
+ *   B {c1,c2,c3} → c3                     (self-consuming cycle: reflected own-sink claims through
  *                                          the consumed branch, relay quiescence)
- *   C {t1,t2,t3} → t4
- *   W {t1,t2,t3,t4} → t5 (silent delegate: t5 carries only null messages)
- *   N {t5} → t6          (consumes only null messages — its stamps must still carry t1..t5
+ *   C {c1,c2,c3} → c4
+ *   W {c1,c2,c3,c4} → c5 (silent delegate: c5 carries only null messages)
+ *   N {c5} → c6          (consumes only null messages — its stamps must still carry c1..c5
  *                          ancestry it never consumed: the I9 custody chain, gate-free)
  * </pre>
  *
@@ -44,13 +44,13 @@ class ParsleyStampInvariantPropertyTest {
 
     private static ParsleyTopologySim standingTopology(long seed) {
         ParsleyTopologySim sim = new ParsleyTopologySim(seed);
-        sim.externalTopic("t1");
-        sim.node("A", Set.of("t1"), List.of("t2"), 0.7);
-        sim.node("D", Set.of("t1"), List.of("t2"), 0.7);
-        sim.node("B", Set.of("t1", "t2", "t3"), List.of("t3"), 0.6);
-        sim.node("C", Set.of("t1", "t2", "t3"), List.of("t4"), 0.7);
-        sim.node("W", Set.of("t1", "t2", "t3", "t4"), List.of("t5"), 0.0);
-        sim.node("N", Set.of("t5"), List.of("t6"), 0.0);
+        sim.externalTopic("c1");
+        sim.node("A", Set.of("c1"), List.of("c2"), 0.7);
+        sim.node("D", Set.of("c1"), List.of("c2"), 0.7);
+        sim.node("B", Set.of("c1", "c2", "c3"), List.of("c3"), 0.6);
+        sim.node("C", Set.of("c1", "c2", "c3"), List.of("c4"), 0.7);
+        sim.node("W", Set.of("c1", "c2", "c3", "c4"), List.of("c5"), 0.0);
+        sim.node("N", Set.of("c5"), List.of("c6"), 0.0);
         return sim;
     }
 
@@ -97,11 +97,11 @@ class ParsleyStampInvariantPropertyTest {
      * I3 across random interleavings: a node's successive stamps are vector-monotone (asserted in
      * the sim at every single emission), which is what makes non-head-of-line delivery preserve
      * FIFO-per-producer downstream — if an earlier record from a producer is held, every later one
-     * is held too. The shared sink t2 is the load-bearing case: A's and D's interleaved records on
+     * is held too. The shared sink c2 is the load-bearing case: A's and D's interleaved records on
      * one partition each stay individually monotone, which is exactly what lets B deliver one
      * producer's record above the other's held one without reordering either producer's sequence.
      *
-     * Asserts the sweep genuinely emitted from both t2 producers in every seed.
+     * Asserts the sweep genuinely emitted from both c2 producers in every seed.
      */
     @Test
     void successiveStampsArePerProducerMonotoneAcrossRandomInterleavings() {
@@ -109,14 +109,14 @@ class ParsleyStampInvariantPropertyTest {
             ParsleyTopologySim sim = standingTopology(seed);
             sim.run(STEPS);
             assertTrue(sim.nodeNamed("A").ownBusinessSends.size() + sim.nodeNamed("D").ownBusinessSends.size() > 0,
-                    "[seed " + seed + "] vacuity guard: the shared sink t2 must see business "
+                    "[seed " + seed + "] vacuity guard: the shared sink c2 must see business "
                             + "emissions for the per-producer monotonicity to be exercised");
         }
     }
 
     /**
-     * I9's transitive-chain scenario: the origin record t1@0's coordinate must be claimed directly
-     * by the stamp of every node whose true causal past contains it, however many hops from t1 it
+     * I9's transitive-chain scenario: the origin record c1@0's coordinate must be claimed directly
+     * by the stamp of every node whose true causal past contains it, however many hops from c1 it
      * sits — the custody chain that makes the D1 ignore branch sound (a consumed ancestor is
      * always claimed <em>in the record's own clock</em>, never only via intermediaries).
      *
@@ -127,59 +127,59 @@ class ParsleyStampInvariantPropertyTest {
     void transitiveChainClaimsTheOriginCoordinateAtEveryHop() {
         for (long seed = 3000; seed < 3000 + SEEDS; seed++) {
             ParsleyTopologySim sim = standingTopology(seed);
-            sim.produceExternal("t1"); // the tagged origin: t1@0, before any random scheduling
+            sim.produceExternal("c1"); // the tagged origin: c1@0, before any random scheduling
             sim.run(STEPS);
-            ParsleyTopologySim.SimCoord origin = new ParsleyTopologySim.SimCoord(sim.topicId("t1"), 0);
+            ParsleyTopologySim.SimCoord origin = new ParsleyTopologySim.SimCoord(sim.topicId("c1"), 0);
             ParsleyTopologySim.SimNode c = sim.nodeNamed("C");
             assertTrue(c.truePast.contains(origin),
-                    "[seed " + seed + "] vacuity guard: the origin t1@0 must reach C's causal past "
+                    "[seed " + seed + "] vacuity guard: the origin c1@0 must reach C's causal past "
                             + "through the chain (drain() delivers all backlog)");
-            assertTrue(c.channels.stamp().offsetFor(sim.topicId("t1"), 0) >= 0,
-                    "[seed " + seed + "] C's stamp must claim the origin coordinate t1@0 directly "
+            assertTrue(c.channels.stamp().offsetFor(sim.topicId("c1"), 0) >= 0,
+                    "[seed " + seed + "] C's stamp must claim the origin coordinate c1@0 directly "
                             + "(I2/I9: transitively complete, unconditionally merged)");
         }
     }
 
     /**
-     * I9's gate-free custody path: node N consumes only t5 — null messages from W — yet its
-     * outbound stamps must carry the t1..t4 ancestry those carried clocks name, none of which N
+     * I9's gate-free custody path: node N consumes only c5 — null messages from W — yet its
+     * outbound stamps must carry the c1..c4 ancestry those carried clocks name, none of which N
      * consumes. This is the unconditional merge working across differing consumption sets today
      * (business-record custody across differing scopes joins at T3.1 with the two-branch gate).
      *
-     * Asserts N genuinely folded carried clocks, never consumed t1, and still stamps a t1 claim.
+     * Asserts N genuinely folded carried clocks, never consumed c1, and still stamps a c1 claim.
      */
     @Test
     void unconsumedChannelAncestryIsCarriedThroughNullMessageCustody() {
         for (long seed = 4000; seed < 4000 + SEEDS; seed++) {
             ParsleyTopologySim sim = standingTopology(seed);
-            sim.produceExternal("t1");
+            sim.produceExternal("c1");
             sim.run(STEPS);
             ParsleyTopologySim.SimNode n = sim.nodeNamed("N");
             assertTrue(n.carriedClocksFolded > 0,
                     "[seed " + seed + "] vacuity guard: N must have folded at least one carried clock");
-            assertTrue(!n.inputs.contains("t1"),
-                    "topology self-check: N must not consume t1 for this property to mean anything");
-            assertTrue(n.channels.stamp().offsetFor(sim.topicId("t1"), 0) >= 0,
-                    "[seed " + seed + "] N's stamp must claim t1 ancestry it learned only from "
-                            + "carried clocks on t5 — the merge may never strip unconsumed channels (I9)");
+            assertTrue(!n.inputs.contains("c1"),
+                    "topology self-check: N must not consume c1 for this property to mean anything");
+            assertTrue(n.channels.stamp().offsetFor(sim.topicId("c1"), 0) >= 0,
+                    "[seed " + seed + "] N's stamp must claim c1 ancestry it learned only from "
+                            + "carried clocks on c5 — the merge may never strip unconsumed channels (I9)");
         }
     }
 
     /**
-     * The T3.1 differing-scope chain: no consumer past A consumes t1, so every record's clock
+     * The T3.1 differing-scope chain: no consumer past A consumes c1, so every record's clock
      * claims coordinates its receiver has no channel for — exactly the shape the retired I7
      * fail-fast rejected. K's two consumed channels keep the consumed branch genuinely exercised
-     * beside the ignore branch: a t3 record (from A2, whose stamps claim t2 ancestry) can arrive
-     * at K before its t2 cause, so K holds it — while the same clock's t1 claims are ignored. L
-     * consumes only t7 and ignores everything upstream (claims on t1, t2, t3 alike).
+     * beside the ignore branch: a c3 record (from A2, whose stamps claim c2 ancestry) can arrive
+     * at K before its c2 cause, so K holds it — while the same clock's c1 claims are ignored. L
+     * consumes only c7 and ignores everything upstream (claims on c1, c2, c3 alike).
      */
     private static ParsleyTopologySim differingScopeChain(long seed) {
         ParsleyTopologySim sim = new ParsleyTopologySim(seed);
-        sim.externalTopic("t1");
-        sim.node("A", Set.of("t1"), List.of("t2"), 0.8);
-        sim.node("A2", Set.of("t2"), List.of("t3"), 0.8);
-        sim.node("K", Set.of("t2", "t3"), List.of("t7"), 0.8);
-        sim.node("L", Set.of("t7"), List.of("t8"), 0.8);
+        sim.externalTopic("c1");
+        sim.node("A", Set.of("c1"), List.of("c2"), 0.8);
+        sim.node("A2", Set.of("c2"), List.of("c3"), 0.8);
+        sim.node("K", Set.of("c2", "c3"), List.of("c7"), 0.8);
+        sim.node("L", Set.of("c7"), List.of("c8"), 0.8);
         return sim;
     }
 
@@ -192,7 +192,7 @@ class ParsleyStampInvariantPropertyTest {
      * to empty hold-back queues (an ignore that wrongly gated would strand records; one that
      * wrongly satisfied a consumed dependency would break the order check at K).
      *
-     * Asserts every seed drains, the origin t1@0 genuinely traverses the chain to L in the sweep,
+     * Asserts every seed drains, the origin c1@0 genuinely traverses the chain to L in the sweep,
      * L's stamp then claims the origin it never consumed (I9 through ignoring consumers), and
      * records were genuinely held at K (the consumed branch ran beside the ignore branch).
      */
@@ -202,19 +202,19 @@ class ParsleyStampInvariantPropertyTest {
         int originsReachedL = 0;
         for (long seed = 9000; seed < 9000 + SEEDS; seed++) {
             ParsleyTopologySim sim = differingScopeChain(seed);
-            sim.produceExternal("t1"); // the tagged origin: t1@0, before any random scheduling
+            sim.produceExternal("c1"); // the tagged origin: c1@0, before any random scheduling
             sim.run(STEPS);
             for (String node : List.of("A", "A2", "K", "L")) {
                 assertEquals(0, sim.nodeNamed(node).core.bufferSize(),
                         "[seed " + seed + "] node " + node + " must end fully drained — an ignored "
                                 + "coordinate must never strand a record");
             }
-            ParsleyTopologySim.SimCoord origin = new ParsleyTopologySim.SimCoord(sim.topicId("t1"), 0);
+            ParsleyTopologySim.SimCoord origin = new ParsleyTopologySim.SimCoord(sim.topicId("c1"), 0);
             ParsleyTopologySim.SimNode l = sim.nodeNamed("L");
             if (l.truePast.contains(origin)) {
                 originsReachedL++;
-                assertTrue(l.channels.stamp().offsetFor(sim.topicId("t1"), 0) >= 0,
-                        "[seed " + seed + "] L's stamp must claim the origin t1@0 it never consumed "
+                assertTrue(l.channels.stamp().offsetFor(sim.topicId("c1"), 0) >= 0,
+                        "[seed " + seed + "] L's stamp must claim the origin c1@0 it never consumed "
                                 + "— the I9 custody chain through ignoring consumers");
             }
             held += sim.recordsHeld;

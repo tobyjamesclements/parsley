@@ -7,9 +7,9 @@ fluent chain, terminate the chain with `.build()`, then hand the result to a `Ca
 <!-- Mirrored verbatim by DocsSamplesTest#streamsQuickstartSample; keep the sample and the test in sync. -->
 ```java
 CausalTopology topology = new CausalStreamsBuilder()
-        .stream(List.of("t1", "t2"), Serdes.String(), orderSerde)
+        .stream(List.of("c1", "c2"), Serdes.String(), orderSerde)
         .process(new EnrichOrderSupplier())
-        .to("t3", Serdes.String(), enrichedSerde)
+        .to("c3", Serdes.String(), enrichedSerde)
         .build();
 
 CausalStreams causalStreams = new CausalStreams(topology, props);

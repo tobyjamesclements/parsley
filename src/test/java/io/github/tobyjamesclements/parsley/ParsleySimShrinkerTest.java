@@ -16,7 +16,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  */
 class ParsleySimShrinkerTest {
 
-    private static final ParsleySimTrace.Action TRIGGER = new ParsleySimTrace.ProduceExternal("t1");
+    private static final ParsleySimTrace.Action TRIGGER = new ParsleySimTrace.ProduceExternal("c1");
     private static final ParsleySimTrace.Action VICTIM = new ParsleySimTrace.Crash("X");
 
     /** Noise actions the oracles below never look at. */
@@ -82,7 +82,7 @@ class ParsleySimShrinkerTest {
         ParsleySimTrace.Action ack = new ParsleySimTrace.AckAll("A");
         List<ParsleySimTrace.Action> trace = new ArrayList<>(noise(5));
         trace.add(ack);
-        trace.addAll(List.of(new ParsleySimTrace.ProduceExternal("t9"), VICTIM));
+        trace.addAll(List.of(new ParsleySimTrace.ProduceExternal("c9"), VICTIM));
         ParsleySimShrinker.Oracle oracle = candidate -> {
             if (!candidate.contains(VICTIM)) {
                 return null;
@@ -108,9 +108,9 @@ class ParsleySimShrinkerTest {
     @Test
     void signatureNormalisationStripsSeedLabelsAndDigits() {
         AssertionError first = new AssertionError(
-                "[seed 4711] B: delivered t2@17 before its consumed cause t1@3");
+                "[seed 4711] B: delivered c2@17 before its consumed cause c1@3");
         AssertionError second = new AssertionError(
-                "[replay] B: delivered t2@5 before its consumed cause t1@1");
+                "[replay] B: delivered c2@5 before its consumed cause c1@1");
         assertEquals(ParsleySimShrinker.signatureOf(first), ParsleySimShrinker.signatureOf(second),
                 "seed labels and shifted coordinates must not split one defect into two signatures");
     }

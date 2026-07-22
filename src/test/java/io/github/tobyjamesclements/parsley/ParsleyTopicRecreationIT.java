@@ -59,8 +59,8 @@ class ParsleyTopicRecreationIT {
     private final KafkaContainer kafka =
             new KafkaContainer(DockerImageName.parse("apache/kafka:3.7.0"));
 
-    private static final String IN = "in";
-    private static final String OUT = "out";
+    private static final String C1 = "c1";
+    private static final String C2 = "c2";
 
     /**
      * An <em>input</em> topic deleted and recreated mid-run, with enough new records appended that
@@ -76,11 +76,11 @@ class ParsleyTopicRecreationIT {
     @Test
     void aRecreatedInputTopicFailsTheMemberFast() throws Exception {
         String bootstrap = kafka.getBootstrapServers();
-        createTopics(bootstrap, IN, OUT);
+        createTopics(bootstrap, C1, C2);
 
         try (KafkaProducer<String, String> producer = new KafkaProducer<>(producerConfig(bootstrap))) {
             for (int i = 0; i < 5; i++) {
-                producer.send(new ProducerRecord<>(IN, "k", "pre-" + i)).get();
+                producer.send(new ProducerRecord<>(C1, "k", "pre-" + i)).get();
             }
         }
 
@@ -93,18 +93,18 @@ class ParsleyTopicRecreationIT {
             streams.start();
             awaitBusinessOutputs(bootstrap, 5);
 
-            // Delete and recreate IN, then immediately refill it past the member's committed
+            // Delete and recreate C1, then immediately refill it past the member's committed
             // offset (5), so a consumer that resumes fetching sees a valid position — the silent
             // mislabelling path the watch exists to close.
             try (Admin admin = Admin.create(Map.of("bootstrap.servers", bootstrap))) {
-                admin.deleteTopics(List.of(IN)).all().get();
+                admin.deleteTopics(List.of(C1)).all().get();
                 await().atMost(Duration.ofSeconds(30)).until(() ->
-                        !admin.listTopics().names().get().contains(IN));
-                admin.createTopics(List.of(new NewTopic(IN, 1, (short) 1))).all().get();
+                        !admin.listTopics().names().get().contains(C1));
+                admin.createTopics(List.of(new NewTopic(C1, 1, (short) 1))).all().get();
             }
             try (KafkaProducer<String, String> producer = new KafkaProducer<>(producerConfig(bootstrap))) {
                 for (int i = 0; i < 10; i++) {
-                    producer.send(new ProducerRecord<>(IN, "k", "post-" + i)).get();
+                    producer.send(new ProducerRecord<>(C1, "k", "post-" + i)).get();
                 }
             }
 
@@ -133,10 +133,10 @@ class ParsleyTopicRecreationIT {
     @Test
     void aRecreatedSinkTopicFailsTheMemberOnItsNextRecord() throws Exception {
         String bootstrap = kafka.getBootstrapServers();
-        createTopics(bootstrap, IN, OUT);
+        createTopics(bootstrap, C1, C2);
 
         try (KafkaProducer<String, String> producer = new KafkaProducer<>(producerConfig(bootstrap))) {
-            producer.send(new ProducerRecord<>(IN, "k", "pre-0")).get();
+            producer.send(new ProducerRecord<>(C1, "k", "pre-0")).get();
         }
 
         AtomicReference<Throwable> uncaught = new AtomicReference<>();
@@ -149,17 +149,17 @@ class ParsleyTopicRecreationIT {
             awaitBusinessOutputs(bootstrap, 1);
 
             try (Admin admin = Admin.create(Map.of("bootstrap.servers", bootstrap))) {
-                admin.deleteTopics(List.of(OUT)).all().get();
+                admin.deleteTopics(List.of(C2)).all().get();
                 await().atMost(Duration.ofSeconds(30)).until(() ->
-                        !admin.listTopics().names().get().contains(OUT));
-                admin.createTopics(List.of(new NewTopic(OUT, 1, (short) 1))).all().get();
+                        !admin.listTopics().names().get().contains(C2));
+                admin.createTopics(List.of(new NewTopic(C2, 1, (short) 1))).all().get();
             }
             // Give the identity poll (5s interval) time to observe the recreation while the tasks
             // sit idle, then feed one record: its pre-ingest check must kill the task rather than
             // let it be processed and stamped under the stale sink identity.
             Thread.sleep(12_000);
             try (KafkaProducer<String, String> producer = new KafkaProducer<>(producerConfig(bootstrap))) {
-                producer.send(new ProducerRecord<>(IN, "k", "post-0")).get();
+                producer.send(new ProducerRecord<>(C1, "k", "post-0")).get();
             }
 
             await().atMost(Duration.ofSeconds(60)).until(() -> streams.state() == KafkaStreams.State.ERROR);
@@ -167,7 +167,7 @@ class ParsleyTopicRecreationIT {
             assertNotNull(failure, "the member must die with an uncaught exception, not stall silently");
             assertTrue(chainContains(failure, CausalTopicRecreatedException.class),
                     "the failure must be the identity watch's recreation detection: " + failure);
-            assertTrue(chainMessageContains(failure, OUT),
+            assertTrue(chainMessageContains(failure, C2),
                     "the failure must name the recreated sink topic: " + failure);
         }
     }
@@ -214,18 +214,18 @@ class ParsleyTopicRecreationIT {
 
     private CausalStreams causalApp(String bootstrap) {
         CausalTopology topology = new CausalStreamsBuilder()
-                .stream(IN, Serdes.String(), Serdes.String())
+                .stream(C1, Serdes.String(), Serdes.String())
                 .process(passthrough())
-                .to(OUT, Serdes.String(), Serdes.String())
+                .to(C2, Serdes.String(), Serdes.String())
                 .build();
         return new CausalStreams(topology, streamsConfig(bootstrap));
     }
 
-    /** Waits until {@code count} business records (non-marker, non-null value) have reached OUT. */
+    /** Waits until {@code count} business records (non-marker, non-null value) have reached C2. */
     private static void awaitBusinessOutputs(String bootstrap, int count) {
         List<ConsumerRecord<String, String>> outputs = new ArrayList<>();
         try (KafkaConsumer<String, String> consumer = new KafkaConsumer<>(consumerConfig(bootstrap))) {
-            consumer.subscribe(List.of(OUT));
+            consumer.subscribe(List.of(C2));
             await().atMost(Duration.ofSeconds(90)).until(() -> {
                 consumer.poll(Duration.ofMillis(500)).forEach(record -> {
                     if (record.value() != null

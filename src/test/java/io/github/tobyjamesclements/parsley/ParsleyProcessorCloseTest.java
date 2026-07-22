@@ -64,7 +64,7 @@ class ParsleyProcessorCloseTest {
         ParsleyProcessor<String, String, String, String> processor = new ParsleyProcessor<>(
                 delegate, serializer,
                 "frontier", "buffer", "candidate-index", "forwarded-index",
-                Set.of("t1"), Set.of(), List.of(),
+                Set.of("c1"), Set.of(), List.of(),
                 configs -> { throw new IllegalStateException("broker unreachable (test)"); },
                 ParsleyConfig.from(new Properties()), null);
 

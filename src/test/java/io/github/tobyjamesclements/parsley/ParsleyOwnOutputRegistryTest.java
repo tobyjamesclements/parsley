@@ -27,7 +27,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  */
 class ParsleyOwnOutputRegistryTest {
 
-    private static final String OUT = "T2";
+    private static final String OUT = "C2";
     private static final String REGISTRY_ID = "test-registry-" + ParsleyOwnOutputRegistryTest.class.hashCode();
 
     @AfterEach

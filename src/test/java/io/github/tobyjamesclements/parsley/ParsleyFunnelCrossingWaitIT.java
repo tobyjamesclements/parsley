@@ -61,7 +61,7 @@ class ParsleyFunnelCrossingWaitIT {
     private final KafkaContainer kafka =
             new KafkaContainer(DockerImageName.parse("apache/kafka:3.7.0"));
 
-    private static final String T1 = "t1";
+    private static final String C1 = "c1";
     private static final String FUNNEL = "funnel";
 
     /**
@@ -76,13 +76,13 @@ class ParsleyFunnelCrossingWaitIT {
     @Test
     void secondSendToASecondPartitionOfOneSinkClaimsTheFirstSendsCoordinate() throws Exception {
         String bootstrap = kafka.getBootstrapServers();
-        createTopics(bootstrap, Map.of(T1, 1, FUNNEL, 2));
+        createTopics(bootstrap, Map.of(C1, 1, FUNNEL, 2));
         Uuid funnelId = topicId(bootstrap, FUNNEL);
         String keyForP0 = keyForPartition(0);
         String keyForP1 = keyForPartition(1);
 
         CausalTopology topology = new CausalStreamsBuilder()
-                .stream(List.of(T1), Serdes.String(), Serdes.String())
+                .stream(List.of(C1), Serdes.String(), Serdes.String())
                 .process(funnelProcessor(keyForP0, keyForP1))
                 .to(FUNNEL, Serdes.String(), Serdes.String())
                 .build();
@@ -91,7 +91,7 @@ class ParsleyFunnelCrossingWaitIT {
             streams.start();
 
             try (KafkaProducer<String, String> input = new KafkaProducer<>(producerConfig(bootstrap))) {
-                input.send(CausalClock.empty().stamp(new ProducerRecord<>(T1, "k", "hello"))).get();
+                input.send(CausalClock.empty().stamp(new ProducerRecord<>(C1, "k", "hello"))).get();
             }
 
             List<ConsumerRecord<String, String>> p0Records = new ArrayList<>();
@@ -123,7 +123,7 @@ class ParsleyFunnelCrossingWaitIT {
     }
 
     /**
-     * The funnel delegate: each T1 record forwards {@code first:<value>} keyed onto partition 0,
+     * The funnel delegate: each C1 record forwards {@code first:<value>} keyed onto partition 0,
      * then {@code second:<value>} keyed onto partition 1 of the single funnel sink — one
      * invocation, one transaction, two partitions.
      */

@@ -63,8 +63,8 @@ class ParsleyEosFrontierDensityIT {
     private final KafkaContainer kafka =
             new KafkaContainer(DockerImageName.parse("apache/kafka:3.7.0"));
 
-    private static final String SRC = "src";
-    private static final String OUT = "out";
+    private static final String C1 = "c1";
+    private static final String C2 = "c2";
 
     /**
      * Produces {@code src} as two committed transactions (a commit marker between the batches) and asserts
@@ -74,10 +74,10 @@ class ParsleyEosFrontierDensityIT {
     @Test
     void frontierTracksATransactionallyProducedInputAcrossCommitMarkers() throws Exception {
         String bootstrap = kafka.getBootstrapServers();
-        createTopics(bootstrap, SRC, OUT);
+        createTopics(bootstrap, C1, C2);
         Uuid srcId;
         try (Admin admin = Admin.create(Map.of("bootstrap.servers", bootstrap))) {
-            srcId = admin.describeTopics(List.of(SRC)).allTopicNames().get().get(SRC).topicId();
+            srcId = admin.describeTopics(List.of(C1)).allTopicNames().get().get(C1).topicId();
         }
 
         // Two committed transactions of three records each: log = rec@0,1,2, MARKER@3, rec@4,5,6.
@@ -88,7 +88,7 @@ class ParsleyEosFrontierDensityIT {
             for (int batch = 0; batch < 2; batch++) {
                 producer.beginTransaction();
                 for (int i = 0; i < 3; i++) {
-                    ProducerRecord<String, String> record = new ProducerRecord<>(SRC, "k", "v" + batch + i);
+                    ProducerRecord<String, String> record = new ProducerRecord<>(C1, "k", "v" + batch + i);
                     record.headers().add(ParsleyHeader.CAUSAL_CLOCK, ParsleyVectorClock.empty().toBytes());
                     producer.send(record).get();
                 }
@@ -102,7 +102,7 @@ class ParsleyEosFrontierDensityIT {
 
             List<Long> srcOffsetsInStamps = new ArrayList<>();
             try (KafkaConsumer<String, String> out = new KafkaConsumer<>(consumerConfig(bootstrap))) {
-                out.subscribe(List.of(OUT));
+                out.subscribe(List.of(C2));
                 await().atMost(Duration.ofSeconds(60)).until(() -> {
                     for (ConsumerRecord<String, String> record : out.poll(Duration.ofMillis(300))) {
                         Header stamp = record.headers().lastHeader(ParsleyHeader.CAUSAL_CLOCK);
@@ -125,12 +125,12 @@ class ParsleyEosFrontierDensityIT {
 
     private static Topology topology() {
         StreamsBuilder builder = new StreamsBuilder();
-        builder.stream(SRC, Consumed.with(Serdes.String(), Serdes.String()))
+        builder.stream(C1, Consumed.with(Serdes.String(), Serdes.String()))
                 .process(ParsleyProcessorSupplier.builder(passthrough())
                         .addBufferStore("parsley")
-                        .addSource(new ParsleySource<>(SRC, Serdes.String(), Serdes.String()))
+                        .addSource(new ParsleySource<>(C1, Serdes.String(), Serdes.String()))
                         .build())
-                .to(OUT, Produced.with(Serdes.String(), Serdes.String()));
+                .to(C2, Produced.with(Serdes.String(), Serdes.String()));
         return builder.build();
     }
 

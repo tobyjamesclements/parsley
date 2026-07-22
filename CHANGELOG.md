@@ -234,11 +234,12 @@ All notable changes to this project are documented in this file. The format is b
   version. Documentation vocabulary updated throughout.
 
 ### Documentation
-- **The getting-started and Streams code samples use neutral `t1`/`t2`/`t3` topic names and
-  `m1`/`m2`/`m3` message variable names** in place of the previous domain-flavoured examples
-  (`orders`, `prices`, `trigger`, `priceUpdate`, ...). The samples are now compiled and exercised
-  by a test (`DocsSamplesTest`), so a public-API change that would break a published sample fails
-  the build.
+- **The getting-started and Streams code samples use neutral channel and message names** —
+  `c1`/`c2`/`c3` topics (a Kafka topic-partition is the causal channel of the literature) and
+  `m1`/`m2`/`m3` messages, the naming convention of the causality papers Parsley cites — in place
+  of the previous domain-flavoured examples (`orders`, `prices`, `trigger`, `priceUpdate`, ...).
+  The samples are now compiled and exercised by a test (`DocsSamplesTest`), so a public-API
+  change that would break a published sample fails the build.
 - **The `parsley-causal-clock` wire format states that entry order is unspecified.** The encoder
   walks unordered maps, so a multi-entry clock's entries appear in no guaranteed order;
   `docs/internals/wire-format.md` now says so explicitly, and a decoder must accept entries in any

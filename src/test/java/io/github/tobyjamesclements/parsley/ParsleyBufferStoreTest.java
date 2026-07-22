@@ -12,8 +12,8 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class ParsleyBufferStoreTest {
 
-    private static final TopicPartition T1 = new TopicPartition("t1", 0);
-    private static final Uuid T1_ID = Uuid.randomUuid();
+    private static final TopicPartition C1 = new TopicPartition("c1", 0);
+    private static final Uuid C1_ID = Uuid.randomUuid();
 
     private final ParsleyBufferStore<String, String> store = new MockBufferStore<>();
 
@@ -26,12 +26,12 @@ class ParsleyBufferStoreTest {
      */
     @Test
     void addAssignsMonotonicSequencesAndGetReturnsEachRecordWithItsDependencies() {
-        long first = store.add(bufferedRecord(T1, 0, ParsleyVectorClock.empty().observe(T1_ID, 0, 9)), 0L);
-        long second = store.add(bufferedRecord(T1, 1, ParsleyVectorClock.empty().observe(T1_ID, 0, 3)), 0L);
+        long first = store.add(bufferedRecord(C1, 0, ParsleyVectorClock.empty().observe(C1_ID, 0, 9)), 0L);
+        long second = store.add(bufferedRecord(C1, 1, ParsleyVectorClock.empty().observe(C1_ID, 0, 3)), 0L);
 
         assertTrue(first < second, "earlier-added record must carry the lower sequence number");
         assertEquals(0L, store.get(first).record().offset(), "first sequence must resolve to the first record");
-        assertEquals(ParsleyVectorClock.empty().observe(T1_ID, 0, 9),
+        assertEquals(ParsleyVectorClock.empty().observe(C1_ID, 0, 9),
                 store.get(first).dependencies(), "first record must carry its original dependencies");
         assertEquals(1L, store.get(second).record().offset(), "second sequence must resolve to the second record");
     }
@@ -45,8 +45,8 @@ class ParsleyBufferStoreTest {
      */
     @Test
     void removeDropsTheEntryAndDecrementsSize() {
-        long first = store.add(bufferedRecord(T1, 0, ParsleyVectorClock.empty().observe(T1_ID, 0, 1)), 0L);
-        long second = store.add(bufferedRecord(T1, 1, ParsleyVectorClock.empty().observe(T1_ID, 0, 5)), 0L);
+        long first = store.add(bufferedRecord(C1, 0, ParsleyVectorClock.empty().observe(C1_ID, 0, 1)), 0L);
+        long second = store.add(bufferedRecord(C1, 1, ParsleyVectorClock.empty().observe(C1_ID, 0, 5)), 0L);
         assertEquals(2, store.size(), "both records must be in the store before removal");
 
         store.remove(first);
@@ -76,8 +76,8 @@ class ParsleyBufferStoreTest {
     @Test
     void bufferedAtRoundTripsThroughAddGetAndIndexEntries() {
         long bufferedAt = 12_345L;
-        long seq = store.add(bufferedRecord(T1, 0,
-                ParsleyVectorClock.empty().observe(T1_ID, 0, 1)), bufferedAt);
+        long seq = store.add(bufferedRecord(C1, 0,
+                ParsleyVectorClock.empty().observe(C1_ID, 0, 1)), bufferedAt);
 
         assertEquals(bufferedAt, store.get(seq).bufferedAt(), "get() must return the bufferedAt passed to add()");
         assertEquals(bufferedAt, store.indexEntries().get(0).bufferedAt(),
@@ -105,9 +105,9 @@ class ParsleyBufferStoreTest {
      */
     @Test
     void oldestBufferedAtTracksTheLowestSurvivingSequence() {
-        long firstSeq = store.add(bufferedRecord(T1, 0, ParsleyVectorClock.empty()), 100L);
-        long secondSeq = store.add(bufferedRecord(T1, 1, ParsleyVectorClock.empty()), 200L);
-        long thirdSeq = store.add(bufferedRecord(T1, 2, ParsleyVectorClock.empty()), 300L);
+        long firstSeq = store.add(bufferedRecord(C1, 0, ParsleyVectorClock.empty()), 100L);
+        long secondSeq = store.add(bufferedRecord(C1, 1, ParsleyVectorClock.empty()), 200L);
+        long thirdSeq = store.add(bufferedRecord(C1, 2, ParsleyVectorClock.empty()), 300L);
 
         assertEquals(OptionalLong.of(100L), store.oldestBufferedAt(),
                 "oldest must be the first-added record's bufferedAt");
@@ -129,6 +129,6 @@ class ParsleyBufferStoreTest {
 
     private static ParsleyMessage<String, String> bufferedRecord(TopicPartition tp, long offset,
                                                                   ParsleyVectorClock deps) {
-        return new ParsleyMessage<>(tp.topic(), T1_ID, tp.partition(), offset, 0L, "k", "v", List.of(), deps);
+        return new ParsleyMessage<>(tp.topic(), C1_ID, tp.partition(), offset, 0L, "k", "v", List.of(), deps);
     }
 }

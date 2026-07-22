@@ -69,7 +69,7 @@ final class ParsleyTopologyGen {
         List<String> created = new ArrayList<>();
         int nextTopic = 1;
         for (int i = 0; i < externalCount; i++) {
-            String name = "t" + nextTopic++;
+            String name = "c" + nextTopic++;
             externals.add(name);
             created.add(name);
         }
@@ -105,7 +105,7 @@ final class ParsleyTopologyGen {
                         continue;
                     }
                 }
-                String fresh = "t" + nextTopic++;
+                String fresh = "c" + nextTopic++;
                 nodeSinks.add(fresh);
                 internals.add(fresh);
                 created.add(fresh);
@@ -134,7 +134,7 @@ final class ParsleyTopologyGen {
 
         List<ParsleySimTrace.SimSpec.NodeSpec> nodes = new ArrayList<>();
         for (int i = 0; i < nodeCount; i++) {
-            nodes.add(new ParsleySimTrace.SimSpec.NodeSpec("N" + (i + 1),
+            nodes.add(new ParsleySimTrace.SimSpec.NodeSpec("p" + (i + 1),
                     inputs.get(i).stream().sorted().toList(),
                     List.copyOf(sinks.get(i)),
                     probabilities.get(i)));

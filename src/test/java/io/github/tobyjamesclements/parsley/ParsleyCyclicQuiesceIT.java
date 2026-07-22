@@ -51,11 +51,11 @@ class ParsleyCyclicQuiesceIT {
     private final KafkaContainer kafka =
             new KafkaContainer(DockerImageName.parse("apache/kafka:3.7.0"));
 
-    private static final String T1 = "t1";
-    private static final String LOOP = "loop";
+    private static final String C1 = "c1";
+    private static final String C2 = "c2";
 
     /**
-     * After one input record flows through the cycle (T1 → loop → the app's own gate again), the
+     * After one input record flows through the cycle (C1 → loop → the app's own gate again), the
      * loop topic's end offset must stabilise — the I6 relay settles once nothing new is being
      * learned — and the app must still be running (the cycle neither crashes nor spins).
      *
@@ -65,28 +65,28 @@ class ParsleyCyclicQuiesceIT {
     @Test
     void ownSinkCycleQuiescesAfterTheInputStops() throws Exception {
         String bootstrap = kafka.getBootstrapServers();
-        createTopics(bootstrap, T1, LOOP);
+        createTopics(bootstrap, C1, C2);
 
         CausalTopology topology = new CausalStreamsBuilder()
-                .stream(List.of(T1, LOOP), Serdes.String(), Serdes.String())
+                .stream(List.of(C1, C2), Serdes.String(), Serdes.String())
                 .process(loopingProcessor())
-                .to(LOOP, Serdes.String(), Serdes.String())
+                .to(C2, Serdes.String(), Serdes.String())
                 .build();
 
         try (CausalStreams streams = new CausalStreams(topology, streamsConfig(bootstrap))) {
             streams.start();
 
             try (KafkaProducer<String, String> input = new KafkaProducer<>(producerConfig(bootstrap))) {
-                input.send(CausalClock.empty().stamp(new ProducerRecord<>(T1, "k", "hello"))).get();
+                input.send(CausalClock.empty().stamp(new ProducerRecord<>(C1, "k", "hello"))).get();
             }
 
-            // The business record must traverse the cycle: T1's delivery forwards s:hello onto the
+            // The business record must traverse the cycle: C1's delivery forwards s:hello onto the
             // loop topic, and the app must then deliver its own sink record (a delay, never a
             // deadlock — the self-consumed sink's claims are genuinely gated by the consumed
             // branch, and reflected claims are ownOutputs-known at relay).
             List<String> loopValues = new ArrayList<>();
             try (KafkaConsumer<String, String> consumer = new KafkaConsumer<>(consumerConfig(bootstrap))) {
-                consumer.subscribe(List.of(LOOP));
+                consumer.subscribe(List.of(C2));
                 await().atMost(Duration.ofSeconds(90)).until(() -> {
                     consumer.poll(Duration.ofMillis(500)).forEach(record -> {
                         if (record.value() != null && record.headers().lastHeader(ParsleyHeader.NULL_MESSAGE) == null) {
@@ -103,9 +103,9 @@ class ParsleyCyclicQuiesceIT {
             // Quiescence: the loop topic's end offset must hold still for a sustained window once
             // the marker exchange settles. A ping-ponging relay would grow it on every commit.
             await().atMost(Duration.ofSeconds(120)).until(() -> {
-                long before = endOffset(bootstrap, LOOP);
+                long before = endOffset(bootstrap, C2);
                 Thread.sleep(5_000);
-                return endOffset(bootstrap, LOOP) == before;
+                return endOffset(bootstrap, C2) == before;
             });
 
             assertTrue(streams.state() == KafkaStreams.State.RUNNING,
@@ -115,7 +115,7 @@ class ParsleyCyclicQuiesceIT {
     }
 
     /**
-     * The cyclic delegate: a T1 record forwards {@code s:<value>} onto the loop sink; a loop
+     * The cyclic delegate: a C1 record forwards {@code s:<value>} onto the loop sink; a loop
      * record — the app's own sink coming back around — forwards nothing (a non-emitting delivery,
      * so the processor advertises progress with a null message instead, exercising marker relay
      * around the cycle).
@@ -131,7 +131,7 @@ class ParsleyCyclicQuiesceIT {
 
             @Override
             public void process(Record<String, String> record) {
-                if (T1.equals(ctx.recordMetadata().orElseThrow().topic())) {
+                if (C1.equals(ctx.recordMetadata().orElseThrow().topic())) {
                     ctx.forward(record.withValue("s:" + record.value()));
                 }
             }

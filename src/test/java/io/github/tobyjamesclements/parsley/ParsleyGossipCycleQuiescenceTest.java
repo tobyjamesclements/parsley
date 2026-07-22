@@ -36,9 +36,9 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 class ParsleyGossipCycleQuiescenceTest {
 
     /**
-     * The two-node cycle quiesces after a single advertisement: A's business delivery of t1@0
+     * The two-node cycle quiesces after a single advertisement: A's business delivery of c4@0
      * advertises one null message on c1, and B does not echo it — the only news it carries
-     * (t1@0) is on a channel B neither consumes nor produces, custody that folds into B's stamp
+     * (c4@0) is on a channel B neither consumes nor produces, custody that folds into B's stamp
      * without obliging a relay. (Under the previous rule B echoed on c2 and the exchange settled
      * only when A's ack-folded ownOutputs dominated the echo; the ownOutputs quench itself stays
      * pinned by ParsleyGossipTest's reflected-claim test and the self-cycle IT, where the own
@@ -46,22 +46,22 @@ class ParsleyGossipCycleQuiescenceTest {
      */
     @Test
     void twoNodeCycleGossipQuiescesAfterOneAdvertisement() {
-        ParsleySimTrace.SimSpec spec = new ParsleySimTrace.SimSpec(List.of("t1"), List.of(
-                new ParsleySimTrace.SimSpec.NodeSpec("A", List.of("c2", "t1"), List.of("c1"), 0.0),
+        ParsleySimTrace.SimSpec spec = new ParsleySimTrace.SimSpec(List.of("c4"), List.of(
+                new ParsleySimTrace.SimSpec.NodeSpec("A", List.of("c2", "c4"), List.of("c1"), 0.0),
                 new ParsleySimTrace.SimSpec.NodeSpec("B", List.of("c1"), List.of("c2"), 0.0)));
         ParsleyTopologySim sim = ParsleyTopologySim.fromSpec(spec, 1);
-        sim.produceExternal("t1");
+        sim.produceExternal("c4");
         sim.drain();
         assertEquals(1, sim.logSize("c1"),
                 "one business delivery at A must advertise exactly one null message on c1");
         assertEquals(0, sim.logSize("c2"),
-                "B must not echo A's advertisement — its only news (t1@0) is custody for B, "
+                "B must not echo A's advertisement — its only news (c4@0) is custody for B, "
                         + "which folds into the stamp but never obliges a relay (I6 trigger scope)");
     }
 
     /**
      * The previously storming three-node cycle quiesces immediately: A's advertisement on c1
-     * carries only t1@0, custody for B (blind to t1), so B folds it and stays silent; C and A
+     * carries only c4@0, custody for B (blind to c4), so B folds it and stays silent; C and A
      * hear nothing further. Under the previous relay-on-any-news rule this exact spec stormed
      * forever (every member blind to one cycle channel, custody one lap stale, each relay's own
      * offset the next member's news) and was pinned as such until the trigger was restricted to
@@ -69,17 +69,17 @@ class ParsleyGossipCycleQuiescenceTest {
      */
     @Test
     void threeNodeCycleGossipQuiescesWithoutRelays() {
-        ParsleySimTrace.SimSpec spec = new ParsleySimTrace.SimSpec(List.of("t1"), List.of(
-                new ParsleySimTrace.SimSpec.NodeSpec("A", List.of("c3", "t1"), List.of("c1"), 0.0),
+        ParsleySimTrace.SimSpec spec = new ParsleySimTrace.SimSpec(List.of("c4"), List.of(
+                new ParsleySimTrace.SimSpec.NodeSpec("A", List.of("c3", "c4"), List.of("c1"), 0.0),
                 new ParsleySimTrace.SimSpec.NodeSpec("B", List.of("c1"), List.of("c2"), 0.0),
                 new ParsleySimTrace.SimSpec.NodeSpec("C", List.of("c2"), List.of("c3"), 0.0)));
         ParsleyTopologySim sim = ParsleyTopologySim.fromSpec(spec, 1);
-        sim.produceExternal("t1");
+        sim.produceExternal("c4");
         sim.drain();
         assertEquals(1, sim.logSize("c1"),
                 "A's single business delivery must advertise exactly one null message on c1");
         assertEquals(0, sim.logSize("c2"),
-                "B must not relay: t1@0 is custody for B (blind channel), and relaying custody is "
+                "B must not relay: c4@0 is custody for B (blind channel), and relaying custody is "
                         + "the mechanism that made this cycle storm forever");
         assertEquals(0, sim.logSize("c3"),
                 "C receives nothing, so c3 must stay empty — the cycle is causally quiet");
@@ -95,17 +95,17 @@ class ParsleyGossipCycleQuiescenceTest {
      */
     @Test
     void chordedThreeNodeCycleQuiescesUnderFairDrain() {
-        ParsleySimTrace.SimSpec spec = new ParsleySimTrace.SimSpec(List.of("t1"), List.of(
-                new ParsleySimTrace.SimSpec.NodeSpec("A", List.of("c2", "c3", "t1"), List.of("c1"), 0.0),
+        ParsleySimTrace.SimSpec spec = new ParsleySimTrace.SimSpec(List.of("c4"), List.of(
+                new ParsleySimTrace.SimSpec.NodeSpec("A", List.of("c2", "c3", "c4"), List.of("c1"), 0.0),
                 new ParsleySimTrace.SimSpec.NodeSpec("B", List.of("c1", "c3"), List.of("c2"), 0.0),
                 new ParsleySimTrace.SimSpec.NodeSpec("C", List.of("c1", "c2"), List.of("c3"), 0.0)));
         ParsleyTopologySim sim = ParsleyTopologySim.fromSpec(spec, 1);
-        sim.produceExternal("t1");
+        sim.produceExternal("c4");
         sim.drain();
         assertEquals(1, sim.logSize("c1"),
                 "A's single business delivery must advertise exactly one null message on c1");
         assertEquals(0, sim.logSize("c2"),
-                "B consumes c1 and c3, but A's advertisement carries no news on either — t1@0 is "
+                "B consumes c1 and c3, but A's advertisement carries no news on either — c4@0 is "
                         + "custody for B and must not oblige a relay");
         assertEquals(0, sim.logSize("c3"),
                 "C consumes c1 and c2, but A's advertisement carries no news on either — the "
@@ -123,19 +123,19 @@ class ParsleyGossipCycleQuiescenceTest {
      */
     @Test
     void sharedSinkThreeNodeCycleQuiescesWithoutSiblingEcho() {
-        ParsleySimTrace.SimSpec spec = new ParsleySimTrace.SimSpec(List.of("t1"), List.of(
-                new ParsleySimTrace.SimSpec.NodeSpec("A", List.of("t1", "c3"), List.of("c1", "c2"), 0.0),
+        ParsleySimTrace.SimSpec spec = new ParsleySimTrace.SimSpec(List.of("c4"), List.of(
+                new ParsleySimTrace.SimSpec.NodeSpec("A", List.of("c4", "c3"), List.of("c1", "c2"), 0.0),
                 new ParsleySimTrace.SimSpec.NodeSpec("B", List.of("c1"), List.of("c2", "c3"), 0.0),
                 new ParsleySimTrace.SimSpec.NodeSpec("C", List.of("c2"), List.of("c3", "c1"), 0.0)));
         ParsleyTopologySim sim = ParsleyTopologySim.fromSpec(spec, 1);
-        sim.produceExternal("t1");
+        sim.produceExternal("c4");
         sim.drain();
         assertEquals(1, sim.logSize("c1"),
                 "A's advertisement reaches c1 exactly once — C must not append a sibling echo");
         assertEquals(1, sim.logSize("c2"),
                 "A's advertisement reaches c2 exactly once — B must not append a sibling echo");
         assertEquals(0, sim.logSize("c3"),
-                "no one relays: every claim B and C receive is custody (t1 blind; sibling shared-"
+                "no one relays: every claim B and C receive is custody (c4 blind; sibling shared-"
                         + "sink appends covered only by hearsay), which must never oblige a relay");
     }
 }

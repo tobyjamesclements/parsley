@@ -35,16 +35,16 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  *
  * <p>Driven as two {@link ParsleyProcessor} lifetimes over the same physical stores (the
  * {@link MockProcessorContext} + {@link TestKeyValueStore} restart harness of
- * {@link ParsleyProcessorRestoreTest}): a v1 whose sink is {@code mid}, then a v2 with a different
+ * {@link ParsleyProcessorRestoreTest}): a v1 whose sink is {@code c3}, then a v2 with a different
  * shape, asserting on the causal-dependencies header of v2's first stamped forward — the exact
  * artifact the under-claim would corrupt.
  */
 class ParsleyFormerSinkHealTest {
 
-    private static final Uuid T1_ID = Uuid.randomUuid();
-    private static final Uuid T2_ID = Uuid.randomUuid();
-    private static final Uuid MID_ID = Uuid.randomUuid();
-    private static final Uuid OUT_ID = Uuid.randomUuid();
+    private static final Uuid C1_ID = Uuid.randomUuid();
+    private static final Uuid C2_ID = Uuid.randomUuid();
+    private static final Uuid C3_ID = Uuid.randomUuid();
+    private static final Uuid C4_ID = Uuid.randomUuid();
 
     private final TestKeyValueStore<String, byte[]> frontierStore =
             new TestKeyValueStore<String, byte[]>(Comparator.naturalOrder(), "frontier");
@@ -56,12 +56,12 @@ class ParsleyFormerSinkHealTest {
             new TestKeyValueStore<byte[], byte[]>(Arrays::compareUnsigned, "forwarded-index");
 
     /**
-     * The main scenario: v1 produced to {@code mid} (its blob's own-output claim trails at the
-     * end-offset-seeded 5); v2 consumes {@code mid} instead of producing to it, and by then the
+     * The main scenario: v1 produced to {@code c3} (its blob's own-output claim trails at the
+     * end-offset-seeded 5); v2 consumes {@code c3} instead of producing to it, and by then the
      * topic holds records up to offset 8 — v1's final-transaction outputs, whose acks never made
      * the blob. The heal must re-cover them from the topic's end offsets, so v2's very first
-     * stamp claims (mid, 0, 8), not the stale 5 — without the heal a downstream consumer of
-     * {@code mid} and v2's {@code out} could deliver the derived output before the offset-8 cause.
+     * stamp claims (c3, 0, 8), not the stale 5 — without the heal a downstream consumer of
+     * {@code c3} and v2's {@code c4} could deliver the derived output before the offset-8 cause.
      *
      * Asserts the first stamped forward claims the former sink at its last appended offset (the
      * growth-seeded frontier keeping the carried pre-heal cut is pinned separately, in
@@ -69,20 +69,20 @@ class ParsleyFormerSinkHealTest {
      */
     @Test
     void aFormerSinkTurnedInputIsHealedToItsEndOffsetsBeforeTheFirstStamp() {
-        runV1WithMidAsSink(TestTopicAdmin.of(Map.of("t1", T1_ID, "mid", MID_ID))
-                .withEndOffsets(Map.of("mid", Map.of(0, 6L))));
+        runV1WithMidAsSink(TestTopicAdmin.of(Map.of("c1", C1_ID, "c3", C3_ID))
+                .withEndOffsets(Map.of("c3", Map.of(0, 6L))));
 
-        // v2: mid is now an input, out is the sink; mid's log has grown to end offset 9 (records
+        // v2: c3 is now an input, c4 is the sink; c3's log has grown to end offset 9 (records
         // up to 8 — v1's final transaction landed there after the blob's last persist).
-        TestTopicAdmin v2Admin = TestTopicAdmin.of(Map.of("t2", T2_ID, "mid", MID_ID, "out", OUT_ID))
-                .withEndOffsets(Map.of("mid", Map.of(0, 9L)));
+        TestTopicAdmin v2Admin = TestTopicAdmin.of(Map.of("c2", C2_ID, "c3", C3_ID, "c4", C4_ID))
+                .withEndOffsets(Map.of("c3", Map.of(0, 9L)));
         MockProcessorContext<String, String> context = contextOverStores();
         ParsleyProcessor<String, String, String, String> v2 =
-                processor(Set.of("t2", "mid"), Set.of("out"), configs -> v2Admin);
+                processor(Set.of("c2", "c3"), Set.of("c4"), configs -> v2Admin);
         v2.init(context);
 
         ParsleyVectorClock stamp = firstStampOf(v2, context);
-        assertEquals(8L, stamp.offsetFor(MID_ID, 0),
+        assertEquals(8L, stamp.offsetFor(C3_ID, 0),
                 "the first post-redeploy stamp must claim the former sink at its last appended "
                         + "offset — the end-offset heal must cover the acks the blob's final "
                         + "transaction never persisted (I2; without the heal this reads the stale 5)");
@@ -97,19 +97,19 @@ class ParsleyFormerSinkHealTest {
      */
     @Test
     void aRecreatedFormerSinksClaimsArePurgedNotHealed() {
-        runV1WithMidAsSink(TestTopicAdmin.of(Map.of("t1", T1_ID, "mid", MID_ID))
-                .withEndOffsets(Map.of("mid", Map.of(0, 6L))));
+        runV1WithMidAsSink(TestTopicAdmin.of(Map.of("c1", C1_ID, "c3", C3_ID))
+                .withEndOffsets(Map.of("c3", Map.of(0, 6L))));
 
         Uuid recreated = Uuid.randomUuid();
-        TestTopicAdmin v2Admin = TestTopicAdmin.of(Map.of("t2", T2_ID, "mid", recreated, "out", OUT_ID))
-                .withEndOffsets(Map.of("mid", Map.of(0, 3L)));
+        TestTopicAdmin v2Admin = TestTopicAdmin.of(Map.of("c2", C2_ID, "c3", recreated, "c4", C4_ID))
+                .withEndOffsets(Map.of("c3", Map.of(0, 3L)));
         MockProcessorContext<String, String> context = contextOverStores();
         ParsleyProcessor<String, String, String, String> v2 =
-                processor(Set.of("t2", "mid"), Set.of("out"), configs -> v2Admin);
+                processor(Set.of("c2", "c3"), Set.of("c4"), configs -> v2Admin);
         v2.init(context);
 
         ParsleyVectorClock stamp = firstStampOf(v2, context);
-        assertEquals(-1L, stamp.offsetFor(MID_ID, 0),
+        assertEquals(-1L, stamp.offsetFor(C3_ID, 0),
                 "a recreated former sink's old-UUID claims are provably destroyed (E1) and must "
                         + "leave the stamp, not be healed to the new topic's offsets");
     }
@@ -123,19 +123,19 @@ class ParsleyFormerSinkHealTest {
      */
     @Test
     void aDeletedFormerSinksClaimsArePurgedAndInitProceeds() {
-        runV1WithMidAsSink(TestTopicAdmin.of(Map.of("t1", T1_ID, "mid", MID_ID))
-                .withEndOffsets(Map.of("mid", Map.of(0, 6L))));
+        runV1WithMidAsSink(TestTopicAdmin.of(Map.of("c1", C1_ID, "c3", C3_ID))
+                .withEndOffsets(Map.of("c3", Map.of(0, 6L))));
 
-        TestTopicAdmin resolving = TestTopicAdmin.of(Map.of("t2", T2_ID, "out", OUT_ID));
-        ParsleyTopicAdmin v2Admin = failingFor(resolving, "mid",
+        TestTopicAdmin resolving = TestTopicAdmin.of(Map.of("c2", C2_ID, "c4", C4_ID));
+        ParsleyTopicAdmin v2Admin = failingFor(resolving, "c3",
                 new ExecutionException(new org.apache.kafka.common.errors.UnknownTopicOrPartitionException("gone")));
         MockProcessorContext<String, String> context = contextOverStores();
         ParsleyProcessor<String, String, String, String> v2 =
-                processor(Set.of("t2"), Set.of("out"), configs -> v2Admin);
+                processor(Set.of("c2"), Set.of("c4"), configs -> v2Admin);
         v2.init(context);
 
         ParsleyVectorClock stamp = firstStampOf(v2, context);
-        assertEquals(-1L, stamp.offsetFor(MID_ID, 0),
+        assertEquals(-1L, stamp.offsetFor(C3_ID, 0),
                 "a deleted former sink's claims must be purged — they can gate nothing and heal nothing");
     }
 
@@ -146,20 +146,20 @@ class ParsleyFormerSinkHealTest {
      */
     @Test
     void aTransientFormerSinkResolutionFailureFailsInitLoudly() {
-        runV1WithMidAsSink(TestTopicAdmin.of(Map.of("t1", T1_ID, "mid", MID_ID))
-                .withEndOffsets(Map.of("mid", Map.of(0, 6L))));
+        runV1WithMidAsSink(TestTopicAdmin.of(Map.of("c1", C1_ID, "c3", C3_ID))
+                .withEndOffsets(Map.of("c3", Map.of(0, 6L))));
 
-        TestTopicAdmin resolving = TestTopicAdmin.of(Map.of("t2", T2_ID, "out", OUT_ID));
-        ParsleyTopicAdmin v2Admin = failingFor(resolving, "mid",
+        TestTopicAdmin resolving = TestTopicAdmin.of(Map.of("c2", C2_ID, "c4", C4_ID));
+        ParsleyTopicAdmin v2Admin = failingFor(resolving, "c3",
                 new ExecutionException(new org.apache.kafka.common.errors.TimeoutException("broker away")));
         MockProcessorContext<String, String> context = contextOverStores();
         ParsleyProcessor<String, String, String, String> v2 =
-                processor(Set.of("t2"), Set.of("out"), configs -> v2Admin);
+                processor(Set.of("c2"), Set.of("c4"), configs -> v2Admin);
 
         IllegalStateException failure = assertThrows(IllegalStateException.class, () -> v2.init(context),
                 "an unresolvable former sink must fail init — neither healing nor purging is provable");
-        assertTrue(String.valueOf(failure.getMessage()).contains("mid")
-                        || String.valueOf(failure.getCause()).contains("mid"),
+        assertTrue(String.valueOf(failure.getMessage()).contains("c3")
+                        || String.valueOf(failure.getCause()).contains("c3"),
                 "the failure must name the unresolvable former sink: " + failure);
     }
 
@@ -170,14 +170,14 @@ class ParsleyFormerSinkHealTest {
      */
     @Test
     void anUnchangedSinkSetOpensNoHealSession() {
-        TestTopicAdmin admin = TestTopicAdmin.of(Map.of("t1", T1_ID, "mid", MID_ID))
-                .withEndOffsets(Map.of("mid", Map.of(0, 6L)));
+        TestTopicAdmin admin = TestTopicAdmin.of(Map.of("c1", C1_ID, "c3", C3_ID))
+                .withEndOffsets(Map.of("c3", Map.of(0, 6L)));
         runV1WithMidAsSink(admin);
 
         int[] factoryCalls = {0};
         MockProcessorContext<String, String> context = contextOverStores();
         ParsleyProcessor<String, String, String, String> v2 =
-                processor(Set.of("t1"), Set.of("mid"), configs -> {
+                processor(Set.of("c1"), Set.of("c3"), configs -> {
                     factoryCalls[0]++;
                     return admin;
                 });
@@ -190,10 +190,10 @@ class ParsleyFormerSinkHealTest {
 
     // --- harness -----------------------------------------------------------------------------------
 
-    /** Runs a v1 processor lifetime (source t1, sink mid) against the shared stores: init only. */
+    /** Runs a v1 processor lifetime (source c1, sink c3) against the shared stores: init only. */
     private void runV1WithMidAsSink(ParsleyTopicAdmin admin) {
         ParsleyProcessor<String, String, String, String> v1 =
-                processor(Set.of("t1"), Set.of("mid"), configs -> admin);
+                processor(Set.of("c1"), Set.of("c3"), configs -> admin);
         v1.init(contextOverStores());
         assertNotNull(frontierStore.get(ParsleyStores.FRONTIER_KEY),
                 "v1's init must have persisted the \"f\" blob the v2 lifetime restores from");
@@ -226,13 +226,13 @@ class ParsleyFormerSinkHealTest {
     }
 
     /**
-     * Feeds one causally minimal {@code t2} record and returns the causal-dependencies clock of
+     * Feeds one causally minimal {@code c2} record and returns the causal-dependencies clock of
      * the delegate's stamped forward — v2's first outbound stamp.
      */
     private ParsleyVectorClock firstStampOf(
             ParsleyProcessor<String, String, String, String> processor,
             MockProcessorContext<String, String> context) {
-        context.setRecordMetadata("t2", 0, 0);
+        context.setRecordMetadata("c2", 0, 0);
         Headers headers = ParsleyHeader.mutableHeaders();
         headers.add(ParsleyHeader.CAUSAL_CLOCK, ParsleyVectorClock.empty().toBytes());
         processor.process(new Record<>("k", "v", 0L, headers));

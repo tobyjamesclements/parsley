@@ -66,20 +66,20 @@ class CausalReconvergenceTopologyTest {
     // genuine, gated wait — not an out-of-scope, fail-closed case.
     private static final String T_ANC = "anc";
     // Separate input for single-processor tests.
-    private static final String T1 = "t1";
+    private static final String C1 = "c1";
 
     private static final Uuid FAST_ID = Uuid.randomUuid();
     private static final Uuid SLOW_ID = Uuid.randomUuid();
     private static final Uuid ANC_ID = Uuid.randomUuid();
-    private static final Uuid T1_ID = Uuid.randomUuid();
+    private static final Uuid C1_ID = Uuid.randomUuid();
 
     private static final ParsleyTopicAdmin FAN_IN_ADMIN =
             TestTopicAdmin.of(Map.of(T_FAST, FAST_ID, T_SLOW, SLOW_ID, T_ANC, ANC_ID));
     private static final ParsleyTopicAdmin SINGLE_ADMIN =
-            TestTopicAdmin.of(Map.of(T1, T1_ID));
+            TestTopicAdmin.of(Map.of(C1, C1_ID));
 
     private static final ParsleyTopics TOPICS = ParsleyTopics.of(
-            Map.of(T_FAST, FAST_ID, T_SLOW, SLOW_ID, T_ANC, ANC_ID, T1, T1_ID));
+            Map.of(T_FAST, FAST_ID, T_SLOW, SLOW_ID, T_ANC, ANC_ID, C1, C1_ID));
 
     // --- topology builders -------------------------------------------------------------------
 
@@ -96,7 +96,7 @@ class CausalReconvergenceTopologyTest {
                         .addSources(List.of(T_FAST, T_SLOW, T_ANC), Serdes.String(), Serdes.String())
                         .topicAdmin(FAN_IN_ADMIN)
                         .build())
-                .to("out", Produced.with(Serdes.String(), Serdes.String()));
+                .to("c2", Produced.with(Serdes.String(), Serdes.String()));
         return builder.build();
     }
 
@@ -106,13 +106,13 @@ class CausalReconvergenceTopologyTest {
      */
     private static Topology filterTopology() {
         StreamsBuilder builder = new StreamsBuilder();
-        builder.stream(List.of(T1), Consumed.with(Serdes.String(), Serdes.String()))
+        builder.stream(List.of(C1), Consumed.with(Serdes.String(), Serdes.String()))
                 .process(ParsleyProcessorSupplier.builder(filter())
                         .addBufferStore("filter")
-                        .addSource(new ParsleySource<>(T1, Serdes.String(), Serdes.String()))
+                        .addSource(new ParsleySource<>(C1, Serdes.String(), Serdes.String()))
                         .topicAdmin(SINGLE_ADMIN)
                         .build())
-                .to("out", Produced.with(Serdes.String(), Serdes.String()));
+                .to("c2", Produced.with(Serdes.String(), Serdes.String()));
         return builder.build();
     }
 
@@ -148,7 +148,7 @@ class CausalReconvergenceTopologyTest {
             TestInputTopic<String, String> ancIn =
                     driver.createInputTopic(T_ANC, new StringSerializer(), new StringSerializer());
             TestOutputTopic<String, String> out =
-                    driver.createOutputTopic("out", new StringDeserializer(), new StringDeserializer());
+                    driver.createOutputTopic("c2", new StringDeserializer(), new StringDeserializer());
 
             CausalClock depsAnc3 = CausalClock.builder(TOPICS).require(T_ANC, 0, 3).build();
 
@@ -208,9 +208,9 @@ class CausalReconvergenceTopologyTest {
     void filterProcessorEmitsNullMessageForEveryDeliveredInput() {
         try (TopologyTestDriver driver = new TopologyTestDriver(filterTopology(), testConfig())) {
             TestInputTopic<String, String> in =
-                    driver.createInputTopic(T1, new StringSerializer(), new StringSerializer());
+                    driver.createInputTopic(C1, new StringSerializer(), new StringSerializer());
             TestOutputTopic<String, String> out =
-                    driver.createOutputTopic("out", new StringDeserializer(), new StringDeserializer());
+                    driver.createOutputTopic("c2", new StringDeserializer(), new StringDeserializer());
 
             // A record with no deps — admitted immediately; delegate filters it (no forward).
             in.pipeInput(new TestRecord<>("k", "will-be-filtered",
@@ -256,7 +256,7 @@ class CausalReconvergenceTopologyTest {
             TestInputTopic<String, String> slowIn =
                     driver.createInputTopic(T_SLOW, new StringSerializer(), new StringSerializer());
             TestOutputTopic<String, String> out =
-                    driver.createOutputTopic("out", new StringDeserializer(), new StringDeserializer());
+                    driver.createOutputTopic("c2", new StringDeserializer(), new StringDeserializer());
 
             // The slow branch advertises ANC@10 via a null message alone — no business record ever
             // flows on slow carrying this fact.
@@ -306,9 +306,9 @@ class CausalReconvergenceTopologyTest {
      */
     @Test
     void nullMessageReceiveAdvancesChannelClockAndCompleteness() {
-        // T1 is the only subscribed topic. ANC_ID is an out-of-scope ancestor.
+        // C1 is the only subscribed topic. ANC_ID is an out-of-scope ancestor.
         ParsleyVectorClock.CoordinatePredicate scope = (topicId, partition) ->
-                partition == 0 && topicId.equals(T1_ID);
+                partition == 0 && topicId.equals(C1_ID);
         MockBufferStore<String, String> buffer = new MockBufferStore<>();
 
         ParsleyChannels channels = ParsleyTestFixtures.channels(ParsleyVectorClock.empty(), new MockForwardedIndex());
@@ -321,10 +321,10 @@ class CausalReconvergenceTopologyTest {
         assertEquals(-1L, causalBroadcast.completeness().offsetFor(ANC_ID, 0),
                 "completeness must not know ANC before any null message arrives");
 
-        // Receive a null message at T1/0 offset 0, carrying {ANC@5}.
+        // Receive a null message at C1/0 offset 0, carrying {ANC@5}.
         ParsleyVectorClock carriedFrontier = ParsleyVectorClock.empty().observe(ANC_ID, 0, 5);
         ParsleyGossip.Reception<String, String> reception =
-                gossip.receive(T1_ID, 0, 0, carriedFrontier);
+                gossip.receive(C1_ID, 0, 0, carriedFrontier);
         List<ParsleyMessage<String, String>> released = reception.delivered();
 
         // No records were buffered, so nothing is released.
@@ -334,7 +334,7 @@ class CausalReconvergenceTopologyTest {
                 "ANC is a channel this node neither consumes nor produces — the claim is custody, "
                         + "which folds into the stamp but must not oblige a relay (I6 trigger scope)");
 
-        // The channel clock for T1/0 now knows ANC@5, which must appear in completeness().
+        // The channel clock for C1/0 now knows ANC@5, which must appear in completeness().
         assertEquals(5L, causalBroadcast.completeness().offsetFor(ANC_ID, 0),
                 "completeness must rise to ANC@5 after the null message advances the channel clock");
     }

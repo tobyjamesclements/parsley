@@ -19,13 +19,13 @@ class ParsleySimReplayFidelityTest {
 
     /** The standing six-node topology of {@link ParsleyStampInvariantPropertyTest}, by value. */
     private static ParsleySimTrace.SimSpec standingSpec() {
-        return new ParsleySimTrace.SimSpec(List.of("t1"), List.of(
-                new ParsleySimTrace.SimSpec.NodeSpec("A", List.of("t1"), List.of("t2"), 0.7),
-                new ParsleySimTrace.SimSpec.NodeSpec("D", List.of("t1"), List.of("t2"), 0.7),
-                new ParsleySimTrace.SimSpec.NodeSpec("B", List.of("t1", "t2", "t3"), List.of("t3"), 0.6),
-                new ParsleySimTrace.SimSpec.NodeSpec("C", List.of("t1", "t2", "t3"), List.of("t4"), 0.7),
-                new ParsleySimTrace.SimSpec.NodeSpec("W", List.of("t1", "t2", "t3", "t4"), List.of("t5"), 0.0),
-                new ParsleySimTrace.SimSpec.NodeSpec("N", List.of("t5"), List.of("t6"), 0.0)));
+        return new ParsleySimTrace.SimSpec(List.of("c1"), List.of(
+                new ParsleySimTrace.SimSpec.NodeSpec("A", List.of("c1"), List.of("c2"), 0.7),
+                new ParsleySimTrace.SimSpec.NodeSpec("D", List.of("c1"), List.of("c2"), 0.7),
+                new ParsleySimTrace.SimSpec.NodeSpec("B", List.of("c1", "c2", "c3"), List.of("c3"), 0.6),
+                new ParsleySimTrace.SimSpec.NodeSpec("C", List.of("c1", "c2", "c3"), List.of("c4"), 0.7),
+                new ParsleySimTrace.SimSpec.NodeSpec("W", List.of("c1", "c2", "c3", "c4"), List.of("c5"), 0.0),
+                new ParsleySimTrace.SimSpec.NodeSpec("N", List.of("c5"), List.of("c6"), 0.0)));
     }
 
     /**

@@ -34,7 +34,7 @@ class ParsleyMarkerPartitionerTest {
     void withNoOverrideAndNoDelegateFallsBackToKafkasDefaultPartitioner() {
         ParsleyMarkerPartitioner<String, String> partitioner = new ParsleyMarkerPartitioner<>(null);
 
-        assertEquals(Optional.empty(), partitioner.partitions("out", "k", "v", 4),
+        assertEquals(Optional.empty(), partitioner.partitions("c1", "k", "v", 4),
                 "no override and no delegate must fall back to the default partitioner (Optional.empty())");
     }
 
@@ -49,10 +49,10 @@ class ParsleyMarkerPartitionerTest {
         RecordingPartitioner delegate = new RecordingPartitioner(Optional.of(Set.of(2)));
         ParsleyMarkerPartitioner<String, String> partitioner = new ParsleyMarkerPartitioner<>(delegate);
 
-        Optional<Set<Integer>> result = partitioner.partitions("out", "k", "v", 4);
+        Optional<Set<Integer>> result = partitioner.partitions("c1", "k", "v", 4);
 
         assertEquals(Optional.of(Set.of(2)), result, "the delegate's own answer must be returned verbatim");
-        assertEquals("out", delegate.lastTopic, "the delegate must see the same topic");
+        assertEquals("c1", delegate.lastTopic, "the delegate must see the same topic");
         assertEquals("k", delegate.lastKey, "the delegate must see the same key");
         assertEquals("v", delegate.lastValue, "the delegate must see the same value");
         assertEquals(4, delegate.lastNumPartitions, "the delegate must see the same partition count");
@@ -70,7 +70,7 @@ class ParsleyMarkerPartitionerTest {
         ParsleyMarkerPartitioner<String, String> partitioner = new ParsleyMarkerPartitioner<>(delegate);
 
         ParsleyMarkerPartition.set(3);
-        Optional<Set<Integer>> result = partitioner.partitions("out", null, null, 4);
+        Optional<Set<Integer>> result = partitioner.partitions("c1", null, null, 4);
 
         assertEquals(Optional.of(Set.of(3)), result,
                 "the override must win over the delegate's own answer (2) and the null key/value");
@@ -88,10 +88,10 @@ class ParsleyMarkerPartitionerTest {
         ParsleyMarkerPartitioner<String, String> partitioner = new ParsleyMarkerPartitioner<>(delegate);
 
         ParsleyMarkerPartition.set(3);
-        partitioner.partitions("out", "marker-key", null, 4);
+        partitioner.partitions("c1", "marker-key", null, 4);
         ParsleyMarkerPartition.clear();
 
-        Optional<Set<Integer>> result = partitioner.partitions("out", "k", "v", 4);
+        Optional<Set<Integer>> result = partitioner.partitions("c1", "k", "v", 4);
 
         assertEquals(Optional.of(Set.of(2)), result, "with the override cleared, the delegate must be consulted");
         assertTrue(delegate.invoked, "the delegate must have been consulted for this second call");

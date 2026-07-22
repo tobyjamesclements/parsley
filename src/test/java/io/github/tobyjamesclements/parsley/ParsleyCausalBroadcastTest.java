@@ -21,17 +21,17 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class ParsleyCausalBroadcastTest {
 
-    private static final TopicPartition T1 = new TopicPartition("t1", 0);
-    private static final TopicPartition T2 = new TopicPartition("t2", 0);
-    private static final Uuid T1_ID = Uuid.randomUuid();
-    private static final Uuid T2_ID = Uuid.randomUuid();
-    // T3 is never channelled by this node — a stand-in for a downstream/sibling node's own input
+    private static final TopicPartition C1 = new TopicPartition("c1", 0);
+    private static final TopicPartition C2 = new TopicPartition("c2", 0);
+    private static final Uuid C1_ID = Uuid.randomUuid();
+    private static final Uuid C2_ID = Uuid.randomUuid();
+    // C3 is never channelled by this node — a stand-in for a downstream/sibling node's own input
     // coordinate, the kind an inbound clock can name without this node consuming it.
-    private static final Uuid T3_ID = Uuid.randomUuid();
+    private static final Uuid C3_ID = Uuid.randomUuid();
 
-    // A consumed scope owning partition 0 of t1 and t2 — what a Streams task sees for these sources.
+    // A consumed scope owning partition 0 of c1 and c2 — what a Streams task sees for these sources.
     private static final ParsleyVectorClock.CoordinatePredicate SCOPE = (topicId, partition) ->
-            partition == 0 && (topicId.equals(T1_ID) || topicId.equals(T2_ID));
+            partition == 0 && (topicId.equals(C1_ID) || topicId.equals(C2_ID));
 
     private final List<ParsleyMessage<String, String>> forwarded = new ArrayList<>();
     private final MockBufferStore<String, String> buffer = new MockBufferStore<>();
@@ -53,10 +53,10 @@ class ParsleyCausalBroadcastTest {
     void satisfiedRecordForwardsImmediatelyAndAdvancesFrontier() {
         ParsleyCausalBroadcast<String, String> causalBroadcast = causalBroadcastWith();
 
-        processRecord(causalBroadcast, incomingRecord(T1, 3, ParsleyVectorClock.empty()));
+        processRecord(causalBroadcast, incomingRecord(C1, 3, ParsleyVectorClock.empty()));
 
         assertEquals(1, forwarded.size(), "satisfied record must be forwarded immediately");
-        assertEquals(ParsleyVectorClock.empty().observe(T1_ID, 0, 3), causalBroadcast.frontier(),
+        assertEquals(ParsleyVectorClock.empty().observe(C1_ID, 0, 3), causalBroadcast.frontier(),
                 "frontier must advance to the forwarded record's source offset");
     }
 
@@ -76,19 +76,19 @@ class ParsleyCausalBroadcastTest {
     void unsatisfiedRecordIsBufferedUntilFrontierCatchesUp() {
         ParsleyCausalBroadcast<String, String> causalBroadcast = causalBroadcastWith();
 
-        ParsleyVectorClock deps = ParsleyVectorClock.empty().observe(T1_ID, 0, 3);
-        processRecord(causalBroadcast, incomingRecord(T2, 0, deps));
+        ParsleyVectorClock deps = ParsleyVectorClock.empty().observe(C1_ID, 0, 3);
+        processRecord(causalBroadcast, incomingRecord(C2, 0, deps));
         assertTrue(forwarded.isEmpty(), "unsatisfied record must be held in the buffer");
 
-        processRecord(causalBroadcast, incomingRecord(T1, 3, ParsleyVectorClock.empty()));
+        processRecord(causalBroadcast, incomingRecord(C1, 3, ParsleyVectorClock.empty()));
 
         assertEquals(2, forwarded.size(), "both records must be forwarded after the dependency arrives");
-        assertEquals(T1, tp(forwarded.get(0)), "satisfying record must be forwarded first");
-        assertEquals(T2, tp(forwarded.get(1)), "buffered record must be released second");
+        assertEquals(C1, tp(forwarded.get(0)), "satisfying record must be forwarded first");
+        assertEquals(C2, tp(forwarded.get(1)), "buffered record must be released second");
         assertEquals(
                 ParsleyVectorClock.empty()
-                        .observe(T1_ID, 0, 3)
-                        .observe(T2_ID, 0, 0),
+                        .observe(C1_ID, 0, 3)
+                        .observe(C2_ID, 0, 0),
                 causalBroadcast.frontier(),
                 "frontier must reflect both records after drain");
     }
@@ -103,10 +103,10 @@ class ParsleyCausalBroadcastTest {
     void bufferHoldsAnUnsatisfiedRecordAndReleasesItOnDrain() {
         ParsleyCausalBroadcast<String, String> causalBroadcast = causalBroadcastWith();
 
-        causalBroadcast.receive(incomingRecord(T2, 0, ParsleyVectorClock.empty().observe(T1_ID, 0, 3)));
+        causalBroadcast.receive(incomingRecord(C2, 0, ParsleyVectorClock.empty().observe(C1_ID, 0, 3)));
         assertEquals(1, buffer.size(), "unsatisfied record must be held in the buffer");
 
-        causalBroadcast.receive(incomingRecord(T1, 3, ParsleyVectorClock.empty()));
+        causalBroadcast.receive(incomingRecord(C1, 3, ParsleyVectorClock.empty()));
         assertEquals(0, buffer.size(), "drained record must be removed from the buffer");
     }
 
@@ -121,7 +121,7 @@ class ParsleyCausalBroadcastTest {
     void dependencyOnConsumedButUnobservedCoordinateStillBlocks() {
         ParsleyCausalBroadcast<String, String> causalBroadcast = causalBroadcastConsuming(SCOPE);
 
-        processRecord(causalBroadcast, incomingRecord(T1, 0, ParsleyVectorClock.empty().observe(T2_ID, 0, 3)));
+        processRecord(causalBroadcast, incomingRecord(C1, 0, ParsleyVectorClock.empty().observe(C2_ID, 0, 3)));
 
         assertTrue(forwarded.isEmpty(), "an unobserved in-scope dependency must still hold the record");
         assertEquals(1, buffer.size(), "the record must be buffered, not forwarded");
@@ -139,15 +139,15 @@ class ParsleyCausalBroadcastTest {
      */
     @Test
     void recordsAlreadyInTheBufferDrainWhenTheFrontierCatchesUp() {
-        buffer.add(incomingRecord(T2, 0, ParsleyVectorClock.empty().observe(T1_ID, 0, 3)), 0L);
+        buffer.add(incomingRecord(C2, 0, ParsleyVectorClock.empty().observe(C1_ID, 0, 3)), 0L);
         ParsleyCausalBroadcast<String, String> causalBroadcast = causalBroadcastWith();
         assertEquals(ParsleyVectorClock.empty(), causalBroadcast.frontier(), "pre-buffered records must not advance the frontier on construction");
 
-        processRecord(causalBroadcast, incomingRecord(T1, 3, ParsleyVectorClock.empty()));
+        processRecord(causalBroadcast, incomingRecord(C1, 3, ParsleyVectorClock.empty()));
 
         assertEquals(2, forwarded.size(), "satisfying record and pre-buffered record must both be forwarded");
-        assertEquals(T1, tp(forwarded.get(0)), "satisfying record must be forwarded first");
-        assertEquals(T2, tp(forwarded.get(1)), "pre-buffered record must be released second");
+        assertEquals(C1, tp(forwarded.get(0)), "satisfying record must be forwarded first");
+        assertEquals(C2, tp(forwarded.get(1)), "pre-buffered record must be released second");
     }
 
     /**
@@ -162,10 +162,10 @@ class ParsleyCausalBroadcastTest {
     void emptyDependenciesRecordIsForwardedAsTriviallySatisfied() {
         ParsleyCausalBroadcast<String, String> causalBroadcast = causalBroadcastWith();
 
-        processRecord(causalBroadcast, incomingRecord(T1, 0, ParsleyVectorClock.empty()));
+        processRecord(causalBroadcast, incomingRecord(C1, 0, ParsleyVectorClock.empty()));
 
         assertEquals(1, forwarded.size(), "a trivially-satisfied record must be forwarded");
-        assertEquals(ParsleyVectorClock.empty().observe(T1_ID, 0, 0), causalBroadcast.frontier(),
+        assertEquals(ParsleyVectorClock.empty().observe(C1_ID, 0, 0), causalBroadcast.frontier(),
                 "frontier must advance through the forwarded record");
     }
 
@@ -199,12 +199,12 @@ class ParsleyCausalBroadcastTest {
                 ParsleyVectorClock.empty(), buffer,
                 new MockCandidateIndex(), forwardedIndex, capturing);
 
-        causalBroadcast.receive(incomingRecord(T2, 0, ParsleyVectorClock.empty().observe(T1_ID, 0, 3)));
+        causalBroadcast.receive(incomingRecord(C2, 0, ParsleyVectorClock.empty().observe(C1_ID, 0, 3)));
         assertEquals(List.of(1), bufferedCounts, "recordBuffered must fire when a record enters the buffer");
         assertEquals(List.of(1), reportedDepths, "reportState must fire with the new buffer depth");
         assertTrue(releasedCounts.isEmpty(), "recordReleased must not fire while record is buffered");
 
-        causalBroadcast.receive(incomingRecord(T1, 3, ParsleyVectorClock.empty()));
+        causalBroadcast.receive(incomingRecord(C1, 3, ParsleyVectorClock.empty()));
         assertEquals(List.of(1), releasedCounts, "recordReleased must fire with the count of drained records");
         assertEquals(List.of(1, 0), reportedDepths, "reportState must report the post-drain buffer depth");
     }
@@ -238,17 +238,17 @@ class ParsleyCausalBroadcastTest {
         ParsleyCausalBroadcast<String, String> causalBroadcast = ParsleyTestFixtures.broadcast(
                 ParsleyVectorClock.empty(), buffer, new MockCandidateIndex(), forwardedIndex,
                 capturing, System::currentTimeMillis);
-        processRecord(causalBroadcast, incomingRecord(T1, 0, ParsleyVectorClock.empty()));
+        processRecord(causalBroadcast, incomingRecord(C1, 0, ParsleyVectorClock.empty()));
         assertEquals(1, forwarded.size(), "precondition: the original delivery forwards once");
 
         // The same offset again — carrying a dependency on a coordinate this node has no channel
         // for, as a replayed pre-scope-change record legitimately can.
-        processRecord(causalBroadcast, incomingRecord(T1, 0, ParsleyVectorClock.empty().observe(T3_ID, 0, 2)));
+        processRecord(causalBroadcast, incomingRecord(C1, 0, ParsleyVectorClock.empty().observe(C3_ID, 0, 2)));
 
         assertEquals(1, forwarded.size(),
                 "an already-delivered offset must be skipped, never forwarded to the delegate again");
         assertEquals(0, buffer.size(), "a skipped replay must not enter the buffer");
-        assertEquals(ParsleyVectorClock.empty().observe(T1_ID, 0, 0), causalBroadcast.frontier(),
+        assertEquals(ParsleyVectorClock.empty().observe(C1_ID, 0, 0), causalBroadcast.frontier(),
                 "a skipped replay must not move the frontier");
         assertEquals(List.of(1), replaySkips, "the replay-skipped metric must count the skip");
     }
@@ -266,15 +266,15 @@ class ParsleyCausalBroadcastTest {
     void replayOfAForwardedButUnabsorbedOffsetIsSkipped() {
         ParsleyCausalBroadcast<String, String> causalBroadcast = causalBroadcastWith();
 
-        processRecord(causalBroadcast, incomingRecord(T1, 0, ParsleyVectorClock.empty()));
-        // T1@1 held on an unmet dependency; T1@2 then delivers out of order past it.
-        processRecord(causalBroadcast, incomingRecord(T1, 1, ParsleyVectorClock.empty().observe(T2_ID, 0, 5)));
-        processRecord(causalBroadcast, incomingRecord(T1, 2, ParsleyVectorClock.empty()));
+        processRecord(causalBroadcast, incomingRecord(C1, 0, ParsleyVectorClock.empty()));
+        // C1@1 held on an unmet dependency; C1@2 then delivers out of order past it.
+        processRecord(causalBroadcast, incomingRecord(C1, 1, ParsleyVectorClock.empty().observe(C2_ID, 0, 5)));
+        processRecord(causalBroadcast, incomingRecord(C1, 2, ParsleyVectorClock.empty()));
         assertEquals(2, forwarded.size(), "precondition: offsets 0 and 2 delivered, 1 held");
-        assertEquals(0L, causalBroadcast.frontier().offsetFor(T1_ID, 0),
+        assertEquals(0L, causalBroadcast.frontier().offsetFor(C1_ID, 0),
                 "precondition: the held offset 1 pins the frontier below the out-of-order 2");
 
-        processRecord(causalBroadcast, incomingRecord(T1, 2, ParsleyVectorClock.empty()));
+        processRecord(causalBroadcast, incomingRecord(C1, 2, ParsleyVectorClock.empty()));
 
         assertEquals(2, forwarded.size(),
                 "a replay of the out-of-order-delivered offset 2 must be skipped — it is still marked "
@@ -294,12 +294,12 @@ class ParsleyCausalBroadcastTest {
     void forwardImmediatelyWhenOnlySelfDependency() {
         ParsleyCausalBroadcast<String, String> causalBroadcast = causalBroadcastWith();
 
-        // Record at T1/0@3 whose dependencies require T1/0@3 — exactly itself.
-        processRecord(causalBroadcast, incomingRecord(T1, 3, ParsleyVectorClock.empty().observe(T1_ID, 0, 3)));
+        // Record at C1/0@3 whose dependencies require C1/0@3 — exactly itself.
+        processRecord(causalBroadcast, incomingRecord(C1, 3, ParsleyVectorClock.empty().observe(C1_ID, 0, 3)));
 
         assertEquals(1, forwarded.size(), "self-dep is stripped → dependencies empty → forwarded immediately");
         assertEquals(0, buffer.size(), "self-dep record must never enter the buffer");
-        assertEquals(ParsleyVectorClock.empty().observe(T1_ID, 0, 3), causalBroadcast.frontier(),
+        assertEquals(ParsleyVectorClock.empty().observe(C1_ID, 0, 3), causalBroadcast.frontier(),
                 "frontier must advance through the forwarded record");
     }
 
@@ -315,20 +315,20 @@ class ParsleyCausalBroadcastTest {
     void bufferOnRealDependencyWhenMixedWithSelfDependency() {
         ParsleyCausalBroadcast<String, String> causalBroadcast = causalBroadcastWith();
 
-        // T2/0@0 has a self-dep on T2_ID/0@0 AND a real dep on T1_ID/0@5.
-        // After stripping the self-ref, the effective dependencies are {T1_ID/0@5}: still unsatisfied.
+        // C2/0@0 has a self-dep on C2_ID/0@0 AND a real dep on C1_ID/0@5.
+        // After stripping the self-ref, the effective dependencies are {C1_ID/0@5}: still unsatisfied.
         ParsleyVectorClock mixed = ParsleyVectorClock.empty()
-                .observe(T2_ID, 0, 0)
-                .observe(T1_ID, 0, 5);
-        processRecord(causalBroadcast, incomingRecord(T2, 0, mixed));
-        assertTrue(forwarded.isEmpty(), "real dep on T1@5 must still hold the record in the buffer");
+                .observe(C2_ID, 0, 0)
+                .observe(C1_ID, 0, 5);
+        processRecord(causalBroadcast, incomingRecord(C2, 0, mixed));
+        assertTrue(forwarded.isEmpty(), "real dep on C1@5 must still hold the record in the buffer");
         assertEquals(1, buffer.size(), "record must be in the buffer while real dep is unmet");
 
-        // T1@5 arrives — satisfies the real dep; T2 drains.
-        processRecord(causalBroadcast, incomingRecord(T1, 5, ParsleyVectorClock.empty()));
+        // C1@5 arrives — satisfies the real dep; C2 drains.
+        processRecord(causalBroadcast, incomingRecord(C1, 5, ParsleyVectorClock.empty()));
         assertEquals(2, forwarded.size(), "satisfying record and buffered record must both be forwarded");
-        assertEquals(T1, tp(forwarded.get(0)), "satisfying record must be forwarded first");
-        assertEquals(T2, tp(forwarded.get(1)), "buffered record must be released second");
+        assertEquals(C1, tp(forwarded.get(0)), "satisfying record must be forwarded first");
+        assertEquals(C2, tp(forwarded.get(1)), "buffered record must be released second");
     }
 
     /**
@@ -346,23 +346,23 @@ class ParsleyCausalBroadcastTest {
     void holdRecordUntilBackwardSamePartitionDependencyArrives() {
         ParsleyCausalBroadcast<String, String> causalBroadcast = causalBroadcastWith();
 
-        // T1@3 arrives first (natural Kafka order) but is itself held on an unrelated dependency.
-        processRecord(causalBroadcast, incomingRecord(T1, 3, ParsleyVectorClock.empty().observe(T2_ID, 0, 0)));
-        assertTrue(forwarded.isEmpty(), "T1@3 is held on its own, unrelated, unmet dependency");
+        // C1@3 arrives first (natural Kafka order) but is itself held on an unrelated dependency.
+        processRecord(causalBroadcast, incomingRecord(C1, 3, ParsleyVectorClock.empty().observe(C2_ID, 0, 0)));
+        assertTrue(forwarded.isEmpty(), "C1@3 is held on its own, unrelated, unmet dependency");
 
-        // T1@5 depends on T1@3 — an earlier record on its own partition (backward dep, honoured) —
-        // but T1@3 hasn't actually been forwarded yet, only buffered, so T1@5 must wait too.
-        processRecord(causalBroadcast, incomingRecord(T1, 5, ParsleyVectorClock.empty().observe(T1_ID, 0, 3)));
-        assertTrue(forwarded.isEmpty(), "backward same-partition dep must hold T1@5 until T1@3 is actually forwarded");
-        assertEquals(2, buffer.size(), "both T1@3 and T1@5 remain held");
+        // C1@5 depends on C1@3 — an earlier record on its own partition (backward dep, honoured) —
+        // but C1@3 hasn't actually been forwarded yet, only buffered, so C1@5 must wait too.
+        processRecord(causalBroadcast, incomingRecord(C1, 5, ParsleyVectorClock.empty().observe(C1_ID, 0, 3)));
+        assertTrue(forwarded.isEmpty(), "backward same-partition dep must hold C1@5 until C1@3 is actually forwarded");
+        assertEquals(2, buffer.size(), "both C1@3 and C1@5 remain held");
 
-        // T2@0 arrives, satisfying T1@3's own dependency — T1@3 releases, which in turn satisfies T1@5.
-        processRecord(causalBroadcast, incomingRecord(T2, 0, ParsleyVectorClock.empty()));
+        // C2@0 arrives, satisfying C1@3's own dependency — C1@3 releases, which in turn satisfies C1@5.
+        processRecord(causalBroadcast, incomingRecord(C2, 0, ParsleyVectorClock.empty()));
 
-        assertEquals(3, forwarded.size(), "T2@0, then T1@3, then T1@5 must all be forwarded");
-        assertEquals(0L, forwarded.get(0).offset(), "the satisfying record (T2@0) is forwarded first");
-        assertEquals(3L, forwarded.get(1).offset(), "T1@3 releases once its own dependency is met");
-        assertEquals(5L, forwarded.get(2).offset(), "T1@5 releases once T1@3 (its backward dependency) is forwarded");
+        assertEquals(3, forwarded.size(), "C2@0, then C1@3, then C1@5 must all be forwarded");
+        assertEquals(0L, forwarded.get(0).offset(), "the satisfying record (C2@0) is forwarded first");
+        assertEquals(3L, forwarded.get(1).offset(), "C1@3 releases once its own dependency is met");
+        assertEquals(5L, forwarded.get(2).offset(), "C1@5 releases once C1@3 (its backward dependency) is forwarded");
     }
 
     /**
@@ -377,23 +377,23 @@ class ParsleyCausalBroadcastTest {
     void recreatedTopicDoesNotSatisfyDependencyOnOldIncarnation() {
         ParsleyCausalBroadcast<String, String> causalBroadcast = causalBroadcastWith();
 
-        Uuid oldT1 = new Uuid(0L, 1L);
-        Uuid newT1 = new Uuid(0L, 2L);   // recreated — different UUID, same name + partition
+        Uuid oldC1 = new Uuid(0L, 1L);
+        Uuid newC1 = new Uuid(0L, 2L);   // recreated — different UUID, same name + partition
 
-        // T2 depends on t1-0@5 under the OLD incarnation.
-        processRecord(causalBroadcast, incomingRecordWithId(T2, 0, T2_ID,
-                ParsleyVectorClock.empty().observe(oldT1, 0, 5L)));
-        assertTrue(forwarded.isEmpty(), "T2 must be buffered: old-t1 dependency unsatisfied");
+        // C2 depends on c1-0@5 under the OLD incarnation.
+        processRecord(causalBroadcast, incomingRecordWithId(C2, 0, C2_ID,
+                ParsleyVectorClock.empty().observe(oldC1, 0, 5L)));
+        assertTrue(forwarded.isEmpty(), "C2 must be buffered: old-c1 dependency unsatisfied");
 
-        // A record from the NEW t1 incarnation at the same offset must NOT unblock T2.
-        processRecord(causalBroadcast, incomingRecordWithId(T1, 5, newT1, ParsleyVectorClock.empty()));
-        assertEquals(1, forwarded.size(), "only the new-t1 record must be forwarded; T2 stays buffered");
-        assertEquals(T1, tp(forwarded.get(0)), "new-incarnation record must be forwarded");
+        // A record from the NEW c1 incarnation at the same offset must NOT unblock C2.
+        processRecord(causalBroadcast, incomingRecordWithId(C1, 5, newC1, ParsleyVectorClock.empty()));
+        assertEquals(1, forwarded.size(), "only the new-c1 record must be forwarded; C2 stays buffered");
+        assertEquals(C1, tp(forwarded.get(0)), "new-incarnation record must be forwarded");
 
-        // A record from the OLD t1 incarnation arrives — dependency now satisfied.
-        processRecord(causalBroadcast, incomingRecordWithId(T1, 5, oldT1, ParsleyVectorClock.empty()));
-        assertEquals(3, forwarded.size(), "old-t1 record forwarded, then buffered T2 released");
-        assertEquals(T2, tp(forwarded.get(2)), "T2 must be released after old-t1 arrives");
+        // A record from the OLD c1 incarnation arrives — dependency now satisfied.
+        processRecord(causalBroadcast, incomingRecordWithId(C1, 5, oldC1, ParsleyVectorClock.empty()));
+        assertEquals(3, forwarded.size(), "old-c1 record forwarded, then buffered C2 released");
+        assertEquals(C2, tp(forwarded.get(2)), "C2 must be released after old-c1 arrives");
     }
 
     /**
@@ -410,25 +410,25 @@ class ParsleyCausalBroadcastTest {
     void laterSamePartitionRecordForwardsWithoutLeapfroggingAnEarlierHeldOne() {
         ParsleyCausalBroadcast<String, String> causalBroadcast = causalBroadcastWith();
 
-        // T1@5 is held on an unrelated dependency requiring real progress on T2 (not just T2's
-        // baseline — a dependency on T2's very first observed offset would be trivially satisfied
-        // the moment any record on T2 is seen at all, which isn't the scenario under test here).
-        processRecord(causalBroadcast, incomingRecord(T1, 5, ParsleyVectorClock.empty().observe(T2_ID, 0, 10)));
-        assertTrue(forwarded.isEmpty(), "T1@5 must be held while its dependency is unmet");
+        // C1@5 is held on an unrelated dependency requiring real progress on C2 (not just C2's
+        // baseline — a dependency on C2's very first observed offset would be trivially satisfied
+        // the moment any record on C2 is seen at all, which isn't the scenario under test here).
+        processRecord(causalBroadcast, incomingRecord(C1, 5, ParsleyVectorClock.empty().observe(C2_ID, 0, 10)));
+        assertTrue(forwarded.isEmpty(), "C1@5 must be held while its dependency is unmet");
 
-        // A third record depends on exactly T1@5 having been forwarded.
-        processRecord(causalBroadcast, incomingRecord(T2, 1, ParsleyVectorClock.empty().observe(T1_ID, 0, 5)));
-        assertTrue(forwarded.isEmpty(), "T2@1 must be held: T1@5 has not actually been forwarded yet");
+        // A third record depends on exactly C1@5 having been forwarded.
+        processRecord(causalBroadcast, incomingRecord(C2, 1, ParsleyVectorClock.empty().observe(C1_ID, 0, 5)));
+        assertTrue(forwarded.isEmpty(), "C2@1 must be held: C1@5 has not actually been forwarded yet");
 
-        // T1@6 has independently-satisfied (empty) deps and forwards immediately.
-        processRecord(causalBroadcast, incomingRecord(T1, 6, ParsleyVectorClock.empty()));
+        // C1@6 has independently-satisfied (empty) deps and forwards immediately.
+        processRecord(causalBroadcast, incomingRecord(C1, 6, ParsleyVectorClock.empty()));
 
         assertEquals(List.of(6L), forwarded.stream().map(ParsleyMessage::offset).toList(),
-                "T1@6 forwards on its own");
-        assertEquals(4L, causalBroadcast.frontier().offsetFor(T1_ID, 0),
-                "the frontier must stall one below T1@5, never leapfrogging past the still-held record");
+                "C1@6 forwards on its own");
+        assertEquals(4L, causalBroadcast.frontier().offsetFor(C1_ID, 0),
+                "the frontier must stall one below C1@5, never leapfrogging past the still-held record");
         assertEquals(2, buffer.size(),
-                "T1@5 and T2@1 (depending on it) must both remain held — T1@6 forwarding must not release either");
+                "C1@5 and C2@1 (depending on it) must both remain held — C1@6 forwarding must not release either");
     }
 
     /**
@@ -436,39 +436,39 @@ class ParsleyCausalBroadcastTest {
      * single step to absorb every already-forwarded record above it — it does not need those later
      * records to arrive again, since they are already sitting in the forwarded index.
      *
-     * Asserts that releasing T1@5 advances the frontier all the way to T1@8 (which already
-     * forwarded while T1@5 was held) in one step, and that a record depending on T1@8 releases too.
+     * Asserts that releasing C1@5 advances the frontier all the way to C1@8 (which already
+     * forwarded while C1@5 was held) in one step, and that a record depending on C1@8 releases too.
      */
     @Test
     void releasingTheHeldRecordCatchesUpThroughEverythingAlreadyForwardedAboveIt() {
         ParsleyCausalBroadcast<String, String> causalBroadcast = causalBroadcastWith();
 
-        // T1@5 is held on an unrelated dependency.
-        processRecord(causalBroadcast, incomingRecord(T1, 5, ParsleyVectorClock.empty().observe(T2_ID, 0, 0)));
+        // C1@5 is held on an unrelated dependency.
+        processRecord(causalBroadcast, incomingRecord(C1, 5, ParsleyVectorClock.empty().observe(C2_ID, 0, 0)));
 
-        // T1@6, T1@7, T1@8 each forward immediately (independently-satisfied), piling up above the gap.
-        processRecord(causalBroadcast, incomingRecord(T1, 6, ParsleyVectorClock.empty()));
-        processRecord(causalBroadcast, incomingRecord(T1, 7, ParsleyVectorClock.empty()));
-        processRecord(causalBroadcast, incomingRecord(T1, 8, ParsleyVectorClock.empty()));
-        assertEquals(4L, causalBroadcast.frontier().offsetFor(T1_ID, 0), "frontier stalls below T1@5 the whole time");
+        // C1@6, C1@7, C1@8 each forward immediately (independently-satisfied), piling up above the gap.
+        processRecord(causalBroadcast, incomingRecord(C1, 6, ParsleyVectorClock.empty()));
+        processRecord(causalBroadcast, incomingRecord(C1, 7, ParsleyVectorClock.empty()));
+        processRecord(causalBroadcast, incomingRecord(C1, 8, ParsleyVectorClock.empty()));
+        assertEquals(4L, causalBroadcast.frontier().offsetFor(C1_ID, 0), "frontier stalls below C1@5 the whole time");
         forwarded.clear();
 
-        // T1@9 depends on T1@8 (its own immediate predecessor) — held, since the frontier hasn't
-        // actually reached 8 yet (it is stuck behind the still-held T1@5).
-        processRecord(causalBroadcast, incomingRecord(T1, 9, ParsleyVectorClock.empty().observe(T1_ID, 0, 8)));
-        assertTrue(forwarded.isEmpty(), "T1@9 must be held: the frontier hasn't reached 8 yet");
-        assertEquals(2, buffer.size(), "T1@5 and T1@9 both remain held");
+        // C1@9 depends on C1@8 (its own immediate predecessor) — held, since the frontier hasn't
+        // actually reached 8 yet (it is stuck behind the still-held C1@5).
+        processRecord(causalBroadcast, incomingRecord(C1, 9, ParsleyVectorClock.empty().observe(C1_ID, 0, 8)));
+        assertTrue(forwarded.isEmpty(), "C1@9 must be held: the frontier hasn't reached 8 yet");
+        assertEquals(2, buffer.size(), "C1@5 and C1@9 both remain held");
         forwarded.clear();
 
-        // T2@0 satisfies T1@5's own dependency — releasing it closes the gap, and the frontier
-        // should catch up through 6, 7, and 8 in one step, releasing T1@9 too.
-        processRecord(causalBroadcast, incomingRecord(T2, 0, ParsleyVectorClock.empty()));
+        // C2@0 satisfies C1@5's own dependency — releasing it closes the gap, and the frontier
+        // should catch up through 6, 7, and 8 in one step, releasing C1@9 too.
+        processRecord(causalBroadcast, incomingRecord(C2, 0, ParsleyVectorClock.empty()));
 
-        assertEquals(9L, causalBroadcast.frontier().offsetFor(T1_ID, 0),
+        assertEquals(9L, causalBroadcast.frontier().offsetFor(C1_ID, 0),
                 "the frontier must jump straight to 9, absorbing every already-forwarded record above the gap");
         assertEquals(List.of(0L, 5L, 9L), forwarded.stream().map(ParsleyMessage::offset).toList(),
-                "T2@0 forwards, releasing T1@5, which in turn releases T1@9");
-        assertTrue(forwardedIndex.forwardedAfter(T1_ID, 0, 4).isEmpty(),
+                "C2@0 forwards, releasing C1@5, which in turn releases C1@9");
+        assertTrue(forwardedIndex.forwardedAfter(C1_ID, 0, 4).isEmpty(),
                 "every absorbed offset (5-9) must be pruned from the forwarded index, not left to "
                         + "accumulate — it is no longer needed once folded into the frontier");
     }
@@ -478,9 +478,9 @@ class ParsleyCausalBroadcastTest {
      * every buffered record whose dependency falls <em>anywhere</em> in that advanced range must
      * be released in the same cascade — not only records waiting on exactly the new boundary.
      *
-     * <p>T1@5 holds the gap while T1@6–T1@12 pile up in the forwarded index. Five records each
-     * wait on a different T1/0 offset inside that range (8, 9, 10, 11, 12). When T2@0 closes the
-     * gap and releases T1@5, the frontier walks from 4 to 12 in one step, and the candidate-index
+     * <p>C1@5 holds the gap while C1@6–C1@12 pile up in the forwarded index. Five records each
+     * wait on a different C1/0 offset inside that range (8, 9, 10, 11, 12). When C2@0 closes the
+     * gap and releases C1@5, the frontier walks from 4 to 12 in one step, and the candidate-index
      * scan of {@code [0, 12]} must find all five — not just the record waiting on 12.
      *
      * <p>Asserts all five are forwarded in the same cascade, without any eviction trigger, and
@@ -490,37 +490,37 @@ class ParsleyCausalBroadcastTest {
     void frontierJumpReleasesAllWaitingRecordsAcrossTheJumpedRange() {
         ParsleyCausalBroadcast<String, String> causalBroadcast = causalBroadcastWith();
 
-        // T1@5 holds the gap; T1's baseline is seeded to 4 (offset - 1).
-        processRecord(causalBroadcast, incomingRecord(T1, 5, ParsleyVectorClock.empty().observe(T2_ID, 0, 0)));
-        assertEquals(4L, causalBroadcast.frontier().offsetFor(T1_ID, 0),
-                "baseline must seed T1/0 frontier at offset - 1 = 4");
+        // C1@5 holds the gap; C1's baseline is seeded to 4 (offset - 1).
+        processRecord(causalBroadcast, incomingRecord(C1, 5, ParsleyVectorClock.empty().observe(C2_ID, 0, 0)));
+        assertEquals(4L, causalBroadcast.frontier().offsetFor(C1_ID, 0),
+                "baseline must seed C1/0 frontier at offset - 1 = 4");
 
-        // T1@6–T1@12 forward immediately, piling up in the forwarded index above the gap.
+        // C1@6–C1@12 forward immediately, piling up in the forwarded index above the gap.
         for (long offset = 6; offset <= 12; offset++) {
-            processRecord(causalBroadcast, incomingRecord(T1, offset, ParsleyVectorClock.empty()));
+            processRecord(causalBroadcast, incomingRecord(C1, offset, ParsleyVectorClock.empty()));
         }
-        assertEquals(4L, causalBroadcast.frontier().offsetFor(T1_ID, 0),
-                "frontier must stall at 4 while the gap at T1@5 remains open");
+        assertEquals(4L, causalBroadcast.frontier().offsetFor(C1_ID, 0),
+                "frontier must stall at 4 while the gap at C1@5 remains open");
 
-        // Five records, each waiting on a distinct T1/0 offset spanning the entire jump range.
-        processRecord(causalBroadcast, incomingRecord(T1, 13, ParsleyVectorClock.empty().observe(T1_ID, 0, 8)));
-        processRecord(causalBroadcast, incomingRecord(T1, 14, ParsleyVectorClock.empty().observe(T1_ID, 0, 9)));
-        processRecord(causalBroadcast, incomingRecord(T1, 15, ParsleyVectorClock.empty().observe(T1_ID, 0, 10)));
-        processRecord(causalBroadcast, incomingRecord(T1, 16, ParsleyVectorClock.empty().observe(T1_ID, 0, 11)));
-        processRecord(causalBroadcast, incomingRecord(T1, 17, ParsleyVectorClock.empty().observe(T1_ID, 0, 12)));
-        assertEquals(6, buffer.size(), "T1@5 and T1@13–T1@17 must all be held before the trigger");
+        // Five records, each waiting on a distinct C1/0 offset spanning the entire jump range.
+        processRecord(causalBroadcast, incomingRecord(C1, 13, ParsleyVectorClock.empty().observe(C1_ID, 0, 8)));
+        processRecord(causalBroadcast, incomingRecord(C1, 14, ParsleyVectorClock.empty().observe(C1_ID, 0, 9)));
+        processRecord(causalBroadcast, incomingRecord(C1, 15, ParsleyVectorClock.empty().observe(C1_ID, 0, 10)));
+        processRecord(causalBroadcast, incomingRecord(C1, 16, ParsleyVectorClock.empty().observe(C1_ID, 0, 11)));
+        processRecord(causalBroadcast, incomingRecord(C1, 17, ParsleyVectorClock.empty().observe(C1_ID, 0, 12)));
+        assertEquals(6, buffer.size(), "C1@5 and C1@13–C1@17 must all be held before the trigger");
         forwarded.clear();
 
-        // T2@0 closes the gap: T1@5 releases, the frontier walks to 12 in one step, and all five
+        // C2@0 closes the gap: C1@5 releases, the frontier walks to 12 in one step, and all five
         // waiting records must be released in the same cascade — none left for eviction to handle.
-        processRecord(causalBroadcast, incomingRecord(T2, 0, ParsleyVectorClock.empty()));
+        processRecord(causalBroadcast, incomingRecord(C2, 0, ParsleyVectorClock.empty()));
 
         assertEquals(
                 List.of(0L, 5L, 13L, 14L, 15L, 16L, 17L),
                 forwarded.stream().map(ParsleyMessage::offset).toList(),
                 "after the 4→12 frontier jump every record waiting in the range 8–12 must be "
                         + "released eagerly — range scan must cover all newly-satisfied offsets, not just 12");
-        assertEquals(17L, causalBroadcast.frontier().offsetFor(T1_ID, 0),
+        assertEquals(17L, causalBroadcast.frontier().offsetFor(C1_ID, 0),
                 "frontier must advance through the full release cascade to 17");
         assertEquals(0, buffer.size(),
                 "buffer must be empty — all releases must be driven by the frontier advance, not eviction");
@@ -531,8 +531,8 @@ class ParsleyCausalBroadcastTest {
      * nor the top of) a frontier jump range must be released in the same cascade as the jump —
      * the candidate-index range scan must cover the whole range, not just the exact new boundary.
      *
-     * <p>The frontier jumps 4 → 12 when T2@0 releases T1@5, but the single waiting record depends
-     * on T1/0 at offset 10, which is interior to the jumped range. It must be released immediately
+     * <p>The frontier jumps 4 → 12 when C2@0 releases C1@5, but the single waiting record depends
+     * on C1/0 at offset 10, which is interior to the jumped range. It must be released immediately
      * in that cascade without any eviction trigger.
      *
      * <p>Asserts the intermediate-offset record is forwarded and the buffer is empty afterward.
@@ -541,26 +541,26 @@ class ParsleyCausalBroadcastTest {
     void frontierJumpReleasesRecordWaitingOnIntermediateOffsetNotJustFinalOffset() {
         ParsleyCausalBroadcast<String, String> causalBroadcast = causalBroadcastWith();
 
-        // T1@5 holds the gap; T1@6–T1@12 pile up in the forwarded index above it.
-        processRecord(causalBroadcast, incomingRecord(T1, 5, ParsleyVectorClock.empty().observe(T2_ID, 0, 0)));
+        // C1@5 holds the gap; C1@6–C1@12 pile up in the forwarded index above it.
+        processRecord(causalBroadcast, incomingRecord(C1, 5, ParsleyVectorClock.empty().observe(C2_ID, 0, 0)));
         for (long offset = 6; offset <= 12; offset++) {
-            processRecord(causalBroadcast, incomingRecord(T1, offset, ParsleyVectorClock.empty()));
+            processRecord(causalBroadcast, incomingRecord(C1, offset, ParsleyVectorClock.empty()));
         }
-        assertEquals(4L, causalBroadcast.frontier().offsetFor(T1_ID, 0),
+        assertEquals(4L, causalBroadcast.frontier().offsetFor(C1_ID, 0),
                 "frontier must stall at 4 until the gap is closed");
 
         // One record waiting on offset 10 — strictly inside the 4→12 jump range.
-        processRecord(causalBroadcast, incomingRecord(T1, 13, ParsleyVectorClock.empty().observe(T1_ID, 0, 10)));
-        assertEquals(2, buffer.size(), "T1@5 and T1@13 must both be held");
+        processRecord(causalBroadcast, incomingRecord(C1, 13, ParsleyVectorClock.empty().observe(C1_ID, 0, 10)));
+        assertEquals(2, buffer.size(), "C1@5 and C1@13 must both be held");
         forwarded.clear();
 
-        // T2@0 closes the gap; frontier jumps 4→12. T1@13 (waiting on 10, not 12) must be found.
-        processRecord(causalBroadcast, incomingRecord(T2, 0, ParsleyVectorClock.empty()));
+        // C2@0 closes the gap; frontier jumps 4→12. C1@13 (waiting on 10, not 12) must be found.
+        processRecord(causalBroadcast, incomingRecord(C2, 0, ParsleyVectorClock.empty()));
 
         assertEquals(
                 List.of(0L, 5L, 13L),
                 forwarded.stream().map(ParsleyMessage::offset).toList(),
-                "T1@13 depends on T1/0 offset 10 (interior to the 4→12 jump) and must be released "
+                "C1@13 depends on C1/0 offset 10 (interior to the 4→12 jump) and must be released "
                         + "eagerly — offset 10 must be found by the range scan, not missed because "
                         + "the frontier landed on 12");
         assertEquals(0, buffer.size(),
@@ -585,29 +585,29 @@ class ParsleyCausalBroadcastTest {
         ParsleyCausalBroadcast<String, String> first = ParsleyTestFixtures.broadcast(ParsleyVectorClock.empty(), sharedBuffer, new MockCandidateIndex(),
                 sharedForwardedIndex, ParsleyMetrics.NOOP);
 
-        // T1@5 is held; T1@6, T1@7, T1@8 each forward immediately, piling up above the gap.
-        first.receive(incomingRecord(T1, 5, ParsleyVectorClock.empty().observe(T2_ID, 0, 0)));
-        first.receive(incomingRecord(T1, 6, ParsleyVectorClock.empty()));
-        first.receive(incomingRecord(T1, 7, ParsleyVectorClock.empty()));
-        first.receive(incomingRecord(T1, 8, ParsleyVectorClock.empty()));
+        // C1@5 is held; C1@6, C1@7, C1@8 each forward immediately, piling up above the gap.
+        first.receive(incomingRecord(C1, 5, ParsleyVectorClock.empty().observe(C2_ID, 0, 0)));
+        first.receive(incomingRecord(C1, 6, ParsleyVectorClock.empty()));
+        first.receive(incomingRecord(C1, 7, ParsleyVectorClock.empty()));
+        first.receive(incomingRecord(C1, 8, ParsleyVectorClock.empty()));
         ParsleyVectorClock persistedFrontier = first.frontier();
-        assertEquals(4L, persistedFrontier.offsetFor(T1_ID, 0),
+        assertEquals(4L, persistedFrontier.offsetFor(C1_ID, 0),
                 "frontier persisted at the gap, as it would be before a crash");
 
         // Simulate a restart: a brand-new core instance, seeded with the persisted frontier and a
-        // buffer restored from the changelog (still holding T1@5), and the SAME forwarded-index
+        // buffer restored from the changelog (still holding C1@5), and the SAME forwarded-index
         // contents (standing in for "restored from its own changelog") — no separate "ceiling"
         // value is needed; the forwarded index alone remembers that 6, 7, and 8 already went out.
         ParsleyCausalBroadcast<String, String> restarted = ParsleyTestFixtures.broadcast(persistedFrontier, sharedBuffer, new MockCandidateIndex(),
                 sharedForwardedIndex, ParsleyMetrics.NOOP);
 
         List<ParsleyMessage<String, String>> released =
-                restarted.receive(incomingRecord(T2, 0, ParsleyVectorClock.empty())).delivered();
+                restarted.receive(incomingRecord(C2, 0, ParsleyVectorClock.empty())).delivered();
 
-        assertEquals(8L, restarted.frontier().offsetFor(T1_ID, 0),
+        assertEquals(8L, restarted.frontier().offsetFor(C1_ID, 0),
                 "the restarted instance must still catch up through 6, 7, and 8 via the surviving forwarded index");
         assertEquals(List.of(0L, 5L), released.stream().map(ParsleyMessage::offset).toList(),
-                "T2@0 forwards and releases T1@5 on the restarted instance");
+                "C2@0 forwards and releases C1@5 on the restarted instance");
     }
 
     /**
@@ -620,7 +620,7 @@ class ParsleyCausalBroadcastTest {
      * delivered. That is a harmless at-least-once duplicate on the next drain, never the reverse (a
      * permanently stranded frontier no future dependency on that coordinate could ever cross).
      *
-     * <p>Asserts the "crashed" instance's frontier already reflects T2@0 as delivered even though it
+     * <p>Asserts the "crashed" instance's frontier already reflects C2@0 as delivered even though it
      * is still sitting in the buffer, and that a "restarted" instance redelivers it (a duplicate)
      * rather than wedging forever.
      */
@@ -631,28 +631,28 @@ class ParsleyCausalBroadcastTest {
         ParsleyCausalBroadcast<String, String> beforeCrash = ParsleyTestFixtures.broadcast(ParsleyVectorClock.empty(), crashyBuffer,
                 new MockCandidateIndex(), new MockForwardedIndex(), ParsleyMetrics.NOOP);
 
-        // T2@0 depends on T1@5 and is held (sequence 0 in the buffer).
-        beforeCrash.receive(incomingRecord(T2, 0, ParsleyVectorClock.empty().observe(T1_ID, 0, 5)));
-        assertEquals(1, crashyBuffer.size(), "T2@0 must be held");
+        // C2@0 depends on C1@5 and is held (sequence 0 in the buffer).
+        beforeCrash.receive(incomingRecord(C2, 0, ParsleyVectorClock.empty().observe(C1_ID, 0, 5)));
+        assertEquals(1, crashyBuffer.size(), "C2@0 must be held");
 
-        // T1@5 satisfies it: propagate() releases T2@0, persisting the frontier advance before its
+        // C1@5 satisfies it: propagate() releases C2@0, persisting the frontier advance before its
         // (swallowed) buffer removal — simulating a crash landing in that exact window.
         List<ParsleyMessage<String, String>> releasedBeforeCrash =
-                beforeCrash.receive(incomingRecord(T1, 5, ParsleyVectorClock.empty())).delivered();
+                beforeCrash.receive(incomingRecord(C1, 5, ParsleyVectorClock.empty())).delivered();
 
         assertEquals(List.of(5L, 0L), releasedBeforeCrash.stream().map(ParsleyMessage::offset).toList(),
-                "both T1@5 and T2@0 are delivered in-process before the simulated crash");
-        assertEquals(0L, beforeCrash.frontier().offsetFor(T2_ID, 0),
-                "the frontier already recorded T2@0 as delivered — persisted before the swallowed removal");
+                "both C1@5 and C2@0 are delivered in-process before the simulated crash");
+        assertEquals(0L, beforeCrash.frontier().offsetFor(C2_ID, 0),
+                "the frontier already recorded C2@0 as delivered — persisted before the swallowed removal");
         assertEquals(1, crashyBuffer.size(),
-                "T2@0's buffer removal never landed (the simulated crash), so it is still sitting in "
+                "C2@0's buffer removal never landed (the simulated crash), so it is still sitting in "
                         + "the buffer");
 
         // "Restart": a fresh core over the persisted (torn) frontier and a normal buffer store
         // standing in for the buffer changelog restoring the same still-held record.
         ParsleyVectorClock persistedFrontier = beforeCrash.frontier();
         MockBufferStore<String, String> restoredBuffer = new MockBufferStore<>();
-        restoredBuffer.add(incomingRecord(T2, 0, ParsleyVectorClock.empty().observe(T1_ID, 0, 5)), 0L);
+        restoredBuffer.add(incomingRecord(C2, 0, ParsleyVectorClock.empty().observe(C1_ID, 0, 5)), 0L);
 
         ParsleyCausalBroadcast<String, String> restarted = ParsleyTestFixtures.broadcast(persistedFrontier, restoredBuffer,
                 new MockCandidateIndex(), new MockForwardedIndex(), ParsleyMetrics.NOOP);
@@ -660,9 +660,9 @@ class ParsleyCausalBroadcastTest {
         List<ParsleyMessage<String, String>> releasedAfterRestart = restarted.drainAfterRestore().delivered();
 
         assertEquals(List.of(0L), releasedAfterRestart.stream().map(ParsleyMessage::offset).toList(),
-                "the restarted instance redelivers T2@0 — a harmless at-least-once duplicate — rather "
+                "the restarted instance redelivers C2@0 — a harmless at-least-once duplicate — rather "
                         + "than wedging forever");
-        assertEquals(0, restoredBuffer.size(), "T2@0 must finally leave the buffer after the redelivery");
+        assertEquals(0, restoredBuffer.size(), "C2@0 must finally leave the buffer after the redelivery");
     }
 
     /**
@@ -670,25 +670,25 @@ class ParsleyCausalBroadcastTest {
      * release an already-buffered record — before the very record that triggered the baseline seed
      * is even dispositioned by its own dominates check.
      *
-     * Asserts that T2@0, depending on a coordinate the core has never seen, is released as a
-     * direct effect of T1@5 establishing that coordinate's baseline — and is forwarded ahead of
-     * T1@5 itself in the returned order.
+     * Asserts that C2@0, depending on a coordinate the core has never seen, is released as a
+     * direct effect of C1@5 establishing that coordinate's baseline — and is forwarded ahead of
+     * C1@5 itself in the returned order.
      */
     @Test
     void establishingTheBaselineForAFirstSeenCoordinateCanItselfReleaseAWaitingRecord() {
         ParsleyCausalBroadcast<String, String> causalBroadcast = causalBroadcastWith();
 
-        // T2@0 depends on T1_ID/0@4 — a coordinate this core has never observed at all yet.
-        processRecord(causalBroadcast, incomingRecord(T2, 0, ParsleyVectorClock.empty().observe(T1_ID, 0, 4)));
-        assertTrue(forwarded.isEmpty(), "T2@0 must be held: T1/0 has never been observed");
+        // C2@0 depends on C1_ID/0@4 — a coordinate this core has never observed at all yet.
+        processRecord(causalBroadcast, incomingRecord(C2, 0, ParsleyVectorClock.empty().observe(C1_ID, 0, 4)));
+        assertTrue(forwarded.isEmpty(), "C2@0 must be held: C1/0 has never been observed");
 
-        // T1@5 is the very first record this core ever sees on T1/0. Establishing its baseline
-        // (frontier = 4) is itself enough to satisfy T2@0's dependency — before T1@5 is even
+        // C1@5 is the very first record this core ever sees on C1/0. Establishing its baseline
+        // (frontier = 4) is itself enough to satisfy C2@0's dependency — before C1@5 is even
         // dispositioned by its own dominates check.
-        processRecord(causalBroadcast, incomingRecord(T1, 5, ParsleyVectorClock.empty()));
+        processRecord(causalBroadcast, incomingRecord(C1, 5, ParsleyVectorClock.empty()));
 
         assertEquals(List.of(0L, 5L), forwarded.stream().map(ParsleyMessage::offset).toList(),
-                "establishing T1's baseline must release T2@0 before T1@5 itself forwards");
+                "establishing C1's baseline must release C2@0 before C1@5 itself forwards");
         assertEquals(0, buffer.size(), "both records must have left the buffer");
     }
 
@@ -706,15 +706,15 @@ class ParsleyCausalBroadcastTest {
      */
     @Test
     void baselineSeedNeverRefiresWhenTheRestoredFrontierAlreadyHasRealProgress() {
-        ParsleyVectorClock restoredFrontier = ParsleyVectorClock.empty().observe(T1_ID, 0, 0);
+        ParsleyVectorClock restoredFrontier = ParsleyVectorClock.empty().observe(C1_ID, 0, 0);
         ParsleyCausalBroadcast<String, String> causalBroadcast = ParsleyTestFixtures.broadcast(restoredFrontier, buffer, new MockCandidateIndex(),
                 forwardedIndex, ParsleyMetrics.NOOP);
 
-        // The first record this (restarted) instance ever sees on T1/0 is offset 10 — far above
+        // The first record this (restarted) instance ever sees on C1/0 is offset 10 — far above
         // the restored frontier of 0. There is a real, unaccounted-for gap from 1 through 9.
-        processRecord(causalBroadcast, incomingRecord(T1, 10, ParsleyVectorClock.empty()));
+        processRecord(causalBroadcast, incomingRecord(C1, 10, ParsleyVectorClock.empty()));
 
-        assertEquals(0L, causalBroadcast.frontier().offsetFor(T1_ID, 0),
+        assertEquals(0L, causalBroadcast.frontier().offsetFor(C1_ID, 0),
                 "the frontier must stay at the restored value (0); it must not be corrupted into "
                         + "treating the unaccounted-for gap from 1-9 as moot just because "
                         + "seenCoordinates was fresh");
@@ -722,56 +722,56 @@ class ParsleyCausalBroadcastTest {
 
     /**
      * Restart regression: the "coordinate marked seen even if the record is held" guard must survive
-     * a restart. Pre-crash, T1@0 is held (deps on a third coordinate that never arrives before the
-     * crash), so nothing on T1 was ever delivered and the persisted frontier has NO entry for T1 (the
-     * offset-0 seed is a no-op); a record d on T2 depending on T1@0 is held too — correctly, since
+     * a restart. Pre-crash, C1@0 is held (deps on a third coordinate that never arrives before the
+     * crash), so nothing on C1 was ever delivered and the persisted frontier has NO entry for C1 (the
+     * offset-0 seed is a no-op); a record d on C2 depending on C1@0 is held too — correctly, since
      * its cause has not been delivered. After a restart (a fresh core over the restored buffer,
-     * with a fresh in-memory seen-set), the first new record on T1 arrives at offset 5. Without the
-     * core constructor re-marking T1 seen from the restored buffer, the baseline seed would fold
+     * with a fresh in-memory seen-set), the first new record on C1 arrives at offset 5. Without the
+     * core constructor re-marking C1 seen from the restored buffer, the baseline seed would fold
      * offsets 0-4 into the frontier as "outside the core's purview" and release d before its
-     * still-held cause T1@0 — an effect-before-cause delivery of exactly the kind the library exists
+     * still-held cause C1@0 — an effect-before-cause delivery of exactly the kind the library exists
      * to prevent.
      *
-     * Asserts the post-restart record does not re-trigger the seed (the T1 frontier stays at -1, the
+     * Asserts the post-restart record does not re-trigger the seed (the C1 frontier stays at -1, the
      * gap at 0 intact), d stays held, and the whole chain then drains in causal order — d only after
-     * T1@0 — once the third coordinate finally delivers.
+     * C1@0 — once the third coordinate finally delivers.
      */
     @Test
     void restartDoesNotReSeedPastAStillHeldRecordAndReleaseItsDependents() {
-        TopicPartition t3 = new TopicPartition("t3", 0);
+        TopicPartition c3 = new TopicPartition("c3", 0);
         MockBufferStore<String, String> sharedBuffer = new MockBufferStore<>();
         MockForwardedIndex sharedIndex = new MockForwardedIndex();
         ParsleyCausalBroadcast<String, String> first = ParsleyTestFixtures.broadcast(ParsleyVectorClock.empty(), sharedBuffer,
                 new MockCandidateIndex(), sharedIndex, ParsleyMetrics.NOOP);
 
-        // T1@0 held on T3@0 (never arriving pre-crash); d = T2@0 held on its cause T1@0.
-        first.receive(incomingRecord(T1, 0, ParsleyVectorClock.empty().observe(T3_ID, 0, 0)));
-        first.receive(incomingRecord(T2, 0, ParsleyVectorClock.empty().observe(T1_ID, 0, 0)));
+        // C1@0 held on C3@0 (never arriving pre-crash); d = C2@0 held on its cause C1@0.
+        first.receive(incomingRecord(C1, 0, ParsleyVectorClock.empty().observe(C3_ID, 0, 0)));
+        first.receive(incomingRecord(C2, 0, ParsleyVectorClock.empty().observe(C1_ID, 0, 0)));
         assertEquals(2, sharedBuffer.size(), "both records must be held before the crash");
-        assertEquals(-1L, first.frontier().offsetFor(T1_ID, 0),
-                "nothing on T1 was delivered, so the persisted frontier must have no T1 entry");
+        assertEquals(-1L, first.frontier().offsetFor(C1_ID, 0),
+                "nothing on C1 was delivered, so the persisted frontier must have no C1 entry");
 
         // Restart: fresh core (fresh seen-set) over the restored buffer and persisted frontier.
         ParsleyCausalBroadcast<String, String> restarted = ParsleyTestFixtures.broadcast(first.frontier(), sharedBuffer,
                 new MockCandidateIndex(), sharedIndex, ParsleyMetrics.NOOP);
 
-        // The first post-restart record on T1 arrives at offset 5, dependency-free.
-        List<ParsleyMessage<String, String>> onT1At5 =
-                restarted.receive(incomingRecord(T1, 5, ParsleyVectorClock.empty())).delivered();
+        // The first post-restart record on C1 arrives at offset 5, dependency-free.
+        List<ParsleyMessage<String, String>> onC1At5 =
+                restarted.receive(incomingRecord(C1, 5, ParsleyVectorClock.empty())).delivered();
 
-        assertEquals(List.of(5L), onT1At5.stream().map(ParsleyMessage::offset).toList(),
-                "only T1@5 itself may deliver; d must stay held because its cause T1@0 is still held");
-        assertEquals(-1L, restarted.frontier().offsetFor(T1_ID, 0),
-                "the baseline seed must not re-fire past the still-held T1@0: the contiguous frontier "
+        assertEquals(List.of(5L), onC1At5.stream().map(ParsleyMessage::offset).toList(),
+                "only C1@5 itself may deliver; d must stay held because its cause C1@0 is still held");
+        assertEquals(-1L, restarted.frontier().offsetFor(C1_ID, 0),
+                "the baseline seed must not re-fire past the still-held C1@0: the contiguous frontier "
                         + "keeps the gap at offset 0 open");
-        assertEquals(2, sharedBuffer.size(), "T1@0 and d must both still be held");
+        assertEquals(2, sharedBuffer.size(), "C1@0 and d must both still be held");
 
-        // T3@0 finally arrives: T1@0 releases, then d — cause strictly before effect.
+        // C3@0 finally arrives: C1@0 releases, then d — cause strictly before effect.
         List<ParsleyMessage<String, String>> drained = restarted.receive(
-                incomingRecordWithId(t3, 0, T3_ID, ParsleyVectorClock.empty())).delivered();
+                incomingRecordWithId(c3, 0, C3_ID, ParsleyVectorClock.empty())).delivered();
 
-        assertEquals(List.of("t3", "t1", "t2"), drained.stream().map(ParsleyMessage::topic).toList(),
-                "the chain must drain in causal order: T3@0, then T1@0, then its dependent d");
+        assertEquals(List.of("c3", "c1", "c2"), drained.stream().map(ParsleyMessage::topic).toList(),
+                "the chain must drain in causal order: C3@0, then C1@0, then its dependent d");
         assertEquals(0, sharedBuffer.size(), "everything must have left the buffer");
     }
 
@@ -784,19 +784,19 @@ class ParsleyCausalBroadcastTest {
      */
     @Test
     void poisonFailsTheTask() {
-        TopicPartition t4 = new TopicPartition("t4", 0);
-        Uuid t4Id = Uuid.randomUuid();
+        TopicPartition c4 = new TopicPartition("c4", 0);
+        Uuid c4Id = Uuid.randomUuid();
         PoisonableBufferStore<String, String> buffer = new PoisonableBufferStore<>();
         ParsleyCausalBroadcast<String, String> causalBroadcast = ParsleyTestFixtures.broadcast(ParsleyVectorClock.empty(), buffer,
                 new MockCandidateIndex(), new MockForwardedIndex(), ParsleyMetrics.NOOP,
                 System::currentTimeMillis);
 
-        ParsleyVectorClock needsT4 = ParsleyVectorClock.empty().observe(t4Id, 0, 0);
-        causalBroadcast.receive(incomingRecordWithId(T1, 5, T1_ID, needsT4));
+        ParsleyVectorClock needsC4 = ParsleyVectorClock.empty().observe(c4Id, 0, 0);
+        causalBroadcast.receive(incomingRecordWithId(C1, 5, C1_ID, needsC4));
         buffer.poison(0L); // the only sequence added so far
 
         assertThrows(CausalBufferDeserializationException.class,
-                () -> causalBroadcast.receive(incomingRecordWithId(t4, 0, t4Id, ParsleyVectorClock.empty())),
+                () -> causalBroadcast.receive(incomingRecordWithId(c4, 0, c4Id, ParsleyVectorClock.empty())),
                 "a poison record on the forward path must fail the task");
         assertEquals(1, buffer.size(), "the poisoned record must remain in the buffer for recovery, not be removed");
     }
@@ -826,17 +826,17 @@ class ParsleyCausalBroadcastTest {
             @Override public void reportHeldAboveHighestReceived(int count) {}
             @Override public void reportState(int depth, OptionalLong oldest) {}
         };
-        // Only T1 is consumed; T2 and T3 are coordinates this node has no channel for at all.
-        ParsleyVectorClock.CoordinatePredicate onlyT1 = (topicId, partition) -> partition == 0 && topicId.equals(T1_ID);
+        // Only C1 is consumed; C2 and C3 are coordinates this node has no channel for at all.
+        ParsleyVectorClock.CoordinatePredicate onlyC1 = (topicId, partition) -> partition == 0 && topicId.equals(C1_ID);
         MockBufferStore<String, String> localBuffer = new MockBufferStore<>();
         ParsleyCausalBroadcast<String, String> causalBroadcast = ParsleyTestFixtures.broadcast(
                 ParsleyTestFixtures.channels(ParsleyVectorClock.empty(), new MockForwardedIndex()),
-                localBuffer, new MockCandidateIndex(), capturing, System::currentTimeMillis, onlyT1);
+                localBuffer, new MockCandidateIndex(), capturing, System::currentTimeMillis, onlyC1);
 
-        ParsleyVectorClock needsT2AndT3 =
-                ParsleyVectorClock.empty().observe(T2_ID, 0, 0).observe(T3_ID, 0, 4);
+        ParsleyVectorClock needsC2AndC3 =
+                ParsleyVectorClock.empty().observe(C2_ID, 0, 0).observe(C3_ID, 0, 4);
         ParsleyCausalBroadcast.Outcome<String, String> outcome =
-                causalBroadcast.receive(incomingRecord(T1, 0, needsT2AndT3));
+                causalBroadcast.receive(incomingRecord(C1, 0, needsC2AndC3));
 
         assertEquals(1, outcome.delivered().size(),
                 "dependencies on unconsumed coordinates must fall to the ignore branch, not gate "
@@ -857,24 +857,24 @@ class ParsleyCausalBroadcastTest {
      */
     @Test
     void ignoredCoordinateNeverSatisfiesTheConsumedBranch() {
-        // T1 and T2 are consumed; T3 is a coordinate this node has no channel for.
+        // C1 and C2 are consumed; C3 is a coordinate this node has no channel for.
         ParsleyVectorClock.CoordinatePredicate scope = (topicId, partition) ->
-                partition == 0 && (topicId.equals(T1_ID) || topicId.equals(T2_ID));
+                partition == 0 && (topicId.equals(C1_ID) || topicId.equals(C2_ID));
         MockBufferStore<String, String> localBuffer = new MockBufferStore<>();
         ParsleyCausalBroadcast<String, String> causalBroadcast = ParsleyTestFixtures.broadcast(
                 ParsleyTestFixtures.channels(ParsleyVectorClock.empty(), new MockForwardedIndex()),
                 localBuffer, new MockCandidateIndex(), ParsleyMetrics.NOOP, System::currentTimeMillis, scope);
 
-        // T3@9 is unconsumed (ignored); T2@0 is consumed and not yet delivered here (gates).
-        ParsleyVectorClock deps = ParsleyVectorClock.empty().observe(T3_ID, 0, 9).observe(T2_ID, 0, 0);
+        // C3@9 is unconsumed (ignored); C2@0 is consumed and not yet delivered here (gates).
+        ParsleyVectorClock deps = ParsleyVectorClock.empty().observe(C3_ID, 0, 9).observe(C2_ID, 0, 0);
         ParsleyCausalBroadcast.Outcome<String, String> held =
-                causalBroadcast.receive(incomingRecord(T1, 0, deps));
+                causalBroadcast.receive(incomingRecord(C1, 0, deps));
         assertEquals(0, held.delivered().size(),
-                "the unmet consumed dependency must hold the record — ignoring T3 must not admit it");
+                "the unmet consumed dependency must hold the record — ignoring C3 must not admit it");
         assertEquals(1, localBuffer.size(), "the held record must be buffered on the consumed branch");
 
         ParsleyCausalBroadcast.Outcome<String, String> released =
-                causalBroadcast.receive(incomingRecord(T2, 0, ParsleyVectorClock.empty()));
+                causalBroadcast.receive(incomingRecord(C2, 0, ParsleyVectorClock.empty()));
         assertEquals(2, released.delivered().size(),
                 "local delivery of the consumed cause must release the held record");
     }
@@ -897,12 +897,12 @@ class ParsleyCausalBroadcastTest {
         Uuid sinkId = Uuid.randomUuid();
         List<Set<TopicPartition>> waits = new ArrayList<>();
         ParsleyChannels channels = ParsleyTestFixtures.channels(ParsleyVectorClock.empty(), forwardedIndex);
-        channels.bindOwnOutputSource(consumer -> consumer.accept("out", 0, 11),
-                (except, timeoutMs) -> waits.add(except), Map.of("out", sinkId), 1_000L);
+        channels.bindOwnOutputSource(consumer -> consumer.accept("c5", 0, 11),
+                (except, timeoutMs) -> waits.add(except), Map.of("c5", sinkId), 1_000L);
         ParsleyCausalBroadcast<String, String> causalBroadcast = ParsleyTestFixtures.broadcast(
                 channels, buffer, new MockCandidateIndex(), ParsleyMetrics.NOOP,
                 System::currentTimeMillis);
-        causalBroadcast.receive(incomingRecord(T1, 3, ParsleyVectorClock.empty()));
+        causalBroadcast.receive(incomingRecord(C1, 3, ParsleyVectorClock.empty()));
 
         Record<String, String> stamped =
                 causalBroadcast.broadcast(new Record<>("k", "v", 0L, ParsleyHeader.mutableHeaders()));
@@ -958,7 +958,7 @@ class ParsleyCausalBroadcastTest {
                 channels, buffer, new MockCandidateIndex(), ParsleyMetrics.NOOP,
                 System::currentTimeMillis);
 
-        Set<TopicPartition> destinations = Set.of(new TopicPartition("out-a", 3), new TopicPartition("out-b", 3));
+        Set<TopicPartition> destinations = Set.of(new TopicPartition("c6", 3), new TopicPartition("c7", 3));
         causalBroadcast.broadcast(new Record<>("k", "v", 0L, ParsleyHeader.mutableHeaders()), destinations);
 
         assertEquals(List.of(destinations), waits,
@@ -979,11 +979,11 @@ class ParsleyCausalBroadcastTest {
         ParsleyCausalBroadcast<String, String> causalBroadcast = ParsleyTestFixtures.broadcast(
                 channels, buffer, new MockCandidateIndex(), ParsleyMetrics.NOOP,
                 System::currentTimeMillis,
-                (topicId, partition) -> partition == 0 && topicId.equals(T1_ID),
+                (topicId, partition) -> partition == 0 && topicId.equals(C1_ID),
                 (topicId, partition) -> topicId.equals(sinkId));
 
         ParsleyCausalBroadcast.Outcome<String, String> outcome = causalBroadcast.receive(
-                incomingRecord(T1, 0, ParsleyVectorClock.empty().observe(sinkId, 0, 5)));
+                incomingRecord(C1, 0, ParsleyVectorClock.empty().observe(sinkId, 0, 5)));
 
         assertEquals(1, outcome.delivered().size(),
                 "the reflected claim on an unconsumed own sink must fall to the ignore branch and "
@@ -1003,18 +1003,18 @@ class ParsleyCausalBroadcastTest {
     @Test
     void consumedOwnSinkClaimIsGenuinelyGatedNotVacuouslySatisfied() {
         Uuid sinkId = Uuid.randomUuid();
-        TopicPartition sink = new TopicPartition("sink", 0);
+        TopicPartition sink = new TopicPartition("c8", 0);
         MockBufferStore<String, String> localBuffer = new MockBufferStore<>();
         ParsleyCausalBroadcast<String, String> causalBroadcast = ParsleyTestFixtures.broadcast(
                 ParsleyTestFixtures.channels(ParsleyVectorClock.empty(), new MockForwardedIndex()),
                 localBuffer, new MockCandidateIndex(), ParsleyMetrics.NOOP,
                 System::currentTimeMillis,
-                (topicId, partition) -> partition == 0 && (topicId.equals(T1_ID) || topicId.equals(sinkId)),
+                (topicId, partition) -> partition == 0 && (topicId.equals(C1_ID) || topicId.equals(sinkId)),
                 (topicId, partition) -> topicId.equals(sinkId));
 
-        // A T1 record claims a sibling producer's record at sink@0, not yet delivered here.
+        // A C1 record claims a sibling producer's record at sink@0, not yet delivered here.
         ParsleyCausalBroadcast.Outcome<String, String> held = causalBroadcast.receive(
-                incomingRecord(T1, 0, ParsleyVectorClock.empty().observe(sinkId, 0, 0)));
+                incomingRecord(C1, 0, ParsleyVectorClock.empty().observe(sinkId, 0, 0)));
         assertEquals(0, held.delivered().size(),
                 "a claim about another producer's record on the consumed shared sink must gate, "
                         + "never be vacuously satisfied (finding (iii))");
@@ -1054,11 +1054,11 @@ class ParsleyCausalBroadcastTest {
                 System::currentTimeMillis, (topicId, partition) -> true,
                 (topicId, partition) -> topicId.equals(sinkId));
 
-        causalBroadcast.receive(incomingRecord(T1, 0, ParsleyVectorClock.empty().observe(sinkId, 0, 7)));
+        causalBroadcast.receive(incomingRecord(C1, 0, ParsleyVectorClock.empty().observe(sinkId, 0, 7)));
         assertEquals(List.of(), reflectedCounts,
                 "a reflected claim at or below ownOutputs is the truthful case — no diagnostic");
 
-        causalBroadcast.receive(incomingRecord(T1, 1, ParsleyVectorClock.empty().observe(sinkId, 0, 9)));
+        causalBroadcast.receive(incomingRecord(C1, 1, ParsleyVectorClock.empty().observe(sinkId, 0, 9)));
         assertEquals(List.of(1), reflectedCounts,
                 "a reflected claim above ownOutputs must count the I8 diagnostic metric");
     }
@@ -1089,15 +1089,15 @@ class ParsleyCausalBroadcastTest {
         ParsleyCausalBroadcast<String, String> causalBroadcast = ParsleyTestFixtures.broadcast(
                 channels, buffer, new MockCandidateIndex(), capturing, now::get);
 
-        // T1@5 delivers (frontier and highest received at 5); T1@8 arrives with an unsatisfiable
+        // C1@5 delivers (frontier and highest received at 5); C1@8 arrives with an unsatisfiable
         // foreign dependency and is held — the bridge folds the skipped 6..7, so highest received
-        // on T1 is 8 while the record itself waits on T3@0, a channel never received on (a stall).
-        causalBroadcast.receive(incomingRecord(T1, 5, ParsleyVectorClock.empty()));
-        causalBroadcast.receive(incomingRecord(T1, 8, ParsleyVectorClock.empty().observe(T3_ID, 0, 0)));
-        // T2@0 waits on T1@8 — at or below T1's highest received: its cause physically arrived and
-        // is merely held, NOT a stall. T2@1 waits on T1@11 — above it: a genuine stall.
-        causalBroadcast.receive(incomingRecord(T2, 0, ParsleyVectorClock.empty().observe(T1_ID, 0, 8)));
-        causalBroadcast.receive(incomingRecord(T2, 1, ParsleyVectorClock.empty().observe(T1_ID, 0, 11)));
+        // on C1 is 8 while the record itself waits on C3@0, a channel never received on (a stall).
+        causalBroadcast.receive(incomingRecord(C1, 5, ParsleyVectorClock.empty()));
+        causalBroadcast.receive(incomingRecord(C1, 8, ParsleyVectorClock.empty().observe(C3_ID, 0, 0)));
+        // C2@0 waits on C1@8 — at or below C1's highest received: its cause physically arrived and
+        // is merely held, NOT a stall. C2@1 waits on C1@11 — above it: a genuine stall.
+        causalBroadcast.receive(incomingRecord(C2, 0, ParsleyVectorClock.empty().observe(C1_ID, 0, 8)));
+        causalBroadcast.receive(incomingRecord(C2, 1, ParsleyVectorClock.empty().observe(C1_ID, 0, 11)));
 
         causalBroadcast.reportHeldDependencyStalls(1_000L);
         assertEquals(List.of(0), stallCounts,
@@ -1106,19 +1106,19 @@ class ParsleyCausalBroadcastTest {
         now.set(1_001L);
         causalBroadcast.reportHeldDependencyStalls(1_000L);
         assertEquals(List.of(0, 2), stallCounts,
-                "exactly the two records waiting on never-received positions (T1@8 on T3@0, T2@1 "
-                        + "on T1@11) must count — the record whose cause arrived but is still held "
-                        + "(T2@0 on T1@8) must not");
+                "exactly the two records waiting on never-received positions (C1@8 on C3@0, C2@1 "
+                        + "on C1@11) must count — the record whose cause arrived but is still held "
+                        + "(C2@0 on C1@8) must not");
     }
 
     /**
      * The input-side sibling of the own-output gap D2 closed: a record delivered out of order above
-     * a contiguous-frontier gap (t1:3 held on an unseen t2 dependency; t1:4 from another producer
+     * a contiguous-frontier gap (c1:3 held on an unseen c2 dependency; c1:4 from another producer
      * delivers past it) must be claimed by the stamp {@code broadcast()} attaches — the delegate
-     * has seen t1:4, so any output emitted now is causally after it, and a downstream consumer of
-     * both the sink and t1 gates only on the stamp. Before the {@code highestDelivered} repair the
-     * stamp claimed only the contiguous prefix (t1@2), so the derived output could be delivered
-     * downstream before its cause t1:4.
+     * has seen c1:4, so any output emitted now is causally after it, and a downstream consumer of
+     * both the sink and c1 gates only on the stamp. Before the {@code highestDelivered} repair the
+     * stamp claimed only the contiguous prefix (c1@2), so the derived output could be delivered
+     * downstream before its cause c1:4.
      *
      * Asserts the broadcast stamp dominates the out-of-order-delivered coordinate while the gate's
      * frontier stays below the gap.
@@ -1127,21 +1127,21 @@ class ParsleyCausalBroadcastTest {
     void broadcastStampClaimsARecordDeliveredAboveTheContiguousFrontierGap() {
         ParsleyCausalBroadcast<String, String> causalBroadcast = causalBroadcastWith();
         for (long offset = 0; offset <= 2; offset++) {
-            processRecord(causalBroadcast, incomingRecord(T1, offset, ParsleyVectorClock.empty()));
+            processRecord(causalBroadcast, incomingRecord(C1, offset, ParsleyVectorClock.empty()));
         }
-        processRecord(causalBroadcast, incomingRecord(T1, 3, ParsleyVectorClock.empty().observe(T2_ID, 0, 9)));
-        processRecord(causalBroadcast, incomingRecord(T1, 4, ParsleyVectorClock.empty()));
-        assertEquals(4, forwarded.size(), "t1:0..2 and the out-of-order t1:4 must have been delivered");
-        assertEquals(4L, forwarded.get(3).offset(), "the out-of-order delivery must be t1:4");
+        processRecord(causalBroadcast, incomingRecord(C1, 3, ParsleyVectorClock.empty().observe(C2_ID, 0, 9)));
+        processRecord(causalBroadcast, incomingRecord(C1, 4, ParsleyVectorClock.empty()));
+        assertEquals(4, forwarded.size(), "c1:0..2 and the out-of-order c1:4 must have been delivered");
+        assertEquals(4L, forwarded.get(3).offset(), "the out-of-order delivery must be c1:4");
 
         Record<String, String> stamped = causalBroadcast.broadcast(new Record<>("k", "v", 0L));
 
         ParsleyVectorClock stamp = ParsleyVectorClock.fromBytes(
                 stamped.headers().lastHeader(ParsleyHeader.CAUSAL_CLOCK).value());
-        assertEquals(2L, causalBroadcast.frontier().offsetFor(T1_ID, 0),
-                "the gate's contiguous frontier must stay below the gap at t1:3");
-        assertTrue(stamp.dominates(ParsleyVectorClock.empty().observe(T1_ID, 0, 4)),
-                "the outbound stamp must claim the delivered record t1:4 — an output emitted after "
+        assertEquals(2L, causalBroadcast.frontier().offsetFor(C1_ID, 0),
+                "the gate's contiguous frontier must stay below the gap at c1:3");
+        assertTrue(stamp.dominates(ParsleyVectorClock.empty().observe(C1_ID, 0, 4)),
+                "the outbound stamp must claim the delivered record c1:4 — an output emitted after "
                         + "its delivery is causally after it");
     }
 
@@ -1171,8 +1171,8 @@ class ParsleyCausalBroadcastTest {
     }
 
     private static Uuid idFor(TopicPartition tp) {
-        if (T1.topic().equals(tp.topic())) return T1_ID;
-        if (T2.topic().equals(tp.topic())) return T2_ID;
+        if (C1.topic().equals(tp.topic())) return C1_ID;
+        if (C2.topic().equals(tp.topic())) return C2_ID;
         throw new IllegalArgumentException("no known id for topic " + tp.topic());
     }
 

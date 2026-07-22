@@ -18,18 +18,18 @@ class ParsleyResolverTest {
      */
     @Test
     void resolvesKeyAndValueSerdesByTopic() {
-        Serde<String> t1Key = Serdes.String();
+        Serde<String> c1Key = Serdes.String();
         Serde<String> defaultKey = Serdes.String();
-        Serde<String> t1Value = Serdes.String();
+        Serde<String> c1Value = Serdes.String();
         Serde<String> defaultValue = Serdes.String();
 
         ParsleyResolver<String, String> resolver = new ParsleyResolver<>(
-                topic -> topic.equals("t1") ? t1Key : defaultKey,
-                topic -> topic.equals("t1") ? t1Value : defaultValue);
+                topic -> topic.equals("c1") ? c1Key : defaultKey,
+                topic -> topic.equals("c1") ? c1Value : defaultValue);
 
-        assertSame(t1Key, resolver.keySerde("t1"), "resolver must return the per-topic key serde for t1");
-        assertSame(defaultKey, resolver.keySerde("t2"), "resolver must return the default key serde for other topics");
-        assertSame(t1Value, resolver.valueSerde("t1"), "resolver must return the per-topic value serde for t1");
-        assertSame(defaultValue, resolver.valueSerde("t2"), "resolver must return the default value serde for other topics");
+        assertSame(c1Key, resolver.keySerde("c1"), "resolver must return the per-topic key serde for c1");
+        assertSame(defaultKey, resolver.keySerde("c2"), "resolver must return the default key serde for other topics");
+        assertSame(c1Value, resolver.valueSerde("c1"), "resolver must return the per-topic value serde for c1");
+        assertSame(defaultValue, resolver.valueSerde("c2"), "resolver must return the default value serde for other topics");
     }
 }

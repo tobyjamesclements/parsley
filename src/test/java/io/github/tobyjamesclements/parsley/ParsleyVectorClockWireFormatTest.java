@@ -40,12 +40,12 @@ class ParsleyVectorClockWireFormatTest {
     private static final int ENTRY_LENGTH = 28;
 
     /** Byte values chosen so every field of the encoded entry has a distinct, position-revealing pattern. */
-    private static final Uuid T1_ID = new Uuid(0x0102030405060708L, 0x1112131415161718L);
-    private static final Uuid T2_ID = new Uuid(0x4142434445464748L, 0x5152535455565758L);
-    private static final int T1_PARTITION = 0x21222324;
-    private static final long T1_OFFSET = 0x3132333435363738L;
+    private static final Uuid C1_ID = new Uuid(0x0102030405060708L, 0x1112131415161718L);
+    private static final Uuid C2_ID = new Uuid(0x4142434445464748L, 0x5152535455565758L);
+    private static final int C1_PARTITION = 0x21222324;
+    private static final long C1_OFFSET = 0x3132333435363738L;
 
-    /** Hand-assembled encoding of a single-entry clock at {@code (T1_ID, T1_PARTITION, T1_OFFSET)}. */
+    /** Hand-assembled encoding of a single-entry clock at {@code (C1_ID, C1_PARTITION, C1_OFFSET)}. */
     private static final byte[] SINGLE_ENTRY_BYTES = {
             0x01,                                            // version
             0x00, 0x00, 0x00, 0x01,                          // count = 1
@@ -78,7 +78,7 @@ class ParsleyVectorClockWireFormatTest {
      */
     @Test
     void singleEntryClockEncodesToPinnedBytes() {
-        ParsleyVectorClock clock = ParsleyVectorClock.empty().observe(T1_ID, T1_PARTITION, T1_OFFSET);
+        ParsleyVectorClock clock = ParsleyVectorClock.empty().observe(C1_ID, C1_PARTITION, C1_OFFSET);
         assertArrayEquals(SINGLE_ENTRY_BYTES, clock.toBytes(),
                 "a single-entry clock must encode as [version][count=1][MSB:8][LSB:8][partition:4][offset:8], big-endian");
     }
@@ -95,9 +95,9 @@ class ParsleyVectorClockWireFormatTest {
     @Test
     void multiEntryClockEncodesEachEntryAsPinnedSlice() {
         ParsleyVectorClock clock = ParsleyVectorClock.empty()
-                .observe(T1_ID, 0, 5L)
-                .observe(T1_ID, 1, 7L)
-                .observe(T2_ID, 9, 0x0000000100000000L);
+                .observe(C1_ID, 0, 5L)
+                .observe(C1_ID, 1, 7L)
+                .observe(C2_ID, 9, 0x0000000100000000L);
 
         byte[] bytes = clock.toBytes();
 
@@ -108,9 +108,9 @@ class ParsleyVectorClockWireFormatTest {
                 "the header must be version 0x01 followed by a big-endian count of 3");
 
         Set<String> expectedSlices = Set.of(
-                hex(pinnedEntry(T1_ID, 0, 5L)),
-                hex(pinnedEntry(T1_ID, 1, 7L)),
-                hex(pinnedEntry(T2_ID, 9, 0x0000000100000000L)));
+                hex(pinnedEntry(C1_ID, 0, 5L)),
+                hex(pinnedEntry(C1_ID, 1, 7L)),
+                hex(pinnedEntry(C2_ID, 9, 0x0000000100000000L)));
         assertEquals(expectedSlices, entrySlices(bytes),
                 "each encoded entry must match its hand-assembled 28-byte slice (in any order)");
     }
@@ -126,9 +126,9 @@ class ParsleyVectorClockWireFormatTest {
     @Test
     void pinnedSingleEntryBytesDecodeToExpectedClock() {
         ParsleyVectorClock decoded = ParsleyVectorClock.fromBytes(SINGLE_ENTRY_BYTES);
-        assertEquals(ParsleyVectorClock.empty().observe(T1_ID, T1_PARTITION, T1_OFFSET), decoded,
+        assertEquals(ParsleyVectorClock.empty().observe(C1_ID, C1_PARTITION, C1_OFFSET), decoded,
                 "the pinned single-entry literal must decode to the clock it was assembled from");
-        assertEquals(T1_OFFSET, decoded.offsetFor(T1_ID, T1_PARTITION),
+        assertEquals(C1_OFFSET, decoded.offsetFor(C1_ID, C1_PARTITION),
                 "the decoded clock must report the pinned offset at the pinned coordinate");
     }
 
@@ -141,13 +141,13 @@ class ParsleyVectorClockWireFormatTest {
      */
     @Test
     void decodingAcceptsEntriesInAnyOrder() {
-        byte[] entryA = pinnedEntry(T1_ID, 0, 5L);
-        byte[] entryB = pinnedEntry(T2_ID, 9, 7L);
+        byte[] entryA = pinnedEntry(C1_ID, 0, 5L);
+        byte[] entryB = pinnedEntry(C2_ID, 9, 7L);
 
         ParsleyVectorClock abOrder = ParsleyVectorClock.fromBytes(concat(new byte[] {0x01, 0x00, 0x00, 0x00, 0x02}, entryA, entryB));
         ParsleyVectorClock baOrder = ParsleyVectorClock.fromBytes(concat(new byte[] {0x01, 0x00, 0x00, 0x00, 0x02}, entryB, entryA));
 
-        ParsleyVectorClock expected = ParsleyVectorClock.empty().observe(T1_ID, 0, 5L).observe(T2_ID, 9, 7L);
+        ParsleyVectorClock expected = ParsleyVectorClock.empty().observe(C1_ID, 0, 5L).observe(C2_ID, 9, 7L);
         assertEquals(expected, abOrder, "entries in A,B order must decode to the expected clock");
         assertEquals(expected, baOrder, "entries in B,A order must decode to the same clock");
     }
@@ -179,8 +179,8 @@ class ParsleyVectorClockWireFormatTest {
      */
     @Test
     void causalClockFacadeSharesThePinnedEncoding() {
-        CausalClock built = CausalClock.builder(Map.of("T1", T1_ID))
-                .require("T1", T1_PARTITION, T1_OFFSET)
+        CausalClock built = CausalClock.builder(Map.of("C1", C1_ID))
+                .require("C1", C1_PARTITION, C1_OFFSET)
                 .build();
         assertArrayEquals(SINGLE_ENTRY_BYTES, built.toBytes(),
                 "the public CausalClock facade must produce the identical pinned encoding");

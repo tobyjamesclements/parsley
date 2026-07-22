@@ -75,8 +75,8 @@ class ParsleyProducerAckMechanicsIT {
     private final KafkaContainer kafka =
             new KafkaContainer(DockerImageName.parse("apache/kafka:3.7.0"));
 
-    private static final String T1 = "T1";
-    private static final String T2 = "T2";
+    private static final String C1 = "C1";
+    private static final String C2 = "C2";
 
     /** Acknowledgements in arrival order; written by producer threads, read by the test thread. */
     private static final ConcurrentLinkedQueue<ObservedAck> ACKS = new ConcurrentLinkedQueue<>();
@@ -145,19 +145,19 @@ class ParsleyProducerAckMechanicsIT {
      * (topic, partition, offset) coordinate, and the callback runs on the producer's network
      * thread rather than the stream thread, so the T2.2 registry must be concurrent.
      *
-     * Asserts the T2 ack matches the delivered record's coordinate, arrived off the stream thread
+     * Asserts the C2 ack matches the delivered record's coordinate, arrived off the stream thread
      * on a producer network thread, and that configure() exposed a client.id usable for routing.
      */
     @Test
     void streamsProducerConfigDeliversSinkAckCoordinatesOffTheStreamThread() throws Exception {
         String bootstrap = kafka.getBootstrapServers();
-        createTopics(bootstrap, T1, T2);
+        createTopics(bootstrap, C1, C2);
 
         AtomicReference<String> streamThread = new AtomicReference<>("");
         CausalTopology topology = new CausalStreamsBuilder()
-                .stream(List.of(T1), Serdes.String(), Serdes.String())
+                .stream(List.of(C1), Serdes.String(), Serdes.String())
                 .process(threadRecordingUpperCaser(streamThread))
-                .to(T2, Serdes.String(), Serdes.String())
+                .to(C2, Serdes.String(), Serdes.String())
                 .build();
 
         Properties props = streamsConfig(bootstrap);
@@ -170,13 +170,13 @@ class ParsleyProducerAckMechanicsIT {
             try (KafkaProducer<String, String> producer =
                          new KafkaProducer<>(plainProducerConfig(bootstrap))) {
                 producer.send(CausalClock.empty()
-                        .stamp(new ProducerRecord<>(T1, "k", "ping"))).get();
+                        .stamp(new ProducerRecord<>(C1, "k", "ping"))).get();
             }
 
             ConsumerRecord<String, String> delivered = awaitOutputRecord(bootstrap, "PING");
             await().atMost(Duration.ofSeconds(30))
-                    .until(() -> ackFor(T2, delivered.offset()) != null);
-            ObservedAck ack = ackFor(T2, delivered.offset());
+                    .until(() -> ackFor(C2, delivered.offset()) != null);
+            ObservedAck ack = ackFor(C2, delivered.offset());
             assertNotNull(ack, "the sink send's ack must be observable through the registry");
             assertEquals(delivered.partition(), ack.partition(),
                     "the ack must name the exact partition the record landed on");
@@ -205,16 +205,16 @@ class ParsleyProducerAckMechanicsIT {
     @Test
     void flushReturnsOnlyAfterEveryAckCallbackHasCompleted() throws Exception {
         String bootstrap = kafka.getBootstrapServers();
-        createTopics(bootstrap, T1);
+        createTopics(bootstrap, C1);
 
         try (KafkaProducer<String, String> producer =
-                     new KafkaProducer<>(transactionalProducerConfig(bootstrap, "t21-flush"))) {
+                     new KafkaProducer<>(transactionalProducerConfig(bootstrap, "c21-flush"))) {
             producer.initTransactions();
             int total = 0;
             for (int round = 1; round <= 5; round++) {
                 producer.beginTransaction();
                 for (int i = 0; i < 200; i++) {
-                    producer.send(new ProducerRecord<>(T1, "k" + i, "round-" + round));
+                    producer.send(new ProducerRecord<>(C1, "k" + i, "round-" + round));
                 }
                 total += 200;
                 producer.flush();
@@ -242,9 +242,9 @@ class ParsleyProducerAckMechanicsIT {
     @Test
     void abortingATransactionReleasesAPendingAckWaitWithFailedAcks() throws Exception {
         String bootstrap = kafka.getBootstrapServers();
-        createTopics(bootstrap, T1);
+        createTopics(bootstrap, C1);
 
-        Map<String, Object> config = transactionalProducerConfig(bootstrap, "t21-abort");
+        Map<String, Object> config = transactionalProducerConfig(bootstrap, "c21-abort");
         config.put(ProducerConfig.LINGER_MS_CONFIG, 60_000);
 
         try (KafkaProducer<String, String> producer = new KafkaProducer<>(config)) {
@@ -253,9 +253,9 @@ class ParsleyProducerAckMechanicsIT {
 
             CountDownLatch latch = new CountDownLatch(3);
             ackLatch = latch;
-            producer.send(new ProducerRecord<>(T1, "a", "1"));
-            producer.send(new ProducerRecord<>(T1, "b", "2"));
-            producer.send(new ProducerRecord<>(T1, "c", "3"));
+            producer.send(new ProducerRecord<>(C1, "a", "1"));
+            producer.send(new ProducerRecord<>(C1, "b", "2"));
+            producer.send(new ProducerRecord<>(C1, "c", "3"));
             assertEquals(0, ACKS.size(), "sends parked by linger must not have acked yet");
 
             AtomicBoolean released = new AtomicBoolean(false);
@@ -265,7 +265,7 @@ class ParsleyProducerAckMechanicsIT {
                 } catch (InterruptedException e) {
                     Thread.currentThread().interrupt();
                 }
-            }, "t21-crossing-wait");
+            }, "c21-crossing-wait");
             waiter.start();
 
             producer.abortTransaction();
@@ -310,10 +310,10 @@ class ParsleyProducerAckMechanicsIT {
         };
     }
 
-    /** Polls T2 (read_committed) until a record with the expected value appears, and returns it. */
+    /** Polls C2 (read_committed) until a record with the expected value appears, and returns it. */
     private static ConsumerRecord<String, String> awaitOutputRecord(String bootstrap, String expectedValue) {
         try (KafkaConsumer<String, String> consumer = new KafkaConsumer<>(consumerConfig(bootstrap))) {
-            consumer.subscribe(List.of(T2));
+            consumer.subscribe(List.of(C2));
             AtomicReference<ConsumerRecord<String, String>> found = new AtomicReference<>();
             await().atMost(Duration.ofSeconds(60)).until(() -> {
                 for (ConsumerRecord<String, String> candidate : consumer.poll(Duration.ofMillis(500))) {

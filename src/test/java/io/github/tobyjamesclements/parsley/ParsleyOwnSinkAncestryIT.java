@@ -45,7 +45,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * Before T2.3 the stamp-side own-sink strip erased exactly that ancestor: app A's derived output
  * carried no claim on the shared topic, and the third party could deliver the effect first.
  *
- * <p>Topology: app A consumes {@code T1} and {@code shared} and produces {@code shared} (from T1
+ * <p>Topology: app A consumes {@code C1} and {@code shared} and produces {@code shared} (from C1
  * records) and {@code derived} (from shared records) — {@code shared} is both A's sink and A's
  * input. Third-party app B consumes all three and forwards each delivery, tagged with its source
  * topic, to {@code observed}.
@@ -57,7 +57,7 @@ class ParsleyOwnSinkAncestryIT {
     private final KafkaContainer kafka =
             new KafkaContainer(DockerImageName.parse("apache/kafka:3.7.0"));
 
-    private static final String T1 = "t1";
+    private static final String C1 = "c1";
     private static final String SHARED = "shared";
     private static final String DERIVED = "derived";
     private static final String OBSERVED = "observed";
@@ -73,17 +73,17 @@ class ParsleyOwnSinkAncestryIT {
     @Test
     void thirdPartyConsumingASharedSinkSeesTrueAncestryAndCausalOrder() throws Exception {
         String bootstrap = kafka.getBootstrapServers();
-        createTopics(bootstrap, T1, SHARED, DERIVED, OBSERVED);
+        createTopics(bootstrap, C1, SHARED, DERIVED, OBSERVED);
         Uuid sharedId = topicId(bootstrap, SHARED);
 
         CausalTopology producerTopology = new CausalStreamsBuilder()
-                .stream(List.of(T1, SHARED), Serdes.String(), Serdes.String())
+                .stream(List.of(C1, SHARED), Serdes.String(), Serdes.String())
                 .process(routingProcessor())
                 .to("shared-sink", SHARED, Serdes.String(), Serdes.String())
                 .to("derived-sink", DERIVED, Serdes.String(), Serdes.String())
                 .build();
         CausalTopology observerTopology = new CausalStreamsBuilder()
-                .stream(List.of(T1, SHARED, DERIVED), Serdes.String(), Serdes.String())
+                .stream(List.of(C1, SHARED, DERIVED), Serdes.String(), Serdes.String())
                 .process(taggingProcessor())
                 .to(OBSERVED, Serdes.String(), Serdes.String())
                 .build();
@@ -94,7 +94,7 @@ class ParsleyOwnSinkAncestryIT {
             observer.start();
 
             try (KafkaProducer<String, String> input = new KafkaProducer<>(producerConfig(bootstrap))) {
-                input.send(CausalClock.empty().stamp(new ProducerRecord<>(T1, "k", "hello"))).get();
+                input.send(CausalClock.empty().stamp(new ProducerRecord<>(C1, "k", "hello"))).get();
             }
 
             // The wire evidence (#22): the derived business record's stamp claims the shared
@@ -114,7 +114,7 @@ class ParsleyOwnSinkAncestryIT {
             }
             ConsumerRecord<String, String> sharedRecord = sharedRecords.get(0);
             ConsumerRecord<String, String> derivedRecord = derivedRecords.get(0);
-            assertEquals("s:hello", sharedRecord.value(), "the shared record must be A's T1 derivation");
+            assertEquals("s:hello", sharedRecord.value(), "the shared record must be A's C1 derivation");
             assertEquals("d:s:hello", derivedRecord.value(), "the derived record must be A's shared derivation");
             ParsleyVectorClock derivedClock = wireClock(derivedRecord);
             assertTrue(derivedClock.offsetFor(sharedId, 0) >= sharedRecord.offset(),
@@ -143,7 +143,7 @@ class ParsleyOwnSinkAncestryIT {
     }
 
     /**
-     * App A's delegate: a T1 record forwards {@code s:<value>} to the shared sink; a shared record
+     * App A's delegate: a C1 record forwards {@code s:<value>} to the shared sink; a shared record
      * forwards {@code d:<value>} to the derived sink. Routing is by the delivered record's source
      * topic, addressed to the named sink so each output reaches exactly one topic.
      */
@@ -159,7 +159,7 @@ class ParsleyOwnSinkAncestryIT {
             @Override
             public void process(Record<String, String> record) {
                 String source = ctx.recordMetadata().orElseThrow().topic();
-                if (T1.equals(source)) {
+                if (C1.equals(source)) {
                     ctx.forward(record.withValue("s:" + record.value()), "shared-sink");
                 } else {
                     ctx.forward(record.withValue("d:" + record.value()), "derived-sink");

@@ -14,8 +14,8 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  */
 class ParsleyVectorClockTest {
 
-    private static final Uuid T1_ID = Uuid.randomUuid();
-    private static final Uuid T2_ID = Uuid.randomUuid();
+    private static final Uuid C1_ID = Uuid.randomUuid();
+    private static final Uuid C2_ID = Uuid.randomUuid();
 
     /**
      * An empty dependency clock carries no requirements and is therefore dominated by any frontier,
@@ -27,7 +27,7 @@ class ParsleyVectorClockTest {
     void emptyClockIsDominatedByAnything() {
         assertTrue(ParsleyVectorClock.empty().dominates(ParsleyVectorClock.empty()),
                 "an empty frontier must dominate empty dependencies");
-        assertTrue(ParsleyVectorClock.empty().observe(T1_ID, 0, 7).dominates(ParsleyVectorClock.empty()),
+        assertTrue(ParsleyVectorClock.empty().observe(C1_ID, 0, 7).dominates(ParsleyVectorClock.empty()),
                 "a non-empty frontier must dominate empty dependencies");
     }
 
@@ -39,14 +39,14 @@ class ParsleyVectorClockTest {
      */
     @Test
     void dominatesRequiresEveryPartitionToBeCaughtUp() {
-        ParsleyVectorClock required = ParsleyVectorClock.empty().observe(T1_ID, 0, 3);
+        ParsleyVectorClock required = ParsleyVectorClock.empty().observe(C1_ID, 0, 3);
         assertFalse(ParsleyVectorClock.empty().dominates(required),
                 "empty frontier cannot dominate a non-empty dependency");
-        assertFalse(ParsleyVectorClock.empty().observe(T1_ID, 0, 2).dominates(required),
+        assertFalse(ParsleyVectorClock.empty().observe(C1_ID, 0, 2).dominates(required),
                 "frontier at offset 2 does not dominate a requirement of offset 3");
-        assertTrue(ParsleyVectorClock.empty().observe(T1_ID, 0, 3).dominates(required),
+        assertTrue(ParsleyVectorClock.empty().observe(C1_ID, 0, 3).dominates(required),
                 "frontier at exactly the required offset must dominate");
-        assertTrue(ParsleyVectorClock.empty().observe(T1_ID, 0, 4).dominates(required),
+        assertTrue(ParsleyVectorClock.empty().observe(C1_ID, 0, 4).dominates(required),
                 "frontier ahead of the required offset must dominate");
     }
 
@@ -58,8 +58,8 @@ class ParsleyVectorClockTest {
      */
     @Test
     void observeTakesTheMaximum() {
-        assertEquals(ParsleyVectorClock.empty().observe(T1_ID, 0, 5),
-                ParsleyVectorClock.empty().observe(T1_ID, 0, 5).observe(T1_ID, 0, 2),
+        assertEquals(ParsleyVectorClock.empty().observe(C1_ID, 0, 5),
+                ParsleyVectorClock.empty().observe(C1_ID, 0, 5).observe(C1_ID, 0, 2),
                 "observe must retain only the maximum offset per (topicId, partition)");
     }
 
@@ -70,10 +70,10 @@ class ParsleyVectorClockTest {
      */
     @Test
     void mergeTakesPerPartitionMaximum() {
-        ParsleyVectorClock a = ParsleyVectorClock.empty().observe(T1_ID, 0, 3).observe(T2_ID, 0, 1);
-        ParsleyVectorClock b = ParsleyVectorClock.empty().observe(T1_ID, 0, 1).observe(T2_ID, 0, 9);
+        ParsleyVectorClock a = ParsleyVectorClock.empty().observe(C1_ID, 0, 3).observe(C2_ID, 0, 1);
+        ParsleyVectorClock b = ParsleyVectorClock.empty().observe(C1_ID, 0, 1).observe(C2_ID, 0, 9);
         assertEquals(
-                ParsleyVectorClock.empty().observe(T1_ID, 0, 3).observe(T2_ID, 0, 9),
+                ParsleyVectorClock.empty().observe(C1_ID, 0, 3).observe(C2_ID, 0, 9),
                 a.merge(b),
                 "merged clock must take the per-partition maximum from both clocks");
     }
@@ -85,10 +85,10 @@ class ParsleyVectorClockTest {
      */
     @Test
     void withoutRemovesASingleCoordinate() {
-        ParsleyVectorClock clock = ParsleyVectorClock.empty().observe(T1_ID, 0, 3).observe(T2_ID, 0, 9);
-        assertEquals(ParsleyVectorClock.empty().observe(T2_ID, 0, 9), clock.without(T1_ID, 0),
+        ParsleyVectorClock clock = ParsleyVectorClock.empty().observe(C1_ID, 0, 3).observe(C2_ID, 0, 9);
+        assertEquals(ParsleyVectorClock.empty().observe(C2_ID, 0, 9), clock.without(C1_ID, 0),
                 "without must drop only the named coordinate");
-        assertEquals(clock, clock.without(T1_ID, 1),
+        assertEquals(clock, clock.without(C1_ID, 1),
                 "without must be a no-op for a coordinate not present");
     }
 
@@ -99,7 +99,7 @@ class ParsleyVectorClockTest {
      */
     @Test
     void serialisationRoundTrips() {
-        ParsleyVectorClock clock = ParsleyVectorClock.empty().observe(T1_ID, 0, 5).observe(T2_ID, 0, 2);
+        ParsleyVectorClock clock = ParsleyVectorClock.empty().observe(C1_ID, 0, 5).observe(C2_ID, 0, 2);
         assertEquals(clock, ParsleyVectorClock.fromBytes(clock.toBytes()),
                 "clock must round-trip through binary serialisation");
     }
@@ -114,20 +114,20 @@ class ParsleyVectorClockTest {
      */
     @Test
     void retainingDropsOutOfScopeCoordinates() {
-        // In scope: topic T1 on partition 0 only. T1-1 (wrong partition) and T2-0 (wrong topic) are out.
-        ParsleyVectorClock.CoordinatePredicate inScope = (topicId, partition) -> topicId.equals(T1_ID) && partition == 0;
+        // In scope: topic C1 on partition 0 only. C1-1 (wrong partition) and C2-0 (wrong topic) are out.
+        ParsleyVectorClock.CoordinatePredicate inScope = (topicId, partition) -> topicId.equals(C1_ID) && partition == 0;
         ParsleyVectorClock deps = ParsleyVectorClock.empty()
-                .observe(T1_ID, 0, 3).observe(T1_ID, 1, 8).observe(T2_ID, 0, 5);
+                .observe(C1_ID, 0, 3).observe(C1_ID, 1, 8).observe(C2_ID, 0, 5);
 
         ParsleyVectorClock scoped = deps.retaining(inScope);
 
-        assertEquals(ParsleyVectorClock.empty().observe(T1_ID, 0, 3), scoped,
+        assertEquals(ParsleyVectorClock.empty().observe(C1_ID, 0, 3), scoped,
                 "retaining must keep only the in-scope coordinate and drop the others");
         assertFalse(ParsleyVectorClock.empty().dominates(deps),
                 "the unfiltered dependencies are not satisfied by an empty frontier");
         assertFalse(ParsleyVectorClock.empty().dominates(scoped),
                 "the in-scope coordinate still requires offset 3 from the frontier");
-        assertTrue(ParsleyVectorClock.empty().observe(T1_ID, 0, 3).dominates(scoped),
+        assertTrue(ParsleyVectorClock.empty().observe(C1_ID, 0, 3).dominates(scoped),
                 "once out-of-scope coordinates are dropped, only the in-scope requirement gates");
     }
 
@@ -139,7 +139,7 @@ class ParsleyVectorClockTest {
      */
     @Test
     void retainingReturnsSameInstanceWhenNothingDropped() {
-        ParsleyVectorClock deps = ParsleyVectorClock.empty().observe(T1_ID, 0, 3).observe(T2_ID, 0, 5);
+        ParsleyVectorClock deps = ParsleyVectorClock.empty().observe(C1_ID, 0, 3).observe(C2_ID, 0, 5);
         assertSame(deps, deps.retaining((topicId, partition) -> true),
                 "retaining must not allocate when every coordinate is kept");
     }

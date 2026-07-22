@@ -41,16 +41,17 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
  * </ul>
  *
  * <p>Drift is one-directional — a doc edit does not touch this file — so each fenced block in the
- * docs carries a comment naming its mirror method. The samples use the repo's usual T1/T2/T3
- * topic-name convention, so the mirrors do too.
+ * docs carries a comment naming its mirror method. The samples use the repo's academic naming
+ * convention — channels {@code c1}/{@code c2}/{@code c3}, messages {@code m1}/{@code m2}/{@code m3}
+ * — so the mirrors do too.
  */
 class DocsSamplesTest {
 
     /** The docs' topic names bound to fixed UUIDs — the broker-free resolver path. */
     private static final Map<String, Uuid> TOPIC_IDS = Map.of(
-            "t1", Uuid.randomUuid(),
-            "t2", Uuid.randomUuid(),
-            "t3", Uuid.randomUuid());
+            "c1", Uuid.randomUuid(),
+            "c2", Uuid.randomUuid(),
+            "c3", Uuid.randomUuid());
 
     // ---------------------------------------------------------------------------------------------
     // docs/getting-started.md § "Stamping causal context onto produced records", sample 1: relay
@@ -66,7 +67,7 @@ class DocsSamplesTest {
             ConsumerRecord<String, String> m1, String key, String value) {
         // m1's own dependencies plus its own position
         CausalClock deps = CausalClock.using(props).observe(m1);
-        producer.send(deps.stamp(new ProducerRecord<>("t3", key, value)));
+        producer.send(deps.stamp(new ProducerRecord<>("c3", key, value)));
     }
 
     /**
@@ -79,17 +80,17 @@ class DocsSamplesTest {
      */
     @Test
     void relaySampleStampsTheConsumedMessagesDepsAndOwnPosition() {
-        CausalClock carried = CausalClock.builder(TOPIC_IDS).require("t2", 0, 3).build();
-        ConsumerRecord<String, String> m1 = new ConsumerRecord<>("t1", 0, 7L, "k", "v");
+        CausalClock carried = CausalClock.builder(TOPIC_IDS).require("c2", 0, 3).build();
+        ConsumerRecord<String, String> m1 = new ConsumerRecord<>("c1", 0, 7L, "k", "v");
         m1.headers().add(ParsleyHeader.CAUSAL_CLOCK, carried.toBytes());
 
         CausalClock deps = CausalClock.using(TOPIC_IDS).observe(m1);
         ProducerRecord<String, String> stamped =
-                deps.stamp(new ProducerRecord<>("t3", "k", "v"));
+                deps.stamp(new ProducerRecord<>("c3", "k", "v"));
 
         CausalClock expected = CausalClock.builder(TOPIC_IDS)
-                .require("t2", 0, 3)
-                .require("t1", 0, 7)
+                .require("c2", 0, 3)
+                .require("c1", 0, 7)
                 .build();
         assertEquals(Optional.of(expected), CausalClock.fromHeaders(stamped.headers()),
                 "the relay sample must stamp m1's carried dependencies plus m1's own "
@@ -124,9 +125,9 @@ class DocsSamplesTest {
      */
     @Test
     void fanInSampleChainsAnObservePerInput() {
-        ConsumerRecord<String, String> m1 = new ConsumerRecord<>("t1", 0, 7L, "k", "v");
-        ConsumerRecord<String, String> m2 = new ConsumerRecord<>("t2", 0, 3L, "k", "v");
-        ProducerRecord<String, String> m3 = new ProducerRecord<>("t3", "k", "v");
+        ConsumerRecord<String, String> m1 = new ConsumerRecord<>("c1", 0, 7L, "k", "v");
+        ConsumerRecord<String, String> m2 = new ConsumerRecord<>("c2", 0, 3L, "k", "v");
+        ProducerRecord<String, String> m3 = new ProducerRecord<>("c3", "k", "v");
 
         CausalClock deps = CausalClock.using(TOPIC_IDS)
                 .observe(m1)
@@ -134,8 +135,8 @@ class DocsSamplesTest {
         ProducerRecord<String, String> stamped = deps.stamp(m3);
 
         CausalClock expected = CausalClock.builder(TOPIC_IDS)
-                .require("t1", 0, 7)
-                .require("t2", 0, 3)
+                .require("c1", 0, 7)
+                .require("c2", 0, 3)
                 .build();
         assertEquals(Optional.of(expected), CausalClock.fromHeaders(stamped.headers()),
                 "the fan-in sample must stamp the union of both consumed inputs' positions");
@@ -153,7 +154,7 @@ class DocsSamplesTest {
     @SuppressWarnings("unused")
     private static void builderSample(Properties props) {
         CausalClock deps = CausalClock.builder(props)
-                .require("t1", /* partition */ 0, /* offset */ 42)
+                .require("c1", /* partition */ 0, /* offset */ 42)
                 .build();
     }
 
@@ -167,13 +168,13 @@ class DocsSamplesTest {
     @Test
     void builderSampleRequiresTheNamedCoordinate() {
         CausalClock deps = CausalClock.builder(TOPIC_IDS)
-                .require("t1", /* partition */ 0, /* offset */ 42)
+                .require("c1", /* partition */ 0, /* offset */ 42)
                 .build();
 
         CausalClock observed = CausalClock.using(TOPIC_IDS)
-                .observe(new ConsumerRecord<>("t1", 0, 42L, "k", "v"));
+                .observe(new ConsumerRecord<>("c1", 0, 42L, "k", "v"));
         assertEquals(observed, deps,
-                "an explicit require(\"t1\", 0, 42) must build the same clock as observing "
+                "an explicit require(\"c1\", 0, 42) must build the same clock as observing "
                         + "a record at that coordinate");
     }
 
@@ -208,10 +209,10 @@ class DocsSamplesTest {
     @Test
     void portableTokenSampleRebuildsTheDependenciesAcrossATransport() {
         CausalClock carried = CausalClock.builder(TOPIC_IDS)
-                .require("t1", 0, 42)
-                .require("t2", 0, 3)
+                .require("c1", 0, 42)
+                .require("c2", 0, 3)
                 .build();
-        ConsumerRecord<String, String> m1 = new ConsumerRecord<>("t3", 0, 9L, "k", "v");
+        ConsumerRecord<String, String> m1 = new ConsumerRecord<>("c3", 0, 9L, "k", "v");
         m1.headers().add(ParsleyHeader.CAUSAL_CLOCK, carried.toBytes());
 
         assertEquals(carried, portableTokenSample(m1),
@@ -226,7 +227,7 @@ class DocsSamplesTest {
      */
     @Test
     void portableTokenSampleFallsBackToTheEmptyClockForAnUnstampedRecord() {
-        ConsumerRecord<String, String> m1 = new ConsumerRecord<>("t3", 0, 9L, "k", "v");
+        ConsumerRecord<String, String> m1 = new ConsumerRecord<>("c3", 0, 9L, "k", "v");
         assertEquals(CausalClock.empty(), portableTokenSample(m1),
                 "an unstamped record must propagate as the empty clock, not fail");
     }
@@ -244,9 +245,9 @@ class DocsSamplesTest {
     private static void streamsQuickstartSample(Properties props, Serde<String> orderSerde,
             Serde<String> enrichedSerde) {
         CausalTopology topology = new CausalStreamsBuilder()
-                .stream(List.of("t1", "t2"), Serdes.String(), orderSerde)
+                .stream(List.of("c1", "c2"), Serdes.String(), orderSerde)
                 .process(new EnrichOrderSupplier())
-                .to("t3", Serdes.String(), enrichedSerde)
+                .to("c3", Serdes.String(), enrichedSerde)
                 .build();
 
         CausalStreams causalStreams = new CausalStreams(topology, props);
@@ -269,9 +270,9 @@ class DocsSamplesTest {
 
         CausalTopology topology = new CausalStreamsBuilder()
                 .topicAdmin(TestTopicAdmin.of(TOPIC_IDS))
-                .stream(List.of("t1", "t2"), Serdes.String(), orderSerde)
+                .stream(List.of("c1", "c2"), Serdes.String(), orderSerde)
                 .process(new EnrichOrderSupplier())
-                .to("t3", Serdes.String(), enrichedSerde)
+                .to("c3", Serdes.String(), enrichedSerde)
                 .build();
 
         try (CausalStreams causalStreams = new CausalStreams(topology, streamsProps())) {

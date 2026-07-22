@@ -53,8 +53,8 @@ class ParsleyClocklessProducerIT {
     private final KafkaContainer kafka =
             new KafkaContainer(DockerImageName.parse("apache/kafka:3.7.0"));
 
-    private static final String T1 = "t1";
-    private static final String OUT = "out";
+    private static final String C1 = "c1";
+    private static final String C2 = "c2";
 
     /**
      * Two records produced with no {@code parsley-causal-clock} header at all must deliver
@@ -67,13 +67,13 @@ class ParsleyClocklessProducerIT {
     @Test
     void clocklessRecordsDeliverImmediatelyAndAreStampedOnConsumption() throws Exception {
         String bootstrap = kafka.getBootstrapServers();
-        createTopics(bootstrap, T1, OUT);
-        Uuid t1Id = topicId(bootstrap, T1);
+        createTopics(bootstrap, C1, C2);
+        Uuid c1Id = topicId(bootstrap, C1);
 
         CausalTopology topology = new CausalStreamsBuilder()
-                .stream(List.of(T1), Serdes.String(), Serdes.String())
+                .stream(List.of(C1), Serdes.String(), Serdes.String())
                 .process(prefixingProcessor("d:"))
-                .to(OUT, Serdes.String(), Serdes.String())
+                .to(C2, Serdes.String(), Serdes.String())
                 .build();
 
         try (CausalStreams streams = new CausalStreams(topology, streamsConfig(bootstrap))) {
@@ -81,13 +81,13 @@ class ParsleyClocklessProducerIT {
 
             try (KafkaProducer<String, String> input = new KafkaProducer<>(producerConfig(bootstrap))) {
                 // Deliberately NOT CausalClock.empty().stamp(...): no clock header at all.
-                input.send(new ProducerRecord<>(T1, "k", "one")).get();
-                input.send(new ProducerRecord<>(T1, "k", "two")).get();
+                input.send(new ProducerRecord<>(C1, "k", "one")).get();
+                input.send(new ProducerRecord<>(C1, "k", "two")).get();
             }
 
             List<ConsumerRecord<String, String>> outputs = new ArrayList<>();
             try (KafkaConsumer<String, String> consumer = new KafkaConsumer<>(consumerConfig(bootstrap))) {
-                consumer.subscribe(List.of(OUT));
+                consumer.subscribe(List.of(C2));
                 await().atMost(Duration.ofSeconds(90)).until(() -> {
                     consumer.poll(Duration.ofMillis(500)).forEach(record -> {
                         if (isBusinessRecord(record)) {
@@ -102,9 +102,9 @@ class ParsleyClocklessProducerIT {
                     List.of(outputs.get(0).value(), outputs.get(1).value()),
                     "clockless records must deliver immediately and in input order — causally "
                             + "minimal, never held and never failed");
-            assertTrue(wireClock(outputs.get(1)).offsetFor(t1Id, 0) >= 1,
+            assertTrue(wireClock(outputs.get(1)).offsetFor(c1Id, 0) >= 1,
                     "the second derivation's clock must claim the clockless input's coordinate "
-                            + "t1@1 — custody begins at the first Parsley hop");
+                            + "c1@1 — custody begins at the first Parsley hop");
         }
     }
 

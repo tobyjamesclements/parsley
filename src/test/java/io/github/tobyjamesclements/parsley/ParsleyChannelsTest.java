@@ -18,8 +18,8 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  */
 class ParsleyChannelsTest {
 
-    private static final Uuid T1_ID = Uuid.randomUuid();
-    private static final Uuid T2_ID = Uuid.randomUuid();
+    private static final Uuid C1_ID = Uuid.randomUuid();
+    private static final Uuid C2_ID = Uuid.randomUuid();
     private static final Uuid ANC_ID = Uuid.randomUuid();
 
     /**
@@ -33,11 +33,11 @@ class ParsleyChannelsTest {
                 new TestKeyValueStore<String, byte[]>(Comparator.naturalOrder(), "frontier");
 
         ParsleyChannels original = new ParsleyChannels(store, new MockForwardedIndex());
-        // Advance the contiguous frontier on T1 and record channel clocks for two inputs.
-        original.delivered(T1_ID, 0, 0);
-        original.delivered(T1_ID, 0, 1);
-        original.channelUpdate(T1_ID, 0, ParsleyVectorClock.empty().observe(ANC_ID, 0, 4));
-        original.channelUpdate(T2_ID, 0, ParsleyVectorClock.empty().observe(ANC_ID, 0, 7));
+        // Advance the contiguous frontier on C1 and record channel clocks for two inputs.
+        original.delivered(C1_ID, 0, 0);
+        original.delivered(C1_ID, 0, 1);
+        original.channelUpdate(C1_ID, 0, ParsleyVectorClock.empty().observe(ANC_ID, 0, 4));
+        original.channelUpdate(C2_ID, 0, ParsleyVectorClock.empty().observe(ANC_ID, 0, 7));
 
         ParsleyVectorClock frontierBefore = original.frontier();
         ParsleyVectorClock completenessBefore = original.completeness();
@@ -47,8 +47,8 @@ class ParsleyChannelsTest {
 
         assertEquals(frontierBefore, restored.frontier(),
                 "the contiguous frontier clock must round-trip through the \"f\" blob");
-        assertEquals(1L, restored.frontier().offsetFor(T1_ID, 0),
-                "T1 must restore at its delivered offset 1");
+        assertEquals(1L, restored.frontier().offsetFor(C1_ID, 0),
+                "C1 must restore at its delivered offset 1");
         assertEquals(completenessBefore, restored.completeness(),
                 "completeness must be identical after reload — both channel clocks restored");
         assertEquals(7L, restored.completeness().offsetFor(ANC_ID, 0),
@@ -74,19 +74,19 @@ class ParsleyChannelsTest {
                 new TestKeyValueStore<String, byte[]>(Comparator.naturalOrder(), "frontier");
         ParsleyChannels channels = new ParsleyChannels(store, new MockForwardedIndex());
 
-        channels.receive(T1_ID, 0, 0);
-        channels.delivered(T1_ID, 0, 0);
-        channels.receive(T1_ID, 0, 1);
-        channels.delivered(T1_ID, 0, 1);
-        channels.receive(T1_ID, 0, 2); // received but held — a genuine gap, not a consumer skip
-        channels.receive(T1_ID, 0, 3);
-        channels.delivered(T1_ID, 0, 3); // delivered above the gap at offset 2
+        channels.receive(C1_ID, 0, 0);
+        channels.delivered(C1_ID, 0, 0);
+        channels.receive(C1_ID, 0, 1);
+        channels.delivered(C1_ID, 0, 1);
+        channels.receive(C1_ID, 0, 2); // received but held — a genuine gap, not a consumer skip
+        channels.receive(C1_ID, 0, 3);
+        channels.delivered(C1_ID, 0, 3); // delivered above the gap at offset 2
 
-        assertEquals(1L, channels.frontier().offsetFor(T1_ID, 0),
+        assertEquals(1L, channels.frontier().offsetFor(C1_ID, 0),
                 "the contiguous frontier must not advance past the held offset 2");
-        assertEquals(1L, channels.completeness().offsetFor(T1_ID, 0),
+        assertEquals(1L, channels.completeness().offsetFor(C1_ID, 0),
                 "completeness (the floor-publication view) must not claim above the gap either");
-        assertEquals(3L, channels.stamp().offsetFor(T1_ID, 0),
+        assertEquals(3L, channels.stamp().offsetFor(C1_ID, 0),
                 "the outbound stamp must claim the record delivered above the gap — its coordinate "
                         + "is real delivered causal past, and omitting it lets a downstream consumer "
                         + "deliver a derived output before this cause");
@@ -107,17 +107,17 @@ class ParsleyChannelsTest {
                 new TestKeyValueStore<String, byte[]>(Comparator.naturalOrder(), "frontier");
         MockForwardedIndex forwardedIndex = new MockForwardedIndex();
         ParsleyChannels original = new ParsleyChannels(store, forwardedIndex);
-        original.receive(T1_ID, 0, 0);
-        original.delivered(T1_ID, 0, 0);
-        original.receive(T1_ID, 0, 1); // received but held
-        original.receive(T1_ID, 0, 2);
-        original.delivered(T1_ID, 0, 2); // delivered above the gap at offset 1
+        original.receive(C1_ID, 0, 0);
+        original.delivered(C1_ID, 0, 0);
+        original.receive(C1_ID, 0, 1); // received but held
+        original.receive(C1_ID, 0, 2);
+        original.delivered(C1_ID, 0, 2); // delivered above the gap at offset 1
 
         ParsleyChannels restored = new ParsleyChannels(store, forwardedIndex);
 
-        assertEquals(0L, restored.frontier().offsetFor(T1_ID, 0),
+        assertEquals(0L, restored.frontier().offsetFor(C1_ID, 0),
                 "the restored frontier must still sit below the gap");
-        assertEquals(2L, restored.stamp().offsetFor(T1_ID, 0),
+        assertEquals(2L, restored.stamp().offsetFor(C1_ID, 0),
                 "the restored stamp must reconstruct the above-gap delivered claim from the "
                         + "forwarded index — losing it across a restart would let post-restart "
                         + "outputs under-claim delivered causal past");
@@ -139,18 +139,18 @@ class ParsleyChannelsTest {
                 new TestKeyValueStore<String, byte[]>(Comparator.naturalOrder(), "frontier");
         MockForwardedIndex forwardedIndex = new MockForwardedIndex();
         ParsleyChannels original = new ParsleyChannels(store, forwardedIndex);
-        original.rescope(Map.of("T1", T1_ID, "T2", T2_ID), 0);
-        original.receive(T2_ID, 0, 0);
-        original.delivered(T2_ID, 0, 0);
-        original.receive(T2_ID, 0, 1); // received but held
-        original.receive(T2_ID, 0, 2);
-        original.delivered(T2_ID, 0, 2); // delivered above the gap at offset 1
+        original.rescope(Map.of("C1", C1_ID, "C2", C2_ID), 0);
+        original.receive(C2_ID, 0, 0);
+        original.delivered(C2_ID, 0, 0);
+        original.receive(C2_ID, 0, 1); // received but held
+        original.receive(C2_ID, 0, 2);
+        original.delivered(C2_ID, 0, 2); // delivered above the gap at offset 1
 
-        // Restart with T2 removed from the declared inputs — the A6 shrink path.
+        // Restart with C2 removed from the declared inputs — the A6 shrink path.
         ParsleyChannels restored = new ParsleyChannels(store, forwardedIndex);
-        restored.rescope(Map.of("T1", T1_ID), 0);
+        restored.rescope(Map.of("C1", C1_ID), 0);
 
-        assertEquals(2L, restored.stamp().offsetFor(T2_ID, 0),
+        assertEquals(2L, restored.stamp().offsetFor(C2_ID, 0),
                 "the retired channel's above-gap delivered offset must survive the shrink in the "
                         + "carried ancestry — delivered causal past is re-homed, never dropped");
     }
@@ -168,19 +168,19 @@ class ParsleyChannelsTest {
                 new TestKeyValueStore<String, byte[]>(Comparator.naturalOrder(), "frontier");
         MockForwardedIndex forwardedIndex = new MockForwardedIndex();
         ParsleyChannels original = new ParsleyChannels(store, forwardedIndex);
-        original.rescope(Map.of("T1", T1_ID, "T2", T2_ID), 0);
-        original.receive(T2_ID, 0, 0);
-        original.delivered(T2_ID, 0, 0);
-        original.receive(T2_ID, 0, 1); // received but held
-        original.receive(T2_ID, 0, 2);
-        original.delivered(T2_ID, 0, 2); // delivered above the gap at offset 1
+        original.rescope(Map.of("C1", C1_ID, "C2", C2_ID), 0);
+        original.receive(C2_ID, 0, 0);
+        original.delivered(C2_ID, 0, 0);
+        original.receive(C2_ID, 0, 1); // received but held
+        original.receive(C2_ID, 0, 2);
+        original.delivered(C2_ID, 0, 2); // delivered above the gap at offset 1
 
-        // Restart with T2 recreated: same name, new UUID — the destroyed-coordinate path.
-        Uuid recreatedT2 = Uuid.randomUuid();
+        // Restart with C2 recreated: same name, new UUID — the destroyed-coordinate path.
+        Uuid recreatedC2 = Uuid.randomUuid();
         ParsleyChannels restored = new ParsleyChannels(store, forwardedIndex);
-        restored.rescope(Map.of("T1", T1_ID, "T2", recreatedT2), 0);
+        restored.rescope(Map.of("C1", C1_ID, "C2", recreatedC2), 0);
 
-        assertEquals(-1L, restored.stamp().offsetFor(T2_ID, 0),
+        assertEquals(-1L, restored.stamp().offsetFor(C2_ID, 0),
                 "a destroyed (recreated) UUID's above-gap claim must leave the stamp outright — "
                         + "no receiver can ever deliver the old coordinates (E1)");
     }
@@ -202,20 +202,20 @@ class ParsleyChannelsTest {
                 new TestKeyValueStore<String, byte[]>(Comparator.naturalOrder(), "frontier");
         ParsleyChannels channels = new ParsleyChannels(store, new MockForwardedIndex());
 
-        // T1's channel advertises transitive ancestry on ANC (an upstream topic) and on T2 (a
+        // C1's channel advertises transitive ancestry on ANC (an upstream topic) and on C2 (a
         // consumed sibling); ANC is delivered on directly too, then retired from the input set.
-        channels.rescope(Map.of("T1", T1_ID, "T2", T2_ID, "ANC", ANC_ID), 0);
-        channels.delivered(T1_ID, 0, 0);
-        channels.delivered(T1_ID, 0, 1);
+        channels.rescope(Map.of("C1", C1_ID, "C2", C2_ID, "ANC", ANC_ID), 0);
+        channels.delivered(C1_ID, 0, 0);
+        channels.delivered(C1_ID, 0, 1);
         channels.seedIfFirstSeen(ANC_ID, 0, 9);
         channels.delivered(ANC_ID, 0, 9);
-        channels.channelUpdate(T1_ID, 0,
-                ParsleyVectorClock.empty().observe(ANC_ID, 0, 4).observe(T2_ID, 0, 2));
+        channels.channelUpdate(C1_ID, 0,
+                ParsleyVectorClock.empty().observe(ANC_ID, 0, 4).observe(C2_ID, 0, 2));
         assertEquals(9L, channels.completeness().offsetFor(ANC_ID, 0),
                 "precondition: the soon-retired ancestor is delivered and advertised before the rescope");
 
-        // The new input set: T1 and T2 only — ANC has left the topology.
-        channels.rescope(Map.of("T1", T1_ID, "T2", T2_ID), 0);
+        // The new input set: C1 and C2 only — ANC has left the topology.
+        channels.rescope(Map.of("C1", C1_ID, "C2", C2_ID), 0);
 
         assertEquals(9L, channels.completeness().offsetFor(ANC_ID, 0),
                 "the retired coordinate must re-home into the carried ancestry at its full delivered "
@@ -223,9 +223,9 @@ class ParsleyChannelsTest {
         assertEquals(-1L, channels.frontier().offsetFor(ANC_ID, 0),
                 "the retired coordinate must leave the frontier — the gate view — even as the stamp "
                         + "keeps carrying it");
-        assertEquals(2L, channels.completeness().offsetFor(T2_ID, 0),
+        assertEquals(2L, channels.completeness().offsetFor(C2_ID, 0),
                 "live transitive ancestry inside the surviving channel clock must survive the rescope");
-        assertEquals(1L, channels.frontier().offsetFor(T1_ID, 0),
+        assertEquals(1L, channels.frontier().offsetFor(C1_ID, 0),
                 "the in-scope frontier entry must survive the rescope");
 
         ParsleyChannels reloaded = new ParsleyChannels(store, new MockForwardedIndex());
@@ -248,25 +248,25 @@ class ParsleyChannelsTest {
                 new TestKeyValueStore<String, byte[]>(Comparator.naturalOrder(), "frontier");
         ParsleyChannels channels = new ParsleyChannels(store, new MockForwardedIndex());
 
-        channels.rescope(Map.of("T1", T1_ID, "T2", T2_ID), 0);
-        channels.seedIfFirstSeen(T1_ID, 0, 5);
-        channels.delivered(T1_ID, 0, 5);
-        channels.channelUpdate(T2_ID, 0, ParsleyVectorClock.empty().observe(T1_ID, 0, 3));
-        assertEquals(5L, channels.completeness().offsetFor(T1_ID, 0),
+        channels.rescope(Map.of("C1", C1_ID, "C2", C2_ID), 0);
+        channels.seedIfFirstSeen(C1_ID, 0, 5);
+        channels.delivered(C1_ID, 0, 5);
+        channels.channelUpdate(C2_ID, 0, ParsleyVectorClock.empty().observe(C1_ID, 0, 3));
+        assertEquals(5L, channels.completeness().offsetFor(C1_ID, 0),
                 "precondition: the soon-destroyed UUID is delivered and advertised before the rescope");
 
-        // T1 is deleted and recreated: same name, new UUID.
-        Uuid recreatedT1 = Uuid.randomUuid();
-        channels.rescope(Map.of("T1", recreatedT1, "T2", T2_ID), 0);
+        // C1 is deleted and recreated: same name, new UUID.
+        Uuid recreatedC1 = Uuid.randomUuid();
+        channels.rescope(Map.of("C1", recreatedC1, "C2", C2_ID), 0);
 
-        assertEquals(-1L, channels.completeness().offsetFor(T1_ID, 0),
+        assertEquals(-1L, channels.completeness().offsetFor(C1_ID, 0),
                 "the destroyed UUID must leave every stamp-feeding structure — it can never be "
                         + "delivered by any receiver (E1), so re-homing it would carry a dead claim forever");
-        assertEquals(-1L, channels.frontier().offsetFor(recreatedT1, 0),
+        assertEquals(-1L, channels.frontier().offsetFor(recreatedC1, 0),
                 "the recreated topic's new UUID has no carried ancestry, so it starts unseeded");
 
         ParsleyChannels reloaded = new ParsleyChannels(store, new MockForwardedIndex());
-        assertEquals(-1L, reloaded.completeness().offsetFor(T1_ID, 0),
+        assertEquals(-1L, reloaded.completeness().offsetFor(C1_ID, 0),
                 "the destruction must persist: a reload must not resurrect the dead UUID");
     }
 
@@ -287,33 +287,33 @@ class ParsleyChannelsTest {
         MockForwardedIndex forwardedIndex = new MockForwardedIndex();
         ParsleyChannels channels = new ParsleyChannels(store, forwardedIndex);
 
-        // Deployment 1: T1 and T2 consumed; T2 delivered up to 7.
-        channels.rescope(Map.of("T1", T1_ID, "T2", T2_ID), 0);
-        channels.delivered(T1_ID, 0, 0);
-        channels.seedIfFirstSeen(T2_ID, 0, 7);
-        channels.delivered(T2_ID, 0, 7);
-        // A stale out-of-order forwarded entry for T2 below the eventual seed survives in its store.
-        forwardedIndex.mark(T2_ID, 0, 5);
+        // Deployment 1: C1 and C2 consumed; C2 delivered up to 7.
+        channels.rescope(Map.of("C1", C1_ID, "C2", C2_ID), 0);
+        channels.delivered(C1_ID, 0, 0);
+        channels.seedIfFirstSeen(C2_ID, 0, 7);
+        channels.delivered(C2_ID, 0, 7);
+        // A stale out-of-order forwarded entry for C2 below the eventual seed survives in its store.
+        forwardedIndex.mark(C2_ID, 0, 5);
 
-        // Deployment 2: T2 removed — its history re-homes into the carried ancestry.
-        channels.rescope(Map.of("T1", T1_ID), 0);
-        assertEquals(-1L, channels.frontier().offsetFor(T2_ID, 0),
+        // Deployment 2: C2 removed — its history re-homes into the carried ancestry.
+        channels.rescope(Map.of("C1", C1_ID), 0);
+        assertEquals(-1L, channels.frontier().offsetFor(C2_ID, 0),
                 "precondition: the removed input left the frontier at the shrink");
 
-        // Deployment 3: T2 re-added — the frontier seeds at the carried value, not log-start.
-        channels.rescope(Map.of("T1", T1_ID, "T2", T2_ID, "T3", ANC_ID), 0);
+        // Deployment 3: C2 re-added — the frontier seeds at the carried value, not log-start.
+        channels.rescope(Map.of("C1", C1_ID, "C2", C2_ID, "C3", ANC_ID), 0);
 
-        assertEquals(7L, channels.frontier().offsetFor(T2_ID, 0),
+        assertEquals(7L, channels.frontier().offsetFor(C2_ID, 0),
                 "the re-added input must seed at the carried-ancestry value 7 — replaying the prefix "
                         + "at or below what this node already delivered would be cause-after-effect (A5)");
-        assertFalse(forwardedIndex.contains(T2_ID, 0, 5),
+        assertFalse(forwardedIndex.contains(C2_ID, 0, 5),
                 "the forwarded index must be pruned at or below the seed, mirroring the restore-time sweep");
         assertEquals(-1L, channels.frontier().offsetFor(ANC_ID, 0),
                 "a genuinely new input with no carried ancestry seeds nothing — its history has no "
                         + "delivered descendants here (I2), so replaying it is ordinary delivery");
-        assertTrue(channels.alreadyDelivered(T2_ID, 0, 7),
+        assertTrue(channels.alreadyDelivered(C2_ID, 0, 7),
                 "the seeded prefix must read as already delivered, so the receive path skips its replay");
-        assertFalse(channels.alreadyDelivered(T2_ID, 0, 8),
+        assertFalse(channels.alreadyDelivered(C2_ID, 0, 8),
                 "the first offset above the seed is undelivered — replay resumes normal delivery there");
     }
 
@@ -333,17 +333,17 @@ class ParsleyChannelsTest {
                 new TestKeyValueStore<String, byte[]>(Comparator.naturalOrder(), "frontier");
         ParsleyChannels channels = new ParsleyChannels(store, new MockForwardedIndex());
 
-        // Deployment 1: only T1 consumed; T2 is a pure sink whose sends were acked up to 9 — it is
+        // Deployment 1: only C1 consumed; C2 is a pure sink whose sends were acked up to 9 — it is
         // claimed by every stamp (completeness ∪ ownOutputs) without ever being delivered here.
-        channels.rescope(Map.of("T1", T1_ID), 0);
-        channels.acknowledge(T2_ID, 0, 9);
-        assertEquals(-1L, channels.completeness().offsetFor(T2_ID, 0),
+        channels.rescope(Map.of("C1", C1_ID), 0);
+        channels.acknowledge(C2_ID, 0, 9);
+        assertEquals(-1L, channels.completeness().offsetFor(C2_ID, 0),
                 "precondition: the sink coordinate is not in completeness — only ownOutputs claims it");
 
-        // Deployment 2: T2 added as an input (the node now consumes its own former sink).
-        channels.rescope(Map.of("T1", T1_ID, "T2", T2_ID), 0);
+        // Deployment 2: C2 added as an input (the node now consumes its own former sink).
+        channels.rescope(Map.of("C1", C1_ID, "C2", C2_ID), 0);
 
-        assertEquals(9L, channels.frontier().offsetFor(T2_ID, 0),
+        assertEquals(9L, channels.frontier().offsetFor(C2_ID, 0),
                 "the added former sink must seed at the ownOutputs value its stamps already "
                         + "claimed — an under-seed would re-deliver a prefix downstream gates "
                         + "already order behind this node's outputs");
@@ -361,15 +361,15 @@ class ParsleyChannelsTest {
     void stampIsCompletenessMergedWithOwnOutputs() {
         ParsleyChannels channels =
                 ParsleyTestFixtures.channels(ParsleyVectorClock.empty(), new MockForwardedIndex());
-        channels.seedIfFirstSeen(T1_ID, 0, 3);
-        channels.delivered(T1_ID, 0, 3);
-        channels.acknowledge(SINK_ID, 0, 6);
+        channels.seedIfFirstSeen(C1_ID, 0, 3);
+        channels.delivered(C1_ID, 0, 3);
+        channels.acknowledge(C4_ID, 0, 6);
 
-        assertEquals(3L, channels.stamp().offsetFor(T1_ID, 0),
+        assertEquals(3L, channels.stamp().offsetFor(C1_ID, 0),
                 "the stamp must carry the delivered frontier");
-        assertEquals(6L, channels.stamp().offsetFor(SINK_ID, 0),
+        assertEquals(6L, channels.stamp().offsetFor(C4_ID, 0),
                 "the stamp must carry the acked own-output position (D2)");
-        assertEquals(-1L, channels.completeness().offsetFor(SINK_ID, 0),
+        assertEquals(-1L, channels.completeness().offsetFor(C4_ID, 0),
                 "completeness must stay free of ownOutputs — only the stamp unions them");
     }
 
@@ -390,19 +390,19 @@ class ParsleyChannelsTest {
         // No rescope ever ran here: the blob carries frontier/channel state but an empty declared set,
         // standing in for a pre-T1.3 blob (the sections are also simply absent on truncation — load()
         // treats both identically).
-        original.seedIfFirstSeen(T1_ID, 0, 3);
-        original.delivered(T1_ID, 0, 3);
+        original.seedIfFirstSeen(C1_ID, 0, 3);
+        original.delivered(C1_ID, 0, 3);
 
         ParsleyChannels reloaded = new ParsleyChannels(store, new MockForwardedIndex());
         assertTrue(reloaded.declaredInputs().isEmpty(),
                 "a blob with nothing declared must load as an empty input set, not fail");
 
-        reloaded.rescope(Map.of("T1", T1_ID, "T2", T2_ID), 0);
-        assertEquals(3L, reloaded.frontier().offsetFor(T1_ID, 0),
+        reloaded.rescope(Map.of("C1", C1_ID, "C2", C2_ID), 0);
+        assertEquals(3L, reloaded.frontier().offsetFor(C1_ID, 0),
                 "the first rescope over an undeclared blob must keep surviving in-scope state");
-        assertEquals(-1L, reloaded.frontier().offsetFor(T2_ID, 0),
+        assertEquals(-1L, reloaded.frontier().offsetFor(C2_ID, 0),
                 "with no persisted declaration there is no added-input diff, so nothing seeds");
-        assertEquals(Map.of("T1", T1_ID, "T2", T2_ID), reloaded.declaredInputs(),
+        assertEquals(Map.of("C1", C1_ID, "C2", C2_ID), reloaded.declaredInputs(),
                 "the rescope must record the current declaration for the next init to diff against");
     }
 
@@ -412,7 +412,7 @@ class ParsleyChannelsTest {
     // init-time end-offset seed) monotonically, and nothing here may leak into completeness() until
     // T2.3 changes the stamp to completeness ∪ ownOutputs.
 
-    private static final Uuid SINK_ID = Uuid.randomUuid();
+    private static final Uuid C4_ID = Uuid.randomUuid();
 
     /**
      * {@code acknowledge} folds monotonically into the {@code ownOutputs} clock: entries only ever
@@ -425,21 +425,21 @@ class ParsleyChannelsTest {
         ParsleyChannels channels =
                 ParsleyTestFixtures.channels(ParsleyVectorClock.empty(), new MockForwardedIndex());
 
-        channels.acknowledge(SINK_ID, 0, 5);
-        assertEquals(5L, channels.ownOutputs().offsetFor(SINK_ID, 0),
+        channels.acknowledge(C4_ID, 0, 5);
+        assertEquals(5L, channels.ownOutputs().offsetFor(C4_ID, 0),
                 "a first ack must establish the coordinate's own-output position");
 
-        channels.acknowledge(SINK_ID, 0, 3);
-        channels.acknowledge(SINK_ID, 0, 5);
-        channels.acknowledge(SINK_ID, 0, -1);
-        assertEquals(5L, channels.ownOutputs().offsetFor(SINK_ID, 0),
+        channels.acknowledge(C4_ID, 0, 3);
+        channels.acknowledge(C4_ID, 0, 5);
+        channels.acknowledge(C4_ID, 0, -1);
+        assertEquals(5L, channels.ownOutputs().offsetFor(C4_ID, 0),
                 "a lower, equal, or negative offset must never lower an own-output entry");
 
-        channels.acknowledge(SINK_ID, 0, 9);
-        channels.acknowledge(SINK_ID, 1, 2);
-        assertEquals(9L, channels.ownOutputs().offsetFor(SINK_ID, 0),
+        channels.acknowledge(C4_ID, 0, 9);
+        channels.acknowledge(C4_ID, 1, 2);
+        assertEquals(9L, channels.ownOutputs().offsetFor(C4_ID, 0),
                 "a higher ack must raise the entry");
-        assertEquals(2L, channels.ownOutputs().offsetFor(SINK_ID, 1),
+        assertEquals(2L, channels.ownOutputs().offsetFor(C4_ID, 1),
                 "partitions of one sink are independent own-output coordinates (T3.0 A7)");
     }
 
@@ -452,14 +452,14 @@ class ParsleyChannelsTest {
     void ownOutputsDoesNotLeakIntoCompletenessBeforeStampIntegration() {
         ParsleyChannels channels =
                 ParsleyTestFixtures.channels(ParsleyVectorClock.empty(), new MockForwardedIndex());
-        channels.delivered(T1_ID, 0, 0);
+        channels.delivered(C1_ID, 0, 0);
         ParsleyVectorClock before = channels.completeness();
 
-        channels.acknowledge(SINK_ID, 0, 41);
+        channels.acknowledge(C4_ID, 0, 41);
 
         assertEquals(before, channels.completeness(),
                 "acknowledging own outputs must leave the outbound stamp unchanged until T2.3");
-        assertEquals(-1L, channels.completeness().offsetFor(SINK_ID, 0),
+        assertEquals(-1L, channels.completeness().offsetFor(C4_ID, 0),
                 "the acked sink coordinate must not appear in completeness yet");
     }
 
@@ -474,14 +474,14 @@ class ParsleyChannelsTest {
         TestKeyValueStore<String, byte[]> store =
                 new TestKeyValueStore<String, byte[]>(Comparator.naturalOrder(), "frontier");
         ParsleyChannels original = new ParsleyChannels(store, new MockForwardedIndex());
-        original.delivered(T1_ID, 0, 2);
-        original.acknowledge(SINK_ID, 0, 7);
-        original.acknowledge(SINK_ID, 1, 3);
+        original.delivered(C1_ID, 0, 2);
+        original.acknowledge(C4_ID, 0, 7);
+        original.acknowledge(C4_ID, 1, 3);
 
         ParsleyChannels restored = new ParsleyChannels(store, new MockForwardedIndex());
-        assertEquals(7L, restored.ownOutputs().offsetFor(SINK_ID, 0),
+        assertEquals(7L, restored.ownOutputs().offsetFor(C4_ID, 0),
                 "own-output positions must restore from the \"f\" blob's trailing section");
-        assertEquals(3L, restored.ownOutputs().offsetFor(SINK_ID, 1),
+        assertEquals(3L, restored.ownOutputs().offsetFor(C4_ID, 1),
                 "every persisted own-output coordinate must restore");
         assertEquals(original.frontier(), restored.frontier(),
                 "the own-outputs section must not disturb the sections before it");
@@ -500,19 +500,19 @@ class ParsleyChannelsTest {
                 new TestKeyValueStore<String, byte[]>(Comparator.naturalOrder(), "frontier");
         ParsleyChannels original = new ParsleyChannels(store, new MockForwardedIndex());
         // Acks up to offset 10 were persisted; the crashed transaction's acks at 11..12 were not.
-        original.acknowledge(SINK_ID, 0, 10);
+        original.acknowledge(C4_ID, 0, 10);
 
         ParsleyChannels restored = new ParsleyChannels(store, new MockForwardedIndex());
-        assertEquals(10L, restored.ownOutputs().offsetFor(SINK_ID, 0),
+        assertEquals(10L, restored.ownOutputs().offsetFor(C4_ID, 0),
                 "precondition: the restored clock trails the crashed transaction's acks");
 
         // Init-time seed: the sink's end offset is 13, so its last appended position is 12.
-        restored.acknowledge(SINK_ID, 0, 12);
-        assertEquals(12L, restored.ownOutputs().offsetFor(SINK_ID, 0),
+        restored.acknowledge(C4_ID, 0, 12);
+        assertEquals(12L, restored.ownOutputs().offsetFor(C4_ID, 0),
                 "the end-offset seed must heal the trailing clock up to the last appended position");
 
-        restored.acknowledge(SINK_ID, 0, 11);
-        assertEquals(12L, restored.ownOutputs().offsetFor(SINK_ID, 0),
+        restored.acknowledge(C4_ID, 0, 11);
+        assertEquals(12L, restored.ownOutputs().offsetFor(C4_ID, 0),
                 "a replayed ack below the healed value must never lower the clock (I8)");
     }
 
@@ -528,13 +528,13 @@ class ParsleyChannelsTest {
                 ParsleyTestFixtures.channels(ParsleyVectorClock.empty(), new MockForwardedIndex());
 
         // Seed from end offset 42 (last appended position 41) with nothing produced by this task.
-        channels.acknowledge(SINK_ID, 0, 41);
-        assertEquals(41L, channels.ownOutputs().offsetFor(SINK_ID, 0),
+        channels.acknowledge(C4_ID, 0, 41);
+        assertEquals(41L, channels.ownOutputs().offsetFor(C4_ID, 0),
                 "the seed must claim the last appended position regardless of who appended it");
 
         // This task's first real ack lands far below the seed: the over-claim must stand.
-        channels.acknowledge(SINK_ID, 0, 7);
-        assertEquals(41L, channels.ownOutputs().offsetFor(SINK_ID, 0),
+        channels.acknowledge(C4_ID, 0, 7);
+        assertEquals(41L, channels.ownOutputs().offsetFor(C4_ID, 0),
                 "a real ack below the seed must not lower the entry — I8 mechanisms only ever raise");
     }
 
@@ -555,12 +555,12 @@ class ParsleyChannelsTest {
         channels.bindOwnOutputSource(consumer -> {
             consumer.accept("OUT", 0, 6);
             consumer.accept("unresolved-sink", 0, 99);
-        }, (except, timeoutMs) -> { }, Map.of("OUT", SINK_ID), 1_000L);
+        }, (except, timeoutMs) -> { }, Map.of("OUT", C4_ID), 1_000L);
         channels.foldAcknowledgedOutputs();
 
-        assertEquals(6L, channels.ownOutputs().offsetFor(SINK_ID, 0),
+        assertEquals(6L, channels.ownOutputs().offsetFor(C4_ID, 0),
                 "an ack whose topic name resolves must fold under the sink's UUID identity");
-        assertEquals(ParsleyVectorClock.empty().observe(SINK_ID, 0, 6), channels.ownOutputs(),
+        assertEquals(ParsleyVectorClock.empty().observe(C4_ID, 0, 6), channels.ownOutputs(),
                 "an ack for an unresolvable sink name must be skipped — no other entry may appear");
     }
 
@@ -576,25 +576,25 @@ class ParsleyChannelsTest {
         TestKeyValueStore<String, byte[]> store =
                 new TestKeyValueStore<String, byte[]>(Comparator.naturalOrder(), "frontier");
         ParsleyChannels channels = new ParsleyChannels(store, new MockForwardedIndex());
-        // T1 is both input and own sink (a cycle); SINK is an ordinary, non-input sink.
-        channels.rescope(Map.of("T1", T1_ID, "T2", T2_ID), 0);
-        channels.acknowledge(T1_ID, 0, 4);
-        channels.acknowledge(SINK_ID, 0, 8);
+        // C1 is both input and own sink (a cycle); SINK is an ordinary, non-input sink.
+        channels.rescope(Map.of("C1", C1_ID, "C2", C2_ID), 0);
+        channels.acknowledge(C1_ID, 0, 4);
+        channels.acknowledge(C4_ID, 0, 8);
 
-        // An ordinary shrink (T2 leaves) and growth (T3 arrives) must leave ownOutputs alone.
-        Uuid t3 = Uuid.randomUuid();
-        channels.rescope(Map.of("T1", T1_ID, "T3", t3), 0);
-        assertEquals(4L, channels.ownOutputs().offsetFor(T1_ID, 0),
+        // An ordinary shrink (C2 leaves) and growth (C3 arrives) must leave ownOutputs alone.
+        Uuid c3 = Uuid.randomUuid();
+        channels.rescope(Map.of("C1", C1_ID, "C3", c3), 0);
+        assertEquals(4L, channels.ownOutputs().offsetFor(C1_ID, 0),
                 "an input-set change must not prune own outputs — the clock is sink-keyed");
-        assertEquals(8L, channels.ownOutputs().offsetFor(SINK_ID, 0),
+        assertEquals(8L, channels.ownOutputs().offsetFor(C4_ID, 0),
                 "a non-input sink's entry is untouched by any input-set change");
 
-        // T1 recreated: same name, new UUID — the old UUID is provably destroyed.
+        // C1 recreated: same name, new UUID — the old UUID is provably destroyed.
         Uuid recreated = Uuid.randomUuid();
-        channels.rescope(Map.of("T1", recreated, "T3", t3), 0);
-        assertEquals(-1L, channels.ownOutputs().offsetFor(T1_ID, 0),
+        channels.rescope(Map.of("C1", recreated, "C3", c3), 0);
+        assertEquals(-1L, channels.ownOutputs().offsetFor(C1_ID, 0),
                 "a destroyed coordinate must leave the own-output clock — no receiver can deliver it");
-        assertEquals(8L, channels.ownOutputs().offsetFor(SINK_ID, 0),
+        assertEquals(8L, channels.ownOutputs().offsetFor(C4_ID, 0),
                 "unrelated own-output entries must survive the destruction");
     }
 
@@ -612,16 +612,16 @@ class ParsleyChannelsTest {
         TestKeyValueStore<String, byte[]> store =
                 new TestKeyValueStore<String, byte[]>(Comparator.naturalOrder(), "frontier");
         ParsleyChannels original = new ParsleyChannels(store, new MockForwardedIndex());
-        original.delivered(T1_ID, 0, 0);
+        original.delivered(C1_ID, 0, 0);
         assertEquals(Map.of(), new ParsleyChannels(store, new MockForwardedIndex()).declaredSinks(),
                 "a blob written before any sink declaration must load an empty declared-sink set");
 
-        original.declareSinks(Map.of("sink", SINK_ID));
+        original.declareSinks(Map.of("c4", C4_ID));
 
         ParsleyChannels restored = new ParsleyChannels(store, new MockForwardedIndex());
-        assertEquals(Map.of("sink", SINK_ID), restored.declaredSinks(),
+        assertEquals(Map.of("c4", C4_ID), restored.declaredSinks(),
                 "the declared-sink set must round-trip through its trailing \"f\" blob section");
-        assertEquals(0L, restored.frontier().offsetFor(T1_ID, 0),
+        assertEquals(0L, restored.frontier().offsetFor(C1_ID, 0),
                 "the earlier sections must be unaffected by the trailing sink declaration");
     }
 
@@ -639,20 +639,20 @@ class ParsleyChannelsTest {
         TestKeyValueStore<String, byte[]> store =
                 new TestKeyValueStore<String, byte[]>(Comparator.naturalOrder(), "frontier");
         ParsleyChannels channels = new ParsleyChannels(store, new MockForwardedIndex());
-        channels.acknowledge(SINK_ID, 0, 8);
-        channels.acknowledge(SINK_ID, 1, 3);
-        channels.acknowledge(T1_ID, 0, 5);
+        channels.acknowledge(C4_ID, 0, 8);
+        channels.acknowledge(C4_ID, 1, 3);
+        channels.acknowledge(C1_ID, 0, 5);
 
-        channels.destroyOwnOutput(SINK_ID);
+        channels.destroyOwnOutput(C4_ID);
 
-        assertEquals(-1L, channels.ownOutputs().offsetFor(SINK_ID, 0),
+        assertEquals(-1L, channels.ownOutputs().offsetFor(C4_ID, 0),
                 "the destroyed sink's partition-0 claim must leave the clock");
-        assertEquals(-1L, channels.ownOutputs().offsetFor(SINK_ID, 1),
+        assertEquals(-1L, channels.ownOutputs().offsetFor(C4_ID, 1),
                 "the destroyed sink's partition-1 claim must leave the clock");
-        assertEquals(5L, channels.ownOutputs().offsetFor(T1_ID, 0),
+        assertEquals(5L, channels.ownOutputs().offsetFor(C1_ID, 0),
                 "an unrelated sink's claim must survive the purge");
         assertEquals(-1L, new ParsleyChannels(store, new MockForwardedIndex())
-                        .ownOutputs().offsetFor(SINK_ID, 0),
+                        .ownOutputs().offsetFor(C4_ID, 0),
                 "the purge must be persisted — a reload must not resurrect the destroyed claims");
     }
 
@@ -681,10 +681,10 @@ class ParsleyChannelsTest {
         ParsleyChannels frontier = ParsleyTestFixtures.channels(ParsleyVectorClock.empty(), new MockForwardedIndex());
 
         for (long offset : new long[] {0, 1, 2, 4, 5, 6}) {   // 3 is a commit marker the consumer skips
-            receiveAndDeliver(frontier, T1_ID, 0, offset);
+            receiveAndDeliver(frontier, C1_ID, 0, offset);
         }
 
-        assertEquals(6L, frontier.frontier().offsetFor(T1_ID, 0),
+        assertEquals(6L, frontier.frontier().offsetFor(C1_ID, 0),
                 "the frontier must advance past the skipped marker offset 3 to cover all delivered "
                         + "records (0,1,2,4,5,6); a stall at 2 is the density bug");
     }
@@ -698,19 +698,19 @@ class ParsleyChannelsTest {
     void bridgeReturnsTrueOnlyWhenItAdvancesTheFrontier() {
         ParsleyChannels frontier = ParsleyTestFixtures.channels(ParsleyVectorClock.empty(), new MockForwardedIndex());
 
-        assertFalse(frontier.bridge(T1_ID, 0, 0),
+        assertFalse(frontier.bridge(C1_ID, 0, 0),
                 "the first sighting of a channel bridges nothing (its baseline is the seed's concern)");
-        frontier.delivered(T1_ID, 0, 0);
-        receiveAndDeliver(frontier, T1_ID, 0, 1);
-        receiveAndDeliver(frontier, T1_ID, 0, 2);
+        frontier.delivered(C1_ID, 0, 0);
+        receiveAndDeliver(frontier, C1_ID, 0, 1);
+        receiveAndDeliver(frontier, C1_ID, 0, 2);
 
-        assertTrue(frontier.bridge(T1_ID, 0, 4),
+        assertTrue(frontier.bridge(C1_ID, 0, 4),
                 "bridging the marker at 3 (frontier at 2) advances the frontier to 3 — the walk crosses "
                         + "the hole — so it must return true to trigger a cascade");
-        assertEquals(3L, frontier.frontier().offsetFor(T1_ID, 0),
+        assertEquals(3L, frontier.frontier().offsetFor(C1_ID, 0),
                 "the frontier advances to the marker offset itself once crossed; the real record at 4 is "
                         + "delivered separately");
-        assertFalse(frontier.bridge(T1_ID, 0, 4),
+        assertFalse(frontier.bridge(C1_ID, 0, 4),
                 "a repeat bridge at an already-received offset is an at-least-once replay: a no-op");
     }
 
@@ -724,19 +724,19 @@ class ParsleyChannelsTest {
     void bridgeDoesNotAdvancePastAHeldBusinessRecord() {
         ParsleyChannels frontier = ParsleyTestFixtures.channels(ParsleyVectorClock.empty(), new MockForwardedIndex());
 
-        receiveAndDeliver(frontier, T1_ID, 0, 0);
-        receiveAndDeliver(frontier, T1_ID, 0, 1);
+        receiveAndDeliver(frontier, C1_ID, 0, 0);
+        receiveAndDeliver(frontier, C1_ID, 0, 1);
         // Record at 2 is received (bridge records it) but HELD — deliver() is not called for it.
-        frontier.bridge(T1_ID, 0, 2);
+        frontier.bridge(C1_ID, 0, 2);
         // Record at 4 arrives; offset 3 between the held 2 and 4 is a marker.
-        assertFalse(frontier.bridge(T1_ID, 0, 4),
+        assertFalse(frontier.bridge(C1_ID, 0, 4),
                 "bridging 3 must not advance the frontier while 2 is still held");
-        assertEquals(1L, frontier.frontier().offsetFor(T1_ID, 0),
+        assertEquals(1L, frontier.frontier().offsetFor(C1_ID, 0),
                 "the held record at 2 blocks the walk; the frontier stays at 1 despite the bridged marker");
 
         // Once the held 2 is delivered, the walk absorbs 2 and the previously-bridged 3 in one run.
-        frontier.delivered(T1_ID, 0, 2);
-        assertEquals(3L, frontier.frontier().offsetFor(T1_ID, 0),
+        frontier.delivered(C1_ID, 0, 2);
+        assertEquals(3L, frontier.frontier().offsetFor(C1_ID, 0),
                 "delivering the held 2 lets the walk absorb 2 and the bridged marker 3 together");
     }
 
@@ -752,14 +752,14 @@ class ParsleyChannelsTest {
         MockForwardedIndex forwardedIndex = new MockForwardedIndex();
         ParsleyChannels frontier = ParsleyTestFixtures.channels(ParsleyVectorClock.empty(), forwardedIndex);
 
-        receiveAndDeliver(frontier, T1_ID, 0, 0);          // frontier and highest-received both at 0
+        receiveAndDeliver(frontier, C1_ID, 0, 0);          // frontier and highest-received both at 0
 
         // A record at 1_000_000 with the entire (0, 1_000_000) run consumer-skipped (a large aborted txn).
-        assertTrue(frontier.bridge(T1_ID, 0, 1_000_000L),
+        assertTrue(frontier.bridge(C1_ID, 0, 1_000_000L),
                 "bridging a large skipped run must advance the frontier");
-        assertEquals(999_999L, frontier.frontier().offsetFor(T1_ID, 0),
+        assertEquals(999_999L, frontier.frontier().offsetFor(C1_ID, 0),
                 "the whole skipped run folds into the frontier, up to just below the received offset");
-        assertTrue(forwardedIndex.forwardedAfter(T1_ID, 0, -1L).isEmpty(),
+        assertTrue(forwardedIndex.forwardedAfter(C1_ID, 0, -1L).isEmpty(),
                 "the fast path must mark none of the skipped offsets in the forwarded index — O(1), not O(gap)");
     }
 
@@ -776,21 +776,21 @@ class ParsleyChannelsTest {
                 new TestKeyValueStore<String, byte[]>(Comparator.naturalOrder(), "frontier");
         ParsleyChannels original = new ParsleyChannels(store, new MockForwardedIndex());
         for (long offset : new long[] {0, 1, 2, 4}) {   // 3 skipped; highest received becomes 4
-            receiveAndDeliver(original, T1_ID, 0, offset);
+            receiveAndDeliver(original, C1_ID, 0, offset);
         }
-        assertEquals(4L, original.frontier().offsetFor(T1_ID, 0), "precondition: frontier reached 4 before restart");
+        assertEquals(4L, original.frontier().offsetFor(C1_ID, 0), "precondition: frontier reached 4 before restart");
 
         // Reload from the same store: the highest-received map restores from the "f" blob alone.
         ParsleyChannels restored = new ParsleyChannels(store, new MockForwardedIndex());
 
         // A record at 6 arrives (offset 5 a marker). Because highest-received restored as 4, the gap at
         // 5 is recognised and bridged.
-        assertTrue(restored.bridge(T1_ID, 0, 6),
+        assertTrue(restored.bridge(C1_ID, 0, 6),
                 "the restored highest-received (4) lets bridge recognise the marker gap at 5 and advance");
-        assertEquals(5L, restored.frontier().offsetFor(T1_ID, 0),
+        assertEquals(5L, restored.frontier().offsetFor(C1_ID, 0),
                 "the frontier crosses the bridged marker 5; a first-sighting misread would have stalled at 4");
-        restored.delivered(T1_ID, 0, 6);
-        assertEquals(6L, restored.frontier().offsetFor(T1_ID, 0),
+        restored.delivered(C1_ID, 0, 6);
+        assertEquals(6L, restored.frontier().offsetFor(C1_ID, 0),
                 "delivering the real record at 6 then advances the frontier to 6");
     }
 
@@ -836,7 +836,7 @@ class ParsleyChannelsTest {
                 // A fresh frontier over the same store sees only what has actually been written —
                 // not this call's own in-progress in-memory state.
                 ParsleyChannels persistedView = new ParsleyChannels(store, new MockForwardedIndex());
-                persistedOffsetAtUnmarkTime.add(persistedView.frontier().offsetFor(T1_ID, 0));
+                persistedOffsetAtUnmarkTime.add(persistedView.frontier().offsetFor(C1_ID, 0));
                 delegate.unmark(topicId, partition, offset);
             }
 
@@ -847,7 +847,7 @@ class ParsleyChannelsTest {
         };
 
         ParsleyChannels frontier = new ParsleyChannels(store, recordingIndex);
-        frontier.delivered(T1_ID, 0, 0);
+        frontier.delivered(C1_ID, 0, 0);
 
         assertEquals(List.of(0L), persistedOffsetAtUnmarkTime,
                 "by the time the absorbed entry is pruned, the frontier store must already durably "
@@ -893,19 +893,19 @@ class ParsleyChannelsTest {
         };
         ParsleyChannels frontier = ParsleyTestFixtures.channels(ParsleyVectorClock.empty(), crashyIndex);
 
-        frontier.delivered(T1_ID, 0, 0);
+        frontier.delivered(C1_ID, 0, 0);
 
-        assertEquals(0L, frontier.frontier().offsetFor(T1_ID, 0),
+        assertEquals(0L, frontier.frontier().offsetFor(C1_ID, 0),
                 "the frontier already advanced to 0 — persist() ran before the (lost) unmark");
-        assertEquals(List.of(0L), delegate.forwardedAfter(T1_ID, 0, -1),
+        assertEquals(List.of(0L), delegate.forwardedAfter(C1_ID, 0, -1),
                 "the now-redundant entry for the already-absorbed offset lingers, harmlessly, in the "
                         + "forwarded index");
 
         // A later delivery must proceed normally despite the leaked entry sitting below the frontier —
         // this is the crux of the regression: the tear must never strand the coordinate.
-        frontier.delivered(T1_ID, 0, 1);
+        frontier.delivered(C1_ID, 0, 1);
 
-        assertEquals(1L, frontier.frontier().offsetFor(T1_ID, 0),
+        assertEquals(1L, frontier.frontier().offsetFor(C1_ID, 0),
                 "a subsequent delivery must advance normally, unaffected by the leaked stale entry "
                         + "below the frontier");
     }
@@ -925,17 +925,17 @@ class ParsleyChannelsTest {
         MockForwardedIndex forwardedIndex = new MockForwardedIndex();
         ParsleyChannels frontier = ParsleyTestFixtures.channels(ParsleyVectorClock.empty(), forwardedIndex);
 
-        frontier.delivered(T1_ID, 0, 0);
-        frontier.delivered(T1_ID, 0, 1);
-        assertEquals(1L, frontier.frontier().offsetFor(T1_ID, 0), "frontier advances normally through 0, 1");
+        frontier.delivered(C1_ID, 0, 0);
+        frontier.delivered(C1_ID, 0, 1);
+        assertEquals(1L, frontier.frontier().offsetFor(C1_ID, 0), "frontier advances normally through 0, 1");
 
         // Replay: offset 0 (below the watermark) and offset 1 (exactly at it) redelivered.
-        frontier.delivered(T1_ID, 0, 0);
-        frontier.delivered(T1_ID, 0, 1);
+        frontier.delivered(C1_ID, 0, 0);
+        frontier.delivered(C1_ID, 0, 1);
 
-        assertEquals(1L, frontier.frontier().offsetFor(T1_ID, 0),
+        assertEquals(1L, frontier.frontier().offsetFor(C1_ID, 0),
                 "a replay of an already-delivered offset must not move the frontier");
-        assertTrue(forwardedIndex.forwardedAfter(T1_ID, 0, -1).isEmpty(),
+        assertTrue(forwardedIndex.forwardedAfter(C1_ID, 0, -1).isEmpty(),
                 "a replayed already-delivered offset must never be marked in the forwarded index — the "
                         + "absorb walk only scans strictly above the watermark, so it could never be "
                         + "found and unmarked again");
@@ -988,16 +988,16 @@ class ParsleyChannelsTest {
         };
 
         ParsleyChannels original = new ParsleyChannels(store, crashyIndex);
-        original.delivered(T1_ID, 0, 0); // offset 0 absorbed, but its unmark is lost — leaks below the watermark
-        original.delivered(T1_ID, 0, 1); // watermark advances to 1; the offset-0 entry is now stale
+        original.delivered(C1_ID, 0, 0); // offset 0 absorbed, but its unmark is lost — leaks below the watermark
+        original.delivered(C1_ID, 0, 1); // watermark advances to 1; the offset-0 entry is now stale
 
-        assertEquals(List.of(0L), delegate.forwardedAfter(T1_ID, 0, -1),
+        assertEquals(List.of(0L), delegate.forwardedAfter(C1_ID, 0, -1),
                 "the stale entry must still be sitting in the forwarded index before any restore");
 
         // Restore: a fresh frontier over the same durable store must sweep the stale entry away.
         new ParsleyChannels(store, delegate);
 
-        assertTrue(delegate.forwardedAfter(T1_ID, 0, -1).isEmpty(),
+        assertTrue(delegate.forwardedAfter(C1_ID, 0, -1).isEmpty(),
                 "restoring the frontier must sweep the stale below-watermark entry left by the crash");
     }
 }

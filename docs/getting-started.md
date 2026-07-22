@@ -61,7 +61,7 @@ yourself.
 ```java
 // m1's own dependencies plus its own position
 CausalClock deps = CausalClock.using(props).observe(m1);
-producer.send(deps.stamp(new ProducerRecord<>("t3", key, value)));
+producer.send(deps.stamp(new ProducerRecord<>("c3", key, value)));
 ```
 
 `observe` folds in the dependencies the consumed record arrived with, together with the consumed
@@ -86,7 +86,7 @@ explicitly.
 <!-- Mirrored verbatim by DocsSamplesTest#builderSample; keep the sample and the test in sync. -->
 ```java
 CausalClock deps = CausalClock.builder(props)
-        .require("t1", /* partition */ 0, /* offset */ 42)
+        .require("c1", /* partition */ 0, /* offset */ 42)
         .build();
 ```
 

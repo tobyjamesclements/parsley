@@ -30,8 +30,8 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  */
 class ParsleyTopicIdentityWatchTest {
 
-    private static final Uuid T1_ID = Uuid.randomUuid();
-    private static final Uuid T2_ID = Uuid.randomUuid();
+    private static final Uuid C1_ID = Uuid.randomUuid();
+    private static final Uuid C2_ID = Uuid.randomUuid();
 
     /** Hammer schedule seed; override with {@code -Dparsley.hammer.seed} to replay a failure. */
     private static final long HAMMER_SEED = Long.getLong("parsley.hammer.seed", 71_000L);
@@ -89,10 +89,10 @@ class ParsleyTopicIdentityWatchTest {
     @Test
     void unchangedTopicIdsStayIntactAcrossPolls() {
         ParsleyTopicIdentityWatch watch = new ParsleyTopicIdentityWatch();
-        watch.expect("t1", T1_ID);
-        watch.expect("t2", T2_ID);
+        watch.expect("c1", C1_ID);
+        watch.expect("c2", C2_ID);
 
-        watch.poll(new FixedIdsAdmin().with("t1", T1_ID).with("t2", T2_ID));
+        watch.poll(new FixedIdsAdmin().with("c1", C1_ID).with("c2", C2_ID));
 
         assertDoesNotThrow(watch::ensureIntact,
                 "unchanged topic UUIDs must keep the watch intact — the check must stay a no-op");
@@ -106,17 +106,17 @@ class ParsleyTopicIdentityWatchTest {
     @Test
     void aRecreatedTopicBreaksTheWatchAndEnsureIntactThrows() {
         ParsleyTopicIdentityWatch watch = new ParsleyTopicIdentityWatch();
-        watch.expect("t1", T1_ID);
+        watch.expect("c1", C1_ID);
         Uuid recreated = Uuid.randomUuid();
 
-        watch.poll(new FixedIdsAdmin().with("t1", recreated));
+        watch.poll(new FixedIdsAdmin().with("c1", recreated));
 
         CausalTopicRecreatedException failure =
                 assertThrows(CausalTopicRecreatedException.class, watch::ensureIntact,
                         "a changed topic UUID must fail every subsequent identity check");
-        assertTrue(failure.getMessage().contains("t1"),
+        assertTrue(failure.getMessage().contains("c1"),
                 "the failure must name the recreated topic: " + failure.getMessage());
-        assertTrue(failure.getMessage().contains(T1_ID.toString())
+        assertTrue(failure.getMessage().contains(C1_ID.toString())
                         && failure.getMessage().contains(recreated.toString()),
                 "the failure must carry both the init-time and the current UUID: " + failure.getMessage());
     }
@@ -130,9 +130,9 @@ class ParsleyTopicIdentityWatchTest {
     @Test
     void aDeletedTopicBreaksTheWatch() {
         ParsleyTopicIdentityWatch watch = new ParsleyTopicIdentityWatch();
-        watch.expect("t1", T1_ID);
+        watch.expect("c1", C1_ID);
 
-        watch.poll(new FixedIdsAdmin().failing("t1",
+        watch.poll(new FixedIdsAdmin().failing("c1",
                 new ExecutionException(new UnknownTopicOrPartitionException("gone"))));
 
         assertThrows(CausalTopicRecreatedException.class, watch::ensureIntact,
@@ -147,9 +147,9 @@ class ParsleyTopicIdentityWatchTest {
     @Test
     void aTransientResolutionFailureNeverBreaksTheWatch() {
         ParsleyTopicIdentityWatch watch = new ParsleyTopicIdentityWatch();
-        watch.expect("t1", T1_ID);
+        watch.expect("c1", C1_ID);
 
-        watch.poll(new FixedIdsAdmin().failing("t1",
+        watch.poll(new FixedIdsAdmin().failing("c1",
                 new ExecutionException(new org.apache.kafka.common.errors.TimeoutException("broker away"))));
 
         assertDoesNotThrow(watch::ensureIntact,
@@ -164,8 +164,8 @@ class ParsleyTopicIdentityWatchTest {
     @Test
     void conflictingInitTimeResolutionsBreakTheWatchImmediately() {
         ParsleyTopicIdentityWatch watch = new ParsleyTopicIdentityWatch();
-        watch.expect("t1", T1_ID);
-        watch.expect("t1", Uuid.randomUuid());
+        watch.expect("c1", C1_ID);
+        watch.expect("c1", Uuid.randomUuid());
 
         assertThrows(CausalTopicRecreatedException.class, watch::ensureIntact,
                 "conflicting init-time resolutions of one topic name must break the watch without a poll");
@@ -179,10 +179,10 @@ class ParsleyTopicIdentityWatchTest {
     @Test
     void aBrokenWatchStaysBrokenAcrossLaterCleanPolls() {
         ParsleyTopicIdentityWatch watch = new ParsleyTopicIdentityWatch();
-        watch.expect("t1", T1_ID);
-        watch.poll(new FixedIdsAdmin().with("t1", Uuid.randomUuid()));
+        watch.expect("c1", C1_ID);
+        watch.poll(new FixedIdsAdmin().with("c1", Uuid.randomUuid()));
 
-        watch.poll(new FixedIdsAdmin().with("t1", T1_ID));
+        watch.poll(new FixedIdsAdmin().with("c1", C1_ID));
 
         assertThrows(CausalTopicRecreatedException.class, watch::ensureIntact,
                 "identity, once broken, must stay broken for the process lifetime — a flapping broker "
@@ -216,10 +216,10 @@ class ParsleyTopicIdentityWatchTest {
         ParsleyTopicIdentityWatch watch = new ParsleyTopicIdentityWatch();
         ParsleyTopicIdentityWatch.register(watchId, watch);
         try {
-            watch.expect("t1", T1_ID);
-            Uuid recreated = seededUuidOtherThan(T1_ID, random);
-            FixedIdsAdmin intactView = new FixedIdsAdmin().with("t1", T1_ID).with("t2", T2_ID);
-            FixedIdsAdmin recreatedView = new FixedIdsAdmin().with("t1", recreated).with("t2", T2_ID);
+            watch.expect("c1", C1_ID);
+            Uuid recreated = seededUuidOtherThan(C1_ID, random);
+            FixedIdsAdmin intactView = new FixedIdsAdmin().with("c1", C1_ID).with("c2", C2_ID);
+            FixedIdsAdmin recreatedView = new FixedIdsAdmin().with("c1", recreated).with("c2", C2_ID);
             int intactPollsFirst = random.nextInt(4);
 
             ConcurrentLinkedQueue<Throwable> threadFailures = new ConcurrentLinkedQueue<>();
@@ -243,7 +243,7 @@ class ParsleyTopicIdentityWatchTest {
             }
             hammer.add(hammerThread("hammer-expecter", startGate, threadFailures, () -> {
                 for (int i = 0; i < 50; i++) {
-                    watch.expect("t2", T2_ID);
+                    watch.expect("c2", C2_ID);
                 }
             }));
             hammer.add(hammerThread("hammer-closer", startGate, threadFailures, () -> {
@@ -323,7 +323,7 @@ class ParsleyTopicIdentityWatchTest {
     private static void assertMessageComplete(CausalTopicRecreatedException failure, Uuid recreated,
                                               String context) {
         String message = failure.getMessage();
-        assertTrue(message.contains("t1") && message.contains(T1_ID.toString())
+        assertTrue(message.contains("c1") && message.contains(C1_ID.toString())
                         && message.contains(recreated.toString()),
                 "the surfaced failure must carry the complete detail — topic name and both UUIDs ("
                         + context + "): " + message);

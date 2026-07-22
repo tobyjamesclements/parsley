@@ -32,13 +32,13 @@ class ParsleySimSoakTest {
 
     /** The standing six-node topology plus a self-loop — every structural feature in one spec. */
     private static ParsleySimTrace.SimSpec soakSpec() {
-        return new ParsleySimTrace.SimSpec(List.of("t1"), List.of(
-                new ParsleySimTrace.SimSpec.NodeSpec("A", List.of("t1"), List.of("t2"), 0.4),
-                new ParsleySimTrace.SimSpec.NodeSpec("D", List.of("t1"), List.of("t2"), 0.4),
-                new ParsleySimTrace.SimSpec.NodeSpec("B", List.of("t1", "t2", "t3"), List.of("t3"), 0.4),
-                new ParsleySimTrace.SimSpec.NodeSpec("C", List.of("t1", "t2", "t3"), List.of("t4"), 0.4),
-                new ParsleySimTrace.SimSpec.NodeSpec("W", List.of("t1", "t2", "t3", "t4"), List.of("t5"), 0.0),
-                new ParsleySimTrace.SimSpec.NodeSpec("N", List.of("t5"), List.of("t6"), 0.0)));
+        return new ParsleySimTrace.SimSpec(List.of("c1"), List.of(
+                new ParsleySimTrace.SimSpec.NodeSpec("A", List.of("c1"), List.of("c2"), 0.4),
+                new ParsleySimTrace.SimSpec.NodeSpec("D", List.of("c1"), List.of("c2"), 0.4),
+                new ParsleySimTrace.SimSpec.NodeSpec("B", List.of("c1", "c2", "c3"), List.of("c3"), 0.4),
+                new ParsleySimTrace.SimSpec.NodeSpec("C", List.of("c1", "c2", "c3"), List.of("c4"), 0.4),
+                new ParsleySimTrace.SimSpec.NodeSpec("W", List.of("c1", "c2", "c3", "c4"), List.of("c5"), 0.0),
+                new ParsleySimTrace.SimSpec.NodeSpec("N", List.of("c5"), List.of("c6"), 0.0)));
     }
 
     /**
@@ -68,13 +68,13 @@ class ParsleySimSoakTest {
                                 + "surviving a full settle is a leak or a stall");
             }
             // Progress witness robust to scope changes (a shrink legitimately retires a node's
-            // t1 channel, re-homing its value into carried ancestry — frontier() then reads -1):
+            // c1 channel, re-homing its value into carried ancestry — frontier() then reads -1):
             // the external log itself must grow every segment (the scheduler produces ~1 in 10
             // steps), which together with the settled drain above means the system keeps
             // ingesting whatever it is currently scoped to.
-            long produced = sim.logSize("t1");
+            long produced = sim.logSize("c1");
             assertTrue(produced > lastFrontier,
-                    "[seed " + seed + " segment " + segment + "] the external t1 log must grow "
+                    "[seed " + seed + " segment " + segment + "] the external c1 log must grow "
                             + "every segment (was " + lastFrontier + ", still " + produced + ")");
             lastFrontier = produced;
         }

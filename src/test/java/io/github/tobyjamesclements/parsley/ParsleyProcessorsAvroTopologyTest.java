@@ -41,7 +41,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * {@link MockSchemaRegistry} (no broker, no Docker).
  *
  * <p>The point under test is {@code ParsleyResolver}'s per-source-topic serde resolution: a held
- * {@link Order} must be Avro-serialised into the buffer store under the {@code orders-value} subject
+ * {@link Order} must be Avro-serialised into the buffer store under the {@code c2-value} subject
  * (its source topic), then deserialised back to an equal {@code Order} when it drains — never under
  * the changelog/store name.
  */
@@ -51,11 +51,11 @@ class ParsleyProcessorsAvroTopologyTest {
     private static final String SCOPE = "parsley-avro-topology";
     private static final String REGISTRY_URL = "mock://" + SCOPE;
 
-    private static final String PRICES = "prices";
-    private static final String ORDERS = "orders";
+    private static final String C1 = "c1";
+    private static final String C2 = "c2";
     private static final Uuid PRICES_ID = Uuid.randomUuid();
     private static final Uuid ORDERS_ID = Uuid.randomUuid();
-    private static final ParsleyTopics TOPICS = ParsleyTopics.of(Map.of(PRICES, PRICES_ID, ORDERS, ORDERS_ID));
+    private static final ParsleyTopics TOPICS = ParsleyTopics.of(Map.of(C1, PRICES_ID, C2, ORDERS_ID));
 
     private final List<SpecificRecord> processed = new ArrayList<>();
 
@@ -67,7 +67,7 @@ class ParsleyProcessorsAvroTopologyTest {
 
     /**
      * An Avro {@link Order} held in the buffer while waiting for a {@link Price} dependency is
-     * Avro-serialised into the store under the {@code orders-value} Schema Registry subject (its
+     * Avro-serialised into the store under the {@code c2-value} Schema Registry subject (its
      * source topic), and is deserialized back to an equal {@code Order} when it drains — never
      * under the buffer-store or changelog subject name.
      *
@@ -77,8 +77,8 @@ class ParsleyProcessorsAvroTopologyTest {
      *
      * Asserts that the held record is not delivered to the delegate before the Price arrives,
      * the buffer store contains exactly one entry while held, and after the Price drains it both
-     * values arrive in causal order and the buffer is empty. Also asserts that {@code orders-value}
-     * and {@code prices-value} subjects are registered and no subject contains {@code buffer} or
+     * values arrive in causal order and the buffer is empty. Also asserts that {@code c2-value}
+     * and {@code c1-value} subjects are registered and no subject contains {@code buffer} or
      * {@code changelog}.
      */
     @Test
@@ -89,45 +89,45 @@ class ParsleyProcessorsAvroTopologyTest {
 
         ProcessorSupplier<String, SpecificRecord, String, SpecificRecord> user = capturing();
         StreamsBuilder builder = new StreamsBuilder();
-        builder.stream(List.of(PRICES, ORDERS), Consumed.with(Serdes.String(), avro))
+        builder.stream(List.of(C1, C2), Consumed.with(Serdes.String(), avro))
                 .process(ParsleyProcessorSupplier.builder(user)
                         .addBufferStore("parsley")
-                        .addSources(List.of(PRICES, ORDERS), Serdes.String(), avro)
-                        .topicAdmin(TestTopicAdmin.of(Map.of(PRICES, PRICES_ID, ORDERS, ORDERS_ID)))
+                        .addSources(List.of(C1, C2), Serdes.String(), avro)
+                        .topicAdmin(TestTopicAdmin.of(Map.of(C1, PRICES_ID, C2, ORDERS_ID)))
                         .build());
         Topology topology = builder.build();
 
         try (TopologyTestDriver driver = new TopologyTestDriver(topology, config())) {
-            TestInputTopic<String, SpecificRecord> prices =
-                    driver.createInputTopic(PRICES, new StringSerializer(), avro.serializer());
-            TestInputTopic<String, SpecificRecord> orders =
-                    driver.createInputTopic(ORDERS, new StringSerializer(), avro.serializer());
+            TestInputTopic<String, SpecificRecord> c1 =
+                    driver.createInputTopic(C1, new StringSerializer(), avro.serializer());
+            TestInputTopic<String, SpecificRecord> c2 =
+                    driver.createInputTopic(C2, new StringSerializer(), avro.serializer());
             KeyValueStore<String, byte[]> bufferStore = driver.getKeyValueStore("parsley-buffer");
 
             Order order = new Order("o-1", "ACME", 5);
 
-            // The order depends on prices-0@0, which has not arrived: it is held (Avro-serialised
+            // The order depends on c1-0@0, which has not arrived: it is held (Avro-serialised
             // into the buffer store), not delivered.
-            orders.pipeInput(new TestRecord<>("k", order, depsHeader(CausalClock.builder(TOPICS).require(PRICES, 0, 0).build())));
+            c2.pipeInput(new TestRecord<>("k", order, depsHeader(CausalClock.builder(TOPICS).require(C1, 0, 0).build())));
             assertTrue(processed.isEmpty(), "held record must not reach the delegate");
             assertEquals(1, storeSize(bufferStore), "held record must be persisted (Avro bytes) to the buffer store");
 
             // The price arrives and advances the frontier, draining the order back through the codec.
             Price price = new Price("ACME", 42.5);
-            prices.pipeInput(new TestRecord<>("k", price, depsHeader(CausalClock.empty())));
+            c1.pipeInput(new TestRecord<>("k", price, depsHeader(CausalClock.empty())));
 
             assertEquals(List.of(price, order), processed,
                     "the price is admitted, then the order drains as an Avro Order equal to the original");
             assertEquals(0, storeSize(bufferStore), "drained record must be removed from the buffer store");
         }
 
-        // Per-topic subject resolution: the held order round-tripped under orders-value (its source
+        // Per-topic subject resolution: the held order round-tripped under c2-value (its source
         // topic), never under the buffer store / changelog name.
         List<String> subjects = registeredSubjects();
-        assertTrue(subjects.contains("orders-value"),
-                "the buffered order must register the orders-value subject; got " + subjects);
-        assertTrue(subjects.contains("prices-value"),
-                "the prices topic must register the prices-value subject; got " + subjects);
+        assertTrue(subjects.contains("c2-value"),
+                "the buffered order must register the c2-value subject; got " + subjects);
+        assertTrue(subjects.contains("c1-value"),
+                "the c1 topic must register the c1-value subject; got " + subjects);
         assertTrue(subjects.stream().noneMatch(s -> s.contains("buffer") || s.contains("changelog")),
                 "no subject may be derived from the buffer/changelog name; got " + subjects);
     }
@@ -139,7 +139,7 @@ class ParsleyProcessorsAvroTopologyTest {
      * never crashed) rather than dropping the record.
      *
      * <p>Exercised directly against {@link StoreBackedBufferStore} with the real {@link SpecificAvroSerde}
-     * (genuine Confluent wire bytes, schema registered under {@code orders-value}), rather than
+     * (genuine Confluent wire bytes, schema registered under {@code c2-value}), rather than
      * through a full topology: a record's own declared dependency is folded into its own channel
      * before its own gate check runs, so under single-witness merge it always proves itself
      * immediately — there is no longer a way to force a record to sit genuinely buffered via a normal
@@ -150,7 +150,7 @@ class ParsleyProcessorsAvroTopologyTest {
      * exception.
      *
      * Asserts that decoding raises {@code CausalBufferDeserializationException}, naming the record's
-     * source topic {@code orders}, and that {@code indexEntries()} (which never touches the value
+     * source topic {@code c2}, and that {@code indexEntries()} (which never touches the value
      * serde) still succeeds despite the undecodable value.
      */
     @Test
@@ -163,11 +163,11 @@ class ParsleyProcessorsAvroTopologyTest {
 
         ParsleyVectorClock deps = ParsleyVectorClock.empty().observe(PRICES_ID, 0, 0);
         ParsleyMessage<String, SpecificRecord> orderMessage = new ParsleyMessage<>(
-                ORDERS, ORDERS_ID, 0, 0, 0L, "k", new Order("o-1", "ACME", 5), List.of(), deps);
+                C2, ORDERS_ID, 0, 0, 0L, "k", new Order("o-1", "ACME", 5), List.of(), deps);
         long seq = store.add(orderMessage, 100L);
 
         // A second store over the same backing bytes, but with a deserializer that always throws —
-        // modelling the registry schema for "orders-value" having changed incompatibly since.
+        // modelling the registry schema for "c2-value" having changed incompatibly since.
         Serde<SpecificRecord> undecodableOnRead = new Serde<>() {
             @Override public org.apache.kafka.common.serialization.Serializer<SpecificRecord> serializer() {
                 return avro.serializer();
@@ -188,7 +188,7 @@ class ParsleyProcessorsAvroTopologyTest {
 
         CausalBufferDeserializationException cause = causeOfType(thrown, CausalBufferDeserializationException.class);
         assertTrue(cause != null, "the failure must be a typed CausalBufferDeserializationException; got " + thrown);
-        assertEquals(ORDERS, cause.topic(), "the exception must name the record's source topic");
+        assertEquals(C2, cause.topic(), "the exception must name the record's source topic");
 
         List<ParsleyBufferStore.IndexEntry> indexEntries = org.junit.jupiter.api.Assertions.assertDoesNotThrow(
                 poisonedView::indexEntries, "indexEntries() must not touch the value serde");

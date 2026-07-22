@@ -47,7 +47,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * dependency, so A delivers B's record before any effect derived from it.
  *
  * <p>Topology: {@code ty} → app B → {@code shared}; app C consumes {@code shared} and re-keys
- * B-derived records to {@code t1}; app A consumes {@code t1} and {@code shared}, produces
+ * B-derived records to {@code c1}; app A consumes {@code c1} and {@code shared}, produces
  * {@code shared} (from seed records) and tags every delivery to {@code observed}.
  */
 @Testcontainers(disabledWithoutDocker = true)
@@ -57,7 +57,7 @@ class ParsleySharedSinkOrderingIT {
     private final KafkaContainer kafka =
             new KafkaContainer(DockerImageName.parse("apache/kafka:3.7.0"));
 
-    private static final String T1 = "t1";
+    private static final String C1 = "c1";
     private static final String TY = "ty";
     private static final String SHARED = "shared";
     private static final String OBSERVED = "observed";
@@ -65,24 +65,24 @@ class ParsleySharedSinkOrderingIT {
     /**
      * The effect record C derives from B's shared-topic record must carry a wire claim on that
      * record's exact shared coordinate, and A — for which {@code shared} is both a sink and an
-     * input — must deliver B's shared record before the derived effect arriving on {@code t1}:
+     * input — must deliver B's shared record before the derived effect arriving on {@code c1}:
      * a claim about another producer's record on A's own sink topic is genuinely gated, never
      * vacuously satisfied (finding (iii)).
      *
      * Asserts the effect's clock names B's shared coordinate and A's observed output shows the
-     * shared cause strictly before the t1 effect.
+     * shared cause strictly before the c1 effect.
      */
     @Test
     void claimAboutAnotherProducersRecordOnOwnSharedSinkGatesInsteadOfVacuouslySatisfying() throws Exception {
         String bootstrap = kafka.getBootstrapServers();
-        createTopics(bootstrap, T1, TY, SHARED, OBSERVED);
+        createTopics(bootstrap, C1, TY, SHARED, OBSERVED);
         Uuid sharedId = topicId(bootstrap, SHARED);
 
-        // App A: consumes t1 and shared (shared is ALSO its declared sink — the finding-(iii)
-        // shape); a "seed:" t1 record forwards to the shared sink, and every delivery is tagged
+        // App A: consumes c1 and shared (shared is ALSO its declared sink — the finding-(iii)
+        // shape); a "seed:" c1 record forwards to the shared sink, and every delivery is tagged
         // to observed.
         CausalTopology aTopology = new CausalStreamsBuilder()
-                .stream(List.of(T1, SHARED), Serdes.String(), Serdes.String())
+                .stream(List.of(C1, SHARED), Serdes.String(), Serdes.String())
                 .process(appAProcessor())
                 .to("shared-sink", SHARED, Serdes.String(), Serdes.String())
                 .to("observed-sink", OBSERVED, Serdes.String(), Serdes.String())
@@ -93,12 +93,12 @@ class ParsleySharedSinkOrderingIT {
                 .process(prefixingProcessor("b:"))
                 .to(SHARED, Serdes.String(), Serdes.String())
                 .build();
-        // App C: consumes the shared topic and derives an effect onto t1 from B's records only
+        // App C: consumes the shared topic and derives an effect onto c1 from B's records only
         // (A's own shared records are not re-derived, so the cycle terminates).
         CausalTopology cTopology = new CausalStreamsBuilder()
                 .stream(List.of(SHARED), Serdes.String(), Serdes.String())
                 .process(deriveFromBProcessor())
-                .to(T1, Serdes.String(), Serdes.String())
+                .to(C1, Serdes.String(), Serdes.String())
                 .build();
 
         try (CausalStreams a = new CausalStreams(aTopology, streamsConfig(bootstrap, "shared-a"));
@@ -111,7 +111,7 @@ class ParsleySharedSinkOrderingIT {
             try (KafkaProducer<String, String> input = new KafkaProducer<>(producerConfig(bootstrap))) {
                 // A seed for A so `shared` is genuinely A's sink in this run, then the trigger
                 // for the B → C → A causal chain.
-                input.send(CausalClock.empty().stamp(new ProducerRecord<>(T1, "k", "seed:x"))).get();
+                input.send(CausalClock.empty().stamp(new ProducerRecord<>(C1, "k", "seed:x"))).get();
                 input.send(CausalClock.empty().stamp(new ProducerRecord<>(TY, "k", "y"))).get();
             }
 
@@ -119,14 +119,14 @@ class ParsleySharedSinkOrderingIT {
             List<ConsumerRecord<String, String>> sharedRecords = new ArrayList<>();
             List<ConsumerRecord<String, String>> effectRecords = new ArrayList<>();
             try (KafkaConsumer<String, String> consumer = new KafkaConsumer<>(consumerConfig(bootstrap))) {
-                consumer.subscribe(List.of(SHARED, T1));
+                consumer.subscribe(List.of(SHARED, C1));
                 await().atMost(Duration.ofSeconds(90)).until(() -> {
                     consumer.poll(Duration.ofMillis(500)).forEach(record -> {
                         if (isBusinessRecord(record)) {
                             if (record.topic().equals(SHARED) && record.value().startsWith("b:")) {
                                 sharedRecords.add(record);
                             }
-                            if (record.topic().equals(T1) && record.value().startsWith("c:")) {
+                            if (record.topic().equals(C1) && record.value().startsWith("c:")) {
                                 effectRecords.add(record);
                             }
                         }
@@ -150,9 +150,9 @@ class ParsleySharedSinkOrderingIT {
                             observed.add(record.value());
                         }
                     });
-                    return observed.contains(SHARED + ":b:y") && observed.contains(T1 + ":c:b:y");
+                    return observed.contains(SHARED + ":b:y") && observed.contains(C1 + ":c:b:y");
                 });
-                assertTrue(observed.indexOf(SHARED + ":b:y") < observed.indexOf(T1 + ":c:b:y"),
+                assertTrue(observed.indexOf(SHARED + ":b:y") < observed.indexOf(C1 + ":c:b:y"),
                         "A must deliver another producer's shared-sink record before the effect "
                                 + "derived from it — never vacuously satisfy the claim because the "
                                 + "topic is A's own sink (finding (iii)); observed: " + observed);
@@ -161,7 +161,7 @@ class ParsleySharedSinkOrderingIT {
     }
 
     /**
-     * App A's delegate: a {@code seed:}-prefixed {@code t1} record forwards {@code a:<value>} to
+     * App A's delegate: a {@code seed:}-prefixed {@code c1} record forwards {@code a:<value>} to
      * the shared sink (making {@code shared} a genuine sink of A); every delivery — whatever its
      * source — is also tagged {@code <sourceTopic>:<value>} to the observed sink.
      */
@@ -178,7 +178,7 @@ class ParsleySharedSinkOrderingIT {
             public void process(Record<String, String> record) {
                 String source = ctx.recordMetadata().orElseThrow().topic();
                 ctx.forward(record.withValue(source + ":" + record.value()), "observed-sink");
-                if (T1.equals(source) && record.value().startsWith("seed:")) {
+                if (C1.equals(source) && record.value().startsWith("seed:")) {
                     ctx.forward(record.withValue("a:" + record.value()), "shared-sink");
                 }
             }
@@ -202,7 +202,7 @@ class ParsleySharedSinkOrderingIT {
         };
     }
 
-    /** App C's delegate: derives {@code c:<value>} onto t1 from B's shared records only. */
+    /** App C's delegate: derives {@code c:<value>} onto c1 from B's shared records only. */
     private static ProcessorSupplier<String, String, String, String> deriveFromBProcessor() {
         return () -> new Processor<>() {
             private ProcessorContext<String, String> ctx;

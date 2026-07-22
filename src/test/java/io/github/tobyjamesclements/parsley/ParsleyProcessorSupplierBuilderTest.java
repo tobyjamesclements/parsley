@@ -34,7 +34,7 @@ class ParsleyProcessorSupplierBuilderTest {
     @Test
     void buildFailsWithoutBufferStore() {
         ParsleyProcessorSupplier.Builder<String, String, String, String> b = ParsleyProcessorSupplier.builder(USER)
-                .addSource(new ParsleySource<>("t1", Serdes.String(), Serdes.String()));
+                .addSource(new ParsleySource<>("c1", Serdes.String(), Serdes.String()));
         assertThrows(IllegalStateException.class, b::build,
                 "build() must throw when addBufferStore(name) was not called");
     }
@@ -64,7 +64,7 @@ class ParsleyProcessorSupplierBuilderTest {
     void buildsAValidSupplier() {
         ParsleyProcessorSupplier<String, String, String, String> supplier =
                 builderWith()
-                        .addSource(new ParsleySource<>("t1", Serdes.String(), Serdes.String()))
+                        .addSource(new ParsleySource<>("c1", Serdes.String(), Serdes.String()))
                         .build();
         assertNotNull(supplier, "build() must return a non-null supplier");
         assertNotNull(supplier.get(), "supplier.get() must return a non-null processor");
@@ -80,18 +80,18 @@ class ParsleyProcessorSupplierBuilderTest {
     void addBufferStoreSetsNamespace() {
         ParsleyProcessorSupplier<String, String, String, String> supplier =
                 (ParsleyProcessorSupplier<String, String, String, String>) ParsleyProcessorSupplier.builder(USER)
-                        .addBufferStore("t1")
-                        .addSource(new ParsleySource<>("t1", Serdes.String(), Serdes.String()))
+                        .addBufferStore("c1")
+                        .addSource(new ParsleySource<>("c1", Serdes.String(), Serdes.String()))
                         .build();
 
         Set<String> storeNames = supplier.stores().stream()
                 .map(StoreBuilder::name)
                 .collect(Collectors.toSet());
-        assertTrue(storeNames.contains("t1-frontier"), "frontier store must be named from the namespace");
-        assertTrue(storeNames.contains("t1-buffer"), "buffer store must be named from the namespace");
-        assertTrue(storeNames.contains("t1-candidate-index"),
+        assertTrue(storeNames.contains("c1-frontier"), "frontier store must be named from the namespace");
+        assertTrue(storeNames.contains("c1-buffer"), "buffer store must be named from the namespace");
+        assertTrue(storeNames.contains("c1-candidate-index"),
                 "candidate-index store must be named from the namespace");
-        assertTrue(storeNames.contains("t1-forwarded-index"),
+        assertTrue(storeNames.contains("c1-forwarded-index"),
                 "forwarded-index store must be named from the namespace");
     }
 
@@ -106,7 +106,7 @@ class ParsleyProcessorSupplierBuilderTest {
     void withConfigKeyValueOverridesDefault() {
         ParsleyProcessorSupplier<String, String, String, String> supplier =
                 (ParsleyProcessorSupplier<String, String, String, String>) builderWith()
-                        .addSource(new ParsleySource<>("t1", Serdes.String(), Serdes.String()))
+                        .addSource(new ParsleySource<>("c1", Serdes.String(), Serdes.String()))
                         .withConfig(TOPOLOGY_VALIDATION, "strict")
                         .build();
         assertEquals(ParsleyConfig.ValidationMode.STRICT, supplier.config().topologyValidation(),
@@ -123,7 +123,7 @@ class ParsleyProcessorSupplierBuilderTest {
     void defaultConfigUsesStrictValidation() {
         ParsleyProcessorSupplier<String, String, String, String> supplier =
                 (ParsleyProcessorSupplier<String, String, String, String>) builderWith()
-                        .addSource(new ParsleySource<>("t1", Serdes.String(), Serdes.String()))
+                        .addSource(new ParsleySource<>("c1", Serdes.String(), Serdes.String()))
                         .build();
         assertEquals(ParsleyConfig.ValidationMode.STRICT, supplier.config().topologyValidation(),
                 "the default topology-validation mode is 'strict'");
@@ -140,7 +140,7 @@ class ParsleyProcessorSupplierBuilderTest {
     void builderRejectsAnAlreadyDecoratedSupplier() {
         ParsleyProcessorSupplier<String, String, String, String> alreadyDecorated =
                 builderWith()
-                        .addSource(new ParsleySource<>("t1", Serdes.String(), Serdes.String()))
+                        .addSource(new ParsleySource<>("c1", Serdes.String(), Serdes.String()))
                         .build();
 
         IllegalArgumentException e = assertThrows(IllegalArgumentException.class,

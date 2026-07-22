@@ -38,13 +38,13 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * IT b): a late joiner consuming both an input topic and its derived topic replays fully-written
  * history and must deliver every (cause, effect) pair in causal order. Under the retired epoch
  * floors, a coordinated joiner's replay-era view repositioned historical stamps at the epoch origin
- * — erasing the derived records' {@code t1} ancestry, so nothing ordered a historical {@code t2}
- * record after its {@code t1} cause. With truthful stamps the derived record's clock claims its
- * exact {@code t1} coordinate, and the joiner's own gate orders the pair — no floors, no
+ * — erasing the derived records' {@code c1} ancestry, so nothing ordered a historical {@code c2}
+ * record after its {@code c1} cause. With truthful stamps the derived record's clock claims its
+ * exact {@code c1} coordinate, and the joiner's own gate orders the pair — no floors, no
  * coordination, no barrier.
  *
- * <p>App A ({@code t1} → {@code t2}) processes a batch and shuts down; only then does joiner Z
- * (consuming {@code t1} and {@code t2}) start, against complete, closed history.
+ * <p>App A ({@code c1} → {@code c2}) processes a batch and shuts down; only then does joiner Z
+ * (consuming {@code c1} and {@code c2}) start, against complete, closed history.
  */
 @Testcontainers(disabledWithoutDocker = true)
 class ParsleyLateJoinerHistoricalOrderIT {
@@ -53,15 +53,15 @@ class ParsleyLateJoinerHistoricalOrderIT {
     private final KafkaContainer kafka =
             new KafkaContainer(DockerImageName.parse("apache/kafka:3.7.0"));
 
-    private static final String T1 = "t1";
-    private static final String T2 = "t2";
+    private static final String C1 = "c1";
+    private static final String C2 = "c2";
     private static final String OBSERVED = "observed";
     private static final int RECORDS = 8;
 
     /**
-     * Z starts after the whole {@code t1} → {@code t2} history is written and A is gone, replays
+     * Z starts after the whole {@code c1} → {@code c2} history is written and A is gone, replays
      * both topics from log start, and must deliver every historical pair cause-first: each derived
-     * {@code t2} record's stamp names its exact {@code t1} cause, so Z's gate holds it until that
+     * {@code c2} record's stamp names its exact {@code c1} cause, so Z's gate holds it until that
      * cause has been locally delivered — the ordering floored stamps could not express.
      *
      * Asserts Z observes both halves of every historical pair, cause strictly before effect.
@@ -69,12 +69,12 @@ class ParsleyLateJoinerHistoricalOrderIT {
     @Test
     void lateJoinerDeliversHistoricalPairsInCausalOrder() throws Exception {
         String bootstrap = kafka.getBootstrapServers();
-        createTopics(bootstrap, T1, T2, OBSERVED);
+        createTopics(bootstrap, C1, C2, OBSERVED);
 
         CausalTopology aTopology = new CausalStreamsBuilder()
-                .stream(List.of(T1), Serdes.String(), Serdes.String())
+                .stream(List.of(C1), Serdes.String(), Serdes.String())
                 .process(prefixingProcessor("a:"))
-                .to(T2, Serdes.String(), Serdes.String())
+                .to(C2, Serdes.String(), Serdes.String())
                 .build();
 
         // Phase 1: write the history, then shut A down — the joiner faces closed, purely
@@ -84,7 +84,7 @@ class ParsleyLateJoinerHistoricalOrderIT {
             try (KafkaProducer<String, String> input = new KafkaProducer<>(producerConfig(bootstrap))) {
                 for (int i = 0; i < RECORDS; i++) {
                     input.send(CausalClock.empty()
-                            .stamp(new ProducerRecord<>(T1, "k", "v" + i))).get();
+                            .stamp(new ProducerRecord<>(C1, "k", "v" + i))).get();
                 }
             }
             awaitDerivedHistory(bootstrap);
@@ -92,7 +92,7 @@ class ParsleyLateJoinerHistoricalOrderIT {
 
         // Phase 2: the late joiner replays input and derived topic together.
         CausalTopology joinerTopology = new CausalStreamsBuilder()
-                .stream(List.of(T1, T2), Serdes.String(), Serdes.String())
+                .stream(List.of(C1, C2), Serdes.String(), Serdes.String())
                 .process(taggingProcessor())
                 .to(OBSERVED, Serdes.String(), Serdes.String())
                 .build();
@@ -111,26 +111,26 @@ class ParsleyLateJoinerHistoricalOrderIT {
                     return observed.size() >= 2 * RECORDS;
                 });
                 for (int i = 0; i < RECORDS; i++) {
-                    String cause = T1 + ":v" + i;
-                    String effect = T2 + ":a:v" + i;
+                    String cause = C1 + ":v" + i;
+                    String effect = C2 + ":a:v" + i;
                     assertTrue(observed.contains(cause),
-                            "the joiner must deliver the historical t1 cause v" + i + "; observed: " + observed);
+                            "the joiner must deliver the historical c1 cause v" + i + "; observed: " + observed);
                     assertTrue(observed.contains(effect),
-                            "the joiner must deliver the historical derived t2 effect for v" + i
+                            "the joiner must deliver the historical derived c2 effect for v" + i
                                     + "; observed: " + observed);
                     assertTrue(observed.indexOf(cause) < observed.indexOf(effect),
                             "the historical pair for v" + i + " must deliver cause-first — the derived "
-                                    + "record's truthful stamp names its t1 cause, closing the ordering "
+                                    + "record's truthful stamp names its c1 cause, closing the ordering "
                                     + "hole floored stamps opened; observed: " + observed);
                 }
             }
         }
     }
 
-    /** Waits until every derived record has been committed to {@code t2}, so history is complete. */
+    /** Waits until every derived record has been committed to {@code c2}, so history is complete. */
     private void awaitDerivedHistory(String bootstrap) {
         try (KafkaConsumer<String, String> consumer = new KafkaConsumer<>(consumerConfig(bootstrap))) {
-            consumer.subscribe(List.of(T2));
+            consumer.subscribe(List.of(C2));
             Set<String> derived = new HashSet<>();
             await().atMost(Duration.ofSeconds(90)).until(() -> {
                 consumer.poll(Duration.ofMillis(500)).forEach(record -> {
