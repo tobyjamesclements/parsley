@@ -165,6 +165,16 @@
             <version>1.21.4</version>
             <scope>test</scope>
         </dependency>
+        <!-- Toxiproxy between the Streams clients and the broker for the real-broker fault IT
+             (ParsleyBrokerFaultIT): stalled acks and severed connections that the in-JVM simulator
+             cannot model. Brings eu.rekawek.toxiproxy:toxiproxy-java transitively; the wide
+             toxiproxy API stays behind the ParsleyProxiedBroker test seam. -->
+        <dependency>
+            <groupId>org.testcontainers</groupId>
+            <artifactId>toxiproxy</artifactId>
+            <version>1.21.4</version>
+            <scope>test</scope>
+        </dependency>
         <dependency>
             <groupId>org.awaitility</groupId>
             <artifactId>awaitility</artifactId>
