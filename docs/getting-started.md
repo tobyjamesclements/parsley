@@ -61,7 +61,7 @@ yourself.
 ```java
 // the trigger's own dependencies plus its own position
 CausalClock deps = CausalClock.using(props).observe(trigger);
-producer.send(deps.stamp(new ProducerRecord<>("orders", key, value)));
+producer.send(deps.stamp(new ProducerRecord<>("t3", key, value)));
 ```
 
 `observe` folds in the dependencies the consumed record arrived with, together with the consumed
@@ -86,7 +86,7 @@ explicitly.
 <!-- Mirrored verbatim by DocsSamplesTest#builderSample; keep the sample and the test in sync. -->
 ```java
 CausalClock deps = CausalClock.builder(props)
-        .require("prices", /* partition */ 0, /* offset */ 42)
+        .require("t1", /* partition */ 0, /* offset */ 42)
         .build();
 ```
 

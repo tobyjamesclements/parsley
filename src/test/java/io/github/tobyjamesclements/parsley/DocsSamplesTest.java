@@ -41,23 +41,16 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
  * </ul>
  *
  * <p>Drift is one-directional — a doc edit does not touch this file — so each fenced block in the
- * docs carries a comment naming its mirror method. Topic names follow the docs' samples
- * ({@code orders}, {@code prices}, ...) rather than the usual T1/T2/T3 convention, because the
- * samples are mirrored as written.
+ * docs carries a comment naming its mirror method. The samples use the repo's usual T1/T2/T3
+ * topic-name convention, so the mirrors do too.
  */
 class DocsSamplesTest {
 
-    private static final Uuid ORDERS_ID = Uuid.randomUuid();
-    private static final Uuid PRICES_ID = Uuid.randomUuid();
-    private static final Uuid INVENTORY_ID = Uuid.randomUuid();
-    private static final Uuid ENRICHED_OUTPUT_ID = Uuid.randomUuid();
-
     /** The docs' topic names bound to fixed UUIDs — the broker-free resolver path. */
     private static final Map<String, Uuid> TOPIC_IDS = Map.of(
-            "orders", ORDERS_ID,
-            "prices", PRICES_ID,
-            "inventory", INVENTORY_ID,
-            "enriched-output", ENRICHED_OUTPUT_ID);
+            "t1", Uuid.randomUuid(),
+            "t2", Uuid.randomUuid(),
+            "t3", Uuid.randomUuid());
 
     // ---------------------------------------------------------------------------------------------
     // docs/getting-started.md § "Stamping causal context onto produced records", sample 1: relay
@@ -73,7 +66,7 @@ class DocsSamplesTest {
             ConsumerRecord<String, String> trigger, String key, String value) {
         // the trigger's own dependencies plus its own position
         CausalClock deps = CausalClock.using(props).observe(trigger);
-        producer.send(deps.stamp(new ProducerRecord<>("orders", key, value)));
+        producer.send(deps.stamp(new ProducerRecord<>("t3", key, value)));
     }
 
     /**
@@ -86,17 +79,17 @@ class DocsSamplesTest {
      */
     @Test
     void relaySampleStampsTheTriggersDepsAndOwnPosition() {
-        CausalClock carried = CausalClock.builder(TOPIC_IDS).require("inventory", 0, 3).build();
-        ConsumerRecord<String, String> trigger = new ConsumerRecord<>("prices", 0, 7L, "k", "v");
+        CausalClock carried = CausalClock.builder(TOPIC_IDS).require("t2", 0, 3).build();
+        ConsumerRecord<String, String> trigger = new ConsumerRecord<>("t1", 0, 7L, "k", "v");
         trigger.headers().add(ParsleyHeader.CAUSAL_CLOCK, carried.toBytes());
 
         CausalClock deps = CausalClock.using(TOPIC_IDS).observe(trigger);
         ProducerRecord<String, String> stamped =
-                deps.stamp(new ProducerRecord<>("orders", "k", "v"));
+                deps.stamp(new ProducerRecord<>("t3", "k", "v"));
 
         CausalClock expected = CausalClock.builder(TOPIC_IDS)
-                .require("inventory", 0, 3)
-                .require("prices", 0, 7)
+                .require("t2", 0, 3)
+                .require("t1", 0, 7)
                 .build();
         assertEquals(Optional.of(expected), CausalClock.fromHeaders(stamped.headers()),
                 "the relay sample must stamp the trigger's carried dependencies plus the "
@@ -131,19 +124,19 @@ class DocsSamplesTest {
      */
     @Test
     void fanInSampleChainsAnObservePerInput() {
-        ConsumerRecord<String, String> priceUpdate = new ConsumerRecord<>("prices", 0, 7L, "k", "v");
+        ConsumerRecord<String, String> priceUpdate = new ConsumerRecord<>("t1", 0, 7L, "k", "v");
         ConsumerRecord<String, String> inventoryChange =
-                new ConsumerRecord<>("inventory", 0, 3L, "k", "v");
+                new ConsumerRecord<>("t2", 0, 3L, "k", "v");
 
         CausalClock deps = CausalClock.using(TOPIC_IDS)
                 .observe(priceUpdate)
                 .observe(inventoryChange);
         ProducerRecord<String, String> stamped =
-                deps.stamp(new ProducerRecord<>("orders", "k", "v"));
+                deps.stamp(new ProducerRecord<>("t3", "k", "v"));
 
         CausalClock expected = CausalClock.builder(TOPIC_IDS)
-                .require("prices", 0, 7)
-                .require("inventory", 0, 3)
+                .require("t1", 0, 7)
+                .require("t2", 0, 3)
                 .build();
         assertEquals(Optional.of(expected), CausalClock.fromHeaders(stamped.headers()),
                 "the fan-in sample must stamp the union of both consumed inputs' positions");
@@ -161,7 +154,7 @@ class DocsSamplesTest {
     @SuppressWarnings("unused")
     private static void builderSample(Properties props) {
         CausalClock deps = CausalClock.builder(props)
-                .require("prices", /* partition */ 0, /* offset */ 42)
+                .require("t1", /* partition */ 0, /* offset */ 42)
                 .build();
     }
 
@@ -175,13 +168,13 @@ class DocsSamplesTest {
     @Test
     void builderSampleRequiresTheNamedCoordinate() {
         CausalClock deps = CausalClock.builder(TOPIC_IDS)
-                .require("prices", /* partition */ 0, /* offset */ 42)
+                .require("t1", /* partition */ 0, /* offset */ 42)
                 .build();
 
         CausalClock observed = CausalClock.using(TOPIC_IDS)
-                .observe(new ConsumerRecord<>("prices", 0, 42L, "k", "v"));
+                .observe(new ConsumerRecord<>("t1", 0, 42L, "k", "v"));
         assertEquals(observed, deps,
-                "an explicit require(\"prices\", 0, 42) must build the same clock as observing "
+                "an explicit require(\"t1\", 0, 42) must build the same clock as observing "
                         + "a record at that coordinate");
     }
 
@@ -216,11 +209,11 @@ class DocsSamplesTest {
     @Test
     void portableTokenSampleRebuildsTheDependenciesAcrossATransport() {
         CausalClock carried = CausalClock.builder(TOPIC_IDS)
-                .require("prices", 0, 42)
-                .require("inventory", 0, 3)
+                .require("t1", 0, 42)
+                .require("t2", 0, 3)
                 .build();
         ConsumerRecord<String, String> consumedRecord =
-                new ConsumerRecord<>("orders", 0, 9L, "k", "v");
+                new ConsumerRecord<>("t3", 0, 9L, "k", "v");
         consumedRecord.headers().add(ParsleyHeader.CAUSAL_CLOCK, carried.toBytes());
 
         assertEquals(carried, portableTokenSample(consumedRecord),
@@ -236,7 +229,7 @@ class DocsSamplesTest {
     @Test
     void portableTokenSampleFallsBackToTheEmptyClockForAnUnstampedRecord() {
         ConsumerRecord<String, String> consumedRecord =
-                new ConsumerRecord<>("orders", 0, 9L, "k", "v");
+                new ConsumerRecord<>("t3", 0, 9L, "k", "v");
         assertEquals(CausalClock.empty(), portableTokenSample(consumedRecord),
                 "an unstamped record must propagate as the empty clock, not fail");
     }
@@ -254,9 +247,9 @@ class DocsSamplesTest {
     private static void streamsQuickstartSample(Properties props, Serde<String> orderSerde,
             Serde<String> enrichedSerde) {
         CausalTopology topology = new CausalStreamsBuilder()
-                .stream(List.of("prices", "orders"), Serdes.String(), orderSerde)
+                .stream(List.of("t1", "t2"), Serdes.String(), orderSerde)
                 .process(new EnrichOrderSupplier())
-                .to("enriched-output", Serdes.String(), enrichedSerde)
+                .to("t3", Serdes.String(), enrichedSerde)
                 .build();
 
         CausalStreams causalStreams = new CausalStreams(topology, props);
@@ -279,9 +272,9 @@ class DocsSamplesTest {
 
         CausalTopology topology = new CausalStreamsBuilder()
                 .topicAdmin(TestTopicAdmin.of(TOPIC_IDS))
-                .stream(List.of("prices", "orders"), Serdes.String(), orderSerde)
+                .stream(List.of("t1", "t2"), Serdes.String(), orderSerde)
                 .process(new EnrichOrderSupplier())
-                .to("enriched-output", Serdes.String(), enrichedSerde)
+                .to("t3", Serdes.String(), enrichedSerde)
                 .build();
 
         try (CausalStreams causalStreams = new CausalStreams(topology, streamsProps())) {
