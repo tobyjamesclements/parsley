@@ -22,7 +22,6 @@ import org.junit.jupiter.api.Test;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.kafka.KafkaContainer;
-import org.testcontainers.utility.DockerImageName;
 
 import java.time.Duration;
 import java.util.ArrayList;
@@ -55,7 +54,7 @@ class ParsleySharedSinkOrderingIT {
 
     @Container
     private final KafkaContainer kafka =
-            new KafkaContainer(DockerImageName.parse("apache/kafka:3.7.0"));
+            new KafkaContainer(ParsleyBrokerImage.get());
 
     private static final String C1 = "c1";
     private static final String TY = "ty";

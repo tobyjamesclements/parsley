@@ -23,7 +23,6 @@ import org.junit.jupiter.api.Test;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.kafka.KafkaContainer;
-import org.testcontainers.utility.DockerImageName;
 
 import java.time.Duration;
 import java.util.ArrayList;
@@ -68,7 +67,7 @@ class CausalFanOutScopedFrontierIT {
 
     @Container
     private final KafkaContainer kafka =
-            new KafkaContainer(DockerImageName.parse("apache/kafka:3.7.0"));
+            new KafkaContainer(ParsleyBrokerImage.get());
 
     // Upstream source topics the client consumes to build its max frontier.
     private static final String SRC1 = "src-1";

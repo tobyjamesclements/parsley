@@ -28,7 +28,9 @@ Parsley is published to [Maven Central](https://central.sonatype.com/artifact/io
 fresh start (new state, new offsets), because wire formats and the public API change without
 compatibility aliases until 1.0.
 
-Requires Java 21 or later. Building from source needs JDK 25; build with `./mvnw install`.
+Requires Java 21 or later, and Kafka brokers version 3.7.0 or later — the minimum supported
+broker; the integration suite runs against both 3.7.0 and the current stable broker line.
+Building from source needs JDK 25; build with `./mvnw install`.
 
 ## Docs
 

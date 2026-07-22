@@ -5,6 +5,8 @@
 - Java 21 or later (the artifact is compiled with `--release 21`; building Parsley from source
   needs JDK 25)
 - Maven 3.9 or later, or the included `./mvnw` wrapper
+- Kafka brokers version 3.7.0 or later. 3.7.0 is the minimum supported broker version; the
+  integration suite runs against both 3.7.0 and the current stable broker line.
 
 ## Installation
 

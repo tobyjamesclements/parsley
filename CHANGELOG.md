@@ -234,6 +234,10 @@ All notable changes to this project are documented in this file. The format is b
   version. Documentation vocabulary updated throughout.
 
 ### Documentation
+- **The minimum supported Kafka broker version is documented: 3.7.0.** The integration suite now
+  runs against both the 3.7.0 minimum and the current stable broker line (4.3.1 at the time of
+  writing) in a CI matrix; the broker image is centralized behind one test seam
+  (`-Dparsley.it.kafka.image`). Stated in the README and the getting-started prerequisites.
 - **The getting-started and Streams code samples use neutral channel and message names** —
   `c1`/`c2`/`c3` topics (a Kafka topic-partition is the causal channel of the literature) and
   `m1`/`m2`/`m3` messages, the naming convention of the causality papers Parsley cites — in place
