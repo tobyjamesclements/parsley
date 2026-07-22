@@ -57,6 +57,7 @@ entirely internal: each distinct topic name is resolved (and cached) the first t
 through a Kafka admin client Parsley opens and closes on its own — nothing to construct or close
 yourself.
 
+<!-- Mirrored verbatim by DocsSamplesTest#relaySample; keep the sample and the test in sync. -->
 ```java
 // the trigger's own dependencies plus its own position
 CausalClock deps = CausalClock.using(props).observe(trigger);
@@ -68,6 +69,7 @@ record's own position. A downstream causal processor therefore waits until it ha
 before it delivers anything stamped here. The resolver bound by `using` carries through each
 `observe`, so a fan-in — where an output is caused by several inputs — chains an `observe` per input.
 
+<!-- Mirrored verbatim by DocsSamplesTest#fanInSample; keep the sample and the test in sync. -->
 ```java
 CausalClock deps = CausalClock.using(props)
         .observe(priceUpdate)
@@ -81,6 +83,7 @@ A stateful node whose output reflects everything it has consumed keeps a single 
 To declare a dependency on a specific upstream position that you did not consume, build one
 explicitly.
 
+<!-- Mirrored verbatim by DocsSamplesTest#builderSample; keep the sample and the test in sync. -->
 ```java
 CausalClock deps = CausalClock.builder(props)
         .require("prices", /* partition */ 0, /* offset */ 42)
@@ -98,6 +101,7 @@ The serialised dependencies header grows with the number of topic-partitions it 
 A `CausalClock` value is a portable causal token. To gate a read in a downstream service on
 what an upstream record depended on, serialise the dependencies and send them over your transport.
 
+<!-- Mirrored verbatim by DocsSamplesTest#portableTokenSample; keep the sample and the test in sync. -->
 ```java
 // Sender. Extract the relevant dependencies and serialise them.
 CausalClock context = CausalClock.fromRecord(consumedRecord)

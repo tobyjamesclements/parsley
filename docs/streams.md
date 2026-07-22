@@ -4,6 +4,7 @@
 own `StreamsBuilder`, `Topology`, and `KafkaStreams`. Declare the topology's single causal stage as one
 fluent chain, terminate the chain with `.build()`, then hand the result to a `CausalStreams` runtime.
 
+<!-- Mirrored verbatim by DocsSamplesTest#streamsQuickstartSample; keep the sample and the test in sync. -->
 ```java
 CausalTopology topology = new CausalStreamsBuilder()
         .stream(List.of("prices", "orders"), Serdes.String(), orderSerde)
