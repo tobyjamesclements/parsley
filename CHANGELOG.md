@@ -6,6 +6,37 @@ All notable changes to this project are documented in this file. The format is b
 
 ## [Unreleased]
 
+### Added
+- **A randomized protocol explorer over the topology simulator** (test-side). The T2.4 property
+  harness (`ParsleyTopologySim`) now records every scheduler step as a replayable trace
+  (`ParsleySimTrace`, with a text format for copy-pasteable repros) and can re-execute a recorded
+  or delta-debugged schedule PRNG-free; failing schedules are minimised by `ParsleySimShrinker`
+  (shortest failing prefix, then ddmin, same-failure-signature preserving). New fault modes
+  compose with the existing seeded scheduling: dirty restarts (no final ack fold; the I8
+  end-offset seed carries the recovery), consumer offset rollbacks into the already-delivered
+  region (the A11 redelivery net, with a new no-duplicate-delegate-delivery invariant), and
+  random A5/A6 scope-change restarts. `ParsleyTopologyGen` generates seed-deterministic random
+  topologies classified by structural feature, and `ParsleyRandomTopologyPropertyTest` sweeps
+  them under rotating fault profiles with population-level vacuity guards — system-property
+  scalable from the CI default (~1s) to deep sweeps; `ParsleySimSoakTest` (opt-in,
+  `-Dparsley.sim.soak=true`) adds a 500k-step leak-and-stall soak. Cross-JVM seed
+  reproducibility fixed on the way (pollable-input iteration was salted `Set` order), plus two
+  simulator fidelity gaps the explorer itself surfaced: null-message sends now ack and fold into
+  `ownOutputs` like any send, and node (re)starts now run production's post-init
+  `drainAfterRestore` pass.
+
+### Known issues
+- **Null-message gossip never quiesces on topic cycles of three or more nodes** — found by the
+  explorer's first sweep and pinned in `ParsleyGossipCycleQuiescenceTest`. A cycle member that
+  neither produces nor consumes some cycle channel knows it only through carried-clock custody
+  (I9), one gossip lap stale, so the I6 relay condition is satisfied every lap and each relay
+  appends the coordinate that sustains the next: an idle deployment generates null-message
+  traffic forever at one message per loop latency per channel. Delivery-order safety is
+  unaffected. Self-cycles and two-node cycles quiesce (every cycle channel is produced or
+  consumed by every member) — the existing cyclic ITs cover exactly those shapes, which is why
+  this went unseen. The topology generator excludes longer cycles until the protocol closes the
+  gap.
+
 ### Changed
 - **The artifact now targets Java 21.** `maven.compiler.release` drops from 25 to 21: no main
   source used a post-21 API, so the 25 floor only excluded consumers pinned to an LTS. Building
