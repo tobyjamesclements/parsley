@@ -55,6 +55,8 @@ nav:
     - Internals:
       - Overview: internals/overview.md
       - Causal consistency model: internals/causal-consistency.md
+      - Named invariants: internals/invariants.md
+      - Naming: internals/naming.md
       - The channels module: internals/channels.md
       - The causal-broadcast module: internals/causal-broadcast.md
       - The gossip module: internals/gossip.md

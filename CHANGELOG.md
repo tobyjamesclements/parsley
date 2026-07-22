@@ -7,6 +7,12 @@ All notable changes to this project are documented in this file. The format is b
 ## [Unreleased]
 
 ### Added
+- **Two new internals pages: the named-invariant catalogue and the naming register.**
+  `docs/internals/invariants.md` states I1–I9 — the invariants Javadoc and tests cite by
+  number — which previously had no definition in the repository; `docs/internals/naming.md`
+  records the visibility convention, the academic naming test, and the register of naming
+  decisions with their literature citations. Project instructions for coding agents landed as
+  `.claude/CLAUDE.md` (now tracked; the rest of `.claude/` stays ignored).
 - **A randomized protocol explorer over the topology simulator** (test-side). The T2.4 property
   harness (`ParsleyTopologySim`) now records every scheduler step as a replayable trace
   (`ParsleySimTrace`, with a text format for copy-pasteable repros) and can re-execute a recorded

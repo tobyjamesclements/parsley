@@ -115,6 +115,9 @@ Causal processor (Streams)
 
 - [Causal consistency model](causal-consistency.md) — the theory, the gate's soundness argument,
   and the environmental assumptions E1–E3
+- [Named invariants](invariants.md) — the I1–I9 catalogue that Javadoc and tests cite
+- [Naming](naming.md) — the visibility convention, the academic naming test, and the decision
+  register
 - [The channels module](channels.md) — coordinates, density, own outputs, scope changes
 - [The causal-broadcast module](causal-broadcast.md) — buffer, candidate index, drain cascade,
   fail-closed delivery, the stamping site
