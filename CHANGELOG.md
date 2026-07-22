@@ -234,10 +234,11 @@ All notable changes to this project are documented in this file. The format is b
   version. Documentation vocabulary updated throughout.
 
 ### Documentation
-- **The getting-started and Streams code samples use neutral `t1`/`t2`/`t3` topic names** in place
-  of the previous `orders`/`prices`/`inventory`/`enriched-output` examples. The samples are now
-  compiled and exercised by a test (`DocsSamplesTest`), so a public-API change that would break a
-  published sample fails the build.
+- **The getting-started and Streams code samples use neutral `t1`/`t2`/`t3` topic names and
+  `m1`/`m2`/`m3` message variable names** in place of the previous domain-flavoured examples
+  (`orders`, `prices`, `trigger`, `priceUpdate`, ...). The samples are now compiled and exercised
+  by a test (`DocsSamplesTest`), so a public-API change that would break a published sample fails
+  the build.
 - **The `parsley-causal-clock` wire format states that entry order is unspecified.** The encoder
   walks unordered maps, so a multi-entry clock's entries appear in no guaranteed order;
   `docs/internals/wire-format.md` now says so explicitly, and a decoder must accept entries in any

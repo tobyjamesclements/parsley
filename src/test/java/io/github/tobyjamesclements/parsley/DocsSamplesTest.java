@@ -29,7 +29,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
  * <p>Each sample appears twice here:
  * <ul>
  *   <li>A <em>mirror method</em> whose body is the fenced block verbatim, with the doc's free
- *       identifiers ({@code props}, {@code producer}, {@code trigger}, ...) as parameters.
+ *       identifiers ({@code props}, {@code producer}, {@code m1}, ...) as parameters.
  *       Compilation is the contract; mirrors whose sample needs a live broker (the
  *       {@code using(Properties)} / {@code builder(Properties)} resolvers, {@code start()}) are
  *       never invoked.</li>
@@ -59,31 +59,31 @@ class DocsSamplesTest {
     /**
      * Verbatim mirror of the one-to-one relay sample. Never invoked: {@code using(Properties)}
      * resolves topic UUIDs through a live broker. Executed equivalent:
-     * {@link #relaySampleStampsTheTriggersDepsAndOwnPosition()}.
+     * {@link #relaySampleStampsTheConsumedMessagesDepsAndOwnPosition()}.
      */
     @SuppressWarnings("unused")
     private static void relaySample(Properties props, Producer<String, String> producer,
-            ConsumerRecord<String, String> trigger, String key, String value) {
-        // the trigger's own dependencies plus its own position
-        CausalClock deps = CausalClock.using(props).observe(trigger);
+            ConsumerRecord<String, String> m1, String key, String value) {
+        // m1's own dependencies plus its own position
+        CausalClock deps = CausalClock.using(props).observe(m1);
         producer.send(deps.stamp(new ProducerRecord<>("t3", key, value)));
     }
 
     /**
      * The relay sample's chain, over the broker-free {@code using(Map)} overload: observing the
-     * trigger folds in both the dependencies the trigger arrived with and the trigger's own
-     * position, exactly as the surrounding prose claims.
+     * consumed message {@code m1} folds in both the dependencies {@code m1} arrived with and
+     * {@code m1}'s own position, exactly as the surrounding prose claims.
      *
-     * Asserts that the stamped record's clock header decodes to the trigger's carried dependency
-     * plus the trigger's own coordinate.
+     * Asserts that the stamped record's clock header decodes to {@code m1}'s carried dependency
+     * plus {@code m1}'s own coordinate.
      */
     @Test
-    void relaySampleStampsTheTriggersDepsAndOwnPosition() {
+    void relaySampleStampsTheConsumedMessagesDepsAndOwnPosition() {
         CausalClock carried = CausalClock.builder(TOPIC_IDS).require("t2", 0, 3).build();
-        ConsumerRecord<String, String> trigger = new ConsumerRecord<>("t1", 0, 7L, "k", "v");
-        trigger.headers().add(ParsleyHeader.CAUSAL_CLOCK, carried.toBytes());
+        ConsumerRecord<String, String> m1 = new ConsumerRecord<>("t1", 0, 7L, "k", "v");
+        m1.headers().add(ParsleyHeader.CAUSAL_CLOCK, carried.toBytes());
 
-        CausalClock deps = CausalClock.using(TOPIC_IDS).observe(trigger);
+        CausalClock deps = CausalClock.using(TOPIC_IDS).observe(m1);
         ProducerRecord<String, String> stamped =
                 deps.stamp(new ProducerRecord<>("t3", "k", "v"));
 
@@ -92,8 +92,8 @@ class DocsSamplesTest {
                 .require("t1", 0, 7)
                 .build();
         assertEquals(Optional.of(expected), CausalClock.fromHeaders(stamped.headers()),
-                "the relay sample must stamp the trigger's carried dependencies plus the "
-                        + "trigger's own (topic, partition, offset)");
+                "the relay sample must stamp m1's carried dependencies plus m1's own "
+                        + "(topic, partition, offset)");
     }
 
     // ---------------------------------------------------------------------------------------------
@@ -107,12 +107,12 @@ class DocsSamplesTest {
      */
     @SuppressWarnings("unused")
     private static void fanInSample(Properties props, Producer<String, String> producer,
-            ConsumerRecord<String, String> priceUpdate,
-            ConsumerRecord<String, String> inventoryChange, ProducerRecord<String, String> record) {
+            ConsumerRecord<String, String> m1, ConsumerRecord<String, String> m2,
+            ProducerRecord<String, String> m3) {
         CausalClock deps = CausalClock.using(props)
-                .observe(priceUpdate)
-                .observe(inventoryChange);
-        producer.send(deps.stamp(record));
+                .observe(m1)
+                .observe(m2);
+        producer.send(deps.stamp(m3));
     }
 
     /**
@@ -124,15 +124,14 @@ class DocsSamplesTest {
      */
     @Test
     void fanInSampleChainsAnObservePerInput() {
-        ConsumerRecord<String, String> priceUpdate = new ConsumerRecord<>("t1", 0, 7L, "k", "v");
-        ConsumerRecord<String, String> inventoryChange =
-                new ConsumerRecord<>("t2", 0, 3L, "k", "v");
+        ConsumerRecord<String, String> m1 = new ConsumerRecord<>("t1", 0, 7L, "k", "v");
+        ConsumerRecord<String, String> m2 = new ConsumerRecord<>("t2", 0, 3L, "k", "v");
+        ProducerRecord<String, String> m3 = new ProducerRecord<>("t3", "k", "v");
 
         CausalClock deps = CausalClock.using(TOPIC_IDS)
-                .observe(priceUpdate)
-                .observe(inventoryChange);
-        ProducerRecord<String, String> stamped =
-                deps.stamp(new ProducerRecord<>("t3", "k", "v"));
+                .observe(m1)
+                .observe(m2);
+        ProducerRecord<String, String> stamped = deps.stamp(m3);
 
         CausalClock expected = CausalClock.builder(TOPIC_IDS)
                 .require("t1", 0, 7)
@@ -187,9 +186,9 @@ class DocsSamplesTest {
      * directly by the tests below. The test supplies the transport hop: {@code receivedToken}
      * is {@code token} arriving unchanged.
      */
-    private static CausalClock portableTokenSample(ConsumerRecord<String, String> consumedRecord) {
+    private static CausalClock portableTokenSample(ConsumerRecord<String, String> m1) {
         // Sender. Extract the relevant dependencies and serialise them.
-        CausalClock context = CausalClock.fromRecord(consumedRecord)
+        CausalClock context = CausalClock.fromRecord(m1)
                 .orElse(CausalClock.empty());
         byte[] token = context.toBytes();
         // Send the token over HTTP, gRPC, or another transport, applying your own encryption.
@@ -212,11 +211,10 @@ class DocsSamplesTest {
                 .require("t1", 0, 42)
                 .require("t2", 0, 3)
                 .build();
-        ConsumerRecord<String, String> consumedRecord =
-                new ConsumerRecord<>("t3", 0, 9L, "k", "v");
-        consumedRecord.headers().add(ParsleyHeader.CAUSAL_CLOCK, carried.toBytes());
+        ConsumerRecord<String, String> m1 = new ConsumerRecord<>("t3", 0, 9L, "k", "v");
+        m1.headers().add(ParsleyHeader.CAUSAL_CLOCK, carried.toBytes());
 
-        assertEquals(carried, portableTokenSample(consumedRecord),
+        assertEquals(carried, portableTokenSample(m1),
                 "the receiver must rebuild exactly the dependencies the consumed record carried");
     }
 
@@ -228,9 +226,8 @@ class DocsSamplesTest {
      */
     @Test
     void portableTokenSampleFallsBackToTheEmptyClockForAnUnstampedRecord() {
-        ConsumerRecord<String, String> consumedRecord =
-                new ConsumerRecord<>("t3", 0, 9L, "k", "v");
-        assertEquals(CausalClock.empty(), portableTokenSample(consumedRecord),
+        ConsumerRecord<String, String> m1 = new ConsumerRecord<>("t3", 0, 9L, "k", "v");
+        assertEquals(CausalClock.empty(), portableTokenSample(m1),
                 "an unstamped record must propagate as the empty clock, not fail");
     }
 

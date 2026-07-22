@@ -59,22 +59,22 @@ yourself.
 
 <!-- Mirrored verbatim by DocsSamplesTest#relaySample; keep the sample and the test in sync. -->
 ```java
-// the trigger's own dependencies plus its own position
-CausalClock deps = CausalClock.using(props).observe(trigger);
+// m1's own dependencies plus its own position
+CausalClock deps = CausalClock.using(props).observe(m1);
 producer.send(deps.stamp(new ProducerRecord<>("t3", key, value)));
 ```
 
 `observe` folds in the dependencies the consumed record arrived with, together with the consumed
-record's own position. A downstream causal processor therefore waits until it has observed `trigger`
+record's own position. A downstream causal processor therefore waits until it has observed `m1`
 before it delivers anything stamped here. The resolver bound by `using` carries through each
 `observe`, so a fan-in — where an output is caused by several inputs — chains an `observe` per input.
 
 <!-- Mirrored verbatim by DocsSamplesTest#fanInSample; keep the sample and the test in sync. -->
 ```java
 CausalClock deps = CausalClock.using(props)
-        .observe(priceUpdate)
-        .observe(inventoryChange);
-producer.send(deps.stamp(record));
+        .observe(m1)
+        .observe(m2);
+producer.send(deps.stamp(m3));
 ```
 
 A stateful node whose output reflects everything it has consumed keeps a single instance and
@@ -104,7 +104,7 @@ what an upstream record depended on, serialise the dependencies and send them ov
 <!-- Mirrored verbatim by DocsSamplesTest#portableTokenSample; keep the sample and the test in sync. -->
 ```java
 // Sender. Extract the relevant dependencies and serialise them.
-CausalClock context = CausalClock.fromRecord(consumedRecord)
+CausalClock context = CausalClock.fromRecord(m1)
         .orElse(CausalClock.empty());
 byte[] token = context.toBytes();
 // Send the token over HTTP, gRPC, or another transport, applying your own encryption.
