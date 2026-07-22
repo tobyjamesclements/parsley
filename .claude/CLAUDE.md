@@ -53,6 +53,28 @@ single package `io.github.tobyjamesclements.parsley`, Java 21. The design docume
 - Prefer existing configuration surfaces over new mode-specific semantics.
 - Model a feature's data flow end to end before building it; an existing primitive may
   already express it.
+- Keep concrete `final` public classes concrete. A sealed-interface + static-factory
+  conversion of a single-implementation class was proposed and rejected as ceremony;
+  Java's non-public constructors already encapsulate adequately. Propose interface
+  indirection only for a demonstrated polymorphism need.
+- Through 0.x, public-API ergonomics is an active workstream, not just coverage: exercise
+  the surface with realistic usage, surface naming/boilerplate/discoverability friction,
+  and propose breaking refinements (batched into one minor). The API locks at 1.0.
+
+## Working process (for agents)
+
+- Present a plan and get approval before writing code on any non-trivial task (more than a
+  single-file, single-method change). When planning, stress-test the design against
+  restart/crash, multi-topic, serde/schema, and EOS edge cases before presenting; state
+  infeasibility plainly with the technical reason rather than papering over a gap.
+- For large or multi-session changes, follow the big-task skill (`.claude/skills/big-task`):
+  checkpoint the plan to disk before implementing, land one green commit per task, delete
+  the working file on completion.
+- Carry sustained implementation directly in the main session; reserve subagents for
+  research and search fan-out. Continuity comes from on-disk context, not spawned agents.
+- Durable context lives in the repo: this file, `.claude/skills/`, `docs/`, Javadoc, and
+  code comments. Task state lives in GitHub issues (`gh`). Do not keep a private task
+  ledger or convention notes outside the repo.
 
 ## Documentation
 

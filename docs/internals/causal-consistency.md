@@ -226,3 +226,27 @@ consistency literature unconditionally: Parsley has no policy knob that spends c
 liveness. A genuinely stuck dependency (a lagging partition, a co-partitioning gap, a producing
 topic that was deleted) shows up as unbounded buffer growth or a fail-closed task restart, never
 as a silent reordering — see [Troubleshooting](../troubleshooting.md).
+
+## Rejected designs
+
+Two earlier designs are recorded here so they are not re-derived. Both were removed after the
+proof above showed they added coordination without adding safety.
+
+**Epochs as consistent cuts.** Earlier versions took a domain-wide cut (an epoch) whenever the
+topology changed and stamped replay-era emissions at the epoch origin, so that nothing a joiner
+replayed appeared to happen before the cut. The intent was reasonable in the era of the
+fail-closed gate: a joiner consuming from offset 0 stamps outputs whose dependencies predate
+everything the topology had delivered. But the mechanism amounts to causal repositioning — the
+stamps are made to lie, and the lie must be agreed domain-wide (floors, transition windows,
+publication rounds) or gates wedge on it. Truthful historical stamps need no agreement at all:
+an incumbent's frontier trivially dominates historical dependencies, and a joiner's replay is
+self-gating — the hold-back queue converts arbitrary cross-partition arrival order into causal
+delivery order. Truthful stamps are also more correct: a later joiner replaying both an input
+and its derived topic orders them properly, which floored stamps erase.
+
+**Hold-until-admitted joins.** A corollary of epochs was that a fresh joiner must not consume
+until the epoch computed with it commits and admits it. With no epochs there is no admission to
+wait for, and none is needed: a fresh message carrying old dependencies is causally low, not
+retroactive — no incumbent mis-delivered in the past, because nothing can be delivered before
+it exists. Joins therefore need zero coordination (see
+[Concepts](../concepts.md#joining-a-running-topology)).
