@@ -63,6 +63,21 @@ class ParsleyOwnOutputRegistryTest {
     }
 
     /**
+     * Blocks until {@code waiter} is parked in the crossing wait's timed monitor wait. The tests
+     * below call this from the simulated network thread before firing an acknowledgement, so the
+     * ack provably arrives while the waiter is blocked — the only timed wait the test's main
+     * thread ever enters is the tracker's {@code wait(ms)}, making the state check unambiguous.
+     * The spin is bounded so a registry bug that never blocks cannot park this thread forever;
+     * on expiry the caller proceeds and the test fails on its own assertions instead.
+     */
+    private static void awaitParkedInCrossingWait(Thread waiter) {
+        long deadlineNanos = System.nanoTime() + TimeUnit.SECONDS.toNanos(10);
+        while (waiter.getState() != Thread.State.TIMED_WAITING && System.nanoTime() < deadlineNanos) {
+            Thread.onSpinWait();
+        }
+    }
+
+    /**
      * The registry keeps the maximum successfully acked offset per coordinate: later, lower folds
      * (a slower sibling producer's ack) never lower an entry, and partitions are independent.
      */
@@ -193,24 +208,21 @@ class ParsleyOwnOutputRegistryTest {
         ParsleyOwnOutputInterceptor interceptor = configuredInterceptor();
         interceptor.onSend(new ProducerRecord<>(OUT, 1, "k", "v"));
 
-        CountDownLatch waiterDone = new CountDownLatch(1);
+        Thread waiter = Thread.currentThread();
+        CountDownLatch ackFired = new CountDownLatch(1);
         Thread ackThread = new Thread(() -> {
-            try {
-                // Give the main thread a moment to actually block in the wait first.
-                Thread.sleep(200);
-            } catch (InterruptedException e) {
-                Thread.currentThread().interrupt();
-            }
+            awaitParkedInCrossingWait(waiter);
             interceptor.onAcknowledgement(metadata(OUT, 1, 4), null);
-            waiterDone.countDown();
+            ackFired.countDown();
         }, "test-ack-network-thread");
         ackThread.start();
 
         registry.awaitQuiescentExcept(Set.of(new TopicPartition(OUT, 0)), 5_000);
-        assertTrue(waiterDone.await(1, TimeUnit.SECONDS),
+        assertTrue(ackFired.await(1, TimeUnit.SECONDS),
                 "the wait must have been released by the ack, not by anything else");
         assertEquals(Map.of(new TopicPartition(OUT, 1), 4L), ackedOf(registry),
                 "the releasing ack's coordinate must have folded");
+        ackThread.join();
         interceptor.close();
     }
 
@@ -237,17 +249,14 @@ class ParsleyOwnOutputRegistryTest {
      * release by THROWING, dying with the transaction instead of stamping over a failed send.
      */
     @Test
-    void ackFailureDuringTheCrossingWaitThrowsSoTheWaitDiesWithTheTransaction() {
+    void ackFailureDuringTheCrossingWaitThrowsSoTheWaitDiesWithTheTransaction() throws Exception {
         ParsleyOwnOutputRegistry registry = registeredRegistry();
         ParsleyOwnOutputInterceptor interceptor = configuredInterceptor();
         interceptor.onSend(new ProducerRecord<>(OUT, 1, "k", "v"));
 
+        Thread waiter = Thread.currentThread();
         Thread abortThread = new Thread(() -> {
-            try {
-                Thread.sleep(200);
-            } catch (InterruptedException e) {
-                Thread.currentThread().interrupt();
-            }
+            awaitParkedInCrossingWait(waiter);
             interceptor.onAcknowledgement(metadata(OUT, 1, -1L), new RuntimeException("aborted"));
         }, "test-abort-network-thread");
         abortThread.start();
@@ -257,6 +266,7 @@ class ParsleyOwnOutputRegistryTest {
                 "a failed pending ack must surface as a throw, not as a satisfied wait");
         assertFalse(ackedOf(registry).containsKey(new TopicPartition(OUT, 1)),
                 "the aborted send must not have folded an own-output coordinate");
+        abortThread.join();
         interceptor.close();
     }
 
