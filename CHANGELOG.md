@@ -26,6 +26,13 @@ All notable changes to this project are documented in this file. The format is b
   `drainAfterRestore` pass.
 
 ### Fixed
+- **`records-released-total` now counts released records, not drain passes.** The sensor's total
+  stat counts observations, and `recordReleased` recorded once per drain pass with the release
+  count as the (ignored-for-counting) value — so a pass releasing five records advanced the total
+  by one, under-reporting releases and making the total incomparable with `records-buffered-total`.
+  It now records once per released record, matching the documented meaning. Found by the new
+  `ParsleyMetricsTest`, which pins the full metrics contract (names, group, tags, gauge
+  descriptions, and per-method counting semantics) against `docs/configuration.md#metrics`.
 - **Null-message gossip now quiesces on every topic cycle: the I6 relay trigger is restricted to
   consumed channels.** The explorer's first sweep found (and `ParsleyGossipCycleQuiescenceTest`
   pinned) a liveness defect: on a cycle of three or more nodes, a member that neither produces

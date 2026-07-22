@@ -154,7 +154,14 @@ interface ParsleyMetrics {
 
         ParsleyMetrics metrics = new ParsleyMetrics() {
             @Override public void recordBuffered()             { buffered.record(); }
-            @Override public void recordReleased(int c)        { released.record(c); }
+            // One record() per released record: the sensor's "-total" is a cumulative count of
+            // observations, so a single record(c) would count one drain pass regardless of c —
+            // and records-released could never be compared against records-buffered.
+            @Override public void recordReleased(int c) {
+                for (int i = 0; i < c; i++) {
+                    released.record();
+                }
+            }
             @Override public void recordDeserializationError() { deserErr.record(); }
             @Override public void recordClockResolutionError() { clockResErr.record(); }
             // One record() per ignored coordinate: the sensor's "-total" is a cumulative count of
