@@ -19,6 +19,8 @@ per entry:
 
 Size: `5 + 28 × n` bytes. The wire version is `0x01`, and deserialization throws `IllegalStateException` on a mismatch.
 
+Entries appear in no guaranteed order: an encoder may emit them however it likes, and a decoder must not assume any ordering.
+
 Topic IDs are Kafka `Uuid` values stored as two `long` fields (most-significant bits, then least-significant bits).
 
 On a forwarded business record this header carries the producing node's **outbound stamp**

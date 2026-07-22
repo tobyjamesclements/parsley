@@ -219,6 +219,12 @@ All notable changes to this project are documented in this file. The format is b
   version. Documentation vocabulary updated throughout.
 
 ### Documentation
+- **The `parsley-causal-clock` wire format states that entry order is unspecified.** The encoder
+  walks unordered maps, so a multi-entry clock's entries appear in no guaranteed order;
+  `docs/internals/wire-format.md` now says so explicitly, and a decoder must accept entries in any
+  order. The layout itself is unchanged, and is now pinned byte-for-byte by a golden-bytes test
+  (`ParsleyVectorClockWireFormatTest`), so an accidental encoding change fails the build instead
+  of only breaking external implementations and in-flight records.
 - **A full audit pass over every documentation surface (mkdocs pages, Javadoc, `overview.html`,
   README) fixes doc/code drift and deepens the explanations.** The topology examples now build
   exactly one stage and call `build()` on `CausalProcessedStream` (the previous `builder.build()`
