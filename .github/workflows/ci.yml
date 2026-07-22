@@ -56,4 +56,6 @@ jobs:
           distribution: 'temurin'
           cache: 'maven'
       - name: Run integration tests
-        run: ./mvnw verify --no-transfer-progress
+        # skip-unit-tests: surefire already ran in the unit-tests job this job depends on;
+        # verify here runs failsafe (the broker ITs) only.
+        run: ./mvnw verify -Pskip-unit-tests --no-transfer-progress

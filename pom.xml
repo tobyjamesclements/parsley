@@ -252,6 +252,9 @@
                             <excludedTestClasses>
                                 <param>io.github.tobyjamesclements.parsley.*IT</param>
                             </excludedTestClasses>
+                            <!-- Mutation-score floor: the build fails if killed-mutant percentage
+                                 drops below this. Baseline was 73% when the floor was set. -->
+                            <mutationThreshold>71</mutationThreshold>
                         </configuration>
                         <executions>
                             <execution>
@@ -262,6 +265,25 @@
                                 </goals>
                             </execution>
                         </executions>
+                    </plugin>
+                </plugins>
+            </build>
+        </profile>
+
+        <!-- CI's verify job: the unit-tests job has already run surefire, so verify skips it and
+             runs failsafe (the broker ITs) only. A profile rather than a property because surefire
+             has no surefire-only skip property: -DskipTests and -Dmaven.test.skip both disable
+             failsafe too. JaCoCo's report/check no-op when surefire is skipped (no exec file). -->
+        <profile>
+            <id>skip-unit-tests</id>
+            <build>
+                <plugins>
+                    <plugin>
+                        <groupId>org.apache.maven.plugins</groupId>
+                        <artifactId>maven-surefire-plugin</artifactId>
+                        <configuration>
+                            <skip>true</skip>
+                        </configuration>
                     </plugin>
                 </plugins>
             </build>

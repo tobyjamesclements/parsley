@@ -1,0 +1,68 @@
+# The deep tier: expensive suites that would bloat every push but must actually run somewhere.
+# Weekly on a schedule, plus on demand via workflow_dispatch. Each job prints enough (seed,
+# property values) to replay any failure locally with a single command.
+name: Deep tests
+
+on:
+  schedule:
+    # Mondays 03:00 UTC.
+    - cron: '0 3 * * 1'
+  workflow_dispatch:
+
+jobs:
+  # Mutation testing with the score floor enforced by <mutationThreshold> in the pom's
+  # mutation profile: the build fails if killed-mutant percentage regresses below it.
+  mutation:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-java@v5
+        with:
+          java-version: '25'
+          distribution: 'temurin'
+          cache: 'maven'
+      - name: Mutation coverage (floor enforced)
+        run: ./mvnw -Pmutation test --no-transfer-progress
+
+  # The sim soak tier: one long run (500k scheduler steps) with every fault mode armed.
+  # The seed is derived from the date so successive weekly runs explore different schedules;
+  # local runs keep the fixed default seed. Assertion messages embed the seed, and the echo
+  # below pins it in the log either way, so any failure replays locally.
+  soak:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-java@v5
+        with:
+          java-version: '25'
+          distribution: 'temurin'
+          cache: 'maven'
+      - name: Soak with date-derived seed
+        # -Djacoco.skip: a single-class run can never meet the bundle coverage floor bound
+        # to the test phase, and coverage is not what this job measures.
+        run: |
+          seed="$(date -u +%Y%m%d)"
+          echo "soak seed: ${seed} — replay locally with:"
+          echo "  ./mvnw test -Dtest=ParsleySimSoakTest -Dparsley.sim.soak=true -Dparsley.sim.soak.seed=${seed} -Djacoco.skip=true"
+          ./mvnw test --no-transfer-progress -Dtest=ParsleySimSoakTest -Djacoco.skip=true \
+            -Dparsley.sim.soak=true "-Dparsley.sim.soak.seed=${seed}"
+
+  # The deep random-topology sweep: the documented deep-tier population (5000 topologies x
+  # 2000 steps, vs the in-CI 80 x 400) with the per-topology seed count raised from 2 to 3.
+  # Topology and run seeds are deterministic bases scaled by these counts, so a CI failure
+  # (which prints its run seed and a shrunk repro trace) replays locally by rerunning with
+  # the same property values.
+  topology-sweep:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-java@v5
+        with:
+          java-version: '25'
+          distribution: 'temurin'
+          cache: 'maven'
+      - name: Deep random-topology sweep
+        run: >-
+          ./mvnw test --no-transfer-progress -Dtest=ParsleyRandomTopologyPropertyTest
+          -Djacoco.skip=true
+          -Dparsley.sim.topologies=5000 -Dparsley.sim.steps=2000 -Dparsley.sim.seeds=3
