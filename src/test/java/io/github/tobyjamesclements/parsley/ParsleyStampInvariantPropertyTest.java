@@ -75,7 +75,7 @@ class ParsleyStampInvariantPropertyTest {
             ParsleyTopologySim sim = standingTopology(seed);
             sim.run(STEPS);
             for (String node : List.of("A", "D", "B", "C", "W", "N")) {
-                assertEquals(0, sim.nodeNamed(node).core.bufferSize(),
+                assertEquals(0, sim.nodeNamed(node).bufferSize(),
                         "[seed " + seed + "] node " + node + " must end fully drained — a record "
                                 + "held forever means a stamped claim nothing appended can satisfy");
             }
@@ -108,7 +108,7 @@ class ParsleyStampInvariantPropertyTest {
         for (long seed = 2000; seed < 2000 + SEEDS; seed++) {
             ParsleyTopologySim sim = standingTopology(seed);
             sim.run(STEPS);
-            assertTrue(sim.nodeNamed("A").ownBusinessSends.size() + sim.nodeNamed("D").ownBusinessSends.size() > 0,
+            assertTrue(sim.nodeNamed("A").task(0).ownBusinessSends.size() + sim.nodeNamed("D").task(0).ownBusinessSends.size() > 0,
                     "[seed " + seed + "] vacuity guard: the shared sink c2 must see business "
                             + "emissions for the per-producer monotonicity to be exercised");
         }
@@ -129,8 +129,8 @@ class ParsleyStampInvariantPropertyTest {
             ParsleyTopologySim sim = standingTopology(seed);
             sim.produceExternal("c1"); // the tagged origin: c1@0, before any random scheduling
             sim.run(STEPS);
-            ParsleyTopologySim.SimCoord origin = new ParsleyTopologySim.SimCoord(sim.topicId("c1"), 0);
-            ParsleyTopologySim.SimNode c = sim.nodeNamed("C");
+            ParsleyTopologySim.SimCoord origin = new ParsleyTopologySim.SimCoord(sim.topicId("c1"), 0, 0);
+            ParsleyTopologySim.SimTask c = sim.nodeNamed("C").task(0);
             assertTrue(c.truePast.contains(origin),
                     "[seed " + seed + "] vacuity guard: the origin c1@0 must reach C's causal past "
                             + "through the chain (drain() delivers all backlog)");
@@ -154,10 +154,10 @@ class ParsleyStampInvariantPropertyTest {
             ParsleyTopologySim sim = standingTopology(seed);
             sim.produceExternal("c1");
             sim.run(STEPS);
-            ParsleyTopologySim.SimNode n = sim.nodeNamed("N");
+            ParsleyTopologySim.SimTask n = sim.nodeNamed("N").task(0);
             assertTrue(n.carriedClocksFolded > 0,
                     "[seed " + seed + "] vacuity guard: N must have folded at least one carried clock");
-            assertTrue(!n.inputs.contains("c1"),
+            assertTrue(!n.node.inputs.contains("c1"),
                     "topology self-check: N must not consume c1 for this property to mean anything");
             assertTrue(n.channels.stamp().offsetFor(sim.topicId("c1"), 0) >= 0,
                     "[seed " + seed + "] N's stamp must claim c1 ancestry it learned only from "
@@ -205,12 +205,12 @@ class ParsleyStampInvariantPropertyTest {
             sim.produceExternal("c1"); // the tagged origin: c1@0, before any random scheduling
             sim.run(STEPS);
             for (String node : List.of("A", "A2", "K", "L")) {
-                assertEquals(0, sim.nodeNamed(node).core.bufferSize(),
+                assertEquals(0, sim.nodeNamed(node).bufferSize(),
                         "[seed " + seed + "] node " + node + " must end fully drained — an ignored "
                                 + "coordinate must never strand a record");
             }
-            ParsleyTopologySim.SimCoord origin = new ParsleyTopologySim.SimCoord(sim.topicId("c1"), 0);
-            ParsleyTopologySim.SimNode l = sim.nodeNamed("L");
+            ParsleyTopologySim.SimCoord origin = new ParsleyTopologySim.SimCoord(sim.topicId("c1"), 0, 0);
+            ParsleyTopologySim.SimTask l = sim.nodeNamed("L").task(0);
             if (l.truePast.contains(origin)) {
                 originsReachedL++;
                 assertTrue(l.channels.stamp().offsetFor(sim.topicId("c1"), 0) >= 0,
@@ -243,7 +243,7 @@ class ParsleyStampInvariantPropertyTest {
             ParsleyTopologySim sim = standingTopology(seed).withRestarts();
             sim.run(STEPS);
             for (String node : List.of("A", "D", "B", "C", "W", "N")) {
-                assertEquals(0, sim.nodeNamed(node).core.bufferSize(),
+                assertEquals(0, sim.nodeNamed(node).bufferSize(),
                         "[seed " + seed + "] node " + node + " must end fully drained after restarts");
             }
             restarts += sim.restarts;

@@ -18,13 +18,23 @@ import java.util.stream.Collectors;
  * <p>Names are the identity used across runs (topic UUIDs are freshly random per sim instance),
  * so the text format assumes topic and node names contain no spaces or commas — true of every
  * name the harness and generator produce.
+ *
+ * <p><strong>Partition fields (T10).</strong> Actions carry the partition dimension, printed only
+ * when it is informative (a nonzero partition, a nonzero key index): a single-partition run
+ * prints exactly the pre-T10 text, and pre-T10 trace texts parse with the partition fields
+ * defaulting to 0.
  */
 final class ParsleySimTrace {
 
     private ParsleySimTrace() {}
 
     /** A topology by value — enough to rebuild a sim for replay without the builder calls. */
-    record SimSpec(List<String> externalTopics, List<NodeSpec> nodes) {
+    record SimSpec(List<String> externalTopics, List<NodeSpec> nodes, int partitions) {
+
+        /** Single-partition compatibility shape — the pre-T10 constructor. */
+        SimSpec(List<String> externalTopics, List<NodeSpec> nodes) {
+            this(externalTopics, nodes, 1);
+        }
 
         /** One node: declared inputs (sorted), sinks, and the delegate's forward probability. */
         record NodeSpec(String name, List<String> inputs, List<String> sinks, double outputProbability) {}
@@ -33,8 +43,22 @@ final class ParsleySimTrace {
     /** One scheduler step. All state an action needs is in its fields — see the class Javadoc. */
     sealed interface Action {}
 
-    /** An external clockless producer appends one record to {@code topic}. */
-    record ProduceExternal(String topic) implements Action {}
+    /**
+     * An external clockless producer appends one record to {@code topic} with key
+     * {@code keyIndex} (always 0 on single-partition topologies — the key draw exists only where
+     * a partitioner has work to do).
+     */
+    record ProduceExternal(String topic, int keyIndex) implements Action {}
+
+    /** One observed coordinate of a stamped-external production. */
+    record Observed(String topic, int partition, long offset) {}
+
+    /**
+     * A stamped external producer ({@code CausalClock.using(...).observe(...)} at the edge)
+     * appends one record to {@code topic} whose clock and history derive from the observed
+     * coordinates — the sim's only source of cross-partition claims.
+     */
+    record ProduceStamped(String topic, int keyIndex, List<Observed> observed) implements Action {}
 
     /** Every pending send of {@code node} is acknowledged. */
     record AckAll(String node) implements Action {}
@@ -53,13 +77,17 @@ final class ParsleySimTrace {
     record Crash(String node) implements Action {}
 
     /**
-     * {@code node}'s consumer position on {@code input} rewinds to {@code toCursor} — at-least-
-     * once redelivery (a rebalance re-fetch); the protocol must absorb the replay (A11).
+     * {@code node}'s consumer position on {@code input} at task {@code partition} rewinds to
+     * {@code toCursor} — at-least-once redelivery (a rebalance re-fetch); the protocol must
+     * absorb the replay (A11).
      */
-    record Rollback(String node, String input, int toCursor) implements Action {}
+    record Rollback(String node, String input, int partition, int toCursor) implements Action {}
 
-    /** {@code node} polls {@code input} once; {@code emits} are the delegate decisions drawn. */
-    record Poll(String node, String input, List<Emit> emits) implements Action {}
+    /**
+     * {@code node}'s task {@code partition} polls {@code input} once; {@code emits} are the
+     * delegate decisions drawn.
+     */
+    record Poll(String node, String input, int partition, List<Emit> emits) implements Action {}
 
     /** One delegate decision for one released record: forward to {@code sink}, or stay silent. */
     record Emit(boolean business, String sink) {
@@ -71,6 +99,9 @@ final class ParsleySimTrace {
 
     static String print(SimSpec spec, List<Action> trace) {
         StringBuilder out = new StringBuilder("spec\n");
+        if (spec.partitions() > 1) {
+            out.append("partitions ").append(spec.partitions()).append('\n');
+        }
         for (String topic : spec.externalTopics()) {
             out.append("ext ").append(topic).append('\n');
         }
@@ -90,12 +121,20 @@ final class ParsleySimTrace {
 
     private static String printAction(Action action) {
         return switch (action) {
-            case ProduceExternal(String topic) -> "ext " + topic;
+            // Zero fields print the legacy shapes, so single-partition traces stay byte-stable.
+            case ProduceExternal(String topic, int keyIndex) ->
+                    "ext " + topic + (keyIndex == 0 ? "" : " k" + keyIndex);
+            case ProduceStamped(String topic, int keyIndex, List<Observed> observed) ->
+                    "exts " + topic + " k" + keyIndex + " " + observed.stream()
+                            .map(o -> o.topic() + ":" + o.partition() + "@" + o.offset())
+                            .collect(Collectors.joining(","));
             case AckAll(String node) -> "ack " + node;
             case Rescope(String node, List<String> inputs) -> "rescope " + node + " " + String.join(",", inputs);
             case Crash(String node) -> "crash " + node;
-            case Rollback(String node, String input, int toCursor) -> "rollback " + node + " " + input + " " + toCursor;
-            case Poll(String node, String input, List<Emit> emits) -> "poll " + node + " " + input + " ["
+            case Rollback(String node, String input, int partition, int toCursor) -> "rollback " + node
+                    + " " + input + (partition == 0 ? "" : " p" + partition) + " " + toCursor;
+            case Poll(String node, String input, int partition, List<Emit> emits) -> "poll " + node
+                    + " " + input + (partition == 0 ? "" : " p" + partition) + " ["
                     + emits.stream().map(e -> e.business() ? e.sink() : "-").collect(Collectors.joining(","))
                     + "]";
         };
@@ -105,6 +144,7 @@ final class ParsleySimTrace {
         List<String> externals = new ArrayList<>();
         List<SimSpec.NodeSpec> nodes = new ArrayList<>();
         List<Action> trace = new ArrayList<>();
+        int partitions = 1;
         boolean inTrace = false;
         for (String raw : text.split("\n")) {
             String line = raw.strip();
@@ -118,6 +158,7 @@ final class ParsleySimTrace {
             String[] tokens = line.split(" ");
             if (!inTrace) {
                 switch (tokens[0]) {
+                    case "partitions" -> partitions = Integer.parseInt(tokens[1]);
                     case "ext" -> externals.add(tokens[1]);
                     case "node" -> nodes.add(new SimSpec.NodeSpec(tokens[1],
                             commaList(value(tokens[2], "in=")),
@@ -129,19 +170,43 @@ final class ParsleySimTrace {
             }
             trace.add(parseAction(line, tokens));
         }
-        return new Repro(new SimSpec(List.copyOf(externals), List.copyOf(nodes)), List.copyOf(trace));
+        return new Repro(new SimSpec(List.copyOf(externals), List.copyOf(nodes), partitions),
+                List.copyOf(trace));
     }
 
     private static Action parseAction(String line, String[] tokens) {
         return switch (tokens[0]) {
-            case "ext" -> new ProduceExternal(tokens[1]);
+            case "ext" -> new ProduceExternal(tokens[1],
+                    tokens.length > 2 ? Integer.parseInt(tokens[2].substring(1)) : 0);
+            case "exts" -> new ProduceStamped(tokens[1], Integer.parseInt(tokens[2].substring(1)),
+                    parseObserved(tokens[3]));
             case "ack" -> new AckAll(tokens[1]);
             case "rescope" -> new Rescope(tokens[1], commaList(tokens[2]));
             case "crash" -> new Crash(tokens[1]);
-            case "rollback" -> new Rollback(tokens[1], tokens[2], Integer.parseInt(tokens[3]));
-            case "poll" -> new Poll(tokens[1], tokens[2], parseEmits(tokens[3]));
+            // rollback node input [pN] toCursor — the partition token is absent in legacy traces.
+            case "rollback" -> tokens.length == 4
+                    ? new Rollback(tokens[1], tokens[2], 0, Integer.parseInt(tokens[3]))
+                    : new Rollback(tokens[1], tokens[2], Integer.parseInt(tokens[3].substring(1)),
+                            Integer.parseInt(tokens[4]));
+            // poll node input [pN] [emits] — the partition token is absent in legacy traces.
+            case "poll" -> tokens[3].startsWith("[")
+                    ? new Poll(tokens[1], tokens[2], 0, parseEmits(tokens[3]))
+                    : new Poll(tokens[1], tokens[2], Integer.parseInt(tokens[3].substring(1)),
+                            parseEmits(tokens[4]));
             default -> throw new IllegalArgumentException("unparseable trace line: " + line);
         };
+    }
+
+    private static List<Observed> parseObserved(String joined) {
+        List<Observed> observed = new ArrayList<>();
+        for (String token : joined.split(",")) {
+            int colon = token.lastIndexOf(':');
+            int at = token.indexOf('@', colon);
+            observed.add(new Observed(token.substring(0, colon),
+                    Integer.parseInt(token.substring(colon + 1, at)),
+                    Long.parseLong(token.substring(at + 1))));
+        }
+        return List.copyOf(observed);
     }
 
     private static List<Emit> parseEmits(String bracketed) {

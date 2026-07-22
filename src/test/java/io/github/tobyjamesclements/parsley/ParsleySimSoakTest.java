@@ -32,13 +32,17 @@ class ParsleySimSoakTest {
 
     /** The standing six-node topology plus a self-loop — every structural feature in one spec. */
     private static ParsleySimTrace.SimSpec soakSpec() {
+        // parsley.sim.soak.partitions widens the soak to the T10 multi-partition dimension
+        // (per-partition tasks + stamped-external cross-partition claims); the default keeps the
+        // historical single-partition spec so existing soak seeds stay replayable.
         return new ParsleySimTrace.SimSpec(List.of("c1"), List.of(
                 new ParsleySimTrace.SimSpec.NodeSpec("A", List.of("c1"), List.of("c2"), 0.4),
                 new ParsleySimTrace.SimSpec.NodeSpec("D", List.of("c1"), List.of("c2"), 0.4),
                 new ParsleySimTrace.SimSpec.NodeSpec("B", List.of("c1", "c2", "c3"), List.of("c3"), 0.4),
                 new ParsleySimTrace.SimSpec.NodeSpec("C", List.of("c1", "c2", "c3"), List.of("c4"), 0.4),
                 new ParsleySimTrace.SimSpec.NodeSpec("W", List.of("c1", "c2", "c3", "c4"), List.of("c5"), 0.0),
-                new ParsleySimTrace.SimSpec.NodeSpec("N", List.of("c5"), List.of("c6"), 0.0)));
+                new ParsleySimTrace.SimSpec.NodeSpec("N", List.of("c5"), List.of("c6"), 0.0)),
+                Integer.getInteger("parsley.sim.soak.partitions", 1));
     }
 
     /**
@@ -56,13 +60,16 @@ class ParsleySimSoakTest {
         ParsleyTopologySim sim = ParsleyTopologySim.fromSpec(spec, seed).withNoTrace()
                 .withoutGroundTruthHistories()
                 .withRestarts().withCrashes().withRollbacks().withScopeChanges();
+        if (spec.partitions() > 1) {
+            sim.withEdgeProducers();
+        }
         long lastFrontier = -1;
         int segments = TOTAL_STEPS / SEGMENT_STEPS;
         for (int segment = 0; segment < segments; segment++) {
             sim.runWithoutDrain(SEGMENT_STEPS);
             sim.drain();
             for (ParsleySimTrace.SimSpec.NodeSpec node : spec.nodes()) {
-                assertEquals(0, sim.nodeNamed(node.name()).core.bufferSize(),
+                assertEquals(0, sim.nodeNamed(node.name()).bufferSize(),
                         "[seed " + seed + " segment " + segment + "] node " + node.name()
                                 + " must be empty after the segment drain — a held record "
                                 + "surviving a full settle is a leak or a stall");

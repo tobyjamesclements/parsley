@@ -43,9 +43,12 @@ jobs:
         run: |
           seed="$(date -u +%Y%m%d)"
           echo "soak seed: ${seed} — replay locally with:"
-          echo "  ./mvnw test -Dtest=ParsleySimSoakTest -Dparsley.sim.soak=true -Dparsley.sim.soak.seed=${seed} -Djacoco.skip=true"
+          echo "  ./mvnw test -Dtest=ParsleySimSoakTest -Dparsley.sim.soak=true -Dparsley.sim.soak.seed=${seed} -Dparsley.sim.soak.partitions=2 -Djacoco.skip=true"
+          # partitions=2: the weekly soak runs the T10 multi-partition dimension (per-partition
+          # tasks + stamped-external cross-partition claims); local default stays single-partition
+          # so historical soak seeds replay unchanged.
           ./mvnw test --no-transfer-progress -Dtest=ParsleySimSoakTest -Djacoco.skip=true \
-            -Dparsley.sim.soak=true "-Dparsley.sim.soak.seed=${seed}"
+            -Dparsley.sim.soak=true "-Dparsley.sim.soak.seed=${seed}" -Dparsley.sim.soak.partitions=2
 
   # The deep random-topology sweep: the documented deep-tier population (5000 topologies x
   # 2000 steps, vs the in-CI 80 x 400) with the per-topology seed count raised from 2 to 3.

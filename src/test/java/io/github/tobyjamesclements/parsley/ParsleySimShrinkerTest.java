@@ -16,7 +16,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  */
 class ParsleySimShrinkerTest {
 
-    private static final ParsleySimTrace.Action TRIGGER = new ParsleySimTrace.ProduceExternal("c1");
+    private static final ParsleySimTrace.Action TRIGGER = new ParsleySimTrace.ProduceExternal("c1", 0);
     private static final ParsleySimTrace.Action VICTIM = new ParsleySimTrace.Crash("X");
 
     /** Noise actions the oracles below never look at. */
@@ -82,7 +82,7 @@ class ParsleySimShrinkerTest {
         ParsleySimTrace.Action ack = new ParsleySimTrace.AckAll("A");
         List<ParsleySimTrace.Action> trace = new ArrayList<>(noise(5));
         trace.add(ack);
-        trace.addAll(List.of(new ParsleySimTrace.ProduceExternal("c9"), VICTIM));
+        trace.addAll(List.of(new ParsleySimTrace.ProduceExternal("c9", 0), VICTIM));
         ParsleySimShrinker.Oracle oracle = candidate -> {
             if (!candidate.contains(VICTIM)) {
                 return null;

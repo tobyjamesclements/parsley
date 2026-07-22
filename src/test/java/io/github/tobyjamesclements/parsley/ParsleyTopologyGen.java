@@ -53,7 +53,13 @@ final class ParsleyTopologyGen {
         /** Some node with sinks never forwards business records — its sinks carry only null messages. */
         SILENT_NODE,
         /** Some node consumes two or more topics — the crossing-wait / funnel shape. */
-        FUNNEL
+        FUNNEL,
+        /**
+         * The topology runs more than one partition — per-partition tasks, keyed externals, and
+         * (in the sweep) stamped-external cross-partition claims. Guarded so a population of
+         * nothing but single-partition topologies cannot claim the T10 dimension vacuously.
+         */
+        MULTI_PARTITION
     }
 
     private static final double CYCLE_PROBABILITY_CAP = 0.4;
@@ -139,7 +145,14 @@ final class ParsleyTopologyGen {
                     List.copyOf(sinks.get(i)),
                     probabilities.get(i)));
         }
-        ParsleySimTrace.SimSpec spec = new ParsleySimTrace.SimSpec(List.copyOf(externals), List.copyOf(nodes));
+        // Drawn LAST so the topology shape for a given generator seed is unchanged from the
+        // single-partition era — the count is the only new draw and nothing draws after it.
+        // Single-partition keeps the majority so the pre-T10 population stays the baseline;
+        // 2 or 3 partitions open the T10 dimension (per-partition tasks, keyed externals,
+        // stamped-external cross-partition claims in the sweep).
+        int partitions = random.nextInt(10) < 6 ? 1 : 2 + random.nextInt(2);
+        ParsleySimTrace.SimSpec spec = new ParsleySimTrace.SimSpec(
+                List.copyOf(externals), List.copyOf(nodes), partitions);
         // Whatever closed a cycle — the back-edge above or a shared sink onto an already-consumed
         // topic — caps every forward probability subcritical (see the class Javadoc: on a
         // feedback loop, amplification is governed by loop membership, not probability alone).
@@ -149,7 +162,7 @@ final class ParsleyTopologyGen {
                 capped.add(new ParsleySimTrace.SimSpec.NodeSpec(node.name(), node.inputs(),
                         node.sinks(), Math.min(node.outputProbability(), CYCLE_PROBABILITY_CAP)));
             }
-            spec = new ParsleySimTrace.SimSpec(spec.externalTopics(), List.copyOf(capped));
+            spec = new ParsleySimTrace.SimSpec(spec.externalTopics(), List.copyOf(capped), partitions);
         }
         return spec;
     }
@@ -157,6 +170,9 @@ final class ParsleyTopologyGen {
     /** The structural features present in {@code spec} — see {@link Feature}. */
     static Set<Feature> classify(ParsleySimTrace.SimSpec spec) {
         EnumSet<Feature> features = EnumSet.noneOf(Feature.class);
+        if (spec.partitions() > 1) {
+            features.add(Feature.MULTI_PARTITION);
+        }
         Map<String, List<ParsleySimTrace.SimSpec.NodeSpec>> producersByTopic = new HashMap<>();
         for (ParsleySimTrace.SimSpec.NodeSpec node : spec.nodes()) {
             for (String sink : node.sinks()) {

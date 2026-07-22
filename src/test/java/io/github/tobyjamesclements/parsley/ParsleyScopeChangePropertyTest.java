@@ -45,7 +45,7 @@ class ParsleyScopeChangePropertyTest {
             sim.node("X", Set.of("c1", "c2"), List.of("c3"), 0.8);
             sim.node("Y", Set.of("c1", "c2", "c3"), List.of(), 0.0);
             sim.run(250);
-            ParsleyTopologySim.SimNode x = sim.nodeNamed("X");
+            ParsleyTopologySim.SimTask x = sim.nodeNamed("X").task(0);
             ParsleyVectorClock stampBefore = x.channels.stamp();
             Set<ParsleyTopologySim.SimCoord> truePastBefore = Set.copyOf(x.truePast);
             assertTrue(stampBefore.offsetFor(sim.topicId("c2"), 0) >= 0,
@@ -88,7 +88,7 @@ class ParsleyScopeChangePropertyTest {
             sim.node("X", Set.of("c2"), List.of("c3"), 0.8);
             sim.produceExternal("c1");
             sim.run(250);
-            ParsleyTopologySim.SimNode x = sim.nodeNamed("X");
+            ParsleyTopologySim.SimTask x = sim.nodeNamed("X").task(0);
             long claimedBefore = x.channels.stamp().offsetFor(sim.topicId("c1"), 0);
             assertTrue(claimedBefore >= 0,
                     "[seed " + seed + "] vacuity guard: X must have come to claim c1 ancestry "
@@ -134,7 +134,7 @@ class ParsleyScopeChangePropertyTest {
             sim.node("X", Set.of("c1"), List.of("c2"), 0.6);
             sim.produceExternal("c1");
             sim.run(250);
-            ParsleyTopologySim.SimNode x = sim.nodeNamed("X");
+            ParsleyTopologySim.SimTask x = sim.nodeNamed("X").task(0);
             long ackedBefore = x.channels.ownOutputs().offsetFor(sim.topicId("c2"), 0);
             assertTrue(ackedBefore >= 0,
                     "[seed " + seed + "] vacuity guard: X must have acked c2 outputs to skip");
@@ -173,7 +173,7 @@ class ParsleyScopeChangePropertyTest {
             sim.externalTopic("c1");
             sim.node("A", Set.of("c1"), List.of("c2"), 0.8);
             sim.node("X", Set.of("c1", "c2"), List.of("c3"), 0.8);
-            ParsleyTopologySim.SimNode x = sim.nodeNamed("X");
+            ParsleyTopologySim.SimTask x = sim.nodeNamed("X").task(0);
             // Walk the schedule in short bursts, stopping the moment X holds a c2 record — a
             // transient state a fixed-length run would usually sail past (holds resolve quickly).
             for (int burst = 0; burst < 50 && !x.heldSourceTopics().contains("c2"); burst++) {

@@ -51,6 +51,8 @@ class ParsleyRandomTopologyPropertyTest {
         int crashes = 0;
         int rollbacks = 0;
         int rescopes = 0;
+        int stampedExternals = 0;
+        int crossPartitionIgnores = 0;
         int supercriticalSkips = 0;
         for (int t = 0; t < TOPOLOGIES; t++) {
             ParsleySimTrace.SimSpec spec = ParsleyTopologyGen.generate(TOPOLOGY_SEED_BASE + t);
@@ -59,6 +61,11 @@ class ParsleyRandomTopologyPropertyTest {
                 long runSeed = RUN_SEED_BASE + (long) t * SEEDS_PER_TOPOLOGY + s;
                 ParsleyTopologySim sim = withProfile(ParsleyTopologySim.fromSpec(spec, runSeed),
                         t * SEEDS_PER_TOPOLOGY + s);
+                if (spec.partitions() > 1) {
+                    // The cross-partition claim source (T10): only multi-partition specs have a
+                    // partitioner with work to do, so the flag never perturbs legacy schedules.
+                    sim.withEdgeProducers();
+                }
                 try {
                     sim.run(STEPS);
                     assertDrained(sim, spec, "[seed " + runSeed + "] ");
@@ -76,6 +83,8 @@ class ParsleyRandomTopologyPropertyTest {
                 crashes += sim.crashes;
                 rollbacks += sim.rollbacks;
                 rescopes += sim.rescopes;
+                stampedExternals += sim.stampedExternals;
+                crossPartitionIgnores += sim.crossPartitionIgnoredCauses;
             }
         }
 
@@ -96,6 +105,12 @@ class ParsleyRandomTopologyPropertyTest {
         assertTrue(crashes > 0, "vacuity guard: the sweep must include dirty restarts");
         assertTrue(rollbacks > 0, "vacuity guard: the sweep must include redelivery rollbacks");
         assertTrue(rescopes > 0, "vacuity guard: the sweep must include scope-change restarts");
+        assertTrue(stampedExternals > 0,
+                "vacuity guard: the sweep must produce stamped externals — the cross-partition "
+                        + "claim source (T10) never ran");
+        assertTrue(crossPartitionIgnores > 0,
+                "vacuity guard: no delivery ever carried a foreign-partition cause — the gate's "
+                        + "partition dimension (ignore branch) was never genuinely exercised");
     }
 
     /** Fault profiles rotate deterministically across runs, plain through everything-at-once. */
@@ -114,7 +129,7 @@ class ParsleyRandomTopologyPropertyTest {
      */
     private static void assertDrained(ParsleyTopologySim sim, ParsleySimTrace.SimSpec spec, String label) {
         for (ParsleySimTrace.SimSpec.NodeSpec node : spec.nodes()) {
-            assertEquals(0, sim.nodeNamed(node.name()).core.bufferSize(),
+            assertEquals(0, sim.nodeNamed(node.name()).bufferSize(),
                     label + "node " + node.name() + " must end fully drained");
         }
     }
