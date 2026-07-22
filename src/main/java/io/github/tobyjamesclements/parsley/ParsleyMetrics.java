@@ -127,7 +127,6 @@ interface ParsleyMetrics {
     static Wired wire(ProcessorContext<?, ?> context) {
         StreamsMetrics sm = context.metrics();
         String taskId = context.taskId().toString();
-        String parsleyId = context.applicationId() + "-" + taskId;
 
         Sensor buffered  = sm.addRateTotalSensor("parsley", taskId, "records-buffered",  Sensor.RecordingLevel.INFO);
         Sensor released  = sm.addRateTotalSensor("parsley", taskId, "records-released",  Sensor.RecordingLevel.INFO);
@@ -140,11 +139,11 @@ interface ParsleyMetrics {
         Sensor reflectedAboveOwn = sm.addRateTotalSensor("parsley", taskId,
                 "reflected-claims-above-own-outputs", Sensor.RecordingLevel.INFO);
 
-        Sensor depth = gauge(sm, parsleyId, "buffer-depth",
+        Sensor depth = gauge(sm, taskId, "buffer-depth",
                 "Current number of records held in the causal buffer");
-        Sensor oldestBufferedAt = gauge(sm, parsleyId, "buffer-oldest-buffered-at-ms",
+        Sensor oldestBufferedAt = gauge(sm, taskId, "buffer-oldest-buffered-at-ms",
                 "Buffer-admission time (epoch millis) of the oldest held record, or 0 if the buffer is empty");
-        Sensor heldAboveReceived = gauge(sm, parsleyId, "records-held-above-highest-received",
+        Sensor heldAboveReceived = gauge(sm, taskId, "records-held-above-highest-received",
                 "Held records waiting past the stall threshold on a dependency above its channel's "
                         + "highest received offset — nothing received so far can satisfy the claim");
 
@@ -183,10 +182,15 @@ interface ParsleyMetrics {
         return new Wired(metrics, sensors);
     }
 
+    // The tag map must mirror what StreamsMetrics.addRateTotalSensor generates for the rate/total
+    // sensors above (parsley-id = task ID, thread-id = registering stream thread), so every metric
+    // in the stream-parsley-metrics group shares one identity scheme; the thread-id tag is also
+    // what keeps JMX names unique when several instances run in one JVM.
     private static Sensor gauge(StreamsMetrics sm, String taskId, String name, String description) {
         Sensor sensor = sm.addSensor("parsley-" + name + "-" + taskId, Sensor.RecordingLevel.INFO);
         sensor.add(new MetricName(name, "stream-parsley-metrics", description,
-                Map.of("parsley-id", taskId)), new Value());
+                Map.of("parsley-id", taskId, "thread-id", Thread.currentThread().getName())),
+                new Value());
         return sensor;
     }
 }

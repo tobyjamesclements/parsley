@@ -77,8 +77,9 @@ failing at startup — `strict` surfaces it once, clearly, at init. See
 ## Metrics
 
 Parsley wires a handful of Kafka Streams `Sensor`s per task, under the `stream-parsley-metrics`
-group. They are visible over JMX like any Kafka Streams metric, and in-process through
-`CausalStreams.metrics()`.
+group. Every metric is tagged `parsley-id` (the task ID, for example `0_1`) and `thread-id` (the
+stream thread that registered it). They are visible over JMX like any Kafka Streams metric, and
+in-process through `CausalStreams.metrics()`.
 
 | Sensor | Kind | Meaning |
 |---|---|---|

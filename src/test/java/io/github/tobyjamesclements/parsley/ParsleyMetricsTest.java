@@ -16,7 +16,6 @@ import java.util.stream.Collectors;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
-import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
  * Contract test for the observability surface: the exact metric names, group, tags, and gauge
@@ -88,35 +87,33 @@ class ParsleyMetricsTest {
     }
 
     /**
-     * Every rate/total metric is tagged {@code parsley-id} = the task ID (plus the
-     * {@code thread-id} tag Kafka Streams adds to scoped sensors) — the tags dashboards group by.
-     *
-     * <p>Deliberately pinned asymmetry: the gauges below tag {@code parsley-id} with
-     * {@code <application.id>-<taskId>} while these rate/total metrics tag the bare task ID.
+     * Every metric in the group — rate/total and gauge alike — carries the same tag scheme:
+     * {@code parsley-id} = the bare task ID and {@code thread-id} = the registering thread, the
+     * tags dashboards group by. One scheme for the whole group is itself part of the contract: a
+     * dashboard grouping by {@code parsley-id} must see a single id format per task.
      */
     @Test
-    void rateTotalMetricsAreTaggedWithTheTaskId() {
+    void everyMetricIsTaggedWithTheTaskIdAndThreadId() {
         MockProcessorContext<Void, Void> context = newContext();
         ParsleyMetrics.wire(context);
 
         for (MetricName name : parsleyMetrics(context).keySet()) {
-            if (GAUGES.containsKey(name.name())) {
-                continue;
-            }
             assertEquals(TASK_ID, name.tags().get("parsley-id"),
-                    "rate/total metric must be tagged with the bare task ID: " + name.name());
-            assertTrue(name.tags().containsKey("thread-id"),
-                    "rate/total metric must carry Kafka Streams' thread-id tag: " + name.name());
+                    "metric must be tagged with the bare task ID: " + name.name());
+            assertEquals(Thread.currentThread().getName(), name.tags().get("thread-id"),
+                    "metric must be tagged with the registering thread: " + name.name());
+            assertEquals(Set.of("parsley-id", "thread-id"), name.tags().keySet(),
+                    "metric must carry exactly the two contract tags: " + name.name());
         }
     }
 
     /**
-     * The three gauges are tagged {@code parsley-id} = {@code <application.id>-<taskId>} (and
-     * nothing else), and each carries exactly its documented description — gauge description
-     * strings are owned by this codebase, so their wording is part of the contract.
+     * Each gauge carries exactly its documented description — gauge description strings are owned
+     * by this codebase (unlike the Kafka-composed rate/total descriptions), so their wording is
+     * part of the contract.
      */
     @Test
-    void gaugesAreTaggedWithTheApplicationScopedIdAndKeepTheirDescriptions() {
+    void gaugesKeepTheirDocumentedDescriptions() {
         MockProcessorContext<Void, Void> context = newContext();
         ParsleyMetrics.wire(context);
 
@@ -126,9 +123,6 @@ class ParsleyMetricsTest {
         assertEquals(GAUGES.keySet(), gaugesByName.keySet(),
                 "all three documented gauges must be registered");
         for (MetricName gauge : gaugesByName.values()) {
-            assertEquals(Map.of("parsley-id", APPLICATION_ID + "-" + TASK_ID), gauge.tags(),
-                    "gauge must be tagged parsley-id=<application.id>-<taskId> and nothing else: "
-                            + gauge.name());
             assertEquals(GAUGES.get(gauge.name()), gauge.description(),
                     "gauge description text is part of the observability contract: " + gauge.name());
         }

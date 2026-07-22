@@ -26,6 +26,14 @@ All notable changes to this project are documented in this file. The format is b
   `drainAfterRestore` pass.
 
 ### Fixed
+- **The three gauge metrics now carry the same tags as the rate/total sensors.** The gauges
+  (`buffer-depth`, `buffer-oldest-buffered-at-ms`, `records-held-above-highest-received`) were
+  tagged `parsley-id=<application.id>-<taskId>` with no thread tag, while the rate/total sensors
+  in the same `stream-parsley-metrics` group were tagged with the bare task ID plus `thread-id` —
+  so a dashboard grouping by `parsley-id` saw two id formats for one task. All metrics in the
+  group now share one scheme: `parsley-id` = the task ID, `thread-id` = the registering stream
+  thread. The tag scheme is documented in the configuration page's metrics section and pinned by
+  `ParsleyMetricsTest`.
 - **`records-released-total` now counts released records, not drain passes.** The sensor's total
   stat counts observations, and `recordReleased` recorded once per drain pass with the release
   count as the (ignored-for-counting) value — so a pass releasing five records advanced the total
