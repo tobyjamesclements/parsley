@@ -216,14 +216,18 @@ final class ParsleyTopologySim {
             channels.bindOwnOutputSource(producer, producer, sinkIds, 60_000L);
             Set<Uuid> inputUuids = new HashSet<>(inputIds.values());
             Set<Uuid> sinkUuids = new HashSet<>(sinkIds.values());
+            ParsleyVectorClock.CoordinatePredicate consumedScope =
+                    (topicId, partition) -> partition == PARTITION && inputUuids.contains(topicId);
             core = ParsleyTestFixtures.broadcast(channels,
                     new StoreBackedBufferStore<>(bufferStore,
                             new ParsleySerializer<>(new ParsleyResolver<>(t -> Serdes.String(), t -> Serdes.String()))),
                     new StoreBackedCandidateIndex(candidateStore),
                     ParsleyMetrics.NOOP, () -> ++simTimeMs,
-                    (topicId, partition) -> partition == PARTITION && inputUuids.contains(topicId),
+                    consumedScope,
                     (topicId, partition) -> sinkUuids.contains(topicId));
-            gossip = new ParsleyGossip<>(core, Set.of());
+            // The same consumed scope is the I6 relay trigger (ParsleyGossip's class Javadoc):
+            // only a carried-clock advance on a channel this node consumes obliges a relay.
+            gossip = new ParsleyGossip<>(core, Set.of(), consumedScope);
             frontierAtStart = channels.frontier();
             // The production init sequence ends with the post-init punctuator's one-shot
             // drainAfterRestore: the full gate re-runs over every restored held record under the
@@ -820,9 +824,9 @@ final class ParsleyTopologySim {
         // now on — but it creates no delegate-visible obligation (no truePast contribution).
         node.obligation = node.obligation.merge(record.stamp());
         boolean anyBusinessOutput = processDeliveries(node, outcome.delivered(), false);
-        // The I6 relay (strictly new knowledge propagates onward), and the silent-delegate
+        // The I6 relay (a consumed-channel advance propagates onward), and the silent-delegate
         // advertisement for any released records — at most one null message per poll.
-        if (outcome.learnedSomethingNew() || (!anyBusinessOutput && !outcome.delivered().isEmpty())) {
+        if (outcome.advancedConsumedChannel() || (!anyBusinessOutput && !outcome.delivered().isEmpty())) {
             emitNullMessage(node);
         }
     }

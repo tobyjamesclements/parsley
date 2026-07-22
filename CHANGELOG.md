@@ -25,17 +25,33 @@ All notable changes to this project are documented in this file. The format is b
   `ownOutputs` like any send, and node (re)starts now run production's post-init
   `drainAfterRestore` pass.
 
-### Known issues
-- **Null-message gossip never quiesces on topic cycles of three or more nodes** — found by the
-  explorer's first sweep and pinned in `ParsleyGossipCycleQuiescenceTest`. A cycle member that
-  neither produces nor consumes some cycle channel knows it only through carried-clock custody
-  (I9), one gossip lap stale, so the I6 relay condition is satisfied every lap and each relay
-  appends the coordinate that sustains the next: an idle deployment generates null-message
-  traffic forever at one message per loop latency per channel. Delivery-order safety is
-  unaffected. Self-cycles and two-node cycles quiesce (every cycle channel is produced or
-  consumed by every member) — the existing cyclic ITs cover exactly those shapes, which is why
-  this went unseen. The topology generator excludes longer cycles until the protocol closes the
-  gap.
+### Fixed
+- **Null-message gossip now quiesces on every topic cycle: the I6 relay trigger is restricted to
+  consumed channels.** The explorer's first sweep found (and `ParsleyGossipCycleQuiescenceTest`
+  pinned) a liveness defect: on a cycle of three or more nodes, a member that neither produces
+  nor consumes some cycle channel knew it only through carried-clock custody (I9), one gossip lap
+  stale, so the relay-on-any-new-knowledge rule fired every lap and each relay appended the
+  coordinate that sustained the next — an idle deployment generated null-message traffic forever
+  at one message per loop latency per channel (delivery-order safety was unaffected). The relay
+  rule now follows the Chandy–Misra–Bryant trigger discipline the null messages come from: a
+  received null message obliges a relay only when its carried clock advances this node's total
+  knowledge *on a channel it consumes at its own task partition*
+  (`Reception.advancedConsumedChannel`, formerly `learnedSomethingNew`) — coordinates whose
+  first-hand coverage (the contiguous frontier) physically catches up to every appended offset,
+  so a fact there can oblige at most one relay before it is covered for good. Custody — a claim
+  on a channel the node neither consumes nor produces, a sibling's appends on a shared sink, a
+  foreign partition of a consumed topic — still folds into the stamp unconditionally (I9 is
+  untouched) and rides every later emission, but never itself obliges a relay. Withholding the
+  relay starves nothing: the delivery gate waits only on the local frontier of consumed
+  channels, and every stamped claim sits at or below a really-appended offset that arrives
+  regardless of gossip (I8). Net traffic strictly decreases everywhere (a two-node cycle now
+  settles in one advertisement, with no echo). The quiescence guarantee and its one
+  fair-scheduling qualification on chorded cycles are documented in the gossip internals page;
+  the previously storming three-node cycle, the chorded cycle, and an all-shared-sinks cycle
+  (which disqualified the looser consumed-or-produced trigger) are pinned as quiescence
+  regressions, and the random-topology generator produces multi-node cycles and shared sinks
+  onto already-consumed topics again, with a population vacuity guard proving the multi-node
+  shapes appear in every sweep.
 
 ### Changed
 - **The artifact now targets Java 21.** `maven.compiler.release` drops from 25 to 21: no main

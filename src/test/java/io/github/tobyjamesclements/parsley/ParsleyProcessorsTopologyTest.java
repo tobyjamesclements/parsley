@@ -1496,11 +1496,14 @@ class ParsleyProcessorsTopologyTest {
             TestOutputTopic<String, String> out =
                     driver.createOutputTopic("out", new StringDeserializer(), new StringDeserializer());
 
-            // Carries news (a claim on a coordinate this node knows nothing about), so it relays.
+            // Carries news on the consumed channel itself (a t1 claim above anything this node
+            // has received — offsets 1..3 still in flight), so the I6 trigger fires and it
+            // relays. A claim on an unconsumed coordinate would be custody: folded, never
+            // relayed.
             Headers newsworthy = ParsleyHeader.mutableHeaders();
             newsworthy.add(ParsleyHeader.NULL_MESSAGE, new byte[0]);
             newsworthy.add(ParsleyHeader.CAUSAL_CLOCK,
-                    CausalClock.builder(TOPICS).require("ghost", 0, 3).build().toBytes());
+                    CausalClock.builder(TOPICS).require("t1", 0, 3).build().toBytes());
             t1.pipeInput(new TestRecord<>(null, null, newsworthy, 4242L));
 
             List<TestRecord<String, String>> emitted = out.readRecordsToList();

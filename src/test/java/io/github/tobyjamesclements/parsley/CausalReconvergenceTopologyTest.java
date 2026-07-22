@@ -287,17 +287,19 @@ class CausalReconvergenceTopologyTest {
     // reconvergence proof — a real, independent witness (here, anc's own channel) is required instead.
 
     /**
-     * Null-message propagation — a non-subscribing relay layer re-emits received null messages, so
-     * a grandchild node's completeness advances even when no business record flows on that path.
+     * Null-message custody — a non-subscribing layer folds a received null message's carried clock
+     * into its own outbound stamp, so a grandchild node's completeness advances with this node's
+     * next emission even when no business record flows on the path.
      *
      * <p>This is tested at the {@link ParsleyGossip} level over a channel-tracking {@link
      * ParsleyChannels}: after {@link ParsleyGossip#receive} is called with a frontier carrying an
      * ancestor coordinate, {@link ParsleyCausalBroadcast#completeness()} must reflect it. This proves the
-     * channel clock is updated by the null-message receipt, which is the mechanism that enables inductive
-     * propagation through non-subscribing layers. Also asserts {@link
-     * ParsleyGossip.Reception#learnedSomethingNew()} reports {@code true} — the signal {@link
-     * ParsleyProcessor} gates further relay on (clock-invisible null messages; see its class Javadoc) —
-     * since this null message genuinely taught the channel something it did not already know.
+     * channel clock is updated by the null-message receipt, which is the custody mechanism (I9)
+     * behind propagation through non-subscribing layers. Also asserts {@link
+     * ParsleyGossip.Reception#advancedConsumedChannel()} reports {@code false} — the ancestor is a
+     * channel this node neither consumes nor produces, so the claim is custody: it folds into the
+     * stamp and rides every later emission, but it must not itself oblige a relay (the I6 trigger
+     * scope on {@link ParsleyGossip} — relaying hearsay is what let topic cycles storm).
      *
      * Asserts that completeness rises to include the null message's ancestor coordinate immediately
      * after {@code ParsleyGossip.receive} is called, even though no business record was delivered.
@@ -313,7 +315,7 @@ class CausalReconvergenceTopologyTest {
         ParsleyCausalBroadcast<String, String> causalBroadcast = ParsleyTestFixtures.broadcast(
                 channels, buffer, new MockCandidateIndex(), ParsleyMetrics.NOOP,
                 System::currentTimeMillis);
-        ParsleyGossip<String, String> gossip = new ParsleyGossip<>(causalBroadcast, Set.of());
+        ParsleyGossip<String, String> gossip = new ParsleyGossip<>(causalBroadcast, Set.of(), scope);
 
         // Before any null message, completeness has no ANC coordinate.
         assertEquals(-1L, causalBroadcast.completeness().offsetFor(ANC_ID, 0),
@@ -328,9 +330,9 @@ class CausalReconvergenceTopologyTest {
         // No records were buffered, so nothing is released.
         assertEquals(0, released.size(),
                 "no records buffered, so the null-message receive must return an empty release list");
-        assertTrue(reception.learnedSomethingNew(),
-                "the node knew nothing of ANC before, so this null message must report genuinely new "
-                        + "knowledge (I6)");
+        assertFalse(reception.advancedConsumedChannel(),
+                "ANC is a channel this node neither consumes nor produces — the claim is custody, "
+                        + "which folds into the stamp but must not oblige a relay (I6 trigger scope)");
 
         // The channel clock for T1/0 now knows ANC@5, which must appear in completeness().
         assertEquals(5L, causalBroadcast.completeness().offsetFor(ANC_ID, 0),

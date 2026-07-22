@@ -13,8 +13,9 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
  * Tests for {@link ParsleyGossip#receive}: a null message's carried clock feeds the outbound stamp
- * ({@link ParsleyCausalBroadcast#completeness()}) and the {@code learnedSomethingNew} relay signal
- * (I6), but never the delivery gate — a peer's claim that a coordinate was delivered <em>there</em>
+ * ({@link ParsleyCausalBroadcast#completeness()}) and the {@code advancedConsumedChannel} relay
+ * signal (I6 — only an advance of a channel this node consumes obliges a relay; custody folds but
+ * never obliges), but never the delivery gate — a peer's claim that a coordinate was delivered <em>there</em>
  * is not proof it was delivered <em>here</em>, so a held record releases only once this node's own
  * contiguous frontier genuinely reaches its dependencies. Gating on the max-merged completeness
  * used to let a null message claiming a sibling channel's coordinate release a held record before
@@ -58,9 +59,9 @@ class ParsleyGossipTest {
         assertEquals(List.of(), reception.delivered(),
                 "a null message's carried claim of T2@3 must not release the held record — a peer's "
                         + "delivery is not this node's delivery");
-        assertTrue(reception.learnedSomethingNew(),
-                "the carried clock did teach the channel something new, so the relay signal is true "
-                        + "even though nothing was released");
+        assertTrue(reception.advancedConsumedChannel(),
+                "the carried clock advanced consumed sibling channel T2, so the relay signal is "
+                        + "true even though nothing was released");
 
         for (long offset = 0; offset < 3; offset++) {
             assertEquals(List.of(), causalBroadcast.receive(record(T2, offset, T2_ID, ParsleyVectorClock.empty())).delivered()
@@ -119,56 +120,74 @@ class ParsleyGossipTest {
         assertEquals(1, reception.delivered().size(),
                 "the null message's own offset genuinely delivers T1@0, releasing the held T2@0 — "
                         + "a null-message-only channel still advances its own frontier");
-        assertFalse(reception.learnedSomethingNew(),
-                "an empty carried clock taught the channel nothing, so the relay signal stays false "
+        assertFalse(reception.advancedConsumedChannel(),
+                "an empty carried clock advanced nothing, so the relay signal stays false "
                         + "even though the message's own delivery released a record");
     }
 
     /**
-     * The I6 relay rule with own outputs: a null message reflecting this node's own produced
-     * coordinate back at it (a downstream stamp echoing around a topology cycle) at or below the
-     * {@code ownOutputs} clock teaches nothing — this node produced that position — so the relay
+     * The I6 relay rule with own outputs, in the one shape where {@code ownOutputs} is
+     * load-bearing for the trigger: a <em>consumed own sink</em> (the self-cycle). A null message
+     * reflecting this node's own produced coordinate back at it — on a channel inside the consumed
+     * trigger scope, while the append itself is still above the frontier — at or below the
+     * {@code ownOutputs} clock teaches nothing (this node produced that position), so the relay
      * signal settles {@code false} on first sight, without the old stamp-side own-sink strip. The
-     * unstripped claim still folds into the channel clock and rides the outbound stamp (I9).
+     * unstripped claim still folds into the channel clock and rides the outbound stamp (I9). A
+     * claim on a non-consumed sink would be filtered by the trigger scope before ownOutputs even
+     * mattered; this test pins the domination itself.
      */
     @Test
     void reflectedOwnOutputClaimTeachesNothingSoTheRelaySettles() {
-        Uuid sinkId = Uuid.randomUuid();
         ParsleyChannels channels = newFrontier();
-        channels.acknowledge(sinkId, 0, 7);
+        // T2 is consumed (in SCOPE) and also this node's own sink — the self-cycle shape. The
+        // acked append at T2@7 has not been delivered here (frontier T2 = -1), so only the
+        // ownOutputs side of stamp() can dominate the reflected claim.
+        channels.acknowledge(T2_ID, 0, 7);
         ParsleyCausalBroadcast<String, String> causalBroadcast = ParsleyTestFixtures.broadcast(
                 channels, buffer, new MockCandidateIndex(), ParsleyMetrics.NOOP,
-                System::currentTimeMillis, SCOPE, (topicId, partition) -> topicId.equals(sinkId));
+                System::currentTimeMillis, SCOPE, (topicId, partition) -> topicId.equals(T2_ID));
         ParsleyGossip<String, String> gossip = gossipOver(channels, causalBroadcast);
 
-        ParsleyGossip.Reception<String, String> reflected = gossip.receive(T1_ID, 0, 0, clock(sinkId, 7));
+        ParsleyGossip.Reception<String, String> reflected = gossip.receive(T1_ID, 0, 0, clock(T2_ID, 7));
 
-        assertFalse(reflected.learnedSomethingNew(),
-                "a claim at or below ownOutputs is this node's own knowledge — relaying it would "
-                        + "ping-pong forever around a cycle (I6: new is judged against total "
-                        + "knowledge, ownOutputs included)");
-        assertEquals(7L, causalBroadcast.completeness().offsetFor(sinkId, 0),
+        assertFalse(reflected.advancedConsumedChannel(),
+                "a consumed-own-sink claim at or below ownOutputs is this node's own knowledge — "
+                        + "relaying it would ping-pong forever around a self-cycle (I6: the "
+                        + "comparison is against total knowledge, ownOutputs included)");
+        assertEquals(7L, causalBroadcast.completeness().offsetFor(T2_ID, 0),
                 "the reflected claim must still fold into the channel clock unstripped (I9) — "
                         + "only the relay is suppressed, never the merge");
     }
 
     /**
-     * A carried clock this node's total knowledge does not dominate — even one arriving on a
-     * channel whose own clock would dominate it — relays exactly once: the first sight folds it
-     * (so the stamp carries it, I9), and an identical repeat teaches nothing and settles. This is
-     * the strict-advance convergence argument: each relay shrinks the set of unknown facts.
+     * The trigger scope split, both directions. A claim on foreign ancestor T3 — a channel this
+     * node neither consumes nor produces — folds into the stamp (I9) but never obliges a relay,
+     * first sight included: custody coverage is hearsay that structurally lags its source, and
+     * relaying on it is what let ≥3-node topic cycles storm forever (each relay's own offset was
+     * the next blind member's news). A claim on consumed channel T2 obliges a relay on first
+     * sight only: the fold makes it total knowledge, so the identical claim settles on repeat —
+     * even arriving on a different channel (the comparison is against total knowledge, never a
+     * single channel's clock).
      */
     @Test
-    void repeatedForeignClaimRelaysOnFirstSightOnly() {
+    void custodyNeverObligesARelayAndConsumedChannelNewsObligesOnce() {
         ParsleyChannels frontier = newFrontier();
         ParsleyCausalBroadcast<String, String> causalBroadcast = causalBroadcastOver(frontier);
         ParsleyGossip<String, String> gossip = gossipOver(frontier, causalBroadcast);
 
-        assertTrue(gossip.receive(T1_ID, 0, 0, clock(T3_ID, 5)).learnedSomethingNew(),
-                "first sight of the foreign claim is genuinely new knowledge — it must relay");
-        assertFalse(gossip.receive(T1_ID, 0, 1, clock(T3_ID, 5)).learnedSomethingNew(),
-                "the identical claim taught nothing the second time — it must settle, not ping-pong");
-        assertFalse(gossip.receive(T2_ID, 0, 0, clock(T3_ID, 5)).learnedSomethingNew(),
+        assertFalse(gossip.receive(T1_ID, 0, 0, clock(T3_ID, 5)).advancedConsumedChannel(),
+                "a custody claim (T3 is neither consumed nor produced) must never oblige a relay, "
+                        + "even on first sight — relaying hearsay is the ≥3-cycle storm");
+        assertEquals(5L, causalBroadcast.completeness().offsetFor(T3_ID, 0),
+                "the custody claim still folds into the channel clock and the stamp (I9) — only "
+                        + "the relay obligation is scoped, never the merge");
+        assertTrue(gossip.receive(T1_ID, 0, 1, clock(T2_ID, 3)).advancedConsumedChannel(),
+                "first sight of a consumed-channel claim (T2@3 above this node's knowledge) is "
+                        + "genuine input news — it must relay");
+        assertFalse(gossip.receive(T1_ID, 0, 2, clock(T2_ID, 3)).advancedConsumedChannel(),
+                "the identical consumed-channel claim taught nothing the second time — it must "
+                        + "settle, not ping-pong");
+        assertFalse(gossip.receive(T2_ID, 0, 0, clock(T2_ID, 3)).advancedConsumedChannel(),
                 "the same claim arriving on a DIFFERENT channel is still already-known — I6 "
                         + "compares against total knowledge, never a single channel's clock");
     }
@@ -187,7 +206,7 @@ class ParsleyGossipTest {
 
     private static ParsleyGossip<String, String> gossipOver(ParsleyChannels channels,
                                                             ParsleyCausalBroadcast<String, String> broadcast) {
-        return new ParsleyGossip<>(broadcast, Set.of());
+        return new ParsleyGossip<>(broadcast, Set.of(), SCOPE);
     }
 
     private static ParsleyMessage<String, String> record(TopicPartition tp, long offset,

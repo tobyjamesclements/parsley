@@ -11,17 +11,18 @@ The module box:
 ```
 requests:    receive(channel, offset, carried)   the null message's own offset is delivered via
                → (deliveries,                    the channels and causal-broadcast modules (it
-                  learnedSomethingNew)           advances the contiguous frontier — the only thing
+                  advancedConsumedChannel)       advances the contiguous frontier — the only thing
                                                  that can release held records); its carried clock
                                                  feeds the channel's advertised view and the stamp
                                                  only, never the gate
 indications: advertise(key, timestamp)           a stamped, ready-to-forward null message, emitted
                → null message                    when a delivery produced no business output (or a
-                                                 received null message carried news)
-relay rule:  relay iff the carried clock is not  "new" is judged against the node's total
-             dominated by the node's total       knowledge (the stamp: frontier ∪ channel clocks ∪
-             knowledge                           carried ancestry ∪ ownOutputs ∪ highestDelivered)
-properties:  relay on strict advance; liveness of completeness propagation
+                                                 received null message advanced a consumed channel)
+relay rule:  relay iff the carried clock,        the comparison is against the node's total
+             restricted to channels this node    knowledge (the stamp: frontier ∪ channel clocks ∪
+             consumes, is not dominated by the   carried ancestry ∪ ownOutputs ∪ highestDelivered);
+             node's total knowledge              custody folds but never obliges a relay
+properties:  relay on consumed-channel advance; liveness of completeness propagation
 ```
 
 The module sits on top of the [causal-broadcast module](causal-broadcast.md) as a liveness layer —
@@ -101,17 +102,49 @@ nothing claims nothing.
 
 ## The relay rule
 
-A received null message is relayed onward only when its carried clock taught this node something
-outside its *total knowledge* — the comparison is against the full stamp, taken before the carried
+A received null message is relayed onward only when its carried clock advanced this node's *total
+knowledge on a channel this node consumes* — the carried clock restricted to the node's declared
+input topics at its own task partition, compared against the full stamp, taken before the carried
 clock is folded (afterwards it is dominated by construction), with pending producer
 acknowledgements folded first so the own-outputs side of the comparison is current.
 
+The restriction to consumed channels is what lets every topology cycle quiesce, and it is the
+discipline of the Chandy–Misra–Bryant protocol this module's null messages come from: there, a
+null-message send is obliged only by an advance of the process's own input channel clocks, never
+by third-party knowledge of distant links. Everything else in a carried clock is *custody* — a
+claim about a channel this node neither consumes nor produces, a sibling producer's appends on a
+shared sink, a foreign partition of a consumed topic. Custody still folds into the stamp
+unconditionally and rides every later emission (stamps must carry custody; that chain is what
+keeps unconsumed ancestry claimable downstream), but it never obliges a relay, because custody
+coverage is hearsay that structurally lags its source: on a cycle of three or more nodes it is
+always one gossip lap stale, so relaying on it appends the very offset that is news to the next
+blind member — an idle deployment then emits null messages forever. Consumed channels have no
+such lag: the contiguous frontier physically catches up to every appended offset, so a fact
+there can oblige at most one relay before it is covered for good.
+
+Withholding a relay starves nobody. The delivery gate waits only on the local frontier of
+consumed channels; every stamped claim sits at or below a really-appended offset, which arrives
+on its channel regardless of gossip; and a suppressed relay also suppresses the claim it would
+have stamped, so nothing downstream can reference — let alone wait on — the knowledge it
+withheld. Folded-but-unrelayed custody reaches downstream on the node's next emission of any
+kind: in an active topology, the next business delivery flushes it; in an idle one it waits, and
+an idle topology has no emission whose stamp could need it.
+
 "New" is never judged against a single channel's clock. A reflected own coordinate — a downstream
-stamp echoing this node's own produced position around a cycle — is dominated by the own-outputs
+stamp echoing this node's own produced position around a self-cycle, where the sink is also a
+consumed channel and therefore inside the trigger scope — is dominated by the own-outputs
 clock and so teaches nothing; the relay settles without any special-casing of own-sink topics. A
-null message's own delivery is never itself a reason to relay: only genuinely new knowledge is,
-so each relay strictly shrinks the set of unknown facts and any cycle quiesces. This is the
-convergence argument for emulating broadcast on a graph with cycles.
+null message's own delivery is never itself a reason to relay.
+
+The resulting quiescence guarantee is unconditional on a pure cycle (each member consumes exactly
+one cycle channel: a claim about that channel arriving on the channel itself always trails the
+frontier, by partition FIFO). On a chorded cycle — a member consuming two or more cycle channels —
+a claim can outrun its record through a multi-hop path and oblige one extra relay, and each such
+relay mints one new offset; under any fair scheduler the race class is bounded and every lap dies
+the moment the raced record is delivered, so sustaining relays forever would require a consumed
+partition starved by at least a full gossip lap indefinitely — an operational pathology
+(broker or network degradation), not a protocol state, and one that self-quenches at the first
+successful fetch.
 
 ## Consuming null messages outside Parsley
 

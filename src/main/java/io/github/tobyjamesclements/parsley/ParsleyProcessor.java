@@ -42,19 +42,21 @@ import java.util.function.Function;
  * on both the admit and punctuator paths.
  *
  * <p><strong>Clock-invisible null messages.</strong> A received null message
- * ({@link #handleNullMessage}) is relayed downstream only when it genuinely
- * taught this node's channel something it did not already know
- * ({@link ParsleyGossip.Reception#learnedSomethingNew()} — the I6 relay rule, stated once on
+ * ({@link #handleNullMessage}) is relayed downstream only when its carried clock advanced this
+ * node's knowledge of a channel it consumes
+ * ({@link ParsleyGossip.Reception#advancedConsumedChannel()} — the I6 relay rule, stated once on
  * {@link ParsleyGossip}). A null message's own delivery is never itself treated as a reason to relay
  * further — unlike a genuine
  * business record, whose delivery always unconditionally causes this node to emit something on its own
- * sink (see {@link #deliver}). Gating on data-taught-something rather than on "a record was delivered"
- * is what keeps a topology cycle — a null-message-only channel included — from ping-ponging the
- * same message forever: a node that has already converged with its peers has nothing new to say, and
- * simply stops, rather than needing separate per-edge "have I already relayed this" bookkeeping. A
+ * sink (see {@link #deliver}). Gating on advanced-my-own-inputs rather than on "a record was delivered"
+ * or "the clock carried anything new anywhere" is what keeps a topology cycle — a null-message-only
+ * channel included — from ping-ponging messages forever: custody knowledge of channels this node
+ * neither consumes nor produces folds into the stamp (I9) and rides every later emission, but it
+ * never obliges a relay, so a node that has converged on its own inputs simply stops, rather than
+ * needing separate per-edge "have I already relayed this" bookkeeping. A
  * dependency can only ever be created after something real has already been observed, so a null
- * message that taught nothing new could not have just formed a new dependency on that non-event
- * either — skipping the re-emission strands nothing.
+ * message that advanced no consumed channel could not have just formed a locally gateable
+ * dependency either — skipping the re-emission strands nothing.
  *
  * @param <KIn>  the input key type
  * @param <VIn>  the input value type
@@ -206,7 +208,10 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
         // the same core and channel state.
         this.causalBroadcast = buildCausalBroadcast();
         ParsleyCausalBroadcast<KIn, VIn> causalBroadcast = this.causalBroadcast;
-        this.gossip = new ParsleyGossip<>(causalBroadcast, destinations);
+        // The consumed scope doubles as the I6 relay trigger: only a carried-clock advance on a
+        // coordinate this task consumes obliges a relay (ParsleyGossip's class Javadoc, single
+        // home of the rule).
+        this.gossip = new ParsleyGossip<>(causalBroadcast, destinations, consumedScope());
         if (restored) {
             log.info("Processor initialized [task: {}] — frontier restored: {}", context.taskId(), causalBroadcast.frontier());
         } else {
@@ -274,6 +279,22 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
     }
 
     /**
+     * The coordinates this task consumes: a registered input topic, on the partition this task
+     * owns (Streams co-partitions a sub-topology's sources, so the task owns partition
+     * {@code taskId().partition()} of every input). Derived, never persisted, so it is recomputed
+     * identically after a rebalance. Two consumers, deliberately the same predicate: restore-time
+     * pruning in {@link #buildCausalBroadcast()} (not a delivery filter — the gate waits for every
+     * channel; see {@code completeness()}), and the I6 relay trigger scope handed to
+     * {@link ParsleyGossip} — a foreign partition of a consumed topic is a sibling task's scope,
+     * never fetched here, so a carried claim on it must fold without obliging a relay.
+     */
+    private ParsleyVectorClock.CoordinatePredicate consumedScope() {
+        Set<Uuid> consumedTopicIds = Set.copyOf(topicUuids.values());
+        int taskPartition = context.taskId().partition();
+        return (topicId, partition) -> partition == taskPartition && consumedTopicIds.contains(topicId);
+    }
+
+    /**
      * Builds the causal-broadcast core over this task's state stores: constructs the {@link ParsleyChannels}
      * (restoring the frontier clock and channel clocks from the {@code "f"} blob when
      * present), prunes restored state to this task's current scope, seeds a channel entry for every
@@ -289,25 +310,18 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
         // index keeps its own keyed store and is injected here.
         ParsleyChannels channels = new ParsleyChannels(frontierStore, forwardedIndex);
 
-        // The coordinates this task consumes: a registered input topic, on the partition this task
-        // owns. Streams co-partitions a sub-topology's sources, so the task owns partition
-        // taskId().partition() of every input topic. Derived here, never persisted, so it is
-        // recomputed identically after a rebalance. Used for restore-time pruning — not as a delivery
-        // filter (the gate waits for every channel; see completeness()).
-        Set<Uuid> consumedTopicIds = Set.copyOf(topicUuids.values());
         int taskPartition = context.taskId().partition();
-        ParsleyVectorClock.CoordinatePredicate inScope = (topicId, partition) ->
-                partition == taskPartition && consumedTopicIds.contains(topicId);
+        ParsleyVectorClock.CoordinatePredicate inScope = consumedScope();
 
         // Reconcile restored causal state with the currently declared input set (the #21 fix: the
         // scope decision keys on "input set unchanged since the persisted blob", not blob presence
         // alone). Retired ancestry re-homes into the carried-ancestry clock the stamp keeps merging
         // (A6); an added input's frontier seeds at the carried-ancestry value so its already-carried
         // prefix is skipped, never replayed as live (A5); a recreated input's old UUID is destroyed.
-        // Then seed an entry for every consumed input
-        // channel so a channel that has not yet advertised anything is present in the min (holding it
-        // down until it does), rather than absent — which would let a record deliver before that
-        // channel confirmed the dependency. Idempotent against an already-rescoped/seeded store (the
+        // Then seed an (empty) entry for every consumed input channel so rescope has a recorded
+        // channel to diff against on the next scope change; the entry contributes nothing to
+        // completeness() (a plain max-merge since D1 retired the intersection minimum). Idempotent
+        // against an already-rescoped/seeded store (the
         // common case, every call after the first), so this costs a redundant write, never a wrong one.
         Map<String, Uuid> previousInputs = channels.declaredInputs();
         channels.rescope(topicUuids, taskPartition);
@@ -323,7 +337,7 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
                 destroyedSources.add(previous.getValue());
             }
         }
-        for (Uuid topicId : consumedTopicIds) {
+        for (Uuid topicId : topicUuids.values()) {
             channels.channelUpdate(topicId, taskPartition, ParsleyVectorClock.empty());
         }
 
@@ -666,8 +680,9 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
     /**
      * Handles a received null message — the one path every one takes through the gossip module's
      * {@link ParsleyGossip#receive receive}: decodes its carried completeness clock, folds it, and
-     * relays this node's own null message downstream iff the received one genuinely taught this node
-     * something (the I6 relay rule on {@link ParsleyGossip}). The null message is never forwarded to
+     * relays this node's own null message downstream iff the received one advanced this node's
+     * knowledge of a channel it consumes (the I6 relay rule on {@link ParsleyGossip}). The null
+     * message is never forwarded to
      * the user delegate and never buffered. The two pre-fold guards mirror the business path
      * exactly — a null message is a protocol record on the same channels, and a decode or wiring
      * failure is no more tolerable for it than for a business record:
@@ -696,11 +711,13 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
      * losing them. Fail-closed: let it kill the task.
      *
      * <p>The downstream relay (inductive propagation) ensures that a node which never produces
-     * business records on this path still advertises its causal progress, so a grandchild node's
-     * channel clock can advance without any business record on the path. But a null message's own
-     * delivery is never itself a reason to relay further — only a genuine change to what this node
-     * knows is — or a topology cycle (a null-message-only channel included) would ping-pong the same
-     * message forever (clock-invisible null messages; see the class Javadoc).
+     * business records on this path still advertises its causal progress when its own inputs
+     * genuinely move, so a grandchild node's channel clock can advance without any business record
+     * on the path. But a null message's own delivery is never itself a reason to relay further,
+     * and neither is custody-only news (a carried claim on a channel this node neither consumes
+     * nor produces — it folds into the stamp and rides every later emission instead) — only an
+     * advance of a consumed channel is, or a topology cycle (a null-message-only channel included)
+     * would ping-pong messages forever (clock-invisible null messages; see the class Javadoc).
      */
     private void handleNullMessage(Record<KIn, VIn> record) {
         RecordMetadata meta = requireRecordMetadata();
@@ -726,14 +743,16 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
         }
         ParsleyGossip.Reception<KIn, VIn> reception = gossip.receive(topicId, partition, offset, carried);
         deliver(reception.delivered());
-        // Relay only when this null message genuinely advanced this node's total knowledge, so the
-        // completeness boundary still propagates through non-subscribing layers when it carries real
-        // news, without ping-ponging a message that taught this node nothing around a topology
-        // cycle. Reuse the incoming message's own key: upstream keyed it to route to this partition,
+        // Relay only when this null message advanced this node's knowledge of a channel it
+        // consumes (the I6 trigger scope on ParsleyGossip): the completeness boundary still
+        // propagates through non-subscribing layers when a node's own inputs genuinely moved,
+        // while custody-only news folds into the stamp without obliging a message — the relay
+        // discipline that lets topology cycles quiesce. Reuse the incoming message's own key:
+        // upstream keyed it to route to this partition,
         // so re-emitting under the same key keeps the relayed message on the co-partitioned
         // downstream partition. Its timestamp propagates too — a relay carries the original
         // trigger's event time onward, never re-stamping it with this node's wall clock.
-        if (reception.learnedSomethingNew()) {
+        if (reception.advancedConsumedChannel()) {
             advertise(record.key(), record.timestamp());
         }
     }

@@ -64,7 +64,7 @@ why an outbound stamp cannot include the record's own coordinate).
 |---|---|
 | `ParsleyChannels` | The channels module: owns all persisted causal metadata — contiguous frontier, per-channel advertised clocks, carried ancestry, own outputs, highest received — self-persisting as the single `"f"` value; normalisation, scope changes, the crossing wait |
 | `ParsleyCausalBroadcast` | The causal-broadcast module (Birman–Schiper–Stephenson): gate, buffer, cascade, fail-closed, the single stamping site. No eviction, no buffer limit, no timeout |
-| `ParsleyGossip` | The gossip module: receives null messages (own offset delivered, carried clock folded stamp-side only) and builds this node's own; owns the relay rule (relay only when the carried clock taught this node something outside its total knowledge) |
+| `ParsleyGossip` | The gossip module: receives null messages (own offset delivered, carried clock folded stamp-side only) and builds this node's own; owns the relay rule (relay only when the carried clock advanced this node's knowledge of a channel it consumes — custody folds but never obliges a relay) |
 | `ParsleyVectorClock` | The one vector clock: node frontier *and* dependency representation, keyed on `(Uuid, int)` primitives |
 | `ParsleyMessage` | Typed envelope: source coordinate + dependency clock as fields, user headers separate |
 | `ParsleyHeader` | A `(key, value)` header plus the header-key vocabulary (`_parsley_*`, reserved keys, factories) |
@@ -93,7 +93,7 @@ Edge (plain Kafka producer)
 Causal processor (Streams)
   ParsleyProcessor.process(record)
     -> null message? -> ParsleyGossip.receive: deliver its own offset, fold its carried clock
-                        stamp-side, relay onward only if it taught this node something new
+                        stamp-side, relay onward only if it advanced a consumed channel
     -> ingest: wrap in ParsleyMessage, embed source coordinates
     -> gate:   ParsleyCausalBroadcast.receive()
                  frontier.dominates(consumedDeps) — this node's own contiguous delivered

@@ -56,9 +56,9 @@ parsley.coordination.*} is part of the configuration surface; startup fails if o
   delivered input produced no business output. Parsley routes each null message to the emitting
   task's own partition on every sink; the key is informational only. It keeps causal progress
   flowing through filters and not-yet-emitting aggregates, and a received null message is relayed
-  further downstream only when its carried clock taught this node something outside its total
-  knowledge — never unconditionally, which is what keeps a cyclic topology's marker traffic from
-  ping-ponging forever. Parsley's processors handle null messages internally; a plain Kafka client detects
+  further downstream only when its carried clock advanced this node's knowledge of a channel it
+  consumes — never unconditionally, which is what keeps a cyclic topology's marker traffic from
+  circulating forever. Parsley's processors handle null messages internally; a plain Kafka client detects
   them with {@link io.github.tobyjamesclements.parsley.CausalClock#isNullMessage isNullMessage}.</dd>
 
   <dt><strong>Causal buffer</strong></dt>

@@ -18,10 +18,14 @@ import java.util.Set;
  * quietly producing only boring DAGs.
  *
  * <p>Construction is layered so specs are DAGs by default — each node draws its inputs from the
- * topics that exist before its own sinks are created — with at most one seed-chosen
- * <em>back-edge</em> (a later-produced topic added to an earlier node's inputs, the node's own
- * sink included) closing cycles. When a back-edge is present every forward probability is capped
- * subcritical: on a feedback loop each consumer-with-sinks appends roughly one record per
+ * topics that exist before its own sinks are created — with two seed-chosen cycle closers: a
+ * shared sink onto a topic an earlier node already consumes (a produces→consumes edge pointing
+ * backward), and at most one <em>back-edge</em> (a later-produced topic added to an earlier
+ * node's inputs, the node's own sink included). Cycles of any length are generated, including
+ * the ≥ 3-node shapes on which the pre-fix I6 relay stormed (custody obliged relays; pinned
+ * quiescent by {@code ParsleyGossipCycleQuiescenceTest} since the consumed-channel trigger).
+ * When the finished spec contains a cycle every forward probability is capped subcritical: on a
+ * feedback loop each consumer-with-sinks appends roughly one record per
  * delivered record (a business forward or a completeness-advert null message), so amplification
  * is governed by loop membership, not probability alone, and the sim's runaway guard classifies
  * anything that still goes hot as {@link ParsleyTopologySim.SupercriticalTopologyException} for
@@ -37,6 +41,13 @@ final class ParsleyTopologyGen {
         SELF_CONSUMER,
         /** The produces→consumes graph has a directed cycle (self-consumers included). */
         CYCLE,
+        /**
+         * Two or more distinct nodes sit on one directed cycle — the shape whose blind channels
+         * stormed the pre-fix I6 relay (custody obliged relays), excluded from generation until
+         * the consumed-channel trigger closed the defect. Guarded separately from {@link #CYCLE}
+         * so a population of nothing but self-loops cannot satisfy the cycle guard vacuously.
+         */
+        MULTI_NODE_CYCLE,
         /** Some consumer does not consume everything its upstream producer consumes — the ignore branch. */
         DIFFERING_SCOPE,
         /** Some node with sinks never forwards business records — its sinks carry only null messages. */
@@ -45,7 +56,7 @@ final class ParsleyTopologyGen {
         FUNNEL
     }
 
-    private static final double BACK_EDGE_PROBABILITY_CAP = 0.4;
+    private static final double CYCLE_PROBABILITY_CAP = 0.4;
 
     private ParsleyTopologyGen() {}
 
@@ -81,13 +92,12 @@ final class ParsleyTopologyGen {
             int sinkCount = random.nextInt(3);
             for (int s = 0; s < sinkCount; s++) {
                 // Mostly fresh topics; sometimes an existing internal one — the shared-sink
-                // shape. Only internals nobody consumes YET are candidates: sharing a topic an
-                // earlier node already consumes would point a produces→consumes edge backward,
-                // closing a multi-node cycle — see the back-edge comment below for why those are
-                // excluded wholesale.
+                // shape. Internals an earlier node already consumes are candidates too: that
+                // points a produces→consumes edge backward and closes a multi-node cycle, the
+                // shape the pre-fix I6 relay stormed on (re-enabled since the consumed-channel
+                // trigger; the cycle cap below keeps the loop subcritical).
                 if (random.nextInt(10) < 3) {
                     List<String> shareable = internals.stream()
-                            .filter(topic -> inputs.stream().noneMatch(in -> in.contains(topic)))
                             .filter(topic -> !nodeSinks.contains(topic))
                             .toList();
                     if (!shareable.isEmpty()) {
@@ -105,25 +115,20 @@ final class ParsleyTopologyGen {
             probabilities.add(random.nextInt(8) / 10.0);
         }
 
-        // One optional back-edge: a node additionally consumes ONE OF ITS OWN SINKS — the
-        // self-loop, the only cycle shape generated. Multi-node cycles of length >= 3 contain a
-        // channel some cycle member neither produces nor consumes ("blind"), and on those the I6
-        // relay provably never quiesces — each relay's own offset is the blind node's next
-        // lesson — a KNOWN liveness defect pinned by ParsleyGossipCycleQuiescenceTest, excluded
-        // here until the protocol closes it. Two-node cycles quiesce but compose with DAG paths
-        // into longer cycles, so only the self-loop (whose every channel its node produces) is
-        // safe to add blindly; the two-node shape is covered by the dedicated quiescence test
-        // and the cyclic-reflection IT.
+        // One optional back-edge: a node additionally consumes any internal topic not already
+        // among its inputs — its own sink (the self-loop) or any other node's (closing a
+        // multi-node cycle of arbitrary length). Cycles of length >= 3 contain channels some
+        // cycle member neither produces nor consumes ("blind"): the pre-fix I6 relay stormed on
+        // exactly those (custody obliged relays), so they were excluded here until the
+        // consumed-channel trigger closed the defect — pinned quiescent by
+        // ParsleyGossipCycleQuiescenceTest.
         if (random.nextInt(10) < 4) {
             int grower = random.nextInt(nodeCount);
-            List<String> ownSinks = sinks.get(grower).stream()
-                    .filter(sink -> !inputs.get(grower).contains(sink))
+            List<String> candidates = internals.stream()
+                    .filter(topic -> !inputs.get(grower).contains(topic))
                     .toList();
-            if (!ownSinks.isEmpty()) {
-                inputs.get(grower).add(ownSinks.get(random.nextInt(ownSinks.size())));
-                for (int i = 0; i < nodeCount; i++) {
-                    probabilities.set(i, Math.min(probabilities.get(i), BACK_EDGE_PROBABILITY_CAP));
-                }
+            if (!candidates.isEmpty()) {
+                inputs.get(grower).add(candidates.get(random.nextInt(candidates.size())));
             }
         }
 
@@ -134,7 +139,19 @@ final class ParsleyTopologyGen {
                     List.copyOf(sinks.get(i)),
                     probabilities.get(i)));
         }
-        return new ParsleySimTrace.SimSpec(List.copyOf(externals), List.copyOf(nodes));
+        ParsleySimTrace.SimSpec spec = new ParsleySimTrace.SimSpec(List.copyOf(externals), List.copyOf(nodes));
+        // Whatever closed a cycle — the back-edge above or a shared sink onto an already-consumed
+        // topic — caps every forward probability subcritical (see the class Javadoc: on a
+        // feedback loop, amplification is governed by loop membership, not probability alone).
+        if (classify(spec).contains(Feature.CYCLE)) {
+            List<ParsleySimTrace.SimSpec.NodeSpec> capped = new ArrayList<>();
+            for (ParsleySimTrace.SimSpec.NodeSpec node : spec.nodes()) {
+                capped.add(new ParsleySimTrace.SimSpec.NodeSpec(node.name(), node.inputs(),
+                        node.sinks(), Math.min(node.outputProbability(), CYCLE_PROBABILITY_CAP)));
+            }
+            spec = new ParsleySimTrace.SimSpec(spec.externalTopics(), List.copyOf(capped));
+        }
+        return spec;
     }
 
     /** The structural features present in {@code spec} — see {@link Feature}. */
@@ -168,15 +185,31 @@ final class ParsleyTopologyGen {
         if (producersByTopic.values().stream().anyMatch(producers -> producers.size() >= 2)) {
             features.add(Feature.SHARED_SINK);
         }
-        if (hasCycle(spec, producersByTopic)) {
-            features.add(Feature.CYCLE);
+        Map<String, Set<String>> reachableByNode = reachability(spec);
+        for (ParsleySimTrace.SimSpec.NodeSpec node : spec.nodes()) {
+            if (reachableByNode.get(node.name()).contains(node.name())) {
+                features.add(Feature.CYCLE);
+            }
+        }
+        for (ParsleySimTrace.SimSpec.NodeSpec a : spec.nodes()) {
+            for (ParsleySimTrace.SimSpec.NodeSpec b : spec.nodes()) {
+                if (!a.name().equals(b.name())
+                        && reachableByNode.get(a.name()).contains(b.name())
+                        && reachableByNode.get(b.name()).contains(a.name())) {
+                    features.add(Feature.MULTI_NODE_CYCLE);
+                }
+            }
         }
         return features;
     }
 
-    private static boolean hasCycle(ParsleySimTrace.SimSpec spec,
-                                    Map<String, List<ParsleySimTrace.SimSpec.NodeSpec>> producersByTopic) {
-        // A node is on a cycle iff it can reach itself through produces→consumes edges.
+    /**
+     * Per node, every node reachable from it through produces→consumes edges (a node is on a
+     * cycle iff it reaches itself; two distinct mutually reachable nodes share a multi-node
+     * cycle).
+     */
+    private static Map<String, Set<String>> reachability(ParsleySimTrace.SimSpec spec) {
+        Map<String, Set<String>> reachableByNode = new HashMap<>();
         for (ParsleySimTrace.SimSpec.NodeSpec start : spec.nodes()) {
             Set<String> reachable = new HashSet<>();
             List<ParsleySimTrace.SimSpec.NodeSpec> frontier = new ArrayList<>(List.of(start));
@@ -189,10 +222,8 @@ final class ParsleyTopologyGen {
                     }
                 }
             }
-            if (reachable.contains(start.name())) {
-                return true;
-            }
+            reachableByNode.put(start.name(), reachable);
         }
-        return false;
+        return reachableByNode;
     }
 }
