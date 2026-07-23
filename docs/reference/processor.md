@@ -1,7 +1,11 @@
-# Streams integration
+# The processor
+
+The processor is how the [three protocols](../protocols/index.md) are embedded in Kafka Streams. It
+is the glue, not a fourth protocol: it drives the channels, causal-broadcast, and gossip modules
+from a Kafka Streams `Processor`, and everything causal lives in those modules rather than here.
 
 The Kafka Streams entry point is `ParsleyProcessorSupplier`, assembled by `CausalTopology#assemble`
-from a `CausalStreamsBuilder`-declared stage (package-private; not constructed directly by user code —
+from a `CausalStreamsBuilder`-declared stage (package-private; not constructed directly by user code;
 see [Streams integration](../guide/streams.md) for the public API). It composes three package-private
 classes: `ParsleyProcessorSupplier`, `ParsleyProcessor`, and `ParsleyProcessorContext`.
 

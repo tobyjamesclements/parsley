@@ -2,7 +2,8 @@
 
 Parsley's naming follows two systems: a visibility convention separating the public API from
 the internals, and an academic-grounding test applied to every identifier a change touches.
-This page is the living register of naming decisions; new decisions are recorded here.
+This page is the living register of naming decisions; new decisions are recorded here. The works
+each decision cites are collected in the [bibliography](bibliography.md).
 
 ## Visibility convention
 

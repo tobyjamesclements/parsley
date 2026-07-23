@@ -1,5 +1,10 @@
 # Wire format
 
+This page specifies the binary layout of every header and state-store value the
+[three protocols](../protocols/index.md) read and write. It is the ground truth for anyone
+decoding a `parsley-causal-clock` header, inspecting a buffer changelog, or reasoning about the
+`"f"` frontier blob.
+
 All binary encodings are big-endian. All lengths are in bytes.
 
 ## `parsley-causal-clock` header

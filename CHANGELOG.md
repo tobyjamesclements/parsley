@@ -58,6 +58,14 @@ All notable changes to this project are documented in this file. The format is b
   Foundations and Streams, and its unique practitioner material moved to Getting started. The five
   compile-pinned samples are unchanged. Inbound Concepts links are repointed to Streams and Getting
   started.
+- **Reference is completed with a Bibliography and reframed pages.** The former internals "Streams
+  integration" page becomes "The processor", framed explicitly as the Kafka Streams embedding of the
+  three protocols rather than a fourth protocol. Wire format and naming gain leads linking into the
+  protocols and the new Bibliography, which collects every source the Foundations, protocols, and
+  naming pages cite (Lamport 1978; Fidge and Mattern 1988; Schwarz–Mattern 1994; BSS 1991;
+  Hadzilacos–Toueg 1994; Cachin–Guerraoui–Rodrigues; Bryant 1977; Chandy–Misra 1979; DeVries 1990;
+  Cai–Turner and Wood–Turner; Demers et al. 1987; Wuu–Bernstein and Sarin–Lynch; COPS 2011), grouped
+  by theme, with the page footnotes linking into it.
 
 ### Removed
 - **The JMH benchmark suite is deleted; `docs/performance.md` now asserts complexity from the
