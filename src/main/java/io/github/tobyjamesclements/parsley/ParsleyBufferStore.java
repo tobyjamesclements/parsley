@@ -14,7 +14,7 @@ import java.util.OptionalLong;
  *
  * <p>There is no separate in-memory copy: a durable implementation <em>is</em> the buffer, so held
  * records need no rehydration step after a restart — they are simply read back on the next drain.
- * The {@link ParsleyEngine} drives the buffer through this interface and is agnostic to whether it is
+ * The {@link ParsleyCausalBroadcast} drives the buffer through this interface and is agnostic to whether it is
  * purely in-memory (tests) or backed by a changelog-replicated Kafka store (production).
  *
  * @param <K> the record key type
@@ -26,7 +26,7 @@ interface ParsleyBufferStore<K, V> {
      * A buffered entry: its insertion sequence (an opaque handle for {@link #remove(long)}), the
      * wall-clock time it was admitted to the buffer, the record, and its decoded dependencies.
      */
-    record Entry<K, V>(long sequence, long bufferedAt, ParsleyMessage<K, V> record, ParsleyClock dependencies) {}
+    record Entry<K, V>(long sequence, long bufferedAt, ParsleyMessage<K, V> record, ParsleyVectorClock dependencies) {}
 
     /**
      * The metadata decodable <em>without</em> the user serde: an entry's insertion sequence, its
@@ -38,7 +38,7 @@ interface ParsleyBufferStore<K, V> {
      * key/value bytes), so they're always decodable even for a record that is otherwise undecodable.
      */
     record IndexEntry(long sequence, long bufferedAt, String topic, Uuid topicId, int partition, long offset,
-                      ParsleyClock dependencies) {}
+                      ParsleyVectorClock dependencies) {}
 
     /**
      * Buffers a record under the next insertion sequence and returns that sequence. The sequence

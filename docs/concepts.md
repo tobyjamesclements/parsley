@@ -1,13 +1,22 @@
 # Concepts
 
+This page covers the concepts a user of Parsley works with: the causal clock, the frontier, the
+buffer, delivery, co-partitioning, and topology changes. Internally these are implemented as three
+layered protocols — a channels layer that adapts Kafka topic-partitions into the reliable FIFO
+channels causal broadcast assumes, a causal-broadcast layer that delivers records in causal order,
+and a gossip layer that keeps clock progress flowing through processors that emit nothing. The
+[internals overview](internals/overview.md) maps the layers to classes, and the
+[causal consistency model](internals/causal-consistency.md) gives the theory; nothing below
+requires either.
+
 ## Causal dependencies
 
-`CausalDependencies` is a snapshot of what a producer had observed when it sent a record. It is a map
+`CausalClock` is a snapshot of what a producer had observed when it sent a record. It is a map
 from a `(topicId, partition)` coordinate to the highest offset the producer had seen on that
 coordinate. Parsley serialises this map as a compact binary header named
-`parsley-causal-dependencies` and attaches it to every outgoing record.
+`parsley-causal-clock` and attaches it to every outgoing record.
 
-On the consumer side the header is decoded back into a `CausalDependencies` value. It describes the
+On the consumer side the header is decoded back into a `CausalClock` value. It describes the
 minimum frontier a downstream consumer must reach before the record may be delivered. A record is
 causally ready once the consumer's frontier has observed at least the offset the dependencies require
 on every coordinate.
@@ -15,6 +24,14 @@ on every coordinate.
 The keys are Kafka topic UUIDs rather than topic names. Because a topic that is deleted and recreated
 receives a new UUID, a new incarnation of `prices` is treated as a distinct dependency. Records
 stamped against the old `prices` are never satisfied by the new one.
+
+Names are resolved to UUIDs once, at task initialisation. Deleting and recreating a causal topic
+while an application is running is therefore not a supported operation: a `CausalStreams` instance
+polls the broker's current topic IDs in the background and fails the application fast when a causal
+topic's UUID changes mid-run, rather than letting records of the new incarnation be processed under
+the old identity. Records fetched between the recreation and the next poll are the residual exposure,
+so treat live recreation as an operational error; restarting after a recreation is safe (identity is
+re-resolved, and the old incarnation's history reads as lost, never reordered).
 
 ## The frontier
 
@@ -28,20 +45,21 @@ delivered, whether it is released or evicted, the frontier catches up in a singl
 everything already forwarded above it.
 
 The node's internal frontier is an implementation detail, and there is no public type for it: it is
-contiguous (the highest offset delivered without a gap), which is specific to how the engine releases
+contiguous (the highest offset delivered without a gap), which is specific to how Parsley releases
 held records. A node consuming with a plain Kafka client maintains its own frontier instead, as an
-accumulating `CausalDependencies` value. Bind a resolver once with `CausalDependencies.using(props)`,
+accumulating `CausalClock` value. Bind a resolver once with `CausalClock.using(props)`,
 fold in each record you consume with `observe(record)`, and stamp the result onto each record you
 produce. A one-to-one relay is `using(props).observe(record)`; a fan-in chains an `observe` per
 input; a stateful node keeps one instance and observes into it across records. To read back the
 dependencies a record already carries, without folding in a new position, use
-`CausalDependencies.fromRecord(record)`.
+`CausalClock.fromRecord(record)`.
 
-When you consume a topic a Parsley topology produces, some records are *protocol watermarks*: null
-key and value, carrying a completeness frontier so causal progress flows through processors that
-produce no output for a given input. Still `observe(record)` them, so your frontier advances across a
-service that emitted only watermarks on this path, but skip them as business records — test with
-`CausalDependencies.isWatermark(record)` and `continue` past those it flags.
+When you consume a topic a Parsley topology produces, some records are *protocol null messages*: a
+record with a null value (its key is borrowed from the record that triggered it), carrying a
+completeness frontier so causal progress flows through processors that produce no output for a given
+input. Still `observe(record)` them, so your frontier advances across a service that emitted only
+null messages on this path, but skip them as business records — test with
+`CausalClock.isNullMessage(record)` and `continue` past those it flags.
 
 The frontier is persisted before each record is forwarded, so it survives restarts and rebalances.
 
@@ -60,38 +78,39 @@ further releases occur.
 A record is delivered once this node's **own contiguous frontier** — the positions it has itself
 delivered, gap-free — dominates the record's dependencies. A dependency is satisfied only by this
 node having delivered the cause locally; a claim carried on another channel's clock (a peer's
-watermark advertising a coordinate the peer delivered) never substitutes for local delivery, or the
+null message advertising a coordinate the peer delivered) never substitutes for local delivery, or the
 processor could see an effect before the cause it directly subscribes to. This covers a record
 delivered immediately and a record delivered after a wait; a record that claims no dependencies (an
 empty dependency set) is trivially satisfied.
 
-The **completeness** clock — the frontier max-merged with every input channel's advertised clock —
-is the *outbound stamp*, not the delivery gate: it carries transitive ancestry (coordinates an
-upstream channel has advertised) downstream, where each receiver's own gate verifies them against
-its own delivery history.
+The *outbound stamp* — the frontier max-merged with every input channel's advertised clock and
+with the node's own acknowledged output positions — is not the delivery gate: it carries
+transitive ancestry (coordinates an upstream channel has advertised, and the node's own produced
+positions) downstream, where each receiver's own gate verifies them against its own delivery
+history.
 
-There is no vacuous satisfaction, though: a dependency naming a coordinate this node has **no input
-channel for at all** — an undeclared topic, or a partition a different task instance owns — is not
-treated as satisfied just because it is out of scope. This node can prove it has no way to confirm such
-a coordinate, never that the coordinate is genuinely irrelevant, so it fails the task fast instead of
-buffering forever or guessing. The corollary is the **topology contract**: every coordinate a node's
-records could ever depend on must be reachable to that node through at least one input channel,
-directly or transitively. A join of fully independent sources can still receive a record depending on a
-coordinate no input channel observes — route that coordinate through some input branch instead (see
-[`parsley.coordination.domain-topics`](configuration.md) for doing this without a redundant business
-subscription). Unlike the topology contract, there is no restriction on a node consuming both a topic
-and a topic derived from it — single-witness merge has no unanimity requirement for that to violate.
-See the [causal consistency model](internals/causal-consistency.md) for the full contract and why a
+A dependency naming a coordinate this node does not consume at all — an undeclared topic, or a
+partition a different task instance owns — is **ignored**, unconditionally. That is sound, not
+vacuous satisfaction: stamps are transitively complete and merged unconditionally, so any consumed
+causal ancestor of a record is claimed *directly* in that record's own clock — an unconsumed entry
+only ever proxies ancestry the same clock already states, and ignoring it loses no ordering
+observable at this node. Each ignore is counted by the `deps-out-of-scope-ignored` metric,
+never a failure. There is no restriction on a node consuming both a topic
+and a topic derived from it.
+This gate is the delivery condition of Birman–Schiper–Stephenson causal broadcast, evaluated over
+Kafka topic-partition coordinates rather than process identifiers. See the
+[causal consistency model](internals/causal-consistency.md) for the full contract and why a
 single witness suffices.
 
 ## Causal buffer is unbounded and fail-closed
 
 The causal buffer never evicts and never delivers a record out of causal order. There is no
-configuration that trades causal safety for liveness. A record whose dependencies are proven
-impossible — an undecodable payload or dependencies header, or a dependency naming a coordinate this
-node has no channel for — unconditionally fails the task; it is never dropped or forwarded on an
-unproven premise. The failure is logged with the record's coordinate and, for a decode failure, its
-metadata (never the payload), and counted by a metric. See [Troubleshooting](troubleshooting.md) for
+configuration that trades causal safety for liveness. A record that cannot be evaluated at all — an
+undecodable payload or an undecodable causal-clock header — unconditionally fails the task; it is
+never dropped or forwarded on an unproven premise. The failure is logged with the record's
+coordinate and its metadata (never the payload), and counted by a metric. A dependency on a
+coordinate this node does not consume is not a failure: it falls to the delivery gate's ignore
+branch, described under [Delivery](#delivery). See [Troubleshooting](troubleshooting.md) for
 the operational playbook and [Configuration](configuration.md#metrics) for the metrics.
 
 ## Co-partitioning
@@ -102,39 +121,27 @@ standard way to arrange this is to partition related topics by the record key wi
 partition count, so that causally related messages, which share a key, land on the same partition
 number across topics and each instance owns partition `N` everywhere. The key is the shard: the unit
 that keeps causally related events together on one partition. An advanced user can partition by a
-coarser function of the key with a custom `StreamPartitioner`, provided the partitioner reads the key
-rather than the value, since a protocol watermark carries no value to read.
+coarser function of the key with a custom `StreamPartitioner`, provided the partitioner computes the
+partition from the key alone: the key is the only field causally related records share across
+topics, so a partitioner that reads anything else cannot place them consistently. Protocol null
+messages do not pass through this partitioner at all; Parsley routes each one to the emitting
+task's own partition on every sink.
 
 Parsley does not enforce co-partitioning end to end, and most of it cannot be checked, so a
 misconfigured topology evaluates against an incomplete partition set. At startup, `parsley.topology.validation`
-(`warn` by default, `strict` to fail fast, `off` to disable) checks that a stage's causal input topics
+(`strict` by default, `warn` to log and continue, `off` to disable) checks that a stage's causal input topics
 share a partition count, and, since a stage built through `CausalStreamsBuilder` owns its sinks too,
 folds sink partition counts into the same check and applies one partitioner uniformly across every sink
 a stage declares so a shard cannot drift onto different partitions across topics by accident. See the
 [Streams integration](streams.md#preconditions) preconditions for the full contract.
 
-## Topology epochs
+## Joining a running topology
 
 A causal topology sometimes has to change while it runs — a new stage, a replaced stage, a recompile.
-A new stage replays its inputs from the earliest offset, and the completeness frontier is a minimum
-across every node, so a node replaying from offset 0 would pull the shared frontier back to the start
-and un-strip history the other nodes had already delivered. An **epoch** prevents this. It defines a
-floor per coordinate; history below the floor is pre-epoch, so it feeds the delegate's state but does
-not participate in causal time. A node deployed into a running topology adopts the current floor and
-replays with everything below it stripped, so it never drags the frontier down.
-
-Setting `parsley.coordination.epoch-events-topic` turns this on. It is optional and leaderless:
-participating applications share one single-partition epoch-events log and each folds it identically
-to agree on every epoch's floor, which then propagates through the topology in-band. Which topics are
-external entry points is derived from what each node declares it consumes and produces, not configured
-by hand. Absent that key, a topology runs in epoch 0 and behaves exactly as one with no epoch
-machinery.
-
-Coordination also requires every running member's declared inputs and sinks to jointly cover the full
-coordinated domain, or an epoch round cannot commit — a genuine multi-stage pipeline (app A produces a
-topic only app B consumes) needs every member to also cover the topics only a sibling touches. Set
-`parsley.coordination.domain-topics` so `CausalTopology` auto-wires a passthrough source for any domain
-topic a stage does not otherwise consume or produce, covering it without a redundant business
-subscription — this is what makes a genuinely cyclic topology (A produces to B, B produces back to A)
-coordinate correctly. See [Evolving a running topology](streams.md#evolving-a-running-topology) for the
-API and [Topology epochs](internals/topology-epochs.md) for the protocol.
+Joining needs **zero coordination**: a fresh application starts consuming from wherever the log
+starts, its hold-back queue converts arbitrary cross-partition arrival into causal delivery order
+(replay is just arbitrarily delayed delivery, which causal broadcast absorbs by construction), and
+its truthful stamps make its outputs correctly gated everywhere from its first emission. A fresh
+record with old dependencies simply sits low in the causal partial order — correct, not a hazard.
+There is no join barrier, no admission, no membership roster, and no epoch. No key under
+`parsley.coordination.*` is part of the configuration surface; startup fails if one is present.

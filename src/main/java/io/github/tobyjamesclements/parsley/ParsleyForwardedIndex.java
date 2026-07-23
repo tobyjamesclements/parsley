@@ -5,12 +5,12 @@ import org.apache.kafka.common.Uuid;
 import java.util.List;
 
 /**
- * A durable record of every offset the engine has forwarded (whether by immediate admission or
+ * A durable record of every offset the causal-broadcast core has forwarded (whether by immediate admission or
  * release) that has not yet been absorbed into the contiguous frontier.
  *
- * <p>The engine does not head-of-line block: a later offset on a partition may forward before an
+ * <p>The causal-broadcast core does not head-of-line block: a later offset on a partition may forward before an
  * earlier offset on the same partition, if the earlier one is still held. Each forward marks its
- * coordinate here; {@link #forwardedAfter} lets the engine walk forward from the current frontier
+ * coordinate here; {@link #forwardedAfter} lets the causal-broadcast core walk forward from the current frontier
  * to find the longest run of consecutive offsets now forwarded, so the frontier only ever advances
  * over a coordinate once every offset up to it has actually gone out — never past a gap. Unlike
  * {@link ParsleyCandidateIndex}, this index <em>is</em> the source of truth for what has been
@@ -21,7 +21,7 @@ interface ParsleyForwardedIndex {
 
     /**
      * Marks {@code (topicId, partition, offset)} as forwarded. The entry persists until {@link
-     * #unmark} removes it, once the engine has folded it into the contiguous frontier.
+     * #unmark} removes it, once the causal-broadcast core has folded it into the contiguous frontier.
      *
      * @param topicId   the forwarded record's source topic UUID
      * @param partition the forwarded record's source partition
@@ -31,7 +31,7 @@ interface ParsleyForwardedIndex {
 
     /**
      * Returns the marked offsets for {@code (topicId, partition)} strictly greater than {@code
-     * frontierOffset}, in ascending order, for the engine to walk while extending the contiguous
+     * frontierOffset}, in ascending order, for the causal-broadcast core to walk while extending the contiguous
      * frontier.
      *
      * @param topicId        the coordinate's topic UUID
@@ -42,7 +42,20 @@ interface ParsleyForwardedIndex {
     List<Long> forwardedAfter(Uuid topicId, int partition, long frontierOffset);
 
     /**
-     * Removes a single marked offset, once the engine has folded it into the contiguous frontier.
+     * Returns {@code true} if {@code (topicId, partition, offset)} is currently marked — i.e. the
+     * offset was forwarded (out of order, above the contiguous frontier) and has not yet been folded
+     * into it. Together with "at or below the frontier", this is the exact membership test for "was
+     * this offset already delivered here" ({@link ParsleyChannels#alreadyDelivered}).
+     *
+     * @param topicId   the coordinate's topic UUID
+     * @param partition the coordinate's partition
+     * @param offset    the offset to test
+     * @return whether the offset is marked
+     */
+    boolean contains(Uuid topicId, int partition, long offset);
+
+    /**
+     * Removes a single marked offset, once the causal-broadcast core has folded it into the contiguous frontier.
      *
      * @param topicId   the coordinate's topic UUID
      * @param partition the coordinate's partition
@@ -55,7 +68,7 @@ interface ParsleyForwardedIndex {
      * one-shot sweep for entries that leaked below the contiguous frontier and can never be reached by
      * {@link #forwardedAfter}'s absorb walk again (it only ever scans strictly above the watermark), so
      * they would otherwise linger in a changelog-backed store forever. Purely cosmetic: {@link
-     * ParsleyFrontier} calls this once per restored coordinate at load, not on the hot delivery path.
+     * ParsleyChannels} calls this once per restored coordinate at load, not on the hot delivery path.
      *
      * @param topicId   the coordinate's topic UUID
      * @param partition the coordinate's partition

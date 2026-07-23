@@ -7,11 +7,11 @@ import java.util.Objects;
 import java.util.Properties;
 
 /**
- * Resolves a topic name to its stable Kafka UUID — the identity {@link CausalDependencies} keys their
+ * Resolves a topic name to its stable Kafka UUID — the identity {@link CausalClock} keys their
  * coordinates by, so that a topic deleted and recreated under the same name is treated as a different
  * topic. A {@code ConsumerRecord} carries only the topic <em>name</em>; building a UUID-keyed
- * dependency from it (via {@link CausalDependencies#using} or {@link CausalDependencies#builder}) needs
- * this mapping. Internal to {@link CausalDependencies}, which is the public entry point — callers never
+ * dependency from it (via {@link CausalClock#using} or {@link CausalClock#builder}) needs
+ * this mapping. Internal to {@link CausalClock}, which is the public entry point — callers never
  * construct or hold a {@code ParsleyTopics} directly.
  *
  * <h2>Thread safety</h2>

@@ -7,7 +7,7 @@ import java.util.Set;
 
 /**
  * Wraps a {@link MockBufferStore}, letting a test mark chosen insertion sequences to make {@link #get}
- * throw {@link ParsleyBufferDeserializationException} instead of returning the entry — simulating a
+ * throw {@link CausalBufferDeserializationException} instead of returning the entry — simulating a
  * poison record (undecodable on the forward path) without a real serde.
  *
  * @param <K> the record key type
@@ -18,7 +18,7 @@ final class PoisonableBufferStore<K, V> implements ParsleyBufferStore<K, V> {
     private final MockBufferStore<K, V> delegate = new MockBufferStore<>();
     private final Set<Long> poisoned = new HashSet<>();
 
-    /** Marks {@code sequence} to throw {@link ParsleyBufferDeserializationException} on the next {@link #get}. */
+    /** Marks {@code sequence} to throw {@link CausalBufferDeserializationException} on the next {@link #get}. */
     void poison(long sequence) {
         poisoned.add(sequence);
     }
@@ -32,7 +32,7 @@ final class PoisonableBufferStore<K, V> implements ParsleyBufferStore<K, V> {
     public Entry<K, V> get(long sequence) {
         if (poisoned.contains(sequence)) {
             IndexEntry meta = indexEntryFor(sequence);
-            throw new ParsleyBufferDeserializationException(meta.topic(), meta.topicId(), meta.partition(),
+            throw new CausalBufferDeserializationException(meta.topic(), meta.topicId(), meta.partition(),
                     meta.offset(), -1, "poisoned by test", new RuntimeException("simulated poison"));
         }
         return delegate.get(sequence);

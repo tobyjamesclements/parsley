@@ -30,7 +30,8 @@ import java.util.Map;
  * between. The public fluent chain terminates in {@link CausalProcessedStream#build()} — there is no
  * public {@code build()} on the builder and no term to open a second stage, so a topology is exactly one
  * {@code stream(...).process(...).to(...)} chain. A multi-stage causal pipeline is built as multiple
- * applications, each one stage, sharing a coordination log.
+ * applications, each one stage, chained topic to topic — joins need zero coordination, so the split
+ * costs nothing beyond the intermediate topic.
  *
  * <p>Multiple input topics are the norm — {@link #stream(Collection, Serde, Serde)} fans several
  * co-partitioned topics sharing one serde pair into a single stage; combine streams declared with
@@ -140,7 +141,7 @@ public final class CausalStreamsBuilder {
         if (this.stage != null) {
             throw new IllegalStateException(
                     "a causal topology declares exactly one stage; a second process(...) is not allowed — "
-                            + "split extra stages into separate applications sharing a coordination log");
+                            + "split extra stages into separate applications chained topic to topic");
         }
         this.stage = spec;
     }

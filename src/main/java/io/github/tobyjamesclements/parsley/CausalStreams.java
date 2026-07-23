@@ -1,5 +1,8 @@
 package io.github.tobyjamesclements.parsley;
 
+import org.apache.kafka.clients.producer.ProducerConfig;
+import org.apache.kafka.common.Metric;
+import org.apache.kafka.common.MetricName;
 import org.apache.kafka.streams.KafkaStreams;
 import org.apache.kafka.streams.StreamsConfig;
 import org.apache.kafka.streams.Topology;
@@ -8,17 +11,25 @@ import org.apache.kafka.streams.errors.StreamsUncaughtExceptionHandler;
 import org.jspecify.annotations.Nullable;
 
 import java.time.Duration;
+import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.LinkedHashSet;
+import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Properties;
 import java.util.Set;
+import java.util.UUID;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.TimeUnit;
+import java.util.function.LongSupplier;
 import java.util.function.Supplier;
 
 /**
  * The causal application runtime: a Facade (GoF) over the Kafka Streams instance a {@link CausalTopology}
  * runs as, and the causal machinery a plain {@code KafkaStreams} doesn't know about — graceful causal
- * drain on shutdown, and (when configured) topology-epoch coordination — behind the one simple
+ * drain on shutdown — behind the one simple
  * start/close lifecycle below. Plays the same role {@link KafkaStreams} plays for a plain Kafka Streams
  * application:
  *
@@ -35,29 +46,41 @@ import java.util.function.Supplier;
  * Runtime.getRuntime().addShutdownHook(new Thread(causalStreams::close));
  * }</pre>
  *
- * <p><strong>Topology-epoch coordination</strong> turns on by setting
- * {@code parsley.coordination.epoch-events-topic} in {@code props}; {@code application.id} supplies the
- * epoch member identity. Absent that key, the topology runs in epoch 0 — no epoch-events log, no
- * coordination thread. Evolve a running, coordinated topology through an epoch boundary with
- * {@link #requestEpochTransition()}. A transition blocks — unbounded — until every running member has
- * published; see {@link ParsleyCoordination#leave()} for how a member is removed from the domain.
+ * <p><strong>Joins need zero coordination</strong>: a fresh application simply starts consuming, and
+ * its replay self-gates into causal order. There is no membership, no epoch, and no join barrier; no
+ * key under {@code parsley.coordination.*} is part of the configuration surface, and startup fails
+ * if one is present (see {@link ParsleyConfig}).
  *
  * <p><strong>{@link #close()}</strong> always runs the full graceful shutdown: it waits for every task's
- * causal buffer to drain through the ordinary delivery path, then — if coordination is configured —
- * permanently decommissions this instance's members (so a restart always rejoins as a fresh member and
- * waits to be re-admitted; slower than resuming as the same running member, but there is no restart/leave
- * distinction for a caller to get wrong), before stopping the underlying {@code KafkaStreams}.
+ * causal buffer to drain through the ordinary delivery path before stopping the underlying
+ * {@code KafkaStreams}. <strong>{@link #close(Duration)}</strong> is the bounded form for callers
+ * that cannot block unbounded — a JVM shutdown hook above all. It never delivers a record early to
+ * meet its deadline; a truncated drain only defers held records to the next start's replay.
  */
 public final class CausalStreams implements AutoCloseable {
 
     private static final Duration QUIESCE_POLL_INTERVAL = Duration.ofMillis(100);
+    // How often the topic-identity watch compares the broker's current topic IDs against what the
+    // tasks resolved at init (E1 / T3.0 A13). Also the bound on the mislabelling window a mid-run
+    // delete+recreate can open before the member fails fast — see ParsleyTopicIdentityWatch.
+    private static final Duration TOPIC_IDENTITY_POLL_INTERVAL = Duration.ofSeconds(5);
 
     private final KafkaStreams kafkaStreams;
     private final ParsleyQuiesce quiesce;
-    private final @Nullable ParsleyCoordination coordination;
+    // The minted id under which this instance's producer-ack registry is registered JVM-wide (D2):
+    // injected into props as producer.<CONFIG_KEY> so the interceptor (producer side) and each
+    // task's init (via appConfigs) resolve the same registry; unregistered at close().
+    private final String ownOutputRegistryId;
+    // The minted id and instance of this application's topic-identity watch (E1 / T3.0 A13): tasks
+    // register their init-time name → UUID resolutions and check intactness per record; start()
+    // spins the poll loop below and close() tears it down + unregisters.
+    private final String topicIdentityWatchId;
+    private final ParsleyTopicIdentityWatch topicIdentityWatch;
+    private @Nullable ScheduledExecutorService identityPollExecutor;
+    private @Nullable ParsleyTopicAdmin identityPollAdmin;
     // Everything the pre-start offset seeding needs, captured at construction: the consumer group id
-    // (application.id), every causal source topic to seed (business and passthrough alike, read off the
-    // assembled topology), and the admin configuration to reach the broker. See seedSourceOffsets().
+    // (application.id), every causal source topic to seed (read off the assembled topology), and the
+    // admin configuration to reach the broker. See seedSourceOffsets().
     private final @Nullable String applicationId;
     private final Set<String> sourceTopics;
     private final Set<String> changelogTopics;
@@ -72,14 +95,40 @@ public final class CausalStreams implements AutoCloseable {
      */
     public CausalStreams(CausalTopology topology, Properties props) {
         this.quiesce = new ParsleyQuiesce();
-        this.coordination = coordinationFrom(props);
-        Topology assembled = topology.assemble(props, quiesce, coordination);
-        this.kafkaStreams = new KafkaStreams(assembled, props);
-        this.applicationId = props.getProperty(StreamsConfig.APPLICATION_ID_CONFIG);
+        // Work on a copy of the caller's Properties: the interceptor entry and the minted
+        // registry/watch ids are injected below, so mutating the caller's object would let a
+        // second instance built from the same Properties duplicate the interceptor and
+        // cross-wire the ids.
+        Properties effective = new Properties();
+        props.forEach(effective::put);
+        Topology assembled = topology.assemble(effective, quiesce);
+        this.ownOutputRegistryId = registerOwnOutputTracking(topology, effective);
+        this.topicIdentityWatchId = UUID.randomUUID().toString();
+        this.topicIdentityWatch = new ParsleyTopicIdentityWatch();
+        ParsleyTopicIdentityWatch.register(topicIdentityWatchId, topicIdentityWatch);
+        effective.put("producer." + ParsleyTopicIdentityWatch.CONFIG_KEY, topicIdentityWatchId);
+        // The two JVM-wide registrations above precede this throwing constructor (a bad Streams
+        // config throws here), and a failed construction hands the caller no instance to close() —
+        // so the registrations must be rolled back on the way out or they leak forever.
+        KafkaStreams streams;
+        try {
+            streams = new KafkaStreams(assembled, effective);
+        } catch (RuntimeException e) {
+            ParsleyOwnOutputRegistry.unregister(ownOutputRegistryId);
+            ParsleyTopicIdentityWatch.unregister(topicIdentityWatchId);
+            throw e;
+        }
+        this.kafkaStreams = streams;
+        this.applicationId = effective.getProperty(StreamsConfig.APPLICATION_ID_CONFIG);
         this.sourceTopics = sourceTopicsOf(assembled);
         this.changelogTopics = changelogTopicsOf(assembled, applicationId);
         this.adminConfigs = new HashMap<>();
-        props.forEach((key, value) -> adminConfigs.put(String.valueOf(key), value));
+        effective.forEach((key, value) -> adminConfigs.put(String.valueOf(key), value));
+    }
+
+    /** The minted id this instance's producer-ack registry is registered under. Test seam. */
+    String ownOutputRegistryId() {
+        return ownOutputRegistryId;
     }
 
     /** Every source topic the assembled topology consumes — the causal sources to seed before start. */
@@ -119,11 +168,34 @@ public final class CausalStreams implements AutoCloseable {
         return changelogs;
     }
 
-    private static @Nullable ParsleyCoordination coordinationFrom(Properties props) {
-        Properties merged = ParsleyConfig.loadProperties();
-        merged.putAll(props);
-        String epochEventsTopic = ParsleyConfig.from(merged).coordinationEpochEventsTopic();
-        return epochEventsTopic == null ? null : ParsleyCoordination.create(epochEventsTopic);
+    /**
+     * Creates and registers this instance's producer-ack registry (the {@code ownOutputs} clock's
+     * feed, D2) and injects the wiring into {@code props} before the {@code KafkaStreams} instance
+     * is built from them: {@link ParsleyOwnOutputInterceptor} is appended to any user-configured
+     * {@code producer.interceptor.classes} (never replacing them), and the minted registry id rides
+     * the same public {@code producer.} prefix so every stream producer's interceptor and every
+     * task's init resolve the same registry — no {@code *.internals.*} type is touched (O1).
+     *
+     * @return the minted registry id, for {@link #close()} to unregister
+     */
+    // Package-private for direct unit coverage: the effective Properties a KafkaStreams instance
+    // is built from are a construction-time copy, no longer observable through the caller's object.
+    static String registerOwnOutputTracking(CausalTopology topology, Properties props) {
+        String registryId = UUID.randomUUID().toString();
+        ParsleyOwnOutputRegistry.register(registryId, new ParsleyOwnOutputRegistry(topology.sinkTopics()));
+        String interceptorsKey = "producer." + ProducerConfig.INTERCEPTOR_CLASSES_CONFIG;
+        Object existing = props.get(interceptorsKey);
+        if (existing instanceof List<?> list) {
+            List<Object> appended = new ArrayList<>(list);
+            appended.add(ParsleyOwnOutputInterceptor.class.getName());
+            props.put(interceptorsKey, appended);
+        } else if (existing != null && !existing.toString().isBlank()) {
+            props.put(interceptorsKey, existing + "," + ParsleyOwnOutputInterceptor.class.getName());
+        } else {
+            props.put(interceptorsKey, ParsleyOwnOutputInterceptor.class.getName());
+        }
+        props.put("producer." + ParsleyOwnOutputRegistry.CONFIG_KEY, registryId);
+        return registryId;
     }
 
     /**
@@ -136,7 +208,29 @@ public final class CausalStreams implements AutoCloseable {
      */
     public void start() {
         seedSourceOffsets();
+        startTopicIdentityPolling();
         kafkaStreams.start();
+    }
+
+    /**
+     * Starts the topic-identity poll loop (E1 / T3.0 A13): a single daemon thread comparing the
+     * broker's current topic IDs against every binding the tasks resolved at init, on a fixed
+     * interval. A detected delete or delete+recreate marks the watch broken; the tasks' per-record
+     * checks then fail the member fast (see {@link ParsleyTopicIdentityWatch}). The poll itself
+     * never throws — transient admin failures are logged and retried next tick.
+     */
+    private void startTopicIdentityPolling() {
+        ParsleyTopicAdmin admin = ParsleyTopicAdmin.ofConfigs(adminConfigs);
+        this.identityPollAdmin = admin;
+        ScheduledExecutorService executor = Executors.newSingleThreadScheduledExecutor(runnable -> {
+            Thread thread = new Thread(runnable, "parsley-topic-identity-watch");
+            thread.setDaemon(true);
+            return thread;
+        });
+        this.identityPollExecutor = executor;
+        long intervalMs = TOPIC_IDENTITY_POLL_INTERVAL.toMillis();
+        executor.scheduleWithFixedDelay(() -> topicIdentityWatch.poll(admin),
+                intervalMs, intervalMs, TimeUnit.MILLISECONDS);
     }
 
     private void seedSourceOffsets() {
@@ -159,6 +253,24 @@ public final class CausalStreams implements AutoCloseable {
     }
 
     /**
+     * The underlying {@code KafkaStreams} instance's metrics, Parsley's own per-task sensors
+     * included (records buffered and released, deserialization and clock-resolution failures,
+     * ignored out-of-scope dependencies, and the rest of the {@code parsley} group) — the
+     * in-process way to reach them without going through JMX.
+     */
+    public Map<MetricName, ? extends Metric> metrics() {
+        return kafkaStreams.metrics();
+    }
+
+    /**
+     * Registers a listener notified on each state transition of the underlying
+     * {@code KafkaStreams}, delegating to it. Set it before {@link #start()}.
+     */
+    public void setStateListener(KafkaStreams.StateListener listener) {
+        kafkaStreams.setStateListener(listener);
+    }
+
+    /**
      * Sets the handler invoked when a stream thread dies from an uncaught exception, delegating to the
      * underlying {@code KafkaStreams}. Set it before {@link #start()}.
      */
@@ -167,35 +279,16 @@ public final class CausalStreams implements AutoCloseable {
     }
 
     /**
-     * Requests an epoch transition across the currently-running nodes, evolving a running, coordinated
-     * topology through an epoch boundary.
-     *
-     * @throws IllegalStateException if topology-epoch coordination is not configured (see
-     *         {@code parsley.coordination.epoch-events-topic}), or no task has initialised it yet
-     */
-    public void requestEpochTransition() {
-        if (coordination == null) {
-            throw new IllegalStateException("topology-epoch coordination is not configured — set "
-                    + "parsley.coordination.epoch-events-topic to enable it");
-        }
-        coordination.requestEpochTransition();
-    }
-
-    /**
      * Gracefully shuts down: waits — unbounded, no timeout — for every task's causal buffer to drain
-     * through the ordinary delivery path, then, if coordination is configured, permanently decommissions
-     * this instance's members from the epoch domain, then stops the underlying {@code KafkaStreams}, then
-     * closes the coordination runtime. Idempotent-safe to call even if {@link #start()} was never called.
+     * through the ordinary delivery path, then stops the underlying {@code KafkaStreams}.
+     * Idempotent-safe to call even if {@link #start()} was never called.
      *
      * <p>The drain wait is unbounded only while draining can actually progress: if the underlying
      * streams instance leaves {@code RUNNING}/{@code REBALANCING} (it died in {@code ERROR}, or was
      * already stopped), no task will ever deliver again, so the wait ends and shutdown proceeds — every
      * held record is changelog-backed and survives to the next start, so nothing is lost by closing an
      * already-dead instance (see {@link ParsleyQuiesce}: the drain is a stall-avoidance optimisation,
-     * not a correctness requirement). The coordination decommission honours the same liveness rule: on
-     * an instance that can no longer drain, {@link ParsleyCoordination#leave} abandons the removal
-     * (members stay in the domain, exactly as a crash would leave them) instead of hanging on a buffer
-     * no task will ever empty.
+     * not a correctness requirement).
      */
     @Override
     public void close() {
@@ -203,13 +296,63 @@ public final class CausalStreams implements AutoCloseable {
             quiesce.requestQuiesce();
             awaitDrain(quiesce, kafkaStreams::state);
         }
-        if (coordination != null) {
-            coordination.leave(() -> canStillDrain(kafkaStreams.state()));
-        }
         kafkaStreams.close();
-        if (coordination != null) {
-            coordination.close();
+        releaseResources();
+    }
+
+    /**
+     * Gracefully shuts down within a time budget, for callers that cannot block unbounded — a JVM
+     * shutdown hook above all. The budget spans the whole shutdown: first the causal drain wait,
+     * then stopping the underlying {@code KafkaStreams} with whatever remains, mirroring
+     * {@link KafkaStreams#close(Duration)}.
+     *
+     * <p>Giving up on the drain is always causally safe — records are <em>never</em> delivered
+     * early to beat the deadline. A truncated drain only leaves held records in the changelog-backed
+     * buffer, exactly as an ungraceful stop would, to be replayed and delivered in causal order on
+     * the next start (see {@link ParsleyQuiesce}: the drain is a stall-avoidance optimisation, not a
+     * correctness requirement). Prefer {@link #close()} for routine shutdown, where an
+     * unbounded-but-progressing drain avoids that replay cost.
+     *
+     * @param timeout the maximum time to spend on drain plus shutdown; {@code Duration.ZERO} skips
+     *                straight to an immediate close
+     * @return {@code true} if the underlying streams instance fully stopped within the budget
+     */
+    public boolean close(Duration timeout) {
+        Objects.requireNonNull(timeout, "timeout");
+        if (timeout.isNegative()) {
+            throw new IllegalArgumentException("timeout must not be negative: " + timeout);
         }
+        long deadlineNanos = System.nanoTime() + timeout.toNanos();
+        if (kafkaStreams.state() != KafkaStreams.State.CREATED) {
+            quiesce.requestQuiesce();
+            awaitDrain(quiesce, kafkaStreams::state, deadlineNanos, System::nanoTime);
+        }
+        long remainingMs = Math.max(0L, TimeUnit.NANOSECONDS.toMillis(deadlineNanos - System.nanoTime()));
+        boolean stopped = kafkaStreams.close(Duration.ofMillis(remainingMs));
+        releaseResources();
+        return stopped;
+    }
+
+    /**
+     * Tears down everything {@code close} must release regardless of how the drain ended: the
+     * JVM-wide registry and watch registrations, the identity-poll executor, and its admin client.
+     * Idempotent, so a bounded close after an unbounded one (or vice versa) is harmless.
+     */
+    private void releaseResources() {
+        ParsleyOwnOutputRegistry.unregister(ownOutputRegistryId);
+        ScheduledExecutorService executor = identityPollExecutor;
+        if (executor != null) {
+            executor.shutdownNow();
+        }
+        ParsleyTopicAdmin admin = identityPollAdmin;
+        if (admin != null) {
+            try {
+                admin.close();
+            } catch (Exception e) {
+                // Closing a poll-only admin client can fail only on shutdown races; nothing to do.
+            }
+        }
+        ParsleyTopicIdentityWatch.unregister(topicIdentityWatchId);
     }
 
     /**
@@ -231,8 +374,32 @@ public final class CausalStreams implements AutoCloseable {
         }
     }
 
-    /** Whether tasks in {@code state} can still deliver records — the liveness rule both {@link
-     * #awaitDrain} and the coordination decommission's drain wait poll. */
+    /**
+     * The deadline-bounded variant {@link #close(Duration)} uses: identical to
+     * {@link #awaitDrain(ParsleyQuiesce, Supplier)} except the wait also ends once {@code nanoTime}
+     * reaches {@code deadlineNanos}. Giving up never delivers anything early — the un-drained
+     * records stay in the changelog-backed buffer for the next start. {@code nanoTime} is a seam so
+     * tests drive the deadline without real waiting; production passes {@code System::nanoTime}.
+     *
+     * @return {@code true} if every registered task drained, {@code false} on the deadline or the
+     *         dead-instance escape
+     */
+    static boolean awaitDrain(ParsleyQuiesce quiesce, Supplier<KafkaStreams.State> state,
+                              long deadlineNanos, LongSupplier nanoTime) {
+        while (!quiesce.isSafeToClose()) {
+            if (!canStillDrain(state.get())) {
+                return false;
+            }
+            if (nanoTime.getAsLong() - deadlineNanos >= 0) {
+                return false;
+            }
+            sleep();
+        }
+        return true;
+    }
+
+    /** Whether tasks in {@code state} can still deliver records — the liveness rule
+     * {@link #awaitDrain} polls. */
     private static boolean canStillDrain(KafkaStreams.State state) {
         return state == KafkaStreams.State.RUNNING || state == KafkaStreams.State.REBALANCING;
     }

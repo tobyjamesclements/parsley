@@ -19,8 +19,8 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 class ParsleySerializerTest {
 
     // Non-zero partition is deliberate: the round-trip test verifies the partition is preserved.
-    private static final TopicPartition T1 = new TopicPartition("t1", 2);
-    private static final Uuid T1_ID = Uuid.randomUuid();
+    private static final TopicPartition C1 = new TopicPartition("c1", 2);
+    private static final Uuid C1_ID = Uuid.randomUuid();
 
     private final ParsleySerializer<String, String> serializer =
             new ParsleySerializer<>(new ParsleyResolver<>(topic -> Serdes.String(), topic -> Serdes.String()));
@@ -34,18 +34,18 @@ class ParsleySerializerTest {
      */
     @Test
     void roundTripsEveryField() {
-        ParsleyClock deps = ParsleyClock.empty().observe(Uuid.randomUuid(), 0, 4);
+        ParsleyVectorClock deps = ParsleyVectorClock.empty().observe(Uuid.randomUuid(), 0, 4);
         List<ParsleyHeader> userHeaders = List.of(
                 new ParsleyHeader("h1", "a".getBytes()),
                 new ParsleyHeader("h2", null));
-        ParsleyMessage<String, String> record = buildRecord("key", "value", 123L, T1, 7L, deps, userHeaders);
+        ParsleyMessage<String, String> record = buildRecord("key", "value", 123L, C1, 7L, deps, userHeaders);
 
         ParsleyMessage<String, String> out = serializer.deserialize(serializer.serialize(record));
 
         assertEquals("key", out.key(), "key must round-trip");
         assertEquals("value", out.value(), "value must round-trip");
         assertEquals(123L, out.timestamp(), "timestamp must round-trip");
-        assertEquals(T1, new TopicPartition(out.topic(), out.partition()),
+        assertEquals(C1, new TopicPartition(out.topic(), out.partition()),
                 "source topic and partition (including non-zero partition number) must round-trip");
         assertEquals(7L, out.offset(), "source offset must round-trip");
         assertEquals(deps, out.dependencies(), "the dependency clock must round-trip");
@@ -64,13 +64,13 @@ class ParsleySerializerTest {
      */
     @Test
     void roundTripsNullKeyAndValue() {
-        ParsleyMessage<String, String> record = buildRecord(null, null, 0L, T1, 0L, null, List.of());
+        ParsleyMessage<String, String> record = buildRecord(null, null, 0L, C1, 0L, null, List.of());
 
         ParsleyMessage<String, String> out = serializer.deserialize(serializer.serialize(record));
 
         assertNull(out.key(), "null key must round-trip as null");
         assertNull(out.value(), "null value must round-trip as null");
-        assertEquals(ParsleyClock.empty(), out.dependencies(), "empty dependencies must round-trip as empty");
+        assertEquals(ParsleyVectorClock.empty(), out.dependencies(), "empty dependencies must round-trip as empty");
     }
 
     /**
@@ -83,7 +83,7 @@ class ParsleySerializerTest {
      */
     @Test
     void roundTripsEmptyButNonNullKeyAndValue() {
-        ParsleyMessage<String, String> record = buildRecord("", "", 0L, T1, 0L, null, List.of());
+        ParsleyMessage<String, String> record = buildRecord("", "", 0L, C1, 0L, null, List.of());
 
         ParsleyMessage<String, String> out = serializer.deserialize(serializer.serialize(record));
 
@@ -108,13 +108,13 @@ class ParsleySerializerTest {
         ParsleySerializer<String, String> spying =
                 new ParsleySerializer<>(new ParsleyResolver<>(topic -> keySpy, topic -> valueSpy));
         ParsleyMessage<String, String> record =
-                buildRecord("k", "v", 0L, T1, 1L, ParsleyClock.empty(), List.of());
+                buildRecord("k", "v", 0L, C1, 1L, ParsleyVectorClock.empty(), List.of());
 
         spying.deserialize(spying.serialize(record));
 
-        assertEquals(List.of("t1", "t1"), keySpy.topics,
+        assertEquals(List.of("c1", "c1"), keySpy.topics,
                 "key serde must be invoked with the source topic on both serialise and deserialise");
-        assertEquals(List.of("t1", "t1"), valueSpy.topics,
+        assertEquals(List.of("c1", "c1"), valueSpy.topics,
                 "value serde must be invoked with the source topic on both serialise and deserialise");
     }
 
@@ -149,10 +149,10 @@ class ParsleySerializerTest {
 
     private static ParsleyMessage<String, String> buildRecord(String key, String value, long timestamp,
                                                               TopicPartition tp, long offset,
-                                                              ParsleyClock deps,
+                                                              ParsleyVectorClock deps,
                                                               List<ParsleyHeader> userHeaders) {
-        return new ParsleyMessage<>(tp.topic(), T1_ID, tp.partition(), offset, timestamp,
-                key, value, userHeaders, deps == null ? ParsleyClock.empty() : deps);
+        return new ParsleyMessage<>(tp.topic(), C1_ID, tp.partition(), offset, timestamp,
+                key, value, userHeaders, deps == null ? ParsleyVectorClock.empty() : deps);
     }
 
     /** A String serde that records the topic argument it was invoked with. */

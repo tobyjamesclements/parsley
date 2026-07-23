@@ -19,7 +19,7 @@ import java.util.TreeSet;
  * <p><strong>Why.</strong> Every causal source is declared with {@code AutoOffsetReset.none()} (see
  * {@link CausalTopology}) so Kafka Streams fails fast — rather than silently jumping forward — when a
  * committed offset falls out of range (retention or {@code deleteRecords} outran a lagging consumer); a
- * silent forward jump would let {@link ParsleyFrontier#bridge} fold real lost records as if they were
+ * silent forward jump would let {@link ParsleyChannels#bridge} fold real lost records as if they were
  * transaction markers. But {@code none()} also fails on a <em>genuine first start</em>, where no committed
  * offset exists yet. This seeder closes that gap: on a true first start it commits each source partition's
  * log-start offset, so {@code none()} sees a valid committed position and reads from the beginning exactly
@@ -33,6 +33,17 @@ import java.util.TreeSet;
  * records as markers — the very violation {@code none()} exists to prevent. So this seeder refuses to seed a
  * missing partition when any Parsley changelog for this application still exists: that is not a first start,
  * and the only safe response is to fail loudly and require an explicit, complete reset.
+ *
+ * <p><strong>One exception: an added input topic.</strong> A topic on which this group has never
+ * committed any partition, while at least one other source topic is committed, was added to the input
+ * set since the state was written (whole-group offset expiry takes every topic together, and a
+ * consumed topic's offsets do not expire selectively). Its partitions are seeded to log-start: the
+ * processor seeds the added channel's frontier at the node's carried ancestry ({@code
+ * ParsleyChannels#rescope}) and the receive path skips already-delivered offsets, so the re-fetched
+ * prefix is skipped at delivery, never replayed as live. The one shape this cannot distinguish — an
+ * operator manually deleting a previously-consumed topic's entire committed offsets — is safe for the
+ * same reason unless retention has also destroyed records above that topic's surviving frontier
+ * (operator tampering plus an E2 violation, outside the fault model).
  *
  * <p><strong>Concurrent startup.</strong> {@code alterConsumerGroupOffsets} requires an empty group and is
  * not transactional, so once a peer instance has joined it fails (wholesale or per partition). Two
@@ -58,8 +69,7 @@ final class ParsleyOffsetSeeder {
      *
      * @param admin           the narrow admin seam
      * @param applicationId   the Streams {@code application.id} (the consumer group id)
-     * @param sourceTopics    every causal source topic (business and passthrough) whose partitions feed a
-     *                        causal stage
+     * @param sourceTopics    every causal source topic whose partitions feed a causal stage
      * @param changelogTopics this application's exact state-store changelog topic names — the marker of
      *                        surviving causal state; any one of them existing means this is not a first start
      */
@@ -80,12 +90,46 @@ final class ParsleyOffsetSeeder {
 
         if (survivingState(admin, changelogTopics)) {
             // Not a first start — this application has run and left causal state. A missing offset here is
-            // offset expiry or a manual offset delete. Re-list once (a concurrently-starting peer creates
+            // offset expiry, a manual offset delete, or an input topic added since the state was written.
+            // Re-list once (a concurrently-starting peer creates
             // changelogs only after committing its seed, so a fresh read observes that commit); only a
             // partition still uncommitted after the fresh read is a genuine problem.
-            Set<TopicPartition> stillMissing = missing(sourcePartitions, admin.committedOffsets(applicationId));
+            Map<TopicPartition, Long> fresh = admin.committedOffsets(applicationId);
+            Set<TopicPartition> stillMissing = missing(sourcePartitions, fresh);
             if (stillMissing.isEmpty()) {
                 return;                                            // a peer's concurrent first start covered them
+            }
+            // An ADDED input topic is distinguishable from offset loss on a consumed one: this group has
+            // never committed on ANY of its partitions, while at least one other source topic is
+            // committed (whole-group offset expiry takes every topic's offsets together, so a partial
+            // shape means the uncommitted topic was never consumed here). Seeding it to log-start is not
+            // the naive replay the refusal below exists to prevent: the processor's rescope seeds the
+            // added channel's frontier at the node's carried ancestry and the receive path skips
+            // already-delivered offsets, so the re-fetched prefix is skipped, never redelivered. The
+            // residual exposure — an operator manually deleting one previously-consumed topic's offsets
+            // while retention has also destroyed records above that topic's surviving frontier — is
+            // operator tampering plus an E2 violation, outside the fault model.
+            Set<String> committedTopics = new HashSet<>();
+            for (TopicPartition partition : sourcePartitions) {
+                if (fresh.containsKey(partition)) {
+                    committedTopics.add(partition.topic());
+                }
+            }
+            Set<TopicPartition> partiallyMissing = new HashSet<>();
+            Set<TopicPartition> addedTopicPartitions = new HashSet<>();
+            for (TopicPartition partition : stillMissing) {
+                if (committedTopics.contains(partition.topic())) {
+                    partiallyMissing.add(partition);
+                } else {
+                    addedTopicPartitions.add(partition);
+                }
+            }
+            if (partiallyMissing.isEmpty() && !committedTopics.isEmpty()) {
+                commitLogStartSeeds(admin, applicationId, addedTopicPartitions, "added-input");
+                log.info("Seeded {} partition(s) of added causal input topic(s) to log-start for group "
+                        + "'{}'; the surviving causal state skips the prefix it already carried",
+                        addedTopicPartitions.size(), applicationId);
+                return;
             }
             throw new IllegalStateException("causal source partition(s) " + sorted(stillMissing)
                     + " have no committed offset, but this application ('" + applicationId + "') has surviving "
@@ -101,13 +145,26 @@ final class ParsleyOffsetSeeder {
         }
 
         // Genuine first start: seed every missing partition to its log-start offset.
-        Map<TopicPartition, Long> earliest = admin.earliestOffsets(missing);
+        commitLogStartSeeds(admin, applicationId, missing, "first-start");
+        log.info("Seeded {} causal source partition(s) to log-start for a first start of group '{}'",
+                missing.size(), applicationId);
+    }
+
+    /**
+     * Resolves the log-start offset for every partition in {@code partitions} and commits it as the
+     * group's starting position, tolerating a group-not-empty failure if and only if a fresh re-list
+     * then shows a peer covered every partition. Shared by the genuine-first-start path and the
+     * added-input-topic path; {@code purpose} labels the failure messages.
+     */
+    private static void commitLogStartSeeds(ParsleySeedAdmin admin, String applicationId,
+            Set<TopicPartition> partitions, String purpose) throws Exception {
+        Map<TopicPartition, Long> earliest = admin.earliestOffsets(partitions);
         Map<TopicPartition, Long> seeds = new HashMap<>();
-        for (TopicPartition partition : missing) {
+        for (TopicPartition partition : partitions) {
             Long logStart = earliest.get(partition);
             if (logStart == null) {
                 throw new IllegalStateException("could not resolve the log-start offset for causal source "
-                        + "partition " + partition + " while seeding a first start");
+                        + "partition " + partition + " while seeding (" + purpose + ")");
             }
             seeds.put(partition, logStart);
         }
@@ -125,20 +182,18 @@ final class ParsleyOffsetSeeder {
                 toleratedGroupNotEmpty = true;
                 continue;
             }
-            throw new IllegalStateException("failed to seed the first-start offset for causal source "
+            throw new IllegalStateException("failed to seed the " + purpose + " offset for causal source "
                     + "partition " + outcome.getKey() + " (group '" + applicationId + "')", failure);
         }
         if (toleratedGroupNotEmpty) {
             Set<TopicPartition> stillMissing = missing(seeds.keySet(), admin.committedOffsets(applicationId));
             if (!stillMissing.isEmpty()) {
-                throw new IllegalStateException("could not seed first-start offsets for causal source "
+                throw new IllegalStateException("could not seed " + purpose + " offsets for causal source "
                         + "partition(s) " + sorted(stillMissing) + ": the consumer group '" + applicationId
                         + "' is no longer empty and no peer instance committed them. Retry the start once the "
                         + "group settles.");
             }
         }
-        log.info("Seeded {} causal source partition(s) to log-start for a first start of group '{}'",
-                seeds.size(), applicationId);
     }
 
     private static Set<TopicPartition> sourcePartitions(ParsleySeedAdmin admin, Set<String> sourceTopics)

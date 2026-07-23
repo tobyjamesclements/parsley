@@ -7,6 +7,567 @@ All notable changes to this project are documented in this file. The format is b
 ## [Unreleased]
 
 ### Added
+- **Two new internals pages: the named-invariant catalogue and the naming register.**
+  `docs/internals/invariants.md` states I1–I9 — the invariants Javadoc and tests cite by
+  number — which previously had no definition in the repository; `docs/internals/naming.md`
+  records the visibility convention, the academic naming test, and the register of naming
+  decisions with their literature citations. The causal consistency model page gains a
+  "Rejected designs" section recording why epoch consistent cuts and hold-until-admitted joins
+  were removed, so they are not re-derived. Project instructions for coding agents landed as
+  `.claude/CLAUDE.md` with a big-task workflow skill at `.claude/skills/big-task` (both now
+  tracked; the rest of `.claude/` stays ignored).
+- **A randomized protocol explorer over the topology simulator** (test-side). The T2.4 property
+  harness (`ParsleyTopologySim`) now records every scheduler step as a replayable trace
+  (`ParsleySimTrace`, with a text format for copy-pasteable repros) and can re-execute a recorded
+  or delta-debugged schedule PRNG-free; failing schedules are minimised by `ParsleySimShrinker`
+  (shortest failing prefix, then ddmin, same-failure-signature preserving). New fault modes
+  compose with the existing seeded scheduling: dirty restarts (no final ack fold; the I8
+  end-offset seed carries the recovery), consumer offset rollbacks into the already-delivered
+  region (the A11 redelivery net, with a new no-duplicate-delegate-delivery invariant), and
+  random A5/A6 scope-change restarts. `ParsleyTopologyGen` generates seed-deterministic random
+  topologies classified by structural feature, and `ParsleyRandomTopologyPropertyTest` sweeps
+  them under rotating fault profiles with population-level vacuity guards — system-property
+  scalable from the CI default (~1s) to deep sweeps; `ParsleySimSoakTest` (opt-in,
+  `-Dparsley.sim.soak=true`) adds a 500k-step leak-and-stall soak. Cross-JVM seed
+  reproducibility fixed on the way (pollable-input iteration was salted `Set` order), plus two
+  simulator fidelity gaps the explorer itself surfaced: null-message sends now ack and fold into
+  `ownOutputs` like any send, and node (re)starts now run production's post-init
+  `drainAfterRestore` pass.
+
+### Fixed
+- **The three gauge metrics now carry the same tags as the rate/total sensors.** The gauges
+  (`buffer-depth`, `buffer-oldest-buffered-at-ms`, `records-held-above-highest-received`) were
+  tagged `parsley-id=<application.id>-<taskId>` with no thread tag, while the rate/total sensors
+  in the same `stream-parsley-metrics` group were tagged with the bare task ID plus `thread-id` —
+  so a dashboard grouping by `parsley-id` saw two id formats for one task. All metrics in the
+  group now share one scheme: `parsley-id` = the task ID, `thread-id` = the registering stream
+  thread. The tag scheme is documented in the configuration page's metrics section and pinned by
+  `ParsleyMetricsTest`.
+- **`records-released-total` now counts released records, not drain passes.** The sensor's total
+  stat counts observations, and `recordReleased` recorded once per drain pass with the release
+  count as the (ignored-for-counting) value — so a pass releasing five records advanced the total
+  by one, under-reporting releases and making the total incomparable with `records-buffered-total`.
+  It now records once per released record, matching the documented meaning. Found by the new
+  `ParsleyMetricsTest`, which pins the full metrics contract (names, group, tags, gauge
+  descriptions, and per-method counting semantics) against `docs/configuration.md#metrics`.
+- **Null-message gossip now quiesces on every topic cycle: the I6 relay trigger is restricted to
+  consumed channels.** The explorer's first sweep found (and `ParsleyGossipCycleQuiescenceTest`
+  pinned) a liveness defect: on a cycle of three or more nodes, a member that neither produces
+  nor consumes some cycle channel knew it only through carried-clock custody (I9), one gossip lap
+  stale, so the relay-on-any-new-knowledge rule fired every lap and each relay appended the
+  coordinate that sustained the next — an idle deployment generated null-message traffic forever
+  at one message per loop latency per channel (delivery-order safety was unaffected). The relay
+  rule now follows the Chandy–Misra–Bryant trigger discipline the null messages come from: a
+  received null message obliges a relay only when its carried clock advances this node's total
+  knowledge *on a channel it consumes at its own task partition*
+  (`Reception.advancedConsumedChannel`, formerly `learnedSomethingNew`) — coordinates whose
+  first-hand coverage (the contiguous frontier) physically catches up to every appended offset,
+  so a fact there can oblige at most one relay before it is covered for good. Custody — a claim
+  on a channel the node neither consumes nor produces, a sibling's appends on a shared sink, a
+  foreign partition of a consumed topic — still folds into the stamp unconditionally (I9 is
+  untouched) and rides every later emission, but never itself obliges a relay. Withholding the
+  relay starves nothing: the delivery gate waits only on the local frontier of consumed
+  channels, and every stamped claim sits at or below a really-appended offset that arrives
+  regardless of gossip (I8). Net traffic strictly decreases everywhere (a two-node cycle now
+  settles in one advertisement, with no echo). The quiescence guarantee and its one
+  fair-scheduling qualification on chorded cycles are documented in the gossip internals page;
+  the previously storming three-node cycle, the chorded cycle, and an all-shared-sinks cycle
+  (which disqualified the looser consumed-or-produced trigger) are pinned as quiescence
+  regressions, and the random-topology generator produces multi-node cycles and shared sinks
+  onto already-consumed topics again, with a population vacuity guard proving the multi-node
+  shapes appear in every sweep.
+
+### Changed
+- **The artifact now targets Java 21.** `maven.compiler.release` drops from 25 to 21: no main
+  source used a post-21 API, so the 25 floor only excluded consumers pinned to an LTS. Building
+  from source still requires JDK 25 for the Error Prone / NullAway toolchain, and the build now
+  enforces that with maven-enforcer-plugin (JDK 25+, Maven 3.9+, dependency convergence — with
+  `slf4j-api` pinned to the 2.x line over kafka-clients' 1.7.36 declaration — and duplicate
+  dependency declarations banned).
+- **The published POM is now consumer-facing, and builds are reproducible.** flatten-maven-plugin
+  rewrites the deployed POM to drop the build machinery — most importantly the Confluent
+  repository, which serves test-scope dependencies only but which every downstream build would
+  otherwise consult during resolution. A fixed `project.build.outputTimestamp` makes rebuilding a
+  tag yield byte-identical artifacts. The JMH annotation processor is scoped to test compilation
+  instead of running over main sources. The getting-started page no longer claims `kafka-streams`
+  arrives transitively — it is an optional dependency: an application using the `CausalStreams`
+  runtime declares it itself, and `CausalClock` edge stamping needs only `kafka-clients`. The
+  stale POM comment justifying the optional flag with class names deleted in the redesign is
+  rewritten against the current types.
+- **BREAKING: the exceptions that escape into the application's uncaught-exception handler are now
+  public API, under one root.** Parsley's fail-closed throws always propagated out of Kafka Streams
+  into the handler `CausalStreams.setUncaughtExceptionHandler` exposes, but the types were
+  package-private — a handler deciding thread-replace vs shutdown could only string-match class
+  names, and the source-coordinate diagnostics on the shared base were unreachable. The hierarchy
+  is now public and unified: `CausalDeliveryException` (the root; extends `RuntimeException`) —
+  with `CausalCoordinateException` (abstract; exposes the `topic`/`topicId`/`partition`/`offset`
+  quartet) over `CausalBufferDeserializationException` and `CausalVectorClockResolutionException`,
+  and `CausalTopicRecreatedException` and `CausalPendingAckException` directly under the root. The
+  renames follow the public-API naming convention (`Parsley*` → `Causal*`), the two types that
+  extended `IllegalStateException` no longer do (the ad-hoc second root is gone; a handler that
+  matched on `IllegalStateException` must match `CausalDeliveryException` instead), constructors
+  stay package-private (only Parsley raises them), and each type's Javadoc now states whether a
+  restart heals the condition. `encodedDependencies()` returns a defensive copy.
+- **`CausalStreams` gains a bounded `close(Duration)`, and a failed construction no longer leaks
+  its JVM-wide registrations.** The new overload budgets the whole shutdown — the causal drain
+  wait, then stopping the underlying `KafkaStreams` with whatever remains, mirroring
+  `KafkaStreams.close(Duration)` — for callers that cannot block unbounded, a JVM shutdown hook
+  above all. Giving up on the drain never delivers a record early: a truncated drain leaves held
+  records in the changelog-backed buffer to replay in causal order on the next start, so the
+  no-arg `close()` remains the routine path. Separately, the constructor registers this instance
+  in two JVM-wide registries (the producer interceptor resolves them from config) *before*
+  building the `KafkaStreams` instance, whose constructor throws on a bad Streams configuration —
+  and a failed construction hands the caller no instance to `close()`, so both registrations
+  leaked for the JVM's lifetime. The constructor now rolls them back on the way out.
+- **`CausalStreams` passes through `metrics()` and `setStateListener`.** Parsley registers its
+  per-task sensors (records buffered and released, deserialization and clock-resolution failures,
+  ignored out-of-scope dependencies, and the rest of the `parsley` group) on the wrapped
+  instance's registry, but the facade offered no in-process way to reach them — an operator had to
+  go through JMX. `metrics()` now exposes the registry and `setStateListener` the state
+  transitions, alongside the existing `state()` and `setUncaughtExceptionHandler`; the facade
+  still deliberately stops short of re-exposing the whole `KafkaStreams` surface.
+- **The naming convention is stated in `package-info.java`.** Public types are `Causal*` (with the
+  reflectively-instantiated `ParsleyOwnOutputInterceptor` as the documented forced exception);
+  package-private machinery is `Parsley*`, except implementations of a `Parsley*` seam interface,
+  which are named for their backing (`KafkaTopics`, the `StoreBacked*` stores). The four
+  backing-named internals were flagged as drift in an architecture review; they are a deliberate
+  idiom, so the convention now says so rather than the classes being renamed.
+- **Javadoc doclint is on (`all,-missing`).** Broken links, malformed HTML, and bad references now
+  fail the Javadoc build instead of rotting silently; only exhaustive `@param`/`@return` tagging
+  stays unchecked, since the documentation style here is prose. Turning it on surfaced real drift
+  in `overview.html`: the usage example still called `build()` on the builder and the text still
+  said a builder declares "one or more" causal stages — both stale since the one-stage redesign
+  made the fluent chain's terminal `.build()` (on `CausalProcessedStream`) the only way to produce
+  a topology. The example and both descriptions are corrected, the section headings sit at the
+  level doclint expects for an overview page, and the entry-points table gains its caption.
+- **Adversarial-review follow-ups.** The strict partition-parity failure now names the
+  `parsley.topology.validation=warn` opt-down for intentionally mismatched (re-keyed fan-out)
+  topologies; the held-records-from-a-removed-input failure and its troubleshooting entry state
+  what happens when the removed topic was also deleted (redeclaring the recreated successor purges
+  the records as destroyed history rather than draining them); two Javadoc leftovers from the
+  strict-sink-resolution change are corrected (`declareSinks` no longer describes best-effort
+  resolution, and the ack fold's missing-translation skip is documented as a defensive guard, not
+  a multi-stage filter — a topology is exactly one stage); and the `delivery.timeout.ms`
+  resolution's happy paths are pinned directly.
+- **Hygiene sweep.** `CausalStreams` now works on a copy of the caller's `Properties`, so
+  constructing two instances from one object can no longer duplicate the producer-interceptor
+  entry or cross-wire registry ids. Test-only machinery left main: `ParsleyCausalBroadcast` keeps
+  only its full constructor and `ParsleyChannels` only its store-backed one (the in-memory and
+  predicate-defaulting convenience shapes moved to a test fixture factory, and the unused
+  `trackChannels=false` mode is deleted). `ParsleyGossip`'s constructor takes the broadcast core
+  alone and reads the channels module through it. Duplicate codecs consolidated: the dead
+  string helpers in `ParsleyByteUtils` are deleted and `ParsleySerializer` uses
+  `ParsleyByteUtils`' UUID codec, retiring `ParsleyHeader`'s copy. An orphaned Javadoc block is
+  reattached to `validateCleanupPolicy`. And `performance.md` gains a fourth cost category —
+  crossing-wait produce serialization: a multi-forward delegate pays roughly
+  N × (linger + replication round trip) per invocation, because each business forward's stamp
+  waits for the previous forward's acknowledgement; with Kafka Streams' default
+  `producer.linger.ms` of 100 ms this dominates every other documented cost, so the section
+  carries the tuning guidance (lower linger for multi-forward delegates) and why a per-partition
+  exemption is impossible (a business forward's destination partition is unknowable at stamp
+  time).
+- **BREAKING: `parsley.topology.validation` now defaults to `strict`.** A detectable topology
+  misconfiguration — the causal topics not sharing a partition count, or a sink whose
+  `cleanup.policy` includes `compact` — now fails startup unless the deployment explicitly opts
+  down to `warn` or `off`. Both misconfigurations were deferred failures anyway: a parity mismatch
+  crash-loops the protocol-marker produce at runtime, and a compacted sink can silently lose null
+  messages. A topology that *intentionally* mismatches partition counts (for example fanning a
+  source into a wider, re-keyed sink) must now set `warn` explicitly. Also strict:
+  a malformed `delivery.timeout.ms` override now fails startup naming the key and value instead of
+  silently falling back to 120 s — it bounds the crossing wait and the stall diagnostic, so a typo
+  must not quietly become the default (an absent key still defaults to Kafka's 120 s).
+- **Null messages carry the triggering record's timestamp instead of the wall clock.** Kafka
+  Streams advances downstream stream time from every polled record's timestamp before any
+  processor classifies it, so a wall-clock-stamped null message emitted during a reprocessing run
+  over historic event times yanked downstream delegates' windows, grace periods, and suppressions
+  to now. All three emission paths now stamp the trigger's own timestamp: the delivered record's
+  on the non-emitting path, the buffered record's on the heartbeat path, and the received null
+  message's own on the relay path — downstream stream time then advances only as the data's time
+  does. The retention trade is documented in the gossip internals page: a segment holding only
+  null messages looks old to time-based retention exactly when its triggers are old (a backfill),
+  which retention on causal topics must already cover (E2's existing sizing constraint), and an
+  undersized retention now fails as `AutoOffsetReset.none()`'s loud stall rather than silent
+  event-time corruption.
+- **Restored held records whose source topic left scope get an explicit disposition at startup.**
+  Previously a supported redeploy could strand them: a held record from a removed input crashed
+  the task on an untyped serde error at every restart (recoverable only by a full reset), or hung
+  `close()` forever if its dependencies never resolved, and a held record from a recreated input's
+  old incarnation could deliver a destroyed record and re-enter its purged coordinate into the
+  frontier. Now, at initialisation: a current input's records restore unchanged; a recreated
+  input's old-incarnation records are purged with an INFO log (deleted history — never delivered,
+  never reordered); and a removed-but-alive input's records fail startup loudly, naming the topics
+  and counts and the two remedies (redeclare the input so they drain through ordinary delivery, or
+  perform a full reset). See the new troubleshooting entry.
+- **A null message with an undecodable clock header, or on an unregistered topic, now fails the
+  task.** Both branches previously warned and continued: an undecodable carried clock was treated
+  as empty (folding nothing while still delivering the offset — permanently dropping the emitting
+  peer's progress claims from the channel fold, so later stamps under-claimed them), and an
+  unregistered-topic null message was skipped (committing the offset past a record on a channel the
+  node claims not to know). Both now mirror the business path exactly: the present-but-undecodable
+  header throws `CausalVectorClockResolutionException`, the unregistered topic throws the same
+  `IllegalStateException` as business ingest, the transaction aborts, and the record is refetched
+  on restart. An absent header is unchanged: an empty carried clock whose offset is still
+  delivered — a producer that stamps nothing claims nothing.
+- **BREAKING: a declared sink topic must exist before the application starts.** Sink UUID and
+  end-offset resolution at startup is now strict: a sink that cannot be resolved — the topic does
+  not exist, or the admin call fails — fails startup with an `IllegalStateException` naming the
+  sink and the remedy, the same treatment inputs already get. Previously both failures logged a
+  warning and continued, which silently disabled own-output stamping for that sink for the task's
+  entire run (and, for a failed end-offset read, skipped the seed that covers the previous run's
+  final-transaction acknowledgements) — stamps then under-claimed the node's own outputs, and a
+  downstream consumer of two sinks could deliver an effect before its cause. Broker auto-creation
+  on first produce is no longer a supported path for causal sinks; create all topics, sinks
+  included, before first start.
+- **Redesign cleanup (T4.3).** Dead code left behind by the coordination-subsystem deletion is
+  removed: the unused string-set wire helpers in `ParsleyByteUtils` (only the deleted epoch roster
+  section read or wrote them), the unreferenced `ParsleyChannels.channelGet` accessor, the
+  test-only `ParsleyHeader.isInternal()` predicate (the intake rule it mirrored is enforced via
+  `INTERNAL_PREFIX` and covered end-to-end by the topology tests), and the uncalled
+  `withConfigs(Map)`/`withConfig(Properties)` convenience overloads on the internal processor
+  builder. `rescope`'s Javadoc, stranded above an unrelated accessor when the former-sink heal
+  methods were inserted between it and its method, is reattached. Remaining pre-redesign prose is
+  corrected: the builder's "sharing a coordination log" guidance (there is no coordination log —
+  multi-stage pipelines are applications chained topic to topic), three "passthrough" asides, and
+  a Javadoc link still naming the renamed `CAUSAL_DEPENDENCIES` header constant.
+- **BREAKING: the protocol vocabulary moves to its academic names — wire format and public API
+  (T4.1).** Parsley's progress marker is a *null message* in the Chandy–Misra–Bryant sense (a
+  timestamp-carrying record whose value is literally null), and the type stamped on records is a
+  *vector clock*, so both now say so. On the wire: the marker header `_parsley_watermark` is
+  renamed `_parsley_null_message`, and the clock header `parsley-causal-dependencies` is renamed
+  `parsley-causal-clock` (encodings unchanged). In the public API: `CausalDependencies` is renamed
+  `CausalClock` — the type plays both classical vector-clock roles (attached to a record it is the
+  message timestamp VT(m); accumulated at an edge it is the process clock VT(p)) and
+  "dependencies" misdescribed the accumulating half — and `isWatermark(record)` is renamed
+  `isNullMessage(record)`. No compatibility aliases and no migration path: pre-1.0 versions have
+  no upgrade path (upgrades are fresh starts), so old-header records are simply unreadable by this
+  version. Documentation vocabulary updated throughout.
+
+### Documentation
+- **The minimum supported Kafka broker version is documented: 3.7.0.** The integration suite now
+  runs against both the 3.7.0 minimum and the current stable broker line (4.3.1 at the time of
+  writing) in a CI matrix; the broker image is centralized behind one test seam
+  (`-Dparsley.it.kafka.image`). Stated in the README and the getting-started prerequisites.
+- **The getting-started and Streams code samples use neutral channel and message names** —
+  `c1`/`c2`/`c3` topics (a Kafka topic-partition is the causal channel of the literature) and
+  `m1`/`m2`/`m3` messages, the naming convention of the causality papers Parsley cites — in place
+  of the previous domain-flavoured examples (`orders`, `prices`, `trigger`, `priceUpdate`, ...).
+  The samples are now compiled and exercised by a test (`DocsSamplesTest`), so a public-API
+  change that would break a published sample fails the build.
+- **The `parsley-causal-clock` wire format states that entry order is unspecified.** The encoder
+  walks unordered maps, so a multi-entry clock's entries appear in no guaranteed order;
+  `docs/internals/wire-format.md` now says so explicitly, and a decoder must accept entries in any
+  order. The layout itself is unchanged, and is now pinned byte-for-byte by a golden-bytes test
+  (`ParsleyVectorClockWireFormatTest`), so an accidental encoding change fails the build instead
+  of only breaking external implementations and in-flight records.
+- **A full audit pass over every documentation surface (mkdocs pages, Javadoc, `overview.html`,
+  README) fixes doc/code drift and deepens the explanations.** The topology examples now build
+  exactly one stage and call `build()` on `CausalProcessedStream` (the previous `builder.build()`
+  example did not compile). Null messages are described as the code implements them: they carry
+  the triggering record's key as information only and are routed to the forwarding task's own
+  partition on every sink, bypassing the user partitioner. The metrics tables cite the sensor as
+  `deps-out-of-scope-ignored`, matching `ParsleyMetrics`. `troubleshooting.md` states that startup
+  rejects the built-in record-skipping exception handlers rather than presenting handler choice as
+  free configuration, and explains why record-skipping is causally unsafe. `configuration.md`
+  documents that the `Properties` passed to `CausalStreams` overlay the classpath
+  `parsley.properties`. Design-history narration is removed in favour of present-tense
+  description, `migration.md` is replaced by `adoption.md` (incremental adoption of stamping;
+  unstamped records are vacuously deliverable), and `streams.md` gains Shutdown and Failure
+  handling sections covering `close()`/`close(Duration)` semantics and the public
+  `CausalDeliveryException` hierarchy. Citations are anchored where terms have exact literature
+  meanings (Birman–Schiper–Stephenson for the delivery condition, Lloyd et al. for COPS). The
+  README no longer forecasts a fault-injection suite for 1.0.
+- **The documentation is rewritten around the three protocol modules (T4.2).** The internals
+  section now has one page per module — a new `internals/channels.md` (coordinates and identity,
+  density, own outputs, scope changes), `internals/engine.md` renamed to
+  `internals/causal-broadcast.md`, and a new `internals/gossip.md` — each opening with its module
+  box in the request/indication/property style the source Javadoc uses.
+  `internals/causal-consistency.md` is rewritten around the two-branch delivery gate and its
+  soundness argument, and now states the three environmental assumptions explicitly: E1 (stable
+  channel identity), E2 (retention must not destroy causally-live history — with a new operating
+  note in Streams integration and a new troubleshooting entry for the out-of-range crash-loop),
+  and E3 (participation is per-path — a new precondition in Streams integration). Four pages
+  (`index.md`, `concepts.md`, `configuration.md`, `overview.html`) still described the retired
+  fail-fast on dependencies naming unconsumed coordinates; all now describe the ignore branch.
+  `internals/wire-format.md` documents the frontier blob's carried-ancestry, declared-input,
+  own-outputs, and declared-sink sections, and the metrics table gains the `replays-skipped`,
+  `reflected-claims-above-own-outputs`, and `records-held-above-highest-received` sensors.
+  `migration.md` and the README state that pre-1.0 versions have no upgrade path (upgrades are
+  fresh starts).
+
+### Changed (internal)
+- **The L3 gossip module is extracted as `ParsleyGossip` (T4.1, design §1b).** The null-message
+  receive path (deliver the message's own offset, fold its carried clock stamp-side only) and the
+  emission of this node's own null messages move out of `ParsleyCausalBroadcast`/`ParsleyProcessor`
+  into one package-private module, so the I6 relay rule — relay a received null message onward iff
+  its carried clock taught this node something outside its total knowledge — is stated exactly
+  once. Behaviour is unchanged; the write-only `lastSeenKey` field (its reader died with the
+  coordination subsystem) is removed.
+
+### Added
+- **Mid-run topic recreation now fails the application fast (T3.4, assumption E1).** Topic names
+  resolve to their stable Kafka UUIDs once, at task initialisation, so deleting and recreating a
+  causal topic while an application runs would silently rebind causal coordinates: a recreated
+  *input* whose new log re-passes the member's committed offset resumes fetching with no client
+  error, labelling the new incarnation's records with the old identity, and a recreated *sink*
+  turns every producer-ack fold into a monotone no-op, so stamps quietly stop claiming the node's
+  own new outputs. `CausalStreams` now runs a background topic-identity poll comparing the
+  broker's current topic IDs — inputs and sinks — against what each task resolved at
+  initialisation; on a detected change or deletion every task fails fast before ingesting or
+  stamping anything further (`CausalTopicRecreatedException`). Detection is bounded by the poll
+  interval (5 seconds), not instantaneous, so live recreation of a causal topic remains an
+  operational error — the guard makes it loud and bounded instead of silent and indefinite.
+  Restarting after a recreation stays safe: identity is re-resolved at initialisation, and the
+  old incarnation's history reads as lost, never reordered.
+
+### Fixed
+- **A dropped or repurposed sink no longer under-claims the node's own final-transaction outputs
+  (T3.4, invariant I2).** The persisted frontier blob always trails the final transaction's
+  own-output acknowledgements (state stores flush before the producer flush completes acks), and
+  the initialisation-time end-offset seed healed only the *currently* declared sinks — so a
+  redeploy that turned a sink into an input, or dropped it while a third party still consumed it,
+  restarted with stamps missing the node's own last outputs there, and a downstream consumer of
+  that topic plus another of the node's sinks could deliver a derived effect before its cause.
+  The blob now records the declared sink set, and initialisation heals every *previous* sink that
+  is no longer one: end-offset acknowledgement when the topic survives under its recorded UUID,
+  purge when it is provably destroyed (deleted, or recreated under a new UUID), and a loud
+  initialisation failure when it cannot be resolved at all — never a silent under-claim.
+
+### Removed
+- **BREAKING: the topology-epoch coordination subsystem is deleted (decisions D4 + D7).** Causal
+  safety never depended on it: the two-branch delivery gate (consumed dependencies gate on the
+  local frontier; all others are soundly ignored under invariants I2 + I9) is the whole safety
+  story, and joins need zero coordination — a fresh application starts consuming and its replay
+  self-gates into causal delivery order. Removed outright: the epoch-events log and its
+  deterministic fold, epoch floors and transition windows, snapshot/boundary markers and their
+  header kinds, the genesis cohort barrier, the member-app roster, the join barrier, leave-drain,
+  the commit-time completeness snapshot store, the `mergeMin` floor fold, and the domain-topics
+  passthrough sources (fourteen main classes, among them `ParsleyCoordination`,
+  `ParsleyEpochRuntime`, `ParsleyEpochLog`, `KafkaEpochTransport`, and
+  `ParsleyQuiesceTracker` — shutdown quiesce via `CausalStreams.close()` is
+  membership-independent and survives unchanged). `CausalStreams.requestEpochTransition()` no
+  longer exists. The `parsley.coordination.*` configuration keys are deleted, not renamed:
+  **startup fails loudly** naming the offending key when one is present. An existing coordinated
+  deployment upgrades by deleting its coordination configuration; behaviour becomes strictly more
+  available (no join barrier, no genesis wait). Two capabilities are knowingly dropped with the
+  subsystem, as misconfiguration detection rather than safety: the split-domain loud failure
+  (cross-deployment coupling between compliant apps is causally sound) and fail-fast on unknown
+  coordinates (replaced by the `deps-out-of-scope-ignored` metric and startup topology
+  validation). The `docs/internals/topology-epochs.md` page is deleted with the machinery it
+  described.
+
+### Fixed
+- **The outbound stamp now claims records delivered out of order above a contiguous-frontier gap:
+  the `highestDelivered` clock (T2.4, invariant I2).** Delivery within a partition is deliberately
+  not head-of-line-blocking, so a later record can be delivered to the delegate while an earlier
+  one from a different producer is still held — but the stamp previously carried only the
+  contiguous frontier (stuck below the gap), the delivered record's *dependency clock* (via the
+  channel fold), and the node's own *outputs*. The delivered record's own coordinate appeared
+  nowhere, so an output derived from it failed to claim its true cause, and a downstream consumer
+  of both topics could deliver the effect before the cause — the input-side sibling of the
+  own-output gap #22 closed. `ParsleyChannels` now keeps `highestDelivered`, the max projection of
+  the delivered vector that non-head-of-line delivery splits off from the contiguous frontier:
+  observed on every delivery, folded into `stamp()` only (never the delivery gate, and never
+  `completeness()`, which the interim epoch-floor publication still reads), and deliberately not
+  persisted — its above-frontier content is exactly the forwarded index's marks, which commit in
+  the same EOS transaction as the frontier blob, so a restart reconstructs it losslessly. A scope
+  shrink re-homes it into the carried-ancestry clock like any delivered causal past (A6); a
+  recreated topic's old UUID leaves it outright (E1). The implied claim on the held gap offsets
+  below an above-gap entry is an offset-prefix over-claim of real appended positions —
+  delay-only, sound by invariant I8. Invariant I2 is restated to match what the D1/D7 proof
+  always needed: the stamp dominates the dependency clocks *and the coordinates* of every
+  delivered event.
+- **T2.4 property harness: I2/I3/I9 certified under randomised interleavings.** A new in-memory
+  multi-node simulator (`ParsleyTopologySim`) drives real `ParsleyChannels` +
+  `ParsleyCausalBroadcast` instances over store-backed persistence through the production entry
+  points — business receive, null-message receive, the single stamping site with the crossing-wait
+  and ack-fold seams, in-place restarts rebuilt from the durable stores, and `rescope` — under
+  seeded-random schedules, while tracking exact delegate-visible causal histories
+  (Schwarz–Mattern) as ground truth. Continuously asserted: I2 in both forms (stamps dominate
+  delivered dependency clocks + coordinates, and the ground-truth causal past), I3 (successive
+  stamps vector-monotone, across restart boundaries too), I9 (stamps carry unconsumed-channel
+  ancestry — the transitive chain claims the origin coordinate at every hop, and a node fed only
+  null messages still stamps ancestry it never consumed), ground-truth causal delivery order (no
+  effect before its consumed cause at any delegate), own-output stamp coverage (D2), and liveness
+  (every seed drains to empty hold-back queues). The scope-change properties (T3.0 A5/A6) run the
+  same sweeps across scope-shrinking and scope-growing restarts, including growth onto a former
+  own sink ("skip what you already claimed"). Reverting the `highestDelivered` fix kills all five
+  invariant properties — the harness is the certification the T3.1 gate switch (D1) leans on.
+  Interim, until T3.1: business topologies keep every consumer's scope covering claimable upstream
+  coordinates (the sim states this once, in `assertInterimDepCover`); differing-scope business
+  chains join the sweep when the two-branch gate lands.
+- **The outbound stamp is now `completeness ∪ ownOutputs`, and the stamp-side own-sink strip is
+  gone (#22; T2.3, decision D2).** Every stamped record — business forwards and null messages alike,
+  through the single stamping site — now carries the node's own acknowledged output positions, and
+  an inbound clock's own-sink coordinates fold into the advertised channel clocks unstripped
+  (invariant I9: the gate may ignore, the merge may not). This closes the two own-sink stamp holes:
+  a stage whose sink topic is also consumed by a distinct downstream app no longer erases that real
+  ancestor from its other outputs' stamps (#22 — the third party could deliver effect before
+  cause), and a producer's second output is now provably after its first (the two-output diamond).
+  Before stamping, the task runs the **crossing wait** (O1; per-(topic, partition) granularity per
+  T3.0 A7): it blocks until no own-sink send to another coordinate — a different topic **or a
+  different partition of the same topic** — is unacknowledged, so a send that process-order-precedes
+  the record cannot be missing from its stamp; on timeout (bounded by the producer's
+  `delivery.timeout.ms`) or on an observed ack failure it throws and the EOS transaction dies —
+  never stamp-and-proceed (A8). A business forward's wait conservatively excludes nothing (its
+  destination partition is unknowable at stamp time; over-waiting only folds more acked positions —
+  monotone-sound by I8); a marker's wait excludes its exact destination set. Null-message relay is
+  now knowledge-based (invariant I6): a carried clock is relayed onward only when it teaches the
+  node something outside `frontier ∪ channel clocks ∪ carried ancestry ∪ ownOutputs`, replacing the
+  per-channel comparison and the strip's old cycle-settling role (a reflected own coordinate is
+  dominated by `ownOutputs`, so cycles still quiesce). A scope-growth rescope now seeds an added
+  input from the ownOutputs-inclusive stamp value, so an added input that was formerly this node's
+  own sink skips the prefix its stamps already claimed ("skip what you already claimed", extending
+  T3.0 A5). New observability: `reflected-claims-above-own-outputs` (I8 diagnostic — an own-sink
+  claim above the own-output view; never a failure) and the `records-held-above-highest-received`
+  gauge with a WARN log (T3.0 A9 — records held past `delivery.timeout.ms` on a dependency above
+  the channel's highest physically received offset, the signature of a claim nothing received can
+  satisfy; fail-safe, unbounded delay made visible). Wiring this surfaced an ack-ordering race in
+  the T2.2 interceptor, found live by `CausalFanOutScopedFrontierIT`: the callback cleared the
+  pending count (waking a crossing-wait waiter) before folding the acked offset into the registry,
+  so the released stamp could miss exactly the coordinate whose ack released it; the interceptor
+  now folds before it acknowledges, and its Javadoc records the order as load-bearing. The interim gate-side own-sink strip stays
+  until T3.1's two-branch gate, which also picks up the A7 funnel's downstream-delivery IT — the
+  cross-partition claims this change (correctly) puts on the wire are exactly what the interim
+  fail-fast gate rejects at a task owning a different partition (the same recorded
+  interim-consequence class as T1.3's re-homed stamps). Wire note: stamps gain entries (own-sink
+  coordinates); no header or blob format changes.
+- **Scope-change safety: a redeploy that changes the input-topic set no longer mishandles surviving
+  causal state (#21; T3.0 attacks A5/A6).** The persisted frontier blob now records the declared
+  input set (topic name → UUID) and a **carried-ancestry clock**, both as trailing sections, so a
+  restart is distinguished from a scope change by "input set unchanged since the blob", not by blob
+  presence alone. On a shrink, a removed input's delivered ancestry — its frontier entry and its
+  channel's advertised clock — re-homes into the carried-ancestry clock that every outbound stamp
+  keeps merging: stamps still dominate the retired channel's history, where the old scope prune
+  silently dropped it (an under-claim that could reorder a third party downstream). On a growth, an
+  added input with surviving state seeds its frontier at the node's carried-ancestry value — never
+  log-start — so the prefix at or below what this node already delivered or carried is skipped, not
+  replayed as live into the surviving state (a full reset is the opt-in for processing that
+  history); a recreated input (same name, new UUID) has its old, undeliverable coordinates removed
+  outright. The receive path gains the matching skip guard: an already-delivered offset (at or below
+  the contiguous frontier, or still marked in the forwarded index) is skipped with a new
+  `replays-skipped` metric instead of being forwarded to the delegate again. The pre-start offset
+  seeder now permits the added-input redeploy — a topic this group has never committed on, while
+  another source topic is committed, seeds to log-start (the skip guard makes the replay safe);
+  every other surviving-state refusal is unchanged. (The interim consequence this entry originally
+  noted — a downstream app failing fast on re-homed coordinates it does not consume — is resolved
+  in this same release by the two-branch gate; see Changed.)
+
+### Changed
+- **The record path is decoupled from topology-epoch coordination; the `parsley.coordination.*`
+  keys are inert (T3.2, decisions D3/D4/D7 — breaking).** Every epoch consultation is out of the
+  hot path: the interim below-floor dependency strip is deleted (`normalize` is now a pure
+  self-cycle strip — no floor can rise under a held record, so the gate's re-evaluation is of a
+  pure function), the frontier's epoch-anchored seeding/delivery/bridge guards are gone (a
+  channel's baseline is its first-seen offset alone), the epoch boundary/snapshot markers are no
+  longer emitted, relayed, or recognised (null messages keep their path unchanged), and `init()`
+  no longer joins a coordination runtime or blocks on any barrier — a joiner just starts
+  consuming, replay self-gating into causal order through the ordinary hold-back queue. The
+  coordination configuration keys are accepted but wire nothing (a warning is logged when one is
+  present; `CausalStreams.requestEpochTransition()` now always throws, naming the removal) — they
+  are deleted outright, with a loud startup failure, in the next release, together with the
+  now-orphaned subsystem sources. Two deliberate behavioural reverts ride along: a sink
+  partition-count mismatch under the default `warn` validation no longer escalates to a hard
+  startup failure when coordination keys are present (the escalation rode on the subsystem;
+  `strict` still fails fast, and the produce-time consequence is documented), and the
+  `parsley.coordination.*` cross-checks ("domain-topics without epoch-events-topic") no longer
+  fail startup — an inert key cannot be misconfigured. The persisted frontier blob drops its
+  epoch section (a format break; pre-1.0 has no upgrade path — upgrades are fresh starts, so
+  pre-T3.2 state is never read). New broker ITs certify what replaces the join barrier: a joiner
+  replaying a two-partition topology mid-run delivers every historical cause before its derived
+  effect with zero coordination, and a late joiner consuming an input and its derived topic
+  orders every fully-historical pair correctly — the exact hole floored replay stamps used to
+  open.
+- **The delivery gate is now the two-branch dispatch: consumed coordinates gate, everything else
+  is ignored (T3.1, decision D1).** A dependency on a coordinate this node consumes (an input
+  channel of the task, on the partition it owns) must be covered by the node's own contiguous
+  delivered frontier, exactly as before. A dependency on any other coordinate — an unconsumed
+  topic, a partition another task owns, a reflected claim on the node's own sink — is now
+  *ignored*, unconditionally, instead of failing the task:
+  `ParsleyUnreachableDependencyException` and the fail-fast dispatch (invariant I7) are removed,
+  and the `unreachable-dependency-errors` sensor is replaced by `deps-out-of-scope-ignored`
+  (one count per ignored coordinate). Ignoring is sound by the transitivity theorem the Phase 2
+  work certified: with transitively complete stamps (I2) carried by unconditional merges (I9),
+  any consumed causal ancestor of a record is claimed directly in that record's own clock, so an
+  unconsumed entry only ever proxies ancestry the clock already states — ordering observable at
+  the node is unchanged, while topologies the fail-fast made impossible (independent sources
+  joined across an unconsumed intermediate topic, cross-partition funnel claims, uncoordinated
+  cycles) now just work. The interim gate-side own-sink strip is deleted with it: a self-consumed
+  sink's claims are genuinely gated (closing the shared-sink blindspot, where a claim about
+  *another producer's* record on a shared sink was vacuously satisfied), and an unconsumed sink's
+  reflected claims fall to the ignore branch. Cross-partition references on a consumed topic — a
+  co-partitioning misconfiguration signal — shift from hard runtime failure to startup validation
+  (`parsley.topology.validation`, unchanged) plus the ignore metric. New broker ITs cover the
+  unconsumed-intermediate join, the shared-sink ordering fix, a two-app cycle with zero
+  coordination, clockless producers (causally minimal by definition — no declaration needed), and
+  the funnel's deferred delivery-order half; the property harness drops its interim fail-fast
+  guards and adds a differing-scope chain sweep that certifies the ignore branch end to end.
+
+### Changed (internal)
+- **The node tracks its own acknowledged output positions: the `ownOutputs` clock (T2.2, decision
+  D2).** Every `CausalStreams` instance now injects a `ProducerInterceptor`
+  (`ParsleyOwnOutputInterceptor`) into its stream producers through the public
+  `producer.interceptor.classes` prefix — appending to, never replacing, any user-configured
+  interceptors — plus a minted registry id under the same prefix, wiring producer acks for declared
+  sink topics into a per-instance concurrent registry (`ParsleyOwnOutputRegistry`). Before every
+  stamp, the single stamping site drains the registry into a new `ownOutputs` vector clock owned by
+  `ParsleyChannels` (`acknowledge(topicId, partition, offset)`, max-fold, monotone), persisted as a
+  new optional trailing section of the frontier `"f"` blob and seeded at init from each resolved
+  sink's end offsets (`endOffset - 1`, the last appended position) — a deliberate over-claim that is
+  conservative-sound (invariant I8) and heals the blob's one-transaction ack lag across a crash.
+  Registry granularity follows T2.1's carry-forward: acked offsets are a global per-coordinate max
+  (a sibling task's higher offset on a shared sink folds as an I8-sound over-claim, so no
+  send-to-task ack routing is needed), while pending-send tracking is per producer — which under
+  `exactly_once_v2` means per StreamThread, so the crossing wait resolves "this task's pending
+  sends" from the current thread alone. The crossing-wait primitive
+  (`awaitQuiescentExcept(topic, partition, timeout)`) enforces T3.0 A8's implementation invariant by
+  construction: it returns normally only when no send to another own-sink coordinate is
+  unacknowledged, and throws — failing the EOS transaction, never stamp-and-proceed — on timeout or
+  on an acknowledgement failure observed while waiting. Destroyed coordinates (a recreated
+  input-that-is-also-own-sink) are purged from the clock at rescope, per I9's one permitted removal.
+  The outbound stamp is byte-identical to before — `completeness ∪ ownOutputs` and the crossing
+  wait's stamping-site call land with T2.3, which also deletes the stamp-side own-sink strip. No
+  public API or wire format changes.
+- **The own-output acknowledgement mechanism is validated against a real broker (T2.1).** A new
+  broker integration test, `ParsleyProducerAckMechanicsIT`, confirms the three mechanics the Phase 2
+  own-output design depends on, ahead of building it: a `ProducerInterceptor` installed purely
+  through the public `producer.interceptor.classes` config prefix reaches the exactly-once stream
+  producer and reports the exact committed `(topic, partition, offset)` of each sink send, on the
+  producer's network thread rather than the stream thread; `KafkaProducer.flush()` — the call a
+  Streams commit makes — returns only after every prior send's callback has completed, so a stamp
+  taken after a flush cannot miss an own-output coordinate; and aborting a transaction with sends
+  outstanding fails each of them with exactly one callback, so a wait fed by those callbacks is
+  always released and can fail the transaction instead of stamping with an unverified position.
+  Test-only: no main sources, public API, or wire formats change.
+- **The L2 causal-broadcast module is named: `ParsleyEngine` becomes `ParsleyCausalBroadcast`.** Third
+  structural step of the three-protocol redesign (T1.2b, decisions D5 and O4). The class is the
+  receive/deliver core of Birman–Schiper–Stephenson causal broadcast, so it now carries that name,
+  presented in the Cachin–Guerraoui–Rodrigues module style with a new `broadcast(record)` request —
+  the timestamp-assignment half of BSS `broadcast(m)`, attaching the completeness stamp read live at
+  stamp time. `broadcast()` is the **single stamping site**: the delegate-facing stamping proxy
+  (`ParsleyProcessorContext`) and the protocol-marker path (`forwardMarker`) both route through it,
+  collapsing the two previously independent stamping sites (snapshot-field vs live-completeness,
+  which coincided only because a delegate's forwards never mutate completeness) into one structural
+  equivalence; the `stampCompleteness` snapshot field is deleted. Stamp content is unchanged until
+  Phase 2 adds `ownOutputs`. Behaviour-identical; no public API or wire format changes.
+- **Dependency-clock normalisation is a single L1 step: `ParsleyChannels.normalize`.** Second
+  structural step of the three-protocol redesign (T1.2, decision D3). The self-cycle removal and the
+  below-floor strip relocate from the engine's per-gate preprocessing (`effectiveDependencies`) into
+  one `normalize(rawDeps, sourceCoordinate)` request on the channels module, so no gate code path
+  consults epoch state directly (invariant I5: after normalisation, no clock inside L2 carries a
+  self-reference). The below-floor clause is interim — it is deleted with the epoch floors in T3.2.
+  The gate-side own-sink strip stays in the engine until T3.1's two-branch gate replaces it.
+  Behaviour-identical; no public API or wire format changes.
+- **The L1 channels module is named: `ParsleyChannels`.** First structural step of the three-protocol
+  redesign (T1.1). `ParsleyFrontier` folds into a new `ParsleyChannels` class — the
+  Kafka-to-reliable-FIFO-channel adaptation, presented in the Cachin–Guerraoui–Rodrigues module style
+  with the classical operation names: `receive` (density seeding and commit-marker bridging),
+  `delivered` (contiguous frontier advance), `frontier()`, and the Phase 2 stubs `acknowledge`/
+  `ownOutputs()` for own-output tracking. `ParsleyClock` is renamed `ParsleyVectorClock` (it is a
+  vector clock — Fidge 1988, Mattern 1988 — indexed by channel rather than process, a stated
+  variant). Behaviour-identical; all classes are package-private, so no public API or wire format
+  changes.
+
+### Added
 - **Genesis cohort barrier and an authoritative member-app roster for topology-epoch coordination.** A
   coordinated domain now always establishes a committed *genesis* epoch — a consistent cut with an empty
   floor — rather than running uncoordinated until the first explicit transition. Genesis does not commit

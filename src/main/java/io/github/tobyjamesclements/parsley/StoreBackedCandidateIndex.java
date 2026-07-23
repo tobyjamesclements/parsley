@@ -36,7 +36,7 @@ final class StoreBackedCandidateIndex implements ParsleyCandidateIndex {
     }
 
     @Override
-    public void index(long recordId, ParsleyClock required, ParsleyClock frontier) {
+    public void index(long recordId, ParsleyVectorClock required, ParsleyVectorClock frontier) {
         required.forEach((topicId, partition, offset) -> {
             if (frontier.offsetFor(topicId, partition) < offset) {
                 store.put(key(topicId, partition, offset, recordId), PRESENT);

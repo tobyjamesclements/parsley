@@ -13,7 +13,7 @@ import java.util.TreeMap;
 
 /**
  * An in-memory {@link ParsleyCandidateIndex} backed by a nested {@link TreeMap}. Used in unit tests that
- * exercise {@link ParsleyEngine} without a Kafka state store. Production uses
+ * exercise {@link ParsleyCausalBroadcast} without a Kafka state store. Production uses
  * {@link StoreBackedCandidateIndex}.
  */
 final class MockCandidateIndex implements ParsleyCandidateIndex {
@@ -24,7 +24,7 @@ final class MockCandidateIndex implements ParsleyCandidateIndex {
     private final Map<CoordKey, TreeMap<Long, Set<Long>>> index = new HashMap<>();
 
     @Override
-    public void index(long recordId, ParsleyClock required, ParsleyClock frontier) {
+    public void index(long recordId, ParsleyVectorClock required, ParsleyVectorClock frontier) {
         required.forEach((topicId, partition, offset) -> {
             if (frontier.offsetFor(topicId, partition) < offset) {
                 index.computeIfAbsent(new CoordKey(topicId, partition), k -> new TreeMap<>())

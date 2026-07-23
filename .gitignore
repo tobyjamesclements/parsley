@@ -4,6 +4,9 @@
 # Target directories
 target/
 
+# flatten-maven-plugin output (the consumer-facing POM generated on every build)
+.flattened-pom.xml
+
 # MkDocs build output
 site/
 
@@ -34,5 +37,10 @@ docs/api/
 # virtual machine crash logs, see http://www.java.com/en/download/help/error_hotspot.xml
 hs_err_pid*
 replay_pid*
-/.claude/
+# Claude Code: session-local state stays ignored; shared project instructions,
+# skills, and commands are tracked
+/.claude/*
+!/.claude/CLAUDE.md
+!/.claude/skills/
+!/.claude/commands/
 /parsley.iml

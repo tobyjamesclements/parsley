@@ -27,7 +27,6 @@ import org.junit.jupiter.api.Test;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.kafka.KafkaContainer;
-import org.testcontainers.utility.DockerImageName;
 
 import java.time.Duration;
 import java.util.ArrayList;
@@ -52,7 +51,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * <p>The stage passes each record through, and {@link ParsleyProcessorContext} stamps every forward with
  * the node's completeness, whose {@code src} entry is the contiguous frontier. Reading the stamps back off
  * {@code out} therefore reveals how far the frontier advanced. If the contiguous walk
- * ({@code ParsleyFrontier.deliver}) stalls at the first marker hole, the highest {@code src} offset in any
+ * ({@code ParsleyChannels.deliver}) stalls at the first marker hole, the highest {@code src} offset in any
  * stamp is capped at 2 even though all six records were delivered — confirming the frontier cannot track a
  * transactional topic past its first commit.
  */
@@ -61,10 +60,10 @@ class ParsleyEosFrontierDensityIT {
 
     @Container
     private final KafkaContainer kafka =
-            new KafkaContainer(DockerImageName.parse("apache/kafka:3.7.0"));
+            new KafkaContainer(ParsleyBrokerImage.get());
 
-    private static final String SRC = "src";
-    private static final String OUT = "out";
+    private static final String C1 = "c1";
+    private static final String C2 = "c2";
 
     /**
      * Produces {@code src} as two committed transactions (a commit marker between the batches) and asserts
@@ -74,10 +73,10 @@ class ParsleyEosFrontierDensityIT {
     @Test
     void frontierTracksATransactionallyProducedInputAcrossCommitMarkers() throws Exception {
         String bootstrap = kafka.getBootstrapServers();
-        createTopics(bootstrap, SRC, OUT);
+        createTopics(bootstrap, C1, C2);
         Uuid srcId;
         try (Admin admin = Admin.create(Map.of("bootstrap.servers", bootstrap))) {
-            srcId = admin.describeTopics(List.of(SRC)).allTopicNames().get().get(SRC).topicId();
+            srcId = admin.describeTopics(List.of(C1)).allTopicNames().get().get(C1).topicId();
         }
 
         // Two committed transactions of three records each: log = rec@0,1,2, MARKER@3, rec@4,5,6.
@@ -88,8 +87,8 @@ class ParsleyEosFrontierDensityIT {
             for (int batch = 0; batch < 2; batch++) {
                 producer.beginTransaction();
                 for (int i = 0; i < 3; i++) {
-                    ProducerRecord<String, String> record = new ProducerRecord<>(SRC, "k", "v" + batch + i);
-                    record.headers().add(ParsleyHeader.CAUSAL_DEPENDENCIES, ParsleyClock.empty().toBytes());
+                    ProducerRecord<String, String> record = new ProducerRecord<>(C1, "k", "v" + batch + i);
+                    record.headers().add(ParsleyHeader.CAUSAL_CLOCK, ParsleyVectorClock.empty().toBytes());
                     producer.send(record).get();
                 }
                 producer.commitTransaction();
@@ -102,12 +101,12 @@ class ParsleyEosFrontierDensityIT {
 
             List<Long> srcOffsetsInStamps = new ArrayList<>();
             try (KafkaConsumer<String, String> out = new KafkaConsumer<>(consumerConfig(bootstrap))) {
-                out.subscribe(List.of(OUT));
+                out.subscribe(List.of(C2));
                 await().atMost(Duration.ofSeconds(60)).until(() -> {
                     for (ConsumerRecord<String, String> record : out.poll(Duration.ofMillis(300))) {
-                        Header stamp = record.headers().lastHeader(ParsleyHeader.CAUSAL_DEPENDENCIES);
+                        Header stamp = record.headers().lastHeader(ParsleyHeader.CAUSAL_CLOCK);
                         if (stamp != null) {
-                            srcOffsetsInStamps.add(ParsleyClock.fromBytes(stamp.value()).offsetFor(srcId, 0));
+                            srcOffsetsInStamps.add(ParsleyVectorClock.fromBytes(stamp.value()).offsetFor(srcId, 0));
                         }
                     }
                     return srcOffsetsInStamps.size() >= 6;
@@ -125,12 +124,12 @@ class ParsleyEosFrontierDensityIT {
 
     private static Topology topology() {
         StreamsBuilder builder = new StreamsBuilder();
-        builder.stream(SRC, Consumed.with(Serdes.String(), Serdes.String()))
+        builder.stream(C1, Consumed.with(Serdes.String(), Serdes.String()))
                 .process(ParsleyProcessorSupplier.builder(passthrough())
                         .addBufferStore("parsley")
-                        .addSource(new ParsleySource<>(SRC, Serdes.String(), Serdes.String()))
+                        .addSource(new ParsleySource<>(C1, Serdes.String(), Serdes.String()))
                         .build())
-                .to(OUT, Produced.with(Serdes.String(), Serdes.String()));
+                .to(C2, Produced.with(Serdes.String(), Serdes.String()));
         return builder.build();
     }
 

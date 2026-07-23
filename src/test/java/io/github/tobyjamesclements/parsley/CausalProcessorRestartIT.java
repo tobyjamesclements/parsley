@@ -27,7 +27,6 @@ import org.junit.jupiter.api.Test;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.kafka.KafkaContainer;
-import org.testcontainers.utility.DockerImageName;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -56,7 +55,7 @@ class CausalProcessorRestartIT {
 
     @Container
     private final KafkaContainer kafka =
-            new KafkaContainer(DockerImageName.parse("apache/kafka:3.7.0"));
+            new KafkaContainer(ParsleyBrokerImage.get());
 
     private static final String PREREQ = "prereq";
     private static final String IN = "orders-in";
@@ -82,7 +81,7 @@ class CausalProcessorRestartIT {
         resolverProps.put("bootstrap.servers", bootstrap);
         // Dependencies a producer would attach after consuming PREREQ@0.
         ConsumerRecord<String, String> prereqConsumed = new ConsumerRecord<>(PREREQ, 0, 0L, "pk", "prereq");
-        CausalDependencies orderDeps = CausalDependencies.using(resolverProps).observe(prereqConsumed);
+        CausalClock orderDeps = CausalClock.using(resolverProps).observe(prereqConsumed);
 
         // Phase 1: buffer the dependent record, confirm it is held, then shut the instance down cleanly.
         try (KafkaStreams streams = new KafkaStreams(newTopology(), streamsConfig(bootstrap, appId, stateDir1))) {
@@ -101,7 +100,7 @@ class CausalProcessorRestartIT {
         try (KafkaStreams streams = new KafkaStreams(newTopology(), streamsConfig(bootstrap, appId, stateDir2))) {
             streams.start();
             try (KafkaProducer<String, String> producer = new KafkaProducer<>(producerConfig(bootstrap))) {
-                producer.send(CausalDependencies.empty().stamp(new ProducerRecord<>(PREREQ, "pk", "prereq"))).get();
+                producer.send(CausalClock.empty().stamp(new ProducerRecord<>(PREREQ, "pk", "prereq"))).get();
             }
             try (KafkaConsumer<String, String> out = new KafkaConsumer<>(consumerConfig(bootstrap))) {
                 out.subscribe(List.of(OUT));

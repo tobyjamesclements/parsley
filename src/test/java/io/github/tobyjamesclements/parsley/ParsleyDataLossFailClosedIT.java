@@ -22,7 +22,6 @@ import org.junit.jupiter.api.Test;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.kafka.KafkaContainer;
-import org.testcontainers.utility.DockerImageName;
 
 import java.time.Duration;
 import java.util.HashSet;
@@ -43,7 +42,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * {@code AutoOffsetReset.none()} (see {@link CausalTopology}), so when a committed offset has fallen out of
  * range — retention or {@code deleteRecords} outran a lagging consumer — Kafka Streams fails the task fast
  * at fetch rather than silently resetting forward over the lost records. Without {@code none()} the
- * consumer would jump to the new log-start and {@link ParsleyFrontier#bridge} would fold the skipped real
+ * consumer would jump to the new log-start and {@link ParsleyChannels#bridge} would fold the skipped real
  * records as if they were transaction markers, releasing dependents before their causes.
  *
  * <p>The scenario: commit offset 2 for the application's group, then delete records below offset 5 so the
@@ -56,10 +55,10 @@ class ParsleyDataLossFailClosedIT {
 
     @Container
     private final KafkaContainer kafka =
-            new KafkaContainer(DockerImageName.parse("apache/kafka:3.7.0"));
+            new KafkaContainer(ParsleyBrokerImage.get());
 
-    private static final String IN = "in";
-    private static final String OUT = "out";
+    private static final String C1 = "c1";
+    private static final String C2 = "c2";
 
     /**
      * A committed offset below the (retention-advanced) log-start fails the instance closed under
@@ -68,14 +67,14 @@ class ParsleyDataLossFailClosedIT {
     @Test
     void anOutOfRangeCommittedOffsetFailsTheInstanceClosed() throws Exception {
         String bootstrap = kafka.getBootstrapServers();
-        createTopics(bootstrap, IN, OUT);
+        createTopics(bootstrap, C1, C2);
         String applicationId = "data-loss-it-" + UUID.randomUUID();
 
-        // Ten records on IN (offsets 0..9), each with an empty causal-dependencies header.
+        // Ten records on C1 (offsets 0..9), each with an empty causal-dependencies header.
         try (KafkaProducer<String, String> producer = new KafkaProducer<>(producerConfig(bootstrap))) {
             for (int i = 0; i < 10; i++) {
-                ProducerRecord<String, String> record = new ProducerRecord<>(IN, "k", "v" + i);
-                record.headers().add(ParsleyHeader.CAUSAL_DEPENDENCIES, ParsleyClock.empty().toBytes());
+                ProducerRecord<String, String> record = new ProducerRecord<>(C1, "k", "v" + i);
+                record.headers().add(ParsleyHeader.CAUSAL_CLOCK, ParsleyVectorClock.empty().toBytes());
                 producer.send(record).get();
             }
         }
@@ -83,16 +82,16 @@ class ParsleyDataLossFailClosedIT {
         try (Admin admin = Admin.create(Map.of("bootstrap.servers", bootstrap))) {
             // Commit offset 2 for the application's group (the group is empty — nothing has started).
             admin.alterConsumerGroupOffsets(applicationId,
-                    Map.of(new TopicPartition(IN, 0), new OffsetAndMetadata(2L))).all().get();
+                    Map.of(new TopicPartition(C1, 0), new OffsetAndMetadata(2L))).all().get();
             // Delete records below offset 5, advancing the log-start past the committed offset 2 — the
             // committed offset is now out of range, exactly as retention outrunning a lagging consumer.
-            admin.deleteRecords(Map.of(new TopicPartition(IN, 0), RecordsToDelete.beforeOffset(5L))).all().get();
+            admin.deleteRecords(Map.of(new TopicPartition(C1, 0), RecordsToDelete.beforeOffset(5L))).all().get();
         }
 
         CausalTopology topology = new CausalStreamsBuilder()
-                .stream(IN, Serdes.String(), Serdes.String())
+                .stream(C1, Serdes.String(), Serdes.String())
                 .process(passthrough())
-                .to(OUT, Serdes.String(), Serdes.String())
+                .to(C2, Serdes.String(), Serdes.String())
                 .build();
 
         AtomicReference<Throwable> uncaught = new AtomicReference<>();

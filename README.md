@@ -4,12 +4,13 @@ Causal delivery order for Kafka Streams. Producers stamp each record with its ca
 Kafka Streams processors hold back any record whose dependencies have not yet been observed, and
 release the record once the frontier catches up.
 
-When co-partitioning and closed processor effects hold, if A causally precedes B, every Kafka
-Streams processor that subscribes to both topics processes A before B.
+When the preconditions hold — co-partitioning by key, closed processor effects, and stamping by
+every processor between causally related topics — if A causally precedes B, every Kafka Streams
+processor that subscribes to both topics processes A before B.
 
-A running topology can evolve — add a stage, replace a stage, recompile — across a leaderless epoch
-boundary, so a new node adopts the current causal floor instead of replaying pre-epoch history into the
-shared frontier. This is optional; without it a topology runs unchanged.
+Joining a running topology needs no coordination: a new application simply starts consuming, its
+replay self-gates into causal delivery order, and its truthful stamps make its outputs correctly
+gated everywhere from its first emission.
 
 ## Install
 
@@ -23,10 +24,13 @@ Parsley is published to [Maven Central](https://central.sonatype.com/artifact/io
 </dependency>
 ```
 
-0.1.0 is an early release. The causal guarantee is implemented and tested, but the fault-injection
-suite that exercises it under crashes, rebalances, and partitions lands in 1.0.
+0.1.0 is an early release. Pre-1.0 versions have no upgrade path between versions: upgrading is a
+fresh start (new state, new offsets), because wire formats and the public API change without
+compatibility aliases until 1.0.
 
-Requires Java 25. Build from source with `./mvnw install`.
+Requires Java 21 or later, and Kafka brokers version 3.7.0 or later — the minimum supported
+broker; the integration suite runs against both 3.7.0 and the current stable broker line.
+Building from source needs JDK 25; build with `./mvnw install`.
 
 ## Docs
 

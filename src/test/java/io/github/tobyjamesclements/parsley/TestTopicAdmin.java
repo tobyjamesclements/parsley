@@ -5,6 +5,7 @@ import org.apache.kafka.common.Uuid;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 /**
  * A {@link ParsleyTopicAdmin} test double that resolves topic UUIDs from a fixed map, for tests
@@ -17,16 +18,21 @@ final class TestTopicAdmin implements ParsleyTopicAdmin {
     private final Map<String, Uuid> topicIds;
     private final Map<String, Integer> partitionCounts;
     private final Map<String, String> cleanupPolicies;
+    private final Map<String, Map<Integer, Long>> endOffsets;
+    private final Set<String> endOffsetFailures;
 
     private TestTopicAdmin(Map<String, Uuid> topicIds, Map<String, Integer> partitionCounts,
-            Map<String, String> cleanupPolicies) {
+            Map<String, String> cleanupPolicies, Map<String, Map<Integer, Long>> endOffsets,
+            Set<String> endOffsetFailures) {
         this.topicIds = topicIds;
         this.partitionCounts = partitionCounts;
         this.cleanupPolicies = cleanupPolicies;
+        this.endOffsets = endOffsets;
+        this.endOffsetFailures = endOffsetFailures;
     }
 
     static TestTopicAdmin of(Map<String, Uuid> topicIds) {
-        return new TestTopicAdmin(Map.copyOf(topicIds), Map.of(), Map.of());
+        return new TestTopicAdmin(Map.copyOf(topicIds), Map.of(), Map.of(), Map.of(), Set.of());
     }
 
     /**
@@ -34,7 +40,8 @@ final class TestTopicAdmin implements ParsleyTopicAdmin {
      * co-partitioning parity check. Topics absent from {@code partitionCounts} report a count of 1.
      */
     static TestTopicAdmin of(Map<String, Uuid> topicIds, Map<String, Integer> partitionCounts) {
-        return new TestTopicAdmin(Map.copyOf(topicIds), Map.copyOf(partitionCounts), Map.of());
+        return new TestTopicAdmin(Map.copyOf(topicIds), Map.copyOf(partitionCounts), Map.of(),
+                Map.of(), Set.of());
     }
 
     /**
@@ -44,7 +51,27 @@ final class TestTopicAdmin implements ParsleyTopicAdmin {
      */
     static TestTopicAdmin of(Map<String, Uuid> topicIds, Map<String, Integer> partitionCounts,
             Map<String, String> cleanupPolicies) {
-        return new TestTopicAdmin(Map.copyOf(topicIds), Map.copyOf(partitionCounts), Map.copyOf(cleanupPolicies));
+        return new TestTopicAdmin(Map.copyOf(topicIds), Map.copyOf(partitionCounts),
+                Map.copyOf(cleanupPolicies), Map.of(), Set.of());
+    }
+
+    /**
+     * A copy of this double that also reports the given per-topic, per-partition end offsets, for
+     * exercising the {@code ownOutputs} init-time seed. Topics absent from {@code endOffsets}
+     * report an empty topic (every partition at end offset 0 — nothing appended, nothing seeded).
+     */
+    TestTopicAdmin withEndOffsets(Map<String, Map<Integer, Long>> endOffsets) {
+        return new TestTopicAdmin(topicIds, partitionCounts, cleanupPolicies,
+                Map.copyOf(endOffsets), endOffsetFailures);
+    }
+
+    /**
+     * A copy of this double whose {@link #endOffsets(String)} throws for the given topics, for
+     * exercising the strict init-time seed: a sink whose end offsets cannot be read fails init.
+     */
+    TestTopicAdmin withFailingEndOffsets(Set<String> failingTopics) {
+        return new TestTopicAdmin(topicIds, partitionCounts, cleanupPolicies, endOffsets,
+                Set.copyOf(failingTopics));
     }
 
     @Override
@@ -72,6 +99,14 @@ final class TestTopicAdmin implements ParsleyTopicAdmin {
         Map<String, String> policies = new HashMap<>();
         topics.forEach(t -> policies.put(t, cleanupPolicies.getOrDefault(t, "delete")));
         return policies;
+    }
+
+    @Override
+    public Map<Integer, Long> endOffsets(String topic) throws Exception {
+        if (endOffsetFailures.contains(topic)) {
+            throw new Exception("simulated end-offset read failure for topic '" + topic + "'");
+        }
+        return endOffsets.getOrDefault(topic, Map.of());
     }
 
     @Override

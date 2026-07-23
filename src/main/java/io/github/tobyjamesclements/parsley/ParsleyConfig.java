@@ -1,6 +1,5 @@
 package io.github.tobyjamesclements.parsley;
 
-import org.jspecify.annotations.Nullable;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -17,11 +16,12 @@ import java.util.Set;
  * consequences with no Streams equivalent, so they are not mapped from Streams' exception handlers.
  *
  * <p>Causal delivery has exactly two dispositions, never a third: a record is <strong>forwarded</strong>
- * once its dependencies are satisfied; while unsatisfied it stays <strong>buffered</strong>, unbounded,
- * changelog-backed. A record whose dependencies are proven impossible (an undecodable payload or
- * dependency header, or a dependency naming a coordinate this node has no channel for) unconditionally
- * fails the task. There is no configuration that trades causal safety for liveness, and no diversion —
- * proven impossibility always fails fast, never on pressure or time.
+ * once its consumed dependencies are satisfied (a dependency on a coordinate this node does not
+ * consume is unconditionally ignored, with a metric — sound by I2/I9, never a failure); while
+ * unsatisfied it stays <strong>buffered</strong>, unbounded, changelog-backed. A record whose
+ * dependencies are proven impossible to evaluate (an undecodable payload or clock header)
+ * unconditionally fails the task. There is no configuration that trades causal safety for liveness,
+ * and no diversion — proven impossibility always fails fast, never on pressure or time.
  *
  * <p>An absent file, or absent keys, fall back to defaults. {@link #from(Properties)} builds one from
  * explicit properties (programmatic override / tests).
@@ -38,98 +38,47 @@ final class ParsleyConfig {
      * can detect at startup: the causal topics not sharing a partition count (co-partitioning is
      * impossible — each task cannot own the complete partition set for a causally-related group), and,
      * for a {@link CausalStreamsBuilder} stage's sink topics, a {@code cleanup.policy} that includes
-     * {@code compact} (a protocol watermark is a null-value record wire-indistinguishable from a
+     * {@code compact} (a protocol null message is a null-value record wire-indistinguishable from a
      * compaction tombstone and can be compacted away before a slow consumer reads it):
      * <ul>
      *   <li>{@code off}: no check.</li>
-     *   <li>{@code warn} (default): log a prominent warning and continue — visible without breaking an
-     *       existing deployment that silently relied on the misconfiguration.</li>
-     *   <li>{@code strict}: fail the task fast at {@code init()}.</li>
+     *   <li>{@code warn}: log a prominent warning and continue — the opt-down for a deployment that
+     *       knowingly runs with the misconfiguration.</li>
+     *   <li>{@code strict} (default): fail the task fast at {@code init()}. Both detectable
+     *       misconfigurations are startup-shaped failures anyway — a partition-parity mismatch
+     *       makes the protocol-marker produce crash-loop at runtime, and a compacted sink can
+     *       silently lose null messages — so failing once, clearly, at init is the safer default.</li>
      * </ul>
      *
      * <p>Only the constraints the processor can observe are checked here — it knows its registered
      * input buffers, and, when built through the topology-owning {@code CausalStreamsBuilder} API, that
-     * stage's sink topics too. A sink not yet created is skipped for both checks rather than failing the
-     * task.
+     * stage's sink topics too. A sink whose describe transiently fails is skipped for both lints
+     * rather than failing the task (sink existence itself is enforced unconditionally, outside this
+     * key — see {@code ParsleyProcessor#resolveSinkTopicUuids}).
      */
     static final String TOPOLOGY_VALIDATION = "parsley.topology.validation";
 
     /**
-     * {@code parsley.coordination.epoch-events-topic} — the shared, single-partition epoch-events log
-     * topic name. Set it to turn on topology-epoch coordination for a {@link CausalStreams} runtime;
-     * absent (the default), a topology runs in epoch 0 exactly as without coordination — no epoch-events
-     * log, no coordination thread, every coordination path inert.
+     * The removed {@code parsley.coordination.*} key prefix. Topology-epoch coordination is no longer
+     * part of the causal protocol (the two-branch delivery gate needs no membership, no epochs, and no
+     * join barrier — joins are coordination-free), and its configuration keys are deleted outright:
+     * {@link #from(Properties)} fails loudly when any key under this prefix is present, so a stale
+     * deployment learns about the removal at startup instead of silently running with dead keys.
      */
-    static final String COORDINATION_EPOCH_EVENTS_TOPIC = "parsley.coordination.epoch-events-topic";
-
-    /**
-     * {@code parsley.coordination.domain-topics} — the comma-separated set of every topic in the
-     * coordinated domain (every member's inputs and sinks, external sources included). Only meaningful
-     * alongside {@link #COORDINATION_EPOCH_EVENTS_TOPIC} — {@link #from} fails startup if this is set
-     * without it. The reverse is not required: coordination works without this key exactly as it always
-     * has (full-mesh validation derives its own domain from the shared log's live declarations, not from
-     * this static config) — set it only when a stage needs {@link CausalTopology#assemble} to auto-wire
-     * extra raw-bytes passthrough sources into that stage's own processor node
-     * for any domain topic a stage does not otherwise consume or produce, so that stage's declared
-     * subscriptions can cover the full domain ({@link ParsleyProcessor#validateFullMeshCoverage}) without
-     * hand-wiring an "independent input" pass-through stage for every such topic. Kafka Streams has no
-     * public API to add a source topic to an already-running task, so the full domain must be known
-     * statically, ahead of runtime, for every member's source nodes to be wired correctly at all — the
-     * coordination log's own full-mesh validation is then a runtime cross-check that this configuration
-     * was applied correctly, never a mechanism that discovers or wires topics itself.
-     */
-    static final String COORDINATION_DOMAIN_TOPICS = "parsley.coordination.domain-topics";
-
-    /**
-     * {@code parsley.coordination.member-apps} — the comma-separated set of every {@code application.id}
-     * that is a causal node in this coordinated domain. It is the authoritative domain membership, and
-     * must be declared identically by every participating app: the genesis cohort barrier waits until
-     * every listed app's full task set has declared before committing genesis (so no founder is left
-     * behind and later mis-admitted at a non-empty floor), and after genesis a roster change is admitted
-     * only once every committed member has re-declared the new roster. Apps that declare incompatible
-     * rosters refuse to commit or admit until the configs agree (fail-closed for progress; the domain
-     * keeps delivering under the last floor). Only meaningful alongside {@link
-     * #COORDINATION_EPOCH_EVENTS_TOPIC}. When absent, an app defaults to a single-app roster of its own
-     * {@code application.id} — a lone causal node coordinates trivially; a multi-app domain must set this.
-     */
-    static final String COORDINATION_MEMBER_APPS = "parsley.coordination.member-apps";
+    static final String REMOVED_COORDINATION_PREFIX = "parsley.coordination.";
 
     /** How {@link #TOPOLOGY_VALIDATION} reacts to a detectable topology misconfiguration. */
     enum ValidationMode { OFF, WARN, STRICT }
 
     private final ValidationMode topologyValidation;
-    private final @Nullable String coordinationEpochEventsTopic;
-    private final Set<String> coordinationDomainTopics;
-    private final Set<String> coordinationMemberApps;
 
-    private ParsleyConfig(ValidationMode topologyValidation, @Nullable String coordinationEpochEventsTopic,
-                          Set<String> coordinationDomainTopics, Set<String> coordinationMemberApps) {
+    private ParsleyConfig(ValidationMode topologyValidation) {
         this.topologyValidation = topologyValidation;
-        this.coordinationEpochEventsTopic = coordinationEpochEventsTopic;
-        this.coordinationDomainTopics = coordinationDomainTopics;
-        this.coordinationMemberApps = coordinationMemberApps;
     }
 
     /** How to react to a detectable topology misconfiguration at startup. */
     ValidationMode topologyValidation() {
         return topologyValidation;
-    }
-
-    /** The shared epoch-events log topic, or {@code null} if topology-epoch coordination is not configured. */
-    @Nullable String coordinationEpochEventsTopic() {
-        return coordinationEpochEventsTopic;
-    }
-
-    /** The full coordinated domain's topic set, or empty if topology-epoch coordination is not configured. */
-    Set<String> coordinationDomainTopics() {
-        return coordinationDomainTopics;
-    }
-
-    /** The authoritative member-app roster (every {@code application.id} in the domain), or empty when
-     * {@link #COORDINATION_MEMBER_APPS} is not configured — the caller then defaults to a single-app
-     * roster of the app's own id. */
-    Set<String> coordinationMemberApps() {
-        return coordinationMemberApps;
     }
 
     /** Loads from the {@code parsley.properties} classpath resource, or defaults if it is absent. */
@@ -155,47 +104,42 @@ final class ParsleyConfig {
         return props;
     }
 
-    /** Builds from explicit properties (programmatic override / tests). */
+    /**
+     * Builds from explicit properties (programmatic override / tests).
+     *
+     * @throws IllegalStateException if any removed {@code parsley.coordination.*} key is present
+     *         (see {@link #rejectRemovedCoordinationKeys})
+     */
     static ParsleyConfig from(Properties props) {
-        String epochEventsTopic = props.getProperty(COORDINATION_EPOCH_EVENTS_TOPIC);
-        String resolvedEpochEventsTopic =
-                (epochEventsTopic == null || epochEventsTopic.isBlank()) ? null : epochEventsTopic.trim();
-        Set<String> domainTopics = domainTopics(props);
-        if (resolvedEpochEventsTopic == null && !domainTopics.isEmpty()) {
-            throw new IllegalStateException(COORDINATION_DOMAIN_TOPICS + " is set but "
-                    + COORDINATION_EPOCH_EVENTS_TOPIC + " is not; domain-topics only has meaning "
-                    + "under topology-epoch coordination");
-        }
-        Set<String> memberApps = commaSeparated(props, COORDINATION_MEMBER_APPS);
-        if (resolvedEpochEventsTopic == null && !memberApps.isEmpty()) {
-            throw new IllegalStateException(COORDINATION_MEMBER_APPS + " is set but "
-                    + COORDINATION_EPOCH_EVENTS_TOPIC + " is not; member-apps only has meaning "
-                    + "under topology-epoch coordination");
-        }
-        return new ParsleyConfig(validationMode(props), resolvedEpochEventsTopic, domainTopics, memberApps);
+        rejectRemovedCoordinationKeys(props);
+        return new ParsleyConfig(validationMode(props));
     }
 
-    private static Set<String> domainTopics(Properties props) {
-        return commaSeparated(props, COORDINATION_DOMAIN_TOPICS);
-    }
-
-    private static Set<String> commaSeparated(Properties props, String key) {
-        String value = props.getProperty(key);
-        if (value == null || value.isBlank()) {
-            return Set.of();
-        }
-        Set<String> items = new LinkedHashSet<>();
-        for (String item : value.split(",")) {
-            String trimmed = item.trim();
-            if (!trimmed.isEmpty()) {
-                items.add(trimmed);
+    /**
+     * Fails loudly when any removed {@code parsley.coordination.*} key is present. Topology-epoch
+     * coordination has been removed from the causal protocol, so the keys wire nothing — and a key
+     * that wires nothing must not parse quietly, or an operator who believes their deployment is
+     * coordinated would never learn otherwise. There is no migration path: an existing coordinated
+     * deployment upgrades by deleting its coordination configuration (behaviour becomes strictly
+     * more available — joins need zero coordination).
+     */
+    private static void rejectRemovedCoordinationKeys(Properties props) {
+        Set<String> removed = new LinkedHashSet<>();
+        for (String name : props.stringPropertyNames()) {
+            if (name.startsWith(REMOVED_COORDINATION_PREFIX)) {
+                removed.add(name);
             }
         }
-        return Set.copyOf(items);
+        if (!removed.isEmpty()) {
+            throw new IllegalStateException("removed configuration " + removed + ": topology-epoch "
+                    + "coordination has been removed from the causal protocol — joins need zero "
+                    + "coordination, so there is no epoch-events log, no domain, and no member roster. "
+                    + "Delete every parsley.coordination.* key; no replacement configuration is needed.");
+        }
     }
 
     private static ValidationMode validationMode(Properties props) {
-        String value = props.getProperty(TOPOLOGY_VALIDATION, "warn").trim();
+        String value = props.getProperty(TOPOLOGY_VALIDATION, "strict").trim();
         try {
             return ValidationMode.valueOf(value.toUpperCase(Locale.ROOT));
         } catch (IllegalArgumentException e) {

@@ -12,7 +12,7 @@ production.
 
 ---
 
-## Three latency categories
+## Four latency categories
 
 ### 1. Per-record header overhead
 
@@ -39,7 +39,7 @@ controlling per-record overhead.
 !!! tip "Controlling clock width"
     In Streams, Parsley stamps the per-task frontier automatically. The width is bounded by the
     number of source partitions assigned to the task, which is usually small. When you only need to
-    express a dependency on a single upstream record, prefer `CausalDependencies.fromRecord(trigger)`,
+    express a dependency on a single upstream record, prefer `CausalClock.fromRecord(trigger)`,
     because it carries a much narrower clock than a manually built, wide dependency set.
 
 ---
@@ -162,6 +162,32 @@ restore.
 
 ---
 
+### 4. Crossing-wait produce serialization
+
+Within one task invocation, a second forward is causally after the first even when the two go to
+different sink topics or partitions, so before stamping each business forward the task waits for
+every pending own-sink send to be acknowledged (the crossing wait — see the
+[own outputs section](internals/channels.md#own-outputs) of the channels internals). The waits
+serialize a multi-forward invocation on producer acknowledgement latency: forward k+1 does not
+stamp until forward k's batch is acknowledged, so a delegate forwarding N records per input pays
+roughly
+
+> **N × (linger + replication round trip)**
+
+per invocation. Kafka Streams' default `producer.linger.ms` is 100 ms, so an unconfigured
+multi-forward delegate can spend ~N × 100 ms per input record in crossing waits alone — usually
+the dominant cost for such delegates, far above every category measured above.
+
+A single-forward delegate pays at most one wait per invocation and is usually unaffected (the
+previous invocation's send has normally been acknowledged by the time the next record arrives).
+For multi-forward delegates, lower `producer.linger.ms` (a few milliseconds, or 0) so each batch
+ships immediately; the replication round trip then bounds the wait. The cost cannot be exempted
+per partition: a business forward's destination partition is unknowable at stamp time (the sink's
+partitioner runs downstream of `forward()`), so the wait must conservatively cover every own-sink
+coordinate. Protocol null messages are exempt for their own exact destinations and do not pay it.
+
+---
+
 ## Summary
 
 | Category | Complexity | Scales with |
@@ -174,6 +200,7 @@ restore.
 | Cascade propagation | O(r) | Chained release depth |
 | Frontier restore on restart | O(1) | — |
 | Buffer restore on restart | O(n) | Records held at time of restart |
+| Crossing-wait produce serialization | O(N) waits | Forwards per invocation × (linger + replication RTT) |
 
 ---
 

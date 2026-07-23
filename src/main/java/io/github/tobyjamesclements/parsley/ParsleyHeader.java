@@ -1,12 +1,10 @@
 package io.github.tobyjamesclements.parsley;
 
-import org.apache.kafka.common.Uuid;
 import org.apache.kafka.common.header.Header;
 import org.apache.kafka.common.header.Headers;
 import org.apache.kafka.clients.producer.ProducerRecord;
 import org.jspecify.annotations.Nullable;
 
-import java.nio.ByteBuffer;
 import java.util.Objects;
 
 /**
@@ -24,40 +22,21 @@ record ParsleyHeader(String key, byte @Nullable [] value) {
     /** Prefix marking a header as Parsley-internal routing metadata, stripped before user delivery. */
     static final String INTERNAL_PREFIX = "_parsley_";
 
-    /** Header carrying a record's serialised causal dependency clock. */
-    static final String CAUSAL_DEPENDENCIES = "parsley-causal-dependencies";
+    /**
+     * Header carrying a record's serialised causal clock — the vector timestamp VT(m) the producer
+     * stamped it with ({@link CausalClock}).
+     */
+    static final String CAUSAL_CLOCK = "parsley-causal-clock";
 
     /**
-     * Header marking a record as a Parsley protocol watermark. A watermark carries no business
-     * payload (null key, null value) and exists solely to propagate the emitting node's completeness
-     * frontier to downstream processors when the user delegate did not forward any business record
-     * for the delivered input. The {@code _parsley_} prefix means it is stripped from user view by
-     * {@code ParsleyMessage.userHeaders} and from any public header API.
+     * Header marking a record as a Parsley null message (Chandy–Misra–Bryant sense: a
+     * timestamp-carrying record whose value is literally null). A null message carries no business
+     * payload and exists solely to propagate the emitting node's completeness frontier to
+     * downstream processors when the user delegate did not forward any business record for the
+     * delivered input ({@link ParsleyGossip}). The {@code _parsley_} prefix means it is stripped
+     * from user view by {@code ParsleyMessage.userHeaders} and from any public header API.
      */
-    static final String WATERMARK = "_parsley_watermark";
-
-    /**
-     * Header marking a record as a Parsley topology epoch-boundary marker. Injected onto a
-     * source-layer task's own sinks from the coordination log ({@code
-     * ParsleyProcessor#adoptAndInjectBoundary}) and relayed edge by edge through the DAG by each
-     * consuming node (leaderless — there is no coordinator process); on consuming it a processor
-     * adopts the new epoch's lower bounds into its {@link ParsleyEpochState} (an overlapping-epoch
-     * transition). Like a watermark it carries no business payload and is never delivered to the user
-     * delegate or buffered; the value holds the serialised {@link ParsleyEpochBoundary}. The
-     * {@code _parsley_} prefix strips it from user view.
-     */
-    static final String EPOCH_BOUNDARY = "_parsley_epoch_boundary";
-
-    /**
-     * Header marking a record as a Parsley topology epoch-snapshot marker — the in-band cut that opens
-     * a snapshot round. Injected by a source-layer task when a round opens on the coordination log and
-     * relayed edge by edge through the DAG (leaderless — there is no coordinator process); on consuming
-     * it a processor publishes its current completeness frontier to the shared epoch-events log (see
-     * {@link ParsleyEpochSnapshotPublisher}), whose deterministic fold merge-mins the published clocks
-     * into the next epoch's lower bounds. Like a watermark it carries no business payload and is never
-     * delivered to the user delegate or buffered; the {@code _parsley_} prefix strips it from user view.
-     */
-    static final String EPOCH_SNAPSHOT = "_parsley_epoch_snapshot";
+    static final String NULL_MESSAGE = "_parsley_null_message";
 
     // Explicit canonical constructor: NullAway does not propagate the type-use @Nullable from an
     // array record component to the implicit constructor parameter, so annotate it here directly.
@@ -68,11 +47,6 @@ record ParsleyHeader(String key, byte @Nullable [] value) {
         }
         this.key = key;
         this.value = value;
-    }
-
-    /** Returns {@code true} if this is a Parsley-internal routing header (the {@code _parsley_} prefix). */
-    boolean isInternal() {
-        return key.startsWith(INTERNAL_PREFIX);
     }
 
     /**
@@ -87,29 +61,19 @@ record ParsleyHeader(String key, byte @Nullable [] value) {
 
     /**
      * Returns a fresh {@link Headers} containing every header from {@code original} except {@link
-     * #CAUSAL_DEPENDENCIES}, with a new {@code CAUSAL_DEPENDENCIES} header appended carrying {@code
-     * dependencies}. Used to re-stamp a record's causal dependencies without duplicating the header (any
-     * prior dependencies header is replaced, not accumulated) or disturbing any other header.
+     * #CAUSAL_CLOCK}, with a new {@code CAUSAL_CLOCK} header appended carrying {@code clock}. Used
+     * to re-stamp a record's causal clock without duplicating the header (any prior clock header is
+     * replaced, not accumulated) or disturbing any other header.
      */
-    static Headers replacingDependencies(Headers original, byte[] dependencies) {
+    static Headers replacingClock(Headers original, byte[] clock) {
         Headers stamped = mutableHeaders();
         for (Header header : original) {
-            if (!header.key().equals(CAUSAL_DEPENDENCIES)) {
+            if (!header.key().equals(CAUSAL_CLOCK)) {
                 stamped.add(header.key(), header.value());
             }
         }
-        stamped.add(CAUSAL_DEPENDENCIES, dependencies);
+        stamped.add(CAUSAL_CLOCK, clock);
         return stamped;
     }
 
-    static byte[] uuidToBytes(Uuid id) {
-        return ByteBuffer.allocate(16)
-                .putLong(id.getMostSignificantBits())
-                .putLong(id.getLeastSignificantBits())
-                .array();
-    }
-
-    static Uuid uuidFromBytes(byte[] b) {
-        return new Uuid(ByteBuffer.wrap(b, 0, 8).getLong(), ByteBuffer.wrap(b, 8, 8).getLong());
-    }
 }

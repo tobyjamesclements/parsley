@@ -11,7 +11,7 @@ import java.util.TreeSet;
 
 /**
  * An in-memory {@link ParsleyForwardedIndex} backed by a per-coordinate {@link TreeSet}. Used in
- * unit tests that exercise {@link ParsleyEngine} without a Kafka state store. Production uses
+ * unit tests that exercise {@link ParsleyCausalBroadcast} without a Kafka state store. Production uses
  * {@link StoreBackedForwardedIndex}.
  */
 final class MockForwardedIndex implements ParsleyForwardedIndex {
@@ -30,6 +30,12 @@ final class MockForwardedIndex implements ParsleyForwardedIndex {
         NavigableSet<Long> offsets = index.get(new CoordKey(topicId, partition));
         if (offsets == null) return List.of();
         return new ArrayList<>(offsets.tailSet(frontierOffset + 1));
+    }
+
+    @Override
+    public boolean contains(Uuid topicId, int partition, long offset) {
+        NavigableSet<Long> offsets = index.get(new CoordKey(topicId, partition));
+        return offsets != null && offsets.contains(offset);
     }
 
     @Override

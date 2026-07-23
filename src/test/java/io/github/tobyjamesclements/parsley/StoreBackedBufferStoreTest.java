@@ -25,8 +25,8 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
  */
 class StoreBackedBufferStoreTest {
 
-    private static final TopicPartition T1 = new TopicPartition("t1", 0);
-    private static final Uuid T1_ID = Uuid.randomUuid();
+    private static final TopicPartition C1 = new TopicPartition("c1", 0);
+    private static final Uuid C1_ID = Uuid.randomUuid();
 
     private final ParsleySerializer<String, String> serializer =
             new ParsleySerializer<>(new ParsleyResolver<>(topic -> Serdes.String(), topic -> Serdes.String()));
@@ -41,11 +41,11 @@ class StoreBackedBufferStoreTest {
     @Test
     void getAndIndexEntriesReadBackThroughTheRealStore() {
         StoreBackedBufferStore<String, String> store = new StoreBackedBufferStore<>(newRocksStore(), serializer);
-        ParsleyClock depsA = ParsleyClock.empty().observe(T1_ID, 0, 9);
-        ParsleyClock depsB = ParsleyClock.empty().observe(T1_ID, 0, 3);
+        ParsleyVectorClock depsA = ParsleyVectorClock.empty().observe(C1_ID, 0, 9);
+        ParsleyVectorClock depsB = ParsleyVectorClock.empty().observe(C1_ID, 0, 3);
 
-        long seqA = store.add(record(T1, 0, depsA), 100L);
-        long seqB = store.add(record(T1, 1, depsB), 200L);
+        long seqA = store.add(record(C1, 0, depsA), 100L);
+        long seqB = store.add(record(C1, 1, depsB), 200L);
 
         ParsleyBufferStore.Entry<String, String> first = store.get(seqA);
         assertEquals(0L, first.record().offset(), "the first sequence must decode the first added record");
@@ -75,13 +75,13 @@ class StoreBackedBufferStoreTest {
         KeyValueStore<Long, byte[]> backing = newRocksStore();
         // Simulate a prior run that buffered records at sequences 5 and 9 (a gap is fine — sequences
         // need not be contiguous after removals).
-        backing.put(5L, packed(record(T1, 0, ParsleyClock.empty()), 10L));
-        backing.put(9L, packed(record(T1, 1, ParsleyClock.empty()), 20L));
+        backing.put(5L, packed(record(C1, 0, ParsleyVectorClock.empty()), 10L));
+        backing.put(9L, packed(record(C1, 1, ParsleyVectorClock.empty()), 20L));
 
         StoreBackedBufferStore<String, String> restored = new StoreBackedBufferStore<>(backing, serializer);
 
         assertEquals(2, restored.size(), "size must be seeded from the pre-existing entries");
-        long newSeq = restored.add(record(T1, 2, ParsleyClock.empty()), 30L);
+        long newSeq = restored.add(record(C1, 2, ParsleyVectorClock.empty()), 30L);
         assertEquals(10L, newSeq, "the next sequence must continue past the highest pre-existing sequence (9)");
         assertEquals(3, restored.indexEntries().size(), "all three records must now be present");
     }
@@ -100,10 +100,10 @@ class StoreBackedBufferStoreTest {
         ParsleySerializer<String, String> poisonSerializer =
                 new ParsleySerializer<>(new ParsleyResolver<>(topic -> Serdes.String(), topic -> new ThrowingDeserializerSerde()));
         StoreBackedBufferStore<String, String> store = new StoreBackedBufferStore<>(newRocksStore(), poisonSerializer);
-        ParsleyClock deps = ParsleyClock.empty().observe(T1_ID, 0, 3);
-        long seq = store.add(record(T1, 0, deps), 100L);
+        ParsleyVectorClock deps = ParsleyVectorClock.empty().observe(C1_ID, 0, 3);
+        long seq = store.add(record(C1, 0, deps), 100L);
 
-        assertThrows(ParsleyBufferDeserializationException.class, () -> store.get(seq),
+        assertThrows(CausalBufferDeserializationException.class, () -> store.get(seq),
                 "get() decodes the value and must fail on a poison record");
 
         List<ParsleyBufferStore.IndexEntry> indexEntries =
@@ -126,10 +126,10 @@ class StoreBackedBufferStoreTest {
                 new ParsleySerializer<>(new ParsleyResolver<>(topic -> Serdes.String(), topic -> valueSpy));
         StoreBackedBufferStore<String, String> store = new StoreBackedBufferStore<>(newRocksStore(), spySerializer);
 
-        store.add(record(T1, 0, ParsleyClock.empty()), 100L);
+        store.add(record(C1, 0, ParsleyVectorClock.empty()), 100L);
 
-        assertEquals(List.of("t1"), valueSpy.serializeTopics,
-                "the value serde must be invoked with the record's own source topic ('t1')");
+        assertEquals(List.of("c1"), valueSpy.serializeTopics,
+                "the value serde must be invoked with the record's own source topic ('c1')");
     }
 
     // --- helpers --------------------------------------------------------------------------------
@@ -143,8 +143,8 @@ class StoreBackedBufferStoreTest {
         return java.nio.ByteBuffer.allocate(8 + serialized.length).putLong(bufferedAt).put(serialized).array();
     }
 
-    private static ParsleyMessage<String, String> record(TopicPartition tp, long offset, ParsleyClock deps) {
-        return new ParsleyMessage<>(tp.topic(), T1_ID, tp.partition(), offset, 0L, "k", "v", List.of(), deps);
+    private static ParsleyMessage<String, String> record(TopicPartition tp, long offset, ParsleyVectorClock deps) {
+        return new ParsleyMessage<>(tp.topic(), C1_ID, tp.partition(), offset, 0L, "k", "v", List.of(), deps);
     }
 
     /** A {@link Serde} whose deserializer always throws, simulating a value that can no longer be decoded. */

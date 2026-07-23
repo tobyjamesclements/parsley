@@ -1,11 +1,11 @@
 # Causal consistency model
 
 Parsley's concrete guarantee is causal delivery order for a Kafka Streams processor: records are
-delivered to `process()` only after their declared dependencies have been satisfied, subject to the
-conditions in [Streams integration](../streams.md). That guarantee is narrower than the
-system-level causal consistency property described below. This page covers the theoretical model
-the guarantee is built on, explains why traditional causal consistency algorithms do not apply
-directly to Kafka stream processing, and describes Parsley's algorithm.
+delivered to `process()` only after every dependency the processor consumes has been satisfied,
+subject to the conditions in [Streams integration](../streams.md). This page covers the
+theoretical model the guarantee is built on, why Kafka stream processing does not satisfy the
+assumptions traditional causal-consistency algorithms make, how Parsley's three protocol layers
+restore them, and the environmental assumptions the guarantee itself rests on.
 
 ## Lamport's happened-before relation
 
@@ -22,180 +22,231 @@ a write W2, then any process that observes W2 must have previously observed W1. 
 case is the important one in practice — a consumer need not have subscribed to every intermediate
 step to be bound by the ordering that runs through them.
 
-Vector clocks implement the happened-before relation for distributed systems. Each process
+Vector clocks (Fidge 1988, Mattern 1988) implement the happened-before relation. Each process
 maintains a clock: a map from process identifiers to the highest event number it has delivered
 from that process. When a process delivers an event, it advances its own entry. When it sends a
 message, it attaches a snapshot of its clock. A receiving process holds the message until its
 local clock dominates the attached snapshot — until it has delivered everything the sender had
-observed.
+observed. Parsley's clocks are the indexed-by-channel variant: keys are `(topicId, partition)`
+coordinates and values are broker offsets, because a Kafka partition — not a process — is the
+unit that carries a total order.
 
 ## How traditional algorithms work
 
-Systems like COPS (Consistency, Availability, and Partition-tolerance of Scalable reads) and
-causal broadcast protocols build on vector clocks under one shared assumption: every node that
-must enforce causal ordering receives every write.
-
-In COPS, writes propagate to all datacenters. When a datacenter receives a write carrying
-dependencies, it can check each one because it already holds, or will receive, the writes those
-dependencies name. The delivery predicate is always checkable: the coordinates in the dependency
-clock are coordinates this datacenter will eventually observe.
-
-In causal broadcast protocols the same assumption holds in a different form. Every process in the
-group receives every message. The delivery predicate (local clock dominates the message's attached
-clock) always converges because every coordinate in the attached clock is a message that will
-eventually arrive.
+Systems like COPS (Lloyd et al., "Don't Settle for Eventual", 2011) and causal broadcast
+protocols build on vector clocks under one shared
+assumption: every node that must enforce causal ordering receives every write. In COPS, writes
+propagate to all datacenters, so the delivery predicate is always checkable — the coordinates in
+a dependency clock are coordinates this datacenter will eventually observe. In causal broadcast
+protocols the same assumption holds in a different form: every process in the group receives
+every message, so the delivery predicate (local clock dominates the attached clock) always
+converges.
 
 This is the total visibility assumption: a node enforcing causal order has, or will have,
 visibility into every event the dependency clock references.
 
-## Why Kafka stream processing is different
+The second assumption is about the transport: messages travel on reliable FIFO channels with
+stable identity and dense sequencing. Both assumptions fail for Kafka stream processing, in
+different ways, and Parsley's two lower layers exist to deal with exactly one each.
 
-A Kafka stream processor subscribes to a fixed set of input topics and receives messages on those
-topics only. A producer stamps the causal dependencies header with its own frontier — the highest
-offset it had observed on each topic-partition it consumed — and that frontier routinely spans
-topics a downstream consumer never reads. A processor subscribing to T1 and T3 will receive records
-whose dependency clocks include a coordinate for T2, an intermediate topic it has no connection to.
+## The three protocol layers
 
-The traditional algorithms above assume total visibility: a node enforcing causal order receives, or
-will receive, every event its dependency clocks reference. Kafka's subscription model does not
-provide this for free — the processor will never receive T2's messages, so it cannot satisfy a
-dependency on T2 through its own delivery.
-
-Parsley's response is to **require every coordinate a message could ever depend on to be reachable
-to this node** — every dependency a record can carry must name a topic-partition this node itself
-consumes — rather than weaken the guarantee. Parsley does not scope a coordinate out when this node
-happens not to consume it — that would be unsound, since a coordinate no channel here can ever
-observe is never satisfiable. And it does not accept a *claim* in place of a delivery: a peer's
-advertised clock saying "K reached k over there" is never a substitute for this node having delivered
-K up to k itself — see [why local delivery is required](#why-local-delivery-is-required).
-
-## Parsley's algorithm
-
-> A record is delivered once this node's own contiguous delivered frontier dominates every
-> coordinate the record depends on. A dependency is satisfied only by this node having itself
-> delivered the cause; a claim advertised on another channel never substitutes for local delivery.
-
-### The delivery gate
-
-A record is delivered when this node's own contiguous frontier dominates its dependency clock, with
-only the record's own self-cycle removed (a record never waits on its own offset). That is the
-entire gate, `ParsleyEngine.isDeliverable()`:
-
-```java
-frontier().dominates(deps.withoutSelfReference())
+```
+┌──────────────────────────────────────────────────────────────────┐
+│ gossip (ParsleyGossip)             liveness / clock dissemination │
+│   causal progress observable on every channel, converging on      │
+│   any topology shape including cycles                             │
+├──────────────────────────────────────────────────────────────────┤
+│ causal broadcast (ParsleyCausalBroadcast)   receive / deliver     │
+│   Birman–Schiper–Stephenson causal delivery to the user's         │
+│   delegate, over gap-free, stable-identity channels               │
+├──────────────────────────────────────────────────────────────────┤
+│ channels (ParsleyChannels)         Kafka → reliable-FIFO-channel  │
+│   adaptation: dense, stable-identity event coordinates; the       │
+│   node's own output positions; normalised dependency clocks       │
+└──────────────────────────────────────────────────────────────────┘
 ```
 
-There is no vacuously-satisfied dependency. A dependency on coordinate K is satisfied once this
-node's own K channel has contiguously delivered up to the required offset; until then the record is
-buffered.
+- The **[channels module](channels.md)** repairs the transport assumption. Kafka partitions are
+  not classical channels: topic recreation rebinds names, EOS commit markers and aborted records
+  occupy offsets a consumer never sees, retention truncates history, the broker assigns the
+  sender's own sequence numbers asynchronously, and Parsley itself delivers within a partition
+  out of order. UUID-keyed coordinates, seeding, bridging, the contiguous frontier, and
+  own-output tracking each repair one of these, so the layer above sees dense, stable channels.
+- The **[causal-broadcast module](causal-broadcast.md)** repairs the visibility assumption — not
+  by restoring total visibility, but by making the delivery predicate sound without it, with the
+  two-branch gate described next.
+- The **[gossip module](gossip.md)** is a liveness layer: it keeps clock progress observable
+  through processors that produce no business output, so downstream completeness never stalls on
+  a quiet path. It can never release a record the gate would hold.
 
-### The completeness clock (the outbound stamp)
+## The delivery gate
 
-The **completeness clock** is this node's own delivered frontier, max-merged with every input
-channel's advertised dependencies (`ParsleyClock.merge`), computed in `ParsleyFrontier.completeness()`.
-Each channel contributes the dependencies its records and watermarks have advertised (the pairwise-max
-over what it has seen on that channel). Forwarded records and protocol watermarks are stamped with
-this clock (`ParsleyProcessor` reads `engine.completeness()`): it carries *transitive ancestry* — a
-coordinate an upstream node delivered that this node's stamp must keep advertising — downstream,
-where each receiving node's own gate verifies every coordinate it names against its own delivery
-history. The stamp is how facts travel; the gate is where they are proven, locally, before anything
-is released on them.
+> A dependency on a coordinate this node consumes is satisfied only by this node's own contiguous
+> delivered frontier reaching it. A dependency on any other coordinate is ignored,
+> unconditionally.
 
-A dependency naming a coordinate this node has **no channel for at all** — not merely one that hasn't
-advertised yet, but one structurally outside this node's own registered inputs — is a different case
-from an ordinary unsatisfied dependency, and is not treated as either: it fails the task fast rather
-than being buffered forever or silently admitted. This node can prove it has no way to confirm such a
-coordinate, never that the coordinate is genuinely irrelevant — so guessing either way (waiting forever
-with no way to ever succeed, or delivering on an unproven premise) is unsound. See
-[Independent inputs](#the-topology-contract) for why this arises and how to fix the topology instead
-of relying on this fail-closed behavior as a substitute.
+Evaluated over the normalised dependency clock (the record's exact self-cycle stripped), the gate
+is two branches, total:
+
+```
+for each coordinate c in deps:
+    if consumed(c):  require frontier(c) >= deps[c]   # local delivery, never hearsay
+    else:            ignore                            # counted by a metric, never a failure
+```
+
+`consumed(c)` means an input channel of this task, on a partition this task owns. A record
+carrying no clock at all (a plain Kafka producer on a consumed topic) is causally minimal by
+definition — a producer that stamps nothing claims nothing — and is deliverable immediately.
 
 ### Why local delivery is required
 
-This is the Birman-Schiper-Stephenson CBCAST delivery condition, instantiated on Kafka's own
+This is the Birman–Schiper–Stephenson CBCAST delivery condition (Birman, Schiper, and Stephenson,
+"Lightweight Causal and Atomic Group Multicast", 1991), instantiated on Kafka's own
 `(topicId, partition)` coordinates: in BSS, a process delivers a message only once *its own*
-delivered vector covers the message's timestamp — the condition is over the receiver's own delivery
-history, never over what a peer reports having delivered. The distinction matters because the
-guarantee Parsley makes is about the *order this node's processor observes events in*, not merely
-about whether an event exists somewhere. "K reached offset k" being true at some peer does not mean
-this node's delegate has processed K@k yet: if a claim carried on a sibling channel could satisfy the
-gate, a record caused by K@k could reach the delegate before K@k itself does on this node's own K
-subscription — an effect delivered before its cause, to a processor subscribed to both. So the gate
-checks the local frontier exclusively, and an advertised claim is only ever *carried* (in the
-outbound stamp) for downstream nodes to verify against their own frontiers in turn.
+delivered vector covers the message's timestamp — the condition is over the receiver's own
+delivery history, never over what a peer reports having delivered. The distinction matters
+because the guarantee Parsley makes is about the *order this node's processor observes events
+in*, not merely about whether an event exists somewhere. "K reached offset k" being true at some
+peer does not mean this node's delegate has processed K@k yet: if a claim carried on a sibling
+channel could satisfy the gate, a record caused by K@k could reach the delegate before K@k itself
+does on this node's own K subscription — an effect delivered before its cause, to a processor
+subscribed to both. So the gate checks the local frontier exclusively, and an advertised claim is
+only ever *carried* (in the outbound stamp) for downstream nodes to verify against their own
+frontiers in turn.
 
-What the model still requires is that every coordinate a node's messages could ever depend on be
-consumed by that node — see the [topology contract](#the-topology-contract). That is both a liveness
-requirement (this node must eventually deliver the fact locally) and the reason the fail-closed
-unreachable-dependency check exists (a coordinate this node never consumes could never be proven
-here at all).
+### Why ignoring unconsumed coordinates is sound
 
-### The topology contract
+A producer stamps a clock spanning everything it consumed, so a record routinely names
+coordinates a narrower downstream consumer has no subscription to. Ignoring them is sound, not
+vacuous satisfaction, and the argument is a transitivity theorem over two invariants of the
+stamp:
 
-Every coordinate any of a node's dependency clocks could ever name must be reachable to that node
-through **at least one** input channel — directly, or transitively through a channel that has itself
-genuinely observed it. This is the metadata overhead of causal consistency without built-in total
-visibility, placed on topology construction rather than hidden in the engine.
+- **Transitive completeness.** Every node's outbound stamp dominates the dependency clocks *and
+  the coordinates* of every event it has delivered.
+- **Unconditional merge.** Every clock fold — the channel folds, the advertised state, every
+  outbound stamp — merges the entire inbound clock, including coordinates on channels the node
+  does not consume. The gate may ignore; the merge may not.
 
-- **Independent inputs.** A node joining unrelated sources can receive a record depending on a
-  coordinate no input channel of this node ever observes — nothing here can ever confirm it, so the
-  completeness clock never includes it. Rather than buffer such a record forever (an undiagnosable,
-  permanent stall) or admit it on the unproven assumption that the coordinate is irrelevant, this fails
-  the task fast immediately. To make such a record genuinely deliverable, route the coordinate through
-  some input branch instead — have it consume and pass the coordinate through, emitting watermarks even
-  when it runs no business logic.
-- **Consuming both an ancestor and its own descendant is fine.** A node may consume both a topic `T`
-  and a topic derived from `T`. A descendant record's dependency on `T` is satisfied by the node's
-  own `T` channel delivering up to it — the ordinary gate, no special case; the descendant's stamp
-  carrying `T`'s progress transitively matters only for the node's own outbound stamp, never for its
-  gate. (An earlier version of this contract forbade this pattern; that restriction was a consequence
-  of the retired intersection-based gate, not a fundamental limit — see the changelog.)
+Together these mean that for any causal chain m₁ → m₂ → m₃ that passes through an unconsumed
+middle channel, every intermediate node delivered its predecessor and merged unconditionally — so
+m₃'s clock claims m₁ *directly*. An unconsumed entry in a clock only ever proxies ancestry the
+same clock already states explicitly, and ignoring it loses no ordering observable at this node.
+Each ignore is counted by the `deps-out-of-scope-ignored` metric.
 
-### Protocol watermarks (heartbeats)
+The ignore branch is also what makes joins coordination-free. A new application's stamps routinely
+circulate coordinates that incumbent nodes have no channel for, and the gate ignores those soundly
+instead of treating them as an error, so joining a running topology needs no admission, no barrier,
+and no membership (see [Concepts](../concepts.md#joining-a-running-topology)).
 
-The completeness stamp advances only as this node's own frontier or its channels advertise progress,
-so a node must keep advertising even when it produces no business output. A consumed message that
-yields no business record — a filter that drops it, a record held in the buffer, a not-yet-ready
-aggregate — emits a *protocol watermark*: a record with a null value, marked with the
-`_parsley_watermark` header, carrying the node's current completeness frontier (emitted when a held
-record advances completeness,
-or when a delivered record produces no forward). The watermark is keyed with the triggering record's
-key so it routes to the same partition that record's business output would, which keeps completeness
-propagation correct across a sink boundary; it is identified by the header, never by its key. A
-downstream node delivers the watermark's *own offset* on its source channel — advancing that
-channel's contiguous frontier exactly like a business record's own coordinate, which is what can
-release held records — and folds the carried frontier into that channel's advertised clock, feeding
-its own outbound stamp (never its gate). It then re-emits its own watermark only when the carried
-clock taught it something new, so progress propagates contiguously through layers that produce no
-business records without ping-ponging around a cycle. Parsley's own processors
-consume watermarks internally (`ParsleyProcessor` / `ParsleyEngine.onWatermark`); a plain Kafka
-client folds them into its running frontier with `CausalDependencies.observe` while skipping them as
-business records, which it detects with `CausalDependencies.isWatermark`.
+## The outbound stamp
 
-### Each channel's own coordinate is a contiguous boundary
+The stamp attached to every outbound record — business forwards and protocol null messages alike,
+through one stamping site — is the max-merge of three clocks:
 
-The frontier's value for each coordinate is a *contiguous* delivered boundary, not a running
-maximum: the highest offset delivered on that channel without a gap. A later record on a partition
-can be forwarded before an earlier record still held on the same partition; the boundary only
-advances past the held record's position once that record is itself delivered. This matters because
-the frontier is exactly what the `dominates` gate checks: if a coordinate jumped over a gap, a
-record waiting on an offset inside the gap would be released on bookkeeping alone, without the
-record at that offset having been delivered. The contiguous boundary ensures the gate reflects
-actual delivery history, not observed-but-undelivered offsets. (It is distinct from the *protocol
-watermark* records above, which carry a completeness frontier between nodes.)
+- **completeness**: the node's contiguous frontier, its carried ancestry from any retired
+  channels, and every input channel's advertised clock — transitive ancestry, carried downstream
+  for each receiver's own gate to verify locally;
+- **ownOutputs**: the node's own acknowledged output positions. The broker performs the sender's
+  clock increment (offset assignment), learned via producer acknowledgements, so a node's second
+  output provably claims its first — including across sink topics and partitions, which a
+  pre-stamp crossing wait covers;
+- **highestDelivered**: the max projection of the delivered vector, so an output emitted from a
+  record delivered above a contiguous-frontier gap still claims that record.
+
+Some stamp entries deliberately over-claim — the init-time end-offset seed, an aborted
+transaction's acknowledgements, the gap offsets below an above-gap claim. Every such entry names
+a position at or below a real appended offset, so an over-claim can only *delay* downstream
+delivery (until the position is delivered or bridged), never reorder it. The gate is monotone in
+the dependency clock and frontiers advance only on physically received offsets, so raising a
+stamp entry can only move outcomes toward holding — fail-safe, never unsafe. The delay is
+unbounded if the claimed channel goes permanently silent; a record held on a dependency above its
+channel's highest received offset beyond a threshold is surfaced by the
+`records-held-above-highest-received` gauge, since that is the exact signature of a claim nothing
+received so far can satisfy.
+
+## Environmental assumptions
+
+The guarantee rests on three stated assumptions about the environment. None is enforced by
+coordination; the first two are enforced in code where that is possible, and all three are
+operational constraints to design for.
+
+### E1 — stable channel identity
+
+A coordinate must never rebind to a different record. Kafka violates this on topic delete and
+recreate (offsets restart under a new incarnation), so identity is keyed by topic UUID and bound
+once per process lifetime, and a background topic-identity poll fails the application fast when a
+causal topic's UUID changes mid-run. Detection is bounded by the poll interval, not
+instantaneous, so live recreation of a causal topic remains an operational error — loud and
+bounded rather than silent. Across a restart, recreation degrades to history loss (E2's kind),
+never reordering: a clock naming the old UUID can never be satisfied by the new topic's offsets.
+See [Troubleshooting](../troubleshooting.md#a-causal-topic-was-deleted-or-recreated-while-the-application-ran).
+
+### E2 — retention must not destroy causally-live history
+
+A record whose effects some running or future consumer still needs must not be expunged before
+every such consumer has delivered it. No protocol can deliver a destroyed record. Parsley
+enforces the detectable half in code: every causal source is configured with
+`AutoOffsetReset.none()`, so a consumer whose position falls out of range fails fast rather than
+silently jumping past destroyed causes, and the offset seeder seeds log-start positions only on a
+genuine first start, refusing when surviving state shows the group is not new (offset expiry is
+not a first start). Mid-replay retention expiry is therefore a loud crash-loop until an operator
+resets — a liveness stall by design, never a reorder. The preventative half is a retention-sizing
+constraint on the operator: retention on causal topics must comfortably exceed the longest
+consumer outage or replay you intend to survive. See the
+[operations note in Streams integration](../streams.md#operating-notes) and
+[Troubleshooting](../troubleshooting.md#retention-outran-a-causal-consumer).
+
+### E3 — compliant participants; participation is per-path
+
+Every producer that stamps clocks is assumed to stamp truthfully and transitively completely, and
+to preserve received causal history. Producers that stamp nothing are causally minimal *sources*
+— safe by construction, no declaration needed. The subtle consequence: **causal order is
+guaranteed only along paths where every intermediate processor stamps.** A service that consumes
+stamped topics and re-produces unstamped output silently severs the custody chain — its outputs
+are causally minimal by definition, and the severance is undetectable at runtime, because an
+unstamped record is indistinguishable from a genuine external event. This is an architectural
+constraint of the same kind as E2's retention constraint: place every processor that sits between
+causally related topics inside the stamping boundary (a Parsley stage, or a client using the
+`CausalClock` edge operations). Byzantine stamping — forged clocks, invented offsets — defeats
+any causal-broadcast algorithm and is out of scope.
 
 ## Violations
 
 There is no path that breaks Lamport's happened-before guarantee. Delivery is unconditionally
-fail-closed: there is no eviction and no configuration that trades causal order for availability. A
-record whose dependencies are proven impossible to satisfy — an undecodable payload or dependencies
-header, or a dependency naming a coordinate this node has no channel for (see
-[the topology contract](#the-topology-contract)) — fails the task fast rather than being delivered out
-of order or dropped. The engine throws, the task restarts, and the record stays in the buffer changelog
-for recovery. No violation ever reaches downstream.
+fail-closed: there is no eviction and no configuration that trades causal order for availability.
+A record that can be proven impossible to evaluate — an undecodable payload or dependency header —
+fails the task fast rather than being delivered out of order or dropped; the task restarts, and
+the record stays in the buffer changelog for recovery. A dependency on a coordinate this node
+does not consume is not a violation and not a failure: it falls to the gate's ignore branch,
+which the transitivity theorem above makes sound.
 
 This takes the consistency side of the trade-off described in the CAP theorem and in the causal
 consistency literature unconditionally: Parsley has no policy knob that spends causal order for
-liveness. A genuinely stuck dependency (a lagging partition, a co-partitioning gap, a producing topic
-that was deleted) shows up as unbounded buffer growth or a fail-closed task restart, never as a silent
-reordering — see [Troubleshooting](../troubleshooting.md).
+liveness. A genuinely stuck dependency (a lagging partition, a co-partitioning gap, a producing
+topic that was deleted) shows up as unbounded buffer growth or a fail-closed task restart, never
+as a silent reordering — see [Troubleshooting](../troubleshooting.md).
+
+## Rejected designs
+
+Two earlier designs are recorded here so they are not re-derived. Both were removed after the
+proof above showed they added coordination without adding safety.
+
+**Epochs as consistent cuts.** Earlier versions took a domain-wide cut (an epoch) whenever the
+topology changed and stamped replay-era emissions at the epoch origin, so that nothing a joiner
+replayed appeared to happen before the cut. The intent was reasonable in the era of the
+fail-closed gate: a joiner consuming from offset 0 stamps outputs whose dependencies predate
+everything the topology had delivered. But the mechanism amounts to causal repositioning — the
+stamps are made to lie, and the lie must be agreed domain-wide (floors, transition windows,
+publication rounds) or gates wedge on it. Truthful historical stamps need no agreement at all:
+an incumbent's frontier trivially dominates historical dependencies, and a joiner's replay is
+self-gating — the hold-back queue converts arbitrary cross-partition arrival order into causal
+delivery order. Truthful stamps are also more correct: a later joiner replaying both an input
+and its derived topic orders them properly, which floored stamps erase.
+
+**Hold-until-admitted joins.** A corollary of epochs was that a fresh joiner must not consume
+until the epoch computed with it commits and admits it. With no epochs there is no admission to
+wait for, and none is needed: a fresh message carrying old dependencies is causally low, not
+retroactive — no incumbent mis-delivered in the past, because nothing can be delivered before
+it exists. Joins therefore need zero coordination (see
+[Concepts](../concepts.md#joining-a-running-topology)).

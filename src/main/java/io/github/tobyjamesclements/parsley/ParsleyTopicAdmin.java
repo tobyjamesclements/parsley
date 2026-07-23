@@ -3,7 +3,10 @@ package io.github.tobyjamesclements.parsley;
 import org.apache.kafka.clients.admin.Admin;
 import org.apache.kafka.clients.admin.Config;
 import org.apache.kafka.clients.admin.ConfigEntry;
+import org.apache.kafka.clients.admin.OffsetSpec;
 import org.apache.kafka.clients.admin.TopicDescription;
+import org.apache.kafka.common.TopicPartition;
+import org.apache.kafka.common.TopicPartitionInfo;
 import org.apache.kafka.common.Uuid;
 import org.apache.kafka.common.config.ConfigResource;
 import org.apache.kafka.common.config.TopicConfig;
@@ -48,6 +51,16 @@ interface ParsleyTopicAdmin extends AutoCloseable {
     Map<String, String> cleanupPolicies(List<String> topics) throws Exception;
 
     /**
+     * Returns each partition's end offset (the next offset to be appended) for {@code topic} —
+     * the init-time seed for the {@code ownOutputs} clock claims {@code endOffset - 1}, the last
+     * appended position, per sink partition (D2/O1; sound by I8).
+     *
+     * @param topic the topic to look up
+     * @return partition → end offset; must include every partition of the topic
+     */
+    Map<Integer, Long> endOffsets(String topic) throws Exception;
+
+    /**
      * Returns a {@link ParsleyTopicAdmin} backed by a real Kafka {@link Admin} created from
      * {@code configs} — used by the processor path, which resolves UUIDs at {@code init()} from the
      * task's {@code appConfigs()} (so it inherits broker security settings, not just bootstrap). The
@@ -75,6 +88,11 @@ interface ParsleyTopicAdmin extends AutoCloseable {
             @Override
             public Map<String, String> cleanupPolicies(List<String> topics) throws Exception {
                 return delegate.cleanupPolicies(topics);
+            }
+
+            @Override
+            public Map<Integer, Long> endOffsets(String topic) throws Exception {
+                return delegate.endOffsets(topic);
             }
 
             @Override
@@ -123,6 +141,23 @@ interface ParsleyTopicAdmin extends AutoCloseable {
                     policies.put(resource.name(), entry != null ? entry.value() : TopicConfig.CLEANUP_POLICY_DELETE);
                 });
                 return policies;
+            }
+
+            @Override
+            public Map<Integer, Long> endOffsets(String topic) throws Exception {
+                TopicDescription description =
+                        admin.describeTopics(List.of(topic)).allTopicNames().get().get(topic);
+                if (description == null) {
+                    throw new IllegalStateException("broker did not describe topic '" + topic + "'");
+                }
+                Map<TopicPartition, OffsetSpec> query = new HashMap<>();
+                for (TopicPartitionInfo partition : description.partitions()) {
+                    query.put(new TopicPartition(topic, partition.partition()), OffsetSpec.latest());
+                }
+                Map<Integer, Long> endOffsets = new HashMap<>();
+                admin.listOffsets(query).all().get()
+                        .forEach((tp, info) -> endOffsets.put(tp.partition(), info.offset()));
+                return endOffsets;
             }
 
             @Override

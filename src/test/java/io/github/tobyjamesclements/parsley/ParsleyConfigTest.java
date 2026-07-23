@@ -7,6 +7,7 @@ import java.util.Set;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
  * Tests {@link ParsleyConfig}'s own configuration loading: building from explicit properties via
@@ -22,30 +23,31 @@ class ParsleyConfigTest {
     /**
      * With no {@code parsley.topology.validation} set, {@link ParsleyConfig#load()} reads the
      * {@code parsley.properties} classpath resource (absent in this project's test classpath) and
-     * falls back to the default {@code warn} mode rather than throwing — detectable
-     * misconfigurations are logged but do not fail the task, so an existing deployment is never
-     * broken by the check.
+     * falls back to the default {@code strict} mode — a detectable topology misconfiguration is a
+     * deferred failure anyway (a parity mismatch crash-loops the marker produce at runtime; a
+     * compacted sink silently loses null messages), so the default fails once, clearly, at init.
      *
-     * Asserts the default validation mode is {@code WARN}.
+     * Asserts the default validation mode is {@code STRICT}.
      */
     @Test
-    void topologyValidationDefaultsToWarn() {
-        assertEquals(ParsleyConfig.ValidationMode.WARN, ParsleyConfig.load().topologyValidation(),
-                "with no parsley.topology.validation set, the default mode must be 'warn'");
+    void topologyValidationDefaultsToStrict() {
+        assertEquals(ParsleyConfig.ValidationMode.STRICT, ParsleyConfig.load().topologyValidation(),
+                "with no parsley.topology.validation set, the default mode must be 'strict'");
     }
 
     /**
-     * Setting {@code parsley.topology.validation} to {@code strict} overrides the default so a
-     * detectable topology misconfiguration fails the task fast; {@code off} disables the check.
+     * Setting {@code parsley.topology.validation} to {@code warn} opts down from the strict
+     * default so a detectable topology misconfiguration is logged but does not fail the task;
+     * {@code off} disables the check entirely.
      *
      * Asserts both explicit modes parse to their enum values.
      */
     @Test
     void fromAppliesExplicitTopologyValidationModes() {
-        Properties strict = new Properties();
-        strict.setProperty(TOPOLOGY_VALIDATION, "strict");
-        assertEquals(ParsleyConfig.ValidationMode.STRICT, ParsleyConfig.from(strict).topologyValidation(),
-                "an explicit 'strict' topology-validation mode must parse to STRICT");
+        Properties warn = new Properties();
+        warn.setProperty(TOPOLOGY_VALIDATION, "warn");
+        assertEquals(ParsleyConfig.ValidationMode.WARN, ParsleyConfig.from(warn).topologyValidation(),
+                "an explicit 'warn' topology-validation mode must parse to WARN");
 
         Properties off = new Properties();
         off.setProperty(TOPOLOGY_VALIDATION, "off");
@@ -69,68 +71,30 @@ class ParsleyConfigTest {
     }
 
     /**
-     * {@code parsley.coordination.domain-topics} parses as a comma-separated set, trimming whitespace
-     * around each entry and dropping empty entries, when {@code parsley.coordination.epoch-events-topic}
-     * is also set.
+     * Every removed {@code parsley.coordination.*} key fails loudly at parse: the coordination
+     * subsystem is deleted (joins need zero coordination), and a key that wires nothing must not be
+     * accepted quietly — an operator who believes their deployment is coordinated should learn about
+     * the removal at startup, from a message naming the offending key.
      *
-     * Asserts the parsed set matches exactly, order and duplicates aside.
+     * Asserts each removed key alone throws {@code IllegalStateException} naming both the key and
+     * the removal.
      */
     @Test
-    void fromParsesDomainTopicsAsATrimmedCommaSeparatedSet() {
-        Properties props = new Properties();
-        props.setProperty("parsley.coordination.epoch-events-topic", "epoch-events");
-        props.setProperty("parsley.coordination.domain-topics", " t1, t2 ,t3,, t2");
-
-        assertEquals(Set.of("t1", "t2", "t3"), ParsleyConfig.from(props).coordinationDomainTopics(),
-                "domain-topics must parse as a trimmed, deduplicated comma-separated set");
-    }
-
-    /**
-     * With neither coordination key set, {@link ParsleyConfig#coordinationDomainTopics()} is empty —
-     * the common, uncoordinated case, unaffected by this new key's existence.
-     *
-     * Asserts the default is an empty set.
-     */
-    @Test
-    void coordinationDomainTopicsDefaultsToEmpty() {
-        assertEquals(Set.of(), ParsleyConfig.load().coordinationDomainTopics(),
-                "domain-topics must default to empty when coordination is not configured");
-    }
-
-    /**
-     * {@code parsley.coordination.domain-topics} is only meaningful alongside {@code parsley.coordination.
-     * epoch-events-topic} — setting it without the epoch-events-topic key is rejected at startup rather
-     * than silently ignored, since a passthrough-wiring config with no coordination log to validate
-     * against would create dead, never-exercised topology nodes with no way to detect the
-     * misconfiguration later.
-     *
-     * Asserts {@code IllegalStateException} is thrown when domain-topics is set alone.
-     */
-    @Test
-    void fromRejectsDomainTopicsWithoutEpochEventsTopic() {
-        Properties props = new Properties();
-        props.setProperty("parsley.coordination.domain-topics", "t1,t2");
-
-        assertThrows(IllegalStateException.class, () -> ParsleyConfig.from(props),
-                "domain-topics without epoch-events-topic must be rejected");
-    }
-
-    /**
-     * The reverse pairing is not required: {@code parsley.coordination.epoch-events-topic} alone (with no
-     * domain-topics) is exactly today's existing, already-supported coordination configuration — full-mesh
-     * validation derives its own domain from the shared log's live declarations, not from this static
-     * config, so there is nothing for an existing coordinated deployment to migrate.
-     *
-     * Asserts no exception is thrown and domain-topics is empty.
-     */
-    @Test
-    void fromAllowsEpochEventsTopicWithoutDomainTopics() {
-        Properties props = new Properties();
-        props.setProperty("parsley.coordination.epoch-events-topic", "epoch-events");
-
-        ParsleyConfig config = ParsleyConfig.from(props);
-        assertEquals("epoch-events", config.coordinationEpochEventsTopic());
-        assertEquals(Set.of(), config.coordinationDomainTopics(),
-                "epoch-events-topic alone must not require domain-topics");
+    void fromRejectsEveryRemovedCoordinationKey() {
+        for (String key : Set.of(
+                "parsley.coordination.epoch-events-topic",
+                "parsley.coordination.domain-topics",
+                "parsley.coordination.member-apps")) {
+            Properties props = new Properties();
+            props.setProperty(key, "anything");
+            IllegalStateException thrown = assertThrows(IllegalStateException.class,
+                    () -> ParsleyConfig.from(props),
+                    "the removed key " + key + " must fail configuration parsing loudly");
+            assertTrue(thrown.getMessage().contains(key),
+                    "the failure must name the offending key: " + thrown.getMessage());
+            assertTrue(thrown.getMessage().contains("removed"),
+                    "the failure must name the removal, not read as an unknown-key typo: "
+                            + thrown.getMessage());
+        }
     }
 }

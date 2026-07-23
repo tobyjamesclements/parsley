@@ -12,9 +12,6 @@ import java.util.concurrent.atomic.AtomicBoolean;
  * before stopping the underlying {@code KafkaStreams} — so a clean shutdown never strands a
  * causally-held record. There is no public handle; this is purely an internal shutdown mechanism.
  *
- * <p>For the structurally similar but unrelated epoch-leave drain gate (no shutdown arming), see the
- * lighter {@link ParsleyQuiesceTracker}.
- *
  * <p>A task registered with a {@code ParsleyQuiesce} keeps processing normally after
  * {@link #requestQuiesce()} — nothing about how it delivers or forwards records changes. It only
  * reports itself drained once its causal buffer has emptied through the ordinary delivery path (a

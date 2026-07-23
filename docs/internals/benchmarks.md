@@ -49,8 +49,8 @@ reassignment:
 
 | Method | Operation | Expected complexity |
 |---|---|---|
-| `frontierRestore` | Single RocksDB point read + `ParsleyClock.fromBytes()` | O(1) |
-| `bufferRestore` | `StoreBackedBufferStore` constructor scan + `ParsleyEngine` candidate-index rebuild | O(n) |
+| `frontierRestore` | Single RocksDB point read + `ParsleyVectorClock.fromBytes()` | O(1) |
+| `bufferRestore` | `StoreBackedBufferStore` constructor scan + `ParsleyCausalBroadcast` candidate-index rebuild | O(n) |
 
 ---
 

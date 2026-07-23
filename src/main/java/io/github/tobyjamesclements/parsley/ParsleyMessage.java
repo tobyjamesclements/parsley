@@ -11,12 +11,12 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * The engine's typed envelope: a record together with the causal metadata Parsley needs, all as
+ * The causal-broadcast core's typed envelope: a record together with the causal metadata Parsley needs, all as
  * typed fields rather than re-parsed headers. {@code headers} holds the user's headers only — the
  * source coordinate ({@code topic}/{@code topicId}/{@code partition}/{@code offset}) and the causal
  * {@code dependencies} are first-class fields. They are written as typed framing fields (never
  * headers) when a message is persisted to the buffer store ({@link ParsleySerializer}), and the
- * dependencies re-materialise as the {@code parsley-causal-dependencies} header only for the
+ * dependencies re-materialise as the {@code parsley-causal-clock} header only for the
  * delegate's view ({@link #headersWithDependencies}).
  *
  * @param <K> the record key type
@@ -24,7 +24,7 @@ import java.util.List;
  */
 record ParsleyMessage<K, V>(String topic, Uuid topicId, int partition, long offset, long timestamp,
                             @Nullable K key, @Nullable V value, List<ParsleyHeader> headers,
-                            ParsleyClock dependencies) {
+                            ParsleyVectorClock dependencies) {
 
     ParsleyMessage {
         headers = List.copyOf(headers);
@@ -32,16 +32,16 @@ record ParsleyMessage<K, V>(String topic, Uuid topicId, int partition, long offs
 
     /**
      * Builds a message from an inbound Kafka Streams {@link Record} at its source coordinate. The
-     * record's {@code parsley-causal-dependencies} header is decoded into {@link #dependencies}
+     * record's {@code parsley-causal-clock} header is decoded into {@link #dependencies}
      * (absent → empty, vacuously satisfied), and all other non-internal headers are carried as user
      * headers.
      *
-     * @throws ParsleyClockResolutionException if the dependencies header is present but cannot be
+     * @throws CausalVectorClockResolutionException if the dependencies header is present but cannot be
      *     decoded; the caller fails the task fast rather than forward the record on an unknown premise
      */
     static <K, V> ParsleyMessage<K, V> from(Record<K, V> record, TopicPartition source,
                                             long offset, Uuid topicId) {
-        ParsleyClock dependencies = decodeDependencies(encodedDependencies(record), source, topicId, offset);
+        ParsleyVectorClock dependencies = decodeDependencies(encodedDependencies(record), source, topicId, offset);
         return from(record, source, offset, topicId, dependencies);
     }
 
@@ -49,7 +49,7 @@ record ParsleyMessage<K, V>(String topic, Uuid topicId, int partition, long offs
      * Builds a message with caller-supplied {@code dependencies}, skipping header decoding.
      */
     static <K, V> ParsleyMessage<K, V> from(Record<K, V> record, TopicPartition source,
-                                            long offset, Uuid topicId, ParsleyClock dependencies) {
+                                            long offset, Uuid topicId, ParsleyVectorClock dependencies) {
         return new ParsleyMessage<>(source.topic(), topicId, source.partition(), offset,
                 record.timestamp(), record.key(), record.value(), userHeaders(record), dependencies);
     }
@@ -57,7 +57,7 @@ record ParsleyMessage<K, V>(String topic, Uuid topicId, int partition, long offs
     private static List<ParsleyHeader> userHeaders(Record<?, ?> record) {
         List<ParsleyHeader> userHeaders = new ArrayList<>();
         for (Header header : record.headers()) {
-            if (!ParsleyHeader.CAUSAL_DEPENDENCIES.equals(header.key())
+            if (!ParsleyHeader.CAUSAL_CLOCK.equals(header.key())
                     && !header.key().startsWith(ParsleyHeader.INTERNAL_PREFIX)) {
                 userHeaders.add(new ParsleyHeader(header.key(), header.value()));
             }
@@ -66,18 +66,18 @@ record ParsleyMessage<K, V>(String topic, Uuid topicId, int partition, long offs
     }
 
     private static byte @Nullable [] encodedDependencies(Record<?, ?> record) {
-        Header header = record.headers().lastHeader(ParsleyHeader.CAUSAL_DEPENDENCIES);
+        Header header = record.headers().lastHeader(ParsleyHeader.CAUSAL_CLOCK);
         return header == null ? null : header.value();
     }
 
     /**
-     * The user headers plus the {@code parsley-causal-dependencies} header carrying
+     * The user headers plus the {@code parsley-causal-clock} header carrying
      * {@link #dependencies} — the header set a delegate processor sees. Carries no
      * {@code _parsley_*}-prefixed internal marker headers.
      */
     Headers headersWithDependencies() {
         Headers out = userHeadersView();
-        out.add(ParsleyHeader.CAUSAL_DEPENDENCIES, dependencies.toBytes());
+        out.add(ParsleyHeader.CAUSAL_CLOCK, dependencies.toBytes());
         return out;
     }
 
@@ -89,16 +89,16 @@ record ParsleyMessage<K, V>(String topic, Uuid topicId, int partition, long offs
         return out;
     }
 
-    private static ParsleyClock decodeDependencies(byte @Nullable [] encoded, TopicPartition source,
+    private static ParsleyVectorClock decodeDependencies(byte @Nullable [] encoded, TopicPartition source,
                                                    Uuid topicId, long offset) {
         if (encoded == null) {
-            return ParsleyClock.empty();
+            return ParsleyVectorClock.empty();
         }
         try {
-            return ParsleyClock.fromBytes(encoded);
+            return ParsleyVectorClock.fromBytes(encoded);
         } catch (Exception e) {
-            throw new ParsleyClockResolutionException(source.topic(), topicId, source.partition(), offset,
-                    encoded, "encoded causal-dependencies header length " + encoded.length, e);
+            throw new CausalVectorClockResolutionException(source.topic(), topicId, source.partition(), offset,
+                    encoded, "encoded causal-clock header length " + encoded.length, e);
         }
     }
 }

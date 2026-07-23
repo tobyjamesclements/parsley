@@ -10,15 +10,15 @@
  *       those dependencies, then delivers it — so a topology of Kafka Streams processors sees causally
  *       related events across topics in the order they actually happened, not merely in per-partition
  *       order. The classic broadcast/receive/deliver vocabulary and where each lives in this package is
- *       spelled out in {@link io.github.tobyjamesclements.parsley.ParsleyEngine}'s Javadoc. See {@link
- *       io.github.tobyjamesclements.parsley.CausalDependencies} for the wire contract and the edge
+ *       spelled out in {@link io.github.tobyjamesclements.parsley.ParsleyCausalBroadcast}'s Javadoc. See {@link
+ *       io.github.tobyjamesclements.parsley.CausalClock} for the wire contract and the edge
  *       operations below for talking to a Parsley topology from plain Kafka clients.</li>
- *   <li><strong>Topology epochs.</strong> A running, coordinated topology can evolve — a stage added,
- *       replaced, or reconfigured — without dragging pre-change history into causal time: {@link
- *       io.github.tobyjamesclements.parsley.CausalStreams#requestEpochTransition()} evolves every
- *       participating member through a leaderless, in-band epoch boundary. Optional and off by default;
- *       {@code parsley.coordination.epoch-events-topic} turns it on. Absent that key, a topology runs in
- *       epoch 0 indefinitely — no epoch-events log, no coordination thread.</li>
+ *   <li><strong>Coordination-free joins.</strong> There is no membership, no epoch, and no join
+ *       barrier: a new application simply starts consuming, its replay self-gates into causal
+ *       delivery order through the ordinary hold-back queue, and its truthful stamps make its
+ *       outputs correctly gated everywhere from the first emission. No key under {@code
+ *       parsley.coordination.*} is part of the configuration surface; startup fails if one is
+ *       present.</li>
  *   <li><strong>Schema handling.</strong> A held record's key and value are (de)serialised with the
  *       {@code Serde} registered for its own <em>source</em> topic, never the buffer's internal changelog
  *       topic, so topic-scoped serdes — Avro plus Schema Registry {@code TopicNameStrategy} in particular
@@ -37,28 +37,59 @@
  *   <li>{@link io.github.tobyjamesclements.parsley.CausalTopology} &mdash; the built causal topology, ready
  *       for {@code new CausalStreams(topology, props)}</li>
  *   <li>{@link io.github.tobyjamesclements.parsley.CausalStreams} &mdash; the runtime: wraps the underlying
- *       {@code KafkaStreams} instance, and owns graceful causal drain on {@code close()} and (when
- *       {@code parsley.coordination.epoch-events-topic} is configured) topology-epoch coordination</li>
+ *       {@code KafkaStreams} instance, and owns graceful causal drain on {@code close()}</li>
  * </ul>
  *
  * <h2>Edge operations</h2>
  * To talk to a Parsley topology from plain Kafka clients, stamp and propagate causal dependencies
- * directly with {@link io.github.tobyjamesclements.parsley.CausalDependencies}:
+ * directly with {@link io.github.tobyjamesclements.parsley.CausalClock}:
  * <ul>
- *   <li>{@link io.github.tobyjamesclements.parsley.CausalDependencies#using(java.util.Properties) using}
+ *   <li>{@link io.github.tobyjamesclements.parsley.CausalClock#using(java.util.Properties) using}
  *       &mdash; bind a resolver (topic name &rarr; stable Kafka UUID, resolved internally through the
  *       given Kafka client configuration) and start accumulating a consumer-side frontier</li>
- *   <li>{@link io.github.tobyjamesclements.parsley.CausalDependencies#observe(org.apache.kafka.clients.consumer.ConsumerRecord)
+ *   <li>{@link io.github.tobyjamesclements.parsley.CausalClock#observe(org.apache.kafka.clients.consumer.ConsumerRecord)
  *       observe} &mdash; fold a consumed record's dependencies and own position into the accumulator</li>
- *   <li>{@link io.github.tobyjamesclements.parsley.CausalDependencies#stamp(org.apache.kafka.clients.producer.ProducerRecord)
+ *   <li>{@link io.github.tobyjamesclements.parsley.CausalClock#stamp(org.apache.kafka.clients.producer.ProducerRecord)
  *       stamp} &mdash; attach the accumulated dependencies to an outbound {@code ProducerRecord}</li>
- *   <li>{@link io.github.tobyjamesclements.parsley.CausalDependencies#merge(io.github.tobyjamesclements.parsley.CausalDependencies) merge} &mdash;
+ *   <li>{@link io.github.tobyjamesclements.parsley.CausalClock#merge(io.github.tobyjamesclements.parsley.CausalClock) merge} &mdash;
  *       combine dependency sets for a fan-in</li>
  * </ul>
  *
+ * <h2>Internal protocol modules</h2>
+ * Internally the implementation is organised as layered protocols, each presented in the module style
+ * of Cachin–Guerraoui–Rodrigues (<em>Introduction to Reliable and Secure Distributed Programming</em>):
+ * requests in, indications out, properties guaranteed. The channels module
+ * ({@link io.github.tobyjamesclements.parsley.ParsleyChannels}) adapts Kafka topic-partitions into the
+ * reliable FIFO channels classical causal broadcast assumes; the causal-broadcast module
+ * ({@link io.github.tobyjamesclements.parsley.ParsleyCausalBroadcast}) is Birman–Schiper–Stephenson
+ * causal delivery over those channels; the gossip module
+ * ({@link io.github.tobyjamesclements.parsley.ParsleyGossip}) disseminates clock progress as null
+ * messages so completeness keeps flowing through non-emitting paths. Two Parsley-wide deviations
+ * from the textbook presentation apply to every module, stated once here:
+ * <ul>
+ *   <li><strong>Indications are pulled, not pushed.</strong> Deliveries come back as ordered return
+ *       values rather than through an upcall, because Kafka Streams' threading is synchronous. Same
+ *       semantics, pull style.</li>
+ *   <li><strong>The sender's clock increment is performed by the broker.</strong> In
+ *       Birman–Schiper–Stephenson the sender increments its own vector entry at send; here the
+ *       increment is the broker's offset assignment, learned asynchronously from producer
+ *       acknowledgements. This is why an outbound stamp cannot include the record's own
+ *       coordinate.</li>
+ * </ul>
+ *
+ * <h2>Naming convention</h2>
+ * Every public type is named {@code Causal*}; the one exception is
+ * {@link io.github.tobyjamesclements.parsley.ParsleyOwnOutputInterceptor}, public only because Kafka
+ * instantiates producer interceptors reflectively and is not public API. Package-private machinery
+ * is named {@code Parsley*}, except implementations of a {@code Parsley*} seam interface, which are
+ * named for their backing: {@code KafkaTopics} implements {@code ParsleyTopics}, and
+ * {@code StoreBackedBufferStore} / {@code StoreBackedCandidateIndex} /
+ * {@code StoreBackedForwardedIndex} implement their {@code Parsley*} store interfaces over any
+ * Kafka Streams {@code KeyValueStore}.
+ *
  * <h2>Key value types</h2>
  * <ul>
- *   <li>{@link io.github.tobyjamesclements.parsley.CausalDependencies} &mdash; the causal requirements stamped on a record
+ *   <li>{@link io.github.tobyjamesclements.parsley.CausalClock} &mdash; the causal requirements stamped on a record
  *       (what the consumer must have observed before the record may be delivered). Its serialised size
  *       grows with the number of relevant topic-partitions and counts against Kafka's
  *       {@code message.max.bytes}. Topic-UUID resolution is an internal detail of {@code using}/
