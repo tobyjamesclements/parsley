@@ -111,9 +111,9 @@ Runtime.getRuntime().addShutdownHook(new Thread(causalStreams::close));
 </code></pre>
 
 <p><strong>Joins need zero coordination</strong>: a fresh application simply starts consuming, and
-its replay self-gates into causal order. There is no membership, no epoch, and no join barrier; no
-key under <code>parsley.coordination.*</code> is part of the configuration surface, and startup fails
-if one is present (see <code>ParsleyConfig</code>).
+its replay self-gates into causal order. There is no membership, no epoch, and no join barrier.
+Parsley has no configuration keys at all — startup fails if any <code>parsley.*</code> key is present
+(see <code>ParsleyConfig</code>).
 
 <p><strong><a href="#close()"><code>close()</code></a></strong> always runs the full graceful shutdown: it waits for every task's
 causal buffer to drain through the ordinary delivery path before stopping the underlying
@@ -223,7 +223,8 @@ instance over it.</div>
 <dl class="notes">
 <dt>Parameters:</dt>
 <dd><code>topology</code> - the causal topology to run</dd>
-<dd><code>props</code> - standard Kafka Streams configuration plus Parsley's <code>parsley.*</code> keys</dd>
+<dd><code>props</code> - standard Kafka Streams configuration; Parsley has no keys of its own, and any
+                <code>parsley.*</code> key fails startup (see <code>ParsleyConfig</code>)</dd>
 </dl>
 </div>
 </section>

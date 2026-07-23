@@ -90,9 +90,8 @@ it is package-private internal machinery.
   <li><strong>Coordination-free joins.</strong> There is no membership, no epoch, and no join
       barrier: a new application simply starts consuming, its replay self-gates into causal
       delivery order through the ordinary hold-back queue, and its truthful stamps make its
-      outputs correctly gated everywhere from the first emission. No key under <code>
-      parsley.coordination.*</code> is part of the configuration surface; startup fails if one is
-      present.</li>
+      outputs correctly gated everywhere from the first emission. Parsley has no configuration
+      keys at all; startup fails if any <code>parsley.*</code> key is present.</li>
   <li><strong>Schema handling.</strong> A held record's key and value are (de)serialised with the
       <code>Serde</code> registered for its own <em>source</em> topic, never the buffer's internal changelog
       topic, so topic-scoped serdes — Avro plus Schema Registry <code>TopicNameStrategy</code> in particular

@@ -49,11 +49,23 @@ loadScripts(document, 'script');</script>
 <div class="header">
 <h1 class="title">Parsley 0.1.1-SNAPSHOT API</h1>
 </div>
-<div class="block"><p>Parsley is a Java library that provides <strong>causal delivery order</strong> for Kafka Streams
-processors. When the required conditions are met, every wrapped processor processes records in causal
-order, even when records originate from multiple topics and partitions. It does this by encoding each
-message's causal dependencies onto the message and buffering records until those dependencies have
-been observed.</p>
+<div class="block"><p>Parsley provides <strong>causal delivery order</strong> for Kafka Streams processors. When the
+required conditions hold, every wrapped processor observes records in causal order even when they
+originate from several topics and partitions: if an event A causally precedes an event B, a
+processor subscribed to both of their topics processes A before B. Parsley achieves this by
+stamping each record with its producer's causal dependencies and buffering a record until those
+dependencies have been observed locally.</p>
+
+<p>The guarantee is the causal-consistency model of the distributed-systems literature (Lamport's
+happened-before relation, realised with vector clocks), instantiated on Kafka's own coordinates: a
+clock is indexed by <code>(topic, partition)</code> rather than by process, and its values are
+broker offsets. Internally the implementation is a stack of three protocols, presented in the
+module style of Cachin, Guerraoui, and Rodrigues: a <em>channels</em> layer that adapts Kafka
+topic-partitions into reliable FIFO channels, a <em>causal broadcast</em> layer
+(Birman–Schiper–Stephenson) that delivers in causal order, and a <em>gossip</em> layer
+(Chandy–Misra–Bryant null messages) that keeps causal progress observable through non-emitting
+processors. The <a href="https://tobyjamesclements.github.io/parsley">documentation site</a>
+develops the theory and the three protocols in full; this page describes the public API.</p>
 
 <p>The entire public surface lives in a single package, <a href="io/github/tobyjamesclements/parsley/package-summary.html"><code>io.github.tobyjamesclements.parsley</code></a>.
 The topology-level entry point is three roles mirroring Kafka Streams' own <code>StreamsBuilder</code> /
@@ -66,8 +78,8 @@ declares the topology's single causal stage, the fluent chain's terminal <code>.
 
 <p>Joining a running topology needs no coordination: a new application simply starts consuming, its
 replay self-gates into causal delivery order through the ordinary hold-back queue, and its truthful
-stamps make its outputs correctly gated everywhere from its first emission. No key under <code>
-parsley.coordination.*</code> is part of the configuration surface; startup fails if one is present.</p>
+stamps make its outputs correctly gated everywhere from its first emission. Parsley has no
+configuration keys at all; startup fails if any <code>parsley.*</code> key is present.</p>
 
 <h1 id="core-concepts-heading">Core concepts</h1>
 <dl>
@@ -86,17 +98,15 @@ parsley.coordination.*</code> is part of the configuration surface; startup fail
   <a href="io/github/tobyjamesclements/parsley/CausalClock.html#isNullMessage(org.apache.kafka.clients.consumer.ConsumerRecord)"><code>isNullMessage</code></a> returns true,
   which are protocol metadata rather than business records.</dd>
 
-  <dt><strong>Completeness frontier</strong></dt>
-  <dd>A node's own contiguous frontier max-merged with every input channel's advertised clock and
-  the node's own acknowledged output positions — the <em>outbound stamp</em>, carrying transitive
-  ancestry downstream for each receiver's own gate to verify locally. The delivery gate itself
-  checks the node's own contiguous frontier alone: a record is delivered once this node has itself
-  delivered every coordinate the record depends on that it consumes, and a peer's advertised claim
-  never substitutes for local delivery. A dependency naming a coordinate this node does not consume
-  is ignored, unconditionally — sound because stamps are transitively complete and merged
-  unconditionally, so any consumed causal ancestor is claimed directly in the same clock; each
-  ignore is counted by a metric, never a failure. The frontier is internal to Parsley's processor
-  machinery and is not a separate public type.</dd>
+  <dt><strong>The delivery gate</strong></dt>
+  <dd>A record is delivered once this node's own contiguous frontier, the positions it has itself
+  delivered gap-free, dominates the record's dependencies on the coordinates it consumes. A peer's
+  advertised claim never substitutes for local delivery, which is the Birman–Schiper–Stephenson
+  delivery condition. A dependency naming a coordinate this node does not consume is ignored,
+  unconditionally: this is sound because stamps are transitively complete and merged
+  unconditionally, so any consumed causal ancestor is claimed directly in the same clock, and each
+  ignore is counted by a metric rather than treated as a failure. The frontier is internal to
+  Parsley's processor machinery and is not a separate public type.</dd>
 
   <dt><strong>Protocol null message</strong></dt>
   <dd>A record with a null value, carrying the triggering record's key and a
@@ -105,15 +115,15 @@ parsley.coordination.*</code> is part of the configuration surface; startup fail
   task's own partition on every sink; the key is informational only. It keeps causal progress
   flowing through filters and not-yet-emitting aggregates, and a received null message is relayed
   further downstream only when its carried clock advanced this node's knowledge of a channel it
-  consumes — never unconditionally, which is what keeps a cyclic topology's marker traffic from
-  circulating forever. Parsley's processors handle null messages internally; a plain Kafka client detects
-  them with <a href="io/github/tobyjamesclements/parsley/CausalClock.html#isNullMessage(org.apache.kafka.clients.consumer.ConsumerRecord)"><code>isNullMessage</code></a>.</dd>
+  consumes, never unconditionally, which is what keeps a cyclic topology's marker traffic from
+  circulating forever. Parsley's processors handle null messages internally; a plain Kafka client
+  detects them with <a href="io/github/tobyjamesclements/parsley/CausalClock.html#isNullMessage(org.apache.kafka.clients.consumer.ConsumerRecord)"><code>isNullMessage</code></a>.</dd>
 
   <dt><strong>Causal buffer</strong></dt>
   <dd>Records whose dependencies are not yet satisfied are held in an unbounded, changelog-backed
   buffer and released as soon as the frontier catches up. There is no configuration that trades causal
-  order for liveness: a record that cannot be evaluated at all — an undecodable payload or an
-  undecodable causal-clock header — unconditionally fails the task rather than being dropped,
+  order for liveness: a record that cannot be evaluated at all, an undecodable payload or an
+  undecodable causal-clock header, unconditionally fails the task rather than being dropped,
   evicted, or delivered out of order.</dd>
 </dl>
 
@@ -123,7 +133,7 @@ parsley.coordination.*</code> is part of the configuration surface; startup fail
   <thead><tr><th>Type</th><th>Purpose</th></tr></thead>
   <tbody>
     <tr><td><a href="io/github/tobyjamesclements/parsley/CausalStreamsBuilder.html" title="class in io.github.tobyjamesclements.parsley"><code>CausalStreamsBuilder</code></a></td><td>Declares the topology's single causal stage: <code>stream(...)</code> one or more source topics, <code>.process(supplier)</code> to bind them to a causal-decorated processor, <code>.to(...)</code> to declare its sink(s). The chain's terminal <code>.build()</code> produces a <a href="io/github/tobyjamesclements/parsley/CausalTopology.html" title="class in io.github.tobyjamesclements.parsley"><code>CausalTopology</code></a>.</td></tr>
-    <tr><td><a href="io/github/tobyjamesclements/parsley/CausalTopology.html" title="class in io.github.tobyjamesclements.parsley"><code>CausalTopology</code></a></td><td>The built causal topology — a specification, not yet a real Kafka Streams <code>Topology</code> — ready for <code>new CausalStreams(topology, props)</code>.</td></tr>
+    <tr><td><a href="io/github/tobyjamesclements/parsley/CausalTopology.html" title="class in io.github.tobyjamesclements.parsley"><code>CausalTopology</code></a></td><td>The built causal topology, a specification rather than a real Kafka Streams <code>Topology</code>, ready for <code>new CausalStreams(topology, props)</code>.</td></tr>
     <tr><td><a href="io/github/tobyjamesclements/parsley/CausalStreams.html" title="class in io.github.tobyjamesclements.parsley"><code>CausalStreams</code></a></td><td>The runtime: wraps the underlying <code>KafkaStreams</code> instance, and owns graceful causal drain on <code>close()</code>.</td></tr>
     <tr><td><a href="io/github/tobyjamesclements/parsley/CausalClock.html" title="class in io.github.tobyjamesclements.parsley"><code>CausalClock</code></a></td><td>Stamps and reads causal dependencies directly on plain <code>ProducerRecord</code> and <code>ConsumerRecord</code> objects, for talking to a Parsley topology from outside Kafka Streams.</td></tr>
   </tbody>
@@ -132,9 +142,9 @@ parsley.coordination.*</code> is part of the configuration surface; startup fail
 <h1 id="typical-usage-heading">Typical usage</h1>
 <pre><code>
 CausalTopology topology = new CausalStreamsBuilder()
-        .stream(List.of("prices", "orders"), Serdes.String(), orderSerde)
+        .stream(List.of("c1", "c2"), Serdes.String(), orderSerde)
         .process(new EnrichOrderSupplier())
-        .to("enriched-output", Serdes.String(), enrichedSerde)
+        .to("c3", Serdes.String(), enrichedSerde)
         .build();
 
 CausalStreams causalStreams = new CausalStreams(topology, props);
@@ -143,7 +153,7 @@ Runtime.getRuntime().addShutdownHook(new Thread(causalStreams::close));
 
 // At the edge, from a plain Kafka client
 CausalClock deps = CausalClock.using(props).observe(consumedRecord);
-producer.send(deps.stamp(new ProducerRecord&lt;&gt;("orders", key, value)));
+producer.send(deps.stamp(new ProducerRecord&lt;&gt;("c3", key, value)));
 </code></pre></div>
 <div id="all-packages-table">
 <div class="caption"><span>Packages</span></div>

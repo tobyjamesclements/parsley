@@ -12,7 +12,7 @@
       
       
       
-        <link rel="next" href="concepts/">
+        <link rel="next" href="foundations/causal-consistency/">
       
       
         
@@ -90,9 +90,7 @@
     
       
 
-  
-
-<header class="md-header md-header--shadow" data-md-component="header">
+<header class="md-header" data-md-component="header">
   <nav class="md-header__inner md-grid" aria-label="Header">
     <a href="." title="Parsley" class="md-header__button md-logo" aria-label="Parsley" data-md-component="logo">
       
@@ -214,6 +212,124 @@
       
         
           
+            
+<nav class="md-tabs" aria-label="Tabs" data-md-component="tabs">
+  <div class="md-grid">
+    <ul class="md-tabs__list">
+      
+        
+  
+  
+  
+    
+  
+  
+    <li class="md-tabs__item md-tabs__item--active">
+      <a href="." class="md-tabs__link">
+        
+  
+  
+    
+  
+  Home
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="foundations/causal-consistency/" class="md-tabs__link">
+          
+  
+  
+    
+  
+  Foundations
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="protocols/" class="md-tabs__link">
+          
+  
+  
+    
+  
+  The three protocols
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="guide/getting-started/" class="md-tabs__link">
+          
+  
+  
+    
+  
+  Using Parsley
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="reference/processor/" class="md-tabs__link">
+          
+  
+  
+    
+  
+  Reference
+
+        </a>
+      </li>
+    
+  
+
+      
+    </ul>
+  </div>
+</nav>
+          
         
       
       <main class="md-main" data-md-component="main">
@@ -227,8 +343,12 @@
                     
 
 
+  
 
-<nav class="md-nav md-nav--primary" aria-label="Navigation" data-md-level="0">
+
+  
+
+<nav class="md-nav md-nav--primary md-nav--lifted md-nav--integrated" aria-label="Navigation" data-md-level="0">
   <label class="md-nav__title" for="__drawer">
     <a href="." title="Parsley" class="md-nav__button md-logo" aria-label="Parsley" data-md-component="logo">
       
@@ -331,10 +451,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#how-it-works" class="md-nav__link">
+  <a href="#where-the-guarantee-sits" class="md-nav__link">
     <span class="md-ellipsis">
       
-        How it works
+        Where the guarantee sits
       
     </span>
   </a>
@@ -342,10 +462,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#public-api" class="md-nav__link">
+  <a href="#why-kafka-streams-needs-a-protocol" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Public API
+        Why Kafka Streams needs a protocol
       
     </span>
   </a>
@@ -353,10 +473,32 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#where-to-go-next" class="md-nav__link">
+  <a href="#the-three-protocols" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Where to go next
+        The three protocols
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#the-public-surface" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The public surface
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#reading-paths" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Reading paths
       
     </span>
   </a>
@@ -379,7 +521,20 @@
   
     
     
+      
+        
+      
+        
+      
+        
+      
+        
+      
     
+    
+    
+      
+      
     
     
     <li class="md-nav__item md-nav__item--nested">
@@ -396,7 +551,7 @@
   <span class="md-ellipsis">
     
   
-    Guide
+    Foundations
   
 
     
@@ -412,7 +567,7 @@
             <span class="md-nav__icon md-icon"></span>
             
   
-    Guide
+    Foundations
   
 
           </label>
@@ -425,14 +580,14 @@
   
   
     <li class="md-nav__item">
-      <a href="concepts/" class="md-nav__link">
+      <a href="foundations/causal-consistency/" class="md-nav__link">
         
   
   
   <span class="md-ellipsis">
     
   
-    Concepts
+    Causal consistency
   
 
     
@@ -453,14 +608,14 @@
   
   
     <li class="md-nav__item">
-      <a href="getting-started/" class="md-nav__link">
+      <a href="foundations/delivery-gate/" class="md-nav__link">
         
   
   
   <span class="md-ellipsis">
     
   
-    Getting started
+    The delivery gate
   
 
     
@@ -481,14 +636,14 @@
   
   
     <li class="md-nav__item">
-      <a href="streams/" class="md-nav__link">
+      <a href="foundations/assumptions/" class="md-nav__link">
         
   
   
   <span class="md-ellipsis">
     
   
-    Streams integration
+    Environmental assumptions
   
 
     
@@ -509,42 +664,14 @@
   
   
     <li class="md-nav__item">
-      <a href="configuration/" class="md-nav__link">
+      <a href="foundations/invariants/" class="md-nav__link">
         
   
   
   <span class="md-ellipsis">
     
   
-    Configuration
-  
-
-    
-  </span>
-  
-  
-
-      </a>
-    </li>
-  
-
-              
-            
-              
-                
-  
-  
-  
-  
-    <li class="md-nav__item">
-      <a href="adoption/" class="md-nav__link">
-        
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    Incremental adoption
+    Named invariants
   
 
     
@@ -573,7 +700,22 @@
   
     
     
+      
+        
+          
+        
+      
+        
+      
+        
+      
+        
+      
     
+    
+    
+      
+      
     
     
     <li class="md-nav__item md-nav__item--nested">
@@ -583,14 +725,15 @@
         <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3" >
         
           
-          <label class="md-nav__link" for="__nav_3" id="__nav_3_label" tabindex="0">
-            
+          <div class="md-nav__link md-nav__container">
+            <a href="protocols/" class="md-nav__link ">
+              
   
   
   <span class="md-ellipsis">
     
   
-    Operations
+    The three protocols
   
 
     
@@ -598,19 +741,27 @@
   
   
 
-            <span class="md-nav__icon md-icon"></span>
-          </label>
+            </a>
+            
+              
+              <label class="md-nav__link " for="__nav_3" id="__nav_3_label" tabindex="0">
+                <span class="md-nav__icon md-icon"></span>
+              </label>
+            
+          </div>
         
         <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="false">
           <label class="md-nav__title" for="__nav_3">
             <span class="md-nav__icon md-icon"></span>
             
   
-    Operations
+    The three protocols
   
 
           </label>
           <ul class="md-nav__list" data-md-scrollfix>
+            
+              
             
               
                 
@@ -619,14 +770,14 @@
   
   
     <li class="md-nav__item">
-      <a href="performance/" class="md-nav__link">
+      <a href="protocols/channels/" class="md-nav__link">
         
   
   
   <span class="md-ellipsis">
     
   
-    Performance
+    1 · Channels
   
 
     
@@ -647,7 +798,244 @@
   
   
     <li class="md-nav__item">
-      <a href="troubleshooting/" class="md-nav__link">
+      <a href="protocols/causal-broadcast/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    2 · Causal broadcast
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="protocols/gossip/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    3 · Gossip
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4" >
+        
+          
+          <label class="md-nav__link" for="__nav_4" id="__nav_4_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Using Parsley
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_4_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_4">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Using Parsley
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="guide/getting-started/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Getting started
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="guide/streams/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Streams integration
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="guide/adoption/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Incremental adoption
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="guide/configuration/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Configuration
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="guide/troubleshooting/" class="md-nav__link">
         
   
   
@@ -683,18 +1071,36 @@
   
     
     
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+          
+        
+      
     
+    
+    
+      
+      
     
     
     <li class="md-nav__item md-nav__item--nested">
       
         
         
-        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5" >
         
           
-          <label class="md-nav__link" for="__nav_4" id="__nav_4_label" tabindex="0">
-            
+          <div class="md-nav__link md-nav__container">
+            <a href="api/" class="md-nav__link ">
+              
   
   
   <span class="md-ellipsis">
@@ -708,11 +1114,17 @@
   
   
 
-            <span class="md-nav__icon md-icon"></span>
-          </label>
+            </a>
+            
+              
+              <label class="md-nav__link " for="__nav_5" id="__nav_5_label" tabindex="0">
+                <span class="md-nav__icon md-icon"></span>
+              </label>
+            
+          </div>
         
-        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_4_label" aria-expanded="false">
-          <label class="md-nav__title" for="__nav_4">
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_5_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_5">
             <span class="md-nav__icon md-icon"></span>
             
   
@@ -729,306 +1141,7 @@
   
   
     <li class="md-nav__item">
-      <a href="api/" class="md-nav__link">
-        
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    API reference
-  
-
-    
-  </span>
-  
-  
-
-      </a>
-    </li>
-  
-
-              
-            
-              
-                
-  
-  
-  
-  
-    
-    
-    
-    
-    
-    <li class="md-nav__item md-nav__item--nested">
-      
-        
-        
-        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4_2" >
-        
-          
-          <label class="md-nav__link" for="__nav_4_2" id="__nav_4_2_label" tabindex="0">
-            
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    Internals
-  
-
-    
-  </span>
-  
-  
-
-            <span class="md-nav__icon md-icon"></span>
-          </label>
-        
-        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_4_2_label" aria-expanded="false">
-          <label class="md-nav__title" for="__nav_4_2">
-            <span class="md-nav__icon md-icon"></span>
-            
-  
-    Internals
-  
-
-          </label>
-          <ul class="md-nav__list" data-md-scrollfix>
-            
-              
-                
-  
-  
-  
-  
-    <li class="md-nav__item">
-      <a href="internals/overview/" class="md-nav__link">
-        
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    Overview
-  
-
-    
-  </span>
-  
-  
-
-      </a>
-    </li>
-  
-
-              
-            
-              
-                
-  
-  
-  
-  
-    <li class="md-nav__item">
-      <a href="internals/causal-consistency/" class="md-nav__link">
-        
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    Causal consistency model
-  
-
-    
-  </span>
-  
-  
-
-      </a>
-    </li>
-  
-
-              
-            
-              
-                
-  
-  
-  
-  
-    <li class="md-nav__item">
-      <a href="internals/invariants/" class="md-nav__link">
-        
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    Named invariants
-  
-
-    
-  </span>
-  
-  
-
-      </a>
-    </li>
-  
-
-              
-            
-              
-                
-  
-  
-  
-  
-    <li class="md-nav__item">
-      <a href="internals/naming/" class="md-nav__link">
-        
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    Naming
-  
-
-    
-  </span>
-  
-  
-
-      </a>
-    </li>
-  
-
-              
-            
-              
-                
-  
-  
-  
-  
-    <li class="md-nav__item">
-      <a href="internals/channels/" class="md-nav__link">
-        
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    The channels module
-  
-
-    
-  </span>
-  
-  
-
-      </a>
-    </li>
-  
-
-              
-            
-              
-                
-  
-  
-  
-  
-    <li class="md-nav__item">
-      <a href="internals/causal-broadcast/" class="md-nav__link">
-        
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    The causal-broadcast module
-  
-
-    
-  </span>
-  
-  
-
-      </a>
-    </li>
-  
-
-              
-            
-              
-                
-  
-  
-  
-  
-    <li class="md-nav__item">
-      <a href="internals/gossip/" class="md-nav__link">
-        
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    The gossip module
-  
-
-    
-  </span>
-  
-  
-
-      </a>
-    </li>
-  
-
-              
-            
-              
-                
-  
-  
-  
-  
-    <li class="md-nav__item">
-      <a href="internals/wire-format/" class="md-nav__link">
-        
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    Wire format
-  
-
-    
-  </span>
-  
-  
-
-      </a>
-    </li>
-  
-
-              
-            
-              
-                
-  
-  
-  
-  
-    <li class="md-nav__item">
-      <a href="internals/streams/" class="md-nav__link">
+      <a href="reference/processor/" class="md-nav__link">
         
   
   
@@ -1056,14 +1169,14 @@
   
   
     <li class="md-nav__item">
-      <a href="internals/benchmarks/" class="md-nav__link">
+      <a href="reference/wire-format/" class="md-nav__link">
         
   
   
   <span class="md-ellipsis">
     
   
-    Benchmarks
+    Wire format
   
 
     
@@ -1077,12 +1190,62 @@
 
               
             
-          </ul>
-        </nav>
-      
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="reference/naming/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Naming
+  
+
+    
+  </span>
+  
+  
+
+      </a>
     </li>
   
 
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="reference/bibliography/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Bibliography
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
               
             
           </ul>
@@ -1099,76 +1262,6 @@
               </div>
             
             
-              
-              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
-                <div class="md-sidebar__scrollwrap">
-                  <div class="md-sidebar__inner">
-                    
-
-<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
-  
-  
-  
-    
-  
-  
-    <label class="md-nav__title" for="__toc">
-      <span class="md-nav__icon md-icon"></span>
-      Table of contents
-    </label>
-    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
-      
-        <li class="md-nav__item">
-  <a href="#the-problem" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        The problem
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#how-it-works" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        How it works
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#public-api" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Public API
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#where-to-go-next" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Where to go next
-      
-    </span>
-  </a>
-  
-</li>
-      
-    </ul>
-  
-</nav>
-                  </div>
-                </div>
-              </div>
-            
           
           
             <div class="md-content" data-md-component="content">
@@ -1183,41 +1276,79 @@
 
 
 <h1 id="parsley">Parsley</h1>
-<p>Parsley is a library that adds causal delivery order to Kafka Streams processors. It builds Kafka
-Streams topologies from processors that enforce causal delivery order, and provides edge operations
-that stamp and propagate causal dependencies to and from plain Kafka clients.</p>
+<p>Parsley provides causal delivery order for Kafka Streams processors. Producers stamp each record
+with its causal dependencies, and Parsley holds back any record whose dependencies a consumer has
+not yet observed, releasing it once the consumer's frontier catches up. The guarantee is the one
+from the distributed-systems literature: if event A causally precedes event B, every processor
+that subscribes to both of their topics processes A before B.</p>
+<p>This site is organised around that guarantee. <a href="foundations/causal-consistency/">Foundations</a>
+develops the theory, <a href="protocols/">The three protocols</a> describes the layered algorithm
+that delivers it, and <a href="guide/getting-started/">Using Parsley</a> covers building and operating a
+topology.</p>
 <h2 id="the-problem">The problem</h2>
-<p>Kafka guarantees ordering only within a single partition. When a system derives decisions from
-events across several topics, that guarantee is not enough.</p>
+<p>Kafka orders records only within a single partition. A system that derives decisions from events
+across several topics is not protected by that guarantee.</p>
 <p>Consider two topics, <code>prices</code> and <code>orders</code>. A consumer reads a price from <code>prices-0</code> at offset 27
-and, on the basis of that price, produces a record to <code>orders</code>. A downstream consumer of <code>orders</code>
+and, on the basis of that price, writes a record to <code>orders</code>. A downstream consumer of <code>orders</code>
 processes that order while its own <code>prices</code> consumer has only reached offset 24. It is acting on an
-order whose causal premise, the price at offset 27, it has not yet seen.</p>
-<p>This is a causal violation, and it happens under normal Kafka operation whenever consumer lag on one
-topic races ahead of a write to another. The price update at offset 27 happened before the order, so
-a causally consistent system would process the price before the order regardless of which topic each
-arrived on. Kafka's per-partition ordering does not prevent the violation. Parsley does.</p>
-<p>The guarantee Parsley provides is causal delivery order: when the required conditions hold, if
-event A causally precedes event B, every Kafka Streams processor that subscribes to both topics
-processes A before B. In the consistency hierarchy this sits above eventual consistency and below
-linearisability. See <a href="streams/">Streams integration</a> for the required conditions.</p>
-<h2 id="how-it-works">How it works</h2>
-<p>Every record carries the producer's causal dependencies in a header. The dependencies are a snapshot
-of the offsets the producer had observed when it sent the record. When a record arrives, the
-consumer compares those dependencies against its own frontier, which is the set of offsets it has
-already delivered on each partition. If the frontier already satisfies the dependencies, the record
-is forwarded immediately. If it does not, the record is held in a causal buffer until the frontier
-catches up.</p>
-<p>The causal buffer is unbounded — there is no configuration that trades causal order for liveness. A
-record that cannot be evaluated at all (an undecodable payload or an undecodable causal-clock
-header) unconditionally fails the task rather than being delivered out of order; a dependency on a
-coordinate this node does not consume is ignored, soundly, with a metric. The <a href="troubleshooting/">Troubleshooting</a> page covers
-recovery, and <a href="configuration/">Configuration</a> covers the resulting metrics.</p>
-<h2 id="public-api">Public API</h2>
-<p>The library is a single jar built around one topology-level entry point and a set of edge operations.
-They share a common vocabulary of value types. Everything else — the processor decorator, the buffer,
-graceful-shutdown quiesce — is internal machinery <code>CausalStreams</code> composes for you;
-there is no low-level public entry point to build a topology around by hand.</p>
+order whose cause, the price at offset 27, it has not yet seen.</p>
+<p>In Lamport's terms the price update happened before the order, so a causally consistent system
+processes the price first regardless of which topic each record arrived on. The violation happens
+under ordinary Kafka operation whenever consumer lag on one topic races ahead of a write to
+another. Per-partition ordering does not prevent it. Parsley does.</p>
+<h2 id="where-the-guarantee-sits">Where the guarantee sits</h2>
+<p>Causal consistency is the strongest model that can be maintained without coordination. It sits
+above eventual consistency, which constrains no order, and below linearisability, which orders
+every event through a single global timeline. Parsley delivers causal consistency for the specific
+setting of Kafka Streams: the ordering unit is a <code>(topic, partition)</code> coordinate rather than a
+process, and dependencies are carried as broker offsets.
+<a href="foundations/causal-consistency/">Foundations</a> develops Lamport's happened-before relation,
+vector clocks, and this instantiation in full.</p>
+<h2 id="why-kafka-streams-needs-a-protocol">Why Kafka Streams needs a protocol</h2>
+<p>Classical causal-broadcast algorithms rest on two assumptions, and Kafka stream processing
+satisfies neither.</p>
+<ul>
+<li><strong>Total visibility.</strong> Every node that must enforce causal order receives every message. A Kafka
+  consumer subscribes to a subset of topics and partitions, so a dependency clock routinely names
+  coordinates the consumer has no channel for.</li>
+<li><strong>Reliable FIFO channels with stable identity.</strong> Vector-clock protocols assume dense, gap-free,
+  permanently-identified channels. Kafka partitions rebind identity when a topic is recreated,
+  expose offsets that commit markers and aborted records occupy but a consumer never returns,
+  truncate history under retention, and, in Parsley, deliver out of order within a partition.</li>
+</ul>
+<p>Parsley restores both assumptions and delivers under them, in three layers.</p>
+<h2 id="the-three-protocols">The three protocols</h2>
+<p>The implementation is a stack of three protocols, each presented in the module style of Cachin,
+Guerraoui, and Rodrigues: requests in, indications out, properties guaranteed. Each layer consumes
+the guarantees of the one below it and offers a clean assumption set to the one above.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>┌──────────────────────────────────────────────────────────────────┐
+<a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>│ gossip              clock dissemination / liveness                │
+<a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a>│   Chandy–Misra–Bryant null messages, Demers epidemic spread       │
+<a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a>├──────────────────────────────────────────────────────────────────┤
+<a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a>│ causal broadcast    receive / deliver in causal order             │
+<a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a>│   Birman–Schiper–Stephenson CBCAST                                │
+<a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a>├──────────────────────────────────────────────────────────────────┤
+<a id="__codelineno-0-8" name="__codelineno-0-8" href="#__codelineno-0-8"></a>│ channels            Kafka partition → reliable FIFO channel       │
+<a id="__codelineno-0-9" name="__codelineno-0-9" href="#__codelineno-0-9"></a>│   Hadzilacos–Toueg reliable channels                              │
+<a id="__codelineno-0-10" name="__codelineno-0-10" href="#__codelineno-0-10"></a>└──────────────────────────────────────────────────────────────────┘
+</code></pre></div>
+<ul>
+<li><strong><a href="protocols/channels/">Channels</a></strong> repairs the transport assumption. UUID-keyed coordinates,
+  seeding and bridging for density, the contiguous frontier, and own-output tracking turn Kafka
+  topic-partitions into the reliable FIFO channels the layer above assumes.</li>
+<li><strong><a href="protocols/causal-broadcast/">Causal broadcast</a></strong> is the core guarantee: the
+  Birman–Schiper–Stephenson delivery gate, the unbounded hold-back buffer, the release cascade, and
+  the single stamping site. It repairs the visibility assumption not by restoring total visibility
+  but by making the delivery predicate sound without it.</li>
+<li><strong><a href="protocols/gossip/">Gossip</a></strong> keeps causal progress observable through processors that emit
+  no business output, using protocol null messages, and quiesces on any topology shape including
+  cycles.</li>
+</ul>
+<p>The <a href="protocols/">protocols overview</a> gives the module boxes, the class map, and the cost
+model of the stack.</p>
+<h2 id="the-public-surface">The public surface</h2>
+<p>Parsley is a single jar built around one topology-level entry point and a set of edge operations
+over a shared vocabulary of value types.</p>
 <table>
 <thead>
 <tr>
@@ -1228,30 +1359,33 @@ there is no low-level public entry point to build a topology around by hand.</p>
 <tbody>
 <tr>
 <td><code>CausalStreamsBuilder</code> / <code>CausalTopology</code></td>
-<td>Declare a causal topology — exactly one stage: a set of source topics feeding a processor and forwarding to one or more sinks — the same way <code>StreamsBuilder</code>/<code>Topology</code> declare a plain Kafka Streams one.</td>
+<td>Declare a causal topology: one stage of source topics feeding a processor and forwarding to one or more sinks, the way <code>StreamsBuilder</code>/<code>Topology</code> declare a plain Kafka Streams one.</td>
 </tr>
 <tr>
 <td><code>CausalStreams</code></td>
-<td>The runtime: wraps the underlying <code>KafkaStreams</code> instance around the causal guarantee. Owns graceful causal drain on <code>close()</code>.</td>
+<td>The runtime: wraps the underlying <code>KafkaStreams</code> instance and owns graceful causal drain on <code>close()</code>.</td>
 </tr>
 <tr>
-<td><code>CausalClock.using</code> / <code>observe</code> / <code>stamp</code> / <code>merge</code></td>
-<td>Maintain a consumer-side frontier and stamp causal context onto records produced to plain Kafka clients at the topology edge. Topic names are resolved to their stable Kafka UUIDs internally.</td>
+<td><code>CausalClock</code></td>
+<td>Maintain a consumer-side frontier and stamp causal context onto records produced to plain Kafka clients at the topology edge. Topic names resolve to their stable Kafka UUIDs internally.</td>
 </tr>
 <tr>
 <td><code>CausalDeliveryException</code> hierarchy</td>
-<td>The typed exceptions Parsley's fail-closed protocol throws out of a task, for an uncaught-exception handler to decide on. See <a href="streams/#failure-handling">Streams integration</a>.</td>
+<td>The typed exceptions Parsley's fail-closed protocol throws out of a task, for an uncaught-exception handler to decide on. See <a href="guide/streams/#failure-handling">failure handling</a>.</td>
 </tr>
 </tbody>
 </table>
-<h2 id="where-to-go-next">Where to go next</h2>
+<p>There is no low-level public entry point to assemble a topology by hand. The processor decorator,
+the buffer, and the shutdown drain are internal machinery <code>CausalStreams</code> composes.</p>
+<h2 id="reading-paths">Reading paths</h2>
 <ul>
-<li><a href="concepts/">Concepts</a> covers causal dependencies, the frontier, and the buffer.</li>
-<li><a href="getting-started/">Getting started</a> covers installation and stamping causal context at the edge.</li>
-<li><a href="streams/">Streams integration</a> covers building a topology with <code>CausalStreamsBuilder</code>, the
-  preconditions, and recovery.</li>
-<li><a href="configuration/">Configuration</a> covers the <code>parsley.*</code> keys, header size, and metrics.</li>
-<li><a href="api/">API reference</a> is the full Javadoc.</li>
+<li>To understand the guarantee, read <a href="foundations/causal-consistency/">Foundations</a> and then
+  <a href="protocols/">The three protocols</a>.</li>
+<li>To build a topology, start with <a href="guide/getting-started/">Getting started</a> and
+  <a href="guide/streams/">Streams integration</a>.</li>
+<li>To operate one, see <a href="guide/configuration/">Configuration</a> and
+  <a href="guide/troubleshooting/">Troubleshooting</a>.</li>
+<li>The <a href="api/">API reference</a> is the full Javadoc.</li>
 </ul>
 
 
@@ -1289,13 +1423,13 @@ there is no low-level public entry point to build a topology around by hand.</p>
         
         
           
-          <a href="concepts/" class="md-footer__link md-footer__link--next" aria-label="Next: Concepts">
+          <a href="foundations/causal-consistency/" class="md-footer__link md-footer__link--next" aria-label="Next: Causal consistency">
             <div class="md-footer__title">
               <span class="md-footer__direction">
                 Next
               </span>
               <div class="md-ellipsis">
-                Concepts
+                Causal consistency
               </div>
             </div>
             <div class="md-footer__button md-icon">
@@ -1332,7 +1466,7 @@ there is no low-level public entry point to build a topology around by hand.</p>
     
       
       
-      <script id="__config" type="application/json">{"annotate": null, "base": ".", "features": ["navigation.top", "navigation.footer", "search.highlight", "content.code.copy"], "search": "assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": {"default": "latest", "provider": "mike"}}</script>
+      <script id="__config" type="application/json">{"annotate": null, "base": ".", "features": ["navigation.tabs", "navigation.indexes", "navigation.top", "navigation.footer", "toc.integrate", "search.highlight", "content.code.copy"], "search": "assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": {"default": "latest", "provider": "mike"}}</script>
     
     
       <script src="assets/javascripts/bundle.d7400e89.min.js"></script>
