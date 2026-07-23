@@ -7,6 +7,21 @@ All notable changes to this project are documented in this file. The format is b
 ## [Unreleased]
 
 ### Removed
+- **The JMH benchmark suite is deleted; `docs/performance.md` now asserts complexity from the
+  code instead of claiming empirical confirmation.** The suite (`HeaderEvaluationBenchmark`,
+  `BufferReleaseBenchmark`, `StateRestorationBenchmark`, their infra, the `benchmarks` Maven
+  profile, and `docs/internals/benchmarks.md`) had drifted after the three-protocol redesign into
+  measuring paths production no longer runs: frontier restore exercised a bare-clock `"f"` format
+  that the compound `ParsleyChannels` blob replaced, and the drain benchmarks ran channel state on
+  an in-memory double, skipping the per-advance blob persist. No CI leg ran it, so it verified
+  nothing while lending the docs false empirical authority. Capabilities dropped: the
+  run-it-on-your-hardware capacity-planning workflow (replaced by the advice to measure your own
+  topology end to end and watch the metrics), and empirical detection of complexity regressions
+  in the drain path (accepted risk; it was never exercised in CI). The rewritten page also
+  corrects the cost model for the redesign: the dominant per-record term is the O(C · w) channel
+  state persist on every advance, outbound clock width grows with the node's causal history
+  rather than being bounded by the task's source partitions, and gossip null-message volume is
+  documented as its own category.
 - **BREAKING: the `parsley.topology.validation` key is deleted; Parsley now has zero
   configuration keys.** The startup topology checks always run and always fail fast — there is no
   `warn`/`off` opt-down, and no `parsley.properties` key is read at all. Startup fails with

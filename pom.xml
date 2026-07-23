@@ -182,18 +182,6 @@
             <scope>test</scope>
         </dependency>
         <dependency>
-            <groupId>org.openjdk.jmh</groupId>
-            <artifactId>jmh-core</artifactId>
-            <version>1.37</version>
-            <scope>test</scope>
-        </dependency>
-        <dependency>
-            <groupId>org.openjdk.jmh</groupId>
-            <artifactId>jmh-generator-annprocess</artifactId>
-            <version>1.37</version>
-            <scope>test</scope>
-        </dependency>
-        <dependency>
             <groupId>org.slf4j</groupId>
             <artifactId>slf4j-simple</artifactId>
             <version>2.0.18</version>
@@ -202,52 +190,6 @@
     </dependencies>
 
     <profiles>
-        <!-- Benchmarks: mvn -Pbenchmarks test
-             Runs the JMH suite in-process on TopologyTestDriver + local RocksDB (no broker, no Docker).
-             Point RocksDB at the target machine's real storage for representative figures via:
-               -Dparsley.bench.state.store.dir=/mnt/nvme/parsley-bench
-             Pass JMH flags via:
-               -Dbenchmark.args="-wi 1 -i 1 -f 1 -p n=8 -p k=1 -p r=1" -->
-        <profile>
-            <id>benchmarks</id>
-            <properties>
-                <!-- Defaults; override on the command line with -Dproperty=value -->
-                <benchmark.args></benchmark.args>
-                <parsley.bench.state.store.dir></parsley.bench.state.store.dir>
-            </properties>
-            <build>
-                <plugins>
-                    <plugin>
-                        <groupId>org.codehaus.mojo</groupId>
-                        <artifactId>exec-maven-plugin</artifactId>
-                        <version>3.6.3</version>
-                        <executions>
-                            <execution>
-                                <id>run-benchmarks</id>
-                                <phase>test</phase>
-                                <!-- exec:exec forks a real JVM so that JMH's per-benchmark fork
-                                     can find ForkedMain on the classpath. exec:java runs in-process
-                                     within Maven and breaks JMH's classpath discovery. -->
-                                <goals><goal>exec</goal></goals>
-                                <configuration>
-                                    <executable>java</executable>
-                                    <classpathScope>test</classpathScope>
-                                    <arguments>
-                                        <argument>--enable-native-access=ALL-UNNAMED</argument>
-                                        <argument>-Dparsley.bench.state.store.dir=${parsley.bench.state.store.dir}</argument>
-                                        <argument>-Dbenchmark.args=${benchmark.args}</argument>
-                                        <argument>-classpath</argument>
-                                        <classpath/>
-                                        <argument>io.github.tobyjamesclements.parsley.BenchmarkRunner</argument>
-                                    </arguments>
-                                </configuration>
-                            </execution>
-                        </executions>
-                    </plugin>
-                </plugins>
-            </build>
-        </profile>
-
         <!-- Mutation testing: mvn -Pmutation test
              Reports land in target/pit-reports/index.html. Broker ITs (Testcontainers)
              are excluded from mutant-by-mutant execution. -->
@@ -386,9 +328,6 @@
                     <execution>
                         <id>default-compile</id>
                         <configuration>
-                            <!-- Main sources need only the Error Prone / NullAway stack; the JMH
-                                 annotation processor is test-only (benchmarks live in src/test) and
-                                 is listed on the default-testCompile execution below. -->
                             <annotationProcessorPaths>
                                 <path>
                                     <groupId>com.google.errorprone</groupId>
@@ -422,11 +361,6 @@
                         <id>default-testCompile</id>
                         <configuration>
                             <annotationProcessorPaths>
-                                <path>
-                                    <groupId>org.openjdk.jmh</groupId>
-                                    <artifactId>jmh-generator-annprocess</artifactId>
-                                    <version>1.37</version>
-                                </path>
                                 <path>
                                     <groupId>com.google.errorprone</groupId>
                                     <artifactId>error_prone_core</artifactId>

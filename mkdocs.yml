@@ -62,4 +62,3 @@ nav:
       - The gossip module: internals/gossip.md
       - Wire format: internals/wire-format.md
       - The processor: internals/streams.md
-      - Benchmarks: internals/benchmarks.md
