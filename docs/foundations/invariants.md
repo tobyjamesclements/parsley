@@ -1,11 +1,12 @@
 # Named invariants
 
-The implementation preserves a fixed set of named invariants. Javadoc, tests, and commit
-messages cite them by number (I1, I2, and so on), and this page is the definitive statement of
-each. The numbering is stable: a retired invariant keeps its number so historical citations
-stay readable. The environmental assumptions E1–E3 that these invariants' soundness arguments
-rest on are stated in the
-[causal consistency model](causal-consistency.md#environmental-assumptions).
+The implementation preserves a fixed set of named invariants: the properties the three protocols
+guarantee, in the module style's sense. Javadoc, tests, and commit messages cite them by number
+(I1, I2, and so on), and this page is the definitive statement of each. The numbering is stable: a
+retired invariant keeps its number so historical citations stay readable. The
+[delivery gate](delivery-gate.md) and the [causal consistency](causal-consistency.md) model give
+the arguments these invariants encode; the environmental assumptions E1–E3 they rest on are stated
+under [environmental assumptions](assumptions.md).
 
 ## I1 — causal delivery
 

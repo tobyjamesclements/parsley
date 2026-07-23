@@ -27,6 +27,15 @@ All notable changes to this project are documented in this file. The format is b
   present the three-protocol stack with its lineage before the public-API orientation. The
   `overview.html` typical-usage sample adopts the `c1`/`c2`/`c3` topic naming the rest of the
   docs samples use.
+- **The Foundations section is rewritten and split into four pages.** The former single
+  causal-consistency page becomes `Causal consistency` (happened-before, vector clocks, the two
+  classical assumptions Kafka breaks, the layer-to-assumption mapping, and the rejected epoch and
+  hold-until-admitted designs), a new `The delivery gate` page (the two-branch gate, why local
+  delivery is required, why ignoring unconsumed coordinates is sound, the outbound stamp, and the
+  fail-closed violation model), and a new `Environmental assumptions` page (E1–E3). `Named
+  invariants` gains an academic framing. Primary sources are cited as page footnotes into the new
+  Bibliography. Inbound links across the site are repointed: gate and stamp references now target
+  the delivery-gate page and E1–E3 references the assumptions page.
 
 ### Removed
 - **The JMH benchmark suite is deleted; `docs/performance.md` now asserts complexity from the

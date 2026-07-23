@@ -83,7 +83,7 @@ unstamped output severs the causal chain: its outputs are causally minimal by de
 severance is undetectable at runtime, because an unstamped record is indistinguishable from a
 genuine external event. Producers that only *originate* events need no participation — a record
 that stamps nothing claims nothing and is delivered immediately. This is environmental assumption
-E3 of the [causal consistency model](../foundations/causal-consistency.md#environmental-assumptions).
+E3 of the [causal consistency model](../foundations/assumptions.md).
 
 **Forward uniformly to all children.** A causal processor advertises its progress downstream by
 stamping its business output, or by emitting a protocol null message when the delegate forwards nothing
@@ -223,5 +223,5 @@ configuration keys at all; startup fails if any `parsley.*` key is present.
   seeded only on a genuine first start (offset expiry is not a first start). Mid-replay expiry is
   therefore a loud crash-loop until an operator resets — a liveness stall by design, never a
   reorder. This is environmental assumption E2 of the
-  [causal consistency model](../foundations/causal-consistency.md#environmental-assumptions); see
+  [causal consistency model](../foundations/assumptions.md); see
   [Troubleshooting](troubleshooting.md#retention-outran-a-causal-consumer) for recovery.

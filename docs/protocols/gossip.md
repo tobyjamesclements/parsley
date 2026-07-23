@@ -69,7 +69,7 @@ retention consequence: a sink segment holding only null messages looks old to br
 retention exactly when its triggers are old — a backfill — and during a backfill the business
 outputs on the same sink carry the same old timestamps, so retention on causal topics must already
 cover the backfill depth. That is
-[E2's retention-sizing constraint](../foundations/causal-consistency.md#environmental-assumptions),
+[E2's retention-sizing constraint](../foundations/assumptions.md),
 restated, not a new one — and an undersized retention fails in the safe direction: expired null
 messages below a lagging consumer's position hit `AutoOffsetReset.none()`'s loud stall rather than
 silently corrupting downstream event-time results.

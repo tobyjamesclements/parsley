@@ -52,7 +52,7 @@ different record — recreation reads as history loss, never as reordering. A ba
 topic-identity poll (`ParsleyTopicIdentityWatch`) enforces the per-lifetime binding for inputs and
 sinks alike: a mid-run UUID change fails every task fast before it can ingest or stamp under the
 stale identity. This is environmental assumption E1 of the
-[causal consistency model](../foundations/causal-consistency.md#environmental-assumptions).
+[causal consistency model](../foundations/assumptions.md).
 
 ## Density: making a partition look gap-free
 

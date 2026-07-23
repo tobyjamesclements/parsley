@@ -34,7 +34,7 @@ unstamped records. Note the resulting contract: causal order is guaranteed only 
 every intermediate processor stamps, so a service that consumes stamped topics and re-produces
 unstamped output severs the causal chain for everything downstream of it. See the
 [participation precondition](streams.md#preconditions) and environmental assumption E3 of the
-[causal consistency model](../foundations/causal-consistency.md#environmental-assumptions).
+[causal consistency model](../foundations/assumptions.md).
 
 ## Notes
 

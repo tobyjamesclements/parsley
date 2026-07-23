@@ -47,6 +47,8 @@ nav:
   - Home: index.md
   - Foundations:
     - Causal consistency: foundations/causal-consistency.md
+    - The delivery gate: foundations/delivery-gate.md
+    - Environmental assumptions: foundations/assumptions.md
     - Named invariants: foundations/invariants.md
   - The three protocols:
     - Overview: protocols/index.md
