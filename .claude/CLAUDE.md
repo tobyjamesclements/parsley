@@ -1,9 +1,9 @@
 # Parsley project instructions
 
 Parsley provides causal delivery order for Kafka Streams processors. Single Maven module,
-single package `io.github.tobyjamesclements.parsley`, Java 21. The design documentation in
-`docs/internals/` is authoritative for the current architecture; start with
-`docs/internals/overview.md`.
+single package `io.github.tobyjamesclements.parsley`, Java 21. The design documentation under
+`docs/` is authoritative for the current architecture; start with `docs/foundations/` (the causal
+model) and `docs/protocols/` (the three protocols, with the overview at `docs/protocols/index.md`).
 
 ## Build and verification
 
@@ -22,7 +22,7 @@ single package `io.github.tobyjamesclements.parsley`, Java 21. The design docume
 - `Causal*` = public API, `Parsley*` = package-private internals; seam implementations are
   named for their backing (`KafkaTopics*`, `StoreBacked*`). Codified in `package-info.java`.
 - Run every new or renamed identifier through the academic naming test in
-  `docs/internals/naming.md`: exact literature match → adopt and cite; near miss → do not
+  `docs/reference/naming.md`: exact literature match → adopt and cite; near miss → do not
   borrow; Kafka-specific → mark as coinage. Record decisions in that page's register.
 - Tests and docs samples name channels/topics `c1..cN`, messages `m1..mN`, and processor
   nodes `p1..pN`. Scenario-named broker ITs are exempt.
@@ -46,7 +46,7 @@ single package `io.github.tobyjamesclements.parsley`, Java 21. The design docume
 
 - Causal safety is inviolable: never deliver a record before a real cause, no timeout
   guessing; block or fault rather than reorder. The invariant catalogue is
-  `docs/internals/invariants.md` (I1–I9, cited throughout Javadoc and tests).
+  `docs/foundations/invariants.md` (I1–I9, cited throughout Javadoc and tests).
 - No silent feature drops: a refactor carries existing capabilities over or explicitly lists
   what it drops and why.
 - Pre-1.0: prefer clean breaking changes over deprecation aliases.
@@ -82,6 +82,6 @@ single package `io.github.tobyjamesclements.parsley`, Java 21. The design docume
   fragments. Do not duplicate examples across pages.
 - A "docs audit" covers `docs/**/*.md`, `README.md`, and the root `overview.html`, not just
   Javadoc.
-- Code samples in `docs/getting-started.md` and `docs/streams.md` are compile-pinned by
+- Code samples in `docs/guide/getting-started.md` and `docs/guide/streams.md` are compile-pinned by
   `DocsSamplesTest` via verbatim mirrors; the doc fences carry HTML comments naming their
   mirrors. Keep them in sync when editing either side.
