@@ -537,14 +537,14 @@
   
   
     <li class="md-nav__item">
-      <a href="migration/" class="md-nav__link">
+      <a href="adoption/" class="md-nav__link">
         
   
   
   <span class="md-ellipsis">
     
   
-    Migration
+    Incremental adoption
   
 
     
@@ -860,14 +860,126 @@
   
   
     <li class="md-nav__item">
-      <a href="internals/topology-epochs/" class="md-nav__link">
+      <a href="internals/invariants/" class="md-nav__link">
         
   
   
   <span class="md-ellipsis">
     
   
-    Topology epochs
+    Named invariants
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="internals/naming/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Naming
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="internals/channels/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    The channels module
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="internals/causal-broadcast/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    The causal-broadcast module
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="internals/gossip/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    The gossip module
   
 
     
@@ -896,34 +1008,6 @@
     
   
     Wire format
-  
-
-    
-  </span>
-  
-  
-
-      </a>
-    </li>
-  
-
-              
-            
-              
-                
-  
-  
-  
-  
-    <li class="md-nav__item">
-      <a href="internals/engine/" class="md-nav__link">
-        
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    The engine
   
 
     
@@ -1125,14 +1209,14 @@ already delivered on each partition. If the frontier already satisfies the depen
 is forwarded immediately. If it does not, the record is held in a causal buffer until the frontier
 catches up.</p>
 <p>The causal buffer is unbounded — there is no configuration that trades causal order for liveness. A
-record whose dependencies are proven impossible to satisfy (an undecodable payload or dependencies
-header, or a dependency naming a coordinate this node has no channel for) unconditionally fails the
-task rather than being delivered out of order. The <a href="troubleshooting/">Troubleshooting</a> page covers
+record that cannot be evaluated at all (an undecodable payload or an undecodable causal-clock
+header) unconditionally fails the task rather than being delivered out of order; a dependency on a
+coordinate this node does not consume is ignored, soundly, with a metric. The <a href="troubleshooting/">Troubleshooting</a> page covers
 recovery, and <a href="configuration/">Configuration</a> covers the resulting metrics.</p>
 <h2 id="public-api">Public API</h2>
 <p>The library is a single jar built around one topology-level entry point and a set of edge operations.
 They share a common vocabulary of value types. Everything else — the processor decorator, the buffer,
-graceful-shutdown quiesce, epoch coordination — is internal machinery <code>CausalStreams</code> composes for you;
+graceful-shutdown quiesce — is internal machinery <code>CausalStreams</code> composes for you;
 there is no low-level public entry point to build a topology around by hand.</p>
 <table>
 <thead>
@@ -1144,15 +1228,19 @@ there is no low-level public entry point to build a topology around by hand.</p>
 <tbody>
 <tr>
 <td><code>CausalStreamsBuilder</code> / <code>CausalTopology</code></td>
-<td>Declare a causal topology — one or more stages, each a set of source topics feeding a processor and forwarding to sink(s) — the same way <code>StreamsBuilder</code>/<code>Topology</code> declare a plain Kafka Streams one.</td>
+<td>Declare a causal topology — exactly one stage: a set of source topics feeding a processor and forwarding to one or more sinks — the same way <code>StreamsBuilder</code>/<code>Topology</code> declare a plain Kafka Streams one.</td>
 </tr>
 <tr>
 <td><code>CausalStreams</code></td>
-<td>The runtime: wraps the underlying <code>KafkaStreams</code> instance around the causal guarantee. Owns graceful causal drain on <code>close()</code> and, when <code>parsley.coordination.epoch-events-topic</code> is configured, leaderless topology-epoch coordination — evolve a running topology through an epoch boundary with <code>requestEpochTransition()</code>.</td>
+<td>The runtime: wraps the underlying <code>KafkaStreams</code> instance around the causal guarantee. Owns graceful causal drain on <code>close()</code>.</td>
 </tr>
 <tr>
-<td><code>CausalDependencies.using</code> / <code>observe</code> / <code>stamp</code> / <code>merge</code></td>
+<td><code>CausalClock.using</code> / <code>observe</code> / <code>stamp</code> / <code>merge</code></td>
 <td>Maintain a consumer-side frontier and stamp causal context onto records produced to plain Kafka clients at the topology edge. Topic names are resolved to their stable Kafka UUIDs internally.</td>
+</tr>
+<tr>
+<td><code>CausalDeliveryException</code> hierarchy</td>
+<td>The typed exceptions Parsley's fail-closed protocol throws out of a task, for an uncaught-exception handler to decide on. See <a href="streams/#failure-handling">Streams integration</a>.</td>
 </tr>
 </tbody>
 </table>
@@ -1162,7 +1250,7 @@ there is no low-level public entry point to build a topology around by hand.</p>
 <li><a href="getting-started/">Getting started</a> covers installation and stamping causal context at the edge.</li>
 <li><a href="streams/">Streams integration</a> covers building a topology with <code>CausalStreamsBuilder</code>, the
   preconditions, and recovery.</li>
-<li><a href="configuration/">Configuration</a> covers the remaining <code>parsley.*</code> keys, header size, and metrics.</li>
+<li><a href="configuration/">Configuration</a> covers the <code>parsley.*</code> keys, header size, and metrics.</li>
 <li><a href="api/">API reference</a> is the full Javadoc.</li>
 </ul>
 

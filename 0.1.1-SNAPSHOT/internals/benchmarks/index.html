@@ -446,14 +446,14 @@
   
   
     <li class="md-nav__item">
-      <a href="../../migration/" class="md-nav__link">
+      <a href="../../adoption/" class="md-nav__link">
         
   
   
   <span class="md-ellipsis">
     
   
-    Migration
+    Incremental adoption
   
 
     
@@ -773,14 +773,126 @@
   
   
     <li class="md-nav__item">
-      <a href="../topology-epochs/" class="md-nav__link">
+      <a href="../invariants/" class="md-nav__link">
         
   
   
   <span class="md-ellipsis">
     
   
-    Topology epochs
+    Named invariants
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../naming/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Naming
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../channels/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    The channels module
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../causal-broadcast/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    The causal-broadcast module
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../gossip/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    The gossip module
   
 
     
@@ -809,34 +921,6 @@
     
   
     Wire format
-  
-
-    
-  </span>
-  
-  
-
-      </a>
-    </li>
-  
-
-              
-            
-              
-                
-  
-  
-  
-  
-    <li class="md-nav__item">
-      <a href="../engine/" class="md-nav__link">
-        
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    The engine
   
 
     
@@ -1392,12 +1476,12 @@ reassignment:</p>
 <tbody>
 <tr>
 <td><code>frontierRestore</code></td>
-<td>Single RocksDB point read + <code>ParsleyClock.fromBytes()</code></td>
+<td>Single RocksDB point read + <code>ParsleyVectorClock.fromBytes()</code></td>
 <td>O(1)</td>
 </tr>
 <tr>
 <td><code>bufferRestore</code></td>
-<td><code>StoreBackedBufferStore</code> constructor scan + <code>ParsleyEngine</code> candidate-index rebuild</td>
+<td><code>StoreBackedBufferStore</code> constructor scan + <code>ParsleyCausalBroadcast</code> candidate-index rebuild</td>
 <td>O(n)</td>
 </tr>
 </tbody>

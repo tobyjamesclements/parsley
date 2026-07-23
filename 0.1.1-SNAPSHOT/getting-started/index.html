@@ -552,14 +552,14 @@
   
   
     <li class="md-nav__item">
-      <a href="../migration/" class="md-nav__link">
+      <a href="../adoption/" class="md-nav__link">
         
   
   
   <span class="md-ellipsis">
     
   
-    Migration
+    Incremental adoption
   
 
     
@@ -875,14 +875,126 @@
   
   
     <li class="md-nav__item">
-      <a href="../internals/topology-epochs/" class="md-nav__link">
+      <a href="../internals/invariants/" class="md-nav__link">
         
   
   
   <span class="md-ellipsis">
     
   
-    Topology epochs
+    Named invariants
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../internals/naming/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Naming
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../internals/channels/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    The channels module
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../internals/causal-broadcast/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    The causal-broadcast module
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../internals/gossip/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    The gossip module
   
 
     
@@ -911,34 +1023,6 @@
     
   
     Wire format
-  
-
-    
-  </span>
-  
-  
-
-      </a>
-    </li>
-  
-
-              
-            
-              
-                
-  
-  
-  
-  
-    <li class="md-nav__item">
-      <a href="../internals/engine/" class="md-nav__link">
-        
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    The engine
   
 
     
@@ -1127,14 +1211,19 @@
 <h1 id="getting-started">Getting started</h1>
 <h2 id="prerequisites">Prerequisites</h2>
 <ul>
-<li>Java 25 (<code>--release 25</code>)</li>
+<li>Java 21 or later (the artifact is compiled with <code>--release 21</code>; building Parsley from source
+  needs JDK 25)</li>
 <li>Maven 3.9 or later, or the included <code>./mvnw</code> wrapper</li>
+<li>Kafka brokers version 3.7.0 or later. 3.7.0 is the minimum supported broker version; the
+  integration suite runs against both 3.7.0 and the current stable broker line.</li>
 </ul>
 <h2 id="installation">Installation</h2>
 <p>Parsley is published to <a href="https://central.sonatype.com/artifact/io.github.tobyjamesclements/parsley">Maven Central</a>.
-The current version is a snapshot, so it lives in Central's snapshot repository rather than the main
-one. No credentials are needed, because snapshots are publicly readable. Declare the repository and
-the dependency in your <code>pom.xml</code>.</p>
+The latest tagged release is <code>0.1.0</code>, available from Central's default repository with no extra
+configuration. This documentation describes the current development version, <code>0.1.1-SNAPSHOT</code>,
+which lives in Central's snapshot repository. No credentials are needed, because snapshots are
+publicly readable. To use the snapshot, declare the repository and the dependency in your
+<code>pom.xml</code>.</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="nt">&lt;repositories&gt;</span>
 <a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="w">  </span><span class="nt">&lt;repository&gt;</span>
 <a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a><span class="w">    </span><span class="nt">&lt;id&gt;</span>central-snapshots<span class="nt">&lt;/id&gt;</span>
@@ -1150,42 +1239,48 @@ the dependency in your <code>pom.xml</code>.</p>
 <a id="__codelineno-0-13" name="__codelineno-0-13" href="#__codelineno-0-13"></a><span class="w">  </span><span class="nt">&lt;version&gt;</span>0.1.1-SNAPSHOT<span class="nt">&lt;/version&gt;</span>
 <a id="__codelineno-0-14" name="__codelineno-0-14" href="#__codelineno-0-14"></a><span class="nt">&lt;/dependency&gt;</span>
 </code></pre></div>
-<p>Once a tagged <code>0.1.0</code> release ships, this repository block is no longer needed, because Central's
-default repository, which is already in every Maven setup, covers real releases.</p>
-<p><code>parsley</code> pulls in <code>kafka-streams</code> and <code>kafka-clients</code> transitively.</p>
+<p><code>parsley</code> pulls in <code>kafka-clients</code> transitively. <code>kafka-streams</code> is an optional dependency and does
+not arrive transitively: an application using the <code>CausalStreams</code> runtime declares <code>kafka-streams</code>
+itself (a Kafka Streams application already does), while edge stamping with <code>CausalClock</code> needs only
+<code>kafka-clients</code>.</p>
 <h2 id="ordering-records-causally">Ordering records causally</h2>
 <p>Parsley delivers records in causal order inside a Kafka Streams topology. Declare your topology with
 <code>CausalStreamsBuilder</code>, binding your own processor to a causal-decorated stage with <code>.process(...)</code>,
 and it holds any record whose dependencies have not yet been observed, releasing the record once the
-frontier catches up. See <a href="../streams/">Streams integration</a> for the full setup.</p>
+frontier catches up. Create every topic the topology touches — sink topics included — before the
+first start: a declared sink that does not exist fails startup, because causal stamping depends on
+its resolved identity. See <a href="../streams/">Streams integration</a> for the full setup.</p>
 <h2 id="stamping-causal-context-onto-produced-records">Stamping causal context onto produced records</h2>
-<p>At the edges of a topology, where plain Kafka producers feed records in, a node has no Parsley engine
-maintaining a frontier for it, so it maintains one itself. A <code>CausalDependencies</code> value is that
+<p>At the edges of a topology, where plain Kafka producers feed records in, a node has no Parsley
+processor maintaining a frontier for it, so it maintains one itself. A <code>CausalClock</code> value is that
 frontier: the running set of positions the node has observed. Bind one with <code>using</code>, giving it the
 Kafka client configuration to resolve topic UUIDs through, fold in each record you consume with
 <code>observe</code>, and attach the result to each record you produce with <code>stamp</code>. Topic UUID resolution is
 entirely internal: each distinct topic name is resolved (and cached) the first time it is needed,
 through a Kafka admin client Parsley opens and closes on its own — nothing to construct or close
 yourself.</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="c1">// the trigger&#39;s own dependencies plus its own position</span>
-<a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a><span class="n">CausalDependencies</span><span class="w"> </span><span class="n">deps</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">CausalDependencies</span><span class="p">.</span><span class="na">using</span><span class="p">(</span><span class="n">props</span><span class="p">).</span><span class="na">observe</span><span class="p">(</span><span class="n">trigger</span><span class="p">);</span>
-<a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a><span class="n">producer</span><span class="p">.</span><span class="na">send</span><span class="p">(</span><span class="n">deps</span><span class="p">.</span><span class="na">stamp</span><span class="p">(</span><span class="k">new</span><span class="w"> </span><span class="n">ProducerRecord</span><span class="o">&lt;&gt;</span><span class="p">(</span><span class="s">&quot;orders&quot;</span><span class="p">,</span><span class="w"> </span><span class="n">key</span><span class="p">,</span><span class="w"> </span><span class="n">value</span><span class="p">)));</span>
+<!-- Mirrored verbatim by DocsSamplesTest#relaySample; keep the sample and the test in sync. -->
+<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="c1">// m1&#39;s own dependencies plus its own position</span>
+<a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a><span class="n">CausalClock</span><span class="w"> </span><span class="n">deps</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">CausalClock</span><span class="p">.</span><span class="na">using</span><span class="p">(</span><span class="n">props</span><span class="p">).</span><span class="na">observe</span><span class="p">(</span><span class="n">m1</span><span class="p">);</span>
+<a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a><span class="n">producer</span><span class="p">.</span><span class="na">send</span><span class="p">(</span><span class="n">deps</span><span class="p">.</span><span class="na">stamp</span><span class="p">(</span><span class="k">new</span><span class="w"> </span><span class="n">ProducerRecord</span><span class="o">&lt;&gt;</span><span class="p">(</span><span class="s">&quot;c3&quot;</span><span class="p">,</span><span class="w"> </span><span class="n">key</span><span class="p">,</span><span class="w"> </span><span class="n">value</span><span class="p">)));</span>
 </code></pre></div>
 <p><code>observe</code> folds in the dependencies the consumed record arrived with, together with the consumed
-record's own position. A downstream causal processor therefore waits until it has observed <code>trigger</code>
+record's own position. A downstream causal processor therefore waits until it has observed <code>m1</code>
 before it delivers anything stamped here. The resolver bound by <code>using</code> carries through each
 <code>observe</code>, so a fan-in — where an output is caused by several inputs — chains an <code>observe</code> per input.</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="n">CausalDependencies</span><span class="w"> </span><span class="n">deps</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">CausalDependencies</span><span class="p">.</span><span class="na">using</span><span class="p">(</span><span class="n">props</span><span class="p">)</span>
-<a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="w">        </span><span class="p">.</span><span class="na">observe</span><span class="p">(</span><span class="n">priceUpdate</span><span class="p">)</span>
-<a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a><span class="w">        </span><span class="p">.</span><span class="na">observe</span><span class="p">(</span><span class="n">inventoryChange</span><span class="p">);</span>
-<a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a><span class="n">producer</span><span class="p">.</span><span class="na">send</span><span class="p">(</span><span class="n">deps</span><span class="p">.</span><span class="na">stamp</span><span class="p">(</span><span class="n">record</span><span class="p">));</span>
+<!-- Mirrored verbatim by DocsSamplesTest#fanInSample; keep the sample and the test in sync. -->
+<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="n">CausalClock</span><span class="w"> </span><span class="n">deps</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">CausalClock</span><span class="p">.</span><span class="na">using</span><span class="p">(</span><span class="n">props</span><span class="p">)</span>
+<a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="w">        </span><span class="p">.</span><span class="na">observe</span><span class="p">(</span><span class="n">m1</span><span class="p">)</span>
+<a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a><span class="w">        </span><span class="p">.</span><span class="na">observe</span><span class="p">(</span><span class="n">m2</span><span class="p">);</span>
+<a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a><span class="n">producer</span><span class="p">.</span><span class="na">send</span><span class="p">(</span><span class="n">deps</span><span class="p">.</span><span class="na">stamp</span><span class="p">(</span><span class="n">m3</span><span class="p">));</span>
 </code></pre></div>
 <p>A stateful node whose output reflects everything it has consumed keeps a single instance and
 <code>observe</code>s into it across records, so each record it produces carries the node's full frontier.</p>
 <p>To declare a dependency on a specific upstream position that you did not consume, build one
 explicitly.</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="n">CausalDependencies</span><span class="w"> </span><span class="n">deps</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">CausalDependencies</span><span class="p">.</span><span class="na">builder</span><span class="p">(</span><span class="n">props</span><span class="p">)</span>
-<a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a><span class="w">        </span><span class="p">.</span><span class="na">require</span><span class="p">(</span><span class="s">&quot;prices&quot;</span><span class="p">,</span><span class="w"> </span><span class="cm">/* partition */</span><span class="w"> </span><span class="mi">0</span><span class="p">,</span><span class="w"> </span><span class="cm">/* offset */</span><span class="w"> </span><span class="mi">42</span><span class="p">)</span>
+<!-- Mirrored verbatim by DocsSamplesTest#builderSample; keep the sample and the test in sync. -->
+<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="n">CausalClock</span><span class="w"> </span><span class="n">deps</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">CausalClock</span><span class="p">.</span><span class="na">builder</span><span class="p">(</span><span class="n">props</span><span class="p">)</span>
+<a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a><span class="w">        </span><span class="p">.</span><span class="na">require</span><span class="p">(</span><span class="s">&quot;c1&quot;</span><span class="p">,</span><span class="w"> </span><span class="cm">/* partition */</span><span class="w"> </span><span class="mi">0</span><span class="p">,</span><span class="w"> </span><span class="cm">/* offset */</span><span class="w"> </span><span class="mi">42</span><span class="p">)</span>
 <a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a><span class="w">        </span><span class="p">.</span><span class="na">build</span><span class="p">();</span>
 </code></pre></div>
 <p>Tests without a live broker can bind a resolver over a fixed topic-name-to-UUID map instead, with the
@@ -1193,16 +1288,17 @@ explicitly.</p>
 <p>The serialised dependencies header grows with the number of topic-partitions it names. See the
 <a href="../configuration/#header-size">header size note</a> in Configuration.</p>
 <h2 id="propagating-causal-context-across-services">Propagating causal context across services</h2>
-<p>A <code>CausalDependencies</code> value is a portable causal token. To gate a read in a downstream service on
+<p>A <code>CausalClock</code> value is a portable causal token. To gate a read in a downstream service on
 what an upstream record depended on, serialise the dependencies and send them over your transport.</p>
+<!-- Mirrored verbatim by DocsSamplesTest#portableTokenSample; keep the sample and the test in sync. -->
 <div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a><span class="c1">// Sender. Extract the relevant dependencies and serialise them.</span>
-<a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a><span class="n">CausalDependencies</span><span class="w"> </span><span class="n">context</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">CausalDependencies</span><span class="p">.</span><span class="na">fromRecord</span><span class="p">(</span><span class="n">consumedRecord</span><span class="p">)</span>
-<a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a><span class="w">        </span><span class="p">.</span><span class="na">orElse</span><span class="p">(</span><span class="n">CausalDependencies</span><span class="p">.</span><span class="na">empty</span><span class="p">());</span>
+<a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a><span class="n">CausalClock</span><span class="w"> </span><span class="n">context</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">CausalClock</span><span class="p">.</span><span class="na">fromRecord</span><span class="p">(</span><span class="n">m1</span><span class="p">)</span>
+<a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a><span class="w">        </span><span class="p">.</span><span class="na">orElse</span><span class="p">(</span><span class="n">CausalClock</span><span class="p">.</span><span class="na">empty</span><span class="p">());</span>
 <a id="__codelineno-4-4" name="__codelineno-4-4" href="#__codelineno-4-4"></a><span class="kt">byte</span><span class="o">[]</span><span class="w"> </span><span class="n">token</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">context</span><span class="p">.</span><span class="na">toBytes</span><span class="p">();</span>
 <a id="__codelineno-4-5" name="__codelineno-4-5" href="#__codelineno-4-5"></a><span class="c1">// Send the token over HTTP, gRPC, or another transport, applying your own encryption.</span>
 <a id="__codelineno-4-6" name="__codelineno-4-6" href="#__codelineno-4-6"></a>
 <a id="__codelineno-4-7" name="__codelineno-4-7" href="#__codelineno-4-7"></a><span class="c1">// Receiver. Rebuild the dependencies.</span>
-<a id="__codelineno-4-8" name="__codelineno-4-8" href="#__codelineno-4-8"></a><span class="n">CausalDependencies</span><span class="w"> </span><span class="n">required</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">CausalDependencies</span><span class="p">.</span><span class="na">fromBytes</span><span class="p">(</span><span class="n">receivedToken</span><span class="p">);</span>
+<a id="__codelineno-4-8" name="__codelineno-4-8" href="#__codelineno-4-8"></a><span class="n">CausalClock</span><span class="w"> </span><span class="n">required</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">CausalClock</span><span class="p">.</span><span class="na">fromBytes</span><span class="p">(</span><span class="n">receivedToken</span><span class="p">);</span>
 </code></pre></div>
 <p>Parsley ships no encryption or transport layer. Securing and routing the token is the application's
 responsibility.</p>

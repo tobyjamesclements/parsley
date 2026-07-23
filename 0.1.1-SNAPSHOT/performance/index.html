@@ -11,7 +11,7 @@
       
       
       
-        <link rel="prev" href="../migration/">
+        <link rel="prev" href="../adoption/">
       
       
         <link rel="next" href="../troubleshooting/">
@@ -448,14 +448,14 @@
   
   
     <li class="md-nav__item">
-      <a href="../migration/" class="md-nav__link">
+      <a href="../adoption/" class="md-nav__link">
         
   
   
   <span class="md-ellipsis">
     
   
-    Migration
+    Incremental adoption
   
 
     
@@ -592,15 +592,15 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
-  <a href="#three-latency-categories" class="md-nav__link">
+  <a href="#four-latency-categories" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Three latency categories
+        Four latency categories
       
     </span>
   </a>
   
-    <nav class="md-nav" aria-label="Three latency categories">
+    <nav class="md-nav" aria-label="Four latency categories">
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
@@ -680,6 +680,17 @@
     <span class="md-ellipsis">
       
         3. Recovery latency
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#4-crossing-wait-produce-serialization" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        4. Crossing-wait produce serialization
       
     </span>
   </a>
@@ -942,14 +953,126 @@
   
   
     <li class="md-nav__item">
-      <a href="../internals/topology-epochs/" class="md-nav__link">
+      <a href="../internals/invariants/" class="md-nav__link">
         
   
   
   <span class="md-ellipsis">
     
   
-    Topology epochs
+    Named invariants
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../internals/naming/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Naming
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../internals/channels/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    The channels module
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../internals/causal-broadcast/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    The causal-broadcast module
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../internals/gossip/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    The gossip module
   
 
     
@@ -978,34 +1101,6 @@
     
   
     Wire format
-  
-
-    
-  </span>
-  
-  
-
-      </a>
-    </li>
-  
-
-              
-            
-              
-                
-  
-  
-  
-  
-    <li class="md-nav__item">
-      <a href="../internals/engine/" class="md-nav__link">
-        
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    The engine
   
 
     
@@ -1117,15 +1212,15 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
-  <a href="#three-latency-categories" class="md-nav__link">
+  <a href="#four-latency-categories" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Three latency categories
+        Four latency categories
       
     </span>
   </a>
   
-    <nav class="md-nav" aria-label="Three latency categories">
+    <nav class="md-nav" aria-label="Four latency categories">
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
@@ -1211,6 +1306,17 @@
   
 </li>
         
+          <li class="md-nav__item">
+  <a href="#4-crossing-wait-produce-serialization" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        4. Crossing-wait produce serialization
+      
+    </span>
+  </a>
+  
+</li>
+        
       </ul>
     </nav>
   
@@ -1270,7 +1376,7 @@ specifications. To get numbers meaningful for your capacity planning, run the be
 your own environment, as described in <a href="#running-the-benchmarks">Running the benchmarks</a>.</p>
 </div>
 <hr />
-<h2 id="three-latency-categories">Three latency categories</h2>
+<h2 id="four-latency-categories">Four latency categories</h2>
 <h3 id="1-per-record-header-overhead">1. Per-record header overhead</h3>
 <p>Every record Parsley handles requires three operations: deserialise the incoming dependency header,
 check whether the frontier satisfies it, and stamp the updated clock onto the outgoing record.</p>
@@ -1321,7 +1427,7 @@ controlling per-record overhead.</p>
 <p class="admonition-title">Controlling clock width</p>
 <p>In Streams, Parsley stamps the per-task frontier automatically. The width is bounded by the
 number of source partitions assigned to the task, which is usually small. When you only need to
-express a dependency on a single upstream record, prefer <code>CausalDependencies.fromRecord(trigger)</code>,
+express a dependency on a single upstream record, prefer <code>CausalClock.fromRecord(trigger)</code>,
 because it carries a much narrower clock than a manually built, wide dependency set.</p>
 </div>
 <hr />
@@ -1534,6 +1640,28 @@ accumulates before a restart, not a configurable limit. Keep an eye on the <code
 topology drives up both restart cost and steady-state buffer footprint.</p>
 </div>
 <hr />
+<h3 id="4-crossing-wait-produce-serialization">4. Crossing-wait produce serialization</h3>
+<p>Within one task invocation, a second forward is causally after the first even when the two go to
+different sink topics or partitions, so before stamping each business forward the task waits for
+every pending own-sink send to be acknowledged (the crossing wait — see the
+<a href="../internals/channels/#own-outputs">own outputs section</a> of the channels internals). The waits
+serialize a multi-forward invocation on producer acknowledgement latency: forward k+1 does not
+stamp until forward k's batch is acknowledged, so a delegate forwarding N records per input pays
+roughly</p>
+<blockquote>
+<p><strong>N × (linger + replication round trip)</strong></p>
+</blockquote>
+<p>per invocation. Kafka Streams' default <code>producer.linger.ms</code> is 100 ms, so an unconfigured
+multi-forward delegate can spend ~N × 100 ms per input record in crossing waits alone — usually
+the dominant cost for such delegates, far above every category measured above.</p>
+<p>A single-forward delegate pays at most one wait per invocation and is usually unaffected (the
+previous invocation's send has normally been acknowledged by the time the next record arrives).
+For multi-forward delegates, lower <code>producer.linger.ms</code> (a few milliseconds, or 0) so each batch
+ships immediately; the replication round trip then bounds the wait. The cost cannot be exempted
+per partition: a business forward's destination partition is unknowable at stamp time (the sink's
+partitioner runs downstream of <code>forward()</code>), so the wait must conservatively cover every own-sink
+coordinate. Protocol null messages are exempt for their own exact destinations and do not pay it.</p>
+<hr />
 <h2 id="summary">Summary</h2>
 <table>
 <thead>
@@ -1583,6 +1711,11 @@ topology drives up both restart cost and steady-state buffer footprint.</p>
 <td>Buffer restore on restart</td>
 <td>O(n)</td>
 <td>Records held at time of restart</td>
+</tr>
+<tr>
+<td>Crossing-wait produce serialization</td>
+<td>O(N) waits</td>
+<td>Forwards per invocation × (linger + replication RTT)</td>
 </tr>
 </tbody>
 </table>
@@ -1639,7 +1772,7 @@ representative absolute figures.</p>
       <nav class="md-footer__inner md-grid" aria-label="Footer" >
         
           
-          <a href="../migration/" class="md-footer__link md-footer__link--prev" aria-label="Previous: Migration">
+          <a href="../adoption/" class="md-footer__link md-footer__link--prev" aria-label="Previous: Incremental adoption">
             <div class="md-footer__button md-icon">
               
               <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
@@ -1649,7 +1782,7 @@ representative absolute figures.</p>
                 Previous
               </span>
               <div class="md-ellipsis">
-                Migration
+                Incremental adoption
               </div>
             </div>
           </a>

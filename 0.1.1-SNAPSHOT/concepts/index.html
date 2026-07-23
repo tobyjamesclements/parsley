@@ -464,10 +464,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#topology-epochs" class="md-nav__link">
+  <a href="#joining-a-running-topology" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Topology epochs
+        Joining a running topology
       
     </span>
   </a>
@@ -574,14 +574,14 @@
   
   
     <li class="md-nav__item">
-      <a href="../migration/" class="md-nav__link">
+      <a href="../adoption/" class="md-nav__link">
         
   
   
   <span class="md-ellipsis">
     
   
-    Migration
+    Incremental adoption
   
 
     
@@ -897,14 +897,126 @@
   
   
     <li class="md-nav__item">
-      <a href="../internals/topology-epochs/" class="md-nav__link">
+      <a href="../internals/invariants/" class="md-nav__link">
         
   
   
   <span class="md-ellipsis">
     
   
-    Topology epochs
+    Named invariants
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../internals/naming/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Naming
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../internals/channels/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    The channels module
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../internals/causal-broadcast/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    The causal-broadcast module
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../internals/gossip/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    The gossip module
   
 
     
@@ -933,34 +1045,6 @@
     
   
     Wire format
-  
-
-    
-  </span>
-  
-  
-
-      </a>
-    </li>
-  
-
-              
-            
-              
-                
-  
-  
-  
-  
-    <li class="md-nav__item">
-      <a href="../internals/engine/" class="md-nav__link">
-        
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    The engine
   
 
     
@@ -1138,10 +1222,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#topology-epochs" class="md-nav__link">
+  <a href="#joining-a-running-topology" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Topology epochs
+        Joining a running topology
       
     </span>
   </a>
@@ -1169,18 +1253,33 @@
 
 
 <h1 id="concepts">Concepts</h1>
+<p>This page covers the concepts a user of Parsley works with: the causal clock, the frontier, the
+buffer, delivery, co-partitioning, and topology changes. Internally these are implemented as three
+layered protocols — a channels layer that adapts Kafka topic-partitions into the reliable FIFO
+channels causal broadcast assumes, a causal-broadcast layer that delivers records in causal order,
+and a gossip layer that keeps clock progress flowing through processors that emit nothing. The
+<a href="../internals/overview/">internals overview</a> maps the layers to classes, and the
+<a href="../internals/causal-consistency/">causal consistency model</a> gives the theory; nothing below
+requires either.</p>
 <h2 id="causal-dependencies">Causal dependencies</h2>
-<p><code>CausalDependencies</code> is a snapshot of what a producer had observed when it sent a record. It is a map
+<p><code>CausalClock</code> is a snapshot of what a producer had observed when it sent a record. It is a map
 from a <code>(topicId, partition)</code> coordinate to the highest offset the producer had seen on that
 coordinate. Parsley serialises this map as a compact binary header named
-<code>parsley-causal-dependencies</code> and attaches it to every outgoing record.</p>
-<p>On the consumer side the header is decoded back into a <code>CausalDependencies</code> value. It describes the
+<code>parsley-causal-clock</code> and attaches it to every outgoing record.</p>
+<p>On the consumer side the header is decoded back into a <code>CausalClock</code> value. It describes the
 minimum frontier a downstream consumer must reach before the record may be delivered. A record is
 causally ready once the consumer's frontier has observed at least the offset the dependencies require
 on every coordinate.</p>
 <p>The keys are Kafka topic UUIDs rather than topic names. Because a topic that is deleted and recreated
 receives a new UUID, a new incarnation of <code>prices</code> is treated as a distinct dependency. Records
 stamped against the old <code>prices</code> are never satisfied by the new one.</p>
+<p>Names are resolved to UUIDs once, at task initialisation. Deleting and recreating a causal topic
+while an application is running is therefore not a supported operation: a <code>CausalStreams</code> instance
+polls the broker's current topic IDs in the background and fails the application fast when a causal
+topic's UUID changes mid-run, rather than letting records of the new incarnation be processed under
+the old identity. Records fetched between the recreation and the next poll are the residual exposure,
+so treat live recreation as an operational error; restarting after a recreation is safe (identity is
+re-resolved, and the old incarnation's history reads as lost, never reordered).</p>
 <h2 id="the-frontier">The frontier</h2>
 <p>The causal frontier is the node's internal clock. For each <code>(topicId, partition)</code> coordinate it
 records the highest offset the node has delivered contiguously. It does not record an offset the node
@@ -1191,19 +1290,20 @@ run actually reaches, so the held record's gap is never skipped over. Once the h
 delivered, whether it is released or evicted, the frontier catches up in a single step through
 everything already forwarded above it.</p>
 <p>The node's internal frontier is an implementation detail, and there is no public type for it: it is
-contiguous (the highest offset delivered without a gap), which is specific to how the engine releases
+contiguous (the highest offset delivered without a gap), which is specific to how Parsley releases
 held records. A node consuming with a plain Kafka client maintains its own frontier instead, as an
-accumulating <code>CausalDependencies</code> value. Bind a resolver once with <code>CausalDependencies.using(props)</code>,
+accumulating <code>CausalClock</code> value. Bind a resolver once with <code>CausalClock.using(props)</code>,
 fold in each record you consume with <code>observe(record)</code>, and stamp the result onto each record you
 produce. A one-to-one relay is <code>using(props).observe(record)</code>; a fan-in chains an <code>observe</code> per
 input; a stateful node keeps one instance and observes into it across records. To read back the
 dependencies a record already carries, without folding in a new position, use
-<code>CausalDependencies.fromRecord(record)</code>.</p>
-<p>When you consume a topic a Parsley topology produces, some records are <em>protocol watermarks</em>: null
-key and value, carrying a completeness frontier so causal progress flows through processors that
-produce no output for a given input. Still <code>observe(record)</code> them, so your frontier advances across a
-service that emitted only watermarks on this path, but skip them as business records — test with
-<code>CausalDependencies.isWatermark(record)</code> and <code>continue</code> past those it flags.</p>
+<code>CausalClock.fromRecord(record)</code>.</p>
+<p>When you consume a topic a Parsley topology produces, some records are <em>protocol null messages</em>: a
+record with a null value (its key is borrowed from the record that triggered it), carrying a
+completeness frontier so causal progress flows through processors that produce no output for a given
+input. Still <code>observe(record)</code> them, so your frontier advances across a service that emitted only
+null messages on this path, but skip them as business records — test with
+<code>CausalClock.isNullMessage(record)</code> and <code>continue</code> past those it flags.</p>
 <p>The frontier is persisted before each record is forwarded, so it survives restarts and rebalances.</p>
 <h2 id="the-causal-buffer">The causal buffer</h2>
 <p>A record whose dependencies are not yet satisfied is held in the causal buffer. Held records survive
@@ -1216,34 +1316,35 @@ further releases occur.</p>
 <p>A record is delivered once this node's <strong>own contiguous frontier</strong> — the positions it has itself
 delivered, gap-free — dominates the record's dependencies. A dependency is satisfied only by this
 node having delivered the cause locally; a claim carried on another channel's clock (a peer's
-watermark advertising a coordinate the peer delivered) never substitutes for local delivery, or the
+null message advertising a coordinate the peer delivered) never substitutes for local delivery, or the
 processor could see an effect before the cause it directly subscribes to. This covers a record
 delivered immediately and a record delivered after a wait; a record that claims no dependencies (an
 empty dependency set) is trivially satisfied.</p>
-<p>The <strong>completeness</strong> clock — the frontier max-merged with every input channel's advertised clock —
-is the <em>outbound stamp</em>, not the delivery gate: it carries transitive ancestry (coordinates an
-upstream channel has advertised) downstream, where each receiver's own gate verifies them against
-its own delivery history.</p>
-<p>There is no vacuous satisfaction, though: a dependency naming a coordinate this node has <strong>no input
-channel for at all</strong> — an undeclared topic, or a partition a different task instance owns — is not
-treated as satisfied just because it is out of scope. This node can prove it has no way to confirm such
-a coordinate, never that the coordinate is genuinely irrelevant, so it fails the task fast instead of
-buffering forever or guessing. The corollary is the <strong>topology contract</strong>: every coordinate a node's
-records could ever depend on must be reachable to that node through at least one input channel,
-directly or transitively. A join of fully independent sources can still receive a record depending on a
-coordinate no input channel observes — route that coordinate through some input branch instead (see
-<a href="../configuration/"><code>parsley.coordination.domain-topics</code></a> for doing this without a redundant business
-subscription). Unlike the topology contract, there is no restriction on a node consuming both a topic
-and a topic derived from it — single-witness merge has no unanimity requirement for that to violate.
-See the <a href="../internals/causal-consistency/">causal consistency model</a> for the full contract and why a
+<p>The <em>outbound stamp</em> — the frontier max-merged with every input channel's advertised clock and
+with the node's own acknowledged output positions — is not the delivery gate: it carries
+transitive ancestry (coordinates an upstream channel has advertised, and the node's own produced
+positions) downstream, where each receiver's own gate verifies them against its own delivery
+history.</p>
+<p>A dependency naming a coordinate this node does not consume at all — an undeclared topic, or a
+partition a different task instance owns — is <strong>ignored</strong>, unconditionally. That is sound, not
+vacuous satisfaction: stamps are transitively complete and merged unconditionally, so any consumed
+causal ancestor of a record is claimed <em>directly</em> in that record's own clock — an unconsumed entry
+only ever proxies ancestry the same clock already states, and ignoring it loses no ordering
+observable at this node. Each ignore is counted by the <code>deps-out-of-scope-ignored</code> metric,
+never a failure. There is no restriction on a node consuming both a topic
+and a topic derived from it.
+This gate is the delivery condition of Birman–Schiper–Stephenson causal broadcast, evaluated over
+Kafka topic-partition coordinates rather than process identifiers. See the
+<a href="../internals/causal-consistency/">causal consistency model</a> for the full contract and why a
 single witness suffices.</p>
 <h2 id="causal-buffer-is-unbounded-and-fail-closed">Causal buffer is unbounded and fail-closed</h2>
 <p>The causal buffer never evicts and never delivers a record out of causal order. There is no
-configuration that trades causal safety for liveness. A record whose dependencies are proven
-impossible — an undecodable payload or dependencies header, or a dependency naming a coordinate this
-node has no channel for — unconditionally fails the task; it is never dropped or forwarded on an
-unproven premise. The failure is logged with the record's coordinate and, for a decode failure, its
-metadata (never the payload), and counted by a metric. See <a href="../troubleshooting/">Troubleshooting</a> for
+configuration that trades causal safety for liveness. A record that cannot be evaluated at all — an
+undecodable payload or an undecodable causal-clock header — unconditionally fails the task; it is
+never dropped or forwarded on an unproven premise. The failure is logged with the record's
+coordinate and its metadata (never the payload), and counted by a metric. A dependency on a
+coordinate this node does not consume is not a failure: it falls to the delivery gate's ignore
+branch, described under <a href="#delivery">Delivery</a>. See <a href="../troubleshooting/">Troubleshooting</a> for
 the operational playbook and <a href="../configuration/#metrics">Configuration</a> for the metrics.</p>
 <h2 id="co-partitioning">Co-partitioning</h2>
 <p>Parsley evaluates dependencies against the partitions assigned to a single consumer instance. For the
@@ -1252,37 +1353,27 @@ standard way to arrange this is to partition related topics by the record key wi
 partition count, so that causally related messages, which share a key, land on the same partition
 number across topics and each instance owns partition <code>N</code> everywhere. The key is the shard: the unit
 that keeps causally related events together on one partition. An advanced user can partition by a
-coarser function of the key with a custom <code>StreamPartitioner</code>, provided the partitioner reads the key
-rather than the value, since a protocol watermark carries no value to read.</p>
+coarser function of the key with a custom <code>StreamPartitioner</code>, provided the partitioner computes the
+partition from the key alone: the key is the only field causally related records share across
+topics, so a partitioner that reads anything else cannot place them consistently. Protocol null
+messages do not pass through this partitioner at all; Parsley routes each one to the emitting
+task's own partition on every sink.</p>
 <p>Parsley does not enforce co-partitioning end to end, and most of it cannot be checked, so a
 misconfigured topology evaluates against an incomplete partition set. At startup, <code>parsley.topology.validation</code>
-(<code>warn</code> by default, <code>strict</code> to fail fast, <code>off</code> to disable) checks that a stage's causal input topics
+(<code>strict</code> by default, <code>warn</code> to log and continue, <code>off</code> to disable) checks that a stage's causal input topics
 share a partition count, and, since a stage built through <code>CausalStreamsBuilder</code> owns its sinks too,
 folds sink partition counts into the same check and applies one partitioner uniformly across every sink
 a stage declares so a shard cannot drift onto different partitions across topics by accident. See the
 <a href="../streams/#preconditions">Streams integration</a> preconditions for the full contract.</p>
-<h2 id="topology-epochs">Topology epochs</h2>
+<h2 id="joining-a-running-topology">Joining a running topology</h2>
 <p>A causal topology sometimes has to change while it runs — a new stage, a replaced stage, a recompile.
-A new stage replays its inputs from the earliest offset, and the completeness frontier is a minimum
-across every node, so a node replaying from offset 0 would pull the shared frontier back to the start
-and un-strip history the other nodes had already delivered. An <strong>epoch</strong> prevents this. It defines a
-floor per coordinate; history below the floor is pre-epoch, so it feeds the delegate's state but does
-not participate in causal time. A node deployed into a running topology adopts the current floor and
-replays with everything below it stripped, so it never drags the frontier down.</p>
-<p>Setting <code>parsley.coordination.epoch-events-topic</code> turns this on. It is optional and leaderless:
-participating applications share one single-partition epoch-events log and each folds it identically
-to agree on every epoch's floor, which then propagates through the topology in-band. Which topics are
-external entry points is derived from what each node declares it consumes and produces, not configured
-by hand. Absent that key, a topology runs in epoch 0 and behaves exactly as one with no epoch
-machinery.</p>
-<p>Coordination also requires every running member's declared inputs and sinks to jointly cover the full
-coordinated domain, or an epoch round cannot commit — a genuine multi-stage pipeline (app A produces a
-topic only app B consumes) needs every member to also cover the topics only a sibling touches. Set
-<code>parsley.coordination.domain-topics</code> so <code>CausalTopology</code> auto-wires a passthrough source for any domain
-topic a stage does not otherwise consume or produce, covering it without a redundant business
-subscription — this is what makes a genuinely cyclic topology (A produces to B, B produces back to A)
-coordinate correctly. See <a href="../streams/#evolving-a-running-topology">Evolving a running topology</a> for the
-API and <a href="../internals/topology-epochs/">Topology epochs</a> for the protocol.</p>
+Joining needs <strong>zero coordination</strong>: a fresh application starts consuming from wherever the log
+starts, its hold-back queue converts arbitrary cross-partition arrival into causal delivery order
+(replay is just arbitrarily delayed delivery, which causal broadcast absorbs by construction), and
+its truthful stamps make its outputs correctly gated everywhere from its first emission. A fresh
+record with old dependencies simply sits low in the causal partial order — correct, not a hazard.
+There is no join barrier, no admission, no membership roster, and no epoch. No key under
+<code>parsley.coordination.*</code> is part of the configuration surface; startup fails if one is present.</p>
 
 
 

@@ -14,7 +14,7 @@
         <link rel="prev" href="../streams/">
       
       
-        <link rel="next" href="../migration/">
+        <link rel="next" href="../adoption/">
       
       
         
@@ -541,14 +541,14 @@
   
   
     <li class="md-nav__item">
-      <a href="../migration/" class="md-nav__link">
+      <a href="../adoption/" class="md-nav__link">
         
   
   
   <span class="md-ellipsis">
     
   
-    Migration
+    Incremental adoption
   
 
     
@@ -864,14 +864,126 @@
   
   
     <li class="md-nav__item">
-      <a href="../internals/topology-epochs/" class="md-nav__link">
+      <a href="../internals/invariants/" class="md-nav__link">
         
   
   
   <span class="md-ellipsis">
     
   
-    Topology epochs
+    Named invariants
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../internals/naming/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Naming
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../internals/channels/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    The channels module
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../internals/causal-broadcast/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    The causal-broadcast module
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../internals/gossip/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    The gossip module
   
 
     
@@ -900,34 +1012,6 @@
     
   
     Wire format
-  
-
-    
-  </span>
-  
-  
-
-      </a>
-    </li>
-  
-
-              
-            
-              
-                
-  
-  
-  
-  
-    <li class="md-nav__item">
-      <a href="../internals/engine/" class="md-nav__link">
-        
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    The engine
   
 
     
@@ -1106,57 +1190,41 @@
 <h2 id="causal-delivery-has-exactly-two-dispositions">Causal delivery has exactly two dispositions</h2>
 <p>A record is either <strong>forwarded</strong> once its dependencies are satisfied, or stays <strong>buffered</strong> —
 unbounded, changelog-backed — while they are not. There is no configuration that trades causal safety
-for liveness, no eviction, and no third disposition: a record whose dependencies are proven impossible
-(an undecodable payload or dependencies header, or a dependency naming a coordinate this node has no
-input channel for) unconditionally fails the task. See <a href="../troubleshooting/">Troubleshooting</a> for what
-that looks like operationally and how to recover from it.</p>
+for liveness, no eviction, and no third disposition: a record that cannot be evaluated at all (an
+undecodable payload or an undecodable causal-clock header) unconditionally fails the task, and a
+dependency on a coordinate this node does not consume is ignored, soundly, with a metric. See
+<a href="../troubleshooting/">Troubleshooting</a> for what that looks like operationally and how to recover
+from it.</p>
 <hr />
 <h2 id="header-size">Header size</h2>
-<p>The serialised <code>parsley-causal-dependencies</code> header is <code>5 + 28 × entries</code> bytes. It counts against
+<p>The serialised <code>parsley-causal-clock</code> header is <code>5 + 28 × entries</code> bytes. It counts against
 Kafka's record-size limit (<code>message.max.bytes</code> and <code>max.request.size</code>, around 1 MB by default), and
 there is no separate header budget.</p>
 <ul>
 <li><strong>Automatic Streams stamping</strong> stamps the node's completeness frontier, which is bounded by the
   number of source topics in the subtopology, at one partition per topic per task. This stays small
   under normal topologies.</li>
-<li><strong><code>CausalDependencies.fromRecord(trigger)</code></strong> carries only the partitions the upstream producer
+<li><strong><code>CausalClock.fromRecord(trigger)</code></strong> carries only the partitions the upstream producer
   depended on. This is the recommended way to propagate causal context from a plain Kafka client.</li>
-<li><strong>A manually built <code>CausalDependencies</code></strong> is as wide as the coordinates you <code>require(...)</code>. Watch
+<li><strong>A manually built <code>CausalClock</code></strong> is as wide as the coordinates you <code>require(...)</code>. Watch
   this on records that legitimately depend on many topic-partitions.</li>
 </ul>
 <p>Parsley never truncates the dependencies header, because truncation would silently break the
 guarantee. Keep the relevant-partition count within your record-size budget.</p>
 <hr />
 <h2 id="parsleyproperties"><code>parsley.properties</code></h2>
-<p>Parsley reads its own behaviour from a <code>parsley.properties</code> resource on the classpath. This is kept
-separate from Kafka Streams configuration because these behaviours have no Streams equivalent. An
-absent file, or an absent key, falls back to the defaults below.</p>
+<p>Parsley reads its own behaviour from a <code>parsley.properties</code> resource on the classpath. A <code>parsley.*</code>
+key may also be set in the <code>Properties</code> passed to <code>CausalStreams</code>, which overrides the classpath
+resource key for key. The namespace is kept separate from Kafka Streams configuration because these
+behaviours have no Streams equivalent. An absent file, or an absent key, falls back to the defaults
+below; a key set to an unrecognised value fails startup with <code>IllegalStateException</code>.</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="c1"># How a causal processor reacts at startup to a detectable topology misconfiguration: the causal</span>
 <a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="c1"># input topics not sharing a partition count (co-partitioning impossible), and, for a</span>
 <a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a><span class="c1"># CausalStreamsBuilder stage, its sink topics&#39; partition counts and cleanup.policy too.</span>
-<a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a><span class="c1">#   warn     (default) logs the mismatch and continues</span>
-<a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a><span class="c1">#   strict             fails the task fast at startup</span>
+<a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a><span class="c1">#   strict   (default) fails the task fast at startup</span>
+<a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a><span class="c1">#   warn               logs the mismatch and continues (the explicit opt-down)</span>
 <a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a><span class="c1">#   off                disables the checks</span>
-<a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a><span class="na">parsley.topology.validation</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s">warn</span>
-<a id="__codelineno-0-8" name="__codelineno-0-8" href="#__codelineno-0-8"></a>
-<a id="__codelineno-0-9" name="__codelineno-0-9" href="#__codelineno-0-9"></a><span class="c1"># The shared, single-partition epoch-events log topic name. Set this to turn on topology-epoch</span>
-<a id="__codelineno-0-10" name="__codelineno-0-10" href="#__codelineno-0-10"></a><span class="c1"># coordination for a CausalStreams runtime. Absent (the default), a topology runs in epoch 0 exactly</span>
-<a id="__codelineno-0-11" name="__codelineno-0-11" href="#__codelineno-0-11"></a><span class="c1"># as without coordination: no epoch-events log, no coordination thread.</span>
-<a id="__codelineno-0-12" name="__codelineno-0-12" href="#__codelineno-0-12"></a><span class="c1">#</span>
-<a id="__codelineno-0-13" name="__codelineno-0-13" href="#__codelineno-0-13"></a><span class="c1"># The topic must exist with EXACTLY ONE partition and must retain its full history: every instance</span>
-<a id="__codelineno-0-14" name="__codelineno-0-14" href="#__codelineno-0-14"></a><span class="c1"># replays the log from the beginning on startup, so use cleanup.policy=delete with retention.ms=-1 —</span>
-<a id="__codelineno-0-15" name="__codelineno-0-15" href="#__codelineno-0-15"></a><span class="c1"># finite retention or compaction silently erases membership and epoch history. Both are validated at</span>
-<a id="__codelineno-0-16" name="__codelineno-0-16" href="#__codelineno-0-16"></a><span class="c1"># startup (the partition count, the cleanup policy, and the retention), failing fast on a topic that</span>
-<a id="__codelineno-0-17" name="__codelineno-0-17" href="#__codelineno-0-17"></a><span class="c1"># could ever lose events the fold needs.</span>
-<a id="__codelineno-0-18" name="__codelineno-0-18" href="#__codelineno-0-18"></a><span class="c1"># parsley.coordination.epoch-events-topic = parsley-epoch-events</span>
-<a id="__codelineno-0-19" name="__codelineno-0-19" href="#__codelineno-0-19"></a>
-<a id="__codelineno-0-20" name="__codelineno-0-20" href="#__codelineno-0-20"></a><span class="c1"># The comma-separated set of every topic in the coordinated domain (every member&#39;s inputs and sinks,</span>
-<a id="__codelineno-0-21" name="__codelineno-0-21" href="#__codelineno-0-21"></a><span class="c1"># external sources included). Only meaningful alongside parsley.coordination.epoch-events-topic; set</span>
-<a id="__codelineno-0-22" name="__codelineno-0-22" href="#__codelineno-0-22"></a><span class="c1"># it so CausalTopology auto-wires a passthrough source for any domain topic a stage does not otherwise</span>
-<a id="__codelineno-0-23" name="__codelineno-0-23" href="#__codelineno-0-23"></a><span class="c1"># consume or produce, letting that stage&#39;s declared subscriptions cover the full domain without a</span>
-<a id="__codelineno-0-24" name="__codelineno-0-24" href="#__codelineno-0-24"></a><span class="c1"># redundant business subscription. Required for a topology with a genuine cycle. See</span>
-<a id="__codelineno-0-25" name="__codelineno-0-25" href="#__codelineno-0-25"></a><span class="c1"># Evolving a running topology in streams.md.</span>
-<a id="__codelineno-0-26" name="__codelineno-0-26" href="#__codelineno-0-26"></a><span class="c1"># parsley.coordination.domain-topics = prices,orders,enriched-output</span>
+<a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a><span class="na">parsley.topology.validation</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s">strict</span>
 </code></pre></div>
 <table>
 <thead>
@@ -1169,39 +1237,35 @@ absent file, or an absent key, falls back to the defaults below.</p>
 <tbody>
 <tr>
 <td><code>parsley.topology.validation</code></td>
-<td><code>warn</code></td>
+<td><code>strict</code></td>
 <td><code>off</code>, <code>warn</code>, <code>strict</code></td>
-</tr>
-<tr>
-<td><code>parsley.coordination.epoch-events-topic</code></td>
-<td>(unset)</td>
-<td>a topic name</td>
-</tr>
-<tr>
-<td><code>parsley.coordination.domain-topics</code></td>
-<td>(unset)</td>
-<td>comma-separated topic names</td>
 </tr>
 </tbody>
 </table>
-<p><code>parsley.topology.validation = warn</code> logs a prominent warning at startup when the causal input topics
-do not share a partition count, which makes co-partitioning impossible, and lets the task start. This
-is visible without breaking a deployment that already ran with the mismatch. Set it to <code>strict</code> to
-fail the task fast instead, or <code>off</code> to skip the checks. <code>CausalTopology</code>-assembled stages also fold
+<p>No key under <code>parsley.coordination.*</code> is part of the configuration surface: joins need zero
+coordination, so there is no coordination subsystem to configure. Startup fails with
+<code>IllegalStateException</code>, naming the offending key, if one is present.</p>
+<p><code>parsley.topology.validation = strict</code> (the default) fails the task fast at startup when the causal
+input topics do not share a partition count, which makes co-partitioning impossible. Set it to
+<code>warn</code> to log a prominent warning and start anyway — the explicit opt-down for a deployment that
+knowingly runs with the mismatch — or <code>off</code> to skip the checks. <code>CausalTopology</code>-assembled stages also fold
 their sink topics' partition counts into the same parity check and check each sink's <code>cleanup.policy</code>
-for <code>compact</code> (a protocol watermark is a null-value record wire-indistinguishable from a compaction
-tombstone). Each sink is resolved independently, so one sink that does not exist yet never masks a
-genuine misconfiguration on a different sink in the same stage, even under <code>strict</code>; both sink-side
-checks are skipped entirely (no admin round-trip) when validation is <code>off</code>. Under topology-epoch
-coordination, a sink partition-count mismatch always escalates to a hard failure regardless of this
-setting — a crash loop is the actual failure mode a warning would otherwise hide. See
+for <code>compact</code> (a protocol null message is a null-value record wire-indistinguishable from a compaction
+tombstone). Each sink is checked independently, so a transient describe failure on one sink never
+masks a genuine misconfiguration on a different sink in the same stage, even under <code>strict</code>; both
+sink-side checks are skipped entirely (no admin round-trip) when validation is <code>off</code>. Sink existence
+itself is not governed by this key: a declared sink that cannot be resolved fails startup
+unconditionally, even under <code>off</code>, because own-output stamping depends on its resolved identity. Note that a sink with
+fewer partitions than a source fails protocol-marker produces at runtime (markers route to the
+task's own partition), so under <code>warn</code> a mismatched deployment crash-loops at the produce instead of
+failing at startup — <code>strict</code> surfaces it once, clearly, at init. See
 <a href="../streams/#startup-validation">Streams integration</a> and its
 <a href="../streams/#preconditions">preconditions</a> for the full contract.</p>
-<p><code>parsley.coordination.epoch-events-topic</code> and <code>parsley.coordination.domain-topics</code> are read directly
-from the <code>Properties</code> passed to <code>new CausalStreams(topology, props)</code> — see
-<a href="../streams/#evolving-a-running-topology">Evolving a running topology</a>.</p>
 <h2 id="metrics">Metrics</h2>
-<p>Parsley wires a handful of Kafka Streams <code>Sensor</code>s per task, under the <code>stream-parsley-metrics</code> group:</p>
+<p>Parsley wires a handful of Kafka Streams <code>Sensor</code>s per task, under the <code>stream-parsley-metrics</code>
+group. Every metric is tagged <code>parsley-id</code> (the task ID, for example <code>0_1</code>) and <code>thread-id</code> (the
+stream thread that registered it). They are visible over JMX like any Kafka Streams metric, and
+in-process through <code>CausalStreams.metrics()</code>.</p>
 <table>
 <thead>
 <tr>
@@ -1229,12 +1293,27 @@ from the <code>Properties</code> passed to <code>new CausalStreams(topology, pro
 <tr>
 <td><code>clock-resolution-errors</code></td>
 <td>rate/total</td>
-<td>Records whose <code>parsley-causal-dependencies</code> header could not be decoded.</td>
+<td>Records whose <code>parsley-causal-clock</code> header could not be decoded.</td>
 </tr>
 <tr>
-<td><code>unreachable-dependency-errors</code></td>
+<td><code>deps-out-of-scope-ignored</code></td>
 <td>rate/total</td>
-<td>Records naming a dependency this node has no input channel for.</td>
+<td>Dependency coordinates on channels this node does not consume, ignored by the gate (one count per coordinate). Routine in topologies whose consumers have narrower scopes than their ancestors' stamps; a sustained unexpected rate can indicate a cross-wired deployment or a co-partitioning mistake.</td>
+</tr>
+<tr>
+<td><code>replays-skipped</code></td>
+<td>rate/total</td>
+<td>Received records whose offset was already delivered here, skipped instead of being forwarded to the delegate again. Routine while an added input's re-fetched prefix replays past the carried-ancestry seed after a scope change; sustained counts outside that warrant investigation.</td>
+</tr>
+<tr>
+<td><code>reflected-claims-above-own-outputs</code></td>
+<td>rate/total</td>
+<td>Inbound clocks claiming one of this node's own sink coordinates above its own-outputs clock. Diagnostic only, never a failure: it means the own-output view is stale beyond the init-time heal, or a peer's stamp is not truthful.</td>
+</tr>
+<tr>
+<td><code>records-held-above-highest-received</code></td>
+<td>gauge</td>
+<td>Held records waiting past the stall threshold (the effective producer <code>delivery.timeout.ms</code>, 120 s unless overridden) on a dependency above its channel's highest received offset — nothing received so far can satisfy the claim, so the delay is unbounded until that channel produces again. Fail-safe, never unsafe; also logged at <code>WARN</code> when the count changes.</td>
 </tr>
 <tr>
 <td><code>buffer-depth</code></td>
@@ -1248,7 +1327,7 @@ from the <code>Properties</code> passed to <code>new CausalStreams(topology, pro
 </tr>
 </tbody>
 </table>
-<p>Any non-zero rate on the three error sensors, or sustained growth in <code>buffer-depth</code>, is worth alerting
+<p>Any non-zero rate on the two error sensors, or sustained growth in <code>buffer-depth</code>, is worth alerting
 on — see <a href="../troubleshooting/">Troubleshooting</a>.</p>
 
 
@@ -1302,13 +1381,13 @@ on — see <a href="../troubleshooting/">Troubleshooting</a>.</p>
         
         
           
-          <a href="../migration/" class="md-footer__link md-footer__link--next" aria-label="Next: Migration">
+          <a href="../adoption/" class="md-footer__link md-footer__link--next" aria-label="Next: Incremental adoption">
             <div class="md-footer__title">
               <span class="md-footer__direction">
                 Next
               </span>
               <div class="md-ellipsis">
-                Migration
+                Incremental adoption
               </div>
             </div>
             <div class="md-footer__button md-icon">

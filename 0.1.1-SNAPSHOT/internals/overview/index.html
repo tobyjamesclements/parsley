@@ -448,14 +448,14 @@
   
   
     <li class="md-nav__item">
-      <a href="../../migration/" class="md-nav__link">
+      <a href="../../adoption/" class="md-nav__link">
         
   
   
   <span class="md-ellipsis">
     
   
-    Migration
+    Incremental adoption
   
 
     
@@ -779,6 +779,17 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
+  <a href="#the-three-protocol-modules" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The three protocol modules
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#class-map" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -883,14 +894,126 @@
   
   
     <li class="md-nav__item">
-      <a href="../topology-epochs/" class="md-nav__link">
+      <a href="../invariants/" class="md-nav__link">
         
   
   
   <span class="md-ellipsis">
     
   
-    Topology epochs
+    Named invariants
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../naming/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Naming
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../channels/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    The channels module
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../causal-broadcast/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    The causal-broadcast module
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../gossip/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    The gossip module
   
 
     
@@ -919,34 +1042,6 @@
     
   
     Wire format
-  
-
-    
-  </span>
-  
-  
-
-      </a>
-    </li>
-  
-
-              
-            
-              
-                
-  
-  
-  
-  
-    <li class="md-nav__item">
-      <a href="../engine/" class="md-nav__link">
-        
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    The engine
   
 
     
@@ -1058,6 +1153,17 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
+  <a href="#the-three-protocol-modules" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The three protocol modules
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#class-map" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1141,8 +1247,8 @@
 <h1 id="internals-overview">Internals overview</h1>
 <p>Parsley is built around one public, topology-level entry point — <code>CausalStreamsBuilder</code> /
 <code>CausalTopology</code> / <code>CausalStreams</code>, three roles mirroring Kafka Streams' own <code>StreamsBuilder</code> /
-<code>Topology</code> / <code>KafkaStreams</code> — plus stateless edge operations for stamping and propagating dependencies
-from plain Kafka clients, all backed by a shared internal implementation.</p>
+<code>Topology</code> / <code>KafkaStreams</code> — plus stateless edge operations for stamping and propagating causal
+clocks from plain Kafka clients, all backed by a shared internal implementation.</p>
 <table>
 <thead>
 <tr>
@@ -1156,12 +1262,42 @@ from plain Kafka clients, all backed by a shared internal implementation.</p>
 <td><code>ParsleyProcessorSupplier</code> / <code>ParsleyProcessor</code> (package-private)</td>
 </tr>
 <tr>
-<td><code>CausalDependencies</code> edge ops (<code>using</code> / <code>observe</code> / <code>stamp</code> / <code>merge</code>)</td>
-<td><code>ParsleyClock</code> (no wrapper objects); <code>using</code>/<code>builder</code> resolve topic UUIDs internally, caching each name against a short-lived Kafka admin client opened on first use</td>
+<td><code>CausalClock</code> edge ops (<code>using</code> / <code>observe</code> / <code>stamp</code> / <code>merge</code>)</td>
+<td><code>ParsleyVectorClock</code> (no wrapper objects); <code>using</code>/<code>builder</code> resolve topic UUIDs internally, caching each name against a short-lived Kafka admin client opened on first use</td>
 </tr>
 </tbody>
 </table>
-<p>All share a common set of value types and a single causal engine.</p>
+<h2 id="the-three-protocol-modules">The three protocol modules</h2>
+<p>Internally the implementation is organised as three layered protocols, each a package-private
+module presented in the style of Cachin–Guerraoui–Rodrigues (<em>Introduction to Reliable and Secure
+Distributed Programming</em>): requests in, indications out, properties guaranteed. Each layer
+consumes the guarantees of the layer below and provides a clean assumption set to the layer above.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>┌──────────────────────────────────────────────────────────────────┐
+<a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>│ gossip (ParsleyGossip)             liveness / clock dissemination │
+<a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a>├──────────────────────────────────────────────────────────────────┤
+<a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a>│ causal broadcast (ParsleyCausalBroadcast)   receive / deliver     │
+<a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a>├──────────────────────────────────────────────────────────────────┤
+<a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a>│ channels (ParsleyChannels)         Kafka → reliable-FIFO-channel  │
+<a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a>│                                    adaptation                     │
+<a id="__codelineno-0-8" name="__codelineno-0-8" href="#__codelineno-0-8"></a>└──────────────────────────────────────────────────────────────────┘
+</code></pre></div>
+<ul>
+<li><strong><a href="../channels/">Channels</a></strong> turns Kafka topic-partitions into the reliable FIFO channels
+  classical causal broadcast assumes: stable UUID-keyed coordinates, dense offset sequences
+  (seeding, bridging, the contiguous frontier), the node's own acknowledged output positions, and
+  normalised dependency clocks.</li>
+<li><strong><a href="../causal-broadcast/">Causal broadcast</a></strong> is Birman–Schiper–Stephenson causal delivery over
+  those channels: the two-branch delivery gate, the hold-back buffer, the release cascade, and
+  the single stamping site.</li>
+<li><strong><a href="../gossip/">Gossip</a></strong> keeps clock progress observable through processors that produce no
+  business output, using protocol null messages, and quiesces on any topology shape including
+  cycles.</li>
+</ul>
+<p>Two Parsley-wide deviations from the textbook module style apply throughout, stated once in
+<code>package-info</code>: indications are pulled, not pushed (deliveries come back as ordered return values,
+because Kafka Streams' threading is synchronous), and the sender's clock increment is performed by
+the broker (offset assignment, learned asynchronously from producer acknowledgements — which is
+why an outbound stamp cannot include the record's own coordinate).</p>
 <h2 id="class-map">Class map</h2>
 <h3 id="public-api">Public API</h3>
 <table>
@@ -1174,23 +1310,27 @@ from plain Kafka clients, all backed by a shared internal implementation.</p>
 <tbody>
 <tr>
 <td><code>CausalStreamsBuilder</code></td>
-<td>Declares one or more causal stages: <code>stream(...)</code> source topics, <code>.process(supplier)</code>, <code>.to(...)</code> sink(s); <code>.build()</code> produces a <code>CausalTopology</code></td>
+<td>Declares the topology's single causal stage: <code>stream(...)</code> source topics, <code>.process(supplier)</code>, <code>.to(...)</code> sink(s); the chain's terminal <code>.build()</code> (on <code>CausalProcessedStream</code>) produces a <code>CausalTopology</code></td>
 </tr>
 <tr>
 <td><code>CausalStream</code> / <code>CausalProcessedStream</code></td>
-<td>Fluent intermediate types <code>CausalStreamsBuilder</code> returns while declaring a stage (<code>merge</code>, <code>process</code>, <code>to</code>, <code>withPartitioner</code>)</td>
+<td>Fluent intermediate types <code>CausalStreamsBuilder</code> returns while declaring the stage (<code>merge</code>, <code>process</code>, <code>to</code>, <code>withPartitioner</code>, <code>build</code>)</td>
 </tr>
 <tr>
 <td><code>CausalTopology</code></td>
-<td>The built, immutable topology specification; <code>assemble(props, quiesce, coordination)</code> produces the real Kafka Streams <code>Topology</code></td>
+<td>The built, immutable topology specification; <code>assemble(props, quiesce)</code> produces the real Kafka Streams <code>Topology</code></td>
 </tr>
 <tr>
 <td><code>CausalStreams</code></td>
-<td>The runtime: wraps the underlying <code>KafkaStreams</code> instance, owns graceful causal drain on <code>close()</code> and, when configured, topology-epoch coordination</td>
+<td>The runtime: wraps the underlying <code>KafkaStreams</code> instance, owns graceful causal drain on <code>close()</code>/<code>close(Duration)</code> and the background topic-identity watch; passes through <code>state()</code>, <code>metrics()</code>, <code>setStateListener</code>, <code>setUncaughtExceptionHandler</code></td>
 </tr>
 <tr>
-<td><code>CausalDependencies</code></td>
-<td>Public facade over a <code>ParsleyClock</code>: the causal requirements stamped onto each record, plus the <code>using</code>/<code>observe</code>/<code>stamp</code>/<code>merge</code> edge operations and <code>isWatermark</code> for skipping protocol watermarks on the consumer side</td>
+<td><code>CausalClock</code></td>
+<td>Public facade over a <code>ParsleyVectorClock</code>: the causal requirements stamped onto each record, plus the <code>using</code>/<code>observe</code>/<code>stamp</code>/<code>merge</code> edge operations and <code>isNullMessage</code> for skipping protocol null messages on the consumer side</td>
+</tr>
+<tr>
+<td><code>CausalDeliveryException</code> hierarchy</td>
+<td>The fail-closed throws as public types: <code>CausalCoordinateException</code> (abstract, carries the source coordinate) over <code>CausalBufferDeserializationException</code> and <code>CausalVectorClockResolutionException</code>; <code>CausalTopicRecreatedException</code> and <code>CausalPendingAckException</code> directly under the root</td>
 </tr>
 </tbody>
 </table>
@@ -1204,24 +1344,24 @@ from plain Kafka clients, all backed by a shared internal implementation.</p>
 </thead>
 <tbody>
 <tr>
-<td><code>ParsleyTopics</code> / <code>KafkaTopics</code></td>
-<td>Resolves topic names to their stable Kafka UUIDs (through a short-lived Kafka admin client, cached), backing <code>CausalDependencies</code>'s <code>using</code>/<code>builder</code></td>
+<td><code>ParsleyChannels</code></td>
+<td>The channels module: owns all persisted causal metadata — contiguous frontier, per-channel advertised clocks, carried ancestry, own outputs, highest received — self-persisting as the single <code>"f"</code> value; normalisation, scope changes, the crossing wait</td>
 </tr>
 <tr>
-<td><code>ParsleySource</code></td>
-<td>One registered causal source: topic name + the serdes the buffer round-trips held records with (the topic's UUID is resolved from the broker)</td>
+<td><code>ParsleyCausalBroadcast</code></td>
+<td>The causal-broadcast module (Birman–Schiper–Stephenson): gate, buffer, cascade, fail-closed, the single stamping site. No eviction, no buffer limit, no timeout</td>
 </tr>
 <tr>
-<td><code>ParsleyEngine</code></td>
-<td>Causal buffer engine: classify, buffer, cascade, fail-closed. No eviction, no buffer limit, no timeout</td>
+<td><code>ParsleyGossip</code></td>
+<td>The gossip module: receives null messages (own offset delivered, carried clock folded stamp-side only) and builds this node's own; owns the relay rule (relay only when the carried clock advanced this node's knowledge of a channel it consumes — custody folds but never obliges a relay)</td>
 </tr>
 <tr>
-<td><code>ParsleyClock</code></td>
+<td><code>ParsleyVectorClock</code></td>
 <td>The one vector clock: node frontier <em>and</em> dependency representation, keyed on <code>(Uuid, int)</code> primitives</td>
 </tr>
 <tr>
 <td><code>ParsleyMessage</code></td>
-<td>Typed engine envelope: source coordinate + dependency clock as fields, user headers separate</td>
+<td>Typed envelope: source coordinate + dependency clock as fields, user headers separate</td>
 </tr>
 <tr>
 <td><code>ParsleyHeader</code></td>
@@ -1229,7 +1369,7 @@ from plain Kafka clients, all backed by a shared internal implementation.</p>
 </tr>
 <tr>
 <td><code>ParsleyProcessor</code></td>
-<td>Kafka Streams processor wrapping the user processor and driving the engine; emits and consumes protocol watermarks and epoch markers</td>
+<td>Kafka Streams processor wrapping the user processor and driving the modules; emits and consumes protocol null messages</td>
 </tr>
 <tr>
 <td><code>ParsleyProcessorSupplier</code></td>
@@ -1237,7 +1377,27 @@ from plain Kafka clients, all backed by a shared internal implementation.</p>
 </tr>
 <tr>
 <td><code>ParsleyProcessorContext</code></td>
-<td>Stamping proxy: replaces the context given to the user processor; counts business forwards to drive watermark emission</td>
+<td>Stamping proxy: replaces the context given to the user processor; counts business forwards to drive null message emission</td>
+</tr>
+<tr>
+<td><code>ParsleyOwnOutputInterceptor</code> / <code>ParsleyOwnOutputRegistry</code></td>
+<td>Producer interceptor capturing the node's own acknowledged <code>(topic, partition, offset)</code> sends, and the registry that presents acked offsets and pending sends to the channels module (Kafka-specific: the broker performs the sender's clock increment)</td>
+</tr>
+<tr>
+<td><code>ParsleyTopicIdentityWatch</code></td>
+<td>Background poll of broker topic IDs against each task's init-time resolution; fails the application fast on a mid-run topic recreation (assumption E1)</td>
+</tr>
+<tr>
+<td><code>ParsleyOffsetSeeder</code></td>
+<td>Seeds log-start offsets on a genuine first start only, refusing when surviving state shows the group is not new (assumption E2's enforcement, with <code>AutoOffsetReset.none()</code>)</td>
+</tr>
+<tr>
+<td><code>ParsleyTopics</code> / <code>KafkaTopics</code></td>
+<td>Resolves topic names to their stable Kafka UUIDs (through a short-lived Kafka admin client, cached), backing <code>CausalClock</code>'s <code>using</code>/<code>builder</code></td>
+</tr>
+<tr>
+<td><code>ParsleySource</code></td>
+<td>One registered causal source: topic name + the serdes the buffer round-trips held records with (the topic's UUID is resolved from the broker)</td>
 </tr>
 <tr>
 <td><code>ParsleyBufferStore</code> / <code>StoreBackedBufferStore</code></td>
@@ -1252,43 +1412,50 @@ from plain Kafka clients, all backed by a shared internal implementation.</p>
 <td>Offsets forwarded ahead of the contiguous frontier, so the boundary stays gap-free across restarts</td>
 </tr>
 <tr>
-<td><code>ParsleyFrontier</code></td>
-<td>Owns all causal metadata a node persists — the contiguous delivered frontier clock (the delivery gate's clock), the per-input-channel clocks, and <code>completeness()</code> (the max-merge of the frontier and every channel's advertised clock — the outbound stamp, never the gate) — self-persisting as the single <code>"f"</code> value of the frontier store; holds the forwarded index as a collaborator</td>
-</tr>
-<tr>
 <td><code>ParsleySerializer</code></td>
 <td>Binary serde for <code>ParsleyMessage</code> (buffer store wire format)</td>
 </tr>
 </tbody>
 </table>
 <h2 id="end-to-end-flow">End-to-end flow</h2>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>Edge (plain Kafka producer)
-<a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>  CausalDependencies.using(props).observe(trigger) / .observe(...) / .builder(props).require(...)
-<a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a>    -&gt; CausalDependencies.stamp(record)
-<a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a>         -&gt; stamps parsley-causal-dependencies header
-<a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a>    -&gt; producer.send(record)
-<a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a>
-<a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a>Causal processor (Streams)
-<a id="__codelineno-0-8" name="__codelineno-0-8" href="#__codelineno-0-8"></a>  ParsleyProcessor.process(record)
-<a id="__codelineno-0-9" name="__codelineno-0-9" href="#__codelineno-0-9"></a>    -&gt; watermark/epoch marker? -&gt; advance channel clock, drain, relay onward only if it genuinely advanced
-<a id="__codelineno-0-10" name="__codelineno-0-10" href="#__codelineno-0-10"></a>    -&gt; ingest: wrap in ParsleyMessage, embed source coordinates
-<a id="__codelineno-0-11" name="__codelineno-0-11" href="#__codelineno-0-11"></a>    -&gt; gate:   ParsleyEngine.receive()
-<a id="__codelineno-0-12" name="__codelineno-0-12" href="#__codelineno-0-12"></a>                 frontier.dominates(deps) — this node&#39;s own contiguous delivered frontier; a
-<a id="__codelineno-0-13" name="__codelineno-0-13" href="#__codelineno-0-13"></a>                   dependency is satisfied only by local delivery of the cause, never by a claim
-<a id="__codelineno-0-14" name="__codelineno-0-14" href="#__codelineno-0-14"></a>                   advertised on another channel&#39;s clock (that feeds only the outbound stamp)
-<a id="__codelineno-0-15" name="__codelineno-0-15" href="#__codelineno-0-15"></a>                 satisfied     -&gt; advance frontier, drain cascade
-<a id="__codelineno-0-16" name="__codelineno-0-16" href="#__codelineno-0-16"></a>                 unsatisfied   -&gt; buffer (StoreBackedBufferStore) + index (StoreBackedCandidateIndex)
-<a id="__codelineno-0-17" name="__codelineno-0-17" href="#__codelineno-0-17"></a>                 no header     -&gt; trivially satisfied (empty dependencies)
-<a id="__codelineno-0-18" name="__codelineno-0-18" href="#__codelineno-0-18"></a>                 unreachable   -&gt; no channel for this coordinate at all -&gt; fail the task fast
-<a id="__codelineno-0-19" name="__codelineno-0-19" href="#__codelineno-0-19"></a>    -&gt; deliver: user processor receives records via ParsleyProcessorContext
-<a id="__codelineno-0-20" name="__codelineno-0-20" href="#__codelineno-0-20"></a>                forwarded records carry the node&#39;s completeness frontier
-<a id="__codelineno-0-21" name="__codelineno-0-21" href="#__codelineno-0-21"></a>                an input that emits no business record -&gt; a protocol watermark instead
-<a id="__codelineno-0-22" name="__codelineno-0-22" href="#__codelineno-0-22"></a>                (Streams sinks carry the header out to the output topic)
+<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>Edge (plain Kafka producer)
+<a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a>  CausalClock.using(props).observe(trigger) / .observe(...) / .builder(props).require(...)
+<a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a>    -&gt; CausalClock.stamp(record)
+<a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a>         -&gt; stamps parsley-causal-clock header
+<a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a>    -&gt; producer.send(record)
+<a id="__codelineno-1-6" name="__codelineno-1-6" href="#__codelineno-1-6"></a>
+<a id="__codelineno-1-7" name="__codelineno-1-7" href="#__codelineno-1-7"></a>Causal processor (Streams)
+<a id="__codelineno-1-8" name="__codelineno-1-8" href="#__codelineno-1-8"></a>  ParsleyProcessor.process(record)
+<a id="__codelineno-1-9" name="__codelineno-1-9" href="#__codelineno-1-9"></a>    -&gt; null message? -&gt; ParsleyGossip.receive: deliver its own offset, fold its carried clock
+<a id="__codelineno-1-10" name="__codelineno-1-10" href="#__codelineno-1-10"></a>                        stamp-side, relay onward only if it advanced a consumed channel
+<a id="__codelineno-1-11" name="__codelineno-1-11" href="#__codelineno-1-11"></a>    -&gt; ingest: wrap in ParsleyMessage, embed source coordinates
+<a id="__codelineno-1-12" name="__codelineno-1-12" href="#__codelineno-1-12"></a>    -&gt; gate:   ParsleyCausalBroadcast.receive()
+<a id="__codelineno-1-13" name="__codelineno-1-13" href="#__codelineno-1-13"></a>                 frontier.dominates(consumedDeps) — this node&#39;s own contiguous delivered
+<a id="__codelineno-1-14" name="__codelineno-1-14" href="#__codelineno-1-14"></a>                   frontier; a dependency is satisfied only by local delivery of the cause,
+<a id="__codelineno-1-15" name="__codelineno-1-15" href="#__codelineno-1-15"></a>                   never by a claim advertised on another channel&#39;s clock (that feeds only
+<a id="__codelineno-1-16" name="__codelineno-1-16" href="#__codelineno-1-16"></a>                   the outbound stamp)
+<a id="__codelineno-1-17" name="__codelineno-1-17" href="#__codelineno-1-17"></a>                 satisfied     -&gt; advance frontier, drain cascade
+<a id="__codelineno-1-18" name="__codelineno-1-18" href="#__codelineno-1-18"></a>                 unsatisfied   -&gt; buffer (StoreBackedBufferStore) + index (StoreBackedCandidateIndex)
+<a id="__codelineno-1-19" name="__codelineno-1-19" href="#__codelineno-1-19"></a>                 no header     -&gt; trivially satisfied (empty dependencies)
+<a id="__codelineno-1-20" name="__codelineno-1-20" href="#__codelineno-1-20"></a>                 unconsumed    -&gt; no channel for this coordinate here -&gt; ignored, with a metric
+<a id="__codelineno-1-21" name="__codelineno-1-21" href="#__codelineno-1-21"></a>                                  (consumed ancestry is claimed directly by the same clock)
+<a id="__codelineno-1-22" name="__codelineno-1-22" href="#__codelineno-1-22"></a>    -&gt; deliver: user processor receives records via ParsleyProcessorContext
+<a id="__codelineno-1-23" name="__codelineno-1-23" href="#__codelineno-1-23"></a>                forwarded records carry the node&#39;s outbound stamp
+<a id="__codelineno-1-24" name="__codelineno-1-24" href="#__codelineno-1-24"></a>                an input that emits no business record -&gt; a protocol null message instead
+<a id="__codelineno-1-25" name="__codelineno-1-25" href="#__codelineno-1-25"></a>                (Streams sinks carry the header out to the output topic)
 </code></pre></div>
 <h2 id="further-reading">Further reading</h2>
 <ul>
+<li><a href="../causal-consistency/">Causal consistency model</a> — the theory, the gate's soundness argument,
+  and the environmental assumptions E1–E3</li>
+<li><a href="../invariants/">Named invariants</a> — the I1–I9 catalogue that Javadoc and tests cite</li>
+<li><a href="../naming/">Naming</a> — the visibility convention, the academic naming test, and the decision
+  register</li>
+<li><a href="../channels/">The channels module</a> — coordinates, density, own outputs, scope changes</li>
+<li><a href="../causal-broadcast/">The causal-broadcast module</a> — buffer, candidate index, drain cascade,
+  fail-closed delivery, the stamping site</li>
+<li><a href="../gossip/">The gossip module</a> — null messages, emission, the relay rule</li>
 <li><a href="../wire-format/">Wire format</a> — binary layouts for all headers and state stores</li>
-<li><a href="../engine/">The engine</a> — buffer, candidate index, drain cascade, fail-closed delivery</li>
 <li><a href="../streams/">Streams integration</a> — processor init, state store wiring, stamping proxy</li>
 </ul>
 
