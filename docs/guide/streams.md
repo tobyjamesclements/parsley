@@ -83,7 +83,7 @@ unstamped output severs the causal chain: its outputs are causally minimal by de
 severance is undetectable at runtime, because an unstamped record is indistinguishable from a
 genuine external event. Producers that only *originate* events need no participation — a record
 that stamps nothing claims nothing and is delivered immediately. This is environmental assumption
-E3 of the [causal consistency model](internals/causal-consistency.md#environmental-assumptions).
+E3 of the [causal consistency model](../foundations/causal-consistency.md#environmental-assumptions).
 
 **Forward uniformly to all children.** A causal processor advertises its progress downstream by
 stamping its business output, or by emitting a protocol null message when the delegate forwards nothing
@@ -196,7 +196,7 @@ configuration keys at all; startup fails if any `parsley.*` key is present.
 - **Parsley creates no topics of its own.** All causal metadata travels in record headers on the
   topics the topology already declares, plus the standard Kafka Streams changelog topics backing
   Parsley's four state stores (`{ns}-frontier`, `{ns}-buffer`, `{ns}-candidate-index`,
-  `{ns}-forwarded-index`, see [Wire format](internals/wire-format.md#state-store-names-and-serdes)).
+  `{ns}-forwarded-index`, see [Wire format](../reference/wire-format.md#state-store-names-and-serdes)).
   There is no coordination log, no marker topic, and no separate metadata topic.
 - **Create every causal topic — sinks included — before the application starts.** Inputs must exist
   for the sources to resolve, and a declared sink must exist too: its UUID and end offsets feed
@@ -223,5 +223,5 @@ configuration keys at all; startup fails if any `parsley.*` key is present.
   seeded only on a genuine first start (offset expiry is not a first start). Mid-replay expiry is
   therefore a loud crash-loop until an operator resets — a liveness stall by design, never a
   reorder. This is environmental assumption E2 of the
-  [causal consistency model](internals/causal-consistency.md#environmental-assumptions); see
+  [causal consistency model](../foundations/causal-consistency.md#environmental-assumptions); see
   [Troubleshooting](troubleshooting.md#retention-outran-a-causal-consumer) for recovery.

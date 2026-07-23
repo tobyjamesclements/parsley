@@ -22,7 +22,7 @@ arrived on. Kafka's per-partition ordering does not prevent the violation. Parsl
 The guarantee Parsley provides is causal delivery order: when the required conditions hold, if
 event A causally precedes event B, every Kafka Streams processor that subscribes to both topics
 processes A before B. In the consistency hierarchy this sits above eventual consistency and below
-linearisability. See [Streams integration](streams.md) for the required conditions.
+linearisability. See [Streams integration](guide/streams.md) for the required conditions.
 
 ## How it works
 
@@ -36,8 +36,8 @@ catches up.
 The causal buffer is unbounded — there is no configuration that trades causal order for liveness. A
 record that cannot be evaluated at all (an undecodable payload or an undecodable causal-clock
 header) unconditionally fails the task rather than being delivered out of order; a dependency on a
-coordinate this node does not consume is ignored, soundly, with a metric. The [Troubleshooting](troubleshooting.md) page covers
-recovery, and [Configuration](configuration.md) covers the resulting metrics.
+coordinate this node does not consume is ignored, soundly, with a metric. The [Troubleshooting](guide/troubleshooting.md) page covers
+recovery, and [Configuration](guide/configuration.md) covers the resulting metrics.
 
 ## Public API
 
@@ -51,13 +51,13 @@ there is no low-level public entry point to build a topology around by hand.
 | `CausalStreamsBuilder` / `CausalTopology` | Declare a causal topology — exactly one stage: a set of source topics feeding a processor and forwarding to one or more sinks — the same way `StreamsBuilder`/`Topology` declare a plain Kafka Streams one. |
 | `CausalStreams` | The runtime: wraps the underlying `KafkaStreams` instance around the causal guarantee. Owns graceful causal drain on `close()`. |
 | `CausalClock.using` / `observe` / `stamp` / `merge` | Maintain a consumer-side frontier and stamp causal context onto records produced to plain Kafka clients at the topology edge. Topic names are resolved to their stable Kafka UUIDs internally. |
-| `CausalDeliveryException` hierarchy | The typed exceptions Parsley's fail-closed protocol throws out of a task, for an uncaught-exception handler to decide on. See [Streams integration](streams.md#failure-handling). |
+| `CausalDeliveryException` hierarchy | The typed exceptions Parsley's fail-closed protocol throws out of a task, for an uncaught-exception handler to decide on. See [Streams integration](guide/streams.md#failure-handling). |
 
 ## Where to go next
 
 - [Concepts](concepts.md) covers causal dependencies, the frontier, and the buffer.
-- [Getting started](getting-started.md) covers installation and stamping causal context at the edge.
-- [Streams integration](streams.md) covers building a topology with `CausalStreamsBuilder`, the
+- [Getting started](guide/getting-started.md) covers installation and stamping causal context at the edge.
+- [Streams integration](guide/streams.md) covers building a topology with `CausalStreamsBuilder`, the
   preconditions, and recovery.
-- [Configuration](configuration.md) covers the `parsley.*` keys, header size, and metrics.
+- [Configuration](guide/configuration.md) covers the `parsley.*` keys, header size, and metrics.
 - [API reference](api/index.html) is the full Javadoc.

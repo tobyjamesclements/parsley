@@ -1,7 +1,7 @@
 # The causal-broadcast module
 
 `ParsleyCausalBroadcast<K,V>` is the middle protocol module (see the
-[internals overview](overview.md)) and the core of the causal guarantee: the receive-and-deliver
+[internals overview](index.md)) and the core of the causal guarantee: the receive-and-deliver
 algorithm of Birman–Schiper–Stephenson (ISIS CBCAST), run over the reliable FIFO channels the
 [channels module](channels.md) adapts Kafka topic-partitions into. It gates incoming records,
 manages the hold-back buffer, cascades releases as the frontier advances, and stamps every
@@ -63,7 +63,7 @@ frontier must cover every depended coordinate this node consumes; every other co
 ignored, unconditionally. `completeness()` — the frontier max-merged with the carried ancestry
 and every input channel's advertised clock — feeds the *outbound stamp*, which carries transitive
 ancestry downstream where each receiver's own gate verifies it locally; it never releases anything
-here. See the [causal consistency model](causal-consistency.md) for why local delivery is required
+here. See the [causal consistency model](../foundations/causal-consistency.md) for why local delivery is required
 and why ignoring unconsumed coordinates is sound.
 
 ## Key state
@@ -163,7 +163,7 @@ an operator recovers from — never forwarded on an unproven causal premise, nev
 discarded. Two distinct failures, each with its own exception (a dependency on a coordinate this
 node does not consume is *not* a failure: it falls to the gate's ignore branch, counted by the
 `deps-out-of-scope-ignored` metric — see the
-[causal consistency model](causal-consistency.md)):
+[causal consistency model](../foundations/causal-consistency.md)):
 
 - **A poisoned buffered record** (`CausalBufferDeserializationException`) — a held record's key or
   value can no longer be deserialised on the forward path (typically an incompatible Schema

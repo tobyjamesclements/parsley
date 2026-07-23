@@ -22,8 +22,8 @@ import java.util.Properties;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 
 /**
- * Compiles and exercises the {@code java} samples in {@code docs/getting-started.md} and
- * {@code docs/streams.md}, so an API change that would break a published sample fails
+ * Compiles and exercises the {@code java} samples in {@code docs/guide/getting-started.md} and
+ * {@code docs/guide/streams.md}, so an API change that would break a published sample fails
  * {@code mvn test} instead of shipping silently.
  *
  * <p>Each sample appears twice here:
@@ -54,7 +54,7 @@ class DocsSamplesTest {
             "c3", Uuid.randomUuid());
 
     // ---------------------------------------------------------------------------------------------
-    // docs/getting-started.md § "Stamping causal context onto produced records", sample 1: relay
+    // docs/guide/getting-started.md § "Stamping causal context onto produced records", sample 1: relay
     // ---------------------------------------------------------------------------------------------
 
     /**
@@ -98,7 +98,7 @@ class DocsSamplesTest {
     }
 
     // ---------------------------------------------------------------------------------------------
-    // docs/getting-started.md § "Stamping causal context onto produced records", sample 2: fan-in
+    // docs/guide/getting-started.md § "Stamping causal context onto produced records", sample 2: fan-in
     // ---------------------------------------------------------------------------------------------
 
     /**
@@ -143,7 +143,7 @@ class DocsSamplesTest {
     }
 
     // ---------------------------------------------------------------------------------------------
-    // docs/getting-started.md § "Stamping causal context onto produced records", sample 3: builder
+    // docs/guide/getting-started.md § "Stamping causal context onto produced records", sample 3: builder
     // ---------------------------------------------------------------------------------------------
 
     /**
@@ -179,7 +179,7 @@ class DocsSamplesTest {
     }
 
     // ---------------------------------------------------------------------------------------------
-    // docs/getting-started.md § "Propagating causal context across services", sample 4: token
+    // docs/guide/getting-started.md § "Propagating causal context across services", sample 4: token
     // ---------------------------------------------------------------------------------------------
 
     /**
@@ -233,7 +233,7 @@ class DocsSamplesTest {
     }
 
     // ---------------------------------------------------------------------------------------------
-    // docs/streams.md, intro sample: declare a topology and hand it to the runtime
+    // docs/guide/streams.md, intro sample: declare a topology and hand it to the runtime
     // ---------------------------------------------------------------------------------------------
 
     /**

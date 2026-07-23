@@ -1,7 +1,7 @@
 # The channels module
 
 `ParsleyChannels` is the lowest of the three protocol modules (see the
-[internals overview](overview.md)): the adaptation that makes Kafka topic-partitions behave as the
+[internals overview](index.md)): the adaptation that makes Kafka topic-partitions behave as the
 reliable FIFO channels classical causal broadcast assumes (Hadzilacos and Toueg's reliable
 channels; the links layer of the Cachin–Guerraoui–Rodrigues stack, minus point-to-point — a
 partition is multi-producer fan-out). Everything that exists because Kafka violates a classical
@@ -38,7 +38,7 @@ properties: per-producer stamp monotonicity; contiguous frontier; normalised clo
 The module is the single owner of all causal metadata a node persists: the contiguous frontier
 clock, the per-input-channel clocks, the carried-ancestry clock, the own-outputs clock, and the
 highest-received offsets, all folded into the single `"f"` value of the frontier store (see
-[Wire format](wire-format.md#the-ns-frontier-f-value)); plus the forwarded-offset index, which
+[Wire format](../reference/wire-format.md#the-ns-frontier-f-value)); plus the forwarded-offset index, which
 keeps its own keyed store. The [causal-broadcast module](causal-broadcast.md) runs the delivery
 gate and the buffer over these operations.
 
@@ -52,7 +52,7 @@ different record — recreation reads as history loss, never as reordering. A ba
 topic-identity poll (`ParsleyTopicIdentityWatch`) enforces the per-lifetime binding for inputs and
 sinks alike: a mid-run UUID change fails every task fast before it can ingest or stamp under the
 stale identity. This is environmental assumption E1 of the
-[causal consistency model](causal-consistency.md#environmental-assumptions).
+[causal consistency model](../foundations/causal-consistency.md#environmental-assumptions).
 
 ## Density: making a partition look gap-free
 
@@ -173,4 +173,4 @@ The module self-persists the single `"f"` value inside every mutating request, b
 returns to the caller — the frontier advance is durable before a delivered record reaches the user
 processor. All Parsley stores commit in one Kafka transaction (`exactly_once_v2` is required), so
 the frontier, forwarded index, and buffer cannot tear against each other. The full binary layout
-is in [Wire format](wire-format.md#the-ns-frontier-f-value).
+is in [Wire format](../reference/wire-format.md#the-ns-frontier-f-value).

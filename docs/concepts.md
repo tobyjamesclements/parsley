@@ -5,8 +5,8 @@ buffer, delivery, co-partitioning, and topology changes. Internally these are im
 layered protocols — a channels layer that adapts Kafka topic-partitions into the reliable FIFO
 channels causal broadcast assumes, a causal-broadcast layer that delivers records in causal order,
 and a gossip layer that keeps clock progress flowing through processors that emit nothing. The
-[internals overview](internals/overview.md) maps the layers to classes, and the
-[causal consistency model](internals/causal-consistency.md) gives the theory; nothing below
+[internals overview](protocols/index.md) maps the layers to classes, and the
+[causal consistency model](foundations/causal-consistency.md) gives the theory; nothing below
 requires either.
 
 ## Causal dependencies
@@ -99,7 +99,7 @@ never a failure. There is no restriction on a node consuming both a topic
 and a topic derived from it.
 This gate is the delivery condition of Birman–Schiper–Stephenson causal broadcast, evaluated over
 Kafka topic-partition coordinates rather than process identifiers. See the
-[causal consistency model](internals/causal-consistency.md) for the full contract and why a
+[causal consistency model](foundations/causal-consistency.md) for the full contract and why a
 single witness suffices.
 
 ## Causal buffer is unbounded and fail-closed
@@ -110,8 +110,8 @@ undecodable payload or an undecodable causal-clock header — unconditionally fa
 never dropped or forwarded on an unproven premise. The failure is logged with the record's
 coordinate and its metadata (never the payload), and counted by a metric. A dependency on a
 coordinate this node does not consume is not a failure: it falls to the delivery gate's ignore
-branch, described under [Delivery](#delivery). See [Troubleshooting](troubleshooting.md) for
-the operational playbook and [Configuration](configuration.md#metrics) for the metrics.
+branch, described under [Delivery](#delivery). See [Troubleshooting](guide/troubleshooting.md) for
+the operational playbook and [Configuration](guide/configuration.md#metrics) for the metrics.
 
 ## Co-partitioning
 
@@ -133,7 +133,7 @@ verify that a stage's causal input topics share a partition count, and, since a 
 `CausalStreamsBuilder` owns its sinks too, that no sink is narrower than the widest source. The
 stage also applies one partitioner uniformly across every sink it declares so a shard cannot drift
 onto different partitions across topics by accident. See the
-[Streams integration](streams.md#preconditions) preconditions for the full contract.
+[Streams integration](guide/streams.md#preconditions) preconditions for the full contract.
 
 ## Joining a running topology
 

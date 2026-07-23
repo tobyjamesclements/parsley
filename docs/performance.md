@@ -11,7 +11,7 @@ and spot the levers that matter for your topology.
     micro-curves proved to be a poor proxy for the costs that actually dominate (state
     persistence, protocol record volume, and producer acknowledgement waits). To size a
     deployment, measure your own topology end to end and watch the metrics described in
-    [Configuration](configuration.md#metrics).
+    [Configuration](guide/configuration.md#metrics).
 
 Throughout this page, `w` is the width of a clock (the number of `(topic, partition)` entries it
 carries), `C` is the number of channels the node tracks, `n` is the number of records held in the
@@ -104,7 +104,7 @@ usually dominate a restart on any healthily sized buffer.
 !!! tip "Buffer restore cost tracks buffer depth"
     The causal buffer is unbounded, so buffer restore cost is entirely a function of how much lag
     accumulates before a restart, not a configurable limit. Keep an eye on the `buffer-depth`
-    gauge (see [Configuration](configuration.md#metrics)) in production. A lagging or
+    gauge (see [Configuration](guide/configuration.md#metrics)) in production. A lagging or
     co-partitioning-broken topology drives up both restart cost and steady-state buffer footprint.
 
 ---
@@ -114,7 +114,7 @@ usually dominate a restart on any healthily sized buffer.
 Within one task invocation, a second forward is causally after the first even when the two go to
 different sink topics or partitions, so before stamping each business forward the task waits for
 every pending own-sink send to be acknowledged (the crossing wait, see the
-[own outputs section](internals/channels.md#own-outputs) of the channels internals). The waits
+[own outputs section](protocols/channels.md#own-outputs) of the channels internals). The waits
 serialize a multi-forward invocation on producer acknowledgement latency: forward k+1 does not
 stamp until forward k's batch is acknowledged, so a delegate forwarding N records per input pays
 roughly
@@ -137,7 +137,7 @@ coordinate. Protocol null messages are exempt for their own exact destinations a
 
 ## 5. Gossip record volume
 
-The gossip layer (see [the gossip module](internals/gossip.md)) keeps causal progress observable
+The gossip layer (see [the gossip module](protocols/gossip.md)) keeps causal progress observable
 through processors that produce no business output, and its cost is record volume rather than
 computation. An input record that yields no business forward emits one protocol null message to
 every declared sink, so a filter-heavy or aggregating stage multiplies its sink traffic by up to

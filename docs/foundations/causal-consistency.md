@@ -2,7 +2,7 @@
 
 Parsley's concrete guarantee is causal delivery order for a Kafka Streams processor: records are
 delivered to `process()` only after every dependency the processor consumes has been satisfied,
-subject to the conditions in [Streams integration](../streams.md). This page covers the
+subject to the conditions in [Streams integration](../guide/streams.md). This page covers the
 theoretical model the guarantee is built on, why Kafka stream processing does not satisfy the
 assumptions traditional causal-consistency algorithms make, how Parsley's three protocol layers
 restore them, and the environmental assumptions the guarantee itself rests on.
@@ -67,16 +67,16 @@ different ways, and Parsley's two lower layers exist to deal with exactly one ea
 └──────────────────────────────────────────────────────────────────┘
 ```
 
-- The **[channels module](channels.md)** repairs the transport assumption. Kafka partitions are
+- The **[channels module](../protocols/channels.md)** repairs the transport assumption. Kafka partitions are
   not classical channels: topic recreation rebinds names, EOS commit markers and aborted records
   occupy offsets a consumer never sees, retention truncates history, the broker assigns the
   sender's own sequence numbers asynchronously, and Parsley itself delivers within a partition
   out of order. UUID-keyed coordinates, seeding, bridging, the contiguous frontier, and
   own-output tracking each repair one of these, so the layer above sees dense, stable channels.
-- The **[causal-broadcast module](causal-broadcast.md)** repairs the visibility assumption — not
+- The **[causal-broadcast module](../protocols/causal-broadcast.md)** repairs the visibility assumption — not
   by restoring total visibility, but by making the delivery predicate sound without it, with the
   two-branch gate described next.
-- The **[gossip module](gossip.md)** is a liveness layer: it keeps clock progress observable
+- The **[gossip module](../protocols/gossip.md)** is a liveness layer: it keeps clock progress observable
   through processors that produce no business output, so downstream completeness never stalls on
   a quiet path. It can never release a record the gate would hold.
 
@@ -180,7 +180,7 @@ causal topic's UUID changes mid-run. Detection is bounded by the poll interval, 
 instantaneous, so live recreation of a causal topic remains an operational error — loud and
 bounded rather than silent. Across a restart, recreation degrades to history loss (E2's kind),
 never reordering: a clock naming the old UUID can never be satisfied by the new topic's offsets.
-See [Troubleshooting](../troubleshooting.md#a-causal-topic-was-deleted-or-recreated-while-the-application-ran).
+See [Troubleshooting](../guide/troubleshooting.md#a-causal-topic-was-deleted-or-recreated-while-the-application-ran).
 
 ### E2 — retention must not destroy causally-live history
 
@@ -194,8 +194,8 @@ not a first start). Mid-replay retention expiry is therefore a loud crash-loop u
 resets — a liveness stall by design, never a reorder. The preventative half is a retention-sizing
 constraint on the operator: retention on causal topics must comfortably exceed the longest
 consumer outage or replay you intend to survive. See the
-[operations note in Streams integration](../streams.md#operating-notes) and
-[Troubleshooting](../troubleshooting.md#retention-outran-a-causal-consumer).
+[operations note in Streams integration](../guide/streams.md#operating-notes) and
+[Troubleshooting](../guide/troubleshooting.md#retention-outran-a-causal-consumer).
 
 ### E3 — compliant participants; participation is per-path
 
@@ -225,7 +225,7 @@ This takes the consistency side of the trade-off described in the CAP theorem an
 consistency literature unconditionally: Parsley has no policy knob that spends causal order for
 liveness. A genuinely stuck dependency (a lagging partition, a co-partitioning gap, a producing
 topic that was deleted) shows up as unbounded buffer growth or a fail-closed task restart, never
-as a silent reordering — see [Troubleshooting](../troubleshooting.md).
+as a silent reordering — see [Troubleshooting](../guide/troubleshooting.md).
 
 ## Rejected designs
 

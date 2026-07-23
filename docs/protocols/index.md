@@ -113,14 +113,14 @@ Causal processor (Streams)
 
 ## Further reading
 
-- [Causal consistency model](causal-consistency.md) — the theory, the gate's soundness argument,
+- [Causal consistency model](../foundations/causal-consistency.md) — the theory, the gate's soundness argument,
   and the environmental assumptions E1–E3
-- [Named invariants](invariants.md) — the I1–I9 catalogue that Javadoc and tests cite
-- [Naming](naming.md) — the visibility convention, the academic naming test, and the decision
+- [Named invariants](../foundations/invariants.md) — the I1–I9 catalogue that Javadoc and tests cite
+- [Naming](../reference/naming.md) — the visibility convention, the academic naming test, and the decision
   register
 - [The channels module](channels.md) — coordinates, density, own outputs, scope changes
 - [The causal-broadcast module](causal-broadcast.md) — buffer, candidate index, drain cascade,
   fail-closed delivery, the stamping site
 - [The gossip module](gossip.md) — null messages, emission, the relay rule
-- [Wire format](wire-format.md) — binary layouts for all headers and state stores
-- [Streams integration](streams.md) — processor init, state store wiring, stamping proxy
+- [Wire format](../reference/wire-format.md) — binary layouts for all headers and state stores
+- [Streams integration](../reference/processor.md) — processor init, state store wiring, stamping proxy

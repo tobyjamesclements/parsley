@@ -48,7 +48,7 @@ channel the task consumes at its own partition. Carried custody folds unconditio
 rides every later emission, but custody never obliges a relay. The original whole-clock trigger
 (relay whenever the carried clock was not dominated) provably never quiesced on topic cycles of
 three or more nodes; the analysis and the current rule are in
-[the gossip module](gossip.md#the-relay-rule).
+[the gossip module](../protocols/gossip.md#the-relay-rule).
 
 ## I7 — retired
 

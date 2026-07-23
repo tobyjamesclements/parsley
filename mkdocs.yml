@@ -19,14 +19,18 @@ theme:
         icon: material/brightness-4
         name: Switch to light mode
   features:
+    - navigation.tabs
+    - navigation.indexes
     - navigation.top
     - navigation.footer
+    - toc.integrate
     - search.highlight
     - content.code.copy
 
 markdown_extensions:
   - attr_list
   - admonition
+  - footnotes
   - pymdownx.details
   - pymdownx.highlight:
       anchor_linenums: true
@@ -41,24 +45,25 @@ extra:
 
 nav:
   - Home: index.md
-  - Guide:
+  - Foundations:
+    - Causal consistency: foundations/causal-consistency.md
+    - Named invariants: foundations/invariants.md
+  - The three protocols:
+    - Overview: protocols/index.md
+    - 1 · Channels: protocols/channels.md
+    - 2 · Causal broadcast: protocols/causal-broadcast.md
+    - 3 · Gossip: protocols/gossip.md
+  - Using Parsley:
+    - Getting started: guide/getting-started.md
+    - Streams integration: guide/streams.md
     - Concepts: concepts.md
-    - Getting started: getting-started.md
-    - Streams integration: streams.md
-    - Configuration: configuration.md
-    - Incremental adoption: adoption.md
-  - Operations:
+    - Incremental adoption: guide/adoption.md
+    - Configuration: guide/configuration.md
+    - Troubleshooting: guide/troubleshooting.md
     - Performance: performance.md
-    - Troubleshooting: troubleshooting.md
   - Reference:
+    - The processor: reference/processor.md
+    - Wire format: reference/wire-format.md
+    - Naming: reference/naming.md
+    - Bibliography: reference/bibliography.md
     - API reference: api/index.html
-    - Internals:
-      - Overview: internals/overview.md
-      - Causal consistency model: internals/causal-consistency.md
-      - Named invariants: internals/invariants.md
-      - Naming: internals/naming.md
-      - The channels module: internals/channels.md
-      - The causal-broadcast module: internals/causal-broadcast.md
-      - The gossip module: internals/gossip.md
-      - Wire format: internals/wire-format.md
-      - The processor: internals/streams.md

@@ -1,6 +1,6 @@
 # The gossip module
 
-`ParsleyGossip` is the top protocol module (see the [internals overview](overview.md)): clock
+`ParsleyGossip` is the top protocol module (see the [internals overview](index.md)): clock
 dissemination over the topology's own channels, in the epidemic sense of Demers et al. 1987 —
 each node relays causal progress onward only while it is news, so knowledge spreads across every
 path, cycles included, and quiesces when everyone has converged. Its records are *null messages*
@@ -69,7 +69,7 @@ retention consequence: a sink segment holding only null messages looks old to br
 retention exactly when its triggers are old — a backfill — and during a backfill the business
 outputs on the same sink carry the same old timestamps, so retention on causal topics must already
 cover the backfill depth. That is
-[E2's retention-sizing constraint](causal-consistency.md#environmental-assumptions),
+[E2's retention-sizing constraint](../foundations/causal-consistency.md#environmental-assumptions),
 restated, not a new one — and an undersized retention fails in the safe direction: expired null
 messages below a lagging consumer's position hit `AutoOffsetReset.none()`'s loud stall rather than
 silently corrupting downstream event-time results.

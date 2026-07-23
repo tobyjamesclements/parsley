@@ -15,7 +15,7 @@ a narrow seam are named for their backing rather than for the seam (`KafkaTopics
 Each of the three protocol layers is one package-private class presented in the module style
 of Cachin, Guerraoui, and Rodrigues (*Introduction to Reliable and Secure Distributed
 Programming*): requests in, indications out, and the properties the module guarantees (its
-[named invariants](invariants.md)). Two package-wide deviations from the textbook style are
+[named invariants](../foundations/invariants.md)). Two package-wide deviations from the textbook style are
 stated once in the package Javadoc so an academic reader is oriented immediately:
 
 - **Indications are pulled, not pushed.** Deliveries come back as ordered return values rather

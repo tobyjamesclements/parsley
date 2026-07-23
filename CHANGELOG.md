@@ -6,6 +6,21 @@ All notable changes to this project are documented in this file. The format is b
 
 ## [Unreleased]
 
+### Changed
+- **The documentation site is restructured to lead with its causal-consistency foundations and
+  the three protocols.** The academic material is promoted from the former `Reference → Internals`
+  into two top-level sections: `Foundations` (the causal-consistency model and the named
+  invariants) and `The three protocols` (channels, causal broadcast, gossip, with the layered
+  overview as the section landing page). Practical pages regroup under `Using Parsley`, and
+  implementation reference (the processor embedding, wire format, naming) under `Reference`,
+  joined by a new `Bibliography`. Files move out of `docs/internals/` into
+  `docs/{foundations,protocols,guide,reference}/` accordingly; every cross-link and the
+  `mkdocs.yml` navigation is updated, and the Material theme gains navigation tabs, section index
+  pages, and footnote-rendered citations. The `docs/getting-started.md` and `docs/streams.md`
+  path references in `DocsSamplesTest` follow the pages to `docs/guide/`. Page prose is rewritten
+  section by section in the changes that follow; the `Concepts` page is absorbed and the
+  `Performance` page dissolved into the protocol pages and Configuration there.
+
 ### Removed
 - **The JMH benchmark suite is deleted; `docs/performance.md` now asserts complexity from the
   code instead of claiming empirical confirmation.** The suite (`HeaderEvaluationBenchmark`,
