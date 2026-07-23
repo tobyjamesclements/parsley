@@ -91,44 +91,22 @@ final class ParsleyCausalBroadcast<K, V> {
     private final ParsleyVectorClock.CoordinatePredicate ownSinkTopics;
 
     /**
-     * The one constructor. Takes a pre-built {@link ParsleyChannels} — the single owner of the
-     * frontier clock, channel clocks, and forwarded index — so callers control its persistence
-     * (the task's changelog-backed store in production, an in-memory store double in tests; the
-     * test fixture factory provides the defaulted convenience shapes tests use).
+     * The one constructor. Takes a pre-built {@link ParsleyChannels} so callers control its
+     * persistence (a changelog-backed store in production, an in-memory double in tests). Every
+     * restored held record is classified by its source coordinate: a <strong>consumed</strong> input
+     * on this task's partition is restored unchanged (seed replay, candidate re-index); a
+     * <strong>destroyed</strong> source (a recreated input's old UUID, in {@code destroyedSources}) is
+     * purged with an INFO log, since delivering it would re-enter a coordinate
+     * {@link ParsleyChannels#rescope} just purged (history loss, never reordering, the one removal I9
+     * permits); an <strong>out-of-scope but alive</strong> source (a removed input's records) fails
+     * init loudly, since it can neither be delivered (no registered serde) nor silently dropped
+     * (fail-closed), with redeclare-or-reset remedies in the message.
      *
-     * <p><strong>Held-record disposition.</strong> Every restored held record is classified by its
-     * source coordinate before anything is seeded or indexed:
-     * <ul>
-     *   <li><strong>Consumed</strong> (a current input on this task's partition) — restored
-     *       unchanged: seed replay, then candidate re-index.</li>
-     *   <li><strong>Destroyed</strong> (its source topicId is in {@code destroyedSources} — a
-     *       recreated input's old incarnation) — purged from the buffer, with an INFO log carrying
-     *       the count and coordinates. E1's precedent: a destroyed UUID's entries are the one
-     *       removal I9 permits from stamp-feeding state; the incarnation that produced these
-     *       records is deleted, and delivering them would both forward a record from a dead
-     *       incarnation and re-enter its destroyed coordinate into the frontier, which rescope
-     *       just purged. Purging keeps recreation-across-a-restart self-healing: history loss,
-     *       never reordering.</li>
-     *   <li><strong>Out of scope but alive</strong> (a removed input's records) — init fails
-     *       loudly, naming the topics and per-record counts. Silently dropping them would violate
-     *       the fail-closed contract; delivering them is impossible (the removed topic has no
-     *       registered serde) and undesirable (the operator removed the input). The remedies are
-     *       in the message: redeclare the input so the records drain through ordinary delivery, or
-     *       perform a full reset.</li>
-     * </ul>
-     *
-     * @param consumed         the consumed(c) predicate of the two-branch gate (D1): a registered
-     *                         input channel of this task, on the partition this task owns. A
-     *                         dependency on a consumed coordinate is gated on this node's own
-     *                         contiguous frontier; a dependency on any other coordinate is ignored,
-     *                         with a metric — see this field's own Javadoc.
-     * @param ownSinkTopics    coordinates for a topic this node itself produces. Feeds only the I8
-     *                         reflected-claim diagnostic — never the gate, the channel folds, or the
-     *                         stamp; see this field's own Javadoc.
-     * @param destroyedSources the old topic UUIDs of inputs recreated across the restart (same
-     *                         name, new UUID — the destroyed incarnations whose channel state
-     *                         {@link ParsleyChannels#rescope} purges); drives the held-record
-     *                         disposition above
+     * @param consumed         the consumed(c) gate predicate: an input channel of this task on the
+     *                         partition it owns; a dependency elsewhere is ignored with a metric
+     * @param ownSinkTopics    coordinates this node produces; feeds only the I8 reflected-claim
+     *                         diagnostic, never the gate or the folds
+     * @param destroyedSources old UUIDs of inputs recreated across the restart, driving the disposition
      */
     ParsleyCausalBroadcast(ParsleyChannels channels,
                  ParsleyBufferStore<K, V> buffer,
@@ -435,43 +413,25 @@ final class ParsleyCausalBroadcast<K, V> {
     }
 
     /**
-     * The causal broadcast <em>broadcast</em> request (see the class Javadoc's module box): stamps
-     * {@code record} with this node's current outbound vector timestamp —
-     * {@code completeness ∪ ownOutputs} ({@link ParsleyChannels#stamp()}, D2), read live at stamp
-     * time — replacing any {@link ParsleyHeader#CAUSAL_CLOCK} header already present. The
-     * send itself is not performed here (it is Kafka's produce, via {@code context.forward()}); in
-     * Birman–Schiper–Stephenson terms this is the timestamp-assignment half of {@code broadcast(m)},
-     * and the sender's own clock increment is the broker's offset assignment, learned only
-     * asynchronously — which is why the stamp cannot include the record's own coordinate
-     * ({@code package-info} states this Parsley-wide deviation once).
+     * The broadcast request: stamps {@code record} with this node's current outbound timestamp
+     * ({@link ParsleyChannels#stamp()}, read live), replacing any {@link ParsleyHeader#CAUSAL_CLOCK}
+     * header present. The send itself is Kafka's produce via {@code context.forward()}; this is the
+     * timestamp-assignment half of BSS {@code broadcast(m)}, and because the broker assigns the
+     * sender's own offset the stamp cannot include the record's own coordinate. Two steps precede
+     * every stamp: the crossing wait ({@link ParsleyChannels#awaitOwnOutputQuiescence}), which blocks
+     * until no own-sink send outside {@code destinations} is unacknowledged and throws rather than
+     * stamp on timeout or ack failure, then the ack fold
+     * ({@link ParsleyChannels#foldAcknowledgedOutputs}), which drains the producer-ack registry into
+     * the {@code ownOutputs} clock the stamp merges.
      *
-     * <p>Two steps precede every stamp, in order, both structural to this single site:
-     * <ol>
-     *   <li><strong>The crossing wait</strong> ({@link ParsleyChannels#awaitOwnOutputQuiescence} —
-     *       O1, per-partition granularity per T3.0 A7): block until no own-sink send outside
-     *       {@code destinations} is unacknowledged, so a send that process-order-precedes this
-     *       record cannot be missing from the clock the stamp carries. On timeout or ack failure
-     *       the wait throws and the EOS transaction dies — never stamp-and-proceed (A8). Uniform
-     *       across business forwards and null messages (O4; the recorded null-message exemption is
-     *       deliberately not taken).</li>
-     *   <li><strong>The ack fold</strong> ({@link ParsleyChannels#foldAcknowledgedOutputs} —
-     *       "folded before each stamp", D2/O1): drain the producer-ack registry into the
-     *       {@code ownOutputs} clock the stamp merges.</li>
-     * </ol>
+     * <p>This is the single stamping site for every outbound record: business forwards
+     * ({@link ParsleyProcessorContext#forward}) and protocol markers both route through here, so their
+     * stamps cannot diverge.
      *
-     * <p>This is the <strong>single stamping site</strong> for every outbound record: a delegate's
-     * business forwards ({@link ParsleyProcessorContext#forward}) and {@code ParsleyProcessor}'s
-     * protocol markers both route through here, so the stamp's content cannot diverge between the
-     * two paths by construction.
-     *
-     * @param record       the outbound record to stamp; its headers are not mutated (a fresh header
-     *                     set is built and applied via {@link Record#withHeaders})
-     * @param destinations the destination coordinates this stamped record will be sent to, excluded
-     *                     from the crossing wait (a pending send to the record's own destination is
-     *                     covered by partition FIFO plus I3, O1; for a marker fanned out to several
-     *                     sinks the whole set is excludable under O4's recorded null-message
-     *                     exemption). Empty when the destination is unknowable — the conservative
-     *                     full-quiescence wait
+     * @param record       the outbound record to stamp; its headers are not mutated
+     * @param destinations the coordinates this record will be sent to, excluded from the crossing wait
+     *                     (a send to the record's own destination is covered by partition FIFO and I3);
+     *                     empty when the destination is unknowable, the conservative full-quiescence wait
      * @param <KOut>       the outbound key type
      * @param <VOut>       the outbound value type
      * @return the same record with the stamp header attached

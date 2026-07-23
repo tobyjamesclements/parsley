@@ -93,35 +93,22 @@ final class ParsleyGossip<K, V> {
     }
 
     /**
-     * The gossip <em>receive</em> request: folds one received null message into this node's state.
-     * It does two independent things, and the distinction is the crux of correctness here:
-     * <ol>
-     *   <li><strong>Always</strong> delivers the null message's own {@code (channelId, partition,
-     *       offset)} into its channel's contiguous frontier — exactly like a business record's own
-     *       coordinate ({@code seed/bridge} then {@link ParsleyChannels#delivered} then the release
-     *       cascade) — so a channel carrying only null messages (a non-emitting path) still
-     *       advances. A null message occupies a real offset on its partition, so the frontier's
-     *       gap-free absorb walk must count it or it stalls below the message forever, stranding
-     *       every later record on that channel.</li>
-     *   <li>Folds the carried clock into the channel's advertised view — the outbound-stamp input
-     *       (I9: the whole clock, never stripped), <strong>never the gate</strong>. A peer's claim
-     *       that a coordinate was delivered <em>there</em> is not proof it was delivered
-     *       <em>here</em>; releases on this path come only from the null message's own offset
-     *       advancing its channel's frontier. Gating on the max-merged completeness here used to
-     *       let a null message claiming a sibling channel's coordinate release a held record before
-     *       this node had itself delivered that cause — an effect-before-cause delivery to the
-     *       delegate.</li>
-     * </ol>
-     *
-     * <p>The I6 comparison is taken between the two — after the producer-ack fold (so a carried
-     * clock reflecting this node's own recent output reads as already known), before the carried
-     * clock folds (afterwards it is dominated by construction).
+     * The receive request: folds one received null message into this node's state, doing two
+     * independent things. It always delivers the null message's own {@code (channelId, partition,
+     * offset)} into its channel's contiguous frontier, exactly like a business record (seed/bridge,
+     * {@link ParsleyChannels#delivered}, release cascade), so a channel carrying only null messages
+     * still advances and the gap-free walk does not stall below it. Separately, it folds the carried
+     * clock into the channel's advertised view, the outbound-stamp input (I9, the whole clock), never
+     * the gate: a peer's claim that a coordinate was delivered there is not proof it was delivered
+     * here, so releases on this path come only from the null message's own offset advancing the
+     * frontier. The I6 relay comparison is taken between the two, after the producer-ack fold and
+     * before the carried clock folds.
      *
      * @param channelId the topic UUID of the null message's source channel
      * @param partition the partition of the null message's source channel
      * @param offset    the null message's own offset on its source channel
      * @param carried   the completeness clock the null message carried (empty when the header was
-     *                  absent — an undecodable header fails the task upstream, before this call)
+     *                  absent; an undecodable header fails the task upstream, before this call)
      * @return the records released in the process, plus the I6 relay signal
      */
     Reception<K, V> receive(Uuid channelId, int partition, long offset, ParsleyVectorClock carried) {
@@ -150,30 +137,19 @@ final class ParsleyGossip<K, V> {
     }
 
     /**
-     * The gossip <em>advertise</em> indication: builds this node's null message — a record with a
-     * null value, marked by the {@link ParsleyHeader#NULL_MESSAGE} header, stamped with the current
-     * outbound vector timestamp by the single stamping site
-     * ({@link ParsleyCausalBroadcast#broadcast}, so a null message's clock and a business record's
-     * clock cannot diverge by construction) — ready for the caller to forward to every sink.
+     * The advertise indication: builds this node's null message, a record with a null value marked by
+     * {@link ParsleyHeader#NULL_MESSAGE} and stamped by the single stamping site
+     * ({@link ParsleyCausalBroadcast#broadcast}, so its clock cannot diverge from a business record's),
+     * ready for the caller to forward to every sink.
      *
-     * <p>{@code key} is the triggering record's key, carried through as informational wire content,
-     * not for routing: {@link ParsleyMarkerPartition} (set by the caller's forward path) routes the
-     * message to this task's own owned partition regardless of key, including when it is
-     * {@code null}. {@code timestamp} is the <em>triggering record's</em> timestamp, never the wall
-     * clock: a null message's timestamp carries no causal meaning (only its headers do), but Kafka
-     * Streams advances downstream stream time from every polled record's timestamp before the
-     * record is classified, so a wall-clock stamp emitted during a reprocessing run over historic
-     * event times would yank downstream delegates' windows, grace periods, and suppressions to
-     * now. Under trigger timestamps, downstream stream time advances only as the data's time does.
-     * The retention trade this makes: a sink segment holding only null messages looks old to
-     * broker time-based retention exactly when its triggers are old — a backfill — and during a
-     * backfill the business outputs on the same sink carry the same old timestamps, so retention
-     * on causal topics must already cover the backfill depth (E2's retention-sizing constraint,
-     * restated, not a new one). An undersized retention then fails in the safe direction: expired
-     * null messages below a lagging consumer's position hit {@code AutoOffsetReset.none()}'s loud
-     * stall, where a wall-clock stamp silently corrupted downstream event-time results. The
-     * stamp's crossing wait excludes exactly this task's own sink partitions (see
-     * {@link #destinations}).
+     * <p>{@code key} is the triggering record's key, informational wire content only, since
+     * {@link ParsleyMarkerPartition} routes the message to this task's own partition regardless of key.
+     * {@code timestamp} is the triggering record's timestamp, never the wall clock: Kafka Streams
+     * advances downstream stream time from every polled record's timestamp, so a wall-clock stamp
+     * during a reprocessing run would yank downstream windows and grace periods to now. A sink segment
+     * of only null messages then looks old to retention exactly when its triggers are old (a backfill),
+     * so retention on causal topics must cover the backfill depth (E2's constraint restated); an
+     * undersized retention fails safely into {@code AutoOffsetReset.none()}'s loud stall.
      *
      * @param key       the triggering record's key, or {@code null} when none has been observed
      * @param timestamp the triggering record's timestamp

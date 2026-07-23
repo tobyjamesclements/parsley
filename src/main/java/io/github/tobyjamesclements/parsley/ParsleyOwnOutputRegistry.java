@@ -9,48 +9,25 @@ import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 
 /**
- * The producer-acknowledgement registry behind the {@code ownOutputs} clock (D2): the concurrent
- * hand-off between {@link ParsleyOwnOutputInterceptor}'s callbacks — which run on the producer's
- * network thread — and the stream threads that fold acknowledged coordinates into
- * {@link ParsleyChannels#acknowledge} before each stamp. The name is a coinage: no literature
- * analog — the mechanism exists only because the broker performs the sender's clock increment
- * (offset assignment) and reports it asynchronously through the producer ack path.
+ * The producer-acknowledgement registry behind the {@code ownOutputs} clock: the concurrent hand-off
+ * between {@link ParsleyOwnOutputInterceptor}'s callbacks, which run on the producer's network
+ * thread, and the stream threads that fold acknowledged coordinates into
+ * {@link ParsleyChannels#acknowledge} before each stamp. It exists only because the broker performs
+ * the sender's clock increment (offset assignment) and reports it asynchronously through the ack path.
  *
- * <p>One registry exists per {@link CausalStreams} instance, registered in a JVM-wide map under a
- * minted id that travels to every one of the instance's producers through the public
- * {@code producer.} config prefix ({@link #CONFIG_KEY}) — the interceptor and the processor path
- * both resolve the same instance from configuration, so no {@code *.internals.*} type is touched
- * and unrelated {@code CausalStreams} instances in one JVM (tests) cannot cross-talk.
+ * <p>One registry exists per {@link CausalStreams} instance, held in a JVM-wide map under a minted id
+ * that travels to every producer through the {@code producer.} config prefix ({@link #CONFIG_KEY}), so
+ * no {@code *.internals.*} type is touched and unrelated instances in one JVM cannot cross-talk. It
+ * holds two structures at different granularity: acked offsets as a global max per
+ * {@code (topic, partition)} across the instance's producers (folding a sibling task's max on a shared
+ * sink is an I8-sound over-claim, and a task's own sends never exceed the max), and pending sends
+ * tracked per producer, which under {@code exactly_once_v2} is per StreamThread, so
+ * {@link #awaitQuiescentExcept} resolves the caller's pending sends from the current thread alone.
  *
- * <p>Two structures with deliberately different granularity (T2.1's carry-forward — under
- * {@code exactly_once_v2} there is one producer per <em>StreamThread</em>, not per task, so
- * {@code client.id} is not a task identity):
- * <ul>
- *   <li><strong>Acked offsets are a global max per (topic, partition)</strong>, across every
- *       producer of this instance. A task folds the coordinates of its own sink topics; if a
- *       sibling task produced the max on a shared sink, folding it is an over-claim on a real
- *       appended offset of this same application — conservative-sound by I8, and the task's own
- *       sends never exceed the max, so its own outputs are always covered (the #22 requirement).
- *       Per-task ack routing therefore dissolves: no send-to-task correlation is ever needed for
- *       the fold.</li>
- *   <li><strong>Pending sends are tracked per producer</strong>, which under EOS v2 means per
- *       StreamThread: every send through a producer happens on its owning stream thread, so the
- *       first {@link PendingTracker#sent} binds that thread to the producer's tracker, and
- *       {@link #awaitQuiescentExcept} resolves "this task's pending sends" from
- *       {@code Thread.currentThread()} alone. Only declared sink topics are tracked — changelog
- *       writes share the producer but their acks are never own-output coordinates, and waiting on
- *       them would add pure latency.</li>
- * </ul>
- *
- * <p>{@link #awaitQuiescentExcept} is the crossing-wait primitive (O1/T3.0 A7): it blocks until no
- * send to any tracked coordinate outside the caller's excluded destination set — a different topic
- * or a different partition of the same topic — is unacknowledged, and it upholds the A8
- * implementation invariant by construction: it returns normally only on quiescence, and
- * <strong>throws</strong> — so the caller's EOS transaction dies rather than stamp — on timeout or
- * on any acknowledgement failure observed while waiting. {@link ParsleyCausalBroadcast#broadcast}
- * runs it (via {@link ParsleyChannels#awaitOwnOutputQuiescence}) before every stamp: business
- * forwards exclude nothing (their destination partition is unknowable at stamp time — over-waiting
- * is monotone-sound, I8), marker forwards exclude their exact destination set.
+ * <p>{@link #awaitQuiescentExcept} is the crossing-wait primitive: it blocks until no send to a
+ * tracked coordinate outside the caller's excluded set is unacknowledged, and throws rather than
+ * return on timeout or an acknowledgement failure, so the caller's EOS transaction dies rather than
+ * emit a possibly under-claiming stamp.
  */
 final class ParsleyOwnOutputRegistry implements ParsleyChannels.AckedOutputs, ParsleyChannels.PendingSends {
 

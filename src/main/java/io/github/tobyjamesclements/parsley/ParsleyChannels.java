@@ -348,40 +348,20 @@ final class ParsleyChannels {
     }
 
     /**
-     * Bridges the offsets a {@code read_committed} consumer skipped between the previous highest received
-     * offset on {@code (topicId, partition)} and {@code receivedOffset} — a transaction commit/abort marker
-     * or an aborted-transaction data record, none of which the consumer ever returns — so the contiguous
-     * walk can cross the hole they would otherwise wedge it at (a marker sits at a real offset that no
-     * business record ever fills). The name is a coinage: no literature analog — the mechanism exists
-     * only because Kafka's EOS commit markers occupy offsets. Called once per received record,
-     * <em>before</em> that record's own
-     * delivery, on every channel the causal-broadcast core advances a frontier on ({@link ParsleyCausalBroadcast#receive} and
-     * {@link ParsleyGossip#receive}). Returns {@code true} if the contiguous frontier advanced — the
-     * caller must then cascade ({@link ParsleyCausalBroadcast#propagate}), since a held record may have been waiting
-     * on exactly a bridged offset.
+     * Bridges the offsets a {@code read_committed} consumer skipped between the previous highest
+     * received offset on {@code (topicId, partition)} and {@code receivedOffset} (a transaction marker
+     * or aborted record the consumer never returns), so the contiguous walk can cross the hole they
+     * would otherwise wedge it at. Called once per received record, before that record's own delivery.
+     * Returns {@code true} if the frontier advanced, in which case the caller must cascade
+     * ({@link ParsleyCausalBroadcast#propagate}), since a held record may have waited on a bridged offset.
      *
-     * <p><strong>Soundness.</strong> Kafka delivers a partition strictly in offset order, so once
-     * {@code receivedOffset} has arrived every lower offset that would ever be returned to this consumer
-     * already has been. An offset in {@code (highestReceived, receivedOffset)} was therefore skipped
-     * permanently — a transaction marker, an aborted record, or a protocol record the causal-broadcast core consumed but
-     * deliberately did not record as a delivery (a marker on an early-return path) — never a
-     * business record still in flight, and never a <em>held</em> business record (a held record was
-     * received, so it is in the buffer and its offset is at or below {@code highestReceived}, outside the
-     * bridged interval). None of these is a cause any dependent awaits, so folding them is safe. A marker carries no
-     * dependencies, so bridging one advances no channel clock and forwards nothing — it only lets the walk
-     * proceed. The interval is skipped, not the record at {@code receivedOffset} itself, which the caller
-     * delivers or holds by the ordinary gate.
-     *
-     * <p><strong>First sighting.</strong> An absent {@code highestReceived} entry means the channel has
-     * never been received on: the baseline below {@code receivedOffset} is {@link #seedIfFirstSeen}'s
-     * concern (finite retention, a fresh consumer group), not a gap. So the first call bridges nothing,
-     * records {@code receivedOffset} as the highest received, and returns {@code false}. A
-     * {@code receivedOffset} at or below the recorded highest is an at-least-once replay: a strict no-op.
-     *
-     * <p>The <em>data-loss</em> guard — distinguishing a marker gap
-     * from a retention/{@code deleteRecords} jump that would drop real committed records below the log-start
-     * offset — is the caller's responsibility, since only it can see the partition's log-start (see
-     * {@link ParsleyCausalBroadcast}); this method assumes the interval it is handed is a genuine skip.
+     * <p>Sound because Kafka delivers a partition in strict offset order: once {@code receivedOffset}
+     * has arrived, every lower offset that would ever be returned already has, so an offset in the
+     * bridged interval was skipped permanently and is never a cause any dependent awaits. A first
+     * sighting (no {@code highestReceived} entry) bridges nothing and records the baseline, leaving
+     * history below it to {@link #seedIfFirstSeen}; a replay at or below the recorded highest is a
+     * no-op. Distinguishing a marker gap from a retention jump that dropped real records is the
+     * caller's responsibility (only it sees the log-start offset); this method assumes a genuine skip.
      */
     boolean bridge(Uuid topicId, int partition, long receivedOffset) {
         CoordKey key = new CoordKey(topicId, partition);
@@ -542,51 +522,30 @@ final class ParsleyChannels {
     }
 
     /**
-     * Reconciles restored causal state with the currently declared input set — the scope-change step
-     * run once at init, before the current input channels are seeded. Replaces the earlier
-     * {@code pruneToScope}, whose outright dropping of out-of-scope entries under-claimed the stamp
-     * and broke I2 at third parties (T3.0 A6). The one principle both directions share: <em>the
-     * causal past a node has delivered or carried may be skipped, but never dropped and never
-     * re-entered.</em> Four cases, diffed against the persisted {@link #declaredInputs}:
+     * Reconciles restored causal state with the currently declared input set, the scope-change step
+     * run once at init before the current channels are seeded. The governing principle: the causal
+     * past a node has delivered or carried may be skipped, but never dropped and never re-entered.
+     * Four cases, diffed against the persisted {@link #declaredInputs}:
      *
      * <ol>
-     *   <li><strong>Destroyed coordinates.</strong> A topic name declared both then and now whose
-     *       UUID changed was deleted and recreated; the old UUID's entries can never be delivered by
-     *       any receiver (E1: offsets rebind to different records), so they are the only entries
-     *       removed outright — from the frontier, the channel keys and values, the highest-received
-     *       map, and the carried ancestry. The new UUID starts as an added channel (below).</li>
-     *   <li><strong>Out-of-scope re-homing (shrink, A6).</strong> Every other entry leaving scope —
-     *       a removed input's frontier entry, a retired channel's full advertised clock, an
-     *       out-of-scope entry inside a surviving channel's clock — max-merges into
-     *       {@link #carriedAncestry} before it is pruned, so {@link #completeness()} (the stamp) is
-     *       unchanged by the prune except at destroyed coordinates. Without this, a receiver
-     *       downstream of this node could see an effect stamped as if its retired-channel cause never
-     *       existed, and reorder them.</li>
-     *   <li><strong>Added channels (growth, A5).</strong> An input declared now but not in the
-     *       persisted set seeds its frontier at this node's carried-ancestry value for the
-     *       coordinate — {@code completeness()} after the re-homing above — never at log-start:
-     *       "skip what you already ignored". The prefix at or below what this node previously
-     *       carried must never be delivered into its surviving state (an operator who wants that
-     *       history performs a full reset); the forwarded index is pruned at or below the seed to
-     *       match. A coordinate with no carried entry seeds nothing — a genuinely new topic's
-     *       history has no delivered descendants here (I2), so replaying it is ordinary delivery,
-     *       not reordering.</li>
-     *   <li><strong>No persisted input set</strong> (a fresh store, or a blob from before this
-     *       section existed): nothing to diff — no seeding, no destruction; the current set is
-     *       simply recorded. Pre-release, no migration path (O6).</li>
+     *   <li><strong>Destroyed coordinates:</strong> a declared topic whose UUID changed was deleted
+     *       and recreated, so the old UUID's entries can never be delivered (E1) and are removed
+     *       outright, the one removal permitted; the new UUID starts as an added channel.</li>
+     *   <li><strong>Shrink:</strong> every other entry leaving scope max-merges into
+     *       {@link #carriedAncestry} before it is pruned, so {@link #completeness()} is unchanged
+     *       except at destroyed coordinates (I9); dropping it would let a downstream receiver reorder
+     *       an effect against its retired-channel cause.</li>
+     *   <li><strong>Growth:</strong> an input declared now but not before seeds its frontier at this
+     *       node's carried-ancestry value for the coordinate, never at log-start, so what was already
+     *       ignored stays skipped; a genuinely new topic with no carried entry seeds nothing.</li>
+     *   <li><strong>Fresh store:</strong> nothing to diff; the current set is recorded.</li>
      * </ol>
      *
-     * <p>The current input set is persisted at the end, so the next init diffs against what this run
-     * declared.
-     *
-     * <p>This method reconciles <em>clocks</em> only. The disposition of restored held
-     * <em>records</em> whose source left scope — purge a destroyed incarnation's, fail init on a
-     * removed-but-alive input's — lives in the L2 constructor
-     * ({@code ParsleyCausalBroadcast}): L1 owns clock state, not the buffer.
+     * <p>This reconciles clocks only; the disposition of restored held records whose source left scope
+     * lives in the {@link ParsleyCausalBroadcast} constructor.
      *
      * @param currentInputs the currently declared input topics, name → UUID
-     * @param taskPartition the partition this task owns on every input (Streams co-partitions a
-     *                      sub-topology's sources)
+     * @param taskPartition the partition this task owns on every input
      */
     void rescope(Map<String, Uuid> currentInputs, int taskPartition) {
         // 1 — destroyed: recreated inputs' old UUIDs leave every stamp-feeding structure for good.
@@ -680,35 +639,17 @@ final class ParsleyChannels {
     }
 
     /**
-     * Serialises the frontier clock, channel clocks, and highest-received offsets into the
-     * single {@code "f"} value: {@code [frontier-len:4][frontier bytes][channel-count:4]} then per channel
-     * {@code [topicId MSB:8][topicId LSB:8][partition:4][clock-len:4][clock bytes]}, then
-     * {@code [highest-received-count:4]} and per channel
-     * {@code [topicId MSB:8][topicId LSB:8][partition:4][offset:8]}. (T3.2 removed the epoch section
-     * that used to sit between the channels and the highest-received offsets — a pre-T3.2 blob is not
-     * readable, consistent with the pre-1.0 no-upgrade-path stance.) The
-     * highest-received offsets are persisted so {@link #bridge}'s skip detection is exact across a restart
-     * (the map is written inside the same EOS transaction as the frontier and forwarded index), rather than
-     * reconstructed and possibly having to re-bridge already-forwarded offsets.
-     *
-     * <p>Two further trailing sections (both written together, both optional on read):
-     * {@code [carried-ancestry-len:4][carried-ancestry bytes]} — the {@link #carriedAncestry} clock,
-     * persisted because it is stamp-feeding state (I9: dropping it on restart would under-claim every
-     * subsequent stamp) — then {@code [input-count:4]} with per input {@code [name UTF][topicId MSB:8]
-     * [topicId LSB:8]} — the {@link #declaredInputs} set, which is what makes a scope change
-     * detectable at the next init ({@link #rescope}).
-     *
-     * <p>Then one more optional trailing section (T2.2):
-     * {@code [own-outputs-len:4][own-outputs bytes]} — the {@link #ownOutputs} clock. Best-effort
-     * durability by design: acks arriving after this transaction's last persist are missing from
-     * the committed blob (store caches flush before the producer flush completes acks — O1), so a
-     * restored clock can trail by one transaction; the init-time sink end-offset seed re-covers it
-     * (I8: both the trail and the seed only ever sit at or below a real appended offset).
-     *
-     * <p>Then one final optional trailing section (T3.4): {@code [sink-count:4]} with per sink
-     * {@code [name UTF][topicId MSB:8][topicId LSB:8]} — the {@link #declaredSinks} set, which is
-     * what lets the next init heal the trailing acks of a topic that is no longer a sink then
-     * (see the field note).
+     * Serialises the persisted {@code "f"} value: the frontier clock, then the per-channel advertised
+     * clocks, then the per-channel highest-received offsets (persisted so {@link #bridge}'s skip
+     * detection is exact across a restart, in the same EOS transaction as the frontier). Then optional
+     * trailing sections: the {@link #carriedAncestry} clock and the {@link #ownOutputs} clock (both
+     * stamp-feeding, so dropping them on restart would under-claim later stamps, I9/I8), and the
+     * {@link #declaredInputs} and {@link #declaredSinks} sets, which make a scope change detectable at
+     * the next init ({@link #rescope}) and let it heal a former sink's trailing acks. Own outputs are
+     * best-effort: acks arriving after this transaction's last persist are missing from the committed
+     * blob, so a restored clock can trail by one transaction, which the init-time sink end-offset seed
+     * re-covers. A trailing section is optional on read, so a blob from an older layout loads with that
+     * section empty; there is no cross-version upgrade path before 1.0.
      */
     private byte[] toBytes() {
         try (ByteArrayOutputStream baos = new ByteArrayOutputStream();

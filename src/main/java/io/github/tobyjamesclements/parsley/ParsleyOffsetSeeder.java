@@ -16,43 +16,23 @@ import java.util.TreeSet;
  * Pre-start consumer-group offset seeding for a {@link CausalStreams} instance, run once from
  * {@link CausalStreams#start()} before the underlying {@code KafkaStreams} joins the group.
  *
- * <p><strong>Why.</strong> Every causal source is declared with {@code AutoOffsetReset.none()} (see
- * {@link CausalTopology}) so Kafka Streams fails fast — rather than silently jumping forward — when a
- * committed offset falls out of range (retention or {@code deleteRecords} outran a lagging consumer); a
- * silent forward jump would let {@link ParsleyChannels#bridge} fold real lost records as if they were
- * transaction markers. But {@code none()} also fails on a <em>genuine first start</em>, where no committed
- * offset exists yet. This seeder closes that gap: on a true first start it commits each source partition's
- * log-start offset, so {@code none()} sees a valid committed position and reads from the beginning exactly
- * as {@code earliest} would — while a real out-of-range restart is left untouched and correctly fails.
+ * <p>Every causal source is declared with {@code AutoOffsetReset.none()} so Kafka Streams fails fast,
+ * rather than silently jumping forward, when a committed offset falls out of range (a silent forward
+ * would let {@link ParsleyChannels#bridge} fold lost records as transaction markers). But
+ * {@code none()} also fails on a genuine first start, where no committed offset exists. This seeder
+ * closes that gap: on a true first start it commits each source partition's log-start offset, while a
+ * real out-of-range restart is left untouched and correctly fails.
  *
- * <p><strong>First start is not "no committed offset".</strong> A consumer group's offsets expire once it
- * has been empty for {@code offsets.retention.minutes} (7 days by default), and an operator can delete them
- * outright — either can leave a partition with no committed offset while the node's causal state (the
- * persisted {@code highestReceived}, in the frontier changelog) survives. Seeding to log-start then would
- * commit a position <em>above</em> the surviving frontier, and the bridge would fold the intervening real
- * records as markers — the very violation {@code none()} exists to prevent. So this seeder refuses to seed a
- * missing partition when any Parsley changelog for this application still exists: that is not a first start,
- * and the only safe response is to fail loudly and require an explicit, complete reset.
- *
- * <p><strong>One exception: an added input topic.</strong> A topic on which this group has never
- * committed any partition, while at least one other source topic is committed, was added to the input
- * set since the state was written (whole-group offset expiry takes every topic together, and a
- * consumed topic's offsets do not expire selectively). Its partitions are seeded to log-start: the
- * processor seeds the added channel's frontier at the node's carried ancestry ({@code
- * ParsleyChannels#rescope}) and the receive path skips already-delivered offsets, so the re-fetched
- * prefix is skipped at delivery, never replayed as live. The one shape this cannot distinguish — an
- * operator manually deleting a previously-consumed topic's entire committed offsets — is safe for the
- * same reason unless retention has also destroyed records above that topic's surviving frontier
- * (operator tampering plus an E2 violation, outside the fault model).
- *
- * <p><strong>Concurrent startup.</strong> {@code alterConsumerGroupOffsets} requires an empty group and is
- * not transactional, so once a peer instance has joined it fails (wholesale or per partition). Two
- * mitigations, both fail-closed: (1) a tolerated group-not-empty failure is followed by a re-list that must
- * show every target partition committed (by the peer), else start aborts; (2) the surviving-state guard
- * itself re-lists before failing, because a peer that has already started created this application's
- * changelogs only <em>after</em> committing its own seed — so a fresh coordinator read is guaranteed to
- * observe that commit (a happens-before, not a timing guess), distinguishing a peer's concurrent first start
- * from genuine offset expiry.
+ * <p>First start is not simply "no committed offset": a group's offsets expire after
+ * {@code offsets.retention.minutes}, or an operator can delete them, while the node's causal state
+ * survives. Seeding to log-start then would commit above the surviving frontier and the bridge would
+ * fold the intervening records as markers, so the seeder refuses to seed a missing partition while any
+ * Parsley changelog for this application still exists, and fails loudly for an explicit reset. The one
+ * exception is an added input topic (uncommitted while another source is committed), seeded to
+ * log-start because the processor seeds its frontier from carried ancestry and the receive path skips
+ * the re-fetched prefix. Concurrent startup is fail-closed: {@code alterConsumerGroupOffsets} requires
+ * an empty group, and a group-not-empty failure is followed by a re-list that must show every target
+ * partition committed by the peer, else start aborts.
  */
 final class ParsleyOffsetSeeder {
 

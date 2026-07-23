@@ -11,32 +11,21 @@ import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 
 /**
- * The mid-run enforcement of E1 — stable channel identity (T3.0 A13, closed in T3.4). Topic
- * name → UUID resolution is bound once per task lifetime, at {@code init()}; if a causal topic is
- * deleted and recreated while a member runs, the consumer can resume fetching the recreated
- * topic's records once its offsets re-pass the member's committed position, and every such record
- * would be ingested under the <em>old</em> UUID — exactly the coordinate rebinding E1 exists to
- * prevent, silently. No per-record identity signal exists in the public Streams API, so this watch
- * makes the failure loud and bounded instead: {@link CausalStreams} polls the broker's current
- * topic IDs on a fixed interval and every task checks {@link #ensureIntact} before ingesting or
- * stamping — once a recreation is detected, the member fails fast and stays down until an operator
- * intervenes (restarting re-resolves identity at init, where recreation degrades to E2-style
- * history loss, never reordering).
+ * The mid-run enforcement of E1, stable channel identity. Topic name → UUID is bound once per task
+ * lifetime at {@code init()}; if a causal topic is deleted and recreated while a member runs, its
+ * records would be ingested under the old UUID, the coordinate rebinding E1 exists to prevent. Since
+ * the Streams API exposes no per-record identity signal, {@link CausalStreams} polls the broker's
+ * current topic IDs on a fixed interval and every task checks {@link #ensureIntact} before ingesting
+ * or stamping; once a recreation is detected the member fails fast and stays down until an operator
+ * intervenes (a restart re-resolves identity, where recreation degrades to history loss, never
+ * reordering).
  *
- * <p><strong>The detection window is the poll interval.</strong> Records fetched between the
- * recreation and the next poll are mislabelled and may have been delivered; deleting and
- * recreating a causal topic under a running member remains an operational constraint of the same
- * kind as E2's retention constraint. What this watch guarantees is that the violation cannot
- * continue silently — without it, a member could mislabel indefinitely.
- *
- * <p>One watch exists per {@link CausalStreams} instance, registered JVM-wide under a minted id
- * that travels to every task through the public {@code producer.} config prefix (the same pattern
- * as {@link ParsleyOwnOutputRegistry}; the key is never read by any producer). Tasks register the
- * name → UUID bindings they resolved at init via {@link #expect}; the poll compares the broker's
- * current view against every registered expectation, so two tasks that resolved different UUIDs
- * for one name (a recreation racing startup) are themselves detected. A run without a
- * {@code CausalStreams} instance (a {@code TopologyTestDriver} test, a low-level supplier wiring)
- * has no watch; every check is then a no-op, like the crossing wait without a registry.
+ * <p>The detection window is the poll interval: records fetched between the recreation and the next
+ * poll may be mislabelled, so recreating a causal topic under a running member remains an operational
+ * constraint. One watch exists per {@link CausalStreams} instance, registered JVM-wide under a minted
+ * id carried to every task through the {@code producer.} config prefix; tasks register their init-time
+ * bindings via {@link #expect}, and the poll compares the broker's view against every expectation. A
+ * run without a {@code CausalStreams} instance has no watch and every check is a no-op.
  */
 final class ParsleyTopicIdentityWatch {
 
