@@ -18,7 +18,7 @@ import java.util.Map;
 /**
  * A Facade (GoF) narrowing the Kafka Admin operations Parsley performs at startup: resolving input
  * topics' stable UUIDs (the causal identity) and reading their partition counts and {@code
- * cleanup.policy} (for the {@code parsley.topology.validation} checks). Keeping the interface narrow
+ * cleanup.policy} (for the always-on startup topology checks). Keeping the interface narrow
  * lets tests implement it without the full ~40-method {@link Admin} surface, and lets the processor
  * path resolve UUIDs at {@code init()} from {@link #ofConfigs}.
  */

@@ -31,46 +31,33 @@ guarantee. Keep the relevant-partition count within your record-size budget.
 
 ---
 
-## `parsley.properties`
+## Parsley has no configuration keys
 
-Parsley reads its own behaviour from a `parsley.properties` resource on the classpath. A `parsley.*`
-key may also be set in the `Properties` passed to `CausalStreams`, which overrides the classpath
-resource key for key. The namespace is kept separate from Kafka Streams configuration because these
-behaviours have no Streams equivalent. An absent file, or an absent key, falls back to the defaults
-below; a key set to an unrecognised value fails startup with `IllegalStateException`.
+Parsley's configuration surface is empty: there is no `parsley.*` key, and the `Properties` passed
+to `CausalStreams` carry only standard Kafka Streams configuration. Every behaviour that once had a
+key is unconditional, because each one guards causal safety and no viable deployment opts out of
+it. Startup fails with `IllegalStateException`, naming every offending key, if any `parsley.*` key
+is present in the `Properties` or in a `parsley.properties` classpath resource — a key that wires
+nothing must not parse quietly.
 
-```properties
-# How a causal processor reacts at startup to a detectable topology misconfiguration: the causal
-# input topics not sharing a partition count (co-partitioning impossible), and, for a
-# CausalStreamsBuilder stage, its sink topics' partition counts and cleanup.policy too.
-#   strict   (default) fails the task fast at startup
-#   warn               logs the mismatch and continues (the explicit opt-down)
-#   off                disables the checks
-parsley.topology.validation = strict
-```
+The always-on startup checks, run once per task at init:
 
-| Key | Default | Values |
-|---|---|---|
-| `parsley.topology.validation` | `strict` | `off`, `warn`, `strict` |
+- The causal input topics must share a partition count. Unequal counts make co-partitioning
+  impossible, so a task would evaluate the completeness frontier against an incomplete partition
+  set.
+- A `CausalTopology`-assembled stage's sink topics must each have at least as many partitions as
+  the widest source. Protocol markers route to the forwarding task's own partition, so a narrower
+  sink would fail the marker produce at runtime; a wider sink (a funnel fanning narrow sources into
+  a re-keyed sink) passes.
+- No causal source or sink topic may have a `cleanup.policy` including `compact`. A compacted
+  source punches consumer-visible holes the skip-bridge would misread as transaction markers; a
+  compacted sink can silently lose protocol null messages, which are wire-indistinguishable from
+  compaction tombstones.
 
-No key under `parsley.coordination.*` is part of the configuration surface: joins need zero
-coordination, so there is no coordination subsystem to configure. Startup fails with
-`IllegalStateException`, naming the offending key, if one is present.
-
-`parsley.topology.validation = strict` (the default) fails the task fast at startup when the causal
-input topics do not share a partition count, which makes co-partitioning impossible. Set it to
-`warn` to log a prominent warning and start anyway — the explicit opt-down for a deployment that
-knowingly runs with the mismatch — or `off` to skip the checks. `CausalTopology`-assembled stages also fold
-their sink topics' partition counts into the same parity check and check each sink's `cleanup.policy`
-for `compact` (a protocol null message is a null-value record wire-indistinguishable from a compaction
-tombstone). Each sink is checked independently, so a transient describe failure on one sink never
-masks a genuine misconfiguration on a different sink in the same stage, even under `strict`; both
-sink-side checks are skipped entirely (no admin round-trip) when validation is `off`. Sink existence
-itself is not governed by this key: a declared sink that cannot be resolved fails startup
-unconditionally, even under `off`, because own-output stamping depends on its resolved identity. Note that a sink with
-fewer partitions than a source fails protocol-marker produces at runtime (markers route to the
-task's own partition), so under `warn` a mismatched deployment crash-loops at the produce instead of
-failing at startup — `strict` surfaces it once, clearly, at init. See
+Each sink-side check is best-effort per topic: a transient describe failure on one sink skips that
+check for that sink only, and never masks a genuine misconfiguration on a different sink in the
+same stage. Sink existence itself is strict — a declared sink that cannot be resolved fails
+startup, because own-output stamping depends on its resolved identity. See
 [Streams integration](streams.md#startup-validation) and its
 [preconditions](streams.md#preconditions) for the full contract.
 

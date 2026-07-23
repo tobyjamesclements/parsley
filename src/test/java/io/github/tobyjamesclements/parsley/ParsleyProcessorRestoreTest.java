@@ -71,7 +71,7 @@ class ParsleyProcessorRestoreTest {
                 delegate, serializer,
                 "frontier", "buffer", "candidate-index", "forwarded-index",
                 Set.of("c1"), Set.of(), List.of(),
-                configs -> ADMIN, ParsleyConfig.from(new Properties()), null);
+                configs -> ADMIN, null);
 
         MockProcessorContext<String, String> context = new MockProcessorContext<>();
         context.setCurrentSystemTimeMs(1L);

@@ -66,7 +66,7 @@ class ParsleyProcessorCloseTest {
                 "frontier", "buffer", "candidate-index", "forwarded-index",
                 Set.of("c1"), Set.of(), List.of(),
                 configs -> { throw new IllegalStateException("broker unreachable (test)"); },
-                ParsleyConfig.from(new Properties()), null);
+                null);
 
         MockProcessorContext<String, String> context = new MockProcessorContext<>();
         context.setCurrentSystemTimeMs(1L);

@@ -128,11 +128,11 @@ messages do not pass through this partitioner at all; Parsley routes each one to
 task's own partition on every sink.
 
 Parsley does not enforce co-partitioning end to end, and most of it cannot be checked, so a
-misconfigured topology evaluates against an incomplete partition set. At startup, `parsley.topology.validation`
-(`strict` by default, `warn` to log and continue, `off` to disable) checks that a stage's causal input topics
-share a partition count, and, since a stage built through `CausalStreamsBuilder` owns its sinks too,
-folds sink partition counts into the same check and applies one partitioner uniformly across every sink
-a stage declares so a shard cannot drift onto different partitions across topics by accident. See the
+misconfigured topology evaluates against an incomplete partition set. At startup, always-on checks
+verify that a stage's causal input topics share a partition count, and, since a stage built through
+`CausalStreamsBuilder` owns its sinks too, that no sink is narrower than the widest source. The
+stage also applies one partitioner uniformly across every sink it declares so a shard cannot drift
+onto different partitions across topics by accident. See the
 [Streams integration](streams.md#preconditions) preconditions for the full contract.
 
 ## Joining a running topology
@@ -143,5 +143,5 @@ starts, its hold-back queue converts arbitrary cross-partition arrival into caus
 (replay is just arbitrarily delayed delivery, which causal broadcast absorbs by construction), and
 its truthful stamps make its outputs correctly gated everywhere from its first emission. A fresh
 record with old dependencies simply sits low in the causal partial order — correct, not a hazard.
-There is no join barrier, no admission, no membership roster, and no epoch. No key under
-`parsley.coordination.*` is part of the configuration surface; startup fails if one is present.
+There is no join barrier, no admission, no membership roster, and no epoch. Parsley has no
+configuration keys at all; startup fails if any `parsley.*` key is present.

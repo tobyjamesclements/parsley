@@ -85,7 +85,7 @@ class CausalStreamsTopologyTest {
         return props;
     }
 
-    /** Assembles {@code builder} against {@code admin} and default (strict) topology validation. */
+    /** Assembles {@code builder} against {@code admin}; the startup topology checks are always on. */
     private static Topology assemble(CausalStreamsBuilder builder, ParsleyTopicAdmin admin) {
         return assemble(builder, admin, config(), new ParsleyQuiesce());
     }
@@ -97,18 +97,6 @@ class CausalStreamsTopologyTest {
     private static Topology assemble(
             CausalStreamsBuilder builder, ParsleyTopicAdmin admin, Properties props, ParsleyQuiesce quiesce) {
         return builder.topicAdmin(admin).build().assemble(props, quiesce);
-    }
-
-    private static Properties strictValidation() {
-        Properties props = config();
-        props.put(ParsleyConfig.TOPOLOGY_VALIDATION, "strict");
-        return props;
-    }
-
-    private static Properties warnValidation() {
-        Properties props = config();
-        props.put(ParsleyConfig.TOPOLOGY_VALIDATION, "warn");
-        return props;
     }
 
     private static Headers depsHeader(CausalClock deps) {
@@ -699,111 +687,111 @@ class CausalStreamsTopologyTest {
     }
 
     /**
-     * Under {@code parsley.topology.validation=strict}, a sink topic with a partition count that
-     * mismatches the stage's source fails startup fast — {@link CausalTopology#assemble} folds sink
-     * partition counts into the same co-partitioning check the decorator runs on its inputs.
+     * A sink topic narrower than the stage's source fails startup fast, unconditionally: protocol
+     * markers route to the forwarding task's own partition, so a task owning source partition 1
+     * could never produce its marker to a 1-partition sink — the mismatch would crash-loop at the
+     * produce, and the startup check surfaces that impossibility once, at init.
      *
      * Asserts driver construction throws, wrapping an {@link IllegalStateException} naming the
-     * mismatch and the strict mode.
+     * narrow sink.
      */
     @Test
-    void mismatchedSinkPartitionCountFailsStartupUnderStrictValidation() throws IOException {
+    void sinkNarrowerThanItsSourceFailsStartup() throws IOException {
         ParsleyTopicAdmin mismatched = TestTopicAdmin.of(
-                Map.of("c1", C1_ID, "c3", C3_ID), Map.of("c1", 2, "c3", 3));
+                Map.of("c1", C1_ID, "c3", C3_ID), Map.of("c1", 2, "c3", 1));
         CausalStreamsBuilder builder = new CausalStreamsBuilder();
         builder.stream("c1", Serdes.String(), Serdes.String())
                 .process(upperCaser())
                 .to("c3-sink", "c3", Serdes.String(), Serdes.String());
-        Topology topology = assemble(builder, mismatched, strictValidation());
+        Topology topology = assemble(builder, mismatched, config());
 
         StreamsException thrown = assertThrows(StreamsException.class,
                 () -> new TopologyTestDriver(topology, config(tempStateDir())),
-                "strict validation must fail startup on a source/sink partition-count mismatch");
+                "startup must fail when a sink is narrower than its source");
         assertEquals(IllegalStateException.class, thrown.getCause().getClass(),
-                "the wrapped cause must be the strict-validation failure");
-        assertTrue(thrown.getCause().getMessage().contains("mismatched partition counts"),
-                "the message must name the mismatch: " + thrown.getCause().getMessage());
+                "the wrapped cause must be the sink-width check's failure");
+        assertTrue(thrown.getCause().getMessage().contains("declared sink topic 'c3'"),
+                "the message must name the narrow sink: " + thrown.getCause().getMessage());
     }
 
     /**
-     * Under an explicit {@code parsley.topology.validation=warn} opt-down, a sink topic with a
-     * mismatched partition count is logged but does not fail startup. (The default is
-     * {@code strict} — pinned by {@code ParsleyConfigTest} and, end to end, by
-     * {@code ParsleyProcessorsTopologyTest}'s default-validation mismatch test.)
+     * A sink topic <em>wider</em> than the stage's source passes the startup checks with no
+     * opt-down: the funnel shape (narrow sources fanning into a wider, re-keyed sink) is
+     * protocol-safe — every task's own partition exists on the sink, so marker produces succeed —
+     * and the sink-width check deliberately permits it.
      *
-     * Asserts the topology constructs and processes normally despite the mismatch.
+     * Asserts the topology constructs and processes normally with a 2-partition source and a
+     * 3-partition sink.
      */
     @Test
-    void mismatchedSinkPartitionCountWarnsButStartsUnderWarnValidation() {
-        ParsleyTopicAdmin mismatched = TestTopicAdmin.of(
+    void sinkWiderThanItsSourcePassesTheStartupChecks() {
+        ParsleyTopicAdmin funnel = TestTopicAdmin.of(
                 Map.of("c1", C1_ID, "c3", C3_ID), Map.of("c1", 2, "c3", 3));
         CausalStreamsBuilder builder = new CausalStreamsBuilder();
         builder.stream("c1", Serdes.String(), Serdes.String())
                 .process(upperCaser())
                 .to("c3-sink", "c3", Serdes.String(), Serdes.String());
-        Topology topology = assemble(builder, mismatched, warnValidation());
+        Topology topology = assemble(builder, funnel, config());
 
         try (TopologyTestDriver driver = new TopologyTestDriver(topology, config())) {
             driver.createInputTopic("c1", new StringSerializer(), new StringSerializer())
                     .pipeInput(new TestRecord<>("k", "live", depsHeader(CausalClock.empty())));
             assertEquals(List.of("live"), processed,
-                    "warn-mode validation must not fail startup: the task starts and processes normally");
+                    "a sink wider than its source must pass startup: the task starts and processes normally");
         }
     }
 
     /**
      * A sink topic whose partition count cannot be described (a transient admin failure) is skipped
-     * for the co-partitioning check rather than failing the task, even under strict validation: the
-     * lints are per-topic best-effort, their strictness governed by {@code
-     * parsley.topology.validation}. Sink identity itself is not — the sink's UUID and end offsets
-     * still resolve here, and an unresolvable sink fails init regardless of validation mode (see
-     * the strict-sink-resolution tests below).
+     * for the sink-width check rather than failing the task: the sink-side checks are per-topic
+     * best-effort. Sink identity itself is not — the sink's UUID and end offsets still resolve
+     * here, and an unresolvable sink fails init unconditionally (see the strict-sink-resolution
+     * tests below).
      *
-     * Asserts the topology constructs and processes normally under strict validation despite the
-     * sink's partition count being undescribable.
+     * Asserts the topology constructs and processes normally despite the sink's partition count
+     * being undescribable.
      */
     @Test
-    void undescribableSinkPartitionCountIsSkippedEvenUnderStrictValidation() {
+    void undescribableSinkPartitionCountIsSkipped() {
         ParsleyTopicAdmin admin = FlakySinkAdmin.withUndescribable(
                 Map.of("c1", C1_ID, "c3", C3_ID), Set.of("c3"));
         CausalStreamsBuilder builder = new CausalStreamsBuilder();
         builder.stream("c1", Serdes.String(), Serdes.String())
                 .process(upperCaser())
                 .to("c3-sink", "c3", Serdes.String(), Serdes.String());
-        Topology topology = assemble(builder, admin, strictValidation());
+        Topology topology = assemble(builder, admin, config());
 
         try (TopologyTestDriver driver = new TopologyTestDriver(topology, config())) {
             driver.createInputTopic("c1", new StringSerializer(), new StringSerializer())
                     .pipeInput(new TestRecord<>("k", "live", depsHeader(CausalClock.empty())));
             assertEquals(List.of("live"), processed,
-                    "an undescribable sink partition count must be skipped, not fail even strict validation");
+                    "an undescribable sink partition count must be skipped, not fail the task");
         }
     }
 
     /**
-     * Under {@code parsley.topology.validation=strict}, a sink topic whose {@code cleanup.policy}
-     * includes {@code compact} fails startup fast — a protocol null message is a null-value record
-     * wire-indistinguishable from a compaction tombstone and could otherwise be compacted away
-     * before a slow consumer reads it.
+     * A sink topic whose {@code cleanup.policy} includes {@code compact} fails startup fast,
+     * unconditionally — a protocol null message is a null-value record wire-indistinguishable from
+     * a compaction tombstone and could otherwise be compacted away before a slow consumer reads it.
      *
      * Asserts driver construction throws, wrapping an {@link IllegalStateException} naming the
      * sink and its cleanup.policy.
      */
     @Test
-    void compactedSinkCleanupPolicyFailsStartupUnderStrictValidation() throws IOException {
+    void compactedSinkCleanupPolicyFailsStartup() throws IOException {
         ParsleyTopicAdmin compacted = TestTopicAdmin.of(
                 Map.of("c1", C1_ID, "c3", C3_ID), Map.of(), Map.of("c3", "compact"));
         CausalStreamsBuilder builder = new CausalStreamsBuilder();
         builder.stream("c1", Serdes.String(), Serdes.String())
                 .process(upperCaser())
                 .to("c3-sink", "c3", Serdes.String(), Serdes.String());
-        Topology topology = assemble(builder, compacted, strictValidation());
+        Topology topology = assemble(builder, compacted, config());
 
         StreamsException thrown = assertThrows(StreamsException.class,
                 () -> new TopologyTestDriver(topology, config(tempStateDir())),
-                "strict validation must fail startup when a sink's cleanup.policy includes compact");
+                "startup must fail when a sink's cleanup.policy includes compact");
         assertEquals(IllegalStateException.class, thrown.getCause().getClass(),
-                "the wrapped cause must be the strict-validation failure");
+                "the wrapped cause must be the compacted-sink check's failure");
         assertTrue(thrown.getCause().getMessage().contains("cleanup.policy=compact"),
                 "the message must name the sink's cleanup.policy: " + thrown.getCause().getMessage());
     }
@@ -811,99 +799,71 @@ class CausalStreamsTopologyTest {
     /**
      * A sink topic's {@code cleanup.policy=compact,delete} is equally unsafe as plain {@code compact}
      * — compaction still runs and can remove a null message before it is read — so it must also fail
-     * strict validation.
+     * startup.
      *
-     * Asserts driver construction throws for a {@code compact,delete} sink under strict validation.
+     * Asserts driver construction throws for a {@code compact,delete} sink.
      */
     @Test
-    void compactAndDeleteSinkCleanupPolicyFailsStartupUnderStrictValidation() throws IOException {
+    void compactAndDeleteSinkCleanupPolicyFailsStartup() throws IOException {
         ParsleyTopicAdmin compacted = TestTopicAdmin.of(
                 Map.of("c1", C1_ID, "c3", C3_ID), Map.of(), Map.of("c3", "compact,delete"));
         CausalStreamsBuilder builder = new CausalStreamsBuilder();
         builder.stream("c1", Serdes.String(), Serdes.String())
                 .process(upperCaser())
                 .to("c3-sink", "c3", Serdes.String(), Serdes.String());
-        Topology topology = assemble(builder, compacted, strictValidation());
+        Topology topology = assemble(builder, compacted, config());
 
         StreamsException thrown = assertThrows(StreamsException.class,
                 () -> new TopologyTestDriver(topology, config(tempStateDir())),
-                "strict validation must fail startup for compact,delete too — compaction still runs");
+                "startup must fail for compact,delete too — compaction still runs");
         assertEquals(IllegalStateException.class, thrown.getCause().getClass(),
-                "the wrapped cause must be the strict-validation failure");
+                "the wrapped cause must be the compacted-sink check's failure");
     }
 
     /**
-     * Under an explicit {@code parsley.topology.validation=warn} opt-down, a compacted sink is
-     * logged but does not fail startup. (The default is {@code strict}.)
-     *
-     * Asserts the topology constructs and processes normally despite the compacted sink.
-     */
-    @Test
-    void compactedSinkCleanupPolicyWarnsButStartsUnderWarnValidation() {
-        ParsleyTopicAdmin compacted = TestTopicAdmin.of(
-                Map.of("c1", C1_ID, "c3", C3_ID), Map.of(), Map.of("c3", "compact"));
-        CausalStreamsBuilder builder = new CausalStreamsBuilder();
-        builder.stream("c1", Serdes.String(), Serdes.String())
-                .process(upperCaser())
-                .to("c3-sink", "c3", Serdes.String(), Serdes.String());
-        Topology topology = assemble(builder, compacted, warnValidation());
-
-        try (TopologyTestDriver driver = new TopologyTestDriver(topology, config())) {
-            driver.createInputTopic("c1", new StringSerializer(), new StringSerializer())
-                    .pipeInput(new TestRecord<>("k", "live", depsHeader(CausalClock.empty())));
-            assertEquals(List.of("live"), processed,
-                    "warn-mode validation must not fail startup: the task starts and processes normally");
-        }
-    }
-
-    /**
-     * A {@code delete}-policy sink (the default, and the safe choice) passes strict validation — a
+     * A {@code delete}-policy sink (the default, and the safe choice) passes the startup checks — a
      * guard against the cleanup-policy check false-positiving on a correctly configured sink.
      *
-     * Asserts the topology constructs and processes normally under strict validation.
+     * Asserts the topology constructs and processes normally.
      */
     @Test
-    void deleteSinkCleanupPolicyPassesStrictValidation() {
+    void deleteSinkCleanupPolicyPassesTheStartupChecks() {
         CausalStreamsBuilder builder = new CausalStreamsBuilder();
         builder.stream("c1", Serdes.String(), Serdes.String())
                 .process(upperCaser())
                 .to("c3-sink", "c3", Serdes.String(), Serdes.String());
-        Topology topology = assemble(builder, ADMIN, strictValidation());
+        Topology topology = assemble(builder, ADMIN, config());
 
         try (TopologyTestDriver driver = new TopologyTestDriver(topology, config())) {
             driver.createInputTopic("c1", new StringSerializer(), new StringSerializer())
                     .pipeInput(new TestRecord<>("k", "live", depsHeader(CausalClock.empty())));
             assertEquals(List.of("live"), processed,
-                    "strict validation must pass for a delete-policy sink: the task processes normally");
+                    "the startup checks must pass for a delete-policy sink: the task processes normally");
         }
     }
 
     /**
-     * A causal <em>source</em> topic whose {@code cleanup.policy} includes {@code compact} fails startup
-     * unconditionally — even under {@code parsley.topology.validation=off}, which disables every other
-     * topology check. The skip-bridge treats a consumer-visible hole as a transaction marker, but log
-     * compaction can punch the same hole by removing a real committed record, so a compacted source cannot
-     * be consumed causally at all. This is a correctness guard, not a topology lint, so it is never gated
-     * by the validation switch.
+     * A causal <em>source</em> topic whose {@code cleanup.policy} includes {@code compact} fails
+     * startup. The skip-bridge treats a consumer-visible hole as a transaction marker, but log
+     * compaction can punch the same hole by removing a real committed record, so a compacted source
+     * cannot be consumed causally at all.
      *
-     * Asserts driver construction throws (wrapping an {@link IllegalStateException} naming the source and
-     * its cleanup.policy) despite validation being off.
+     * Asserts driver construction throws, wrapping an {@link IllegalStateException} naming the
+     * source and its cleanup.policy.
      */
     @Test
-    void compactedSourceCleanupPolicyFailsStartupEvenUnderValidationOff() throws IOException {
+    void compactedSourceCleanupPolicyFailsStartup() throws IOException {
         ParsleyTopicAdmin compactedSource = TestTopicAdmin.of(
                 Map.of("c1", C1_ID, "c3", C3_ID), Map.of(), Map.of("c1", "compact"));
-        Properties props = config();
-        props.put(ParsleyConfig.TOPOLOGY_VALIDATION, "off");
         CausalStreamsBuilder builder = new CausalStreamsBuilder();
         builder.stream("c1", Serdes.String(), Serdes.String())
                 .process(upperCaser())
                 .to("c3-sink", "c3", Serdes.String(), Serdes.String());
-        Topology topology = assemble(builder, compactedSource, props);
+        Topology topology = assemble(builder, compactedSource, config());
 
         StreamsException thrown = assertThrows(StreamsException.class,
                 () -> new TopologyTestDriver(topology, config(tempStateDir())),
-                "a compacted source must fail startup even under validation=off — the guard is unconditional");
+                "a compacted source must fail startup — the guard is unconditional");
         assertEquals(IllegalStateException.class, thrown.getCause().getClass(),
                 "the wrapped cause must be the unconditional source-compaction guard");
         assertTrue(thrown.getCause().getMessage().contains("causal source topic 'c1'"),
@@ -911,31 +871,30 @@ class CausalStreamsTopologyTest {
     }
 
     /**
-     * A sink whose partition count cannot be described must not mask a genuine partition-count
-     * mismatch on a DIFFERENT sink in the same stage: each sink is checked independently, so one
-     * sink's transient describe failure cannot hide another sink's real misconfiguration, even
-     * under strict validation.
+     * A sink whose partition count cannot be described must not mask a genuinely narrow DIFFERENT
+     * sink in the same stage: each sink is checked independently, so one sink's transient describe
+     * failure cannot hide another sink's real misconfiguration.
      *
-     * Asserts driver construction still throws for {@code c4}'s mismatch despite {@code c5}
+     * Asserts driver construction still throws for {@code c4}'s narrowness despite {@code c5}
      * being undescribable.
      */
     @Test
-    void undescribableSinkDoesNotMaskAPartitionMismatchOnAnotherSink() throws IOException {
+    void undescribableSinkDoesNotMaskANarrowerSink() throws IOException {
         ParsleyTopicAdmin admin = new FlakySinkAdmin(
                 Map.of("c1", C1_ID, "c4", C4_ID, "c5", C5_ID),
-                Map.of("c1", 2, "c4", 3), Map.of(), Set.of("c5"));
+                Map.of("c1", 2, "c4", 1), Map.of(), Set.of("c5"));
         CausalStreamsBuilder builder = new CausalStreamsBuilder();
         builder.stream("c1", Serdes.String(), Serdes.String())
                 .process(upperCaser())
                 .to("c4-sink", "c4", Serdes.String(), Serdes.String())
                 .to("c5-sink", "c5", Serdes.String(), Serdes.String());
-        Topology topology = assemble(builder, admin, strictValidation());
+        Topology topology = assemble(builder, admin, config());
 
         StreamsException thrown = assertThrows(StreamsException.class,
                 () -> new TopologyTestDriver(topology, config(tempStateDir())),
-                "strict validation must still catch c4's mismatch despite c5 being undescribable");
-        assertTrue(thrown.getCause().getMessage().contains("mismatched partition counts"),
-                "the message must name the mismatch: " + thrown.getCause().getMessage());
+                "the sink-width check must still catch c4's narrowness despite c5 being undescribable");
+        assertTrue(thrown.getCause().getMessage().contains("declared sink topic 'c4'"),
+                "the message must name the narrow sink: " + thrown.getCause().getMessage());
     }
 
     /**
@@ -956,39 +915,37 @@ class CausalStreamsTopologyTest {
                 .process(upperCaser())
                 .to("c4-sink", "c4", Serdes.String(), Serdes.String())
                 .to("c5-sink", "c5", Serdes.String(), Serdes.String());
-        Topology topology = assemble(builder, admin, strictValidation());
+        Topology topology = assemble(builder, admin, config());
 
         StreamsException thrown = assertThrows(StreamsException.class,
                 () -> new TopologyTestDriver(topology, config(tempStateDir())),
-                "strict validation must still catch c4's compact policy despite c5 being undescribable");
+                "the compacted-sink check must still catch c4's policy despite c5 being undescribable");
         assertTrue(thrown.getCause().getMessage().contains("cleanup.policy=compact"),
                 "the message must name c4's policy: " + thrown.getCause().getMessage());
     }
 
     /**
-     * Under {@code parsley.topology.validation=off}, sink validation must not even attempt the admin
-     * round-trips for partition counts or cleanup policies — not merely discard their results.
+     * A stale {@code parsley.*} key in the Streams {@link Properties} fails assembly loudly:
+     * Parsley has no configuration keys, and a key that wires nothing must not parse quietly
+     * ({@link ParsleyConfig#requireNoParsleyKeys}) — pinned here end to end through
+     * {@link CausalTopology#assemble}.
      *
-     * Asserts a counting sink admin records zero lint round-trips when validation is off.
+     * Asserts assembly throws an {@link IllegalStateException} naming the offending key.
      */
     @Test
-    void validationOffNeverCallsTheSinkAdminAtAll() {
-        CountingSinkAdmin admin = new CountingSinkAdmin(
-                Map.of("c1", C1_ID, "c3", C3_ID), Set.of("c1"));
+    void aParsleyKeyInTheStreamsPropertiesFailsAssembly() {
         Properties props = config();
-        props.put(ParsleyConfig.TOPOLOGY_VALIDATION, "off");
+        props.put("parsley.topology.validation", "warn");
         CausalStreamsBuilder builder = new CausalStreamsBuilder();
         builder.stream("c1", Serdes.String(), Serdes.String())
                 .process(upperCaser())
                 .to("c3-sink", "c3", Serdes.String(), Serdes.String());
-        Topology topology = assemble(builder, admin, props);
 
-        try (TopologyTestDriver driver = new TopologyTestDriver(topology, config())) {
-            driver.createInputTopic("c1", new StringSerializer(), new StringSerializer())
-                    .pipeInput(new TestRecord<>("k", "live", depsHeader(CausalClock.empty())));
-            assertEquals(0, admin.sinkPartitionCountCalls, "off must skip the sink partition-count admin call entirely");
-            assertEquals(0, admin.sinkCleanupPolicyCalls, "off must skip the sink cleanup-policy admin call entirely");
-        }
+        IllegalStateException thrown = assertThrows(IllegalStateException.class,
+                () -> assemble(builder, ADMIN, props),
+                "a parsley.* key must fail assembly — Parsley has no configuration keys");
+        assertTrue(thrown.getMessage().contains("parsley.topology.validation"),
+                "the failure must name the offending key: " + thrown.getMessage());
     }
 
     // --- strict sink resolution at init (R1: sinks must exist at startup) ----------------------
@@ -998,7 +955,7 @@ class CausalStreamsTopologyTest {
      * call fails — fails init loudly instead of silently disabling own-output tracking for the
      * task's lifetime: an unresolved sink would drop every acknowledgement fold for it, so stamps
      * would under-claim this node's own outputs and a downstream consumer could deliver an effect
-     * before its cause. Not gated by {@code parsley.topology.validation}.
+     * before its cause.
      *
      * Asserts driver construction throws, with an {@link IllegalStateException} in the chain
      * naming the sink and the sinks-must-exist remedy.
@@ -1109,8 +1066,7 @@ class CausalStreamsTopologyTest {
 
     /**
      * Regression test for BACKLOG.md's write-ordering-overclaim finding: {@link CausalTopology#assemble}
-     * requires {@code processing.guarantee=exactly_once_v2} unconditionally — never gated by {@code
-     * parsley.topology.validation}, unlike the partition-count/cleanup-policy checks above — since the
+     * requires {@code processing.guarantee=exactly_once_v2} unconditionally, since the
      * crash-safety reasoning throughout {@code ParsleyCausalBroadcast}/{@code ParsleyChannels} (a torn write always
      * lands on the benign side) only holds without exception under exactly-once's transactional
      * multi-store commit.
@@ -1391,64 +1347,4 @@ class CausalStreamsTopologyTest {
         }
     }
 
-    /**
-     * A {@link ParsleyTopicAdmin} test double that resolves the given topic UUIDs (inputs and
-     * sinks — strict sink resolution needs the sinks resolvable even under validation {@code off})
-     * and counts how many times it is asked for a SINK's partition count or cleanup.policy — i.e.
-     * any {@code partitionCounts}/{@code cleanupPolicies} call whose topics are not all in
-     * {@code inputTopics}. Used to prove {@code parsley.topology.validation=off} skips the sink
-     * lint round-trips entirely, not merely discards their results.
-     */
-    private static final class CountingSinkAdmin implements ParsleyTopicAdmin {
-
-        private final Map<String, Uuid> topicIds;
-        private final Set<String> inputTopics;
-        int sinkPartitionCountCalls = 0;
-        int sinkCleanupPolicyCalls = 0;
-
-        CountingSinkAdmin(Map<String, Uuid> topicIds, Set<String> inputTopics) {
-            this.topicIds = topicIds;
-            this.inputTopics = inputTopics;
-        }
-
-        @Override
-        public Map<String, Uuid> topicIds(List<String> topics) {
-            Map<String, Uuid> resolved = new HashMap<>();
-            topics.forEach(t -> resolved.put(t, topicIds.get(t)));
-            return resolved;
-        }
-
-        @Override
-        public Map<String, Integer> partitionCounts(List<String> topics) {
-            if (!inputTopics.containsAll(topics)) {
-                sinkPartitionCountCalls++;
-            }
-            Map<String, Integer> counts = new HashMap<>();
-            topics.forEach(t -> counts.put(t, 1));
-            return counts;
-        }
-
-        @Override
-        public Map<String, String> cleanupPolicies(List<String> topics) {
-            // cleanupPolicies is called for source topics too now (the unconditional compacted-source
-            // guard), so — mirroring partitionCounts above — only a call whose topics are not all known
-            // inputs is a sink-validation call; the source guard's call over the inputs is not counted.
-            if (!inputTopics.containsAll(topics)) {
-                sinkCleanupPolicyCalls++;
-            }
-            Map<String, String> policies = new HashMap<>();
-            topics.forEach(t -> policies.put(t, "delete"));
-            return policies;
-        }
-
-        @Override
-        public Map<Integer, Long> endOffsets(String topic) {
-            return Map.of();
-        }
-
-        @Override
-        public void close() {
-            // nothing to close
-        }
-    }
 }

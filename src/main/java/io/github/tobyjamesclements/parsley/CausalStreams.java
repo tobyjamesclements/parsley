@@ -47,9 +47,9 @@ import java.util.function.Supplier;
  * }</pre>
  *
  * <p><strong>Joins need zero coordination</strong>: a fresh application simply starts consuming, and
- * its replay self-gates into causal order. There is no membership, no epoch, and no join barrier; no
- * key under {@code parsley.coordination.*} is part of the configuration surface, and startup fails
- * if one is present (see {@link ParsleyConfig}).
+ * its replay self-gates into causal order. There is no membership, no epoch, and no join barrier.
+ * Parsley has no configuration keys at all — startup fails if any {@code parsley.*} key is present
+ * (see {@link ParsleyConfig}).
  *
  * <p><strong>{@link #close()}</strong> always runs the full graceful shutdown: it waits for every task's
  * causal buffer to drain through the ordinary delivery path before stopping the underlying
@@ -91,7 +91,8 @@ public final class CausalStreams implements AutoCloseable {
      * instance over it.
      *
      * @param topology the causal topology to run
-     * @param props    standard Kafka Streams configuration plus Parsley's {@code parsley.*} keys
+     * @param props    standard Kafka Streams configuration; Parsley has no keys of its own, and any
+     *                 {@code parsley.*} key fails startup (see {@link ParsleyConfig})
      */
     public CausalStreams(CausalTopology topology, Properties props) {
         this.quiesce = new ParsleyQuiesce();

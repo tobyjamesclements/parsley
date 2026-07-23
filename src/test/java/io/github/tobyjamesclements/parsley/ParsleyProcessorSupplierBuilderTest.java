@@ -23,8 +23,6 @@ class ParsleyProcessorSupplierBuilderTest {
                 public void process(Record<String, String> record) {}
             };
 
-    private static final String TOPOLOGY_VALIDATION = "parsley.topology.validation";
-
     /**
      * {@code ParsleyProcessorSupplier.Builder.build()} requires a buffer store to be declared via
      * {@code addBufferStore(name)} before the processor supplier can be constructed.
@@ -93,40 +91,6 @@ class ParsleyProcessorSupplierBuilderTest {
                 "candidate-index store must be named from the namespace");
         assertTrue(storeNames.contains("c1-forwarded-index"),
                 "forwarded-index store must be named from the namespace");
-    }
-
-    /**
-     * {@code withConfig(key, value)} sets a Parsley configuration entry that is threaded into the
-     * built supplier's effective {@link ParsleyConfig}.
-     *
-     * Asserts that setting {@code parsley.topology.validation} to {@code strict} makes the effective
-     * config report STRICT, where the default is WARN.
-     */
-    @Test
-    void withConfigKeyValueOverridesDefault() {
-        ParsleyProcessorSupplier<String, String, String, String> supplier =
-                (ParsleyProcessorSupplier<String, String, String, String>) builderWith()
-                        .addSource(new ParsleySource<>("c1", Serdes.String(), Serdes.String()))
-                        .withConfig(TOPOLOGY_VALIDATION, "strict")
-                        .build();
-        assertEquals(ParsleyConfig.ValidationMode.STRICT, supplier.config().topologyValidation(),
-                "withConfig(strict) must thread the value into the effective config");
-    }
-
-    /**
-     * With no Parsley configuration supplied, the effective config falls back to its defaults, where
-     * {@code parsley.topology.validation} is {@code strict}.
-     *
-     * Asserts the default effective config reports STRICT.
-     */
-    @Test
-    void defaultConfigUsesStrictValidation() {
-        ParsleyProcessorSupplier<String, String, String, String> supplier =
-                (ParsleyProcessorSupplier<String, String, String, String>) builderWith()
-                        .addSource(new ParsleySource<>("c1", Serdes.String(), Serdes.String()))
-                        .build();
-        assertEquals(ParsleyConfig.ValidationMode.STRICT, supplier.config().topologyValidation(),
-                "the default topology-validation mode is 'strict'");
     }
 
     /**

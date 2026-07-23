@@ -11,7 +11,6 @@ import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.Properties;
 import java.util.Set;
 import java.util.function.Function;
 
@@ -52,7 +51,6 @@ final class ParsleyProcessorSupplier<KIn, VIn, KOut, VOut>
     private final Set<String> sinkTopics;
     private final List<String> sinkNodeNames;
     private final Function<Map<String, Object>, ParsleyTopicAdmin> adminFactory;
-    private final ParsleyConfig config;
     private final @Nullable ParsleyQuiesce quiesce;
 
     ParsleyProcessorSupplier(ProcessorSupplier<KIn, VIn, KOut, VOut> userSupplier,
@@ -66,7 +64,6 @@ final class ParsleyProcessorSupplier<KIn, VIn, KOut, VOut>
                                       Set<String> sinkTopics,
                                       List<String> sinkNodeNames,
                                       Function<Map<String, Object>, ParsleyTopicAdmin> adminFactory,
-                                      ParsleyConfig config,
                                       @Nullable ParsleyQuiesce quiesce) {
         this.userSupplier = userSupplier;
         this.keySerdeByTopic = keySerdeByTopic;
@@ -79,7 +76,6 @@ final class ParsleyProcessorSupplier<KIn, VIn, KOut, VOut>
         this.sinkTopics = sinkTopics;
         this.sinkNodeNames = sinkNodeNames;
         this.adminFactory = adminFactory;
-        this.config = config;
         this.quiesce = quiesce;
     }
 
@@ -117,12 +113,7 @@ final class ParsleyProcessorSupplier<KIn, VIn, KOut, VOut>
                 new ParsleySerializer<>(new ParsleyResolver<>(keySerdeByTopic, valueSerdeByTopic)),
                 frontierStoreName, bufferStoreName, candidateIndexStoreName, forwardedIndexStoreName,
                 topics, sinkTopics, sinkNodeNames,
-                adminFactory, config, quiesce);
-    }
-
-    /** The effective Parsley configuration this supplier was built with. Package-private for tests. */
-    ParsleyConfig config() {
-        return config;
+                adminFactory, quiesce);
     }
 
     @Override
@@ -142,8 +133,7 @@ final class ParsleyProcessorSupplier<KIn, VIn, KOut, VOut>
     /**
      * Builder for a {@link ParsleyProcessorSupplier}. A buffer store
      * (via {@link #addBufferStore(String)}) and at least one {@link ParsleySource}
-     * (via {@link #addSource}/{@link #addSources}) are required; Parsley's own configuration is
-     * optional.
+     * (via {@link #addSource}/{@link #addSources}) are required.
      *
      * @param <KIn>  the input key type
      * @param <VIn>  the input value type
@@ -155,9 +145,7 @@ final class ParsleyProcessorSupplier<KIn, VIn, KOut, VOut>
         private final ProcessorSupplier<KIn, VIn, KOut, VOut> userSupplier;
         private @Nullable String storeName = null;
         private final Map<String, ParsleySource<KIn, VIn>> sources = new LinkedHashMap<>();
-        private final Properties config = new Properties();
         private Function<Map<String, Object>, ParsleyTopicAdmin> adminFactory = ParsleyTopicAdmin::ofConfigs;
-        private @Nullable ParsleyConfig configOverride = null;
         private Set<String> sinkTopics = Set.of();
         private List<String> sinkNodeNames = List.of();
         private @Nullable ParsleyQuiesce quiesce = null;
@@ -230,19 +218,6 @@ final class ParsleyProcessorSupplier<KIn, VIn, KOut, VOut>
         }
 
         /**
-         * Sets a single Parsley configuration entry, overlaid on top of any {@code parsley.properties}
-         * classpath resource. See {@link ParsleyConfig} for the recognised keys.
-         *
-         * @param key   the configuration key
-         * @param value the configuration value; recorded as its string form
-         * @return this builder
-         */
-        Builder<KIn, VIn, KOut, VOut> withConfig(String key, Object value) {
-            config.setProperty(key, String.valueOf(value));
-            return this;
-        }
-
-        /**
          * Registers this processor's tasks with a {@link ParsleyQuiesce} for coordinated graceful
          * shutdown. Optional — without one, tasks process and close exactly as they do today, with no
          * quiesce tracking.
@@ -269,22 +244,12 @@ final class ParsleyProcessorSupplier<KIn, VIn, KOut, VOut>
         }
 
         /**
-         * Overrides the {@link ParsleyConfig} (default: loaded from the {@code parsley.properties}
-         * classpath resource). For tests / embedding.
-         */
-        Builder<KIn, VIn, KOut, VOut> config(ParsleyConfig config) {
-            this.configOverride = config;
-            return this;
-        }
-
-        /**
          * Declares the topics this stage produces. Each declared sink's UUID and end offsets are
          * resolved strictly at init — like a registered input source, a causal sink must exist
          * before the stage starts (they feed own-output stamping, load-bearing for causal order);
          * an unresolvable sink fails init. Sink partition counts and cleanup policies are also
-         * folded into the startup topology lints ({@code parsley.topology.validation}), which stay
-         * best-effort per topic: a describe failure there skips that lint rather than failing the
-         * task, since lint strictness is the validation mode's call.
+         * folded into the always-on startup topology checks, which stay best-effort per topic: a
+         * describe failure there skips that check for that topic rather than failing the task.
          * {@link CausalTopology#assemble} sets this automatically from a stage's
          * {@code CausalProcessedStream#to(...)} declarations.
          *
@@ -332,19 +297,11 @@ final class ParsleyProcessorSupplier<KIn, VIn, KOut, VOut>
             Map<String, ParsleySource<KIn, VIn>> resolved = Map.copyOf(sources);
             Function<String, Serde<KIn>> keySerdeByTopic = topic -> serdeFor(resolved, topic).keySerde();
             Function<String, Serde<VIn>> valueSerdeByTopic = topic -> serdeFor(resolved, topic).valueSerde();
-            ParsleyConfig effectiveConfig = configOverride != null ? configOverride : effectiveConfig();
             return new ParsleyProcessorSupplier<>(
                     userSupplier, keySerdeByTopic, valueSerdeByTopic,
                     store + "-frontier", store + "-buffer", store + "-candidate-index", store + "-forwarded-index",
                     Set.copyOf(resolved.keySet()), sinkTopics, sinkNodeNames,
-                    adminFactory, effectiveConfig, quiesce);
-        }
-
-        /** Classpath {@code parsley.properties} as a base layer, overlaid with builder-supplied keys. */
-        private ParsleyConfig effectiveConfig() {
-            Properties props = ParsleyConfig.loadProperties();
-            props.putAll(config);
-            return ParsleyConfig.from(props);
+                    adminFactory, quiesce);
         }
 
         private static <KIn, VIn> ParsleySource<KIn, VIn> serdeFor(

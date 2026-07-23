@@ -40,7 +40,8 @@ public final class CausalTopology {
      * default-serde-deferred sources/sinks from {@code props}, wires {@code quiesce} into every stage,
      * and adds each stage's source/processor/sink nodes.
      *
-     * @param props   standard Kafka Streams configuration plus Parsley's {@code parsley.*} keys
+     * @param props   standard Kafka Streams configuration; any {@code parsley.*} key fails assembly
+     *                (see {@link ParsleyConfig})
      * @param quiesce the shared quiesce coordinator every stage's tasks register with
      * @return the assembled {@code Topology}
      * @throws IllegalStateException if {@code props} does not configure {@code exactly_once_v2}
@@ -48,7 +49,7 @@ public final class CausalTopology {
     Topology assemble(Properties props, ParsleyQuiesce quiesce) {
         requireExactlyOnce(props);
         requireFailClosedExceptionHandlers(props);
-        ParsleyConfig config = resolveConfig(props);
+        ParsleyConfig.requireNoParsleyKeys(props);
         DefaultSerdes defaults = new DefaultSerdes(props);
         String applicationId = props.getProperty(StreamsConfig.APPLICATION_ID_CONFIG);
         String stagePrefix = (applicationId == null || applicationId.isEmpty()) ? "stage-" : applicationId + "-stage-";
@@ -58,14 +59,14 @@ public final class CausalTopology {
         for (ParsleyStageSpec<?, ?, ?, ?> stage : stages) {
             index++;
             String name = stage.explicitName != null ? stage.explicitName : stagePrefix + index;
-            assembleStage(topology, stage, name, config, defaults, quiesce);
+            assembleStage(topology, stage, name, defaults, quiesce);
         }
         return topology;
     }
 
     /**
-     * Requires {@code processing.guarantee=exactly_once_v2}, unconditionally — never gated by {@code
-     * parsley.topology.validation}, since this is a correctness requirement, not a topology-shape lint.
+     * Requires {@code processing.guarantee=exactly_once_v2}, unconditionally — a correctness
+     * requirement, not a topology-shape lint.
      *
      * <p>Parsley's crash-safety reasoning (the frontier-before-buffer-removal write ordering throughout
      * {@code ParsleyCausalBroadcast}/{@code ParsleyChannels}) narrows an at-least-once torn-write window to a
@@ -91,9 +92,9 @@ public final class CausalTopology {
 
     /**
      * Requires that no Kafka Streams exception handler is configured to <em>skip</em> a record —
-     * unconditionally, never gated by {@code parsley.topology.validation}, because a skipping handler is a
-     * causal-correctness hazard, not a topology-shape lint (the same footing as {@link #requireExactlyOnce}
-     * and {@code ParsleyProcessor}'s compacted-source guard).
+     * unconditionally, because a skipping handler is a causal-correctness hazard, not a
+     * topology-shape lint (the same footing as {@link #requireExactlyOnce} and
+     * {@code ParsleyProcessor}'s compacted-source guard).
      *
      * <p>The skip-bridge ({@link ParsleyChannels#bridge}) treats an offset the consumer never returned as a
      * transaction marker or aborted record. A {@code LogAndContinue} deserialization handler, or a
@@ -142,7 +143,7 @@ public final class CausalTopology {
     }
 
     private <KIn, VIn, KOut, VOut> void assembleStage(
-            Topology topology, ParsleyStageSpec<KIn, VIn, KOut, VOut> stage, String name, ParsleyConfig config,
+            Topology topology, ParsleyStageSpec<KIn, VIn, KOut, VOut> stage, String name,
             DefaultSerdes defaults, ParsleyQuiesce quiesce) {
         Map<String, ParsleySource<KIn, VIn>> sources = new LinkedHashMap<>();
         stage.sources.forEach((topic, source) -> sources.put(topic, new ParsleySource<>(topic,
@@ -156,7 +157,6 @@ public final class CausalTopology {
         ParsleyProcessorSupplier.Builder<KIn, VIn, KOut, VOut> causalBuilder = ParsleyProcessorSupplier.builder(stage.userSupplier)
                 .addBufferStore(name)
                 .addSources(sources.values())
-                .config(config)
                 .sinkTopics(sinkTopics)
                 .sinkNodeNames(sinkNodeNames)
                 .withQuiesce(quiesce);
@@ -210,13 +210,6 @@ public final class CausalTopology {
             stage.sinks.forEach(sink -> topics.add(sink.topic()));
         }
         return topics;
-    }
-
-    /** Classpath {@code parsley.properties} as a base layer, overlaid with the runtime's {@code props}. */
-    private static ParsleyConfig resolveConfig(Properties props) {
-        Properties merged = ParsleyConfig.loadProperties();
-        merged.putAll(props);
-        return ParsleyConfig.from(merged);
     }
 
     /** Lazily resolves {@code default.key.serde}/{@code default.value.serde} from {@code props}. */

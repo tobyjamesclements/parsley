@@ -212,7 +212,7 @@ class ParsleyFormerSinkHealTest {
         return new ParsleyProcessor<>(delegate, serializer,
                 "frontier", "buffer", "candidate-index", "forwarded-index",
                 topics, sinkTopics, List.of(),
-                adminFactory, ParsleyConfig.from(new Properties()), null);
+                adminFactory, null);
     }
 
     private MockProcessorContext<String, String> contextOverStores() {

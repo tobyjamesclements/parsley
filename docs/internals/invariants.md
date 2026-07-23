@@ -57,7 +57,8 @@ certified knowledge of failed the task fast. The certification concept was remov
 with membership. Under the fault model, an unconsumed coordinate in a clock was stamped by a
 compliant participant and its consumed ancestry rides in the same clock (I2 and I9), so it is
 safely ignorable; the fail-fast added no safety and made joins require coordination. The
-replacement observability is the out-of-scope-ignored metric and startup topology validation.
+replacement observability is the out-of-scope-ignored metric and the always-on startup topology
+checks.
 The number stays retired in place so later invariants keep theirs.
 
 ## I8 — stamp over-claim soundness

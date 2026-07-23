@@ -6,6 +6,23 @@ All notable changes to this project are documented in this file. The format is b
 
 ## [Unreleased]
 
+### Removed
+- **BREAKING: the `parsley.topology.validation` key is deleted; Parsley now has zero
+  configuration keys.** The startup topology checks always run and always fail fast — there is no
+  `warn`/`off` opt-down, and no `parsley.properties` key is read at all. Startup fails with
+  `IllegalStateException`, naming every offending key, if any `parsley.*` key is present in the
+  Streams `Properties` or a `parsley.properties` classpath resource (the same fail-loud treatment
+  the removed `parsley.coordination.*` keys already had). The checks themselves became precise
+  enough to need no opt-down: source topics must share a partition count (a causal-safety
+  requirement, previously softenable by `warn`); a sink must be at least as wide as the widest
+  source — the former source/sink parity check wrongly flagged the funnel shape (narrow sources
+  fanning into a wider, re-keyed sink), which was the one legitimate use of `warn` and now passes
+  with no opt-down, while a narrower sink (which can only crash-loop the marker produce at
+  runtime) always fails at init; compacted sinks always fail, like compacted sources already did.
+  Capabilities dropped with the key: nothing viable — every topology `warn`/`off` admitted either
+  cannot run at all or violates causal safety — plus `off`'s saving of the sink-describe admin
+  round-trips at init (a one-time startup cost).
+
 ### Added
 - **Two new internals pages: the named-invariant catalogue and the naming register.**
   `docs/internals/invariants.md` states I1–I9 — the invariants Javadoc and tests cite by

@@ -1,19 +1,16 @@
 package io.github.tobyjamesclements.parsley;
 
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-
 import java.io.IOException;
 import java.io.InputStream;
 import java.util.LinkedHashSet;
-import java.util.Locale;
 import java.util.Properties;
 import java.util.Set;
 
 /**
- * Parsley's own configuration, loaded from a {@code parsley.properties} classpath resource. This is
- * deliberately separate from Kafka Streams configuration: Parsley behaviours have causal-frontier
- * consequences with no Streams equivalent, so they are not mapped from Streams' exception handlers.
+ * Enforces Parsley's empty configuration surface: there are no {@code parsley.*} keys. The startup
+ * topology checks always run and always fail fast (see {@link ParsleyProcessor}), and topology-epoch
+ * coordination was removed from the causal protocol outright (joins need zero coordination), so every
+ * behaviour that once had a key is now unconditional.
  *
  * <p>Causal delivery has exactly two dispositions, never a third: a record is <strong>forwarded</strong>
  * once its consumed dependencies are satisfied (a dependency on a coordinate this node does not
@@ -23,128 +20,66 @@ import java.util.Set;
  * unconditionally fails the task. There is no configuration that trades causal safety for liveness,
  * and no diversion — proven impossibility always fails fast, never on pressure or time.
  *
- * <p>An absent file, or absent keys, fall back to defaults. {@link #from(Properties)} builds one from
- * explicit properties (programmatic override / tests).
+ * <p>A {@code parsley.*} key found in the runtime {@code Properties} or a {@code parsley.properties}
+ * classpath resource therefore wires nothing — and a key that wires nothing must not parse quietly,
+ * or an operator who believes it took effect would never learn otherwise.
+ * {@link #requireNoParsleyKeys(Properties)} fails startup loudly, naming every offending key.
  */
 final class ParsleyConfig {
 
-    private static final Logger log = LoggerFactory.getLogger(ParsleyConfig.class);
-
-    /** The classpath resource Parsley reads its configuration from. */
+    /** The classpath resource earlier releases read configuration from, now scanned only to reject. */
     static final String RESOURCE = "parsley.properties";
 
+    /** The reserved key prefix; any key under it fails startup. */
+    static final String PARSLEY_KEY_PREFIX = "parsley.";
+
+    private ParsleyConfig() {
+    }
+
     /**
-     * {@code parsley.topology.validation} — how the processor reacts to a topology misconfiguration it
-     * can detect at startup: the causal topics not sharing a partition count (co-partitioning is
-     * impossible — each task cannot own the complete partition set for a causally-related group), and,
-     * for a {@link CausalStreamsBuilder} stage's sink topics, a {@code cleanup.policy} that includes
-     * {@code compact} (a protocol null message is a null-value record wire-indistinguishable from a
-     * compaction tombstone and can be compacted away before a slow consumer reads it):
-     * <ul>
-     *   <li>{@code off}: no check.</li>
-     *   <li>{@code warn}: log a prominent warning and continue — the opt-down for a deployment that
-     *       knowingly runs with the misconfiguration.</li>
-     *   <li>{@code strict} (default): fail the task fast at {@code init()}. Both detectable
-     *       misconfigurations are startup-shaped failures anyway — a partition-parity mismatch
-     *       makes the protocol-marker produce crash-loop at runtime, and a compacted sink can
-     *       silently lose null messages — so failing once, clearly, at init is the safer default.</li>
-     * </ul>
+     * Fails startup when any {@code parsley.*} key is present in {@code runtimeProps} or in a
+     * {@code parsley.properties} classpath resource. Both layers are scanned so a stale deployment
+     * learns about the removal at startup, whichever way it used to supply the key. There is no
+     * migration path because there is nothing left to configure: the startup topology checks (the
+     * former {@code parsley.topology.validation}) are always on, and topology-epoch coordination
+     * (the former {@code parsley.coordination.*} keys) was removed — behaviour is strictly more
+     * available without it.
      *
-     * <p>Only the constraints the processor can observe are checked here — it knows its registered
-     * input buffers, and, when built through the topology-owning {@code CausalStreamsBuilder} API, that
-     * stage's sink topics too. A sink whose describe transiently fails is skipped for both lints
-     * rather than failing the task (sink existence itself is enforced unconditionally, outside this
-     * key — see {@code ParsleyProcessor#resolveSinkTopicUuids}).
+     * @param runtimeProps the configuration handed to {@code CausalStreams}
+     * @throws IllegalStateException naming every {@code parsley.*} key found
      */
-    static final String TOPOLOGY_VALIDATION = "parsley.topology.validation";
-
-    /**
-     * The removed {@code parsley.coordination.*} key prefix. Topology-epoch coordination is no longer
-     * part of the causal protocol (the two-branch delivery gate needs no membership, no epochs, and no
-     * join barrier — joins are coordination-free), and its configuration keys are deleted outright:
-     * {@link #from(Properties)} fails loudly when any key under this prefix is present, so a stale
-     * deployment learns about the removal at startup instead of silently running with dead keys.
-     */
-    static final String REMOVED_COORDINATION_PREFIX = "parsley.coordination.";
-
-    /** How {@link #TOPOLOGY_VALIDATION} reacts to a detectable topology misconfiguration. */
-    enum ValidationMode { OFF, WARN, STRICT }
-
-    private final ValidationMode topologyValidation;
-
-    private ParsleyConfig(ValidationMode topologyValidation) {
-        this.topologyValidation = topologyValidation;
+    static void requireNoParsleyKeys(Properties runtimeProps) {
+        Set<String> offending = new LinkedHashSet<>();
+        collectParsleyKeys(loadClasspathProperties(), offending);
+        collectParsleyKeys(runtimeProps, offending);
+        if (!offending.isEmpty()) {
+            throw new IllegalStateException("removed configuration " + offending + ": Parsley has no "
+                    + "configuration keys. The startup topology checks are always on and always fail "
+                    + "fast (the former parsley.topology.validation), and topology-epoch coordination "
+                    + "was removed from the causal protocol (the former parsley.coordination.* keys — "
+                    + "joins need zero coordination). Delete every parsley.* key; no replacement "
+                    + "configuration is needed.");
+        }
     }
 
-    /** How to react to a detectable topology misconfiguration at startup. */
-    ValidationMode topologyValidation() {
-        return topologyValidation;
+    private static void collectParsleyKeys(Properties props, Set<String> offending) {
+        for (String name : props.stringPropertyNames()) {
+            if (name.startsWith(PARSLEY_KEY_PREFIX)) {
+                offending.add(name);
+            }
+        }
     }
 
-    /** Loads from the {@code parsley.properties} classpath resource, or defaults if it is absent. */
-    static ParsleyConfig load() {
-        return from(loadProperties());
-    }
-
-    /**
-     * Reads the {@code parsley.properties} classpath resource into a {@link Properties}, or an empty
-     * one if the resource is absent. Exposed so callers can use the classpath file as a base layer and
-     * overlay explicit keys on top before calling {@link #from(Properties)}.
-     */
-    static Properties loadProperties() {
+    /** The {@code parsley.properties} classpath resource, or empty if absent. */
+    private static Properties loadClasspathProperties() {
         Properties props = new Properties();
         try (InputStream in = ParsleyConfig.class.getClassLoader().getResourceAsStream(RESOURCE)) {
             if (in != null) {
                 props.load(in);
-                log.debug("Loaded {} from the classpath", RESOURCE);
             }
         } catch (IOException e) {
             throw new IllegalStateException("failed to read " + RESOURCE + " from the classpath", e);
         }
         return props;
-    }
-
-    /**
-     * Builds from explicit properties (programmatic override / tests).
-     *
-     * @throws IllegalStateException if any removed {@code parsley.coordination.*} key is present
-     *         (see {@link #rejectRemovedCoordinationKeys})
-     */
-    static ParsleyConfig from(Properties props) {
-        rejectRemovedCoordinationKeys(props);
-        return new ParsleyConfig(validationMode(props));
-    }
-
-    /**
-     * Fails loudly when any removed {@code parsley.coordination.*} key is present. Topology-epoch
-     * coordination has been removed from the causal protocol, so the keys wire nothing — and a key
-     * that wires nothing must not parse quietly, or an operator who believes their deployment is
-     * coordinated would never learn otherwise. There is no migration path: an existing coordinated
-     * deployment upgrades by deleting its coordination configuration (behaviour becomes strictly
-     * more available — joins need zero coordination).
-     */
-    private static void rejectRemovedCoordinationKeys(Properties props) {
-        Set<String> removed = new LinkedHashSet<>();
-        for (String name : props.stringPropertyNames()) {
-            if (name.startsWith(REMOVED_COORDINATION_PREFIX)) {
-                removed.add(name);
-            }
-        }
-        if (!removed.isEmpty()) {
-            throw new IllegalStateException("removed configuration " + removed + ": topology-epoch "
-                    + "coordination has been removed from the causal protocol — joins need zero "
-                    + "coordination, so there is no epoch-events log, no domain, and no member roster. "
-                    + "Delete every parsley.coordination.* key; no replacement configuration is needed.");
-        }
-    }
-
-    private static ValidationMode validationMode(Properties props) {
-        String value = props.getProperty(TOPOLOGY_VALIDATION, "strict").trim();
-        try {
-            return ValidationMode.valueOf(value.toUpperCase(Locale.ROOT));
-        } catch (IllegalArgumentException e) {
-            throw new IllegalStateException(
-                    TOPOLOGY_VALIDATION + " must be 'off', 'warn' or 'strict', got '" + value + "'");
-        }
     }
 }

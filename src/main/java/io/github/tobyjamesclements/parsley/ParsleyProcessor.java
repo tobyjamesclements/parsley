@@ -86,7 +86,6 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
     // broadcast. See ParsleyProcessorContext.forward.
     private final List<String> sinkNodeNames;
     private final Function<Map<String, Object>, ParsleyTopicAdmin> adminFactory;
-    private final ParsleyConfig config;
     private final @Nullable ParsleyQuiesce quiesce;
 
     // All mutable state below is confined to the single Kafka Streams thread that owns this task.
@@ -158,7 +157,6 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
                      Set<String> sinkTopics,
                      List<String> sinkNodeNames,
                      Function<Map<String, Object>, ParsleyTopicAdmin> adminFactory,
-                     ParsleyConfig config,
                      @Nullable ParsleyQuiesce quiesce) {
         this.delegate = delegate;
         this.serializer = serializer;
@@ -170,7 +168,6 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
         this.sinkTopics = sinkTopics;
         this.sinkNodeNames = sinkNodeNames;
         this.adminFactory = adminFactory;
-        this.config = config;
         this.quiesce = quiesce;
     }
 
@@ -884,19 +881,20 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
     private Map<String, Uuid> resolveTopicUuids(ProcessorContext<KOut, VOut> context) {
         List<String> topicList = new ArrayList<>(topics);
         Map<String, Uuid> resolved;
-        Map<String, Integer> partitionCounts;
-        Map<String, String> cleanupPolicies;
+        Map<String, Integer> sourcePartitionCounts;
+        Map<String, Integer> sinkPartitionCounts;
+        Map<String, String> sinkCleanupPolicies;
         Map<String, String> sourceCleanupPolicies;
         try (ParsleyTopicAdmin admin = adminFactory.apply(context.appConfigs())) {
             try {
                 resolved = admin.topicIds(topicList);
-                Map<String, Integer> sourcePartitionCounts = admin.partitionCounts(topicList);
-                partitionCounts = new HashMap<>(sourcePartitionCounts);
-                partitionCounts.putAll(additionalTopicInfo(admin, "partition count", ParsleyTopicAdmin::partitionCounts));
-                cleanupPolicies = additionalTopicInfo(admin, "cleanup.policy", ParsleyTopicAdmin::cleanupPolicies);
-                // Source cleanup.policy is resolved separately, over the input topics (which must already
-                // exist), and always — never gated by parsley.topology.validation — because a compacted
-                // source is a correctness hazard for the skip-bridge, not a topology lint (see
+                sourcePartitionCounts = admin.partitionCounts(topicList);
+                sinkPartitionCounts = additionalTopicInfo(admin, "partition count", ParsleyTopicAdmin::partitionCounts);
+                sinkCleanupPolicies = additionalTopicInfo(admin, "cleanup.policy", ParsleyTopicAdmin::cleanupPolicies);
+                // Source cleanup.policy is resolved over the input topics directly (they must already
+                // exist for the resolves above to have succeeded), not via the best-effort
+                // additionalTopicInfo path: a compacted source is a correctness hazard for the
+                // skip-bridge, so its describe failing must fail init rather than skip the check (see
                 // validateSourcesNotCompacted).
                 sourceCleanupPolicies = admin.cleanupPolicies(topicList);
             } catch (Exception e) {
@@ -919,17 +917,18 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
                 throw new IllegalStateException("broker did not return a UUID for topic '" + topic + "'");
             }
         }
-        // Validate outside the resolve try/catch so a strict-mode failure surfaces as itself rather
+        // Validate outside the resolve try/catch so a check failure surfaces as itself rather
         // than being wrapped as a broker-reachability error.
         validateSourcesNotCompacted(sourceCleanupPolicies);
-        validatePartitionParity(partitionCounts);
-        validateCleanupPolicy(cleanupPolicies);
+        validateSourcePartitionParity(sourcePartitionCounts);
+        validateSinkPartitionWidth(sourcePartitionCounts, sinkPartitionCounts);
+        validateSinksNotCompacted(sinkCleanupPolicies);
         return resolved;
     }
 
     /**
      * Strict, per-topic UUID resolution over {@link #sinkTopics} — unlike {@link
-     * #additionalTopicInfo}, this always runs, never gated by {@code parsley.topology.validation}: it
+     * #additionalTopicInfo}, this is strict — a failed describe fails init: it
      * feeds the {@code ownOutputs} fold's name → UUID translation (D2) and {@link
      * #causalBroadcast}'s I8 reflected-claim diagnostic — correctness and observability
      * mechanisms, not topology-misconfiguration lints. Also captures each sink's
@@ -985,25 +984,21 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
 
     /**
      * Best-effort, per-topic resolution of {@code describe} over {@link #sinkTopics}
-     * — extra topics (e.g. a {@link CausalStreams} sink) folded into validation without being
-     * consumed. Unlike {@link #resolveSinkTopicUuids} (strict: a sink must exist and resolve, it
-     * feeds correctness mechanisms), these describes feed only the topology lints, whose strictness
-     * is governed by {@code parsley.topology.validation} — so a topic that cannot be described is
-     * logged and omitted from the result rather than failing the task here; {@code strict} mode
-     * then judges whatever was resolved.
+     * — extra topics (e.g. a {@link CausalStreams} sink) folded into the startup topology checks
+     * without being consumed. Unlike {@link #resolveSinkTopicUuids} (strict: a sink must exist and
+     * resolve, it feeds correctness mechanisms), these describes feed only the sink-side topology
+     * checks — so a topic that cannot be described is logged and omitted from the result rather
+     * than failing the task here; the checks then judge whatever was resolved.
      *
      * <p>Resolved <strong>one topic at a time</strong>, deliberately not batched: the real
      * {@link ParsleyTopicAdmin} calls this delegates to (via {@code describeTopics}/
      * {@code describeConfigs}) fail their <em>entire</em> batch if any single topic in it errors, so
      * batching all sink topics together would let one not-yet-created sink mask a genuine
-     * misconfiguration on another, already-existing sink — even under {@code strict}. Skipped
-     * entirely under {@code parsley.topology.validation=off}, so a disabled check costs no admin
-     * round-trip.
+     * misconfiguration on another, already-existing sink.
      */
     private <T> Map<String, T> additionalTopicInfo(
             ParsleyTopicAdmin admin, String what, TopicDescriptor<T> describe) {
-        if (sinkTopics.isEmpty()
-                || config.topologyValidation() == ParsleyConfig.ValidationMode.OFF) {
+        if (sinkTopics.isEmpty()) {
             return Map.of();
         }
         Map<String, T> result = new HashMap<>();
@@ -1025,37 +1020,49 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
     }
 
     /**
-     * Warns or fails (per {@code parsley.topology.validation}) when the causal input topics — and,
-     * when built through {@link CausalStreams}, this stage's sink topics too — do not share a
-     * partition count. Co-partitioning requires an equal partition count across all causally-related
-     * topics so that a single task owns the complete partition set for a related group; unequal
-     * counts make that impossible and let the completeness frontier evaluate against an incomplete
-     * partition set. A single topic in the check (or {@code off}) is always vacuously fine.
-     *
-     * <p>Note the produce-time consequence a mismatch carries under {@code warn}: {@link
-     * ParsleyMarkerPartitioner} routes a protocol marker to this task's own owned partition
-     * ({@code taskId().partition()}) unconditionally, so a sink with fewer partitions than a source
-     * makes the marker produce fail outright, crash-looping the task. {@code strict} — the default
-     * — turns that into the startup failure it really is; {@code warn} is the explicit opt-down
-     * for a deployment that knowingly tolerates the mismatch.
+     * Fails the task at {@code init()}, unconditionally, when the causal <em>source</em> topics do
+     * not share a partition count. Co-partitioning requires an equal partition count across all
+     * causally-related source topics so that a single task owns the complete partition set for a
+     * related group; unequal counts make that impossible and let the completeness frontier evaluate
+     * against an incomplete partition set — a causal-safety hole (I2/I9's out-of-scope soundness
+     * argument assumes proper sharding), not a topology lint, so there is no opt-down. A single
+     * source topic is always vacuously fine. Sink topics are deliberately not part of this parity
+     * check: a sink may legitimately be <em>wider</em> than the sources (a funnel fanning into a
+     * re-keyed sink) — see {@link #validateSinkPartitionWidth} for the sink-side constraint.
      */
-    private void validatePartitionParity(Map<String, Integer> partitionCounts) {
-        ParsleyConfig.ValidationMode mode = config.topologyValidation();
-        if (mode == ParsleyConfig.ValidationMode.OFF || partitionCounts.size() < 2) {
+    private static void validateSourcePartitionParity(Map<String, Integer> partitionCounts) {
+        if (partitionCounts.size() < 2 || Set.copyOf(partitionCounts.values()).size() <= 1) {
             return;
         }
-        if (Set.copyOf(partitionCounts.values()).size() <= 1) {
-            return;
+        throw new IllegalStateException("causal source topics have mismatched partition counts "
+                + partitionCounts + "; co-partitioning requires an equal partition count across all "
+                + "causally-related source topics so each task owns the complete partition set for a "
+                + "related group. Repartition the sources to a shared count.");
+    }
+
+    /**
+     * Fails the task at {@code init()}, unconditionally, when a declared sink topic has fewer
+     * partitions than the sources: {@link ParsleyMarkerPartitioner} routes every protocol marker to
+     * the forwarding task's own partition ({@code taskId().partition()}), so a task owning a source
+     * partition the sink does not have would fail the marker produce outright, crash-looping the
+     * task at runtime — this check surfaces that impossibility once, clearly, at startup. A sink as
+     * wide as, or wider than, every source (a funnel fanning narrow sources into a wider, re-keyed
+     * sink) is protocol-safe and passes. Best-effort per sink: a sink whose describe failed is
+     * absent from {@code sinkPartitionCounts} and skipped here (sink <em>existence</em> is enforced
+     * strictly by {@link #resolveSinkTopicUuids}).
+     */
+    private static void validateSinkPartitionWidth(Map<String, Integer> sourcePartitionCounts,
+                                                   Map<String, Integer> sinkPartitionCounts) {
+        int widestSource = sourcePartitionCounts.values().stream().mapToInt(Integer::intValue).max().orElse(0);
+        for (Map.Entry<String, Integer> sink : sinkPartitionCounts.entrySet()) {
+            if (sink.getValue() < widestSource) {
+                throw new IllegalStateException("declared sink topic '" + sink.getKey() + "' has "
+                        + sink.getValue() + " partition(s) but a causal source topic has " + widestSource
+                        + "; protocol markers route to the forwarding task's own partition, so a sink "
+                        + "narrower than its sources fails the marker produce at runtime. Give the sink "
+                        + "at least as many partitions as the widest source.");
+            }
         }
-        String detail = "causal topics have mismatched partition counts " + partitionCounts
-                + "; co-partitioning requires an equal partition count across all causally-related "
-                + "topics so each task owns the complete partition set for a related group";
-        if (mode == ParsleyConfig.ValidationMode.STRICT) {
-            throw new IllegalStateException("parsley.topology.validation=strict: " + detail
-                    + ". An intentionally mismatched topology (e.g. fanning a source into a wider, "
-                    + "re-keyed sink) opts down with parsley.topology.validation=warn.");
-        }
-        log.warn("parsley.topology.validation=warn: {}", detail);
     }
 
     /**
@@ -1089,9 +1096,9 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
 
     /**
      * Fails the task, unconditionally, when a causal <em>source</em> topic has {@code cleanup.policy}
-     * including {@code compact}. Unlike {@link #validateCleanupPolicy} (a sink lint, gated by {@code
-     * parsley.topology.validation}), this is a correctness guard on the skip-bridge and is never gated —
-     * same precedent as {@link #resolveSinkTopicUuids}. The bridge ({@link ParsleyChannels#bridge}) treats
+     * including {@code compact}. Unlike {@link #validateSinksNotCompacted} (best-effort per sink), a
+     * source describe failure fails init too — this is a correctness guard on the skip-bridge, same
+     * precedent as {@link #resolveSinkTopicUuids}. The bridge ({@link ParsleyChannels#bridge}) treats
      * an offset a {@code read_committed} consumer skipped as a transaction marker or aborted record and
      * folds it into the contiguous frontier. Log compaction breaks that premise: it removes a real,
      * committed mid-log record, leaving exactly the same consumer-visible hole a marker would — so the
@@ -1114,37 +1121,30 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
                     + "' has cleanup.policy=" + policy + "; a compacted source can drop a real committed "
                     + "mid-log record, leaving the same consumer-visible hole a transaction marker does, "
                     + "which the skip-bridge would cross — releasing a dependent before its cause. Set "
-                    + "cleanup.policy=delete on any topic consumed by a causal stage. This check is not "
-                    + "governed by parsley.topology.validation because it guards causal correctness, not "
-                    + "topology hygiene.");
+                    + "cleanup.policy=delete on any topic consumed by a causal stage.");
         }
     }
 
     /**
-     * Warns or fails (per {@code parsley.topology.validation}) when a {@link CausalStreams} sink
-     * topic's {@code cleanup.policy} includes {@code compact}. A protocol null message is a null-key,
-     * null-value record wire-indistinguishable from a compaction tombstone, so under compaction it
-     * can be removed from the log before a slow consumer reads it — silently losing the completeness
-     * frontier it carried. {@code compact,delete} is equally unsafe: compaction still runs.
+     * Fails the task at {@code init()}, unconditionally, when a {@link CausalStreams} sink topic's
+     * {@code cleanup.policy} includes {@code compact}. A protocol null message is a null-value
+     * record wire-indistinguishable from a compaction tombstone, so under compaction it can be
+     * removed from the log before a slow consumer reads it — silently losing the completeness
+     * frontier it carried (and read as a <em>delete</em> by any table-style consumer of the sink).
+     * {@code compact,delete} is equally unsafe: compaction still runs. No viable deployment
+     * tolerates this, so there is no opt-down. Best-effort per sink, like
+     * {@link #validateSinkPartitionWidth}: a sink whose describe failed is skipped here.
      */
-    private void validateCleanupPolicy(Map<String, String> cleanupPolicies) {
-        ParsleyConfig.ValidationMode mode = config.topologyValidation();
-        if (mode == ParsleyConfig.ValidationMode.OFF) {
-            return;
-        }
+    private static void validateSinksNotCompacted(Map<String, String> cleanupPolicies) {
         for (Map.Entry<String, String> entry : cleanupPolicies.entrySet()) {
             String policy = entry.getValue();
             if (policy == null || !policy.contains(TopicConfig.CLEANUP_POLICY_COMPACT)) {
                 continue;
             }
-            String detail = "sink topic '" + entry.getKey() + "' has cleanup.policy=" + policy
-                    + "; a Parsley null message is a null-value record wire-indistinguishable from a "
-                    + "compaction tombstone and can be compacted away before a slow consumer reads it "
-                    + "— set cleanup.policy=delete";
-            if (mode == ParsleyConfig.ValidationMode.STRICT) {
-                throw new IllegalStateException("parsley.topology.validation=strict: " + detail);
-            }
-            log.warn("parsley.topology.validation=warn: {}", detail);
+            throw new IllegalStateException("sink topic '" + entry.getKey() + "' has cleanup.policy="
+                    + policy + "; a Parsley null message is a null-value record wire-indistinguishable "
+                    + "from a compaction tombstone and can be compacted away before a slow consumer "
+                    + "reads it — set cleanup.policy=delete");
         }
     }
 }

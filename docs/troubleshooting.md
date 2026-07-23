@@ -95,8 +95,8 @@ clock already states.
 Producers stamp a clock spanning everything they consume, so a downstream stage with a narrower
 scope sees out-of-scope coordinates routinely — a steady rate on the sensor is normal there. A
 sustained rate where you expected full coverage is worth investigating: it can indicate a missing
-subscription, a co-partitioning mistake (also flagged by
-[`parsley.topology.validation`](configuration.md)), or two deployments unintentionally sharing a
+subscription, a co-partitioning mistake (also flagged by the
+[startup topology checks](configuration.md)), or two deployments unintentionally sharing a
 topic.
 
 ---

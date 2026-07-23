@@ -184,10 +184,8 @@ class ParsleyFunnelCrossingWaitIT {
         props.put(StreamsConfig.DEFAULT_VALUE_SERDE_CLASS_CONFIG, Serdes.String().getClass().getName());
         props.put(StreamsConfig.COMMIT_INTERVAL_MS_CONFIG, 200);
         props.put(StreamsConfig.PROCESSING_GUARANTEE_CONFIG, StreamsConfig.EXACTLY_ONCE_V2);
-        // The funnel deliberately fans a 1-partition source into a 2-partition sink, so the
-        // co-partitioning parity lint flags it; under the strict default that fails startup. This
-        // is the documented opt-down for an intentionally mismatched (re-keying) topology.
-        props.put(ParsleyConfig.TOPOLOGY_VALIDATION, "warn");
+        // The funnel fans a 1-partition source into a 2-partition sink; a wider sink passes the
+        // sink-width startup check with no opt-down needed.
         return props;
     }
 

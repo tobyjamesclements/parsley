@@ -1447,7 +1447,7 @@ class ParsleyProcessorsTopologyTest {
                 new ParsleySerializer<>(new ParsleyResolver<>(t -> Serdes.String(), t -> Serdes.String())),
                 "frontier", "buffer", "candidate-index", "forwarded-index",
                 Set.of("c1", "c2"), Set.of(), List.of(),
-                configs -> ADMIN, ParsleyConfig.from(new Properties()), null);
+                configs -> ADMIN, null);
         MockProcessorContext<String, String> context = new MockProcessorContext<>();
         context.setCurrentSystemTimeMs(1L);
         context.addStateStore(new TestKeyValueStore<String, byte[]>(Comparator.naturalOrder(), "frontier"));
@@ -1556,45 +1556,15 @@ class ParsleyProcessorsTopologyTest {
     }
 
     /**
-     * Under an explicit {@code parsley.topology.validation=warn} opt-down, causal input topics with
-     * mismatched partition counts are logged but do not fail startup — for a deployment that
-     * knowingly runs with the misconfiguration. (The default is {@code strict}, pinned by
-     * {@link #mismatchedInputPartitionCountsFailStartupUnderDefaultValidation}.)
+     * Causal input topics with mismatched partition counts fail startup fast, unconditionally:
+     * co-partitioning is impossible, so the completeness frontier would evaluate against an
+     * incomplete partition set — a causal-safety hole with no opt-down.
      *
-     * Asserts the topology constructs (init completes) despite c2 and c3 having different counts.
+     * Asserts driver construction throws, wrapping an {@link IllegalStateException} whose message
+     * names the mismatch.
      */
     @Test
-    void mismatchedInputPartitionCountsWarnButStartUnderWarnValidation() {
-        ParsleyTopicAdmin mismatched = TestTopicAdmin.of(
-                Map.of("c2", C2_ID, "c3", C3_ID), Map.of("c2", 2, "c3", 3));
-        Topology topology = topology(
-                ParsleyProcessorSupplier.builder(upperCaser()).addBufferStore("parsley")
-                        .addSource(new ParsleySource<>("c2", Serdes.String(), Serdes.String()))
-                        .addSource(new ParsleySource<>("c3", Serdes.String(), Serdes.String()))
-                        .withConfig(ParsleyConfig.TOPOLOGY_VALIDATION, "warn")
-                        .topicAdmin(mismatched).build(),
-                List.of("c2", "c3"));
-
-        // Construction runs init(); warn mode must not throw, and the task must be live afterwards.
-        try (TopologyTestDriver driver = new TopologyTestDriver(topology, config(null))) {
-            driver.createInputTopic("c2", new StringSerializer(), new StringSerializer())
-                    .pipeInput(new TestRecord<>("k", "live", depsHeader(CausalClock.empty())));
-            assertEquals(List.of("live"), processed,
-                    "warn-mode validation must not fail startup: the task starts and processes normally");
-        }
-    }
-
-    /**
-     * With no {@code parsley.topology.validation} configured at all, a partition-count mismatch
-     * fails startup: the default is {@code strict}. A mismatch was always a deferred failure —
-     * the protocol-marker produce crash-loops at runtime — so the default surfaces it once,
-     * clearly, at init; {@code warn} is the explicit opt-down.
-     *
-     * Asserts driver construction throws with the strict-validation failure without any explicit
-     * validation configuration.
-     */
-    @Test
-    void mismatchedInputPartitionCountsFailStartupUnderDefaultValidation() throws IOException {
+    void mismatchedInputPartitionCountsFailStartup() throws IOException {
         ParsleyTopicAdmin mismatched = TestTopicAdmin.of(
                 Map.of("c2", C2_ID, "c3", C3_ID), Map.of("c2", 2, "c3", 3));
         Topology topology = topology(
@@ -1606,7 +1576,9 @@ class ParsleyProcessorsTopologyTest {
 
         StreamsException thrown = assertThrows(StreamsException.class,
                 () -> new TopologyTestDriver(topology, config(tempStateDir())),
-                "the default validation mode must be strict: a mismatch fails startup unconfigured");
+                "a source partition-count mismatch must fail startup");
+        assertEquals(IllegalStateException.class, thrown.getCause().getClass(),
+                "the wrapped cause must be the parity check's failure");
         assertTrue(thrown.getCause().getMessage().contains("mismatched partition counts"),
                 "the failure must name the mismatch: " + thrown.getCause().getMessage());
     }
@@ -1665,52 +1637,19 @@ class ParsleyProcessorsTopologyTest {
     }
 
     /**
-     * Under {@code parsley.topology.validation=strict}, causal input topics with mismatched partition
-     * counts fail startup fast, since co-partitioning is impossible and the completeness frontier
-     * would evaluate against an incomplete partition set.
+     * Causal input topics that share a partition count pass the startup checks and start normally —
+     * a guard against the parity check false-positiving on a correctly co-partitioned topology.
      *
-     * Asserts driver construction throws, wrapping an {@link IllegalStateException} whose message names
-     * the strict mode and the mismatch.
+     * Asserts the topology constructs with two equally-partitioned inputs.
      */
     @Test
-    void mismatchedInputPartitionCountsFailStartupUnderStrictValidation() throws IOException {
-        ParsleyTopicAdmin mismatched = TestTopicAdmin.of(
-                Map.of("c2", C2_ID, "c3", C3_ID), Map.of("c2", 2, "c3", 3));
-        Topology topology = topology(
-                ParsleyProcessorSupplier.builder(upperCaser()).addBufferStore("parsley")
-                        .addSource(new ParsleySource<>("c2", Serdes.String(), Serdes.String()))
-                        .addSource(new ParsleySource<>("c3", Serdes.String(), Serdes.String()))
-                        .withConfig(ParsleyConfig.TOPOLOGY_VALIDATION, "strict")
-                        .topicAdmin(mismatched).build(),
-                List.of("c2", "c3"));
-
-        StreamsException thrown = assertThrows(StreamsException.class,
-                () -> new TopologyTestDriver(topology, config(tempStateDir())),
-                "strict validation must fail startup on a partition-count mismatch");
-        assertEquals(IllegalStateException.class, thrown.getCause().getClass(),
-                "the wrapped cause must be the strict-validation failure");
-        assertTrue(thrown.getCause().getMessage().contains("mismatched partition counts"),
-                "the message must name the mismatch: " + thrown.getCause().getMessage());
-        assertTrue(thrown.getCause().getMessage().contains("strict"),
-                "the message must name the strict mode: " + thrown.getCause().getMessage());
-    }
-
-    /**
-     * Under {@code parsley.topology.validation=strict}, causal input topics that share a partition
-     * count pass validation and start normally — a guard against the parity check false-positiving on a
-     * correctly co-partitioned topology.
-     *
-     * Asserts the topology constructs with two equally-partitioned inputs under strict mode.
-     */
-    @Test
-    void equalInputPartitionCountsPassStrictValidation() {
+    void equalInputPartitionCountsPassTheStartupChecks() {
         ParsleyTopicAdmin equal = TestTopicAdmin.of(
                 Map.of("c2", C2_ID, "c3", C3_ID), Map.of("c2", 4, "c3", 4));
         Topology topology = topology(
                 ParsleyProcessorSupplier.builder(upperCaser()).addBufferStore("parsley")
                         .addSource(new ParsleySource<>("c2", Serdes.String(), Serdes.String()))
                         .addSource(new ParsleySource<>("c3", Serdes.String(), Serdes.String()))
-                        .withConfig(ParsleyConfig.TOPOLOGY_VALIDATION, "strict")
                         .topicAdmin(equal).build(),
                 List.of("c2", "c3"));
 
@@ -1718,7 +1657,7 @@ class ParsleyProcessorsTopologyTest {
             driver.createInputTopic("c2", new StringSerializer(), new StringSerializer())
                     .pipeInput(new TestRecord<>("k", "ok", depsHeader(CausalClock.empty())));
             assertEquals(List.of("ok"), processed,
-                    "strict validation must pass when input partition counts match: the task processes normally");
+                    "the parity check must pass when input partition counts match: the task processes normally");
         }
     }
 

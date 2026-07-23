@@ -112,15 +112,16 @@ you make independently of the causal guarantee, it is required by it.
 
 ## Startup validation
 
-`parsley.topology.validation` controls how a causal processor reacts at startup to a detectable
-topology misconfiguration: the causal topics not sharing a partition count, and, for a stage's sink
-topics, a `cleanup.policy` that includes `compact`. The default `strict` fails the task fast,
-`warn` logs the mismatch and continues (the explicit opt-down), and `off` disables the checks. Each sink is checked independently, so
-a transient describe failure on one sink never masks a genuine misconfiguration on a different sink
-in the same stage, even under `strict`. Sink existence itself is not governed by this key: every
-topic a stage declares — inputs and sinks alike — must exist before the application starts, and a
-declared sink that cannot be resolved fails startup unconditionally, because own-output stamping
-depends on its resolved identity. See [Configuration](configuration.md) for the full key reference.
+A causal processor fails fast at startup on every detectable topology misconfiguration, with no
+configuration to soften the reaction: the causal input topics not sharing a partition count, a sink
+topic narrower than the widest source (protocol markers route to the forwarding task's own
+partition, so a narrower sink would fail the marker produce at runtime; a wider, re-keyed funnel
+sink passes), and a source or sink `cleanup.policy` that includes `compact`. Each sink is checked
+independently, so a transient describe failure on one sink never masks a genuine misconfiguration
+on a different sink in the same stage. Sink existence is stricter still: every topic a stage
+declares — inputs and sinks alike — must exist before the application starts, and a declared sink
+that cannot be resolved fails startup, because own-output stamping depends on its resolved
+identity. See [Configuration](configuration.md) for the check catalogue.
 
 ## Restart and recovery
 
@@ -187,8 +188,8 @@ A causal topology sometimes has to change while it runs: add a stage, replace a 
 one. Joining needs **zero coordination**: a new stage simply starts consuming from wherever the log
 starts, its hold-back queue converts arbitrary cross-partition replay arrival into causal delivery
 order, and its truthful stamps make its outputs correctly gated everywhere from its first emission.
-There is no join barrier, no admission wait, and nothing to configure. No key under
-`parsley.coordination.*` is part of the configuration surface; startup fails if one is present.
+There is no join barrier, no admission wait, and nothing to configure. Parsley has no
+configuration keys at all; startup fails if any `parsley.*` key is present.
 
 ## Operating notes
 

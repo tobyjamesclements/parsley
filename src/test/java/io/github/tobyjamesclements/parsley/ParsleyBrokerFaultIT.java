@@ -379,15 +379,14 @@ class ParsleyBrokerFaultIT {
      * so the stalled-ack failure surfaces quickly — this is also the value ParsleyProcessor
      * resolves as the crossing-wait bound. The transaction timeout is raised above the delivery
      * timeout so the failure signature is the delivery timeout, not a coordinator fencing. The
-     * funnel fans two 1-partition sources into a 2-partition sink, the documented opt-down case
-     * for {@code topology.validation=warn}.
+     * funnel fans two 1-partition sources into a 2-partition sink — a wider sink passes the
+     * sink-width startup check.
      */
     private static Properties shortDeliveryTimeoutConfig(String bootstrap) {
         Properties props = baseStreamsConfig(bootstrap);
         props.put("producer." + ProducerConfig.DELIVERY_TIMEOUT_MS_CONFIG, 8000);
         props.put("producer." + ProducerConfig.REQUEST_TIMEOUT_MS_CONFIG, 4000);
         props.put("producer." + ProducerConfig.TRANSACTION_TIMEOUT_CONFIG, 30000);
-        props.put(ParsleyConfig.TOPOLOGY_VALIDATION, "warn");
         return props;
     }
 

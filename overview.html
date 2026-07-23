@@ -18,8 +18,8 @@ declares the topology's single causal stage, the fluent chain's terminal {@code 
 
 <p>Joining a running topology needs no coordination: a new application simply starts consuming, its
 replay self-gates into causal delivery order through the ordinary hold-back queue, and its truthful
-stamps make its outputs correctly gated everywhere from its first emission. No key under {@code
-parsley.coordination.*} is part of the configuration surface; startup fails if one is present.</p>
+stamps make its outputs correctly gated everywhere from its first emission. Parsley has no
+configuration keys at all; startup fails if any {@code parsley.*} key is present.</p>
 
 <h1>Core concepts</h1>
 <dl>

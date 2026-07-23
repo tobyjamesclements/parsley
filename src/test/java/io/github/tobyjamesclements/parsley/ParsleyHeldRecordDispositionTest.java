@@ -193,7 +193,7 @@ class ParsleyHeldRecordDispositionTest {
         return new ParsleyProcessor<>(delegate, serializer,
                 "frontier", "buffer", "candidate-index", "forwarded-index",
                 topics, Set.of(), List.of(),
-                configs -> admin, ParsleyConfig.from(new Properties()), null);
+                configs -> admin, null);
     }
 
     private MockProcessorContext<String, String> contextOverStores() {

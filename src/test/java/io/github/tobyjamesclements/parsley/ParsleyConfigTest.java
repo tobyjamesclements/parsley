@@ -5,96 +5,104 @@ import org.junit.jupiter.api.Test;
 import java.util.Properties;
 import java.util.Set;
 
-import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * Tests {@link ParsleyConfig}'s own configuration loading: building from explicit properties via
- * {@link ParsleyConfig#from(Properties)}, the {@code parsley.topology.validation} value's validation,
- * and {@link ParsleyConfig#load()}'s classpath-resource fallback to defaults. Causal delivery is
- * strictly fail-closed, so there are no failure-policy settings to configure — the only key is
- * {@code parsley.topology.validation}.
+ * Tests {@link ParsleyConfig}'s enforcement of the empty configuration surface: Parsley has no
+ * {@code parsley.*} keys at all (causal delivery is strictly fail-closed and the startup topology
+ * checks are always on, so there is nothing to configure), and
+ * {@link ParsleyConfig#requireNoParsleyKeys(Properties)} fails startup loudly when a stale
+ * deployment still carries one.
  */
 class ParsleyConfigTest {
 
-    private static final String TOPOLOGY_VALIDATION = "parsley.topology.validation";
-
     /**
-     * With no {@code parsley.topology.validation} set, {@link ParsleyConfig#load()} reads the
-     * {@code parsley.properties} classpath resource (absent in this project's test classpath) and
-     * falls back to the default {@code strict} mode — a detectable topology misconfiguration is a
-     * deferred failure anyway (a parity mismatch crash-loops the marker produce at runtime; a
-     * compacted sink silently loses null messages), so the default fails once, clearly, at init.
+     * A configuration with no {@code parsley.*} key passes: ordinary Kafka Streams keys are none of
+     * Parsley's business, and an absent {@code parsley.properties} classpath resource (this
+     * project's test classpath has none) is the expected state.
      *
-     * Asserts the default validation mode is {@code STRICT}.
+     * Asserts a parsley-free configuration is accepted.
      */
     @Test
-    void topologyValidationDefaultsToStrict() {
-        assertEquals(ParsleyConfig.ValidationMode.STRICT, ParsleyConfig.load().topologyValidation(),
-                "with no parsley.topology.validation set, the default mode must be 'strict'");
-    }
-
-    /**
-     * Setting {@code parsley.topology.validation} to {@code warn} opts down from the strict
-     * default so a detectable topology misconfiguration is logged but does not fail the task;
-     * {@code off} disables the check entirely.
-     *
-     * Asserts both explicit modes parse to their enum values.
-     */
-    @Test
-    void fromAppliesExplicitTopologyValidationModes() {
-        Properties warn = new Properties();
-        warn.setProperty(TOPOLOGY_VALIDATION, "warn");
-        assertEquals(ParsleyConfig.ValidationMode.WARN, ParsleyConfig.from(warn).topologyValidation(),
-                "an explicit 'warn' topology-validation mode must parse to WARN");
-
-        Properties off = new Properties();
-        off.setProperty(TOPOLOGY_VALIDATION, "off");
-        assertEquals(ParsleyConfig.ValidationMode.OFF, ParsleyConfig.from(off).topologyValidation(),
-                "an explicit 'off' topology-validation mode must parse to OFF");
-    }
-
-    /**
-     * An unrecognised {@code parsley.topology.validation} value (none of {@code off}/{@code warn}/
-     * {@code strict}) is rejected rather than silently defaulting.
-     *
-     * Asserts that {@code IllegalStateException} is thrown for a garbage validation-mode value.
-     */
-    @Test
-    void fromRejectsAnInvalidTopologyValidationValue() {
+    void acceptsAConfigurationWithNoParsleyKeys() {
         Properties props = new Properties();
-        props.setProperty(TOPOLOGY_VALIDATION, "loud");
+        props.setProperty("application.id", "app");
+        props.setProperty("bootstrap.servers", "localhost:9092");
 
-        assertThrows(IllegalStateException.class, () -> ParsleyConfig.from(props),
-                "an unrecognised topology-validation value must be rejected");
+        assertDoesNotThrow(() -> ParsleyConfig.requireNoParsleyKeys(props),
+                "a configuration carrying no parsley.* key must be accepted");
     }
 
     /**
-     * Every removed {@code parsley.coordination.*} key fails loudly at parse: the coordination
-     * subsystem is deleted (joins need zero coordination), and a key that wires nothing must not be
-     * accepted quietly — an operator who believes their deployment is coordinated should learn about
-     * the removal at startup, from a message naming the offending key.
+     * Every removed {@code parsley.*} key fails loudly at startup: the removed
+     * {@code parsley.topology.validation} modes (the checks are now always on), the removed
+     * {@code parsley.coordination.*} subsystem (joins need zero coordination), and any unknown
+     * {@code parsley.*} key alike wire nothing — and a key that wires nothing must not be accepted
+     * quietly, or an operator who believes it took effect would never learn otherwise.
      *
-     * Asserts each removed key alone throws {@code IllegalStateException} naming both the key and
-     * the removal.
+     * Asserts each key alone throws {@code IllegalStateException} naming both the key and the
+     * removal.
      */
     @Test
-    void fromRejectsEveryRemovedCoordinationKey() {
+    void rejectsEveryParsleyKey() {
         for (String key : Set.of(
+                "parsley.topology.validation",
                 "parsley.coordination.epoch-events-topic",
                 "parsley.coordination.domain-topics",
-                "parsley.coordination.member-apps")) {
+                "parsley.coordination.member-apps",
+                "parsley.some.future.key")) {
             Properties props = new Properties();
             props.setProperty(key, "anything");
             IllegalStateException thrown = assertThrows(IllegalStateException.class,
-                    () -> ParsleyConfig.from(props),
-                    "the removed key " + key + " must fail configuration parsing loudly");
+                    () -> ParsleyConfig.requireNoParsleyKeys(props),
+                    "the key " + key + " must fail startup loudly");
             assertTrue(thrown.getMessage().contains(key),
                     "the failure must name the offending key: " + thrown.getMessage());
             assertTrue(thrown.getMessage().contains("removed"),
-                    "the failure must name the removal, not read as an unknown-key typo: "
-                            + thrown.getMessage());
+                    "the failure must present the empty surface as a removal, not an unknown-key "
+                            + "typo: " + thrown.getMessage());
         }
+    }
+
+    /**
+     * A {@code parsley.*} key supplied only through the {@link Properties} defaults layer is
+     * rejected too: Kafka Streams honours defaults-layer keys, so Parsley must not let one slip
+     * past just because it is not in the top layer.
+     *
+     * Asserts a defaults-layer key throws {@code IllegalStateException}.
+     */
+    @Test
+    void rejectsAParsleyKeyInThePropertiesDefaultsLayer() {
+        Properties defaults = new Properties();
+        defaults.setProperty("parsley.topology.validation", "warn");
+        Properties props = new Properties(defaults);
+
+        IllegalStateException thrown = assertThrows(IllegalStateException.class,
+                () -> ParsleyConfig.requireNoParsleyKeys(props),
+                "a parsley.* key in the defaults layer must fail startup loudly");
+        assertTrue(thrown.getMessage().contains("parsley.topology.validation"),
+                "the failure must name the offending key: " + thrown.getMessage());
+    }
+
+    /**
+     * Several offending keys are reported together, so an operator cleans up the whole stale
+     * configuration in one pass instead of replaying startup once per key.
+     *
+     * Asserts the failure message names every offending key.
+     */
+    @Test
+    void namesEveryOffendingKeyInOneFailure() {
+        Properties props = new Properties();
+        props.setProperty("parsley.topology.validation", "off");
+        props.setProperty("parsley.coordination.member-apps", "a,b");
+
+        IllegalStateException thrown = assertThrows(IllegalStateException.class,
+                () -> ParsleyConfig.requireNoParsleyKeys(props),
+                "a configuration with several parsley.* keys must fail startup loudly");
+        assertTrue(thrown.getMessage().contains("parsley.topology.validation")
+                        && thrown.getMessage().contains("parsley.coordination.member-apps"),
+                "the failure must name every offending key: " + thrown.getMessage());
     }
 }
