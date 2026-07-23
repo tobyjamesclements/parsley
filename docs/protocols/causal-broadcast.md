@@ -1,8 +1,8 @@
 # The causal-broadcast module
 
 `ParsleyCausalBroadcast<K,V>` is the middle protocol module (see the
-[internals overview](index.md)) and the core of the causal guarantee: the receive-and-deliver
-algorithm of Birman–Schiper–Stephenson (ISIS CBCAST), run over the reliable FIFO channels the
+[protocols overview](index.md)) and the core of the causal guarantee: the receive-and-deliver
+algorithm of Birman–Schiper–Stephenson (ISIS CBCAST),[^bss] run over the reliable FIFO channels the
 [channels module](channels.md) adapts Kafka topic-partitions into. It gates incoming records,
 manages the hold-back buffer, cascades releases as the frontier advances, and stamps every
 outbound record at a single site. The module box:
@@ -63,7 +63,7 @@ frontier must cover every depended coordinate this node consumes; every other co
 ignored, unconditionally. `completeness()` — the frontier max-merged with the carried ancestry
 and every input channel's advertised clock — feeds the *outbound stamp*, which carries transitive
 ancestry downstream where each receiver's own gate verifies it locally; it never releases anything
-here. See the [causal consistency model](../foundations/delivery-gate.md) for why local delivery is required
+here. See the [delivery gate](../foundations/delivery-gate.md) for why local delivery is required
 and why ignoring unconsumed coordinates is sound.
 
 ## Key state
@@ -163,7 +163,7 @@ an operator recovers from — never forwarded on an unproven causal premise, nev
 discarded. Two distinct failures, each with its own exception (a dependency on a coordinate this
 node does not consume is *not* a failure: it falls to the gate's ignore branch, counted by the
 `deps-out-of-scope-ignored` metric — see the
-[causal consistency model](../foundations/delivery-gate.md)):
+[delivery gate](../foundations/delivery-gate.md)):
 
 - **A poisoned buffered record** (`CausalBufferDeserializationException`) — a held record's key or
   value can no longer be deserialised on the forward path (typically an incompatible Schema
@@ -210,3 +210,42 @@ needed to find and validate a candidate.
 On construction, if the buffer is non-empty (restart recovery), a single pass over all buffer
 entries repopulates the candidate index. This rebuilds the secondary index from the authoritative
 buffer state.
+
+## Cost
+
+This module carries the per-record clock costs, the buffer-drain cost, and the crossing-wait cost.
+See the [consolidated cost model](index.md#cost-model) for how the rows fit together.
+
+- **Per-record clock walks, O(w).** The header parse (`ParsleyVectorClock.fromBytes`), the gate
+  evaluation (`ParsleyVectorClock.dominates` over the normalised clock), and the outbound stamp
+  serialise (`ParsleyVectorClock.toBytes`) are each a single linear walk over a clock's entries.
+  The stamped clock is wider than the incoming one, as the [channels module](channels.md#cost)
+  describes.
+- **Buffer drain, O(log n + k + r).** When a causally ready record arrives, the drain has three
+  independent components. Finding the held records waiting on the arriving coordinate is a RocksDB
+  range scan over the candidate index, O(log n) in buffer depth `n`. Releasing the `k` records that
+  all depend on that coordinate is one buffer read, one frontier advance, and one forward each,
+  O(k). A released record can satisfy a further held record, and the release propagates through the
+  chain, O(r) in the cascade depth. Only heavy fan-in at one dependency offset drives `k` up, and
+  only long runs of strictly sequential dependencies that become ready together produce a deep
+  cascade.
+- **Buffer restore on restart, O(n).** Every held record is scanned once to rebuild the buffer's
+  counters and the candidate index. The buffer is unbounded, so this cost tracks how much lag
+  accumulated before the restart rather than any configured limit.
+- **Crossing-wait produce serialization, O(N) waits.** Within one task invocation a second forward
+  is causally after the first even across sink topics or partitions, so before stamping each
+  business forward the task waits for every pending own-sink send to be acknowledged (the crossing
+  wait at the stamping site). Forward k+1 does not stamp until forward k's batch is acknowledged, so
+  a delegate forwarding `N` records per input pays roughly `N × (linger + replication round trip)`
+  per invocation. Kafka Streams' default `producer.linger.ms` is 100 ms, so an unconfigured
+  multi-forward delegate can spend about `N × 100 ms` per input record in crossing waits alone,
+  usually its dominant cost. A single-forward delegate pays at most one wait per invocation and is
+  usually unaffected. For multi-forward delegates, lower `producer.linger.ms` (a few milliseconds,
+  or 0) so each batch ships immediately and the replication round trip bounds the wait. The wait
+  cannot be exempted per partition, because a business forward's destination partition is unknowable
+  at stamp time; protocol null messages are exempt for their own exact destinations and do not pay
+  it.
+
+[^bss]: Kenneth Birman, André Schiper, and Pat Stephenson, "Lightweight Causal and Atomic Group
+    Multicast", *ACM Transactions on Computer Systems*, 1991. The ISIS system's CBCAST protocol. See
+    the [bibliography](../reference/bibliography.md).

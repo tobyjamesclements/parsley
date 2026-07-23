@@ -1,10 +1,10 @@
 # The gossip module
 
-`ParsleyGossip` is the top protocol module (see the [internals overview](index.md)): clock
-dissemination over the topology's own channels, in the epidemic sense of Demers et al. 1987 —
+`ParsleyGossip` is the top protocol module (see the [protocols overview](index.md)): clock
+dissemination over the topology's own channels, in the epidemic sense of Demers et al. 1987[^demers] —
 each node relays causal progress onward only while it is news, so knowledge spreads across every
 path, cycles included, and quiesces when everyone has converged. Its records are *null messages*
-in the Chandy–Misra–Bryant sense: a timestamp-carrying record whose value is literally null,
+in the Chandy–Misra–Bryant sense:[^cmb] a timestamp-carrying record whose value is literally null,
 occupying a real offset on its channel purely to make the sender's clock observable downstream.
 The module box:
 
@@ -152,3 +152,27 @@ Parsley's own processors handle null messages internally. A plain Kafka client c
 a Parsley topology produces folds them into its running frontier with `CausalClock.observe` while
 skipping them as business records, detected with `CausalClock.isNullMessage` — see
 [Concepts](../concepts.md#the-frontier).
+
+## Cost
+
+This module's cost is record volume rather than computation. See the
+[consolidated cost model](index.md#cost-model) for how the rows fit together.
+
+An input record that yields no business forward emits one protocol null message to every declared
+sink, so a filter-heavy or aggregating stage multiplies its sink traffic by up to its sink count
+during quiet stretches. A received null message that advanced the node's knowledge of a channel it
+consumes is relayed onward under the same rule, and the restriction to consumed-channel advances is
+what bounds relays and lets any topology, cycles included, go quiet once knowledge has converged.
+
+The per-message processing cost is small: a clock fold and the relay decision, both O(w), plus the
+channel-state persist the [channels module](channels.md#cost) charges. But the messages are real
+records on your sink topics. They occupy broker throughput and retention, and every downstream
+consumer receives them. Downstream causal processors absorb them internally, and plain Kafka
+consumers skip them with `CausalClock.isNullMessage`.
+
+[^demers]: Alan Demers et al., "Epidemic Algorithms for Replicated Database Maintenance", 1987. See
+    the [bibliography](../reference/bibliography.md).
+[^cmb]: K. M. Chandy and J. Misra, "Distributed Simulation: A Case Study in Design and Verification
+    of Distributed Programs", 1979; R. E. Bryant, "Simulation of Packet Communication Architecture
+    Computer Systems", 1977. The null-message protocol for distributed simulation. See the
+    [bibliography](../reference/bibliography.md).

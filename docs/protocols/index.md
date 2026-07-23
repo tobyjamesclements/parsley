@@ -1,8 +1,13 @@
-# Internals overview
+# The three protocols
 
-Parsley is built around one public, topology-level entry point — `CausalStreamsBuilder` /
+This section describes the layered protocol stack that delivers Parsley's guarantee.
+[Foundations](../foundations/causal-consistency.md) develops why the stack is shaped this way; this
+overview gives the module structure, the class map, the end-to-end flow, and the cost model, and
+the three pages that follow describe each protocol in turn.
+
+Parsley is built around one public, topology-level entry point, `CausalStreamsBuilder` /
 `CausalTopology` / `CausalStreams`, three roles mirroring Kafka Streams' own `StreamsBuilder` /
-`Topology` / `KafkaStreams` — plus stateless edge operations for stamping and propagating causal
+`Topology` / `KafkaStreams`, plus stateless edge operations for stamping and propagating causal
 clocks from plain Kafka clients, all backed by a shared internal implementation.
 
 | API | Backed by |
@@ -111,16 +116,53 @@ Causal processor (Streams)
                 (Streams sinks carry the header out to the output topic)
 ```
 
+## Cost model
+
+Parsley's overhead is asserted from the structure of the implementation rather than measured, and
+each row below names the protocol page that carries the mechanism. Parsley ships no benchmark
+suite: absolute latency depends on hardware, storage class, and workload shape, and the costs that
+dominate in practice are state persistence, protocol record volume, and producer acknowledgement
+waits rather than any single clock walk. To size a deployment, measure your own topology end to end
+and watch the [metrics](../guide/configuration.md#metrics).
+
+Throughout, `w` is the width of a clock (its number of `(topic, partition)` entries), `C` is the
+number of channels a node tracks, `n` is the number of records held in the buffer, `k` and `r` are
+drain parameters, and `N` is the number of records a delegate forwards per input.
+
+| Cost | Complexity | Scales with | Layer |
+|---|---|---|---|
+| Header parse | O(w) | Incoming clock width | [causal broadcast](causal-broadcast.md#cost) |
+| Gate evaluation | O(w) | Incoming clock width | [causal broadcast](causal-broadcast.md#cost) |
+| Outbound stamp | O(w) | Outbound clock width, which grows with causal history | [causal broadcast](causal-broadcast.md#cost) |
+| State persistence | O(C · w) | Total channel state, once per advance | [channels](channels.md#cost) |
+| Buffer drain (candidate lookup) | O(log n) | Records in buffer | [causal broadcast](causal-broadcast.md#cost) |
+| Buffer drain (per released record) | O(k) | Records sharing the trigger coordinate | [causal broadcast](causal-broadcast.md#cost) |
+| Cascade propagation | O(r) | Chained release depth | [causal broadcast](causal-broadcast.md#cost) |
+| Channel-state restore on restart | O(C · w) | Total channel state | [channels](channels.md#cost) |
+| Buffer restore on restart | O(n) | Records held at restart | [causal broadcast](causal-broadcast.md#cost) |
+| Crossing-wait produce serialization | O(N) waits | Forwards per invocation × (linger + replication RTT) | [causal broadcast](causal-broadcast.md#cost) |
+| Gossip volume | up to one null message per silent input per sink | Sink count, share of inputs with no business output | [gossip](gossip.md#cost) |
+
+The dominant per-record term is usually the O(C · w) channel-state persist, because
+`ParsleyChannels` rewrites its whole persisted value on every frontier advance and a store write
+costs far more than any clock walk. Each protocol page develops its own rows under its Cost
+section.
+
 ## Further reading
 
-- [Causal consistency model](../foundations/causal-consistency.md) — the theory, the gate's soundness argument,
-  and the environmental assumptions E1–E3
-- [Named invariants](../foundations/invariants.md) — the I1–I9 catalogue that Javadoc and tests cite
-- [Naming](../reference/naming.md) — the visibility convention, the academic naming test, and the decision
-  register
-- [The channels module](channels.md) — coordinates, density, own outputs, scope changes
-- [The causal-broadcast module](causal-broadcast.md) — buffer, candidate index, drain cascade,
-  fail-closed delivery, the stamping site
-- [The gossip module](gossip.md) — null messages, emission, the relay rule
-- [Wire format](../reference/wire-format.md) — binary layouts for all headers and state stores
-- [Streams integration](../reference/processor.md) — processor init, state store wiring, stamping proxy
+- [Causal consistency](../foundations/causal-consistency.md),
+  [the delivery gate](../foundations/delivery-gate.md), and
+  [environmental assumptions](../foundations/assumptions.md) give the model, the gate's soundness
+  argument, and E1–E3.
+- [Named invariants](../foundations/invariants.md) is the I1–I9 catalogue that Javadoc and tests
+  cite.
+- [The channels module](channels.md) covers coordinates, density, own outputs, and scope changes.
+- [The causal-broadcast module](causal-broadcast.md) covers the buffer, candidate index, drain
+  cascade, fail-closed delivery, and the stamping site.
+- [The gossip module](gossip.md) covers null messages, emission, and the relay rule.
+- [The processor](../reference/processor.md) covers processor init, state store wiring, and the
+  stamping proxy.
+- [Wire format](../reference/wire-format.md) gives the binary layouts for all headers and state
+  stores.
+- [Naming](../reference/naming.md) covers the visibility convention, the academic naming test, and
+  the decision register.

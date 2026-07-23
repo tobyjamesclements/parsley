@@ -1,9 +1,9 @@
 # The channels module
 
 `ParsleyChannels` is the lowest of the three protocol modules (see the
-[internals overview](index.md)): the adaptation that makes Kafka topic-partitions behave as the
+[protocols overview](index.md)): the adaptation that makes Kafka topic-partitions behave as the
 reliable FIFO channels classical causal broadcast assumes (Hadzilacos and Toueg's reliable
-channels; the links layer of the Cachin–Guerraoui–Rodrigues stack, minus point-to-point — a
+channels;[^ht] the links layer of the Cachin–Guerraoui–Rodrigues stack, minus point-to-point — a
 partition is multi-producer fan-out). Everything that exists because Kafka violates a classical
 channel assumption lives here, stated once. The module box, in the same request/indication/property
 style the source Javadoc uses:
@@ -51,8 +51,8 @@ recreated under the same name gets a new UUID, so a coordinate never silently re
 different record — recreation reads as history loss, never as reordering. A background
 topic-identity poll (`ParsleyTopicIdentityWatch`) enforces the per-lifetime binding for inputs and
 sinks alike: a mid-run UUID change fails every task fast before it can ingest or stamp under the
-stale identity. This is environmental assumption E1 of the
-[causal consistency model](../foundations/assumptions.md).
+stale identity. This is
+[environmental assumption E1](../foundations/assumptions.md#e1-stable-channel-identity).
 
 ## Density: making a partition look gap-free
 
@@ -174,3 +174,32 @@ returns to the caller — the frontier advance is durable before a delivered rec
 processor. All Parsley stores commit in one Kafka transaction (`exactly_once_v2` is required), so
 the frontier, forwarded index, and buffer cannot tear against each other. The full binary layout
 is in [Wire format](../reference/wire-format.md#the-ns-frontier-f-value).
+
+## Cost
+
+This module carries the term that usually dominates Parsley's per-record cost, because it owns the
+persisted state. See the [consolidated cost model](index.md#cost-model) for how the rows fit
+together.
+
+- **State persistence, O(C · w).** All of the node's causal metadata (the frontier, the per-channel
+  advertised clocks, the carried ancestry, the own-output positions, and the highest-received
+  offsets) persists as the single `"f"` value, and the module rewrites that whole value on every
+  advance: every delivered record, every producer acknowledgement, and every gossip fold. Each
+  rewrite serialises the full channel state and issues one state-store put, so the cost scales with
+  the total channel state rather than with the incoming header alone, and a store write costs far
+  more than any of the clock walks in the causal-broadcast layer.
+- **Channel-state restore on restart, O(C · w).** One point read of the persisted value followed by
+  a parse linear in the total channel state. Independent of buffer depth. Init also resolves topic
+  identities, reconciles the declared input and sink sets against the restored state, and seeds
+  sink end offsets, which are a fixed number of admin and metadata round trips per task but usually
+  dominate a restart in wall-clock terms.
+
+Clock width itself grows here: the outbound stamp is the union of the frontier, the per-channel
+advertised clocks, the carried ancestry, and the own outputs, and carried ancestry never shrinks. A
+coordinate that entered the node's causal past stays claimed on every later stamp, so `w`
+approaches the number of channels in the node's transitive upstream, not just the partitions the
+task consumes.
+
+[^ht]: Vassos Hadzilacos and Sam Toueg, "A Modular Approach to Fault-Tolerant Broadcasts and
+    Related Problems", 1994, for the reliable-channel abstraction. See the
+    [bibliography](../reference/bibliography.md).

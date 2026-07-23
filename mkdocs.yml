@@ -62,7 +62,6 @@ nav:
     - Incremental adoption: guide/adoption.md
     - Configuration: guide/configuration.md
     - Troubleshooting: guide/troubleshooting.md
-    - Performance: performance.md
   - Reference:
     - The processor: reference/processor.md
     - Wire format: reference/wire-format.md

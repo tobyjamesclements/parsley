@@ -36,6 +36,17 @@ All notable changes to this project are documented in this file. The format is b
   invariants` gains an academic framing. Primary sources are cited as page footnotes into the new
   Bibliography. Inbound links across the site are repointed: gate and stamp references now target
   the delivery-gate page and E1–E3 references the assumptions page.
+- **The three protocol pages are rewritten and the standalone Performance page is dissolved into
+  them.** The protocols overview becomes the section landing page, carrying a consolidated cost
+  model table whose rows link to the protocol page that owns each mechanism, and refined
+  further-reading links to the four Foundations pages, the processor, wire format, and naming. Each
+  protocol page gains a Cost section: state persistence and restore on `channels`, the per-record
+  clock walks, buffer drain, and crossing-wait produce serialization (with the
+  `producer.linger.ms` remedy for multi-forward delegates) on `causal-broadcast`, and null-message
+  volume on `gossip`. Each page cites its lineage as a footnote (Hadzilacos–Toueg, BSS,
+  Chandy–Misra–Bryant, Demers). Stale "internals overview" and mislabelled model links are
+  corrected. `docs/performance.md` is deleted; its cost model now lives with the protocols and its
+  metrics guidance with Configuration.
 
 ### Removed
 - **The JMH benchmark suite is deleted; `docs/performance.md` now asserts complexity from the
