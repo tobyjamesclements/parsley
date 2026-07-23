@@ -20,6 +20,13 @@ All notable changes to this project are documented in this file. The format is b
   path references in `DocsSamplesTest` follow the pages to `docs/guide/`. Page prose is rewritten
   section by section in the changes that follow; the `Concepts` page is absorbed and the
   `Performance` page dissolved into the protocol pages and Configuration there.
+- **The landing pages lead with the academic framing.** The docs home page, the root Javadoc
+  `overview.html`, and `README.md` now open by situating Parsley in the causal-consistency
+  literature (Lamport's happened-before relation and vector clocks), state the two classical
+  assumptions Kafka stream processing breaks (total visibility; reliable FIFO channels), and
+  present the three-protocol stack with its lineage before the public-API orientation. The
+  `overview.html` typical-usage sample adopts the `c1`/`c2`/`c3` topic naming the rest of the
+  docs samples use.
 
 ### Removed
 - **The JMH benchmark suite is deleted; `docs/performance.md` now asserts complexity from the

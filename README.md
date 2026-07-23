@@ -1,12 +1,18 @@
 # Parsley
 
-Causal delivery order for Kafka Streams. Producers stamp each record with its causal dependencies.
-Kafka Streams processors hold back any record whose dependencies have not yet been observed, and
-release the record once the frontier catches up.
+Causal delivery order for Kafka Streams. Producers stamp each record with its causal dependencies,
+and Kafka Streams processors hold back any record whose dependencies have not yet been observed,
+releasing it once the frontier catches up. The guarantee is the causal-consistency model of the
+distributed-systems literature (Lamport's happened-before relation, realised with vector clocks),
+instantiated on Kafka coordinates: when the preconditions hold, if A causally precedes B, every
+processor that subscribes to both of their topics processes A before B.
 
-When the preconditions hold — co-partitioning by key, closed processor effects, and stamping by
-every processor between causally related topics — if A causally precedes B, every Kafka Streams
-processor that subscribes to both topics processes A before B.
+Internally Parsley is a stack of three protocols, presented in the module style of Cachin,
+Guerraoui, and Rodrigues: a **channels** layer that adapts Kafka topic-partitions into reliable
+FIFO channels, a **causal broadcast** layer (Birman–Schiper–Stephenson) that delivers in causal
+order, and a **gossip** layer (Chandy–Misra–Bryant null messages) that keeps causal progress
+observable through non-emitting processors. The preconditions are co-partitioning by key, closed
+processor effects, and stamping by every processor between causally related topics.
 
 Joining a running topology needs no coordination: a new application simply starts consuming, its
 replay self-gates into causal delivery order, and its truthful stamps make its outputs correctly
@@ -36,4 +42,5 @@ Building from source needs JDK 25; build with `./mvnw install`.
 
 **[tobyjamesclements.github.io/parsley](https://tobyjamesclements.github.io/parsley)**
 
-Covers concepts, getting started, Streams integration, configuration, and internals.
+Leads with the causal-consistency foundations and the three protocols, then covers getting
+started, Streams integration, configuration, and reference.
