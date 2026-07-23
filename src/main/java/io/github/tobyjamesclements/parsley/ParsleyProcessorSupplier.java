@@ -15,27 +15,21 @@ import java.util.Set;
 import java.util.function.Function;
 
 /**
- * The {@link ProcessorSupplier} the causal decorator {@link CausalTopology} wires around each stage's
- * user supplier when it assembles the real Kafka Streams topology: it wraps the user's supplier in a
- * {@link ParsleyProcessor} and {@linkplain #stores() unions} the user's declared state stores with
- * Parsley's internal frontier and buffer stores, so the DSL wires all of them to the same processor
- * node. The user never names Parsley's internal stores.
+ * The {@link ProcessorSupplier} the causal decorator wires around each stage's user supplier when
+ * {@link CausalTopology} assembles the real topology: it wraps the user supplier in a
+ * {@link ParsleyProcessor} and {@linkplain #stores() unions} the user's declared stores with
+ * Parsley's internal frontier and buffer stores, all on the same processor node. The user never
+ * names Parsley's stores. Not constructed directly; obtain one through
+ * {@link #builder(ProcessorSupplier)}, which {@link CausalStreamsBuilder}'s {@code assemble} pass
+ * drives (store namespace, serdes, sink topics and node names, quiesce wiring).
  *
- * <p>Not constructed directly: obtain one through {@link #builder(ProcessorSupplier)}. User code
- * declares stages through {@link CausalStreamsBuilder}, whose {@code assemble} pass drives that builder
- * (buffer store namespace, per-topic serdes, sink topics and node names, quiesce wiring);
- * package-private tests also drive it directly to exercise the decorator without the topology layer.
- *
- * <p><strong>Data-loss precondition (low-level use).</strong> The causal-broadcast core's skip-bridge
- * ({@link ParsleyChannels#bridge}) treats an offset the consumer never returned as a transaction marker,
- * which is only sound if the consumer can never silently jump forward over lost records. The high-level
- * path ({@link CausalStreamsBuilder} → {@link CausalTopology} → {@link CausalStreams}) guarantees this by
- * declaring every source with {@code AutoOffsetReset.none()} and pre-seeding first-start offsets (see
- * {@link ParsleyOffsetSeeder}). A topology assembled directly from this supplier — bypassing {@code
- * CausalStreams} — must apply the same {@code none()} reset and offset seeding to its causal sources, or a
- * retention/{@code deleteRecords} jump past a lagging consumer will be folded as markers and deliver
- * records before their causes. Only exception handlers are the concern that {@link CausalTopology#assemble}
- * rejects centrally; this reset/seeding requirement is not enforceable from inside the processor.
+ * <p>Data-loss precondition for low-level use: the skip-bridge ({@link ParsleyChannels#bridge})
+ * treats an offset the consumer never returned as a transaction marker, sound only if the consumer
+ * can never silently jump forward over lost records. The high-level path guarantees this by declaring
+ * every source with {@code AutoOffsetReset.none()} and pre-seeding first-start offsets (see
+ * {@link ParsleyOffsetSeeder}). A topology assembled directly from this supplier, bypassing
+ * {@link CausalStreams}, must apply the same reset and seeding to its causal sources, or a retention
+ * jump past a lagging consumer will be folded as markers and deliver records before their causes.
  */
 final class ParsleyProcessorSupplier<KIn, VIn, KOut, VOut>
         implements ProcessorSupplier<KIn, VIn, KOut, VOut> {

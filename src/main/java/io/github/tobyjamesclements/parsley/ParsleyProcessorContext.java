@@ -20,36 +20,23 @@ import java.util.Optional;
 import java.util.function.Supplier;
 
 /**
- * A Decorator (GoF) over the real {@link ProcessorContext} handed to a decorating causal processor's
- * delegate, stamping the current outbound vector timestamp ({@code completeness ∪ ownOutputs} —
- * {@link ParsleyChannels#stamp()}) onto every forwarded record's headers and delegating everything
- * else verbatim.
+ * A Decorator over the real {@link ProcessorContext} handed to a causal processor's delegate,
+ * stamping the current outbound timestamp ({@link ParsleyChannels#stamp()}) onto every forwarded
+ * record's headers and delegating everything else verbatim. This is what stamps outgoing records
+ * without the user doing anything by hand: Kafka Streams sinks propagate a {@link Record}'s headers
+ * onto the produced {@code ProducerRecord}, so the dependencies ride to the output topic.
  *
- * <p>This is what makes outgoing messages causally stamped without the user stamping anything by
- * hand: within a topology {@code forward} is internal routing, and Kafka Streams sinks propagate a
- * {@link Record}'s headers onto the produced {@code ProducerRecord}, so dependencies stamped here
- * ride the headers all the way to the output topic.
+ * <p>The stamp is attached by {@link ParsleyCausalBroadcast#broadcast}, the single stamping site,
+ * which reads the completeness live at forward time, so a forward during admission sees the post-admit
+ * value and a forward from a punctuator sees it as of fire time. Stamping is idempotent (any existing
+ * {@link ParsleyHeader#CAUSAL_CLOCK} header is replaced) and never mutates the incoming record.
  *
- * <p>The stamp itself is attached by {@link ParsleyCausalBroadcast#broadcast} — the single stamping
- * site every outbound record passes through, protocol markers included — which reads the completeness
- * <strong>live</strong> at stamp time, so a forward during record admission sees the post-admit
- * completeness and a forward from a punctuator sees the completeness as of fire time. Stamping is
- * idempotent — any existing {@link ParsleyHeader#CAUSAL_CLOCK} header is replaced, never
- * accumulated — and never mutates the incoming record's headers (a fresh header set is built and
- * applied via {@link Record#withHeaders}).
- *
- * <p><strong>The one-arg {@link #forward(Record)} targets every name in {@code sinkNodeNames}
- * explicitly — it never broadcasts.</strong> A stage's processor node may have more than one child
- * (its business sink(s) and, occasionally, an incompatibly-typed sibling such as a raw-bytes side
- * topic); the zero-arg {@code ProcessorContext.forward} sends to <em>every</em> child of the current
- * node unconditionally, so a business record broadcast that way could also reach an incompatible
- * sibling and throw a runtime {@code ClassCastException} on its serializer. Addressing every forward
- * by name is therefore a correctness requirement, not a style choice, the moment a stage has more than
- * one child of any kind.
- *
- * <p>Note: scheduled punctuators forward through this same proxy, so their forwards are stamped with
- * no special-casing. Punctuators must only <em>read</em> the completeness (never advance it), which
- * preserves the causal-broadcast core's persist-frontier-before-forward invariant on the punctuator path.
+ * <p>The one-arg {@link #forward(Record)} addresses every name in {@code sinkNodeNames} explicitly
+ * rather than broadcasting, because the zero-arg {@code forward} reaches every child of the node,
+ * which could send a business record to an incompatibly-typed sibling and throw
+ * {@code ClassCastException} on its serializer. Punctuators forward through this same proxy and must
+ * only read the completeness, never advance it, preserving the persist-frontier-before-forward
+ * ordering on the punctuator path.
  *
  * @param <KOut> the forwarded key type
  * @param <VOut> the forwarded value type

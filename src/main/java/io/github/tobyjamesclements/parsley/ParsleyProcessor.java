@@ -29,34 +29,21 @@ import java.util.TreeSet;
 import java.util.function.Function;
 
 /**
- * A Decorator (GoF) over a user {@link Processor}, gating delegation on the causal frontier: an incoming
- * record is held until the completeness frontier dominates its causal dependencies. Delivery is strictly
- * fail-closed — there is no eviction, buffer limit, or timeout that forwards a record ahead of its
- * dependencies. Every record that is delivered reaches {@code delegate.process(...)} exactly once,
- * and the state reads/writes the delegate performs and every record it forwards are causally ordered;
- * forwards are stamped by a {@link ParsleyProcessorContext} via {@link ParsleyCausalBroadcast#broadcast}.
+ * A Decorator over a user {@link Processor}, gating delegation on the causal frontier: an incoming
+ * record is held until the frontier dominates its dependencies, then delivered to
+ * {@code delegate.process(...)} exactly once. Delivery is fail-closed, with no eviction, buffer
+ * limit, or timeout that forwards a record ahead of its dependencies, and every forward is stamped by
+ * a {@link ParsleyProcessorContext} through {@link ParsleyCausalBroadcast#broadcast}.
  *
- * <p>Held records are persisted to a changelog-backed buffer store and restored on {@code init}, so
- * they survive a restart (a buffered record's source offset is committed past it, so it would
- * otherwise be lost). The frontier-before-forward invariant from {@link ParsleyCausalBroadcast} is preserved
- * on both the admit and punctuator paths.
+ * <p>Held records are persisted to a changelog-backed buffer and restored on {@code init}, so they
+ * survive a restart; the frontier-before-forward ordering holds on both the admit and punctuator
+ * paths.
  *
- * <p><strong>Clock-invisible null messages.</strong> A received null message
- * ({@link #handleNullMessage}) is relayed downstream only when its carried clock advanced this
- * node's knowledge of a channel it consumes
- * ({@link ParsleyGossip.Reception#advancedConsumedChannel()} — the I6 relay rule, stated once on
- * {@link ParsleyGossip}). A null message's own delivery is never itself treated as a reason to relay
- * further — unlike a genuine
- * business record, whose delivery always unconditionally causes this node to emit something on its own
- * sink (see {@link #deliver}). Gating on advanced-my-own-inputs rather than on "a record was delivered"
- * or "the clock carried anything new anywhere" is what keeps a topology cycle — a null-message-only
- * channel included — from ping-ponging messages forever: custody knowledge of channels this node
- * neither consumes nor produces folds into the stamp (I9) and rides every later emission, but it
- * never obliges a relay, so a node that has converged on its own inputs simply stops, rather than
- * needing separate per-edge "have I already relayed this" bookkeeping. A
- * dependency can only ever be created after something real has already been observed, so a null
- * message that advanced no consumed channel could not have just formed a locally gateable
- * dependency either — skipping the re-emission strands nothing.
+ * <p>A received null message ({@link #handleNullMessage}) is relayed downstream only when its carried
+ * clock advanced this node's knowledge of a channel it consumes (the I6 relay rule on
+ * {@link ParsleyGossip}), never merely because a record was delivered. A delivered business record,
+ * by contrast, always causes this node to emit on its own sink (see {@link #deliver}). That is what
+ * lets a topology cycle quiesce.
  *
  * @param <KIn>  the input key type
  * @param <VIn>  the input value type
@@ -436,29 +423,16 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
     }
 
     /**
-     * Heals the restored {@code ownOutputs} clock for every topic the <em>previous</em> run declared
-     * as a sink but this run does not ({@link ParsleyChannels#declaredSinks}). The previous
-     * declaration is exactly the set of topics whose acks can have trailed the persisted blob (only
-     * a declared sink's sends are ever acked into it), so per former sink, resolved through a fresh
-     * admin session:
-     * <ul>
-     *   <li><strong>Topic survives under its recorded UUID</strong> — acknowledge each partition's
-     *       {@code endOffset - 1}, the same I8-sound over-claim the current-sink seed makes: the end
-     *       offset is at or above every output this node ever produced there, so the healed stamp
-     *       covers the trailing final-transaction acks (over-covering third-party records appended
-     *       since is delay-only, I8).</li>
-     *   <li><strong>Topic deleted, or recreated under a new UUID</strong> — the recorded UUID's
-     *       records are destroyed; no receiver can ever deliver them (E1), so the claims heal
-     *       nothing and gate nothing: purge them ({@link ParsleyChannels#destroyOwnOutput} — I9's
-     *       one permitted removal from stamp-feeding state).</li>
-     *   <li><strong>Broker unreachable / resolution fails otherwise</strong> — fail init loudly:
-     *       proceeding would stamp potential under-claims, and purging without proof of destruction
-     *       would manufacture them.</li>
-     * </ul>
-     * A topic still declared as a sink is skipped: the current-sink end-offset seed already healed
-     * it (same UUID), or {@link ParsleyChannels#destroyOwnOutput} purges its recorded UUID here
-     * when the recreation happened across the restart (different UUID, successor already seeded).
-     * The common case — sink set unchanged — opens no admin session at all.
+     * Heals the restored {@code ownOutputs} clock for every topic the previous run declared as a sink
+     * but this run does not ({@link ParsleyChannels#declaredSinks}), since only a declared sink's acks
+     * can trail the persisted blob. Per former sink, resolved through a fresh admin session: if the
+     * topic survives under its recorded UUID, acknowledge each partition's {@code endOffset - 1} (the
+     * same I8-sound over-claim the current-sink seed makes); if it was deleted or recreated under a new
+     * UUID, purge the recorded UUID's claims ({@link ParsleyChannels#destroyOwnOutput}, I9's one
+     * permitted removal from stamp-feeding state), since no receiver can deliver them (E1); if
+     * resolution fails otherwise, fail init loudly, because proceeding would stamp under-claims and
+     * purging without proof would manufacture them. A still-declared sink is skipped, and an unchanged
+     * sink set opens no admin session.
      */
     private void healFormerSinkOwnOutputs(ParsleyChannels channels) {
         Map<String, Uuid> previousSinks = channels.declaredSinks();
@@ -675,46 +649,18 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
     }
 
     /**
-     * Handles a received null message — the one path every one takes through the gossip module's
-     * {@link ParsleyGossip#receive receive}: decodes its carried completeness clock, folds it, and
-     * relays this node's own null message downstream iff the received one advanced this node's
-     * knowledge of a channel it consumes (the I6 relay rule on {@link ParsleyGossip}). The null
-     * message is never forwarded to
-     * the user delegate and never buffered. The two pre-fold guards mirror the business path
-     * exactly — a null message is a protocol record on the same channels, and a decode or wiring
-     * failure is no more tolerable for it than for a business record:
-     * <ul>
-     *   <li>A null message on an unregistered topic fails the task with the same
-     *       {@code IllegalStateException} the business path throws in {@link #ingest}: the offset
-     *       would otherwise be committed past a record on a channel this node claims not to know —
-     *       a misconfiguration that must stop the task, not be skipped.</li>
-     *   <li>A <em>present but undecodable</em> {@link ParsleyHeader#CAUSAL_CLOCK} header fails the
-     *       task via {@link #onUnresolvableClock}, exactly like a business record's: the carried
-     *       clock is the emitting node's stamp, and folding nothing while delivering the offset
-     *       would permanently drop the peer's progress claims from this node's channel fold — a
-     *       later stamp here would under-claim them (an I2 hole downstream). The transaction
-     *       aborts, the offset is not committed, and the message is refetched and retried on
-     *       restart; a successful retry delivers the offset normally, so the historical
-     *       frontier-gap bug (a skip-and-commit) does not return. An <em>absent</em> header stays
-     *       an empty clock whose offset is still delivered — a producer that stamps nothing claims
-     *       nothing, matching the business-path semantics for an absent header.</li>
-     * </ul>
+     * Handles a received null message: decodes its carried completeness clock, folds it through
+     * {@link ParsleyGossip#receive}, and relays this node's own null message downstream iff the
+     * received one advanced this node's knowledge of a consumed channel (the I6 relay rule). The null
+     * message is never delivered to the delegate and never buffered. Two guards mirror the business
+     * path: a null message on an unregistered topic fails the task, as {@link #ingest} does, and a
+     * present-but-undecodable {@link ParsleyHeader#CAUSAL_CLOCK} header fails it via
+     * {@link #onUnresolvableClock} rather than folding nothing and dropping the peer's progress claims
+     * (an I2 hole downstream); an absent header stays an empty clock whose offset is still delivered.
      *
-     * <p>The {@link ParsleyGossip#receive} call and the delivery of its released records run
-     * deliberately OUTSIDE the decode catch: past that point a failure is a delivery failure, not a
-     * decode failure — the gossip fold has already advanced the frontier and removed released
-     * records from the buffer, so swallowing an exception from the user delegate (or the core's own
-     * fail-fast paths) would let the task commit past records the delegate never processed, silently
-     * losing them. Fail-closed: let it kill the task.
-     *
-     * <p>The downstream relay (inductive propagation) ensures that a node which never produces
-     * business records on this path still advertises its causal progress when its own inputs
-     * genuinely move, so a grandchild node's channel clock can advance without any business record
-     * on the path. But a null message's own delivery is never itself a reason to relay further,
-     * and neither is custody-only news (a carried claim on a channel this node neither consumes
-     * nor produces — it folds into the stamp and rides every later emission instead) — only an
-     * advance of a consumed channel is, or a topology cycle (a null-message-only channel included)
-     * would ping-pong messages forever (clock-invisible null messages; see the class Javadoc).
+     * <p>The {@link ParsleyGossip#receive} call and the delivery of its released records run outside
+     * the decode catch: past that point a failure is a delivery failure, not a decode failure, and
+     * swallowing it would let the task commit past records the delegate never processed. Fail-closed.
      */
     private void handleNullMessage(Record<KIn, VIn> record) {
         RecordMetadata meta = requireRecordMetadata();
@@ -755,40 +701,20 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
     }
 
     /**
-     * Forwards this node's null message ({@link ParsleyGossip#advertise}) — its current outbound
-     * vector timestamp in the {@link ParsleyHeader#CAUSAL_CLOCK} header, marked by
-     * {@link ParsleyHeader#NULL_MESSAGE} — so one record both signals the protocol kind and advances
-     * the downstream channel clock.
+     * Forwards this node's null message ({@link ParsleyGossip#advertise}): its current outbound stamp
+     * in the {@link ParsleyHeader#CAUSAL_CLOCK} header, marked by {@link ParsleyHeader#NULL_MESSAGE},
+     * sent to every business sink ({@link #sinkNodeNames}) and keyed with {@code triggerKey} for wire
+     * content only. {@link ParsleyMarkerPartition} routes it to this task's own partition regardless
+     * of the key, so a downstream task's channel clock always advances across the sink boundary. The
+     * same {@link ParsleyCausalBroadcast#broadcast} that stamps business forwards attaches the clock,
+     * so the two stamps cannot diverge, and it bypasses the stamping proxy's forward counter so it
+     * does not itself count as a business emission.
      *
-     * <p>Sent to every business sink ({@link #sinkNodeNames} — never a zero-arg broadcast, so a sibling
-     * child node with an incompatible type never receives one; see {@link ParsleyProcessorContext}),
-     * keyed with {@code triggerKey} — the key of the input record that triggered this emission, carried
-     * through as informational wire content, not for routing: {@link ParsleyMarkerPartition} (set by
-     * {@link #forwardToSinks}) routes the null message to this task's own owned partition regardless of
-     * {@code triggerKey}, including when it is {@code null} — so a downstream task's channel clock for
-     * that partition always advances across a sink boundary, never dependent on a business key having
-     * been observed yet.
-     *
-     * <p>The null message is distinguished from a business tombstone by its marker header; downstream
-     * Parsley consumers skip it by that header, not by its key. It bypasses the business-forward
-     * counter in {@link ParsleyProcessorContext} (it is forwarded through the raw context, not the
-     * stamping proxy) so it does not prevent null-message emission for a genuinely non-emitting
-     * delegate invocation. Its clock header is attached by the same
-     * {@link ParsleyCausalBroadcast#broadcast} request that stamps business forwards — the single
-     * stamping site — so a null message's stamp and a business record's stamp cannot diverge by
-     * construction.
-     *
-     * <p>{@code triggerTimestamp} is the triggering record's own timestamp — the delivered
-     * message's on the non-emitting path, the buffered record's on the heartbeat path, the
-     * received null message's own on the relay path — never the wall clock: Kafka Streams advances
-     * downstream stream time from every polled record's timestamp before the record is classified,
-     * so a wall-clock-stamped null message emitted during a reprocessing run would yank downstream
-     * delegates' windows, grace periods, and suppressions to <em>now</em>. See
-     * {@link ParsleyGossip#advertise} for the retention-sizing consequence.
-     *
-     * <p>The {@code KIn}-to-{@code KOut} cast is sound under the co-partitioning contract: a causal
-     * processor must not change the key across the node (doing so reshards the causally-related
-     * events), so the input and output key types coincide.
+     * <p>{@code triggerTimestamp} is the triggering record's own timestamp, never the wall clock:
+     * Kafka Streams advances downstream stream time from every polled record's timestamp, so a
+     * wall-clock stamp during a reprocessing run would yank downstream windows and grace periods to
+     * now (see {@link ParsleyGossip#advertise} for the retention consequence). The {@code KIn}-to-{@code
+     * KOut} key cast is sound because a causal processor must not change the key across the node.
      */
     @SuppressWarnings("unchecked") // KIn==KOut under the co-partitioning contract
     private void advertise(@Nullable KIn triggerKey, long triggerTimestamp) {
@@ -927,24 +853,14 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
     }
 
     /**
-     * Strict, per-topic UUID resolution over {@link #sinkTopics} — unlike {@link
-     * #additionalTopicInfo}, this is strict — a failed describe fails init: it
-     * feeds the {@code ownOutputs} fold's name → UUID translation (D2) and {@link
-     * #causalBroadcast}'s I8 reflected-claim diagnostic — correctness and observability
-     * mechanisms, not topology-misconfiguration lints. Also captures each sink's
-     * per-partition end offsets ({@link #sinkEndOffsets}) in the same admin session, for the
-     * {@code ownOutputs} init-time seed.
-     *
-     * <p>A declared sink that cannot be resolved to a UUID — the topic does not exist, or the
-     * admin call fails — fails init loudly, as does a failed end-offset read. Both feed the stamp's
-     * own-output claims, load-bearing for I2 (the stamp must dominate the dependency clocks of
-     * everything this node delivered, including its own outputs, current and previous-run), and
-     * this resolution runs once, at {@code init()}: a skipped sink would silently stamp
-     * under-claims for the task's whole lifetime — the same reasoning that fails init in
-     * {@link #healFormerSinkOwnOutputs}. A causal sink must therefore exist before the stage
-     * starts; auto-creation on first produce is not a supported path. Every declared sink then
-     * always appears in {@link #sinkTopicUuids} and {@link #sinkEndOffsets}, so the ack fold, the
-     * reflected-claim diagnostic, and the identity watch cover the full declared set.
+     * Strict, per-topic UUID resolution over {@link #sinkTopics}, capturing each sink's per-partition
+     * end offsets ({@link #sinkEndOffsets}) in the same admin session for the {@code ownOutputs}
+     * init-time seed. It feeds the ack fold's name → UUID translation and the reflected-claim
+     * diagnostic, so a declared sink that cannot be resolved (a missing topic, or a failed describe or
+     * end-offset read) fails init loudly rather than skipping: the seed is load-bearing for I2, and a
+     * skipped sink would silently stamp under-claims for the task's whole lifetime (the same reasoning
+     * as {@link #healFormerSinkOwnOutputs}). A causal sink must therefore exist before the stage
+     * starts; auto-creation on first produce is not supported.
      */
     private Map<String, Uuid> resolveSinkTopicUuids(ParsleyTopicAdmin admin) {
         Map<String, Uuid> ids = new HashMap<>();
