@@ -15,97 +15,34 @@ import java.util.Set;
 import java.util.function.LongSupplier;
 
 /**
- * <strong>L2 — causal broadcast: the CBCAST receive/deliver core.</strong> The causal delivery
- * algorithm of Birman–Schiper–Stephenson (ISIS CBCAST), over the reliable FIFO channels
- * {@link ParsleyChannels} adapts Kafka topic-partitions into. Presented in the CGR module style
- * ({@code package-info} states the two Parsley-wide deviations from the textbook presentation —
- * pulled indications, and the sender's clock increment performed by the broker's offset assignment,
- * which is why {@link #broadcast} attaches a stamp but cannot include the record's own coordinate):
+ * L2, the causal-broadcast core: the receive/deliver algorithm of Birman–Schiper–Stephenson (ISIS
+ * CBCAST), over the reliable FIFO channels {@link ParsleyChannels} adapts Kafka topic-partitions
+ * into. The processor feeds incoming records to {@link #receive}, which either delivers a record at
+ * once or holds it until its dependencies are met, and forwards the returned records in order.
+ * {@link #broadcast} is the single stamping site every outbound record passes through, business
+ * forwards and protocol markers alike; the send itself is Kafka's produce. The broker assigns the
+ * sender's own offset, so a stamp cannot include the record's own coordinate. The L3 gossip layer
+ * ({@link ParsleyGossip}) sits on top through the {@link #propagate} / {@link #channels()} seam.
  *
- * <pre>
- * requests:   broadcast(record) → stamped record       attach the outbound vector timestamp
- *                                                      completeness ∪ ownOutputs (D2; the BSS
- *                                                      timestamp-assignment half — the underlying
- *                                                      point-to-point send is Kafka's produce),
- *                                                      after the crossing wait and the ack fold
- *             receive(message) → Outcome               the BSS receive: gate → deliver-or-hold →
- *                                                      cascade; the returned ordered list IS the
- *                                                      deliver() indication
- * queries:    completeness() → ParsleyVectorClock      the delivered/advertised boundary (the stamp
- *                                                      is ParsleyChannels.stamp(): this ∪ ownOutputs)
- *             frontier() → ParsleyVectorClock          the delivered vector VT(p)
- * properties: I1 (causal delivery — a record reaches the delegate only after every dependency has
- *             been locally, contiguously delivered; no timeout, no eviction), I2 (stamp transitive
- *             completeness — the stamp dominates the dependency clocks of every delivered event),
- *             I9 (unconditional merge, stamp-side)
- * </pre>
+ * <p>The delivery gate is evaluated per dependency coordinate. A dependency on a coordinate this
+ * node <em>consumes</em> must be covered by this node's own contiguous frontier, never by a position
+ * a peer merely claims (see {@link #isDeliverable}). A dependency on any other coordinate is ignored,
+ * unconditionally, and counted by a metric rather than treated as a failure; this is sound because
+ * transitively complete stamps (I2) carried by unconditional merges (I9) claim every consumed
+ * ancestor directly in the same clock. There is no eviction, no buffer limit, and no timeout: an
+ * unsatisfied record stays in the changelog-backed buffer, and a record that can be proven
+ * impossible to evaluate (an undecodable payload or header) fails the task fast rather than being
+ * forwarded on an unproven premise or discarded.
  *
- * <p><em>Receive</em> is {@link #receive}: a record arrives on an input channel and is either delivered
- * at once or buffered until it can be. <em>Deliver</em> is {@link ParsleyChannels#delivered} — where the
- * causal-order guarantee is actually granted, surfaced here via {@link Outcome} and handed to the user's
- * delegate by {@code ParsleyProcessor#deliver}. <em>Broadcast</em> is {@link #broadcast}: the single
- * stamping site every outbound record — a delegate's business forward and a protocol marker alike —
- * passes through; the send itself is Kafka's own {@code ProducerRecord}/{@code context.forward()} (a
- * partition's total order and replication are already a reliable-broadcast substrate). The L3
- * gossip module ({@link ParsleyGossip}) sits on top of this algorithm as a liveness layer — a
- * protocol extension, not part of the CBCAST core — through the package-private seam
- * {@link #propagate} / {@link #recordReflectedClaims} / {@link #channels()}.
- *
- * <p>The processor feeds incoming records to {@link #receive} and forwards the returned records
- * downstream, in order. The delivery gate is the two-branch dispatch of D1, evaluated per
- * dependency coordinate: a dependency on a coordinate this node <em>consumes</em> (an input
- * channel of this task, on the partition this task owns) must be satisfied by this node's own
- * contiguous frontier — the positions this node has itself delivered, never a position a peer
- * merely claims to have delivered (see {@link #isDeliverable}); a dependency on any other
- * coordinate is <em>ignored</em>, unconditionally — counted by the out-of-scope-ignored metric,
- * never a failure. The ignore branch is sound by the transitivity theorem (D1/D7): with
- * transitively complete stamps (I2) carried by unconditional merges (I9), any consumed causal
- * ancestor of a record is claimed directly in that record's own clock, so an unconsumed entry
- * only ever proxies ancestry the clock already states explicitly — ignoring it loses no ordering
- * observable at this node. On the consumed branch there is no eviction, no buffer limit, and no
- * timeout — a record whose dependencies are not yet satisfied stays buffered (the buffer is a
- * changelog-backed state store, so it spills to disk rather than growing in memory). A record
- * that can be proven impossible to ever evaluate — an undecodable payload or dependency header —
- * unconditionally fails the task fast, rather than being forwarded downstream as if it were
- * causally valid or silently discarded. There is no diversion sink: this is the single, simple
- * failure model — any error is a hard stop, never a partial or best-effort continuation.
- *
- * <p><strong>The frontier is a contiguous high-water mark, not a running max.</strong> This class does
- * not head-of-line block: a later-offset record on a partition may forward before an earlier one
- * still held on the same partition. So a coordinate's frontier offset must only ever advance once
- * every offset up to it has actually been forwarded — never past a gap, or a record elsewhere
- * depending on exactly the gapped offset would be released on bookkeeping alone, never having
- * actually observed it. {@link ParsleyChannels#delivered} marks every forward in a {@link
- * ParsleyForwardedIndex} and walks forward from the current frontier to find the longest run of
- * consecutive forwarded offsets now achievable, advancing the frontier by that run and pruning the
- * absorbed entries. Every release calls it the same way — none are special-cased.
- *
- * <p><strong>A coordinate's first offset need not be 0.</strong> Kafka delivers a partition's
- * records strictly in increasing offset order, but retention, compaction, or a fresh consumer group
- * can all mean the first offset this node ever observes for a coordinate is well past 0. {@link
- * ParsleyChannels#seedIfFirstSeen} folds everything below the first-ever-observed offset into the
- * frontier the moment it's seen, so it is treated as outside this module's purview rather than an
- * unfillable hole — without that, the contiguous walk above could never advance past {@code -1} for
- * such a coordinate.
- *
- * <p><strong>Frontier persistence ordering:</strong> {@link ParsleyChannels} self-persists its
- * single {@code "f"} value on every advance — inside {@link ParsleyChannels#delivered} and
- * {@link ParsleyChannels#seedIfFirstSeen}, before control returns to this class and the record is
- * added to the out-bound list — so the frontier is persisted before the record leaves this class.
- * For the same reason, every release path calls {@link ParsleyChannels#delivered} (and {@link
- * ParsleyChannels#channelUpdate}) <em>before</em> removing the record from {@link #buffer}: the
- * buffer and the frontier/forwarded-index are separate changelog topics with no cross-store
- * atomicity, so a crash between the two writes must always tear toward "buffer still holds a record
- * the frontier already delivered" (harmless — {@link #drainAfterRestore} redelivers it as an
- * at-least-once duplicate) and never the reverse, which would strand that coordinate's frontier
- * permanently.
- *
- * <p><strong>Drain algorithm:</strong> this class uses a {@link ParsleyCandidateIndex} to avoid a full
- * buffer scan on every frontier advance. When a coordinate advances, only records indexed on
- * that coordinate are checked for causal satisfaction. The cascade repeats for each newly
- * released record's source coordinate. A record is only ever released once this check — against
- * the real, contiguous frontier — passes; extending the frontier and checking for release are
- * always two separate steps, never one.
+ * <p>The frontier is a contiguous high-water mark, not a running max: this class does not
+ * head-of-line block, so a coordinate's frontier advances only once every offset up to it has been
+ * forwarded (via {@link ParsleyChannels#delivered} and a {@link ParsleyForwardedIndex}), never past
+ * a gap. {@link ParsleyChannels#seedIfFirstSeen} folds history below the first observed offset into
+ * the frontier, since a coordinate's first offset need not be 0. Every release advances the frontier
+ * and persists the {@code "f"} value before removing the record from {@link #buffer}, so a crash can
+ * only tear toward a harmless at-least-once redelivery. The drain uses a {@link ParsleyCandidateIndex}
+ * to check only records waiting on the advanced coordinate, cascading per released record.
+ * Invariants: I1, I2, I9.
  *
  * @param <K> the record key type
  * @param <V> the record value type

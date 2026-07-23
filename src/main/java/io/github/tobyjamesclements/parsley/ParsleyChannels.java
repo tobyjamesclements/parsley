@@ -18,75 +18,36 @@ import java.util.Map;
 import java.util.Set;
 
 /**
- * <strong>L1 — channels: the Kafka-to-reliable-FIFO-channel adaptation.</strong> Turns Kafka
- * topic-partitions into the channels classical causal broadcast assumes (Hadzilacos–Toueg's
- * reliable channels; the links layer of the Cachin–Guerraoui–Rodrigues stack, minus point-to-point —
- * a partition is multi-producer fan-out). Everything that exists because Kafka violates a classical
- * channel assumption lives here, stated once. Presented in the CGR module style ({@code
- * package-info} states the two Parsley-wide deviations from the textbook presentation):
+ * L1, the channels layer: the adaptation that turns Kafka topic-partitions into the reliable FIFO
+ * channels classical causal broadcast assumes (Hadzilacos–Toueg reliable channels; the links layer
+ * of the Cachin–Guerraoui–Rodrigues stack, minus point-to-point, since a partition is
+ * multi-producer fan-out). Everything that exists because Kafka violates a classical channel
+ * assumption lives here.
  *
- * <pre>
- * requests:   receive(topicId, partition, offset)     a record arrived on a channel: establish the
- *                                                     density baseline (seed) and bridge
- *                                                     consumer-skipped holes
- *             delivered(topicId, partition, offset)   L2 records a delivery; contiguous frontier
- *                                                     advance (I4)
- *             normalize(rawDeps, source)              normalise an inbound dependency clock before
- *                                                     L2 evaluates it: self-cycle strip (I5); a
- *                                                     pure function of the clock and the source
- *             acknowledge(topicId, partition, offset) producer ack → ownOutputs (D2)
- *             awaitOwnOutputQuiescence(except)        the crossing wait (O1, per-partition per
- *                                                     T3.0 A7): block until no own-sink send
- *                                                     outside the excluded destinations is
- *                                                     unacknowledged; throw, never stamp, on
- *                                                     timeout or ack failure (A8)
- *             rescope(currentInputs, taskPartition)   reconcile restored state with the declared
- *                                                     input set: re-home retired ancestry into the
- *                                                     carried-ancestry clock (A6), seed added
- *                                                     channels from carried ancestry (A5)
- * queries:    frontier() → ParsleyVectorClock         the delivered vector VT(p)
- *             ownOutputs() → ParsleyVectorClock       the node's own acked output positions (D2)
- *             stamp() → ParsleyVectorClock            the outbound vector timestamp
- *                                                     completeness ∪ ownOutputs ∪ highestDelivered
- *                                                     (D2 + the above-gap repair) — equally the
- *                                                     node's total knowledge, the I6 relay bound
- *             alreadyDelivered(topicId, partition,    membership in the delivered set (frontier ∪
- *                 offset) → boolean                   forwarded index); the receive path's replay
- *                                                     skip guard
- * properties: I3 (per-producer stamp monotonicity), I4 (contiguous frontier), I5 (normalised
- *             clocks), I8 (stamp over-claim soundness), I9 (unconditional merge, restore-side)
- * </pre>
- *
- * <p>Concretely, this class is the single owner of all causal metadata a node persists: the
- * contiguous frontier clock, the per-input-channel clocks, and the seeding/forwarding
- * infrastructure that maintains the frontier (the held-record buffer and its candidate index are a
- * separate concern).
- *
- * <p>Three structures fold into one durable value here, stored as a single {@code "f"} key-value pair
- * in the frontier state store (loaded once at construction, rewritten on change, read from memory):
+ * <p>This class is the single owner of every piece of causal metadata a node persists. Four vector
+ * clocks and the highest-received offsets fold into one durable {@code "f"} value in the frontier
+ * store (loaded once at construction, rewritten on change, otherwise read from memory):
  * <ul>
- *   <li>the <strong>contiguous frontier clock</strong> — the highest offset delivered without a gap
- *       on each coordinate this node consumes; and
- *   <li>the <strong>channel clocks</strong> — for each input channel {@code (topicId, partition)},
- *       the dependencies advertised on it (max-merged). {@link #completeness()} is the frontier clock
- *       max-merged with every channel's advertised view — the <em>outbound stamp</em>, carrying
- *       transitive ancestry downstream. The delivery gate itself checks the contiguous frontier alone
- *       (see {@link ParsleyCausalBroadcast}); an advertised claim never substitutes for local delivery; and
- *   <li>the <strong>highest-received offsets</strong> — for each input channel, the highest offset ever
- *       physically received, so {@link #bridge} can tell a consumer-skipped offset (a transaction marker
- *       or aborted record the {@code read_committed} consumer never returns) from an offset still to
- *       arrive, and cross the former without stalling the contiguous walk.
+ *   <li>the <strong>contiguous frontier</strong>, the highest offset delivered without a gap on each
+ *       consumed coordinate; the only clock the delivery gate consults (I4);
+ *   <li>the <strong>channel clocks</strong>, per input channel, the dependencies advertised on it;
+ *       {@link #completeness()} max-merges these with the frontier into the outbound stamp, which
+ *       carries transitive ancestry downstream but never substitutes for local delivery;
+ *   <li>the <strong>carried ancestry</strong>, causal past re-homed from coordinates that have left
+ *       the node's scope, kept so the stamp keeps dominating it (I9); stamp-side only;
+ *   <li>the <strong>own outputs</strong>, the node's own acknowledged sink positions, recovering
+ *       CBCAST's own-slot semantics since the broker assigns the sender's offsets (I3, I8);
+ *       stamp-side only;
+ *   <li>the <strong>highest-received offsets</strong>, so {@link #bridge} can distinguish a
+ *       consumer-skipped offset (a transaction marker or aborted record) from one still to arrive and
+ *       cross the former without stalling the contiguous walk.
  * </ul>
  *
- * <p>The <strong>forwarded-offset index</strong> is <em>not</em> in the {@code "f"} blob: it is a
- * growable, order-sensitive set (offsets delivered above the contiguous frontier) with incremental
- * per-offset writes and range reads, so it keeps its own keyed store, injected here as a collaborator.
- *
- * <p>Core operations: {@link #completeness()} (the delivery boundary), {@link #delivered} (advance the
- * contiguous frontier for a delivered record), {@link #seedIfFirstSeen} (establish the baseline the
- * first time a coordinate is observed, since consumption need not start at offset 0), and the channel
- * accessors. {@link ParsleyCausalBroadcast} enforces causal transitivity (the cascade after each delivery) and
- * owns the buffer around these operations.
+ * <p>The forwarded-offset index is not in the {@code "f"} blob: it is a growable, order-sensitive set
+ * of offsets delivered above the contiguous frontier, so it keeps its own keyed store. The delivery
+ * gate, the buffer, and the release cascade run in {@link ParsleyCausalBroadcast} over these
+ * operations, which also strips an inbound clock's self-cycle before the gate sees it (I5).
+ * Invariants preserved here: I3, I4, I5, I8, I9.
  */
 final class ParsleyChannels {
 
@@ -281,41 +242,28 @@ final class ParsleyChannels {
     }
 
     /**
-     * The outbound vector timestamp — {@code completeness ∪ ownOutputs ∪ highestDelivered} (D2 +
-     * the above-gap delivery repair): everything this node has delivered contiguously, carried, or
-     * heard advertised ({@link #completeness()}), max-merged with its own acked output positions
-     * ({@link #ownOutputs()}) and with the highest offset delivered on each input channel —
-     * including deliveries still above a contiguous-frontier gap, which the frontier cannot yet
-     * claim but the stamp must (an output emitted from such a delivery is causally after it; see
-     * the {@code highestDelivered} field note). This is the clock
+     * The outbound vector timestamp, {@code completeness ∪ ownOutputs ∪ highestDelivered}: the clock
      * {@link ParsleyCausalBroadcast#broadcast} attaches to every outbound record, and equally the
-     * node's <em>total knowledge</em> — the {@code known()} the I6 relay rule compares a carried
-     * clock against (frontier ∪ channel clocks ∪ carried ancestry ∪ ownOutputs ∪ highestDelivered).
-     * Both extra clocks are merged here and only here: they never feed {@link #completeness()}
-     * (which stays the delivered/advertised view — what this node has locally delivered, carried,
-     * or heard advertised) and never the delivery gate.
+     * node's total knowledge that the I6 relay rule compares a carried clock against. The own-outputs
+     * and highest-delivered clocks are merged here and only here; neither feeds {@link #completeness()}
+     * or the delivery gate.
      */
     ParsleyVectorClock stamp() {
         return completeness().merge(ownOutputs).merge(highestDelivered);
     }
 
     /**
-     * Wires the acknowledged-outputs source {@link #foldAcknowledgedOutputs()} drains — the
-     * interceptor registry in production — together with this node's sink-name → UUID resolution
-     * (acks arrive keyed by topic name; the clock is keyed by UUID identity, E1). Called once at
-     * init by {@code ParsleyProcessor}; never called for test-fixture instances, whose
-     * {@code ownOutputs} then advances only through direct {@link #acknowledge} calls. Sink
-     * resolution is strict at init (an unresolvable sink fails init) and a topology is exactly one
-     * stage, so {@code sinkTopicIds} always covers every topic the registry tracks — the ack
-     * fold's missing-translation skip is a defensive guard, not a load-bearing filter.
+     * Wires the acknowledged-outputs source {@link #foldAcknowledgedOutputs()} drains and the
+     * pending-send view the crossing wait blocks on, with this node's sink-name → UUID resolution
+     * (acks arrive keyed by name; the clock is keyed by UUID). Called once at init; a test-fixture
+     * instance with no registry never calls it, and its {@code ownOutputs} then advances only via
+     * direct {@link #acknowledge} calls.
      *
      * @param source                the acked-offsets view {@link #foldAcknowledgedOutputs()} drains
      * @param pendingSends          the pending-send view {@link #awaitOwnOutputQuiescence} waits on
-     *                              (the same registry object in production)
      * @param sinkTopicIds          sink topic name → UUID, resolved at init
-     * @param crossingWaitTimeoutMs the crossing wait's bound — the producer's
-     *                              {@code delivery.timeout.ms}, past which an unacked send has
-     *                              failed and the wait must throw rather than stamp (T3.0 A8)
+     * @param crossingWaitTimeoutMs the crossing wait's bound (the producer's
+     *                              {@code delivery.timeout.ms}), past which an unacked send has failed
      */
     void bindOwnOutputSource(AckedOutputs source, PendingSends pendingSends,
                              Map<String, Uuid> sinkTopicIds, long crossingWaitTimeoutMs) {
@@ -326,24 +274,17 @@ final class ParsleyChannels {
     }
 
     /**
-     * The crossing wait (O1; per-partition granularity per T3.0 A7): blocks until the calling
-     * task's producer has no unacknowledged send to any own-sink coordinate outside
-     * {@code exceptDestinations}, so the ack fold ({@link #foldAcknowledgedOutputs()}) that
-     * precedes the very next {@link #stamp()} read cannot miss the coordinate of a send that
-     * process-order-precedes the record being stamped. Passing an <em>empty</em> set waits for
-     * full quiescence — the conservative form used before stamping a business forward, whose
-     * destination partition is unknowable at stamp time (the sink's partitioner runs downstream
-     * of {@code forward()}); over-waiting only ever folds <em>more</em> acked positions, which is
-     * monotone-sound (I8), where a mispredicted same-partition exemption would silently
-     * under-claim. A marker stamp passes its exact destination set — each sink at the task's own
-     * partition — whose same-coordinate pending sends partition FIFO plus I3 already cover (and
-     * whose cross-sink exemption O4's recorded null-message exemption covers).
+     * The crossing wait: blocks until the task's producer has no unacknowledged send to an own-sink
+     * coordinate outside {@code exceptDestinations}, so the ack fold before the next {@link #stamp()}
+     * cannot miss a send that process-order-precedes the record being stamped. An empty set waits for
+     * full quiescence, the conservative form used before a business forward, whose destination
+     * partition is unknowable at stamp time; over-waiting only folds more acked positions, which is
+     * sound (I8). A marker stamp passes its exact destination set, which same-partition FIFO and I3
+     * already cover.
      *
-     * <p><strong>Never stamp-and-proceed</strong> (T3.0 A8): the bound wait throws
-     * {@link CausalPendingAckException} on timeout or on an observed acknowledgement failure —
-     * the caller's EOS transaction must die rather than emit a potentially under-claiming stamp.
-     * A no-op until {@link #bindOwnOutputSource} is called (test-fixture instances and
-     * TopologyTestDriver runs, which have no producer registry and therefore no pending sends).
+     * <p>The wait never stamps-and-proceeds: it throws {@link CausalPendingAckException} on timeout or
+     * an observed acknowledgement failure, so the caller's EOS transaction dies rather than emit a
+     * possibly under-claiming stamp. A no-op until {@link #bindOwnOutputSource} is called.
      */
     void awaitOwnOutputQuiescence(Set<TopicPartition> exceptDestinations) {
         PendingSends pending = pendingSends;
@@ -374,16 +315,11 @@ final class ParsleyChannels {
     }
 
     /**
-     * The causal completeness clock: this node's own contiguous frontier, max-merged with every input
-     * channel's advertised dependencies and with the {@link #carriedAncestry} re-homed from any
-     * coordinates that have left this node's scope (a retired channel's history must keep riding in
-     * the stamp — I9's "never dropped, only re-homed"). This is the <em>outbound stamp</em> — the
-     * boundary this node
-     * advertises downstream, carrying transitive ancestry (coordinates a channel has advertised that
-     * this node may not itself have delivered yet) for each receiver's own gate to verify locally. It
-     * is <em>not</em> the delivery gate: the gate ({@link ParsleyCausalBroadcast}) checks {@link #frontier()}
-     * alone, so an advertised claim can never release a record here ahead of local delivery of its
-     * cause. With no channel clocks recorded, this is exactly the node's own frontier.
+     * The causal completeness clock: this node's contiguous frontier max-merged with every input
+     * channel's advertised dependencies and with the {@link #carriedAncestry} re-homed from retired
+     * coordinates (I9). It is the delivered/advertised boundary the node carries downstream for each
+     * receiver's own gate to verify, not the delivery gate itself: the gate checks {@link #frontier()}
+     * alone, so an advertised claim never releases a record ahead of local delivery of its cause.
      */
     ParsleyVectorClock completeness() {
         ParsleyVectorClock result = frontier.merge(carriedAncestry);
@@ -395,26 +331,11 @@ final class ParsleyChannels {
 
     /**
      * Records that the record at {@code (topicId, partition, offset)} was delivered: marks the offset
-     * forwarded, walks the longest contiguous run now achievable, advances the frontier, persists, and
-     * only then prunes the forwarded-index entries the walk absorbed.
-     *
-     * <p>The persist-before-prune order matters: the frontier blob and the forwarded index are separate
-     * changelog-backed stores with no cross-store atomicity, so a crash between them must always tear
-     * toward "the frontier already reflects the absorbed run, but a since-redundant forwarded-index
-     * entry below it still lingers" — harmless, purely cosmetic (the same degraded outcome the watermark
-     * guard below prevents on the ordinary replay path) — never the reverse, where an entry is pruned but
-     * the frontier advance that accounted for it was lost, which would permanently strand every offset
-     * above it. This "always" is literal: {@link CausalTopology#assemble} requires {@code
-     * processing.guarantee=exactly_once_v2} unconditionally, so the frontier write and the forwarded-index
-     * prune are part of one Kafka transaction — a crash cannot tear one from the other at all, not merely
-     * "usually toward" the benign side (see {@link ParsleyCausalBroadcast}'s class Javadoc for the fuller version
-     * of this note).
-     *
-     * <p>A delivery at or below the current watermark ({@code offset <= frontier}) is an at-least-once
-     * replay of an already-delivered offset — a no-op here too, and deliberately never marked: the absorb
-     * walk below only ever scans strictly above the watermark, so a mark at or below it could never be
-     * found and unmarked again, leaking a permanent, purely cosmetic entry in the changelog-backed
-     * forwarded index (this used to happen on every such replay).
+     * forwarded, walks the longest contiguous run now achievable, advances the frontier, persists,
+     * then prunes the forwarded-index entries the walk absorbed. The frontier write and the prune
+     * commit in one Kafka transaction ({@code exactly_once_v2} is required), so a crash cannot tear
+     * one from the other. A delivery at or below the current frontier is an at-least-once replay and a
+     * no-op, deliberately never marked, since the absorb walk only scans strictly above the frontier.
      */
     void delivered(Uuid topicId, int partition, long offset) {
         long watermark = frontier.offsetFor(topicId, partition);

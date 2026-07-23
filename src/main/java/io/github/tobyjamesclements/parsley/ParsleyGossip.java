@@ -11,84 +11,31 @@ import java.util.List;
 import java.util.Set;
 
 /**
- * <strong>L3 — gossip: clock dissemination over the topology's own channels.</strong> Epidemic
- * dissemination in the sense of Demers et al. 1987 ("Epidemic Algorithms for Replicated Database
- * Maintenance"): each node relays causal progress onward only while it is news, so knowledge spreads
- * across every path — cycles included — and quiesces when everyone has converged. Its records are
- * <em>null messages</em> in the Chandy–Misra–Bryant sense (Chandy–Misra 1979, Bryant 1977): a
- * timestamp-carrying record whose value is literally null, occupying a real offset on its channel
- * purely to make the sender's clock observable downstream. Presented in the CGR module style
- * ({@code package-info} states the Parsley-wide deviations):
+ * L3, the gossip layer: clock dissemination over the topology's own channels. Its records are null
+ * messages in the Chandy–Misra–Bryant sense (a timestamp-carrying record with a null value,
+ * occupying a real offset purely to make the sender's clock observable), spread epidemically in the
+ * sense of Demers et al. 1987 so knowledge reaches every path, cycles included, and quiesces once
+ * everyone has converged. It sits on top of {@link ParsleyCausalBroadcast} as a liveness extension:
+ * nothing here ever releases a record the delivery gate would hold, and removing it would cost only
+ * progress visibility on non-emitting paths, never ordering.
  *
- * <pre>
- * requests:    receive(channel, offset, carried VT)     the null message's own offset is delivered
- *                → (deliveries, advancedConsumedChannel) via L1/L2 (it advances the contiguous
- *                                                       frontier — the only thing that can release
- *                                                       held records); its carried clock feeds the
- *                                                       channel's advertised view and the stamp
- *                                                       only, never the gate
- * indications: advertise(key, timestamp) → null message a stamped, ready-to-forward record, emitted
- *                                                       when a delivery produced no business output
- *                                                       (or a received null message advanced a
- *                                                       consumed channel)
- * relay rule:  relay iff carried VT restricted to       I6 = the CMB trigger discipline: only an
- *              consumed channels ⊀ known()              advance of this node's own input channels
- *                                                       obliges a relay; known() = frontier ∪
- *                                                       channel clocks ∪ carried ancestry ∪
- *                                                       ownOutputs (ParsleyChannels.stamp)
- * properties:  I6 (relay on consumed-channel advance); liveness of completeness propagation
- * </pre>
+ * <p>A received null message's own offset is delivered normally, advancing the contiguous frontier
+ * that releases held records; its carried clock feeds the channel's advertised view and the stamp
+ * only, never the gate. The relay rule (I6) is the single home of this decision: relay onward iff
+ * the carried clock advanced this node's total knowledge on a channel it consumes,
+ * {@code !stamp().dominates(carried.retaining(consumedScope))}, with pending acks folded first. This
+ * is the CMB trigger discipline, where only an advance of the node's own input channels obliges a
+ * relay. Everything else the clock carries is custody: it folds into the stamp unconditionally (I9)
+ * and rides every later emission but never obliges a relay, because custody hearsay lags its source
+ * by a gossip lap and relaying on it would never quiesce on a cycle. Withholding a relay starves
+ * nobody, since a suppressed relay also suppresses the claim it would have stamped.
  *
- * <p>This module sits on top of {@link ParsleyCausalBroadcast} as a liveness layer — a protocol
- * extension, not part of the CBCAST core: nothing here ever releases a record the L2 gate would
- * hold (a peer's carried claim is not local delivery), and removing the layer entirely would cost
- * only progress visibility on non-emitting paths, never ordering.
+ * <p>The emission half lives at the call sites in {@code ParsleyProcessor}: a delivery whose delegate
+ * forwarded nothing, a held record whose receipt advanced completeness, and a received null message
+ * that advanced a consumed channel each emit an {@link #advertise} record, so downstream channel
+ * clocks advance gap-free on every path.
  *
- * <p><strong>The I6 relay rule, stated once (the single home of this decision):</strong> a received
- * null message is relayed onward iff its carried clock advanced this node's <em>total knowledge on
- * a channel this node consumes</em> —
- * {@code !ParsleyChannels.stamp().dominates(carried.retaining(consumedScope))}, taken before the
- * carried clock is folded (afterwards it is dominated by construction), with pending producer acks
- * folded first so the {@code ownOutputs} side of the comparison is current. The consumed scope is
- * the node's declared input topics at its <em>own task partition</em>: those are exactly the
- * coordinates whose first-hand state (the contiguous frontier, plus {@code ownOutputs} where an
- * input is also an own sink) physically catches up to every appended offset, so a fact there can
- * oblige at most one relay before it is covered for good. Everything else in the carried clock —
- * a channel this node neither produces nor consumes, a sibling producer's appends on a shared
- * sink, a foreign partition of a consumed topic — is custody: it still folds into the stamp
- * unconditionally (I9 — stamps must <em>carry</em> custody, and it rides every later emission),
- * but it never <em>obliges</em> a relay, because custody coverage is hearsay that structurally
- * lags its source (one gossip lap on a topic cycle), so relaying on it appends the very offset
- * that will be news to the next blind member — the storm in which gossiping enlarges the state
- * being gossiped and closure is unattainable. This is the Chandy–Misra–Bryant trigger discipline:
- * a null-message send is obliged only by an advance of the node's own input channel clocks, never
- * by third-party knowledge of distant links. Restricting the trigger cannot starve anyone: the
- * delivery gate waits only on the local frontier of consumed channels, every stamped claim sits
- * at or below a real appended offset (I8) that arrives on its channel regardless of gossip, and a
- * suppressed relay also suppresses the claim it would have stamped, so nothing downstream can
- * ever reference — let alone wait on — the knowledge it withheld.
- *
- * <p>"New" is never judged against a single channel's clock: a reflected own coordinate (a
- * downstream stamp echoing this node's own produced position around a self-cycle, where the sink
- * is also consumed and therefore in scope) is dominated by {@code ownOutputs} and so teaches
- * nothing — the relay settles without the historical own-sink strip that erased real ancestors
- * (#22). A null message's own delivery is never itself a reason to relay: only a consumed-channel
- * advance is, so each relay is obliged at most once per appended coordinate per consumer and any
- * cycle quiesces — unconditionally on a pure cycle (each member consumes exactly one cycle
- * channel, and same-channel claims always trail the frontier by partition FIFO); on a chorded
- * cycle, under any fair scheduler (a claim can outrun its record only through a multi-hop race
- * that dies the moment the record itself is delivered, so sustaining relays forever would require
- * a consumed partition starved by at least a full gossip lap indefinitely — an operational
- * pathology, not a protocol state).
- *
- * <p>The <em>emission</em> half of the protocol lives at the call sites in {@code ParsleyProcessor}
- * (the transport — {@code context.forward} plus {@link ParsleyMarkerPartition} routing — is Kafka
- * Streams glue, exactly as L2's underlying send is Kafka's produce): a delivery whose delegate
- * forwarded no business record, a held record whose receipt still advanced completeness, and a
- * received null message that advanced a consumed channel each emit {@link #advertise}'s record, so downstream
- * channel clocks advance gap-free on every path.
- *
- * @param <K> the record key type of the input channels (L2's deliveries)
+ * @param <K> the record key type of the input channels
  * @param <V> the record value type of the input channels
  */
 final class ParsleyGossip<K, V> {
