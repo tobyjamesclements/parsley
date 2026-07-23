@@ -1,8 +1,12 @@
 # Streams integration
 
-`CausalStreamsBuilder`, `CausalTopology`, and `CausalStreams` are three roles mirroring Kafka Streams'
-own `StreamsBuilder`, `Topology`, and `KafkaStreams`. Declare the topology's single causal stage as one
-fluent chain, terminate the chain with `.build()`, then hand the result to a `CausalStreams` runtime.
+A causal topology is where the [three protocols](../protocols/index.md) run: the stage a
+`CausalStreamsBuilder` declares wraps your processor in the causal-broadcast gate and buffer,
+stamps every output, and disseminates progress with null messages. This page is the practical
+contract for building and operating one. `CausalStreamsBuilder`, `CausalTopology`, and
+`CausalStreams` are three roles mirroring Kafka Streams' own `StreamsBuilder`, `Topology`, and
+`KafkaStreams`. Declare the topology's single causal stage as one fluent chain, terminate the chain
+with `.build()`, then hand the result to a `CausalStreams` runtime.
 
 <!-- Mirrored verbatim by DocsSamplesTest#streamsQuickstartSample; keep the sample and the test in sync. -->
 ```java
@@ -82,8 +86,8 @@ the `CausalClock` edge operations. A service that consumes stamped topics and re
 unstamped output severs the causal chain: its outputs are causally minimal by definition, and the
 severance is undetectable at runtime, because an unstamped record is indistinguishable from a
 genuine external event. Producers that only *originate* events need no participation — a record
-that stamps nothing claims nothing and is delivered immediately. This is environmental assumption
-E3 of the [causal consistency model](../foundations/assumptions.md).
+that stamps nothing claims nothing and is delivered immediately. This is
+[environmental assumption E3](../foundations/assumptions.md#e3-compliant-participants-participation-is-per-path).
 
 **Forward uniformly to all children.** A causal processor advertises its progress downstream by
 stamping its business output, or by emitting a protocol null message when the delegate forwards nothing
@@ -222,6 +226,6 @@ configuration keys at all; startup fails if any `parsley.*` key is present.
   range crashes rather than silently jumping past destroyed causes, and log-start offsets are
   seeded only on a genuine first start (offset expiry is not a first start). Mid-replay expiry is
   therefore a loud crash-loop until an operator resets — a liveness stall by design, never a
-  reorder. This is environmental assumption E2 of the
-  [causal consistency model](../foundations/assumptions.md); see
-  [Troubleshooting](troubleshooting.md#retention-outran-a-causal-consumer) for recovery.
+  reorder. This is
+  [environmental assumption E2](../foundations/assumptions.md#e2-retention-must-not-destroy-causally-live-history);
+  see [Troubleshooting](troubleshooting.md#retention-outran-a-causal-consumer) for recovery.

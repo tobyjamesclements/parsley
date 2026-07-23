@@ -59,7 +59,7 @@ ignore is counted by the `deps-out-of-scope-ignored` metric. These two propertie
 The ignore branch is also what makes joins coordination-free. A new application's stamps routinely
 circulate coordinates that incumbent nodes have no channel for, and the gate ignores those soundly
 instead of treating them as an error, so joining a running topology needs no admission, no barrier,
-and no membership (see [Concepts](../concepts.md#joining-a-running-topology)).
+and no membership (see [Streams integration](../guide/streams.md#evolving-a-running-topology)).
 
 ## The outbound stamp
 

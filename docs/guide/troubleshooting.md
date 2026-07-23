@@ -1,5 +1,12 @@
 # Troubleshooting
 
+Every failure below is the operational face of the same design choice: Parsley is unconditionally
+fail-closed, so a situation it cannot resolve soundly surfaces as a loud stall or a task restart,
+never as a silent reordering. The [delivery gate](../foundations/delivery-gate.md) states why, and
+the [environmental assumptions](../foundations/assumptions.md) state the conditions each of these
+symptoms corresponds to violating. Each entry names the exception or metric that signals it and the
+recovery.
+
 ## A held record can no longer be deserialised (poison record)
 
 Parsley persists records whose causal dependencies are not yet satisfied to a changelog-backed buffer

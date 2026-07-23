@@ -1,11 +1,12 @@
 # Incremental adoption
 
 Adopting Parsley in a cluster where some producers do not yet stamp the `parsley-causal-clock`
-header requires no special configuration. A record with a missing header is treated as having an
-empty, vacuously satisfied dependency set and is forwarded immediately. Because such a record is
-never buffered, there is no adoption setting to choose and nothing to tighten later. A producer that
-stamps nothing claims nothing, so its records are causally minimal by definition: safe to deliver at
-once, and correctly ordered below anything that later depends on them.
+header requires no special configuration. This follows directly from the
+[delivery gate](../foundations/delivery-gate.md): a record with a missing header is treated as
+having an empty, vacuously satisfied dependency set and is forwarded immediately. Because such a
+record is never buffered, there is no adoption setting to choose and nothing to tighten later. A
+producer that stamps nothing claims nothing, so its records are causally minimal by definition, safe
+to deliver at once, and correctly ordered below anything that later depends on them.
 
 ## Phase 1: introduce a causal topology and tolerate unstamped producers
 
@@ -33,8 +34,8 @@ There is no follow-up configuration step, because no setting was ever gating the
 unstamped records. Note the resulting contract: causal order is guaranteed only along paths where
 every intermediate processor stamps, so a service that consumes stamped topics and re-produces
 unstamped output severs the causal chain for everything downstream of it. See the
-[participation precondition](streams.md#preconditions) and environmental assumption E3 of the
-[causal consistency model](../foundations/assumptions.md).
+[participation precondition](streams.md#preconditions) and
+[environmental assumption E3](../foundations/assumptions.md#e3-compliant-participants-participation-is-per-path).
 
 ## Notes
 

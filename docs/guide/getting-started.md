@@ -41,23 +41,25 @@ itself (a Kafka Streams application already does), while edge stamping with `Cau
 
 ## Ordering records causally
 
-Parsley delivers records in causal order inside a Kafka Streams topology. Declare your topology with
-`CausalStreamsBuilder`, binding your own processor to a causal-decorated stage with `.process(...)`,
-and it holds any record whose dependencies have not yet been observed, releasing the record once the
-frontier catches up. Create every topic the topology touches — sink topics included — before the
-first start: a declared sink that does not exist fails startup, because causal stamping depends on
-its resolved identity. See [Streams integration](streams.md) for the full setup.
+Parsley delivers records in causal order inside a Kafka Streams topology. Declare the topology with
+`CausalStreamsBuilder`, binding your processor to a causal-decorated stage with `.process(...)`, and
+it holds any record whose dependencies have not yet been observed, releasing the record once the
+frontier catches up. Create every topic the topology touches, sink topics included, before the first
+start: a declared sink that does not exist fails startup, because causal stamping depends on its
+resolved identity. [Streams integration](streams.md) covers the full setup, the preconditions, and
+recovery.
 
-## Stamping causal context onto produced records
+## Stamping causal context at the edge
 
-At the edges of a topology, where plain Kafka producers feed records in, a node has no Parsley
-processor maintaining a frontier for it, so it maintains one itself. A `CausalClock` value is that
-frontier: the running set of positions the node has observed. Bind one with `using`, giving it the
-Kafka client configuration to resolve topic UUIDs through, fold in each record you consume with
-`observe`, and attach the result to each record you produce with `stamp`. Topic UUID resolution is
-entirely internal: each distinct topic name is resolved (and cached) the first time it is needed,
-through a Kafka admin client Parsley opens and closes on its own — nothing to construct or close
-yourself.
+A causal processor maintains a frontier for itself. At the edges of a topology, where plain Kafka
+producers feed records in, there is no such processor, so the producer maintains the frontier
+itself. A `CausalClock` value is that frontier: the running set of positions the node has observed,
+the accumulating VT(p) role described under [vector clocks](../foundations/causal-consistency.md#vector-clocks).
+Bind one with `using`, giving it the Kafka client configuration to resolve topic UUIDs through, fold
+in each record you consume with `observe`, and attach the result to each record you produce with
+`stamp`. Topic UUID resolution is entirely internal: each distinct topic name is resolved and cached
+the first time it is needed, through a Kafka admin client Parsley opens and closes on its own, with
+nothing to construct or close yourself.
 
 <!-- Mirrored verbatim by DocsSamplesTest#relaySample; keep the sample and the test in sync. -->
 ```java
@@ -69,7 +71,7 @@ producer.send(deps.stamp(new ProducerRecord<>("c3", key, value)));
 `observe` folds in the dependencies the consumed record arrived with, together with the consumed
 record's own position. A downstream causal processor therefore waits until it has observed `m1`
 before it delivers anything stamped here. The resolver bound by `using` carries through each
-`observe`, so a fan-in — where an output is caused by several inputs — chains an `observe` per input.
+`observe`, so a fan-in, where an output is caused by several inputs, chains an `observe` per input.
 
 <!-- Mirrored verbatim by DocsSamplesTest#fanInSample; keep the sample and the test in sync. -->
 ```java
@@ -97,6 +99,24 @@ Tests without a live broker can bind a resolver over a fixed topic-name-to-UUID 
 
 The serialised dependencies header grows with the number of topic-partitions it names. See the
 [header size note](configuration.md#header-size) in Configuration.
+
+## Consuming a causal topology's output
+
+A node reading a Parsley topology's output with a plain Kafka client maintains its own frontier, as
+an accumulating `CausalClock` value, exactly as an edge producer does. Bind a resolver once with
+`using`, fold in each record you consume with `observe`, and stamp the result onto anything you
+produce. A one-to-one relay is `using(props).observe(record)`; a fan-in chains an `observe` per
+input; a stateful node keeps one instance and observes into it across records. To read back the
+dependencies a record already carries, without folding in a new position, use
+`CausalClock.fromRecord(record)`.
+
+Some of those records are *protocol null messages*: a record with a null value, carrying a
+completeness frontier so causal progress flows through processors that produce no business output
+for a given input. Still `observe` them, so your frontier advances across a service that emitted
+only null messages on this path, but skip them as business records. Test with
+`CausalClock.isNullMessage(record)` and `continue` past those it flags. A downstream causal
+processor handles null messages internally; only a plain client needs this check. The
+[gossip module](../protocols/gossip.md) describes why the null messages exist.
 
 ## Propagating causal context across services
 

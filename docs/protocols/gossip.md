@@ -151,7 +151,7 @@ successful fetch.
 Parsley's own processors handle null messages internally. A plain Kafka client consuming a topic
 a Parsley topology produces folds them into its running frontier with `CausalClock.observe` while
 skipping them as business records, detected with `CausalClock.isNullMessage` — see
-[Concepts](../concepts.md#the-frontier).
+[Getting started](../guide/getting-started.md#consuming-a-causal-topologys-output).
 
 ## Cost
 

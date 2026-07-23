@@ -2,13 +2,14 @@
 
 ## Causal delivery has exactly two dispositions
 
-A record is either **forwarded** once its dependencies are satisfied, or stays **buffered** —
-unbounded, changelog-backed — while they are not. There is no configuration that trades causal safety
-for liveness, no eviction, and no third disposition: a record that cannot be evaluated at all (an
-undecodable payload or an undecodable causal-clock header) unconditionally fails the task, and a
-dependency on a coordinate this node does not consume is ignored, soundly, with a metric. See
-[Troubleshooting](troubleshooting.md) for what that looks like operationally and how to recover
-from it.
+Parsley's own configuration surface is empty; this page documents the behaviour to observe rather
+than knobs to set. A record is either **forwarded** once its dependencies are satisfied, or stays
+**buffered** — unbounded, changelog-backed — while they are not. There is no configuration that
+trades causal safety for liveness, no eviction, and no third disposition: a record that cannot be
+evaluated at all (an undecodable payload or an undecodable causal-clock header) unconditionally fails
+the task, and a dependency on a coordinate this node does not consume is ignored, soundly, with a
+metric. This is the [delivery gate](../foundations/delivery-gate.md) restated operationally. See
+[Troubleshooting](troubleshooting.md) for what it looks like in practice and how to recover from it.
 
 ---
 
@@ -83,3 +84,16 @@ in-process through `CausalStreams.metrics()`.
 
 Any non-zero rate on the two error sensors, or sustained growth in `buffer-depth`, is worth alerting
 on — see [Troubleshooting](troubleshooting.md).
+
+## Performance and tuning
+
+Parsley has no performance-tuning keys of its own; its overhead is characterised in the
+[protocols cost model](../protocols/index.md#cost-model), which names the layer each cost comes from
+and how it scales. To size a deployment, measure your own topology end to end and watch the metrics
+above rather than relying on isolated micro-benchmarks.
+
+The one standard Kafka setting that materially affects a causal stage is `producer.linger.ms`. A
+delegate that forwards several records per input pays a
+[crossing-wait serialization](../protocols/causal-broadcast.md#cost) proportional to the linger on
+each forward, so for multi-forward delegates lower `producer.linger.ms` (to a few milliseconds, or
+0) so each batch ships immediately. A single-forward delegate is usually unaffected.

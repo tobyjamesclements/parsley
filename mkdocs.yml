@@ -58,7 +58,6 @@ nav:
   - Using Parsley:
     - Getting started: guide/getting-started.md
     - Streams integration: guide/streams.md
-    - Concepts: concepts.md
     - Incremental adoption: guide/adoption.md
     - Configuration: guide/configuration.md
     - Troubleshooting: guide/troubleshooting.md

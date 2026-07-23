@@ -47,6 +47,17 @@ All notable changes to this project are documented in this file. The format is b
   Chandy–Misra–Bryant, Demers). Stale "internals overview" and mislabelled model links are
   corrected. `docs/performance.md` is deleted; its cost model now lives with the protocols and its
   metrics guidance with Configuration.
+- **The Using Parsley guide is rewritten in the academic register and the Concepts page is
+  absorbed.** Getting started gains a "Consuming a causal topology's output" section carrying the
+  consumer-side frontier and null-message handling that lived on Concepts, and cross-links the edge
+  frontier to the vector-clock foundations. Streams integration opens by placing the stage inside
+  the three protocols and repoints its E2/E3 references to the specific assumptions. Incremental
+  adoption, Configuration, and Troubleshooting gain academic framings and links into Foundations;
+  Configuration gains a "Performance and tuning" section pointing to the protocols cost model and
+  the `producer.linger.ms` remedy. `docs/concepts.md` is deleted: its theory already lived in
+  Foundations and Streams, and its unique practitioner material moved to Getting started. The five
+  compile-pinned samples are unchanged. Inbound Concepts links are repointed to Streams and Getting
+  started.
 
 ### Removed
 - **The JMH benchmark suite is deleted; `docs/performance.md` now asserts complexity from the

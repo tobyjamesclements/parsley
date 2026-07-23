@@ -118,7 +118,7 @@ until the epoch computed with it commits and admits it. With no epochs there is 
 wait for, and none is needed: a fresh message carrying old dependencies is causally low, not
 retroactive, because nothing can be delivered before it exists. No incumbent mis-delivered in the
 past. Joins therefore need zero coordination (see
-[Concepts](../concepts.md#joining-a-running-topology)).
+[Streams integration](../guide/streams.md#evolving-a-running-topology)).
 
 [^lamport]: Leslie Lamport, "Time, Clocks, and the Ordering of Events in a Distributed System",
     *Communications of the ACM*, 1978. See the [bibliography](../reference/bibliography.md).
