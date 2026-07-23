@@ -66,6 +66,15 @@ All notable changes to this project are documented in this file. The format is b
   Hadzilacos–Toueg 1994; Cachin–Guerraoui–Rodrigues; Bryant 1977; Chandy–Misra 1979; DeVries 1990;
   Cai–Turner and Wood–Turner; Demers et al. 1987; Wuu–Bernstein and Sarin–Lynch; COPS 2011), grouped
   by theme, with the page footnotes linking into it.
+- **The Javadoc is made far more concise and API-focused, staying standalone.** The public
+  `Causal*` types and the package overview are trimmed to state behaviour and the API contract
+  rather than re-derive the causal model: `CausalClock` drops the repeated relay/fan-in catalogue
+  and the internal null-message-fold reasoning from its method docs; `package-info` drops the
+  internal-protocol-module section (which linked package-private types a public reader cannot
+  navigate to) and compresses the rest; the builder chain and `CausalStreams` shed restated
+  rationale and links to package-private types. The tone matches the documentation site, but the
+  Javadoc reads on its own without it. The verbose internal `Parsley*` module comments are condensed
+  in the same pass. `mvn javadoc:javadoc` stays clean under doclint.
 
 ### Removed
 - **The JMH benchmark suite is deleted; `docs/performance.md` now asserts complexity from the

@@ -10,17 +10,15 @@ import org.slf4j.LoggerFactory;
 import java.util.Map;
 
 /**
- * The producer-side half of the {@code ownOutputs} clock (D2): publishes every acknowledged send
- * to a declared sink topic into this instance's {@link ParsleyOwnOutputRegistry}, from which the
- * stream threads fold coordinates into {@link ParsleyChannels#acknowledge} before each stamp.
+ * The producer-side half of the {@code ownOutputs} clock: it publishes every acknowledged send to a
+ * declared sink topic into this instance's {@link ParsleyOwnOutputRegistry}, from which the stream
+ * threads fold the coordinates into each outbound stamp.
  *
  * <p><strong>Not public API.</strong> This class is {@code public} only because Kafka instantiates
- * it reflectively — {@link CausalStreams} injects it into every stream producer through the public
- * {@code producer.interceptor.classes} config (T2.1 validated this path end to end: the EOS stream
- * producer instantiates and configures it, {@code onAcknowledgement} carries the exact committed
- * coordinate, and the callback runs on the producer network thread — hence the concurrent registry).
- * Do not configure it by hand; without the registry id {@link CausalStreams} co-injects
- * ({@link ParsleyOwnOutputRegistry#CONFIG_KEY}) every callback is a no-op.
+ * producer interceptors reflectively; {@link CausalStreams} injects it into every stream producer
+ * through the {@code producer.interceptor.classes} config. Do not configure it by hand: without the
+ * registry id {@link CausalStreams} co-injects ({@link ParsleyOwnOutputRegistry#CONFIG_KEY}) every
+ * callback is a no-op.
  */
 public final class ParsleyOwnOutputInterceptor implements ProducerInterceptor<Object, Object> {
 

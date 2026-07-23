@@ -95,12 +95,10 @@ public final class CausalProcessedStream<K, V> {
     }
 
     /**
-     * Freezes this stage and builds the single-stage {@link CausalTopology}, ready to be assembled into a
-     * real Kafka Streams {@code Topology} once a {@link CausalStreams} runtime supplies its {@code props}.
-     * The stage is frozen, so this handle can no longer add sinks or change the partitioner — the built
-     * topology is genuinely immutable. This is the only <em>public</em> way to produce a
-     * {@link CausalTopology}, which is why a causal topology is always exactly one stage. Delegates to the
-     * builder that vended this stage.
+     * Freezes this stage and builds the single-stage {@link CausalTopology}, ready to be assembled
+     * into a real Kafka Streams {@code Topology} once a {@link CausalStreams} runtime supplies its
+     * {@code props}. Once built the stage is immutable: this handle can no longer add sinks or change
+     * the partitioner.
      *
      * @return the assembled single-stage {@code CausalTopology}
      * @throws IllegalStateException if this stage has no source or no sink

@@ -27,11 +27,10 @@ import java.util.function.LongSupplier;
 import java.util.function.Supplier;
 
 /**
- * The causal application runtime: a Facade (GoF) over the Kafka Streams instance a {@link CausalTopology}
- * runs as, and the causal machinery a plain {@code KafkaStreams} doesn't know about — graceful causal
- * drain on shutdown — behind the one simple
- * start/close lifecycle below. Plays the same role {@link KafkaStreams} plays for a plain Kafka Streams
- * application:
+ * The causal application runtime: a Facade over the Kafka Streams instance a {@link CausalTopology}
+ * runs as, adding the causal machinery a plain {@code KafkaStreams} does not have (graceful causal
+ * drain on shutdown) behind a simple start/close lifecycle. Plays the role {@link KafkaStreams}
+ * plays for a plain Kafka Streams application:
  *
  * <pre>{@code
  * CausalTopology topology = new CausalStreamsBuilder()
@@ -200,12 +199,11 @@ public final class CausalStreams implements AutoCloseable {
     }
 
     /**
-     * Seeds any un-committed causal source offset for a genuine first start, then starts the underlying
-     * {@code KafkaStreams} instance. The seeding runs first, and before the group is joined, so a first
-     * start does not trip the {@code AutoOffsetReset.none()} every causal source is declared with; a real
-     * out-of-range offset (data loss) is deliberately left to fail fast under {@code none()}. Seeding
-     * failures — surviving state with a missing offset, an absent source topic, or an unreachable broker —
-     * abort the start loudly (see {@link ParsleyOffsetSeeder}).
+     * Starts the underlying {@code KafkaStreams} instance, after seeding log-start offsets for a
+     * genuine first start so it does not trip the {@code AutoOffsetReset.none()} every causal source
+     * uses. A real out-of-range offset (history loss) is left to fail fast under {@code none()}, and a
+     * seeding failure (surviving state with a missing offset, an absent source topic, or an
+     * unreachable broker) aborts the start loudly.
      */
     public void start() {
         seedSourceOffsets();
@@ -284,12 +282,11 @@ public final class CausalStreams implements AutoCloseable {
      * through the ordinary delivery path, then stops the underlying {@code KafkaStreams}.
      * Idempotent-safe to call even if {@link #start()} was never called.
      *
-     * <p>The drain wait is unbounded only while draining can actually progress: if the underlying
-     * streams instance leaves {@code RUNNING}/{@code REBALANCING} (it died in {@code ERROR}, or was
-     * already stopped), no task will ever deliver again, so the wait ends and shutdown proceeds — every
-     * held record is changelog-backed and survives to the next start, so nothing is lost by closing an
-     * already-dead instance (see {@link ParsleyQuiesce}: the drain is a stall-avoidance optimisation,
-     * not a correctness requirement).
+     * <p>The drain wait is unbounded only while draining can progress: if the underlying instance
+     * leaves {@code RUNNING}/{@code REBALANCING} (it died in {@code ERROR}, or was already stopped), no
+     * task will ever deliver again, so the wait ends and shutdown proceeds. Every held record is
+     * changelog-backed and survives to the next start, so nothing is lost by closing an already-dead
+     * instance: the drain is a stall-avoidance optimisation, not a correctness requirement.
      */
     @Override
     public void close() {
@@ -307,12 +304,11 @@ public final class CausalStreams implements AutoCloseable {
      * then stopping the underlying {@code KafkaStreams} with whatever remains, mirroring
      * {@link KafkaStreams#close(Duration)}.
      *
-     * <p>Giving up on the drain is always causally safe — records are <em>never</em> delivered
-     * early to beat the deadline. A truncated drain only leaves held records in the changelog-backed
-     * buffer, exactly as an ungraceful stop would, to be replayed and delivered in causal order on
-     * the next start (see {@link ParsleyQuiesce}: the drain is a stall-avoidance optimisation, not a
-     * correctness requirement). Prefer {@link #close()} for routine shutdown, where an
-     * unbounded-but-progressing drain avoids that replay cost.
+     * <p>Giving up on the drain is always causally safe: records are <em>never</em> delivered early
+     * to beat the deadline. A truncated drain only leaves held records in the changelog-backed buffer,
+     * exactly as an ungraceful stop would, to be replayed and delivered in causal order on the next
+     * start. Prefer {@link #close()} for routine shutdown, where an unbounded-but-progressing drain
+     * avoids that replay cost.
      *
      * @param timeout the maximum time to spend on drain plus shutdown; {@code Duration.ZERO} skips
      *                straight to an immediate close

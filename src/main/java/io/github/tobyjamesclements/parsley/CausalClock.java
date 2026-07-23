@@ -13,34 +13,25 @@ import java.util.Optional;
 import java.util.Properties;
 
 /**
- * A vector clock (Fidge 1988; Mattern 1988, "Virtual Time and Global States of Distributed
- * Systems") over causal coordinates: a set of {@code (topic, partition) → offset} entries, indexed
- * by <em>channel</em> — the topic-partition — rather than by process, a stated variant of the
- * classical form (Kafka's partition is the stable, durable axis a process identity is not).
+ * A vector clock over causal coordinates: a set of {@code (topic, partition) → offset} entries
+ * indexed by channel, the topic-partition, rather than by process (Fidge 1988; Mattern 1988). A
+ * Kafka partition is the stable, durable axis that a process identity is not.
  *
- * <p>One type plays both classical vector-clock roles, and which one an instance is playing depends
- * on where it sits:
+ * <p>One type plays both classical vector-clock roles, depending on where the instance sits:
  * <ul>
- *   <li><strong>Attached to a record, it is the message timestamp VT(m):</strong> the positions a
- *       consumer must have observed before the record may be delivered — its causal
- *       dependencies.</li>
- *   <li><strong>Accumulated at a topology edge, it is the process clock VT(p):</strong> a running
- *       frontier of everything this node has observed, folded forward with every consumed record
- *       and stamped onto every produced one.</li>
+ *   <li><strong>VT(m), attached to a record:</strong> its causal dependencies, the positions a
+ *       consumer must have observed before the record may be delivered.</li>
+ *   <li><strong>VT(p), accumulated at a topology edge:</strong> a running frontier of everything
+ *       this node has observed.</li>
  * </ul>
  *
- * <p>The usual flow at a topology edge is to hold a running {@code CausalClock} as your own VT(p):
- * start from {@link #using(Properties)} to bind a resolver, fold in each record you consume with
- * {@link #observe(ConsumerRecord)} — which accumulates the upstream's clock <em>and</em> the
- * consumed record's own position — then attach the result to each outbound record with
- * {@link #stamp(ProducerRecord)}. A one-to-one relay is {@code using(props).observe(record)};
- * a fan-in chains an {@code observe} per input. To assert a dependency you did not consume, build
- * one with {@link #builder(Properties)}. Serialise with {@link #toBytes()} /
- * {@link #fromBytes(byte[])}.
- *
- * The {@link #toBytes() serialised} form is {@code 5 + 28 × coordinates} bytes. An instance spanning
- * many partitions can breach Kafka's record-size limit ({@code message.max.bytes}, ~1&nbsp;MB by
- * default); the figure to watch is a wide-fan-in record that depends on many topic-partitions.
+ * <p>At an edge, hold a running instance as your VT(p): {@link #using(Properties)} binds a resolver,
+ * {@link #observe(ConsumerRecord)} folds in each record you consume, and
+ * {@link #stamp(ProducerRecord)} attaches the result to each record you produce. Use
+ * {@link #builder(Properties)} to assert a dependency you did not consume, and {@link #toBytes()} /
+ * {@link #fromBytes(byte[])} to serialise. The serialised form is {@code 5 + 28 × coordinates} bytes
+ * and counts against Kafka's {@code message.max.bytes}, so watch a wide fan-in that depends on many
+ * topic-partitions.
  */
 public final class CausalClock {
 
@@ -74,12 +65,10 @@ public final class CausalClock {
     }
 
     /**
-     * Returns an empty instance bound to a resolver backed by {@code props}, ready to accumulate
-     * consumed records with {@link #observe(ConsumerRecord)}. This is the start of the consumer-side
-     * frontier chain: bind the resolver once here, then {@code observe(record)} each record you
-     * consume without repeating {@code props}. The bound resolver flows through
-     * {@link #observe(ConsumerRecord)} and {@link #merge(CausalClock)}, but is never
-     * serialised and never affects equality.
+     * Returns an empty instance bound to a resolver over {@code props}, the start of a consumer-side
+     * frontier: bind the resolver once here, then {@link #observe(ConsumerRecord)} each record you
+     * consume. The bound resolver flows through {@code observe} and {@link #merge(CausalClock)} but
+     * is never serialised and never affects equality.
      *
      * @param props the Kafka client configuration to resolve topic UUIDs through; must not be
      *              {@code null}
@@ -192,36 +181,18 @@ public final class CausalClock {
 
     /**
      * Folds a consumed record into this clock and returns the result: the union of this clock, the
-     * clock {@code record} itself carried, and {@code record}'s own position
-     * {@code (topic, partition, offset)}.
+     * clock {@code record} carried, and, for a business record, {@code record}'s own position
+     * {@code (topic, partition, offset)}. Offsets take the per-coordinate maximum, so re-observing is
+     * safe. Requires a resolver, bound via {@link #using(Properties)} or {@link #builder(Properties)}
+     * or carried through a prior {@code observe} / {@code merge}.
      *
-     * <p>This is the consumer-side frontier accumulator — the VT(p) fold. A node consuming with a
-     * plain Kafka client has no Parsley causal-broadcast core maintaining a frontier for it, so it
-     * maintains one here: bind a resolver
-     * once with {@link #using(Properties)}, {@code observe(record)} every record you consume, and
-     * {@link #stamp(ProducerRecord) stamp} the result onto every record you produce, so downstream
-     * consumers wait until they have observed everything this node did. A one-to-one relay is
-     * {@code CausalClock.using(props).observe(record)}; a fan-in (an output caused by several
-     * inputs) chains an {@code observe} per input; a stateful node whose output reflects everything it
-     * has consumed keeps a single instance and {@code observe}s into it across records. Repeated
-     * positions on a coordinate take the maximum offset, so re-observing is safe.
-     *
-     * <p>A Parsley null message (see {@link #isNullMessage(ConsumerRecord)}) is folded specially:
-     * only the completeness frontier it carries is unioned in — its own {@code (topic, partition,
-     * offset)} is <em>not</em>, because a null message is metadata occupying an offset with no
-     * business payload, and folding that offset would force downstream to wait on a record that
-     * delivers nothing. This mirrors how a Parsley causal-broadcast core folds a received null
-     * message ({@code ParsleyGossip.receive}), so a plain-client session advances across a service
-     * that emitted only null messages on this path while staying consistent with core-side
-     * frontiers. The null message itself must not be surfaced to application code as a business
-     * record; gate that with {@link #isNullMessage(ConsumerRecord)}.
-     *
-     * <p>Requires a resolver to be bound — created via {@link #using(Properties)} or
-     * {@link #builder(Properties)}, or carried through a prior {@code observe} / {@code merge}.
+     * <p>A null message (see {@link #isNullMessage(ConsumerRecord)}) folds in only the completeness
+     * frontier it carries, never its own offset, since it delivers no business payload and gating on
+     * that offset would stall downstream on a record that carries nothing.
      *
      * @param record the consumed record to fold in; must not be {@code null}
-     * @return a new {@code CausalClock} extended with {@code record}'s past and (for a business
-     *         record) its own position
+     * @return a new {@code CausalClock} extended with {@code record}'s past and, for a business
+     *         record, its own position
      * @throws IllegalStateException    if no resolver is bound, or if {@code record} carries a
      *                                  malformed clock header
      * @throws IllegalArgumentException if {@code record}'s topic cannot be resolved to a UUID (business
@@ -243,14 +214,11 @@ public final class CausalClock {
     }
 
     /**
-     * Returns {@code true} if {@code record} is a Parsley null message (Chandy–Misra–Bryant sense):
-     * a metadata record that carries a node's completeness frontier but no business payload (its
-     * value is null; its key is borrowed from the record that triggered it). A plain Kafka client
-     * should still {@link #observe(ConsumerRecord) observe}
-     * a null message — so its running frontier advances across a service that emitted only null
-     * messages on this path — but must not surface it to application code as a business record. The
-     * usual consumer loop is to {@code observe} every record and {@code continue} past those for
-     * which this returns {@code true}.
+     * Returns {@code true} if {@code record} is a Parsley null message: a metadata record carrying a
+     * node's completeness frontier but no business payload. A plain Kafka client should still
+     * {@link #observe(ConsumerRecord) observe} one, so its frontier advances across a service that
+     * emitted only null messages, but must not surface it as a business record. The usual loop is to
+     * {@code observe} every record and {@code continue} past those this flags.
      *
      * @param record the consumed record to test; must not be {@code null}
      * @return {@code true} if the record carries the Parsley null-message marker header

@@ -25,30 +25,23 @@ import java.util.Map;
  * Runtime.getRuntime().addShutdownHook(new Thread(causalStreams::close));
  * }</pre>
  *
- * <p><strong>One stage per topology.</strong> A causal application is a single causal node: it consumes
- * its declared input topics and produces its declared output topics, with no second causal-gated hop in
- * between. The public fluent chain terminates in {@link CausalProcessedStream#build()} — there is no
- * public {@code build()} on the builder and no term to open a second stage, so a topology is exactly one
- * {@code stream(...).process(...).to(...)} chain. A multi-stage causal pipeline is built as multiple
- * applications, each one stage, chained topic to topic — joins need zero coordination, so the split
- * costs nothing beyond the intermediate topic.
+ * <p>A causal topology is exactly one {@code stream(...).process(...).to(...)} chain. The fluent
+ * chain terminates in {@link CausalProcessedStream#build()}; there is no public {@code build()} on
+ * the builder and no way to open a second stage. Build a multi-stage pipeline as several
+ * applications chained topic to topic, which needs no coordination beyond the intermediate topic.
  *
- * <p>Multiple input topics are the norm — {@link #stream(Collection, Serde, Serde)} fans several
- * co-partitioned topics sharing one serde pair into a single stage; combine streams declared with
- * different serdes with {@link CausalStream#merge}. Multiple sinks are declared by chaining
- * {@link CausalProcessedStream#to(String) to(...)}. A stage's key/value serdes may be omitted
- * ({@link #stream(String)}, {@link CausalProcessedStream#to(String)}), falling back to the runtime's
- * {@code default.key.serde}/{@code default.value.serde} — the same convention
- * {@link org.apache.kafka.streams.kstream.KStream} uses.
+ * <p>{@link #stream(Collection, Serde, Serde)} fans several co-partitioned topics sharing one serde
+ * pair into one stage, {@link CausalStream#merge} combines streams declared with different serdes,
+ * and {@link CausalProcessedStream#to(String)} declares each sink. Serdes may be omitted to defer to
+ * the runtime's {@code default.key.serde} / {@code default.value.serde}. Unlike the Kafka Streams
+ * DSL, sources and sinks take plain {@link Serde}s rather than {@code Consumed}/{@code Produced},
+ * because the causal buffer needs the real serde to round-trip a held record across a restart.
  *
- * <p>Unlike the Kafka Streams DSL, sources and sinks here take plain key/value serdes rather than
- * {@code Consumed}/{@code Produced}: neither exposes its serdes for reading back, and Parsley's causal
- * buffer needs the real {@link Serde} to round-trip a held record across a restart.
- *
- * <p>See {@link ParsleyProcessor} for the causal guarantee and its preconditions — they apply
- * unchanged here. Every source and sink a stage declares shares one {@code StreamPartitioner}
- * ({@link CausalProcessedStream#withPartitioner}, default Kafka's own key-hash partitioner), so a shard
- * never drifts onto different partitions across topics.
+ * <p>Every source and sink a stage declares shares one {@code StreamPartitioner}
+ * ({@link CausalProcessedStream#withPartitioner}, default the key-hash partitioner) so a shard never
+ * drifts onto different partitions across topics. The causal guarantee's preconditions still apply:
+ * co-partition related topics by key, keep processor effects closed over {@code forward}, and stamp
+ * every processor that sits between causally related topics.
  */
 public final class CausalStreamsBuilder {
 
@@ -85,9 +78,8 @@ public final class CausalStreamsBuilder {
     }
 
     /**
-     * Registers several source topics that share one serde pair, fanning them into one stage — the
-     * common case, since multiple input topics are the norm for a causal stage. Deferring their
-     * key/value serdes to the runtime's default serdes.
+     * Registers several source topics that share one serde pair, fanning them into one stage, and
+     * defers their key/value serdes to the runtime's default serdes.
      *
      * @param topics the source topic names
      * @param <K>    the key type
