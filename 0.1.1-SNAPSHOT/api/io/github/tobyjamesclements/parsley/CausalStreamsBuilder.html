@@ -99,30 +99,23 @@ causalStreams.start();
 Runtime.getRuntime().addShutdownHook(new Thread(causalStreams::close));
 </code></pre>
 
-<p><strong>One stage per topology.</strong> A causal application is a single causal node: it consumes
-its declared input topics and produces its declared output topics, with no second causal-gated hop in
-between. The public fluent chain terminates in <a href="CausalProcessedStream.html#build()"><code>CausalProcessedStream.build()</code></a> — there is no
-public <code>build()</code> on the builder and no term to open a second stage, so a topology is exactly one
-<code>stream(...).process(...).to(...)</code> chain. A multi-stage causal pipeline is built as multiple
-applications, each one stage, chained topic to topic — joins need zero coordination, so the split
-costs nothing beyond the intermediate topic.
+<p>A causal topology is exactly one <code>stream(...).process(...).to(...)</code> chain. The fluent
+chain terminates in <a href="CausalProcessedStream.html#build()"><code>CausalProcessedStream.build()</code></a>; there is no public <code>build()</code> on
+the builder and no way to open a second stage. Build a multi-stage pipeline as several
+applications chained topic to topic, which needs no coordination beyond the intermediate topic.
 
-<p>Multiple input topics are the norm — <a href="#stream(java.util.Collection,org.apache.kafka.common.serialization.Serde,org.apache.kafka.common.serialization.Serde)"><code>stream(Collection, Serde, Serde)</code></a> fans several
-co-partitioned topics sharing one serde pair into a single stage; combine streams declared with
-different serdes with <a href="CausalStream.html#merge(io.github.tobyjamesclements.parsley.CausalStream)"><code>CausalStream.merge(CausalStream)</code></a>. Multiple sinks are declared by chaining
-<a href="CausalProcessedStream.html#to(java.lang.String)"><code>to(...)</code></a>. A stage's key/value serdes may be omitted
-(<a href="#stream(java.lang.String)"><code>stream(String)</code></a>, <a href="CausalProcessedStream.html#to(java.lang.String)"><code>CausalProcessedStream.to(String)</code></a>), falling back to the runtime's
-<code>default.key.serde</code>/<code>default.value.serde</code> — the same convention
-<code>KStream</code> uses.
+<p><a href="#stream(java.util.Collection,org.apache.kafka.common.serialization.Serde,org.apache.kafka.common.serialization.Serde)"><code>stream(Collection, Serde, Serde)</code></a> fans several co-partitioned topics sharing one serde
+pair into one stage, <a href="CausalStream.html#merge(io.github.tobyjamesclements.parsley.CausalStream)"><code>CausalStream.merge(CausalStream)</code></a> combines streams declared with different serdes,
+and <a href="CausalProcessedStream.html#to(java.lang.String)"><code>CausalProcessedStream.to(String)</code></a> declares each sink. Serdes may be omitted to defer to
+the runtime's <code>default.key.serde</code> / <code>default.value.serde</code>. Unlike the Kafka Streams
+DSL, sources and sinks take plain <code>Serde</code>s rather than <code>Consumed</code>/<code>Produced</code>,
+because the causal buffer needs the real serde to round-trip a held record across a restart.
 
-<p>Unlike the Kafka Streams DSL, sources and sinks here take plain key/value serdes rather than
-<code>Consumed</code>/<code>Produced</code>: neither exposes its serdes for reading back, and Parsley's causal
-buffer needs the real <code>Serde</code> to round-trip a held record across a restart.
-
-<p>See <code>ParsleyProcessor</code> for the causal guarantee and its preconditions — they apply
-unchanged here. Every source and sink a stage declares shares one <code>StreamPartitioner</code>
-(<a href="CausalProcessedStream.html#withPartitioner(org.apache.kafka.streams.processor.StreamPartitioner)"><code>CausalProcessedStream.withPartitioner(StreamPartitioner)</code></a>, default Kafka's own key-hash partitioner), so a shard
-never drifts onto different partitions across topics.</div>
+<p>Every source and sink a stage declares shares one <code>StreamPartitioner</code>
+(<a href="CausalProcessedStream.html#withPartitioner(org.apache.kafka.streams.processor.StreamPartitioner)"><code>CausalProcessedStream.withPartitioner(StreamPartitioner)</code></a>, default the key-hash partitioner) so a shard never
+drifts onto different partitions across topics. The causal guarantee's preconditions still apply:
+co-partition related topics by key, keep processor effects closed over <code>forward</code>, and stamp
+every processor that sits between causally related topics.</div>
 </div>
 </section>
 <section class="summary">
@@ -166,8 +159,8 @@ never drifts onto different partitions across topics.</div>
 <div class="col-first even-row-color method-summary-table method-summary-table-tab2 method-summary-table-tab4"><code>&lt;K,<wbr>V&gt;&nbsp;<a href="CausalStream.html" title="class in io.github.tobyjamesclements.parsley">CausalStream</a><wbr>&lt;K,<wbr>V&gt;</code></div>
 <div class="col-second even-row-color method-summary-table method-summary-table-tab2 method-summary-table-tab4"><code><a href="#stream(java.util.Collection)" class="member-name-link">stream</a><wbr>(<a href="https://docs.oracle.com/en/java/javase/21/docs/api/java.base/java/util/Collection.html" title="class or interface in java.util" class="external-link">Collection</a>&lt;<a href="https://docs.oracle.com/en/java/javase/21/docs/api/java.base/java/lang/String.html" title="class or interface in java.lang" class="external-link">String</a>&gt;&nbsp;topics)</code></div>
 <div class="col-last even-row-color method-summary-table method-summary-table-tab2 method-summary-table-tab4">
-<div class="block">Registers several source topics that share one serde pair, fanning them into one stage — the
-common case, since multiple input topics are the norm for a causal stage.</div>
+<div class="block">Registers several source topics that share one serde pair, fanning them into one stage, and
+defers their key/value serdes to the runtime's default serdes.</div>
 </div>
 <div class="col-first odd-row-color method-summary-table method-summary-table-tab2 method-summary-table-tab4"><code>&lt;K,<wbr>V&gt;&nbsp;<a href="CausalStream.html" title="class in io.github.tobyjamesclements.parsley">CausalStream</a><wbr>&lt;K,<wbr>V&gt;</code></div>
 <div class="col-second odd-row-color method-summary-table method-summary-table-tab2 method-summary-table-tab4"><code><a href="#stream(java.util.Collection,org.apache.kafka.common.serialization.Serde,org.apache.kafka.common.serialization.Serde)" class="member-name-link">stream</a><wbr>(<a href="https://docs.oracle.com/en/java/javase/21/docs/api/java.base/java/util/Collection.html" title="class or interface in java.util" class="external-link">Collection</a>&lt;<a href="https://docs.oracle.com/en/java/javase/21/docs/api/java.base/java/lang/String.html" title="class or interface in java.lang" class="external-link">String</a>&gt;&nbsp;topics,
@@ -254,9 +247,8 @@ common case, since multiple input topics are the norm for a causal stage.</div>
 <h3>stream</h3>
 <div class="horizontal-scroll">
 <div class="member-signature"><span class="modifiers">public</span>&nbsp;<span class="type-parameters">&lt;K,<wbr>V&gt;</span>&nbsp;<span class="return-type"><a href="CausalStream.html" title="class in io.github.tobyjamesclements.parsley">CausalStream</a>&lt;K,<wbr>V&gt;</span>&nbsp;<span class="element-name">stream</span><wbr><span class="parameters">(<a href="https://docs.oracle.com/en/java/javase/21/docs/api/java.base/java/util/Collection.html" title="class or interface in java.util" class="external-link">Collection</a>&lt;<a href="https://docs.oracle.com/en/java/javase/21/docs/api/java.base/java/lang/String.html" title="class or interface in java.lang" class="external-link">String</a>&gt;&nbsp;topics)</span></div>
-<div class="block">Registers several source topics that share one serde pair, fanning them into one stage — the
-common case, since multiple input topics are the norm for a causal stage. Deferring their
-key/value serdes to the runtime's default serdes.</div>
+<div class="block">Registers several source topics that share one serde pair, fanning them into one stage, and
+defers their key/value serdes to the runtime's default serdes.</div>
 <dl class="notes">
 <dt>Type Parameters:</dt>
 <dd><span id="stream(java.util.Collection)-type-param-K"><code>K</code> - the key type</span></dd>

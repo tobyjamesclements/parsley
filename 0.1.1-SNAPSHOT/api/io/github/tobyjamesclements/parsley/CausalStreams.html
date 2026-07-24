@@ -92,11 +92,10 @@ loadScripts(document, 'script');</script>
 <div class="type-signature"><span class="modifiers">public final class </span><span class="element-name type-name-label">CausalStreams</span>
 <span class="extends-implements">extends <a href="https://docs.oracle.com/en/java/javase/21/docs/api/java.base/java/lang/Object.html" title="class or interface in java.lang" class="external-link">Object</a>
 implements <a href="https://docs.oracle.com/en/java/javase/21/docs/api/java.base/java/lang/AutoCloseable.html" title="class or interface in java.lang" class="external-link">AutoCloseable</a></span></div>
-<div class="block">The causal application runtime: a Facade (GoF) over the Kafka Streams instance a <a href="CausalTopology.html" title="class in io.github.tobyjamesclements.parsley"><code>CausalTopology</code></a>
-runs as, and the causal machinery a plain <code>KafkaStreams</code> doesn't know about — graceful causal
-drain on shutdown — behind the one simple
-start/close lifecycle below. Plays the same role <code>KafkaStreams</code> plays for a plain Kafka Streams
-application:
+<div class="block">The causal application runtime: a Facade over the Kafka Streams instance a <a href="CausalTopology.html" title="class in io.github.tobyjamesclements.parsley"><code>CausalTopology</code></a>
+runs as, adding the causal machinery a plain <code>KafkaStreams</code> does not have (graceful causal
+drain on shutdown) behind a simple start/close lifecycle. Plays the role <code>KafkaStreams</code>
+plays for a plain Kafka Streams application:
 
 <pre><code>CausalTopology topology = new CausalStreamsBuilder()
         .stream("orders", Serdes.String(), orderSerde)
@@ -187,8 +186,9 @@ underlying <code>KafkaStreams</code>.</div>
 <div class="col-first odd-row-color method-summary-table method-summary-table-tab2 method-summary-table-tab4"><code>void</code></div>
 <div class="col-second odd-row-color method-summary-table method-summary-table-tab2 method-summary-table-tab4"><code><a href="#start()" class="member-name-link">start</a>()</code></div>
 <div class="col-last odd-row-color method-summary-table method-summary-table-tab2 method-summary-table-tab4">
-<div class="block">Seeds any un-committed causal source offset for a genuine first start, then starts the underlying
-<code>KafkaStreams</code> instance.</div>
+<div class="block">Starts the underlying <code>KafkaStreams</code> instance, after seeding log-start offsets for a
+genuine first start so it does not trip the <code>AutoOffsetReset.none()</code> every causal source
+uses.</div>
 </div>
 <div class="col-first even-row-color method-summary-table method-summary-table-tab2 method-summary-table-tab4"><code>org.apache.kafka.streams.KafkaStreams.State</code></div>
 <div class="col-second even-row-color method-summary-table method-summary-table-tab2 method-summary-table-tab4"><code><a href="#state()" class="member-name-link">state</a>()</code></div>
@@ -242,12 +242,11 @@ instance over it.</div>
 <h3>start</h3>
 <div class="horizontal-scroll">
 <div class="member-signature"><span class="modifiers">public</span>&nbsp;<span class="return-type">void</span>&nbsp;<span class="element-name">start</span>()</div>
-<div class="block">Seeds any un-committed causal source offset for a genuine first start, then starts the underlying
-<code>KafkaStreams</code> instance. The seeding runs first, and before the group is joined, so a first
-start does not trip the <code>AutoOffsetReset.none()</code> every causal source is declared with; a real
-out-of-range offset (data loss) is deliberately left to fail fast under <code>none()</code>. Seeding
-failures — surviving state with a missing offset, an absent source topic, or an unreachable broker —
-abort the start loudly (see <code>ParsleyOffsetSeeder</code>).</div>
+<div class="block">Starts the underlying <code>KafkaStreams</code> instance, after seeding log-start offsets for a
+genuine first start so it does not trip the <code>AutoOffsetReset.none()</code> every causal source
+uses. A real out-of-range offset (history loss) is left to fail fast under <code>none()</code>, and a
+seeding failure (surviving state with a missing offset, an absent source topic, or an
+unreachable broker) aborts the start loudly.</div>
 </div>
 </section>
 </li>
@@ -301,12 +300,11 @@ underlying <code>KafkaStreams</code>. Set it before <a href="#start()"><code>sta
 through the ordinary delivery path, then stops the underlying <code>KafkaStreams</code>.
 Idempotent-safe to call even if <a href="#start()"><code>start()</code></a> was never called.
 
-<p>The drain wait is unbounded only while draining can actually progress: if the underlying
-streams instance leaves <code>RUNNING</code>/<code>REBALANCING</code> (it died in <code>ERROR</code>, or was
-already stopped), no task will ever deliver again, so the wait ends and shutdown proceeds — every
-held record is changelog-backed and survives to the next start, so nothing is lost by closing an
-already-dead instance (see <code>ParsleyQuiesce</code>: the drain is a stall-avoidance optimisation,
-not a correctness requirement).</div>
+<p>The drain wait is unbounded only while draining can progress: if the underlying instance
+leaves <code>RUNNING</code>/<code>REBALANCING</code> (it died in <code>ERROR</code>, or was already stopped), no
+task will ever deliver again, so the wait ends and shutdown proceeds. Every held record is
+changelog-backed and survives to the next start, so nothing is lost by closing an already-dead
+instance: the drain is a stall-avoidance optimisation, not a correctness requirement.</div>
 <dl class="notes">
 <dt>Specified by:</dt>
 <dd><code><a href="https://docs.oracle.com/en/java/javase/21/docs/api/java.base/java/lang/AutoCloseable.html#close()" title="class or interface in java.lang" class="external-link">close</a></code>&nbsp;in interface&nbsp;<code><a href="https://docs.oracle.com/en/java/javase/21/docs/api/java.base/java/lang/AutoCloseable.html" title="class or interface in java.lang" class="external-link">AutoCloseable</a></code></dd>
@@ -324,12 +322,11 @@ shutdown hook above all. The budget spans the whole shutdown: first the causal d
 then stopping the underlying <code>KafkaStreams</code> with whatever remains, mirroring
 <code>KafkaStreams.close(Duration)</code>.
 
-<p>Giving up on the drain is always causally safe — records are <em>never</em> delivered
-early to beat the deadline. A truncated drain only leaves held records in the changelog-backed
-buffer, exactly as an ungraceful stop would, to be replayed and delivered in causal order on
-the next start (see <code>ParsleyQuiesce</code>: the drain is a stall-avoidance optimisation, not a
-correctness requirement). Prefer <a href="#close()"><code>close()</code></a> for routine shutdown, where an
-unbounded-but-progressing drain avoids that replay cost.</div>
+<p>Giving up on the drain is always causally safe: records are <em>never</em> delivered early
+to beat the deadline. A truncated drain only leaves held records in the changelog-backed buffer,
+exactly as an ungraceful stop would, to be replayed and delivered in causal order on the next
+start. Prefer <a href="#close()"><code>close()</code></a> for routine shutdown, where an unbounded-but-progressing drain
+avoids that replay cost.</div>
 <dl class="notes">
 <dt>Parameters:</dt>
 <dd><code>timeout</code> - the maximum time to spend on drain plus shutdown; <code>Duration.ZERO</code> skips

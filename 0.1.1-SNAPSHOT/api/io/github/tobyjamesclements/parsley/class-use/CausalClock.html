@@ -89,7 +89,7 @@ offset (the vector-clock join).</div>
 <div class="col-second even-row-color"><span class="type-name-label">CausalClock.</span><code><a href="../CausalClock.html#observe(org.apache.kafka.clients.consumer.ConsumerRecord)" class="member-name-link">observe</a><wbr>(org.apache.kafka.clients.consumer.ConsumerRecord&lt;?,<wbr>?&gt;&nbsp;record)</code></div>
 <div class="col-last even-row-color">
 <div class="block">Folds a consumed record into this clock and returns the result: the union of this clock, the
-clock <code>record</code> itself carried, and <code>record</code>'s own position
+clock <code>record</code> carried, and, for a business record, <code>record</code>'s own position
 <code>(topic, partition, offset)</code>.</div>
 </div>
 <div class="col-first odd-row-color"><code>static <a href="../CausalClock.html" title="class in io.github.tobyjamesclements.parsley">CausalClock</a></code></div>
@@ -101,8 +101,9 @@ path for tests or callers that already hold the UUIDs.</div>
 <div class="col-first even-row-color"><code>static <a href="../CausalClock.html" title="class in io.github.tobyjamesclements.parsley">CausalClock</a></code></div>
 <div class="col-second even-row-color"><span class="type-name-label">CausalClock.</span><code><a href="../CausalClock.html#using(java.util.Properties)" class="member-name-link">using</a><wbr>(<a href="https://docs.oracle.com/en/java/javase/21/docs/api/java.base/java/util/Properties.html" title="class or interface in java.util" class="external-link">Properties</a>&nbsp;props)</code></div>
 <div class="col-last even-row-color">
-<div class="block">Returns an empty instance bound to a resolver backed by <code>props</code>, ready to accumulate
-consumed records with <a href="../CausalClock.html#observe(org.apache.kafka.clients.consumer.ConsumerRecord)"><code>CausalClock.observe(ConsumerRecord)</code></a>.</div>
+<div class="block">Returns an empty instance bound to a resolver over <code>props</code>, the start of a consumer-side
+frontier: bind the resolver once here, then <a href="../CausalClock.html#observe(org.apache.kafka.clients.consumer.ConsumerRecord)"><code>CausalClock.observe(ConsumerRecord)</code></a> each record you
+consume.</div>
 </div>
 </div>
 <div class="caption"><span>Methods in <a href="../package-summary.html">io.github.tobyjamesclements.parsley</a> that return types with arguments of type <a href="../CausalClock.html" title="class in io.github.tobyjamesclements.parsley">CausalClock</a></span></div>

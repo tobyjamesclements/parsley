@@ -85,8 +85,8 @@ call fans every topic from both into the same causal stage.</div>
 <div class="col-first odd-row-color"><code>&lt;K,<wbr>V&gt;&nbsp;<a href="../CausalStream.html" title="class in io.github.tobyjamesclements.parsley">CausalStream</a><wbr>&lt;K,<wbr>V&gt;</code></div>
 <div class="col-second odd-row-color"><span class="type-name-label">CausalStreamsBuilder.</span><code><a href="../CausalStreamsBuilder.html#stream(java.util.Collection)" class="member-name-link">stream</a><wbr>(<a href="https://docs.oracle.com/en/java/javase/21/docs/api/java.base/java/util/Collection.html" title="class or interface in java.util" class="external-link">Collection</a>&lt;<a href="https://docs.oracle.com/en/java/javase/21/docs/api/java.base/java/lang/String.html" title="class or interface in java.lang" class="external-link">String</a>&gt;&nbsp;topics)</code></div>
 <div class="col-last odd-row-color">
-<div class="block">Registers several source topics that share one serde pair, fanning them into one stage — the
-common case, since multiple input topics are the norm for a causal stage.</div>
+<div class="block">Registers several source topics that share one serde pair, fanning them into one stage, and
+defers their key/value serdes to the runtime's default serdes.</div>
 </div>
 <div class="col-first even-row-color"><code>&lt;K,<wbr>V&gt;&nbsp;<a href="../CausalStream.html" title="class in io.github.tobyjamesclements.parsley">CausalStream</a><wbr>&lt;K,<wbr>V&gt;</code></div>
 <div class="col-second even-row-color"><span class="type-name-label">CausalStreamsBuilder.</span><code><a href="../CausalStreamsBuilder.html#stream(java.util.Collection,org.apache.kafka.common.serialization.Serde,org.apache.kafka.common.serialization.Serde)" class="member-name-link">stream</a><wbr>(<a href="https://docs.oracle.com/en/java/javase/21/docs/api/java.base/java/util/Collection.html" title="class or interface in java.util" class="external-link">Collection</a>&lt;<a href="https://docs.oracle.com/en/java/javase/21/docs/api/java.base/java/lang/String.html" title="class or interface in java.lang" class="external-link">String</a>&gt;&nbsp;topics,

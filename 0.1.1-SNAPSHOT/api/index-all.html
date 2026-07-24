@@ -49,7 +49,7 @@ loadScripts(document, 'script');</script>
 <div class="header">
 <h1>Index</h1>
 </div>
-<a href="#I:B">B</a>&nbsp;<a href="#I:C">C</a>&nbsp;<a href="#I:D">D</a>&nbsp;<a href="#I:E">E</a>&nbsp;<a href="#I:F">F</a>&nbsp;<a href="#I:H">H</a>&nbsp;<a href="#I:I">I</a>&nbsp;<a href="#I:K">K</a>&nbsp;<a href="#I:M">M</a>&nbsp;<a href="#I:N">N</a>&nbsp;<a href="#I:O">O</a>&nbsp;<a href="#I:P">P</a>&nbsp;<a href="#I:R">R</a>&nbsp;<a href="#I:S">S</a>&nbsp;<a href="#I:T">T</a>&nbsp;<a href="#I:U">U</a>&nbsp;<a href="#I:W">W</a>&nbsp;<br><a href="allclasses-index.html">All&nbsp;Classes&nbsp;and&nbsp;Interfaces</a><span class="vertical-separator">|</span><a href="allpackages-index.html">All&nbsp;Packages</a><span class="vertical-separator">|</span><a href="serialized-form.html">Serialized&nbsp;Form</a>
+<a href="#I:B">B</a>&nbsp;<a href="#I:C">C</a>&nbsp;<a href="#I:D">D</a>&nbsp;<a href="#I:E">E</a>&nbsp;<a href="#I:F">F</a>&nbsp;<a href="#I:H">H</a>&nbsp;<a href="#I:I">I</a>&nbsp;<a href="#I:M">M</a>&nbsp;<a href="#I:N">N</a>&nbsp;<a href="#I:O">O</a>&nbsp;<a href="#I:P">P</a>&nbsp;<a href="#I:R">R</a>&nbsp;<a href="#I:S">S</a>&nbsp;<a href="#I:T">T</a>&nbsp;<a href="#I:U">U</a>&nbsp;<a href="#I:W">W</a>&nbsp;<br><a href="allclasses-index.html">All&nbsp;Classes&nbsp;and&nbsp;Interfaces</a><span class="vertical-separator">|</span><a href="allpackages-index.html">All&nbsp;Packages</a><span class="vertical-separator">|</span><a href="serialized-form.html">Serialized&nbsp;Form</a>
 <h2 class="title" id="I:B">B</h2>
 <dl class="index">
 <dt><a href="io/github/tobyjamesclements/parsley/CausalClock.Builder.html#build()" class="member-name-link">build()</a> - Method in class io.github.tobyjamesclements.parsley.<a href="io/github/tobyjamesclements/parsley/CausalClock.Builder.html" title="class in io.github.tobyjamesclements.parsley">CausalClock.Builder</a></dt>
@@ -58,8 +58,9 @@ loadScripts(document, 'script');</script>
 </dd>
 <dt><a href="io/github/tobyjamesclements/parsley/CausalProcessedStream.html#build()" class="member-name-link">build()</a> - Method in class io.github.tobyjamesclements.parsley.<a href="io/github/tobyjamesclements/parsley/CausalProcessedStream.html" title="class in io.github.tobyjamesclements.parsley">CausalProcessedStream</a></dt>
 <dd>
-<div class="block">Freezes this stage and builds the single-stage <a href="io/github/tobyjamesclements/parsley/CausalTopology.html" title="class in io.github.tobyjamesclements.parsley"><code>CausalTopology</code></a>, ready to be assembled into a
-real Kafka Streams <code>Topology</code> once a <a href="io/github/tobyjamesclements/parsley/CausalStreams.html" title="class in io.github.tobyjamesclements.parsley"><code>CausalStreams</code></a> runtime supplies its <code>props</code>.</div>
+<div class="block">Freezes this stage and builds the single-stage <a href="io/github/tobyjamesclements/parsley/CausalTopology.html" title="class in io.github.tobyjamesclements.parsley"><code>CausalTopology</code></a>, ready to be assembled
+into a real Kafka Streams <code>Topology</code> once a <a href="io/github/tobyjamesclements/parsley/CausalStreams.html" title="class in io.github.tobyjamesclements.parsley"><code>CausalStreams</code></a> runtime supplies its
+<code>props</code>.</div>
 </dd>
 <dt><a href="io/github/tobyjamesclements/parsley/CausalClock.html#builder(java.util.Map)" class="member-name-link">builder(Map)</a> - Static method in class io.github.tobyjamesclements.parsley.<a href="io/github/tobyjamesclements/parsley/CausalClock.html" title="class in io.github.tobyjamesclements.parsley">CausalClock</a></dt>
 <dd>
@@ -82,10 +83,8 @@ schema is incompatible).</div>
 </dd>
 <dt><a href="io/github/tobyjamesclements/parsley/CausalClock.html" class="type-name-link" title="class in io.github.tobyjamesclements.parsley">CausalClock</a> - Class in <a href="io/github/tobyjamesclements/parsley/package-summary.html">io.github.tobyjamesclements.parsley</a></dt>
 <dd>
-<div class="block">A vector clock (Fidge 1988; Mattern 1988, "Virtual Time and Global States of Distributed
-Systems") over causal coordinates: a set of <code>(topic, partition) → offset</code> entries, indexed
-by <em>channel</em> — the topic-partition — rather than by process, a stated variant of the
-classical form (Kafka's partition is the stable, durable axis a process identity is not).</div>
+<div class="block">A vector clock over causal coordinates: a set of <code>(topic, partition) → offset</code> entries
+indexed by channel, the topic-partition, rather than by process (Fidge 1988; Mattern 1988).</div>
 </dd>
 <dt><a href="io/github/tobyjamesclements/parsley/CausalClock.Builder.html" class="type-name-link" title="class in io.github.tobyjamesclements.parsley">CausalClock.Builder</a> - Class in <a href="io/github/tobyjamesclements/parsley/package-summary.html">io.github.tobyjamesclements.parsley</a></dt>
 <dd>
@@ -118,10 +117,9 @@ topology with <a href="io/github/tobyjamesclements/parsley/CausalProcessedStream
 </dd>
 <dt><a href="io/github/tobyjamesclements/parsley/CausalStreams.html" class="type-name-link" title="class in io.github.tobyjamesclements.parsley">CausalStreams</a> - Class in <a href="io/github/tobyjamesclements/parsley/package-summary.html">io.github.tobyjamesclements.parsley</a></dt>
 <dd>
-<div class="block">The causal application runtime: a Facade (GoF) over the Kafka Streams instance a <a href="io/github/tobyjamesclements/parsley/CausalTopology.html" title="class in io.github.tobyjamesclements.parsley"><code>CausalTopology</code></a>
-runs as, and the causal machinery a plain <code>KafkaStreams</code> doesn't know about — graceful causal
-drain on shutdown — behind the one simple
-start/close lifecycle below.</div>
+<div class="block">The causal application runtime: a Facade over the Kafka Streams instance a <a href="io/github/tobyjamesclements/parsley/CausalTopology.html" title="class in io.github.tobyjamesclements.parsley"><code>CausalTopology</code></a>
+runs as, adding the causal machinery a plain <code>KafkaStreams</code> does not have (graceful causal
+drain on shutdown) behind a simple start/close lifecycle.</div>
 </dd>
 <dt><a href="io/github/tobyjamesclements/parsley/CausalStreams.html#%3Cinit%3E(io.github.tobyjamesclements.parsley.CausalTopology,java.util.Properties)" class="member-name-link">CausalStreams(CausalTopology, Properties)</a> - Constructor for class io.github.tobyjamesclements.parsley.<a href="io/github/tobyjamesclements/parsley/CausalStreams.html" title="class in io.github.tobyjamesclements.parsley">CausalStreams</a></dt>
 <dd>
@@ -221,23 +219,15 @@ shutdown hook above all.</div>
 </dl>
 <h2 class="title" id="I:I">I</h2>
 <dl class="index">
-<dt><a href="io/github/tobyjamesclements/parsley/package-summary.html#internal-protocol-modules-heading" class="search-tag-link">Internal protocol modules</a> - Section in package io.github.tobyjamesclements.parsley</dt>
-<dd>&nbsp;</dd>
 <dt><a href="io/github/tobyjamesclements/parsley/package-summary.html">io.github.tobyjamesclements.parsley</a> - package io.github.tobyjamesclements.parsley</dt>
 <dd>
-<div class="block">Parsley: causal delivery order for Kafka Streams processors.</div>
+<div class="block">Parsley provides causal delivery order for Kafka Streams processors.</div>
 </dd>
 <dt><a href="io/github/tobyjamesclements/parsley/CausalClock.html#isNullMessage(org.apache.kafka.clients.consumer.ConsumerRecord)" class="member-name-link">isNullMessage(ConsumerRecord)</a> - Static method in class io.github.tobyjamesclements.parsley.<a href="io/github/tobyjamesclements/parsley/CausalClock.html" title="class in io.github.tobyjamesclements.parsley">CausalClock</a></dt>
 <dd>
-<div class="block">Returns <code>true</code> if <code>record</code> is a Parsley null message (Chandy–Misra–Bryant sense):
-a metadata record that carries a node's completeness frontier but no business payload (its
-value is null; its key is borrowed from the record that triggered it).</div>
+<div class="block">Returns <code>true</code> if <code>record</code> is a Parsley null message: a metadata record carrying a
+node's completeness frontier but no business payload.</div>
 </dd>
-</dl>
-<h2 class="title" id="I:K">K</h2>
-<dl class="index">
-<dt><a href="io/github/tobyjamesclements/parsley/package-summary.html#key-value-types-heading" class="search-tag-link">Key value types</a> - Section in package io.github.tobyjamesclements.parsley</dt>
-<dd>&nbsp;</dd>
 </dl>
 <h2 class="title" id="I:M">M</h2>
 <dl class="index">
@@ -269,7 +259,7 @@ in-process way to reach them without going through JMX.</div>
 <dt><a href="io/github/tobyjamesclements/parsley/CausalClock.html#observe(org.apache.kafka.clients.consumer.ConsumerRecord)" class="member-name-link">observe(ConsumerRecord)</a> - Method in class io.github.tobyjamesclements.parsley.<a href="io/github/tobyjamesclements/parsley/CausalClock.html" title="class in io.github.tobyjamesclements.parsley">CausalClock</a></dt>
 <dd>
 <div class="block">Folds a consumed record into this clock and returns the result: the union of this clock, the
-clock <code>record</code> itself carried, and <code>record</code>'s own position
+clock <code>record</code> carried, and, for a business record, <code>record</code>'s own position
 <code>(topic, partition, offset)</code>.</div>
 </dd>
 <dt><a href="io/github/tobyjamesclements/parsley/CausalCoordinateException.html#offset()" class="member-name-link">offset()</a> - Method in exception class io.github.tobyjamesclements.parsley.<a href="io/github/tobyjamesclements/parsley/CausalCoordinateException.html" title="class in io.github.tobyjamesclements.parsley">CausalCoordinateException</a></dt>
@@ -293,9 +283,9 @@ stream thread under EOS v2 — to this producer's tracker, so the crossing wait 
 <dl class="index">
 <dt><a href="io/github/tobyjamesclements/parsley/ParsleyOwnOutputInterceptor.html" class="type-name-link" title="class in io.github.tobyjamesclements.parsley">ParsleyOwnOutputInterceptor</a> - Class in <a href="io/github/tobyjamesclements/parsley/package-summary.html">io.github.tobyjamesclements.parsley</a></dt>
 <dd>
-<div class="block">The producer-side half of the <code>ownOutputs</code> clock (D2): publishes every acknowledged send
-to a declared sink topic into this instance's <code>ParsleyOwnOutputRegistry</code>, from which the
-stream threads fold coordinates into <code>ParsleyChannels.acknowledge(Uuid, int, long)</code> before each stamp.</div>
+<div class="block">The producer-side half of the <code>ownOutputs</code> clock: it publishes every acknowledged send to a
+declared sink topic into this instance's <code>ParsleyOwnOutputRegistry</code>, from which the stream
+threads fold the coordinates into each outbound stamp.</div>
 </dd>
 <dt><a href="io/github/tobyjamesclements/parsley/ParsleyOwnOutputInterceptor.html#%3Cinit%3E()" class="member-name-link">ParsleyOwnOutputInterceptor()</a> - Constructor for class io.github.tobyjamesclements.parsley.<a href="io/github/tobyjamesclements/parsley/ParsleyOwnOutputInterceptor.html" title="class in io.github.tobyjamesclements.parsley">ParsleyOwnOutputInterceptor</a></dt>
 <dd>&nbsp;</dd>
@@ -341,8 +331,9 @@ underlying <code>KafkaStreams</code>.</div>
 </dd>
 <dt><a href="io/github/tobyjamesclements/parsley/CausalStreams.html#start()" class="member-name-link">start()</a> - Method in class io.github.tobyjamesclements.parsley.<a href="io/github/tobyjamesclements/parsley/CausalStreams.html" title="class in io.github.tobyjamesclements.parsley">CausalStreams</a></dt>
 <dd>
-<div class="block">Seeds any un-committed causal source offset for a genuine first start, then starts the underlying
-<code>KafkaStreams</code> instance.</div>
+<div class="block">Starts the underlying <code>KafkaStreams</code> instance, after seeding log-start offsets for a
+genuine first start so it does not trip the <code>AutoOffsetReset.none()</code> every causal source
+uses.</div>
 </dd>
 <dt><a href="io/github/tobyjamesclements/parsley/CausalStreams.html#state()" class="member-name-link">state()</a> - Method in class io.github.tobyjamesclements.parsley.<a href="io/github/tobyjamesclements/parsley/CausalStreams.html" title="class in io.github.tobyjamesclements.parsley">CausalStreams</a></dt>
 <dd>
@@ -358,8 +349,8 @@ underlying <code>KafkaStreams</code>.</div>
 </dd>
 <dt><a href="io/github/tobyjamesclements/parsley/CausalStreamsBuilder.html#stream(java.util.Collection)" class="member-name-link">stream(Collection)</a> - Method in class io.github.tobyjamesclements.parsley.<a href="io/github/tobyjamesclements/parsley/CausalStreamsBuilder.html" title="class in io.github.tobyjamesclements.parsley">CausalStreamsBuilder</a></dt>
 <dd>
-<div class="block">Registers several source topics that share one serde pair, fanning them into one stage — the
-common case, since multiple input topics are the norm for a causal stage.</div>
+<div class="block">Registers several source topics that share one serde pair, fanning them into one stage, and
+defers their key/value serdes to the runtime's default serdes.</div>
 </dd>
 <dt><a href="io/github/tobyjamesclements/parsley/CausalStreamsBuilder.html#stream(java.util.Collection,org.apache.kafka.common.serialization.Serde,org.apache.kafka.common.serialization.Serde)" class="member-name-link">stream(Collection, Serde, Serde)</a> - Method in class io.github.tobyjamesclements.parsley.<a href="io/github/tobyjamesclements/parsley/CausalStreamsBuilder.html" title="class in io.github.tobyjamesclements.parsley">CausalStreamsBuilder</a></dt>
 <dd>
@@ -368,8 +359,6 @@ common case, since multiple input topics are the norm for a causal stage.</div>
 </dl>
 <h2 class="title" id="I:T">T</h2>
 <dl class="index">
-<dt><a href="io/github/tobyjamesclements/parsley/package-summary.html#three-pillars-heading" class="search-tag-link">Three pillars</a> - Section in package io.github.tobyjamesclements.parsley</dt>
-<dd>&nbsp;</dd>
 <dt><a href="io/github/tobyjamesclements/parsley/CausalProcessedStream.html#to(java.lang.String)" class="member-name-link">to(String)</a> - Method in class io.github.tobyjamesclements.parsley.<a href="io/github/tobyjamesclements/parsley/CausalProcessedStream.html" title="class in io.github.tobyjamesclements.parsley">CausalProcessedStream</a></dt>
 <dd>
 <div class="block">Declares a sink topic for this stage, deferring its key/value serdes to the runtime's default
@@ -414,8 +403,9 @@ path for tests or callers that already hold the UUIDs.</div>
 </dd>
 <dt><a href="io/github/tobyjamesclements/parsley/CausalClock.html#using(java.util.Properties)" class="member-name-link">using(Properties)</a> - Static method in class io.github.tobyjamesclements.parsley.<a href="io/github/tobyjamesclements/parsley/CausalClock.html" title="class in io.github.tobyjamesclements.parsley">CausalClock</a></dt>
 <dd>
-<div class="block">Returns an empty instance bound to a resolver backed by <code>props</code>, ready to accumulate
-consumed records with <a href="io/github/tobyjamesclements/parsley/CausalClock.html#observe(org.apache.kafka.clients.consumer.ConsumerRecord)"><code>CausalClock.observe(ConsumerRecord)</code></a>.</div>
+<div class="block">Returns an empty instance bound to a resolver over <code>props</code>, the start of a consumer-side
+frontier: bind the resolver once here, then <a href="io/github/tobyjamesclements/parsley/CausalClock.html#observe(org.apache.kafka.clients.consumer.ConsumerRecord)"><code>CausalClock.observe(ConsumerRecord)</code></a> each record you
+consume.</div>
 </dd>
 </dl>
 <h2 class="title" id="I:W">W</h2>
@@ -427,7 +417,7 @@ consumed records with <a href="io/github/tobyjamesclements/parsley/CausalClock.h
 same stage can never drift onto different partitioners.</div>
 </dd>
 </dl>
-<a href="#I:B">B</a>&nbsp;<a href="#I:C">C</a>&nbsp;<a href="#I:D">D</a>&nbsp;<a href="#I:E">E</a>&nbsp;<a href="#I:F">F</a>&nbsp;<a href="#I:H">H</a>&nbsp;<a href="#I:I">I</a>&nbsp;<a href="#I:K">K</a>&nbsp;<a href="#I:M">M</a>&nbsp;<a href="#I:N">N</a>&nbsp;<a href="#I:O">O</a>&nbsp;<a href="#I:P">P</a>&nbsp;<a href="#I:R">R</a>&nbsp;<a href="#I:S">S</a>&nbsp;<a href="#I:T">T</a>&nbsp;<a href="#I:U">U</a>&nbsp;<a href="#I:W">W</a>&nbsp;<br><a href="allclasses-index.html">All&nbsp;Classes&nbsp;and&nbsp;Interfaces</a><span class="vertical-separator">|</span><a href="allpackages-index.html">All&nbsp;Packages</a><span class="vertical-separator">|</span><a href="serialized-form.html">Serialized&nbsp;Form</a>
+<a href="#I:B">B</a>&nbsp;<a href="#I:C">C</a>&nbsp;<a href="#I:D">D</a>&nbsp;<a href="#I:E">E</a>&nbsp;<a href="#I:F">F</a>&nbsp;<a href="#I:H">H</a>&nbsp;<a href="#I:I">I</a>&nbsp;<a href="#I:M">M</a>&nbsp;<a href="#I:N">N</a>&nbsp;<a href="#I:O">O</a>&nbsp;<a href="#I:P">P</a>&nbsp;<a href="#I:R">R</a>&nbsp;<a href="#I:S">S</a>&nbsp;<a href="#I:T">T</a>&nbsp;<a href="#I:U">U</a>&nbsp;<a href="#I:W">W</a>&nbsp;<br><a href="allclasses-index.html">All&nbsp;Classes&nbsp;and&nbsp;Interfaces</a><span class="vertical-separator">|</span><a href="allpackages-index.html">All&nbsp;Packages</a><span class="vertical-separator">|</span><a href="serialized-form.html">Serialized&nbsp;Form</a>
 <footer>
 <hr>
 <p class="legal-copy"><small>Copyright &#169; 2026. All rights reserved.</small></p>

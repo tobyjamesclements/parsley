@@ -89,17 +89,15 @@ loadScripts(document, 'script');</script>
 <div class="type-signature"><span class="modifiers">public final class </span><span class="element-name type-name-label">ParsleyOwnOutputInterceptor</span>
 <span class="extends-implements">extends <a href="https://docs.oracle.com/en/java/javase/21/docs/api/java.base/java/lang/Object.html" title="class or interface in java.lang" class="external-link">Object</a>
 implements org.apache.kafka.clients.producer.ProducerInterceptor&lt;<a href="https://docs.oracle.com/en/java/javase/21/docs/api/java.base/java/lang/Object.html" title="class or interface in java.lang" class="external-link">Object</a>,<wbr><a href="https://docs.oracle.com/en/java/javase/21/docs/api/java.base/java/lang/Object.html" title="class or interface in java.lang" class="external-link">Object</a>&gt;</span></div>
-<div class="block">The producer-side half of the <code>ownOutputs</code> clock (D2): publishes every acknowledged send
-to a declared sink topic into this instance's <code>ParsleyOwnOutputRegistry</code>, from which the
-stream threads fold coordinates into <code>ParsleyChannels.acknowledge(Uuid, int, long)</code> before each stamp.
+<div class="block">The producer-side half of the <code>ownOutputs</code> clock: it publishes every acknowledged send to a
+declared sink topic into this instance's <code>ParsleyOwnOutputRegistry</code>, from which the stream
+threads fold the coordinates into each outbound stamp.
 
 <p><strong>Not public API.</strong> This class is <code>public</code> only because Kafka instantiates
-it reflectively — <a href="CausalStreams.html" title="class in io.github.tobyjamesclements.parsley"><code>CausalStreams</code></a> injects it into every stream producer through the public
-<code>producer.interceptor.classes</code> config (T2.1 validated this path end to end: the EOS stream
-producer instantiates and configures it, <code>onAcknowledgement</code> carries the exact committed
-coordinate, and the callback runs on the producer network thread — hence the concurrent registry).
-Do not configure it by hand; without the registry id <a href="CausalStreams.html" title="class in io.github.tobyjamesclements.parsley"><code>CausalStreams</code></a> co-injects
-(<code>ParsleyOwnOutputRegistry.CONFIG_KEY</code>) every callback is a no-op.</div>
+producer interceptors reflectively; <a href="CausalStreams.html" title="class in io.github.tobyjamesclements.parsley"><code>CausalStreams</code></a> injects it into every stream producer
+through the <code>producer.interceptor.classes</code> config. Do not configure it by hand: without the
+registry id <a href="CausalStreams.html" title="class in io.github.tobyjamesclements.parsley"><code>CausalStreams</code></a> co-injects (<code>ParsleyOwnOutputRegistry.CONFIG_KEY</code>) every
+callback is a no-op.</div>
 </div>
 </section>
 <section class="summary">

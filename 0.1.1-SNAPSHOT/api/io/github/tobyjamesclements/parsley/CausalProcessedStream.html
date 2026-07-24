@@ -109,8 +109,9 @@ one <code>stream(...).process(...).to(...)</code> chain: there is no term to ope
 <div class="col-first even-row-color method-summary-table method-summary-table-tab2 method-summary-table-tab4"><code><a href="CausalTopology.html" title="class in io.github.tobyjamesclements.parsley">CausalTopology</a></code></div>
 <div class="col-second even-row-color method-summary-table method-summary-table-tab2 method-summary-table-tab4"><code><a href="#build()" class="member-name-link">build</a>()</code></div>
 <div class="col-last even-row-color method-summary-table method-summary-table-tab2 method-summary-table-tab4">
-<div class="block">Freezes this stage and builds the single-stage <a href="CausalTopology.html" title="class in io.github.tobyjamesclements.parsley"><code>CausalTopology</code></a>, ready to be assembled into a
-real Kafka Streams <code>Topology</code> once a <a href="CausalStreams.html" title="class in io.github.tobyjamesclements.parsley"><code>CausalStreams</code></a> runtime supplies its <code>props</code>.</div>
+<div class="block">Freezes this stage and builds the single-stage <a href="CausalTopology.html" title="class in io.github.tobyjamesclements.parsley"><code>CausalTopology</code></a>, ready to be assembled
+into a real Kafka Streams <code>Topology</code> once a <a href="CausalStreams.html" title="class in io.github.tobyjamesclements.parsley"><code>CausalStreams</code></a> runtime supplies its
+<code>props</code>.</div>
 </div>
 <div class="col-first odd-row-color method-summary-table method-summary-table-tab2 method-summary-table-tab4"><code><a href="CausalProcessedStream.html" title="class in io.github.tobyjamesclements.parsley">CausalProcessedStream</a><wbr>&lt;<a href="#type-param-K" title="type parameter in CausalProcessedStream">K</a>,<wbr><a href="#type-param-V" title="type parameter in CausalProcessedStream">V</a>&gt;</code></div>
 <div class="col-second odd-row-color method-summary-table method-summary-table-tab2 method-summary-table-tab4"><code><a href="#to(java.lang.String)" class="member-name-link">to</a><wbr>(<a href="https://docs.oracle.com/en/java/javase/21/docs/api/java.base/java/lang/String.html" title="class or interface in java.lang" class="external-link">String</a>&nbsp;topic)</code></div>
@@ -266,12 +267,10 @@ a decorator that routes each null message to the forwarding task's own partition
 <h3>build</h3>
 <div class="horizontal-scroll">
 <div class="member-signature"><span class="modifiers">public</span>&nbsp;<span class="return-type"><a href="CausalTopology.html" title="class in io.github.tobyjamesclements.parsley">CausalTopology</a></span>&nbsp;<span class="element-name">build</span>()</div>
-<div class="block">Freezes this stage and builds the single-stage <a href="CausalTopology.html" title="class in io.github.tobyjamesclements.parsley"><code>CausalTopology</code></a>, ready to be assembled into a
-real Kafka Streams <code>Topology</code> once a <a href="CausalStreams.html" title="class in io.github.tobyjamesclements.parsley"><code>CausalStreams</code></a> runtime supplies its <code>props</code>.
-The stage is frozen, so this handle can no longer add sinks or change the partitioner — the built
-topology is genuinely immutable. This is the only <em>public</em> way to produce a
-<a href="CausalTopology.html" title="class in io.github.tobyjamesclements.parsley"><code>CausalTopology</code></a>, which is why a causal topology is always exactly one stage. Delegates to the
-builder that vended this stage.</div>
+<div class="block">Freezes this stage and builds the single-stage <a href="CausalTopology.html" title="class in io.github.tobyjamesclements.parsley"><code>CausalTopology</code></a>, ready to be assembled
+into a real Kafka Streams <code>Topology</code> once a <a href="CausalStreams.html" title="class in io.github.tobyjamesclements.parsley"><code>CausalStreams</code></a> runtime supplies its
+<code>props</code>. Once built the stage is immutable: this handle can no longer add sinks or change
+the partitioner.</div>
 <dl class="notes">
 <dt>Returns:</dt>
 <dd>the assembled single-stage <code>CausalTopology</code></dd>

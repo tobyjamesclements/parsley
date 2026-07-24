@@ -54,12 +54,9 @@ loadScripts(document, 'script');</script>
 <ol class="toc-list" tabindex="-1">
 <li><a href="#" tabindex="0">Description</a>
 <ol class="toc-list">
-<li><a href="#three-pillars-heading" tabindex="0">Three pillars</a></li>
 <li><a href="#entry-point-heading" tabindex="0">Entry point</a></li>
 <li><a href="#edge-operations-heading" tabindex="0">Edge operations</a></li>
-<li><a href="#internal-protocol-modules-heading" tabindex="0">Internal protocol modules</a></li>
 <li><a href="#naming-convention-heading" tabindex="0">Naming convention</a></li>
-<li><a href="#key-value-types-heading" tabindex="0">Key value types</a></li>
 </ol>
 </li>
 <li><a href="#class-summary" tabindex="0">Classes and Interfaces</a></li>
@@ -74,98 +71,45 @@ loadScripts(document, 'script');</script>
 <div class="package-signature"><span class="annotations">@NullMarked
 </span>package <span class="element-name">io.github.tobyjamesclements.parsley</span></div>
 <section class="package-description" id="package-description">
-<div class="block">Parsley: causal delivery order for Kafka Streams processors. A single package whose public surface is
-a concise, topology-level API modelled on Kafka Streams; the low-level processor decorator that powers
-it is package-private internal machinery.
-
-<h2 id="three-pillars-heading">Three pillars</h2>
-<ul>
-  <li><strong>Causal broadcast.</strong> Every record carries the producer's causal dependencies in a
-      header; a consumer holds a record in a changelog-backed buffer until its own frontier dominates
-      those dependencies, then delivers it — so a topology of Kafka Streams processors sees causally
-      related events across topics in the order they actually happened, not merely in per-partition
-      order. The classic broadcast/receive/deliver vocabulary and where each lives in this package is
-      spelled out in <code>ParsleyCausalBroadcast</code>'s Javadoc. See <a href="CausalClock.html" title="class in io.github.tobyjamesclements.parsley"><code>CausalClock</code></a> for the wire contract and the edge
-      operations below for talking to a Parsley topology from plain Kafka clients.</li>
-  <li><strong>Coordination-free joins.</strong> There is no membership, no epoch, and no join
-      barrier: a new application simply starts consuming, its replay self-gates into causal
-      delivery order through the ordinary hold-back queue, and its truthful stamps make its
-      outputs correctly gated everywhere from the first emission. Parsley has no configuration
-      keys at all; startup fails if any <code>parsley.*</code> key is present.</li>
-  <li><strong>Schema handling.</strong> A held record's key and value are (de)serialised with the
-      <code>Serde</code> registered for its own <em>source</em> topic, never the buffer's internal changelog
-      topic, so topic-scoped serdes — Avro plus Schema Registry <code>TopicNameStrategy</code> in particular
-      — resolve the correct subject even for a record held across a schema change. A record that
-      becomes undecodable while buffered (e.g. an incompatible registry change) fails the task fast
-      rather than being silently dropped or forwarded on an unproven causal premise.</li>
-</ul>
+<div class="block">Parsley provides causal delivery order for Kafka Streams processors. Every record carries its
+producer's causal dependencies in a header, and a consumer holds a record in a changelog-backed
+buffer until its own frontier dominates those dependencies, so a topology sees causally related
+events across topics in the order they happened rather than merely in per-partition order. The
+public surface is a single topology-level API modelled on Kafka Streams; everything below it is
+package-private machinery. Parsley has no configuration keys; startup fails if any
+<code>parsley.*</code> key is present.
 
 <h2 id="entry-point-heading">Entry point</h2>
-Three roles mirroring Kafka Streams — <code>StreamsBuilder</code> / <code>Topology</code> / <code>KafkaStreams</code>:
+Three roles mirroring Kafka Streams' <code>StreamsBuilder</code> / <code>Topology</code> /
+<code>KafkaStreams</code>:
 <ul>
-  <li><a href="CausalStreamsBuilder.html" title="class in io.github.tobyjamesclements.parsley"><code>CausalStreamsBuilder</code></a> &mdash; declare the one causal
-      stage: <code>stream(...)</code> one or more source topics, <code>.process(supplier)</code> to bind them to a
-      causal-decorated processor, <code>.to(...)</code> to declare its sink(s); <code>.build()</code> produces a
-      <a href="CausalTopology.html" title="class in io.github.tobyjamesclements.parsley"><code>CausalTopology</code></a></li>
-  <li><a href="CausalTopology.html" title="class in io.github.tobyjamesclements.parsley"><code>CausalTopology</code></a> &mdash; the built causal topology, ready
-      for <code>new CausalStreams(topology, props)</code></li>
-  <li><a href="CausalStreams.html" title="class in io.github.tobyjamesclements.parsley"><code>CausalStreams</code></a> &mdash; the runtime: wraps the underlying
-      <code>KafkaStreams</code> instance, and owns graceful causal drain on <code>close()</code></li>
+  <li><a href="CausalStreamsBuilder.html" title="class in io.github.tobyjamesclements.parsley"><code>CausalStreamsBuilder</code></a> declares the one causal
+      stage: <code>stream(...)</code> source topics, <code>.process(supplier)</code>, <code>.to(...)</code>
+      sink(s), and <code>.build()</code> to a
+      <a href="CausalTopology.html" title="class in io.github.tobyjamesclements.parsley"><code>CausalTopology</code></a>.</li>
+  <li><a href="CausalTopology.html" title="class in io.github.tobyjamesclements.parsley"><code>CausalTopology</code></a> is the built topology, ready for
+      <code>new CausalStreams(topology, props)</code>.</li>
+  <li><a href="CausalStreams.html" title="class in io.github.tobyjamesclements.parsley"><code>CausalStreams</code></a> is the runtime: it wraps the
+      underlying <code>KafkaStreams</code> instance and owns graceful causal drain on <code>close()</code>.</li>
 </ul>
 
 <h2 id="edge-operations-heading">Edge operations</h2>
-To talk to a Parsley topology from plain Kafka clients, stamp and propagate causal dependencies
-directly with <a href="CausalClock.html" title="class in io.github.tobyjamesclements.parsley"><code>CausalClock</code></a>:
-<ul>
-  <li><a href="CausalClock.html#using(java.util.Properties)"><code>using</code></a>
-      &mdash; bind a resolver (topic name &rarr; stable Kafka UUID, resolved internally through the
-      given Kafka client configuration) and start accumulating a consumer-side frontier</li>
-  <li><a href="CausalClock.html#observe(org.apache.kafka.clients.consumer.ConsumerRecord)"><code>observe</code></a> &mdash; fold a consumed record's dependencies and own position into the accumulator</li>
-  <li><a href="CausalClock.html#stamp(org.apache.kafka.clients.producer.ProducerRecord)"><code>stamp</code></a> &mdash; attach the accumulated dependencies to an outbound <code>ProducerRecord</code></li>
-  <li><a href="CausalClock.html#merge(io.github.tobyjamesclements.parsley.CausalClock)"><code>merge</code></a> &mdash;
-      combine dependency sets for a fan-in</li>
-</ul>
-
-<h2 id="internal-protocol-modules-heading">Internal protocol modules</h2>
-Internally the implementation is organised as layered protocols, each presented in the module style
-of Cachin–Guerraoui–Rodrigues (<em>Introduction to Reliable and Secure Distributed Programming</em>):
-requests in, indications out, properties guaranteed. The channels module
-(<code>ParsleyChannels</code>) adapts Kafka topic-partitions into the
-reliable FIFO channels classical causal broadcast assumes; the causal-broadcast module
-(<code>ParsleyCausalBroadcast</code>) is Birman–Schiper–Stephenson
-causal delivery over those channels; the gossip module
-(<code>ParsleyGossip</code>) disseminates clock progress as null
-messages so completeness keeps flowing through non-emitting paths. Two Parsley-wide deviations
-from the textbook presentation apply to every module, stated once here:
-<ul>
-  <li><strong>Indications are pulled, not pushed.</strong> Deliveries come back as ordered return
-      values rather than through an upcall, because Kafka Streams' threading is synchronous. Same
-      semantics, pull style.</li>
-  <li><strong>The sender's clock increment is performed by the broker.</strong> In
-      Birman–Schiper–Stephenson the sender increments its own vector entry at send; here the
-      increment is the broker's offset assignment, learned asynchronously from producer
-      acknowledgements. This is why an outbound stamp cannot include the record's own
-      coordinate.</li>
-</ul>
+To talk to a Parsley topology from a plain Kafka client, stamp and read causal dependencies with
+<a href="CausalClock.html" title="class in io.github.tobyjamesclements.parsley"><code>CausalClock</code></a>:
+<a href="CausalClock.html#using(java.util.Properties)"><code>using</code></a> binds a
+resolver and starts a consumer-side frontier,
+<a href="CausalClock.html#observe(org.apache.kafka.clients.consumer.ConsumerRecord)"><code>observe</code></a> folds in a consumed record,
+<a href="CausalClock.html#merge(io.github.tobyjamesclements.parsley.CausalClock)"><code>merge</code></a> combines dependency sets for a fan-in, and
+<a href="CausalClock.html#stamp(org.apache.kafka.clients.producer.ProducerRecord)"><code>stamp</code></a> attaches the result to an outbound record.
 
 <h2 id="naming-convention-heading">Naming convention</h2>
-Every public type is named <code>Causal*</code>; the one exception is
-<a href="ParsleyOwnOutputInterceptor.html" title="class in io.github.tobyjamesclements.parsley"><code>ParsleyOwnOutputInterceptor</code></a>, public only because Kafka
-instantiates producer interceptors reflectively and is not public API. Package-private machinery
-is named <code>Parsley*</code>, except implementations of a <code>Parsley*</code> seam interface, which are
-named for their backing: <code>KafkaTopics</code> implements <code>ParsleyTopics</code>, and
-<code>StoreBackedBufferStore</code> / <code>StoreBackedCandidateIndex</code> /
-<code>StoreBackedForwardedIndex</code> implement their <code>Parsley*</code> store interfaces over any
-Kafka Streams <code>KeyValueStore</code>.
-
-<h2 id="key-value-types-heading">Key value types</h2>
-<ul>
-  <li><a href="CausalClock.html" title="class in io.github.tobyjamesclements.parsley"><code>CausalClock</code></a> &mdash; the causal requirements stamped on a record
-      (what the consumer must have observed before the record may be delivered). Its serialised size
-      grows with the number of relevant topic-partitions and counts against Kafka's
-      <code>message.max.bytes</code>. Topic-UUID resolution is an internal detail of <code>using</code>/
-      <code>builder</code> &mdash; there is no separate public resolver type to construct or manage</li>
-</ul></div>
+Every public type is named <code>Causal*</code>. The one exception is
+<a href="ParsleyOwnOutputInterceptor.html" title="class in io.github.tobyjamesclements.parsley"><code>ParsleyOwnOutputInterceptor</code></a>, which is public only
+because Kafka instantiates producer interceptors reflectively and is not public API.
+Package-private machinery is named <code>Parsley*</code>, except implementations of a <code>Parsley*</code>
+seam, which are named for their backing (<code>KafkaTopics</code> implements <code>ParsleyTopics</code>;
+the <code>StoreBacked*</code> stores implement their <code>Parsley*</code> interfaces over a Kafka Streams
+<code>KeyValueStore</code>).</div>
 </section>
 </div>
 <section class="summary">
@@ -186,10 +130,8 @@ schema is incompatible).</div>
 </div>
 <div class="col-first odd-row-color class-summary class-summary-tab2"><a href="CausalClock.html" title="class in io.github.tobyjamesclements.parsley">CausalClock</a></div>
 <div class="col-last odd-row-color class-summary class-summary-tab2">
-<div class="block">A vector clock (Fidge 1988; Mattern 1988, "Virtual Time and Global States of Distributed
-Systems") over causal coordinates: a set of <code>(topic, partition) → offset</code> entries, indexed
-by <em>channel</em> — the topic-partition — rather than by process, a stated variant of the
-classical form (Kafka's partition is the stable, durable axis a process identity is not).</div>
+<div class="block">A vector clock over causal coordinates: a set of <code>(topic, partition) → offset</code> entries
+indexed by channel, the topic-partition, rather than by process (Fidge 1988; Mattern 1988).</div>
 </div>
 <div class="col-first even-row-color class-summary class-summary-tab2"><a href="CausalClock.Builder.html" title="class in io.github.tobyjamesclements.parsley">CausalClock.Builder</a></div>
 <div class="col-last even-row-color class-summary class-summary-tab2">
@@ -222,10 +164,9 @@ topology with <a href="CausalProcessedStream.html#build()"><code>CausalProcessed
 </div>
 <div class="col-first even-row-color class-summary class-summary-tab2"><a href="CausalStreams.html" title="class in io.github.tobyjamesclements.parsley">CausalStreams</a></div>
 <div class="col-last even-row-color class-summary class-summary-tab2">
-<div class="block">The causal application runtime: a Facade (GoF) over the Kafka Streams instance a <a href="CausalTopology.html" title="class in io.github.tobyjamesclements.parsley"><code>CausalTopology</code></a>
-runs as, and the causal machinery a plain <code>KafkaStreams</code> doesn't know about — graceful causal
-drain on shutdown — behind the one simple
-start/close lifecycle below.</div>
+<div class="block">The causal application runtime: a Facade over the Kafka Streams instance a <a href="CausalTopology.html" title="class in io.github.tobyjamesclements.parsley"><code>CausalTopology</code></a>
+runs as, adding the causal machinery a plain <code>KafkaStreams</code> does not have (graceful causal
+drain on shutdown) behind a simple start/close lifecycle.</div>
 </div>
 <div class="col-first odd-row-color class-summary class-summary-tab2"><a href="CausalStreamsBuilder.html" title="class in io.github.tobyjamesclements.parsley">CausalStreamsBuilder</a></div>
 <div class="col-last odd-row-color class-summary class-summary-tab2">
@@ -250,9 +191,9 @@ unsupported wire version.</div>
 </div>
 <div class="col-first odd-row-color class-summary class-summary-tab2"><a href="ParsleyOwnOutputInterceptor.html" title="class in io.github.tobyjamesclements.parsley">ParsleyOwnOutputInterceptor</a></div>
 <div class="col-last odd-row-color class-summary class-summary-tab2">
-<div class="block">The producer-side half of the <code>ownOutputs</code> clock (D2): publishes every acknowledged send
-to a declared sink topic into this instance's <code>ParsleyOwnOutputRegistry</code>, from which the
-stream threads fold coordinates into <code>ParsleyChannels.acknowledge(Uuid, int, long)</code> before each stamp.</div>
+<div class="block">The producer-side half of the <code>ownOutputs</code> clock: it publishes every acknowledged send to a
+declared sink topic into this instance's <code>ParsleyOwnOutputRegistry</code>, from which the stream
+threads fold the coordinates into each outbound stamp.</div>
 </div>
 </div>
 </div>

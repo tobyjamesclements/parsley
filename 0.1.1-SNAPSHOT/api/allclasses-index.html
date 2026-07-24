@@ -64,10 +64,8 @@ schema is incompatible).</div>
 </div>
 <div class="col-first odd-row-color all-classes-table all-classes-table-tab2"><a href="io/github/tobyjamesclements/parsley/CausalClock.html" title="class in io.github.tobyjamesclements.parsley">CausalClock</a></div>
 <div class="col-last odd-row-color all-classes-table all-classes-table-tab2">
-<div class="block">A vector clock (Fidge 1988; Mattern 1988, "Virtual Time and Global States of Distributed
-Systems") over causal coordinates: a set of <code>(topic, partition) → offset</code> entries, indexed
-by <em>channel</em> — the topic-partition — rather than by process, a stated variant of the
-classical form (Kafka's partition is the stable, durable axis a process identity is not).</div>
+<div class="block">A vector clock over causal coordinates: a set of <code>(topic, partition) → offset</code> entries
+indexed by channel, the topic-partition, rather than by process (Fidge 1988; Mattern 1988).</div>
 </div>
 <div class="col-first even-row-color all-classes-table all-classes-table-tab2"><a href="io/github/tobyjamesclements/parsley/CausalClock.Builder.html" title="class in io.github.tobyjamesclements.parsley">CausalClock.Builder</a></div>
 <div class="col-last even-row-color all-classes-table all-classes-table-tab2">
@@ -100,10 +98,9 @@ topology with <a href="io/github/tobyjamesclements/parsley/CausalProcessedStream
 </div>
 <div class="col-first even-row-color all-classes-table all-classes-table-tab2"><a href="io/github/tobyjamesclements/parsley/CausalStreams.html" title="class in io.github.tobyjamesclements.parsley">CausalStreams</a></div>
 <div class="col-last even-row-color all-classes-table all-classes-table-tab2">
-<div class="block">The causal application runtime: a Facade (GoF) over the Kafka Streams instance a <a href="io/github/tobyjamesclements/parsley/CausalTopology.html" title="class in io.github.tobyjamesclements.parsley"><code>CausalTopology</code></a>
-runs as, and the causal machinery a plain <code>KafkaStreams</code> doesn't know about — graceful causal
-drain on shutdown — behind the one simple
-start/close lifecycle below.</div>
+<div class="block">The causal application runtime: a Facade over the Kafka Streams instance a <a href="io/github/tobyjamesclements/parsley/CausalTopology.html" title="class in io.github.tobyjamesclements.parsley"><code>CausalTopology</code></a>
+runs as, adding the causal machinery a plain <code>KafkaStreams</code> does not have (graceful causal
+drain on shutdown) behind a simple start/close lifecycle.</div>
 </div>
 <div class="col-first odd-row-color all-classes-table all-classes-table-tab2"><a href="io/github/tobyjamesclements/parsley/CausalStreamsBuilder.html" title="class in io.github.tobyjamesclements.parsley">CausalStreamsBuilder</a></div>
 <div class="col-last odd-row-color all-classes-table all-classes-table-tab2">
@@ -128,9 +125,9 @@ unsupported wire version.</div>
 </div>
 <div class="col-first odd-row-color all-classes-table all-classes-table-tab2"><a href="io/github/tobyjamesclements/parsley/ParsleyOwnOutputInterceptor.html" title="class in io.github.tobyjamesclements.parsley">ParsleyOwnOutputInterceptor</a></div>
 <div class="col-last odd-row-color all-classes-table all-classes-table-tab2">
-<div class="block">The producer-side half of the <code>ownOutputs</code> clock (D2): publishes every acknowledged send
-to a declared sink topic into this instance's <code>ParsleyOwnOutputRegistry</code>, from which the
-stream threads fold coordinates into <code>ParsleyChannels.acknowledge(Uuid, int, long)</code> before each stamp.</div>
+<div class="block">The producer-side half of the <code>ownOutputs</code> clock: it publishes every acknowledged send to a
+declared sink topic into this instance's <code>ParsleyOwnOutputRegistry</code>, from which the stream
+threads fold the coordinates into each outbound stamp.</div>
 </div>
 </div>
 </div>
