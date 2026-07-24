@@ -10,9 +10,10 @@ model) and `docs/protocols/` (the three protocols, with the overview at `docs/pr
 - The gate for every commit: `mvn clean verify` green. That runs the unit suite, the
   Testcontainers broker ITs, PIT mutation testing (71 % threshold, enforced in the pom), and
   NullAway.
-- NullAway: main sources are ERROR-clean and must stay so. Tests currently run at WARN
-  (cleanup before promoting them to ERROR is open backlog). The package is `@NullMarked`
-  (JSpecify); mind the JSpecify placement rules on arrays and record components.
+- NullAway: main and test sources are both ERROR-clean and must stay so. The generated
+  `io.github.tobyjamesclements.parsley.avro` subpackage is excluded (`UnannotatedSubPackages`).
+  The package is `@NullMarked` (JSpecify); mind the JSpecify placement rules on arrays and record
+  components.
 - Broker ITs pin their Kafka image through the `ParsleyBrokerImage` seam; the minimum
   supported broker is 3.7.0 and CI runs both a 3.7.0 and a current-broker leg.
 - Update `CHANGELOG.md` `[Unreleased]` in the same commit as the change it records.

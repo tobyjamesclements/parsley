@@ -14,6 +14,8 @@ import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static io.github.tobyjamesclements.parsley.ParsleyTestFixtures.cause;
+import static io.github.tobyjamesclements.parsley.ParsleyTestFixtures.message;
 
 /**
  * Golden-bytes pin of the {@code parsley-causal-clock} wire format, byte for byte, against the
@@ -164,8 +166,8 @@ class ParsleyVectorClockWireFormatTest {
         IllegalStateException thrown = assertThrows(IllegalStateException.class,
                 () -> ParsleyVectorClock.fromBytes(new byte[] {0x02, 0x00, 0x00, 0x00, 0x00}),
                 "a wire version other than 0x01 must be rejected");
-        assertTrue(thrown.getMessage().contains("version"),
-                "the rejection must name the version mismatch, got: " + thrown.getMessage());
+        assertTrue(message(thrown).contains("version"),
+                "the rejection must name the version mismatch, got: " + message(thrown));
     }
 
     /**

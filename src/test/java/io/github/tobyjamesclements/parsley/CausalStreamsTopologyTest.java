@@ -44,6 +44,9 @@ import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static io.github.tobyjamesclements.parsley.ParsleyTestFixtures.cause;
+import static io.github.tobyjamesclements.parsley.ParsleyTestFixtures.message;
+import org.jspecify.annotations.Nullable;
 
 /**
  * Exercises {@link CausalStreamsBuilder}/{@link CausalTopology} — the topology-owning causal API —
@@ -72,7 +75,7 @@ class CausalStreamsTopologyTest {
         return config(null);
     }
 
-    private static Properties config(File stateDir) {
+    private static Properties config(@Nullable File stateDir) {
         Properties props = new Properties();
         props.put(StreamsConfig.APPLICATION_ID_CONFIG, "causal-streams-test");
         props.put(StreamsConfig.BOOTSTRAP_SERVERS_CONFIG, "dummy:1234");
@@ -200,7 +203,7 @@ class CausalStreamsTopologyTest {
 
         IllegalStateException e = assertThrows(IllegalStateException.class, builder::build,
                 "build() must fail without at least one source");
-        assertEquals(true, e.getMessage().contains("source"), "message must name the missing source");
+        assertEquals(true, message(e).contains("source"), "message must name the missing source");
     }
 
     /**
@@ -215,7 +218,7 @@ class CausalStreamsTopologyTest {
 
         IllegalStateException e = assertThrows(IllegalStateException.class, builder::build,
                 "build() must fail without at least one sink");
-        assertEquals(true, e.getMessage().contains("sink"), "message must name the missing sink");
+        assertEquals(true, message(e).contains("sink"), "message must name the missing sink");
     }
 
     /**
@@ -230,8 +233,8 @@ class CausalStreamsTopologyTest {
 
         IllegalStateException e = assertThrows(IllegalStateException.class, builder::build,
                 "build() must fail when no stage was declared");
-        assertEquals(true, e.getMessage().contains("no causal stage"),
-                "message must say no stage was declared, got: " + e.getMessage());
+        assertEquals(true, message(e).contains("no causal stage"),
+                "message must say no stage was declared, got: " + message(e));
     }
 
     /**
@@ -277,7 +280,7 @@ class CausalStreamsTopologyTest {
         IllegalStateException e = assertThrows(IllegalStateException.class,
                 () -> builder.stream("c2", Serdes.String(), Serdes.String()).process(upperCaser()),
                 "a second process(...) on the same builder must be rejected — one stage per topology");
-        assertEquals(true, e.getMessage().contains("exactly one stage"),
+        assertEquals(true, message(e).contains("exactly one stage"),
                 "message must explain the one-stage-per-topology rule");
     }
 
@@ -295,7 +298,7 @@ class CausalStreamsTopologyTest {
 
         IllegalArgumentException e = assertThrows(IllegalArgumentException.class, () -> first.merge(second),
                 "merging two streams that both declare c2 must be rejected");
-        assertEquals(true, e.getMessage().contains("c2"), "message must name the duplicated topic");
+        assertEquals(true, message(e).contains("c2"), "message must name the duplicated topic");
     }
 
     /**
@@ -324,8 +327,8 @@ class CausalStreamsTopologyTest {
         IllegalArgumentException e = assertThrows(IllegalArgumentException.class,
                 () -> topology.assemble(config(), new ParsleyQuiesce()),
                 "assemble() must reject an already-decorated supplier");
-        assertTrue(e.getMessage().contains("ParsleyProcessorSupplier"),
-                "the message must name the double-decoration: " + e.getMessage());
+        assertTrue(message(e).contains("ParsleyProcessorSupplier"),
+                "the message must name the double-decoration: " + message(e));
     }
 
     /**
@@ -348,8 +351,8 @@ class CausalStreamsTopologyTest {
         IllegalStateException e = assertThrows(IllegalStateException.class,
                 () -> topology.assemble(props, new ParsleyQuiesce()),
                 "assemble() must reject a record-skipping deserialization handler");
-        assertTrue(e.getMessage().contains("skips records"),
-                "the message must explain the skip hazard: " + e.getMessage());
+        assertTrue(message(e).contains("skips records"),
+                "the message must explain the skip hazard: " + message(e));
     }
 
     /**
@@ -371,8 +374,8 @@ class CausalStreamsTopologyTest {
         IllegalStateException e = assertThrows(IllegalStateException.class,
                 () -> topology.assemble(props, new ParsleyQuiesce()),
                 "assemble() must reject a record-skipping processing handler");
-        assertTrue(e.getMessage().contains("skips records"),
-                "the message must explain the skip hazard: " + e.getMessage());
+        assertTrue(message(e).contains("skips records"),
+                "the message must explain the skip hazard: " + message(e));
     }
 
     /**
@@ -398,8 +401,8 @@ class CausalStreamsTopologyTest {
         IllegalStateException e = assertThrows(IllegalStateException.class,
                 () -> topology.assemble(props, new ParsleyQuiesce()),
                 "a skipping handler in a Properties defaults layer must still be rejected");
-        assertTrue(e.getMessage().contains("record-skipping handler"),
-                "the message must explain the skip hazard: " + e.getMessage());
+        assertTrue(message(e).contains("record-skipping handler"),
+                "the message must explain the skip hazard: " + message(e));
     }
 
     /**
@@ -708,10 +711,10 @@ class CausalStreamsTopologyTest {
         StreamsException thrown = assertThrows(StreamsException.class,
                 () -> new TopologyTestDriver(topology, config(tempStateDir())),
                 "startup must fail when a sink is narrower than its source");
-        assertEquals(IllegalStateException.class, thrown.getCause().getClass(),
+        assertEquals(IllegalStateException.class, cause(thrown).getClass(),
                 "the wrapped cause must be the sink-width check's failure");
-        assertTrue(thrown.getCause().getMessage().contains("declared sink topic 'c3'"),
-                "the message must name the narrow sink: " + thrown.getCause().getMessage());
+        assertTrue(message(cause(thrown)).contains("declared sink topic 'c3'"),
+                "the message must name the narrow sink: " + message(cause(thrown)));
     }
 
     /**
@@ -790,10 +793,10 @@ class CausalStreamsTopologyTest {
         StreamsException thrown = assertThrows(StreamsException.class,
                 () -> new TopologyTestDriver(topology, config(tempStateDir())),
                 "startup must fail when a sink's cleanup.policy includes compact");
-        assertEquals(IllegalStateException.class, thrown.getCause().getClass(),
+        assertEquals(IllegalStateException.class, cause(thrown).getClass(),
                 "the wrapped cause must be the compacted-sink check's failure");
-        assertTrue(thrown.getCause().getMessage().contains("cleanup.policy=compact"),
-                "the message must name the sink's cleanup.policy: " + thrown.getCause().getMessage());
+        assertTrue(message(cause(thrown)).contains("cleanup.policy=compact"),
+                "the message must name the sink's cleanup.policy: " + message(cause(thrown)));
     }
 
     /**
@@ -816,7 +819,7 @@ class CausalStreamsTopologyTest {
         StreamsException thrown = assertThrows(StreamsException.class,
                 () -> new TopologyTestDriver(topology, config(tempStateDir())),
                 "startup must fail for compact,delete too — compaction still runs");
-        assertEquals(IllegalStateException.class, thrown.getCause().getClass(),
+        assertEquals(IllegalStateException.class, cause(thrown).getClass(),
                 "the wrapped cause must be the compacted-sink check's failure");
     }
 
@@ -864,10 +867,10 @@ class CausalStreamsTopologyTest {
         StreamsException thrown = assertThrows(StreamsException.class,
                 () -> new TopologyTestDriver(topology, config(tempStateDir())),
                 "a compacted source must fail startup — the guard is unconditional");
-        assertEquals(IllegalStateException.class, thrown.getCause().getClass(),
+        assertEquals(IllegalStateException.class, cause(thrown).getClass(),
                 "the wrapped cause must be the unconditional source-compaction guard");
-        assertTrue(thrown.getCause().getMessage().contains("causal source topic 'c1'"),
-                "the message must name the compacted source: " + thrown.getCause().getMessage());
+        assertTrue(message(cause(thrown)).contains("causal source topic 'c1'"),
+                "the message must name the compacted source: " + message(cause(thrown)));
     }
 
     /**
@@ -893,8 +896,8 @@ class CausalStreamsTopologyTest {
         StreamsException thrown = assertThrows(StreamsException.class,
                 () -> new TopologyTestDriver(topology, config(tempStateDir())),
                 "the sink-width check must still catch c4's narrowness despite c5 being undescribable");
-        assertTrue(thrown.getCause().getMessage().contains("declared sink topic 'c4'"),
-                "the message must name the narrow sink: " + thrown.getCause().getMessage());
+        assertTrue(message(cause(thrown)).contains("declared sink topic 'c4'"),
+                "the message must name the narrow sink: " + message(cause(thrown)));
     }
 
     /**
@@ -920,8 +923,8 @@ class CausalStreamsTopologyTest {
         StreamsException thrown = assertThrows(StreamsException.class,
                 () -> new TopologyTestDriver(topology, config(tempStateDir())),
                 "the compacted-sink check must still catch c4's policy despite c5 being undescribable");
-        assertTrue(thrown.getCause().getMessage().contains("cleanup.policy=compact"),
-                "the message must name c4's policy: " + thrown.getCause().getMessage());
+        assertTrue(message(cause(thrown)).contains("cleanup.policy=compact"),
+                "the message must name c4's policy: " + message(cause(thrown)));
     }
 
     /**
@@ -944,8 +947,8 @@ class CausalStreamsTopologyTest {
         IllegalStateException thrown = assertThrows(IllegalStateException.class,
                 () -> assemble(builder, ADMIN, props),
                 "a parsley.* key must fail assembly — Parsley has no configuration keys");
-        assertTrue(thrown.getMessage().contains("parsley.topology.validation"),
-                "the failure must name the offending key: " + thrown.getMessage());
+        assertTrue(message(thrown).contains("parsley.topology.validation"),
+                "the failure must name the offending key: " + message(thrown));
     }
 
     // --- strict sink resolution at init (R1: sinks must exist at startup) ----------------------
@@ -973,10 +976,10 @@ class CausalStreamsTopologyTest {
                 () -> new TopologyTestDriver(topology, config(tempStateDir())),
                 "a declared sink that cannot be resolved must fail init, not start with own-output "
                         + "tracking silently off");
-        assertTrue(thrown.getCause().getMessage().contains("declared sink topic 'c3'"),
-                "the failure must name the unresolvable sink: " + thrown.getCause().getMessage());
-        assertTrue(thrown.getCause().getMessage().contains("must exist before the stage starts"),
-                "the failure must state the sinks-must-exist rule: " + thrown.getCause().getMessage());
+        assertTrue(message(cause(thrown)).contains("declared sink topic 'c3'"),
+                "the failure must name the unresolvable sink: " + message(cause(thrown)));
+        assertTrue(message(cause(thrown)).contains("must exist before the stage starts"),
+                "the failure must state the sinks-must-exist rule: " + message(cause(thrown)));
     }
 
     /**
@@ -998,8 +1001,8 @@ class CausalStreamsTopologyTest {
         StreamsException thrown = assertThrows(StreamsException.class,
                 () -> new TopologyTestDriver(topology, config(tempStateDir())),
                 "a sink the broker answered without a UUID must fail init like a thrown lookup");
-        assertTrue(thrown.getCause().getMessage().contains("declared sink topic 'c3'"),
-                "the failure must name the unresolved sink: " + thrown.getCause().getMessage());
+        assertTrue(message(cause(thrown)).contains("declared sink topic 'c3'"),
+                "the failure must name the unresolved sink: " + message(cause(thrown)));
     }
 
     /**
@@ -1025,9 +1028,9 @@ class CausalStreamsTopologyTest {
         StreamsException thrown = assertThrows(StreamsException.class,
                 () -> new TopologyTestDriver(topology, config(tempStateDir())),
                 "a failed sink end-offset read must fail init — the ownOutputs seed cannot be skipped");
-        assertTrue(thrown.getCause().getMessage().contains("end offsets for declared sink topic 'c3'"),
+        assertTrue(message(cause(thrown)).contains("end offsets for declared sink topic 'c3'"),
                 "the failure must name the sink whose end offsets failed: "
-                        + thrown.getCause().getMessage());
+                        + message(cause(thrown)));
     }
 
     /**
@@ -1058,7 +1061,7 @@ class CausalStreamsTopologyTest {
             StreamsException thrown = assertThrows(StreamsException.class,
                     () -> c1.pipeInput(new TestRecord<>("k", "v", corrupted)),
                     "an undecodable causal-dependencies header must fail the task rather than be diverted");
-            assertEquals(CausalVectorClockResolutionException.class, thrown.getCause().getClass(),
+            assertEquals(CausalVectorClockResolutionException.class, cause(thrown).getClass(),
                     "the wrapped cause must be the clock-resolution guard's exception");
             assertTrue(processed.isEmpty(), "the delegate must never run on a record that fails closed at ingest");
         }
@@ -1088,8 +1091,8 @@ class CausalStreamsTopologyTest {
         IllegalStateException thrown = assertThrows(IllegalStateException.class,
                 () -> assemble(builder, ADMIN, atLeastOnce),
                 "assemble() must fail fast without exactly_once_v2");
-        assertTrue(thrown.getMessage().contains("exactly_once_v2"),
-                "the message must name the required setting: " + thrown.getMessage());
+        assertTrue(message(thrown).contains("exactly_once_v2"),
+                "the message must name the required setting: " + message(thrown));
     }
 
     /** A fresh, unique state directory — required when a test expects driver construction itself to

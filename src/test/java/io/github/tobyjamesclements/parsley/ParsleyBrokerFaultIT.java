@@ -42,6 +42,7 @@ import static org.awaitility.Awaitility.await;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static java.util.Objects.requireNonNull;
 
 /**
  * Real-broker infrastructure faults the in-JVM simulator cannot model: producer acknowledgements
@@ -359,7 +360,7 @@ class ParsleyBrokerFaultIT {
             await().atMost(Duration.ofSeconds(90)).until(() -> {
                 collectDelivered(consumer, values);
                 Map<TopicPartition, Long> end = consumer.endOffsets(partitions);
-                return partitions.stream().allMatch(tp -> consumer.position(tp) >= end.get(tp));
+                return partitions.stream().allMatch(tp -> consumer.position(tp) >= requireNonNull(end.get(tp)));
             });
             return values;
         }

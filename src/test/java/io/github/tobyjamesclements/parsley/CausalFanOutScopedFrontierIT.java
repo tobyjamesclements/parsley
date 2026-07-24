@@ -39,6 +39,7 @@ import java.util.UUID;
 import static org.awaitility.Awaitility.await;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static java.util.Objects.requireNonNull;
 
 /**
  * End-to-end proof, against a real broker, of the two frontier guarantees a fan-in/fan-out pipeline
@@ -205,7 +206,7 @@ class CausalFanOutScopedFrontierIT {
                 Map<String, CausalClock> bStamps = pollStamps(bConsumer, 3);
 
                 for (String output : List.of("S1", "A0")) {
-                    ParsleyVectorClock stamp = clockOf(aStamps.get(output));
+                    ParsleyVectorClock stamp = clockOf(requireNonNull(aStamps.get(output)));
                     assertEquals(1L, stamp.offsetFor(topics.topicId(SHARED), 0),
                             "processor A's " + output + " stamp must carry SHARED@1 — its genuine "
                                     + "dependency, reached only once A's own SHARED channel got there");
@@ -218,7 +219,7 @@ class CausalFanOutScopedFrontierIT {
                                     + "processor never observes — the scoped-frontier guarantee");
                 }
                 for (String output : List.of("S1", "B0")) {
-                    ParsleyVectorClock stamp = clockOf(bStamps.get(output));
+                    ParsleyVectorClock stamp = clockOf(requireNonNull(bStamps.get(output)));
                     assertEquals(1L, stamp.offsetFor(topics.topicId(SHARED), 0),
                             "processor B's " + output + " stamp must carry SHARED@1");
                     assertEquals(0L, stamp.offsetFor(topics.topicId(B_ONLY), 0),
@@ -233,8 +234,8 @@ class CausalFanOutScopedFrontierIT {
                 // position, and the record forwarded LATER in the cascade (A0, after S1's output was
                 // sent and acked) claims a strictly higher own-output position than S1's stamp did —
                 // process order made provable by the crossing wait.
-                long aOutClaimAtS1 = clockOf(aStamps.get("S1")).offsetFor(topics.topicId(A_OUT), 0);
-                long aOutClaimAtA0 = clockOf(aStamps.get("A0")).offsetFor(topics.topicId(A_OUT), 0);
+                long aOutClaimAtS1 = clockOf(requireNonNull(aStamps.get("S1"))).offsetFor(topics.topicId(A_OUT), 0);
+                long aOutClaimAtA0 = clockOf(requireNonNull(aStamps.get("A0"))).offsetFor(topics.topicId(A_OUT), 0);
                 assertTrue(aOutClaimAtS1 >= 0,
                         "processor A's S1 stamp must claim its own output topic's acked position "
                                 + "(completeness ∪ ownOutputs, D2) but claimed nothing");

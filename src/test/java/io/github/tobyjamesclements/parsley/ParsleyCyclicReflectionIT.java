@@ -39,6 +39,7 @@ import static org.awaitility.Awaitility.await;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static java.util.Objects.requireNonNull;
 
 /**
  * A genuine two-app topology cycle under the two-branch gate, with zero coordination (T3.1 IT c):
@@ -217,14 +218,14 @@ class ParsleyCyclicReflectionIT {
 
     private static long endOffset(String bootstrap, String topic, int partition) throws Exception {
         try (Admin admin = Admin.create(Map.of("bootstrap.servers", bootstrap))) {
-            return admin.listOffsets(Map.of(new TopicPartition(topic, partition), OffsetSpec.latest()))
-                    .all().get().get(new TopicPartition(topic, partition)).offset();
+            return requireNonNull(admin.listOffsets(Map.of(new TopicPartition(topic, partition), OffsetSpec.latest()))
+                    .all().get().get(new TopicPartition(topic, partition))).offset();
         }
     }
 
     private static Uuid topicId(String bootstrap, String topic) throws Exception {
         try (Admin admin = Admin.create(Map.of("bootstrap.servers", bootstrap))) {
-            return admin.describeTopics(List.of(topic)).allTopicNames().get().get(topic).topicId();
+            return requireNonNull(admin.describeTopics(List.of(topic)).allTopicNames().get().get(topic)).topicId();
         }
     }
 

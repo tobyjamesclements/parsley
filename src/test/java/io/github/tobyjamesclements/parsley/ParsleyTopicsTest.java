@@ -13,6 +13,8 @@ import java.util.concurrent.atomic.AtomicInteger;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static io.github.tobyjamesclements.parsley.ParsleyTestFixtures.cause;
+import static io.github.tobyjamesclements.parsley.ParsleyTestFixtures.message;
 
 /**
  * Tests {@link ParsleyTopics} resolution and caching against hand-rolled {@link ParsleyTopicAdmin}
@@ -103,7 +105,7 @@ class ParsleyTopicsTest {
 
         IllegalArgumentException ex = assertThrows(IllegalArgumentException.class,
                 () -> topics.topicId("nope"), "an unknown topic must be an IllegalArgumentException");
-        assertTrue(ex.getMessage().contains("nope"), "the message must name the topic; got: " + ex.getMessage());
+        assertTrue(message(ex).contains("nope"), "the message must name the topic; got: " + message(ex));
     }
 
     /**
@@ -172,6 +174,7 @@ class ParsleyTopicsTest {
      * Asserts {@code NullPointerException} for each null entry point.
      */
     @Test
+    @SuppressWarnings("NullAway") // deliberately passes null to @NonNull params to verify rejection
     void nullArgumentsAreRejected() {
         assertThrows(NullPointerException.class, () -> ParsleyTopics.of((Properties) null),
                 "of(Properties) must reject null props");

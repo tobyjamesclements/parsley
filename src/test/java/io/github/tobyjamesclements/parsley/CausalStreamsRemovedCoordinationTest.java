@@ -9,6 +9,8 @@ import java.util.Properties;
 
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static io.github.tobyjamesclements.parsley.ParsleyTestFixtures.cause;
+import static io.github.tobyjamesclements.parsley.ParsleyTestFixtures.message;
 
 /**
  * The removed {@code parsley.coordination.*} keys fail {@link CausalStreams} construction loudly:
@@ -45,11 +47,11 @@ class CausalStreamsRemovedCoordinationTest {
         IllegalStateException thrown = assertThrows(IllegalStateException.class,
                 () -> new CausalStreams(topology, props),
                 "a removed parsley.coordination.* key must fail CausalStreams construction");
-        assertTrue(thrown.getMessage().contains("parsley.coordination.epoch-events-topic"),
-                "the failure must name the offending key: " + thrown.getMessage());
-        assertTrue(thrown.getMessage().contains("removed"),
+        assertTrue(message(thrown).contains("parsley.coordination.epoch-events-topic"),
+                "the failure must name the offending key: " + message(thrown));
+        assertTrue(message(thrown).contains("removed"),
                 "the failure must name the removal, not read as an unknown-key typo: "
-                        + thrown.getMessage());
+                        + message(thrown));
     }
 
     /** A delegate that forwards its input unchanged — the topology shape is all this test needs. */

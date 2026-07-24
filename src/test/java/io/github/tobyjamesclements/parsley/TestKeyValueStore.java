@@ -14,6 +14,8 @@ import java.util.Map;
 import java.util.NavigableMap;
 import java.util.TreeMap;
 
+import org.jspecify.annotations.Nullable;
+
 /**
  * An in-memory {@link KeyValueStore} double, keyed and ordered by an explicit {@link Comparator} (so
  * it can stand in for either a {@code Long}-keyed or a {@code byte[]}-keyed store). Used to exercise
@@ -41,8 +43,8 @@ final class TestKeyValueStore<K, V> implements KeyValueStore<K, V> {
     @Override public void putAll(List<KeyValue<K, V>> entries) {
         for (KeyValue<K, V> entry : entries) put(entry.key, entry.value);
     }
-    @Override public V delete(K key) { return map.remove(key); }
-    @Override public V get(K key) { return map.get(key); }
+    @Override public @Nullable V delete(K key) { return map.remove(key); }
+    @Override public @Nullable V get(K key) { return map.get(key); }
 
     @Override public KeyValueIterator<K, V> range(K from, K to) {
         return iterator(map.subMap(from, true, to, true));

@@ -10,6 +10,7 @@ import java.util.Set;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import org.jspecify.annotations.Nullable;
 
 /**
  * Tests {@link ParsleyMarkerPartitioner}: the {@link StreamPartitioner} wrapper {@link CausalTopology}
@@ -65,6 +66,7 @@ class ParsleyMarkerPartitionerTest {
      * computed from the same key.
      */
     @Test
+    @SuppressWarnings("NullAway") // deliberately passes a null key/value, which the partitioner accepts
     void withAnOverrideSetReturnsItRegardlessOfKeyValueOrDelegate() {
         RecordingPartitioner delegate = new RecordingPartitioner(Optional.of(Set.of(2)));
         ParsleyMarkerPartitioner<String, String> partitioner = new ParsleyMarkerPartitioner<>(delegate);
@@ -83,6 +85,7 @@ class ParsleyMarkerPartitionerTest {
      * delegate again — proving the override is scoped to one forward, not sticky across calls.
      */
     @Test
+    @SuppressWarnings("NullAway") // deliberately passes a null value, which the partitioner accepts
     void afterClearingTheOverrideASubsequentCallFallsBackToTheDelegateAgain() {
         RecordingPartitioner delegate = new RecordingPartitioner(Optional.of(Set.of(2)));
         ParsleyMarkerPartitioner<String, String> partitioner = new ParsleyMarkerPartitioner<>(delegate);
@@ -102,9 +105,9 @@ class ParsleyMarkerPartitionerTest {
 
         private final Optional<Set<Integer>> answer;
         private boolean invoked;
-        private String lastTopic;
-        private String lastKey;
-        private String lastValue;
+        private @Nullable String lastTopic;
+        private @Nullable String lastKey;
+        private @Nullable String lastValue;
         private int lastNumPartitions;
 
         RecordingPartitioner(Optional<Set<Integer>> answer) {

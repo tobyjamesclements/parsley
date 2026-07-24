@@ -37,6 +37,7 @@ import java.util.UUID;
 import static org.awaitility.Awaitility.await;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static java.util.Objects.requireNonNull;
 
 /**
  * The T3.0 A7 funnel against a real broker (T2.3 IT d): one invocation of the delegate sends to
@@ -172,7 +173,7 @@ class ParsleyFunnelCrossingWaitIT {
 
     private static Uuid topicId(String bootstrap, String topic) throws Exception {
         try (Admin admin = Admin.create(Map.of("bootstrap.servers", bootstrap))) {
-            return admin.describeTopics(List.of(topic)).allTopicNames().get().get(topic).topicId();
+            return requireNonNull(admin.describeTopics(List.of(topic)).allTopicNames().get().get(topic)).topicId();
         }
     }
 

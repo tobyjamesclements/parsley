@@ -9,6 +9,7 @@ import java.util.OptionalLong;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static java.util.Objects.requireNonNull;
 
 class ParsleyBufferStoreTest {
 
@@ -30,10 +31,10 @@ class ParsleyBufferStoreTest {
         long second = store.add(bufferedRecord(C1, 1, ParsleyVectorClock.empty().observe(C1_ID, 0, 3)), 0L);
 
         assertTrue(first < second, "earlier-added record must carry the lower sequence number");
-        assertEquals(0L, store.get(first).record().offset(), "first sequence must resolve to the first record");
+        assertEquals(0L, requireNonNull(store.get(first)).record().offset(), "first sequence must resolve to the first record");
         assertEquals(ParsleyVectorClock.empty().observe(C1_ID, 0, 9),
-                store.get(first).dependencies(), "first record must carry its original dependencies");
-        assertEquals(1L, store.get(second).record().offset(), "second sequence must resolve to the second record");
+                requireNonNull(store.get(first)).dependencies(), "first record must carry its original dependencies");
+        assertEquals(1L, requireNonNull(store.get(second)).record().offset(), "second sequence must resolve to the second record");
     }
 
     /**
@@ -53,7 +54,7 @@ class ParsleyBufferStoreTest {
 
         assertEquals(1, store.size(), "store size must decrement after removal");
         assertEquals(null, store.get(first), "the removed entry must be gone");
-        assertEquals(1L, store.get(second).record().offset(), "removing the first entry must leave the second");
+        assertEquals(1L, requireNonNull(store.get(second)).record().offset(), "removing the first entry must leave the second");
     }
 
     /**
@@ -79,7 +80,7 @@ class ParsleyBufferStoreTest {
         long seq = store.add(bufferedRecord(C1, 0,
                 ParsleyVectorClock.empty().observe(C1_ID, 0, 1)), bufferedAt);
 
-        assertEquals(bufferedAt, store.get(seq).bufferedAt(), "get() must return the bufferedAt passed to add()");
+        assertEquals(bufferedAt, requireNonNull(store.get(seq)).bufferedAt(), "get() must return the bufferedAt passed to add()");
         assertEquals(bufferedAt, store.indexEntries().get(0).bufferedAt(),
                 "indexEntries() must return the bufferedAt passed to add()");
     }

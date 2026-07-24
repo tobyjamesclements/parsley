@@ -8,6 +8,8 @@ import java.util.Set;
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static io.github.tobyjamesclements.parsley.ParsleyTestFixtures.cause;
+import static io.github.tobyjamesclements.parsley.ParsleyTestFixtures.message;
 
 /**
  * Tests {@link ParsleyConfig}'s enforcement of the empty configuration surface: Parsley has no
@@ -58,11 +60,11 @@ class ParsleyConfigTest {
             IllegalStateException thrown = assertThrows(IllegalStateException.class,
                     () -> ParsleyConfig.requireNoParsleyKeys(props),
                     "the key " + key + " must fail startup loudly");
-            assertTrue(thrown.getMessage().contains(key),
-                    "the failure must name the offending key: " + thrown.getMessage());
-            assertTrue(thrown.getMessage().contains("removed"),
+            assertTrue(message(thrown).contains(key),
+                    "the failure must name the offending key: " + message(thrown));
+            assertTrue(message(thrown).contains("removed"),
                     "the failure must present the empty surface as a removal, not an unknown-key "
-                            + "typo: " + thrown.getMessage());
+                            + "typo: " + message(thrown));
         }
     }
 
@@ -82,8 +84,8 @@ class ParsleyConfigTest {
         IllegalStateException thrown = assertThrows(IllegalStateException.class,
                 () -> ParsleyConfig.requireNoParsleyKeys(props),
                 "a parsley.* key in the defaults layer must fail startup loudly");
-        assertTrue(thrown.getMessage().contains("parsley.topology.validation"),
-                "the failure must name the offending key: " + thrown.getMessage());
+        assertTrue(message(thrown).contains("parsley.topology.validation"),
+                "the failure must name the offending key: " + message(thrown));
     }
 
     /**
@@ -101,8 +103,8 @@ class ParsleyConfigTest {
         IllegalStateException thrown = assertThrows(IllegalStateException.class,
                 () -> ParsleyConfig.requireNoParsleyKeys(props),
                 "a configuration with several parsley.* keys must fail startup loudly");
-        assertTrue(thrown.getMessage().contains("parsley.topology.validation")
-                        && thrown.getMessage().contains("parsley.coordination.member-apps"),
-                "the failure must name every offending key: " + thrown.getMessage());
+        assertTrue(message(thrown).contains("parsley.topology.validation")
+                        && message(thrown).contains("parsley.coordination.member-apps"),
+                "the failure must name every offending key: " + message(thrown));
     }
 }

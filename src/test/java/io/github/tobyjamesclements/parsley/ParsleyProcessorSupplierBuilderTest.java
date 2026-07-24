@@ -14,6 +14,8 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static io.github.tobyjamesclements.parsley.ParsleyTestFixtures.cause;
+import static io.github.tobyjamesclements.parsley.ParsleyTestFixtures.message;
 
 class ParsleyProcessorSupplierBuilderTest {
 
@@ -110,8 +112,8 @@ class ParsleyProcessorSupplierBuilderTest {
         IllegalArgumentException e = assertThrows(IllegalArgumentException.class,
                 () -> ParsleyProcessorSupplier.builder(alreadyDecorated),
                 "builder(...) must reject an already-decorated supplier");
-        assertTrue(e.getMessage().contains("ParsleyProcessorSupplier"),
-                "the message must name the double-decoration: " + e.getMessage());
+        assertTrue(message(e).contains("ParsleyProcessorSupplier"),
+                "the message must name the double-decoration: " + message(e));
     }
 
     // --- helpers --------------------------------------------------------------------------------

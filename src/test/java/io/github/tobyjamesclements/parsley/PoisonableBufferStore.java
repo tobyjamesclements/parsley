@@ -4,6 +4,7 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.OptionalLong;
 import java.util.Set;
+import org.jspecify.annotations.Nullable;
 
 /**
  * Wraps a {@link MockBufferStore}, letting a test mark chosen insertion sequences to make {@link #get}
@@ -29,7 +30,7 @@ final class PoisonableBufferStore<K, V> implements ParsleyBufferStore<K, V> {
     }
 
     @Override
-    public Entry<K, V> get(long sequence) {
+    public @Nullable Entry<K, V> get(long sequence) {
         if (poisoned.contains(sequence)) {
             IndexEntry meta = indexEntryFor(sequence);
             throw new CausalBufferDeserializationException(meta.topic(), meta.topicId(), meta.partition(),

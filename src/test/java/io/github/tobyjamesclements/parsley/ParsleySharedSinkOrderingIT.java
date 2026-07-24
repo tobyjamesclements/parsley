@@ -35,6 +35,7 @@ import java.util.UUID;
 import static org.awaitility.Awaitility.await;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static java.util.Objects.requireNonNull;
 
 /**
  * The finding-(iii) shared-sink scenario, closed by the two-branch gate (T3.1 IT b): app A both
@@ -233,7 +234,7 @@ class ParsleySharedSinkOrderingIT {
 
     private static Uuid topicId(String bootstrap, String topic) throws Exception {
         try (Admin admin = Admin.create(Map.of("bootstrap.servers", bootstrap))) {
-            return admin.describeTopics(List.of(topic)).allTopicNames().get().get(topic).topicId();
+            return requireNonNull(admin.describeTopics(List.of(topic)).allTopicNames().get().get(topic)).topicId();
         }
     }
 

@@ -6,6 +6,8 @@ import java.util.Map;
 import java.util.OptionalLong;
 import java.util.TreeMap;
 
+import org.jspecify.annotations.Nullable;
+
 /**
  * An in-memory {@link ParsleyBufferStore} backed by a {@link TreeMap} keyed by insertion sequence. Used
  * where buffer durability is not required — unit tests that exercise the {@link ParsleyCausalBroadcast}
@@ -30,7 +32,7 @@ final class MockBufferStore<K, V> implements ParsleyBufferStore<K, V> {
     }
 
     @Override
-    public Entry<K, V> get(long sequence) {
+    public @Nullable Entry<K, V> get(long sequence) {
         Held<K, V> held = buffer.get(sequence);
         if (held == null) return null;
         return toEntry(sequence, held);

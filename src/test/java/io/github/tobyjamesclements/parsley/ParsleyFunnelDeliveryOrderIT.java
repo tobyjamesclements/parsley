@@ -37,6 +37,7 @@ import java.util.UUID;
 import static org.awaitility.Awaitility.await;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static java.util.Objects.requireNonNull;
 
 /**
  * The delivery-order half of the T3.0 A7 funnel, deferred from T2.3 to T3.1: one invocation of
@@ -251,7 +252,7 @@ class ParsleyFunnelDeliveryOrderIT {
 
     private static Uuid topicId(String bootstrap, String topic) throws Exception {
         try (Admin admin = Admin.create(Map.of("bootstrap.servers", bootstrap))) {
-            return admin.describeTopics(List.of(topic)).allTopicNames().get().get(topic).topicId();
+            return requireNonNull(admin.describeTopics(List.of(topic)).allTopicNames().get().get(topic)).topicId();
         }
     }
 

@@ -75,6 +75,14 @@ All notable changes to this project are documented in this file. The format is b
   rationale and links to package-private types. The tone matches the documentation site, but the
   Javadoc reads on its own without it. The verbose internal `Parsley*` module comments are condensed
   in the same pass. `mvn javadoc:javadoc` stays clean under doclint.
+- **NullAway on the test sources is promoted from WARN to ERROR (closes #27).** The test tree is
+  made null-safe: exception assertions read `getMessage()`/`getCause()` through non-null
+  `ParsleyTestFixtures.message`/`cause` helpers; nullable map, store, and admin lookups are wrapped
+  in `requireNonNull`; test-double and helper returns that can be null are annotated `@Nullable`;
+  and the few deliberately-null-input tests carry a scoped `@SuppressWarnings("NullAway")`. The
+  generated `io.github.tobyjamesclements.parsley.avro` subpackage is excluded via
+  `UnannotatedSubPackages`. Both the main and test compile passes now run `-Xep:NullAway:ERROR`, so
+  a nullness regression in either tree fails the build.
 
 ### Removed
 - **The JMH benchmark suite is deleted; `docs/performance.md` now asserts complexity from the

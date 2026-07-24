@@ -40,6 +40,7 @@ import java.util.UUID;
 
 import static org.awaitility.Awaitility.await;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static java.util.Objects.requireNonNull;
 
 /**
  * Repro probe for the EOS offset-density concern: does a causal stage's contiguous frontier track a
@@ -76,7 +77,7 @@ class ParsleyEosFrontierDensityIT {
         createTopics(bootstrap, C1, C2);
         Uuid srcId;
         try (Admin admin = Admin.create(Map.of("bootstrap.servers", bootstrap))) {
-            srcId = admin.describeTopics(List.of(C1)).allTopicNames().get().get(C1).topicId();
+            srcId = requireNonNull(admin.describeTopics(List.of(C1)).allTopicNames().get().get(C1)).topicId();
         }
 
         // Two committed transactions of three records each: log = rec@0,1,2, MARKER@3, rec@4,5,6.

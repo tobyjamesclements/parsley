@@ -20,6 +20,8 @@ import java.util.Set;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static io.github.tobyjamesclements.parsley.ParsleyTestFixtures.cause;
+import static io.github.tobyjamesclements.parsley.ParsleyTestFixtures.message;
 
 /**
  * Tests for {@link ParsleyOffsetSeeder}: pre-start consumer-group offset seeding under
@@ -88,9 +90,9 @@ class ParsleyOffsetSeederTest {
         IllegalStateException thrown = assertThrows(IllegalStateException.class,
                 () -> ParsleyOffsetSeeder.seed(admin, APP, Set.of(C1), CHANGELOGS),
                 "surviving state with a missing offset must fail the start, not seed over the frontier");
-        assertTrue(thrown.getMessage().contains("surviving"),
+        assertTrue(message(thrown).contains("surviving"),
                 "the failure must explain that surviving state means this is not a first start: "
-                        + thrown.getMessage());
+                        + message(thrown));
         assertTrue(admin.commitCalls.isEmpty(), "nothing may be seeded once surviving state is detected");
     }
 
@@ -137,8 +139,8 @@ class ParsleyOffsetSeederTest {
         IllegalStateException thrown = assertThrows(IllegalStateException.class,
                 () -> ParsleyOffsetSeeder.seed(admin, APP, Set.of(C1), CHANGELOGS),
                 "a partially committed topic must keep the surviving-state refusal");
-        assertTrue(thrown.getMessage().contains("surviving"),
-                "the failure must explain the surviving-state refusal: " + thrown.getMessage());
+        assertTrue(message(thrown).contains("surviving"),
+                "the failure must explain the surviving-state refusal: " + message(thrown));
         assertTrue(admin.commitCalls.isEmpty(), "nothing may be seeded for a partially committed topic");
     }
 
@@ -160,8 +162,8 @@ class ParsleyOffsetSeederTest {
         IllegalStateException thrown = assertThrows(IllegalStateException.class,
                 () -> ParsleyOffsetSeeder.seed(admin, APP, Set.of(C1, "c3"), CHANGELOGS),
                 "all topics uncommitted with surviving state is offset expiry, not an added input");
-        assertTrue(thrown.getMessage().contains("surviving"),
-                "the failure must explain the surviving-state refusal: " + thrown.getMessage());
+        assertTrue(message(thrown).contains("surviving"),
+                "the failure must explain the surviving-state refusal: " + message(thrown));
         assertTrue(admin.commitCalls.isEmpty(), "nothing may be seeded on the offset-expiry shape");
     }
 
@@ -222,8 +224,8 @@ class ParsleyOffsetSeederTest {
         IllegalStateException thrown = assertThrows(IllegalStateException.class,
                 () -> ParsleyOffsetSeeder.seed(admin, APP, Set.of(C1), NO_CHANGELOGS),
                 "a group-not-empty failure that no peer covers must abort the start");
-        assertTrue(thrown.getMessage().contains("no longer empty"),
-                "the failure must explain the group was not empty and no peer committed: " + thrown.getMessage());
+        assertTrue(message(thrown).contains("no longer empty"),
+                "the failure must explain the group was not empty and no peer committed: " + message(thrown));
     }
 
     /**
@@ -240,8 +242,8 @@ class ParsleyOffsetSeederTest {
         IllegalStateException thrown = assertThrows(IllegalStateException.class,
                 () -> ParsleyOffsetSeeder.seed(admin, APP, Set.of(C1), NO_CHANGELOGS),
                 "a non-group-not-empty commit failure must abort the start, not be tolerated");
-        assertTrue(thrown.getMessage().contains("failed to seed"),
-                "the failure must name the seed commit that failed: " + thrown.getMessage());
+        assertTrue(message(thrown).contains("failed to seed"),
+                "the failure must name the seed commit that failed: " + message(thrown));
     }
 
     /**

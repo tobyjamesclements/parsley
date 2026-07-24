@@ -34,6 +34,7 @@ import java.util.Properties;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import org.jspecify.annotations.Nullable;
 
 /**
  * Exercises the causal decorator with <strong>real Avro + Confluent Schema Registry</strong> serdes
@@ -197,7 +198,7 @@ class ParsleyProcessorsAvroTopologyTest {
 
     // --- helpers -----------------------------------------------------------------------------
 
-    private static <T extends Throwable> T causeOfType(Throwable thrown, Class<T> type) {
+    private static <T extends Throwable> @Nullable T causeOfType(Throwable thrown, Class<T> type) {
         for (Throwable t = thrown; t != null; t = t.getCause()) {
             if (type.isInstance(t)) return type.cast(t);
         }

@@ -11,6 +11,8 @@ import java.util.Optional;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static io.github.tobyjamesclements.parsley.ParsleyTestFixtures.cause;
+import static io.github.tobyjamesclements.parsley.ParsleyTestFixtures.message;
 
 /**
  * Tests the public {@link CausalClock} facade: building, wire serialisation, and reading the
@@ -89,8 +91,8 @@ class CausalClockTest {
         // version byte 99 (not 1), then a well-formed empty body — must be rejected on the version.
         IllegalStateException ex = assertThrows(IllegalStateException.class,
                 () -> CausalClock.fromBytes(new byte[]{99, 0, 0, 0, 0}));
-        assertTrue(ex.getMessage().contains("99"),
-                "error message must identify the unsupported version; got: " + ex.getMessage());
+        assertTrue(message(ex).contains("99"),
+                "error message must identify the unsupported version; got: " + message(ex));
     }
 
     /**

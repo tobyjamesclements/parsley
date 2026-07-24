@@ -22,6 +22,7 @@ import java.util.TreeMap;
 import java.util.stream.Collectors;
 
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static java.util.Objects.requireNonNull;
 
 /**
  * An in-memory multi-node topology simulator — the T2.4 property harness. Each node is one
@@ -193,6 +194,7 @@ final class ParsleyTopologySim {
      * with its own stores, protocol instances, producer seam, and ground-truth state — the unit
      * every invariant quantifies over.
      */
+    @SuppressWarnings("NullAway.Init") // channels/core/gossip are wired by init() right after construction
     final class SimTask {
         final SimNode node;
         final int partition;
@@ -283,7 +285,7 @@ final class ParsleyTopologySim {
         }
 
         boolean hasPollableInput() {
-            return node.inputs.stream().anyMatch(input -> cursors.get(input) < topic(input).log(partition).size());
+            return node.inputs.stream().anyMatch(input -> requireNonNull(cursors.get(input)) < topic(input).log(partition).size());
         }
 
         /**
@@ -848,7 +850,7 @@ final class ParsleyTopologySim {
         RewindableChannel choice = rewindable.get(random.nextInt(rewindable.size()));
         SimTask task = choice.task();
         int lowest = lowestSafeRollback(task, choice.input());
-        int cursor = task.cursors.get(choice.input());
+        int cursor = requireNonNull(task.cursors.get(choice.input()));
         int toCursor = lowest + random.nextInt(cursor - lowest);
         record(new ParsleySimTrace.Rollback(node.name, choice.input(), task.partition, toCursor));
         task.cursors.put(choice.input(), toCursor);
@@ -960,7 +962,7 @@ final class ParsleyTopologySim {
         List<PollableChannel> pollable = new ArrayList<>();
         for (String input : node.inputs.stream().sorted().toList()) {
             for (SimTask task : node.tasks) {
-                if (task.cursors.get(input) < topic(input).log(task.partition).size()) {
+                if (requireNonNull(task.cursors.get(input)) < topic(input).log(task.partition).size()) {
                     pollable.add(new PollableChannel(input, task));
                 }
             }

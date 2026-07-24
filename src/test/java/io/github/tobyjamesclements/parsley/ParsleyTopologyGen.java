@@ -9,6 +9,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Random;
 import java.util.Set;
+import static java.util.Objects.requireNonNull;
 
 /**
  * Seed-deterministic random topology generation for the {@link ParsleyTopologySim} explorer,
@@ -203,15 +204,15 @@ final class ParsleyTopologyGen {
         }
         Map<String, Set<String>> reachableByNode = reachability(spec);
         for (ParsleySimTrace.SimSpec.NodeSpec node : spec.nodes()) {
-            if (reachableByNode.get(node.name()).contains(node.name())) {
+            if (requireNonNull(reachableByNode.get(node.name())).contains(node.name())) {
                 features.add(Feature.CYCLE);
             }
         }
         for (ParsleySimTrace.SimSpec.NodeSpec a : spec.nodes()) {
             for (ParsleySimTrace.SimSpec.NodeSpec b : spec.nodes()) {
                 if (!a.name().equals(b.name())
-                        && reachableByNode.get(a.name()).contains(b.name())
-                        && reachableByNode.get(b.name()).contains(a.name())) {
+                        && requireNonNull(reachableByNode.get(a.name())).contains(b.name())
+                        && requireNonNull(reachableByNode.get(b.name())).contains(a.name())) {
                     features.add(Feature.MULTI_NODE_CYCLE);
                 }
             }

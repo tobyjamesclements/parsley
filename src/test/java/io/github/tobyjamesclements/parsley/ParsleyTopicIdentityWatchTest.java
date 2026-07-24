@@ -21,6 +21,8 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static io.github.tobyjamesclements.parsley.ParsleyTestFixtures.cause;
+import static io.github.tobyjamesclements.parsley.ParsleyTestFixtures.message;
 
 /**
  * Tests for {@link ParsleyTopicIdentityWatch} — the mid-run E1 enforcement (T3.0 A13): tasks
@@ -114,11 +116,11 @@ class ParsleyTopicIdentityWatchTest {
         CausalTopicRecreatedException failure =
                 assertThrows(CausalTopicRecreatedException.class, watch::ensureIntact,
                         "a changed topic UUID must fail every subsequent identity check");
-        assertTrue(failure.getMessage().contains("c1"),
-                "the failure must name the recreated topic: " + failure.getMessage());
-        assertTrue(failure.getMessage().contains(C1_ID.toString())
-                        && failure.getMessage().contains(recreated.toString()),
-                "the failure must carry both the init-time and the current UUID: " + failure.getMessage());
+        assertTrue(message(failure).contains("c1"),
+                "the failure must name the recreated topic: " + message(failure));
+        assertTrue(message(failure).contains(C1_ID.toString())
+                        && message(failure).contains(recreated.toString()),
+                "the failure must carry both the init-time and the current UUID: " + message(failure));
     }
 
     /**
@@ -322,7 +324,7 @@ class ParsleyTopicIdentityWatchTest {
     /** Asserts {@code failure} carries the full recreation detail — a torn read would truncate it. */
     private static void assertMessageComplete(CausalTopicRecreatedException failure, Uuid recreated,
                                               String context) {
-        String message = failure.getMessage();
+        String message = message(failure);
         assertTrue(message.contains("c1") && message.contains(C1_ID.toString())
                         && message.contains(recreated.toString()),
                 "the surfaced failure must carry the complete detail — topic name and both UUIDs ("

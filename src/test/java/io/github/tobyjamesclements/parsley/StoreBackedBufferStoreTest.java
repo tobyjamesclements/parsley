@@ -16,6 +16,7 @@ import java.util.List;
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static java.util.Objects.requireNonNull;
 
 /**
  * Tests {@link StoreBackedBufferStore} — the {@link org.apache.kafka.streams.state.KeyValueStore}-backed
@@ -47,7 +48,7 @@ class StoreBackedBufferStoreTest {
         long seqA = store.add(record(C1, 0, depsA), 100L);
         long seqB = store.add(record(C1, 1, depsB), 200L);
 
-        ParsleyBufferStore.Entry<String, String> first = store.get(seqA);
+        ParsleyBufferStore.Entry<String, String> first = requireNonNull(store.get(seqA));
         assertEquals(0L, first.record().offset(), "the first sequence must decode the first added record");
         assertEquals(depsA, first.dependencies(), "the first record must carry its original dependencies");
         assertEquals(100L, first.bufferedAt(), "the first record must carry its bufferedAt");

@@ -35,6 +35,7 @@ import java.util.UUID;
 import static org.awaitility.Awaitility.await;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static java.util.Objects.requireNonNull;
 
 /**
  * The two-branch gate's ignore branch across a chain with an unconsumed intermediate topic (T3.1
@@ -195,7 +196,7 @@ class ParsleyUnconsumedIntermediateIT {
 
     private static Uuid topicId(String bootstrap, String topic) throws Exception {
         try (Admin admin = Admin.create(Map.of("bootstrap.servers", bootstrap))) {
-            return admin.describeTopics(List.of(topic)).allTopicNames().get().get(topic).topicId();
+            return requireNonNull(admin.describeTopics(List.of(topic)).allTopicNames().get().get(topic)).topicId();
         }
     }
 

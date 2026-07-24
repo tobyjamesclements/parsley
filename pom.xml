@@ -343,7 +343,7 @@
                             <compilerArgs>
                                 <arg>-XDcompilePolicy=simple</arg>
                                 <arg>--should-stop=ifError=FLOW</arg>
-                                <arg>-Xplugin:ErrorProne -XepDisableAllChecks -Xep:NullAway:ERROR -XepOpt:NullAway:AnnotatedPackages=io.github.tobyjamesclements.parsley -XepOpt:NullAway:KnownInitializers=org.apache.kafka.streams.processor.api.Processor.init</arg>
+                                <arg>-Xplugin:ErrorProne -XepDisableAllChecks -Xep:NullAway:ERROR -XepOpt:NullAway:AnnotatedPackages=io.github.tobyjamesclements.parsley -XepOpt:NullAway:UnannotatedSubPackages=io.github.tobyjamesclements.parsley.avro -XepOpt:NullAway:KnownInitializers=org.apache.kafka.streams.processor.api.Processor.init</arg>
                                 <arg>-J--add-exports=jdk.compiler/com.sun.tools.javac.api=ALL-UNNAMED</arg>
                                 <arg>-J--add-exports=jdk.compiler/com.sun.tools.javac.file=ALL-UNNAMED</arg>
                                 <arg>-J--add-exports=jdk.compiler/com.sun.tools.javac.main=ALL-UNNAMED</arg>
@@ -375,7 +375,7 @@
                             <compilerArgs>
                                 <arg>-XDcompilePolicy=simple</arg>
                                 <arg>--should-stop=ifError=FLOW</arg>
-                                <arg>-Xplugin:ErrorProne -XepDisableAllChecks -Xep:NullAway:WARN -XepOpt:NullAway:AnnotatedPackages=io.github.tobyjamesclements.parsley -XepOpt:NullAway:KnownInitializers=org.apache.kafka.streams.processor.api.Processor.init</arg>
+                                <arg>-Xplugin:ErrorProne -XepDisableAllChecks -Xep:NullAway:ERROR -XepOpt:NullAway:AnnotatedPackages=io.github.tobyjamesclements.parsley -XepOpt:NullAway:UnannotatedSubPackages=io.github.tobyjamesclements.parsley.avro -XepOpt:NullAway:KnownInitializers=org.apache.kafka.streams.processor.api.Processor.init</arg>
                                 <arg>-J--add-exports=jdk.compiler/com.sun.tools.javac.api=ALL-UNNAMED</arg>
                                 <arg>-J--add-exports=jdk.compiler/com.sun.tools.javac.file=ALL-UNNAMED</arg>
                                 <arg>-J--add-exports=jdk.compiler/com.sun.tools.javac.main=ALL-UNNAMED</arg>

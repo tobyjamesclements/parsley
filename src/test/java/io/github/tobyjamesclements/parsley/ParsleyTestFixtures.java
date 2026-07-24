@@ -7,6 +7,8 @@ import java.util.Comparator;
 import java.util.Set;
 import java.util.function.LongSupplier;
 
+import static java.util.Objects.requireNonNull;
+
 /**
  * The test fixture factory for the two protocol classes whose convenience constructors used to
  * live in main: {@link ParsleyChannels} instances over an in-memory store double, and
@@ -101,5 +103,15 @@ final class ParsleyTestFixtures {
         } catch (IOException e) {
             throw new IllegalStateException(e);
         }
+    }
+
+    /** The throwable's message, asserted non-null, for assertions that inspect it. */
+    static String message(Throwable t) {
+        return requireNonNull(t.getMessage(), "expected a non-null exception message");
+    }
+
+    /** The throwable's cause, asserted non-null, for assertions that inspect it. */
+    static Throwable cause(Throwable t) {
+        return requireNonNull(t.getCause(), "expected a non-null cause");
     }
 }

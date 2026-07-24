@@ -49,6 +49,9 @@ import java.util.concurrent.TimeoutException;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static io.github.tobyjamesclements.parsley.ParsleyTestFixtures.cause;
+import static io.github.tobyjamesclements.parsley.ParsleyTestFixtures.message;
+import org.jspecify.annotations.Nullable;
 
 /**
  * Exercises {@link ParsleyProcessorSupplier} — the decorating causal processor — through a real Kafka Streams
@@ -79,7 +82,7 @@ class ParsleyProcessorsTopologyTest {
 
     // --- helpers -------------------------------------------------------------------------------
 
-    private static Properties config(File stateDir) {
+    private static Properties config(@Nullable File stateDir) {
         Properties props = new Properties();
         props.put(StreamsConfig.APPLICATION_ID_CONFIG, "decorator-test");
         props.put(StreamsConfig.BOOTSTRAP_SERVERS_CONFIG, "dummy:1234");
@@ -1176,10 +1179,10 @@ class ParsleyProcessorsTopologyTest {
             StreamsException thrown = assertThrows(StreamsException.class,
                     () -> ghost.pipeInput(new TestRecord<>("k", "v", depsHeader(CausalClock.empty()))),
                     "a record on an unregistered topic must not be silently admitted");
-            assertEquals(IllegalStateException.class, thrown.getCause().getClass(),
+            assertEquals(IllegalStateException.class, cause(thrown).getClass(),
                     "the wrapped cause must be the intake guard's exception");
-            assertTrue(thrown.getCause().getMessage().contains("no ParsleySource registered for topic 'ghost'"),
-                    "the cause must name the unregistered topic: " + thrown.getCause().getMessage());
+            assertTrue(message(cause(thrown)).contains("no ParsleySource registered for topic 'ghost'"),
+                    "the cause must name the unregistered topic: " + message(cause(thrown)));
         }
     }
 
@@ -1214,11 +1217,11 @@ class ParsleyProcessorsTopologyTest {
             StreamsException thrown = assertThrows(StreamsException.class,
                     () -> c1.pipeInput(new TestRecord<>(null, null, corrupt)),
                     "an undecodable null-message carried clock must fail the task, never fold as empty");
-            assertEquals(CausalVectorClockResolutionException.class, thrown.getCause().getClass(),
+            assertEquals(CausalVectorClockResolutionException.class, cause(thrown).getClass(),
                     "the wrapped cause must be the clock-resolution guard's exception, mirroring the "
                             + "business path");
-            assertTrue(thrown.getCause().getMessage().contains("c1-0@0"),
-                    "the failure must name the null message's coordinate: " + thrown.getCause().getMessage());
+            assertTrue(message(cause(thrown)).contains("c1-0@0"),
+                    "the failure must name the null message's coordinate: " + message(cause(thrown)));
         }
     }
 
@@ -1288,10 +1291,10 @@ class ParsleyProcessorsTopologyTest {
             StreamsException thrown = assertThrows(StreamsException.class,
                     () -> ghost.pipeInput(new TestRecord<>(null, null, marker)),
                     "a null message on an unregistered topic must fail the task, not be skipped past");
-            assertEquals(IllegalStateException.class, thrown.getCause().getClass(),
+            assertEquals(IllegalStateException.class, cause(thrown).getClass(),
                     "the wrapped cause must be the intake guard's exception, mirroring the business path");
-            assertTrue(thrown.getCause().getMessage().contains("no ParsleySource registered for topic 'ghost'"),
-                    "the cause must name the unregistered topic: " + thrown.getCause().getMessage());
+            assertTrue(message(cause(thrown)).contains("no ParsleySource registered for topic 'ghost'"),
+                    "the cause must name the unregistered topic: " + message(cause(thrown)));
         }
     }
 
@@ -1321,11 +1324,11 @@ class ParsleyProcessorsTopologyTest {
         StreamsException thrown = assertThrows(StreamsException.class,
                 () -> new TopologyTestDriver(topology, config(tempStateDir())),
                 "startup must fail when the admin does not resolve every registered topic");
-        Throwable guardFailure = thrown.getCause();
+        Throwable guardFailure = cause(thrown);
         assertEquals(IllegalStateException.class, guardFailure.getClass(),
                 "the cause must be the UUID-resolution guard's exception directly, not re-wrapped");
-        assertTrue(guardFailure.getMessage().contains("broker did not return a UUID for topic 'c1'"),
-                "the cause must name the unresolved topic: " + guardFailure.getMessage());
+        assertTrue(message(guardFailure).contains("broker did not return a UUID for topic 'c1'"),
+                "the cause must name the unresolved topic: " + message(guardFailure));
     }
 
     /**
@@ -1356,11 +1359,11 @@ class ParsleyProcessorsTopologyTest {
         StreamsException thrown = assertThrows(StreamsException.class,
                 () -> new TopologyTestDriver(topology, config(tempStateDir())),
                 "startup must fail when the admin itself throws");
-        assertEquals(IllegalStateException.class, thrown.getCause().getClass(),
+        assertEquals(IllegalStateException.class, cause(thrown).getClass(),
                 "the wrapped cause must be the resolveTopicUuids catch-and-rethrow");
-        assertTrue(thrown.getCause().getMessage().contains("failed to resolve topic metadata for causal buffers"),
-                "the wrapping message must name the failed resolution: " + thrown.getCause().getMessage());
-        assertEquals(TimeoutException.class, thrown.getCause().getCause().getClass(),
+        assertTrue(message(cause(thrown)).contains("failed to resolve topic metadata for causal buffers"),
+                "the wrapping message must name the failed resolution: " + message(cause(thrown)));
+        assertEquals(TimeoutException.class, cause(cause(thrown)).getClass(),
                 "the original admin failure must be preserved as the innermost cause");
     }
 
@@ -1577,10 +1580,10 @@ class ParsleyProcessorsTopologyTest {
         StreamsException thrown = assertThrows(StreamsException.class,
                 () -> new TopologyTestDriver(topology, config(tempStateDir())),
                 "a source partition-count mismatch must fail startup");
-        assertEquals(IllegalStateException.class, thrown.getCause().getClass(),
+        assertEquals(IllegalStateException.class, cause(thrown).getClass(),
                 "the wrapped cause must be the parity check's failure");
-        assertTrue(thrown.getCause().getMessage().contains("mismatched partition counts"),
-                "the failure must name the mismatch: " + thrown.getCause().getMessage());
+        assertTrue(message(cause(thrown)).contains("mismatched partition counts"),
+                "the failure must name the mismatch: " + message(cause(thrown)));
     }
 
     /**
@@ -1605,11 +1608,11 @@ class ParsleyProcessorsTopologyTest {
         StreamsException thrown = assertThrows(StreamsException.class,
                 () -> new TopologyTestDriver(topology, props),
                 "a malformed delivery.timeout.ms must fail init, never silently default");
-        assertEquals(IllegalStateException.class, thrown.getCause().getClass(),
+        assertEquals(IllegalStateException.class, cause(thrown).getClass(),
                 "the wrapped cause must be the malformed-timeout guard's exception");
-        assertTrue(thrown.getCause().getMessage().contains("delivery.timeout.ms")
-                        && thrown.getCause().getMessage().contains("not-a-number"),
-                "the failure must name the key and the malformed value: " + thrown.getCause().getMessage());
+        assertTrue(message(cause(thrown)).contains("delivery.timeout.ms")
+                        && message(cause(thrown)).contains("not-a-number"),
+                "the failure must name the key and the malformed value: " + message(cause(thrown)));
     }
 
     /**

@@ -8,6 +8,8 @@ import java.util.Set;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static io.github.tobyjamesclements.parsley.ParsleyTestFixtures.cause;
+import static io.github.tobyjamesclements.parsley.ParsleyTestFixtures.message;
 
 /**
  * The T2.4 scope-change property tests (T3.0 A5/A6, over {@link ParsleyTopologySim}): I2 must
@@ -185,9 +187,9 @@ class ParsleyScopeChangePropertyTest {
                         () -> sim.restartWithInputs("X", Set.of("c1")),
                         "[seed " + seed + "] a shrink that would orphan held c2 records must fail "
                                 + "init loudly, never restore them undeliverable or drop them");
-                assertTrue(thrown.getMessage().contains("c2"),
+                assertTrue(message(thrown).contains("c2"),
                         "[seed " + seed + "] the failure must name the removed topic: "
-                                + thrown.getMessage());
+                                + message(thrown));
                 loudFailures++;
             } else {
                 ParsleyVectorClock stampBefore = x.channels.stamp();

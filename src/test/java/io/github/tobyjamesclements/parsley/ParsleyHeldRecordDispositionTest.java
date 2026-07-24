@@ -23,6 +23,8 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static io.github.tobyjamesclements.parsley.ParsleyTestFixtures.cause;
+import static io.github.tobyjamesclements.parsley.ParsleyTestFixtures.message;
 
 /**
  * Tests the init-time disposition of restored held records whose source topic left scope. A
@@ -77,13 +79,13 @@ class ParsleyHeldRecordDispositionTest {
                 () -> v2.init(contextOverStores()),
                 "init must fail loudly on a held record from a removed input — it can be neither "
                         + "delivered nor silently discarded");
-        assertTrue(thrown.getMessage().contains("c2=1"),
-                "the failure must name the removed topic and its held-record count: " + thrown.getMessage());
-        assertTrue(thrown.getMessage().contains("redeclare") && thrown.getMessage().contains("reset"),
-                "the failure must state both remedies: " + thrown.getMessage());
-        assertFalse(thrown.getMessage().contains("no ParsleySource registered"),
+        assertTrue(message(thrown).contains("c2=1"),
+                "the failure must name the removed topic and its held-record count: " + message(thrown));
+        assertTrue(message(thrown).contains("redeclare") && message(thrown).contains("reset"),
+                "the failure must state both remedies: " + message(thrown));
+        assertFalse(message(thrown).contains("no ParsleySource registered"),
                 "the failure must be the disposition's actionable message, not the old untyped "
-                        + "serde crash: " + thrown.getMessage());
+                        + "serde crash: " + message(thrown));
     }
 
     /**

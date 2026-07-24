@@ -18,6 +18,7 @@ import java.util.concurrent.atomic.AtomicLong;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import org.jspecify.annotations.Nullable;
 
 class ParsleyCausalBroadcastTest {
 
@@ -1198,7 +1199,7 @@ class ParsleyCausalBroadcastTest {
         private final MockBufferStore<K, V> delegate = new MockBufferStore<>();
         int indexEntriesCalls = 0;
         @Override public long add(ParsleyMessage<K, V> record, long bufferedAt) { return delegate.add(record, bufferedAt); }
-        @Override public Entry<K, V> get(long sequence) { return delegate.get(sequence); }
+        @Override public @Nullable Entry<K, V> get(long sequence) { return delegate.get(sequence); }
         @Override public List<IndexEntry> indexEntries() { indexEntriesCalls++; return delegate.indexEntries(); }
         @Override public void remove(long sequence) { delegate.remove(sequence); }
         @Override public int size() { return delegate.size(); }
@@ -1216,7 +1217,7 @@ class ParsleyCausalBroadcastTest {
         private final long swallowedSequence;
         SwallowingRemoveBufferStore(long swallowedSequence) { this.swallowedSequence = swallowedSequence; }
         @Override public long add(ParsleyMessage<K, V> record, long bufferedAt) { return delegate.add(record, bufferedAt); }
-        @Override public Entry<K, V> get(long sequence) { return delegate.get(sequence); }
+        @Override public @Nullable Entry<K, V> get(long sequence) { return delegate.get(sequence); }
         @Override public List<IndexEntry> indexEntries() { return delegate.indexEntries(); }
         @Override public void remove(long sequence) { if (sequence != swallowedSequence) delegate.remove(sequence); }
         @Override public int size() { return delegate.size(); }
@@ -1232,7 +1233,7 @@ class ParsleyCausalBroadcastTest {
     private static final class ReverseOrderBufferStore<K, V> implements ParsleyBufferStore<K, V> {
         private final MockBufferStore<K, V> delegate = new MockBufferStore<>();
         @Override public long add(ParsleyMessage<K, V> record, long bufferedAt) { return delegate.add(record, bufferedAt); }
-        @Override public Entry<K, V> get(long sequence) { return delegate.get(sequence); }
+        @Override public @Nullable Entry<K, V> get(long sequence) { return delegate.get(sequence); }
         @Override public List<IndexEntry> indexEntries() {
             List<IndexEntry> reversed = new ArrayList<>(delegate.indexEntries());
             Collections.reverse(reversed);

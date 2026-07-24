@@ -15,6 +15,7 @@ import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import org.jspecify.annotations.Nullable;
 
 class ParsleySerializerTest {
 
@@ -147,9 +148,9 @@ class ParsleySerializerTest {
 
     // --- helpers --------------------------------------------------------------------------------
 
-    private static ParsleyMessage<String, String> buildRecord(String key, String value, long timestamp,
-                                                              TopicPartition tp, long offset,
-                                                              ParsleyVectorClock deps,
+    private static ParsleyMessage<String, String> buildRecord(@Nullable String key, @Nullable String value,
+                                                              long timestamp, TopicPartition tp, long offset,
+                                                              @Nullable ParsleyVectorClock deps,
                                                               List<ParsleyHeader> userHeaders) {
         return new ParsleyMessage<>(tp.topic(), C1_ID, tp.partition(), offset, timestamp,
                 key, value, userHeaders, deps == null ? ParsleyVectorClock.empty() : deps);

@@ -41,6 +41,7 @@ import static org.awaitility.Awaitility.await;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static java.util.Objects.requireNonNull;
 
 /**
  * End-to-end proof of the T1.3 scope-change rules (#21, T3.0 A5/A6) against a real broker: a
@@ -146,8 +147,8 @@ class CausalScopeChangeIT {
         Uuid c1Id;
         Uuid c3Id;
         try (Admin admin = Admin.create(Map.of("bootstrap.servers", bootstrap))) {
-            c1Id = admin.describeTopics(List.of(C1, C3)).allTopicNames().get().get(C1).topicId();
-            c3Id = admin.describeTopics(List.of(C1, C3)).allTopicNames().get().get(C3).topicId();
+            c1Id = requireNonNull(admin.describeTopics(List.of(C1, C3)).allTopicNames().get().get(C1)).topicId();
+            c3Id = requireNonNull(admin.describeTopics(List.of(C1, C3)).allTopicNames().get().get(C3)).topicId();
         }
 
         // Deployment 1: consume C1 + C3; C3@0 and C1@0 both deliver into the causal state.
@@ -260,9 +261,9 @@ class CausalScopeChangeIT {
     /** Waits until {@code appId}'s consumer group has no members, so seed commits are accepted. */
     private static void awaitGroupEmpty(String bootstrap, String appId) throws Exception {
         try (Admin admin = Admin.create(Map.of("bootstrap.servers", bootstrap))) {
-            await().atMost(Duration.ofSeconds(60)).until(() -> admin
+            await().atMost(Duration.ofSeconds(60)).until(() -> requireNonNull(admin
                     .describeConsumerGroups(List.of(appId)).all().get()
-                    .get(appId).members().isEmpty());
+                    .get(appId)).members().isEmpty());
         }
     }
 
