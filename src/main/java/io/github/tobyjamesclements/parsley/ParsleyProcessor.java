@@ -992,22 +992,22 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
         if (configured == null) {
             configured = appConfigs.get(ProducerConfig.DELIVERY_TIMEOUT_MS_CONFIG);
         }
-        if (configured instanceof Number number) {
-            return number.longValue();
-        }
-        if (configured instanceof String text && !text.isBlank()) {
-            try {
-                return Long.parseLong(text.trim());
-            } catch (NumberFormatException e) {
-                // Never silently defaulted: this value bounds the crossing wait and is the A9
-                // stall threshold — a typo that quietly became 120 s would misconfigure both.
-                throw new IllegalStateException("malformed " + ProducerConfig.DELIVERY_TIMEOUT_MS_CONFIG
-                        + " value '" + text + "'; it bounds the crossing wait and the stall "
-                        + "diagnostic, so it must parse as a long (an absent key defaults to Kafka's "
-                        + DEFAULT_DELIVERY_TIMEOUT_MS + " ms)", e);
+        return switch (configured) {
+            case Number number -> number.longValue();
+            case String text when !text.isBlank() -> {
+                try {
+                    yield Long.parseLong(text.trim());
+                } catch (NumberFormatException e) {
+                    // Never silently defaulted: this value bounds the crossing wait and is the A9
+                    // stall threshold — a typo that quietly became 120 s would misconfigure both.
+                    throw new IllegalStateException("malformed " + ProducerConfig.DELIVERY_TIMEOUT_MS_CONFIG
+                            + " value '" + text + "'; it bounds the crossing wait and the stall "
+                            + "diagnostic, so it must parse as a long (an absent key defaults to Kafka's "
+                            + DEFAULT_DELIVERY_TIMEOUT_MS + " ms)", e);
+                }
             }
-        }
-        return DEFAULT_DELIVERY_TIMEOUT_MS;
+            case null, default -> DEFAULT_DELIVERY_TIMEOUT_MS;
+        };
     }
 
     /**

@@ -66,10 +66,11 @@ final class KafkaTopics implements ParsleyTopics {
             Thread.currentThread().interrupt();
             throw new IllegalStateException("interrupted resolving topic id for '" + topic + "'", e);
         } catch (ExecutionException e) {
-            if (e.getCause() instanceof UnknownTopicOrPartitionException) {
-                throw new IllegalArgumentException("unknown topic '" + topic + "'", e.getCause());
+            Throwable cause = e.getCause();
+            if (cause instanceof UnknownTopicOrPartitionException) {
+                throw new IllegalArgumentException("unknown topic '" + topic + "'", cause);
             }
-            throw new IllegalStateException("failed resolving topic id for '" + topic + "'", e.getCause());
+            throw new IllegalStateException("failed resolving topic id for '" + topic + "'", cause);
         } catch (Exception e) {
             throw new IllegalStateException("failed resolving topic id for '" + topic + "'", e);
         }

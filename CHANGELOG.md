@@ -7,6 +7,12 @@ All notable changes to this project are documented in this file. The format is b
 ## [Unreleased]
 
 ### Changed
+- **Two internal methods are rewritten for expressiveness with Java 21 language features.**
+  `ParsleyProcessor.deliveryTimeoutMs` now dispatches on the configured value with a `switch`
+  expression (a guarded `case String text when ...` and an explicit `case null, default`) instead
+  of a sequence of pattern-`instanceof` returns, and `KafkaTopics.resolveVia` names the
+  `ExecutionException` cause once rather than calling `getCause()` three times. Behaviour is
+  unchanged.
 - **The documentation site is restructured to lead with its causal-consistency foundations and
   the three protocols.** The academic material is promoted from the former `Reference → Internals`
   into two top-level sections: `Foundations` (the causal-consistency model and the named
