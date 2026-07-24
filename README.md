@@ -26,11 +26,11 @@ Parsley is published to [Maven Central](https://central.sonatype.com/artifact/io
 <dependency>
   <groupId>io.github.tobyjamesclements</groupId>
   <artifactId>parsley</artifactId>
-  <version>0.1.0</version>
+  <version>0.2.0</version>
 </dependency>
 ```
 
-0.1.0 is an early release. Pre-1.0 versions have no upgrade path between versions: upgrading is a
+0.2.0 is an early release. Pre-1.0 versions have no upgrade path between versions: upgrading is a
 fresh start (new state, new offsets), because wire formats and the public API change without
 compatibility aliases until 1.0.
 
