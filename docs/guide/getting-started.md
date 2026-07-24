@@ -12,7 +12,7 @@
 
 Parsley is published to [Maven Central](https://central.sonatype.com/artifact/io.github.tobyjamesclements/parsley).
 The latest tagged release is `0.1.0`, available from Central's default repository with no extra
-configuration. This documentation describes the current development version, `0.1.1-SNAPSHOT`,
+configuration. This documentation describes the current development version, `0.2.0-SNAPSHOT`,
 which lives in Central's snapshot repository. No credentials are needed, because snapshots are
 publicly readable. To use the snapshot, declare the repository and the dependency in your
 `pom.xml`.
@@ -30,7 +30,7 @@ publicly readable. To use the snapshot, declare the repository and the dependenc
 <dependency>
   <groupId>io.github.tobyjamesclements</groupId>
   <artifactId>parsley</artifactId>
-  <version>0.1.1-SNAPSHOT</version>
+  <version>0.2.0-SNAPSHOT</version>
 </dependency>
 ```
 
