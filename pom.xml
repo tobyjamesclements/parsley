@@ -10,7 +10,7 @@
     <packaging>jar</packaging>
 
     <name>Parsley</name>
-    <description>Causal delivery order for Kafka Streams processors via vector clocks.</description>
+    <description>Causal delivery order for Kafka Streams processors.</description>
     <url>https://github.com/tobyjamesclements/parsley</url>
 
     <licenses>
@@ -23,7 +23,7 @@
     <developers>
         <developer>
             <id>tobyjamesclements</id>
-            <name>tobyjamesclements</name>
+            <name>${developer.name}</name>
             <url>https://github.com/tobyjamesclements</url>
         </developer>
     </developers>
@@ -52,6 +52,10 @@
          <distributionManagement>, so there is none here. -->
 
     <properties>
+        <!-- Author identity for the <developers> block and the Central-required POM metadata. Held
+             as a property so the enforce-central-metadata gate below can assert it non-blank and
+             not the bare GitHub handle; flatten resolves it literally into the deployed POM. -->
+        <developer.name>Toby Clements</developer.name>
         <kafka.version>4.3.1</kafka.version>
         <confluent.version>8.3.0</confluent.version>
         <avro.version>1.12.1</avro.version>
@@ -585,6 +589,65 @@
                                 </requireJavaVersion>
                                 <dependencyConvergence/>
                                 <banDuplicatePomDependencyVersions/>
+                            </rules>
+                        </configuration>
+                    </execution>
+                    <!-- Publish-metadata gate. Central rejects a bundle missing name, description,
+                         url, licenses, developers, or scm; this fails the build at 'validate'
+                         instead, so a regression surfaces on every 'mvn verify' rather than at the
+                         tag-triggered deploy. The developer name is checked through the
+                         developer.name property (regex-guarded against a blank or the bare
+                         'tobyjamesclements' GitHub handle); the rest are read straight off the
+                         project model. -->
+                    <execution>
+                        <id>enforce-central-metadata</id>
+                        <goals>
+                            <goal>enforce</goal>
+                        </goals>
+                        <configuration>
+                            <rules>
+                                <requireProperty>
+                                    <property>project.name</property>
+                                    <message>Central requires a non-empty &lt;name&gt;.</message>
+                                    <regex>.*\S.*</regex>
+                                    <regexMessage>&lt;name&gt; must not be blank.</regexMessage>
+                                </requireProperty>
+                                <requireProperty>
+                                    <property>project.description</property>
+                                    <message>Central requires a non-empty &lt;description&gt;.</message>
+                                    <regex>.*\S.*</regex>
+                                    <regexMessage>&lt;description&gt; must not be blank.</regexMessage>
+                                </requireProperty>
+                                <requireProperty>
+                                    <property>project.url</property>
+                                    <message>Central requires a non-empty &lt;url&gt;.</message>
+                                    <regex>^https?://.*\S.*</regex>
+                                    <regexMessage>&lt;url&gt; must be an http(s) URL.</regexMessage>
+                                </requireProperty>
+                                <requireProperty>
+                                    <property>project.scm.url</property>
+                                    <message>Central requires &lt;scm&gt;&lt;url&gt;.</message>
+                                    <regex>^https?://.*\S.*</regex>
+                                    <regexMessage>&lt;scm&gt;&lt;url&gt; must be an http(s) URL.</regexMessage>
+                                </requireProperty>
+                                <requireProperty>
+                                    <property>project.scm.connection</property>
+                                    <message>Central requires &lt;scm&gt;&lt;connection&gt;.</message>
+                                    <regex>^scm:git:.*\S.*</regex>
+                                    <regexMessage>&lt;scm&gt;&lt;connection&gt; must be an scm:git: URL.</regexMessage>
+                                </requireProperty>
+                                <requireProperty>
+                                    <property>project.licenses[0].name</property>
+                                    <message>Central requires at least one &lt;license&gt; with a name.</message>
+                                    <regex>.*\S.*</regex>
+                                    <regexMessage>The first &lt;license&gt; must have a name.</regexMessage>
+                                </requireProperty>
+                                <requireProperty>
+                                    <property>developer.name</property>
+                                    <message>Set developer.name to the author's real name.</message>
+                                    <regex>^(?!tobyjamesclements$)\S.*$</regex>
+                                    <regexMessage>developer.name must be a real name, not blank or the bare GitHub handle.</regexMessage>
+                                </requireProperty>
                             </rules>
                         </configuration>
                     </execution>

@@ -7,6 +7,14 @@ All notable changes to this project are documented in this file. The format is b
 ## [Unreleased]
 
 ### Changed
+- **The published POM's developer metadata carries the author's real name, and a new enforcer gate
+  guards the Central-required metadata.** The `<developers>` entry now reads `Toby Clements` (held
+  in a `developer.name` property that flatten resolves into the deployed POM) rather than repeating
+  the `tobyjamesclements` GitHub handle as the name, and the `<description>` is aligned with the
+  docs lead sentence. A second `maven-enforcer-plugin` execution, `enforce-central-metadata`, fails
+  the build at `validate` if `name`, `description`, `url`, `scm`, a license name, or the developer
+  name is blank (or if the developer name regresses to the bare handle), so a metadata regression
+  surfaces on every `mvn verify` instead of at the tag-triggered Central deploy.
 - **Two internal methods are rewritten for expressiveness with Java 21 language features.**
   `ParsleyProcessor.deliveryTimeoutMs` now dispatches on the configured value with a `switch`
   expression (a guarded `case String text when ...` and an explicit `case null, default`) instead
