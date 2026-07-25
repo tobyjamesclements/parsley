@@ -167,6 +167,69 @@ disposition, applied in the causal-broadcast constructor immediately after the r
 | A recreated input's old incarnation (destroyed UUID) | Purged from the buffer, with an INFO log carrying the count and coordinates. The incarnation is deleted, so no receiver can ever deliver these records; delivering them here would re-enter a destroyed coordinate the rescope just purged. History loss, never reordering. |
 | A removed but still-existing input | Init fails loudly, naming the topics and per-topic counts. The records can neither be delivered (no registered source) nor silently discarded (fail-closed). Remedies: redeclare the input so they drain through ordinary causal delivery, or perform a full reset. |
 
+## Why the stamp is four clocks and not one
+
+The preceding sections describe what each persisted clock holds. This section states why each one
+has to exist. The outbound stamp must dominate every event that happened-before the record being
+stamped. The contiguous frontier covers most of that past, and each of the other four clocks closes
+one specific route by which a real cause escapes it. The four cover disjoint routes, which is why
+the union has exactly these terms and not fewer.
+
+| Clock | The causal past it covers | Without it |
+|---|---|---|
+| Channel clocks | Ancestry arriving through channels this node does not consume | The gate's ignore branch becomes unsound |
+| Carried ancestry | This node's delivered past on channels it no longer consumes | A redeploy silently un-claims that past |
+| Own outputs | This node's own earlier emissions | Its outputs carry no order across partitions or sink topics |
+| Highest delivered | The processed record itself, when delivered above a frontier gap | An effect fails to claim its immediate cause |
+
+### Channel clocks
+
+Without the channel fold a node's stamp would name only coordinates it delivered itself, so
+ancestry that reached it through a channel it does not consume would not survive the hop. Suppose
+`p1` consumes `c2` but not `c4`, and a record on `c2` depends on `c4` partition 0 at offset 12.
+`p1` delivers that record and forwards an effect. If the stamp carried no `c4` entry, a downstream
+`p2` consuming both `p1`'s sink and `c4` would deliver the effect without waiting for that offset.
+
+This clock is what makes the [delivery gate](../foundations/delivery-gate.md)'s ignore branch sound
+rather than merely convenient. An unconsumed coordinate may be ignored only because the consumed
+ancestry behind it is claimed directly in the same clock (I2 and I9). Removing the fold would turn
+the ignore branch from a theorem into a hole.
+
+### Carried ancestry
+
+Without it, entries leave the stamp when a coordinate leaves the node's consumption scope. Suppose
+`p1` consumed `c3` and delivered `c3` partition 0 at offset 50, and a redeploy then drops `c3` from
+its declared inputs. Its next stamp would no longer name that offset, so a downstream `p2` consuming
+both `p1`'s sink and `c3` would stop gating on a dependency it previously honoured.
+
+Two properties fail together. An effect can precede its cause, and the stamp regresses across the
+restart, which per-producer stamp monotonicity (I3) forbids. A configuration change would
+retroactively weaken every stamp the node emits afterwards.
+
+### Own outputs
+
+Without it a node's outputs carry no ordering relative to each other. The failure does not appear on
+a single sink partition, where the remaining clocks already make each stamp dominate the previous
+one, so a held earlier record holds every later one (I3). It appears across partitions and across
+sink topics. If `p1` forwards `m1` to `c2` and then `m2` to `c5`, Kafka's FIFO guarantee relates
+neither pair, so nothing would make `m2` claim `m1`, and a downstream consumer of both topics could
+deliver `m2` first.
+
+This clock is also why the crossing wait exists. A node cannot claim its own previous output until
+the broker has reported that output's offset.
+
+### Highest delivered
+
+Without it an effect emitted from an above-gap delivery names its cause's causes but not the cause.
+Suppose `p1` delivers `c1` partition 0 at offset 40 while offset 38 is still held, leaving the
+contiguous frontier at 37. A stamp built from the frontier alone would claim offset 37, so a
+downstream `p2` consuming both `p1`'s sink and `c1` could deliver the effect without having
+delivered offset 40, the record the effect came from.
+
+The clock exists only because delivery within a partition is not head-of-line blocking. A classical
+FIFO channel needs one projection of the delivered vector, and splitting delivery from contiguity
+requires two.
+
 ## Persistence
 
 The module self-persists the single `"f"` value inside every mutating request, before control

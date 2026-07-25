@@ -6,6 +6,19 @@ All notable changes to this project are documented in this file. The format is b
 
 ## [Unreleased]
 
+### Added
+- **A "Why the stamp is four clocks and not one" section in the channels module page.** The page
+  described what each persisted clock holds without stating why each has to exist, leaving the
+  outbound stamp's shape to be inferred from the field notes. The new section gives the rationale
+  layer: the stamp must dominate everything that happened-before the record being stamped, the
+  contiguous frontier covers most of that past, and the channel clocks, carried ancestry, own
+  outputs, and highest-delivered clocks each close one disjoint route by which a real cause escapes
+  it. Each subsection states the failure that removing that clock would produce, including the
+  dependency of the delivery gate's ignore branch on the channel fold (I2 and I9), the stamp
+  regression a scope change would cause without carried ancestry (I3), the cross-partition and
+  cross-sink-topic gap own outputs closes, and the unclaimed immediate cause an above-gap delivery
+  would leave without the highest-delivered projection.
+
 ## [0.2.0] - 2026-07-24
 
 ### Added
