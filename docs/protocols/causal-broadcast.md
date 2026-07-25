@@ -42,7 +42,7 @@ receive(record):
     if frontier.dominates(deps):                      # the gate: this node has ITSELF delivered
                                                       #   every consumed dependency — a peer's
                                                       #   claim never substitutes for local delivery
-        channels.delivered(record.coordinate)         # advance the frontier, self-persist "f"
+        channels.delivered(record.coordinate)         # advance the frontier, self-persist "frontier"
         channelUpdate(record.channel, rawDeps)        # stamp-only fold of the WHOLE clock
         out.add(record)
         propagate(record.coordinate)                  # cascade releases (see below)
@@ -70,7 +70,7 @@ and why ignoring unconsumed coordinates is sound.
 
 | Field | Type | Purpose |
 |---|---|---|
-| `channels` | `ParsleyChannels` | The [channels module](channels.md): all persisted causal state — contiguous frontier, channel clocks, carried ancestry, own outputs, highest received — self-persisting as the single `"f"` value |
+| `channels` | `ParsleyChannels` | The [channels module](channels.md): all persisted causal state — contiguous frontier, channel clocks, carried ancestry, own outputs, highest received — self-persisting as the single `"frontier"` value |
 | `buffer` | `ParsleyBufferStore<K,V>` | Durable hold-back queue of held records — unbounded, no eviction |
 | `candidateIndex` | `ParsleyCandidateIndex` | Secondary index: coordinate -> candidate record IDs |
 | `consumed` | `ParsleyVectorClock.CoordinatePredicate` | The gate's consumed(c) predicate: a registered input channel, on the partition this task owns. A dependency on a consumed coordinate gates on the local frontier; any other dependency is ignored, with a metric |
@@ -181,7 +181,7 @@ never the payload bytes themselves.
 
 ## Frontier persistence ordering
 
-`ParsleyChannels` self-persists its single `"f"` value inside `delivered()` (and
+`ParsleyChannels` self-persists its single `"frontier"` value inside `delivered()` (and
 `seedIfFirstSeen()`), before control returns to this module and the record is added to the output
 list. This ordering guarantees that the changelog write for the frontier advance is durable before
 the record reaches the user processor. There is no separate callback: the channels module owns its

@@ -96,20 +96,10 @@ class ParsleyProcessorRestoreTest {
                 "the record must never have entered the buffer store");
     }
 
-    // Builds the combined ParsleyChannels "f" blob for a frontier clock with no channel clocks:
-    // [frontier-len:4][frontier bytes][channel-count:4 = 0]. Mirrors ParsleyChannels#toBytes so a
-    // restored frontier can be seeded into the frontier store.
+    // The frontier-store value for a frontier clock with no other persisted state, produced by the
+    // production serialiser so it always carries the current wire-version byte and full layout.
     private static byte[] frontierBlob(ParsleyVectorClock frontier) {
-        try (java.io.ByteArrayOutputStream baos = new java.io.ByteArrayOutputStream();
-             java.io.DataOutputStream dos = new java.io.DataOutputStream(baos)) {
-            byte[] f = frontier.toBytes();
-            dos.writeInt(f.length);
-            dos.write(f);
-            dos.writeInt(0);
-            dos.flush();
-            return baos.toByteArray();
-        } catch (java.io.IOException e) {
-            throw new IllegalStateException(e);
-        }
+        return new ParsleyFrontierState(frontier, Map.of(), Map.of(), ParsleyVectorClock.empty(),
+                Map.of(), ParsleyVectorClock.empty(), Map.of()).toBytes();
     }
 }

@@ -1119,7 +1119,7 @@ class CausalStreamsTopologyTest {
      * Task init seeds the {@code ownOutputs} clock from each resolved sink's end offsets: with the
      * sink's end offset at 5, the clock claims the last appended position 4 — whether or not this
      * task produced it (I8's over-claim path; it heals the persisted blob trailing the crashed
-     * transaction's acks). The seed is persisted in the frontier {@code "f"} blob and rides the
+     * transaction's acks). The seed is persisted in the {@code "frontier"} value and rides the
      * outbound stamp — {@code completeness ∪ ownOutputs} (D2, T2.3) — so a downstream consumer of
      * the sink gates a derived record behind this node's whole appended prefix.
      *

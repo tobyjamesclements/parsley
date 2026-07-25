@@ -14,7 +14,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
  * Tests for {@link ParsleyChannels}'s single-value persistence: the frontier clock and the per-channel
- * clocks both round-trip through the one {@code "f"} key of the frontier store.
+ * clocks both round-trip through the one {@code "frontier"} key of the frontier store.
  */
 class ParsleyChannelsTest {
 
@@ -42,7 +42,7 @@ class ParsleyChannelsTest {
         ParsleyVectorClock frontierBefore = original.frontier();
         ParsleyVectorClock completenessBefore = original.completeness();
 
-        // Reload: a fresh frontier over the same store restores from the "f" blob alone.
+        // Reload: a fresh frontier over the same store restores from the frontier value alone.
         ParsleyChannels restored = new ParsleyChannels(store, new MockForwardedIndex());
 
         assertEquals(frontierBefore, restored.frontier(),
@@ -94,8 +94,8 @@ class ParsleyChannelsTest {
 
     /**
      * {@code highestDelivered} is deliberately not persisted: an above-gap delivered offset is
-     * exactly a forwarded-index mark, committed in the same EOS transaction as the {@code "f"}
-     * blob, so a fresh {@link ParsleyChannels} over the same stores must reconstruct the stamp's
+     * exactly a forwarded-index mark, committed in the same EOS transaction as the {@code "frontier"}
+     * value, so a fresh {@link ParsleyChannels} over the same stores must reconstruct the stamp's
      * above-gap claim from the index alone.
      *
      * Asserts the restored instance's stamp still claims the above-gap offset while its frontier
@@ -374,22 +374,21 @@ class ParsleyChannelsTest {
     }
 
     /**
-     * The declared input set and the carried ancestry are trailing-optional sections of the {@code
-     * "f"} blob: a blob written before they existed (simulated by serialising with none recorded)
-     * still loads, reporting an empty declared set — so the first {@code rescope} over an upgraded
-     * store has nothing to diff and simply records the current declaration without seeding anything.
+     * An empty declared input set round-trips through the frontier value: a node that has never
+     * rescoped persists an empty declaration (the section is always present, empty or not), and a
+     * fresh instance over the same store loads it as empty — so the first {@code rescope} has nothing
+     * to diff and simply records the current declaration without seeding anything.
      *
-     * Asserts a pre-section blob loads with empty declared inputs and that the first rescope over it
-     * neither seeds nor destroys surviving state.
+     * Asserts the reloaded declared set is empty and that the first rescope over it neither seeds nor
+     * destroys surviving state.
      */
     @Test
-    void aBlobWithoutTheDeclaredInputSectionLoadsAndRescopesAsUnchanged() {
+    void anEmptyDeclaredInputSetLoadsAndRescopesAsUnchanged() {
         TestKeyValueStore<String, byte[]> store =
                 new TestKeyValueStore<String, byte[]>(Comparator.naturalOrder(), "frontier");
         ParsleyChannels original = new ParsleyChannels(store, new MockForwardedIndex());
-        // No rescope ever ran here: the blob carries frontier/channel state but an empty declared set,
-        // standing in for a pre-T1.3 blob (the sections are also simply absent on truncation — load()
-        // treats both identically).
+        // No rescope ever ran here, so the persisted declared-input set is empty. The first rescope
+        // must treat that as a fresh declaration with nothing to diff.
         original.seedIfFirstSeen(C1_ID, 0, 3);
         original.delivered(C1_ID, 0, 3);
 
@@ -464,13 +463,12 @@ class ParsleyChannelsTest {
     }
 
     /**
-     * The {@code ownOutputs} clock round-trips through its trailing section of the {@code "f"}
-     * blob, and a blob written before the section existed (simulated by a pre-T2.2 write path:
-     * nothing acknowledged persists an empty clock — load() treats a truncated blob identically)
-     * loads with an empty clock rather than failing.
+     * The {@code ownOutputs} clock round-trips through the frontier value: acknowledged sink
+     * positions persist and a fresh instance over the same store restores them, without disturbing
+     * the sections serialised before it.
      */
     @Test
-    void ownOutputsRoundTripsThroughTheFBlob() {
+    void ownOutputsRoundTripsThroughTheFrontierValue() {
         TestKeyValueStore<String, byte[]> store =
                 new TestKeyValueStore<String, byte[]>(Comparator.naturalOrder(), "frontier");
         ParsleyChannels original = new ParsleyChannels(store, new MockForwardedIndex());
@@ -480,7 +478,7 @@ class ParsleyChannelsTest {
 
         ParsleyChannels restored = new ParsleyChannels(store, new MockForwardedIndex());
         assertEquals(7L, restored.ownOutputs().offsetFor(C4_ID, 0),
-                "own-output positions must restore from the \"f\" blob's trailing section");
+                "own-output positions must restore from the frontier value");
         assertEquals(3L, restored.ownOutputs().offsetFor(C4_ID, 1),
                 "every persisted own-output coordinate must restore");
         assertEquals(original.frontier(), restored.frontier(),
@@ -599,28 +597,27 @@ class ParsleyChannelsTest {
     }
 
     /**
-     * The declared-sink set (name → UUID) round-trips through the {@code "f"} blob as its own
-     * trailing section (T3.4): the next init reads it to heal the restored {@code ownOutputs}
-     * clock's trailing acks for topics that are no longer sinks then. A pre-T3.4 blob (no section)
-     * loads an empty set.
+     * The declared-sink set (name → UUID) round-trips through the frontier value (T3.4): the next
+     * init reads it to heal the restored {@code ownOutputs} clock's trailing acks for topics that are
+     * no longer sinks then. A value written before any declaration carries an empty set.
      *
      * Asserts the persisted declaration is reproduced by a fresh instance over the same store, and
-     * that a blob written before any declaration loads empty.
+     * that a value written before any declaration loads empty.
      */
     @Test
-    void declaredSinksRoundTripThroughTheFBlob() {
+    void declaredSinksRoundTripThroughTheFrontierValue() {
         TestKeyValueStore<String, byte[]> store =
                 new TestKeyValueStore<String, byte[]>(Comparator.naturalOrder(), "frontier");
         ParsleyChannels original = new ParsleyChannels(store, new MockForwardedIndex());
         original.delivered(C1_ID, 0, 0);
         assertEquals(Map.of(), new ParsleyChannels(store, new MockForwardedIndex()).declaredSinks(),
-                "a blob written before any sink declaration must load an empty declared-sink set");
+                "a value written before any sink declaration must load an empty declared-sink set");
 
         original.declareSinks(Map.of("c4", C4_ID));
 
         ParsleyChannels restored = new ParsleyChannels(store, new MockForwardedIndex());
         assertEquals(Map.of("c4", C4_ID), restored.declaredSinks(),
-                "the declared-sink set must round-trip through its trailing \"f\" blob section");
+                "the declared-sink set must round-trip through the frontier value");
         assertEquals(0L, restored.frontier().offsetFor(C1_ID, 0),
                 "the earlier sections must be unaffected by the trailing sink declaration");
     }
@@ -764,7 +761,7 @@ class ParsleyChannelsTest {
     }
 
     /**
-     * The per-channel highest-received offset persists in the {@code "f"} blob, so bridge()'s skip
+     * The per-channel highest-received offset persists in the {@code "frontier"} value, so bridge()'s skip
      * detection is exact across a restart: after reloading a frontier that had received up to offset 4,
      * a record arriving at 6 (offset 5 a marker) is correctly bridged rather than misread as a first
      * sighting. Without persisting the highest-received offset the reloaded frontier would treat 6 as a
@@ -780,7 +777,7 @@ class ParsleyChannelsTest {
         }
         assertEquals(4L, original.frontier().offsetFor(C1_ID, 0), "precondition: frontier reached 4 before restart");
 
-        // Reload from the same store: the highest-received map restores from the "f" blob alone.
+        // Reload from the same store: the highest-received map restores from the frontier value alone.
         ParsleyChannels restored = new ParsleyChannels(store, new MockForwardedIndex());
 
         // A record at 6 arrives (offset 5 a marker). Because highest-received restored as 4, the gap at
@@ -796,7 +793,7 @@ class ParsleyChannelsTest {
 
     // --- Cross-store tear regression (BACKLOG.md: torn changelog flush under at-least-once) --------
     //
-    // The forwarded index and the frontier's "f" blob are two separate changelog-backed stores with
+    // The forwarded index and the frontier value are two separate changelog-backed stores with
     // no cross-store atomicity. deliver() must persist the new frontier value before pruning the
     // forwarded-index entries it absorbed, so a crash between the two writes always tears toward "a
     // redundant forwarded-index entry lingers below an already-advanced frontier" (harmless — see the
