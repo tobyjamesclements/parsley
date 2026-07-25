@@ -18,6 +18,31 @@ All notable changes to this project are documented in this file. The format is b
   regression a scope change would cause without carried ancestry (I3), the cross-partition and
   cross-sink-topic gap own outputs closes, and the unclaimed immediate cause an above-gap delivery
   would leave without the highest-delivered projection.
+- **A `diagram-walkthrough` skill that reads the sequence diagram against the source.** The diagram
+  numbers every arrow, but turning a step number into the method it stands for was manual. The skill
+  asks where the reader wants to start, then walks the calls one at a time, giving the declaration's
+  `file:line`, its real signature, where each argument came from earlier in the diagram, the step
+  number that carries the return, and the rationale the Javadoc already records. Its `steps.py`
+  reproduces mermaid's `autonumber` by counting message lines in the `.mmd`, so step N in the script
+  is step N in the render, and it pairs each call with its matching return rather than treating the
+  two as unrelated arrows. The skill treats the code as authoritative and instructs that a diagram
+  label contradicting the source be reported as a diagram defect.
+- **A sequence diagram of the three-layer call path, in `mermaid/two-channel-topology/`.** The
+  diagram source is a standalone `two-channel-topology.mmd` so a renderer can watch it directly,
+  with the prose alongside it in `README.md`. The
+  protocol pages describe each layer's requests and indications in prose, but nothing traced one
+  task's actual calls end to end. The diagram walks a two-source, one-processor, one-sink topology
+  through init, a held record, the release cascade behind its cause, and an inbound null message,
+  naming the real methods on `ParsleyChannels`, `ParsleyCausalBroadcast`, and `ParsleyGossip` at
+  each step. Every call carries an activation bar and an explicit return, the calls into Kafka
+  included, so the synchronous call stack on the single task thread is visible and a void method's
+  return point is not left implicit. The Kafka Streams task thread is itself a participant, since it
+  is the caller behind `init()` and every `process()`, without which the processor would run the
+  init sequence with no activation bar of its own. The asynchrony in the design is end to end rather than per
+  call, so the deferred producer acknowledgement is drawn as its own arrow into
+  `ParsleyOwnOutputRegistry` between two phases, which is both what `foldAcknowledgedOutputs()`
+  later drains and the reason an outbound stamp cannot carry its own coordinate. Documentation
+  only, with no protocol or production-code change.
 
 ### Changed
 - **The frontier store value is now a named `ParsleyFrontierState` carrying a wire-version byte,
