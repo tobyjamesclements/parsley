@@ -90,7 +90,7 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
     // Each declared sink topic's per-partition end offsets, captured at init() alongside the UUID
     // resolution (same admin session, same strictness: an unreadable sink fails init) — the
     // ownOutputs seed claims endOffset - 1, the sink's last appended position, per partition
-    // (D2/O1; an over-claim that is I8-sound and heals the "f" blob trailing the last
+    // (D2/O1; an over-claim that is I8-sound and heals the frontier value trailing the last
     // transaction's acks).
     private Map<String, Map<Integer, Long>> sinkEndOffsets = Map.of();
     // The effective producer delivery.timeout.ms, resolved at init(). Bounds the crossing wait (a
@@ -280,7 +280,7 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
 
     /**
      * Builds the causal-broadcast core over this task's state stores: constructs the {@link ParsleyChannels}
-     * (restoring the frontier clock and channel clocks from the {@code "f"} blob when
+     * (restoring the frontier clock and channel clocks from the {@code "frontier"} value when
      * present), prunes restored state to this task's current scope, seeds a channel entry for every
      * consumed input, and wires the buffer, candidate index, and forwarded index. Called exactly once,
      * from {@link #init}; {@link #wiredMetrics} must already be set.
@@ -290,7 +290,7 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
         ParsleyCandidateIndex candidateIndex = new StoreBackedCandidateIndex(candidateIndexStore);
         ParsleyForwardedIndex forwardedIndex = new StoreBackedForwardedIndex(forwardedIndexStore);
         // The single owner of the persisted causal metadata: loads the frontier clock and channel
-        // clocks from key "f" of the frontier store and rewrites that value on change. The forwarded
+        // clocks from key "frontier" of the frontier store and rewrites that value on change. The forwarded
         // index keeps its own keyed store and is injected here.
         ParsleyChannels channels = new ParsleyChannels(frontierStore, forwardedIndex);
 
@@ -362,7 +362,7 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
             }
         }
         // Heal the restored ownOutputs clock for the PREVIOUS run's sinks that are no longer sinks
-        // (T3.4): the "f" blob always trails the final transaction's own acks, and the end-offset
+        // (T3.4): the frontier value always trails the final transaction's own acks, and the end-offset
         // seed above covers only the currently declared sinks — without this, a redeploy that drops
         // a sink (or turns it into an input) would stamp under-claims of this node's own
         // final-transaction outputs, and a downstream consumer of that topic plus another of this

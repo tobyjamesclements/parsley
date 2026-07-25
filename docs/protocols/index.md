@@ -67,7 +67,7 @@ why an outbound stamp cannot include the record's own coordinate).
 
 | Class | Role |
 |---|---|
-| `ParsleyChannels` | The channels module: owns all persisted causal metadata — contiguous frontier, per-channel advertised clocks, carried ancestry, own outputs, highest received — self-persisting as the single `"f"` value; normalisation, scope changes, the crossing wait |
+| `ParsleyChannels` | The channels module: owns all persisted causal metadata — contiguous frontier, per-channel advertised clocks, carried ancestry, own outputs, highest received — self-persisting as the single `"frontier"` value; normalisation, scope changes, the crossing wait |
 | `ParsleyCausalBroadcast` | The causal-broadcast module (Birman–Schiper–Stephenson): gate, buffer, cascade, fail-closed, the single stamping site. No eviction, no buffer limit, no timeout |
 | `ParsleyGossip` | The gossip module: receives null messages (own offset delivered, carried clock folded stamp-side only) and builds this node's own; owns the relay rule (relay only when the carried clock advanced this node's knowledge of a channel it consumes — custody folds but never obliges a relay) |
 | `ParsleyVectorClock` | The one vector clock: node frontier *and* dependency representation, keyed on `(Uuid, int)` primitives |

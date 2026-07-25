@@ -29,7 +29,7 @@ import static java.util.Objects.requireNonNull;
  * <em>task per partition</em> (the production task model: a task owns partition p of every
  * co-partitioned input), and each task is a real {@link ParsleyChannels} +
  * {@link ParsleyCausalBroadcast} pair over store-backed persistence (restarts are genuine
- * reconstructions from the {@code "f"} blob and the durable buffer / candidate / forwarded-index
+ * reconstructions from the {@code "frontier"} value and the durable buffer / candidate / forwarded-index
  * stores), driven through the production entry points: {@code receive} for business records,
  * {@code ParsleyGossip.receive} for null messages, {@code broadcast} for every stamped emission,
  * {@code rescope} at every (re)start, and the {@code bindOwnOutputSource} seams for producer acks
@@ -883,7 +883,7 @@ final class ParsleyTopologySim {
     /**
      * A dirty restart: the process dies with unfolded acks and un-awaited pending sends — no
      * {@code ackAllExcept}, no {@code foldAcknowledgedOutputs}. Sends already appended stay in
-     * the topic logs (committed, just never folded into the "f" blob); the init-time sink
+     * the topic logs (committed, just never folded into the frontier value); the init-time sink
      * end-offset seed (I8) must re-cover them so post-crash stamps still claim them. The sim's
      * stores commit instantly, so this is exactly the crash-after-commit-before-fold shape — the
      * store-rewinding transaction tear is a documented non-goal (class Javadoc).
