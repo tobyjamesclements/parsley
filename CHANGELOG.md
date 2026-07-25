@@ -7,7 +7,9 @@ All notable changes to this project are documented in this file. The format is b
 ## [Unreleased]
 
 ### Added
-- **A sequence diagram of the three-layer call path, at `mermaid/two-channel-topology.md`.** The
+- **A sequence diagram of the three-layer call path, in `mermaid/two-channel-topology/`.** The
+  diagram source is a standalone `two-channel-topology.mmd` so a renderer can watch it directly,
+  with the prose alongside it in `README.md`. The
   protocol pages describe each layer's requests and indications in prose, but nothing traced one
   task's actual calls end to end. The diagram walks a two-source, one-processor, one-sink topology
   through init, a held record, the release cascade behind its cause, and an inbound null message,
