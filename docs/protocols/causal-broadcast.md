@@ -11,7 +11,7 @@ outbound record at a single site. The module box:
 requests:   broadcast(record) → stamped record   attach the outbound vector timestamp (the
                                                  timestamp-assignment half of BSS; the underlying
                                                  send is Kafka's produce), after the
-                                                 acknowledgement fold and the crossing wait
+                                                 crossing wait and the acknowledgement fold
             receive(message) → Outcome           the BSS receive: gate → deliver-or-hold →
                                                  cascade; the returned ordered list is the
                                                  deliver indication, in pull style
@@ -52,9 +52,9 @@ receive(record):
 
     return out
 
-broadcast(record):                                    # the single stamping site — business
-    channels.foldAcknowledgedOutputs()                #   forwards and null messages alike
+broadcast(record):                                    # single stamping site: forwards + null msgs
     channels.awaitOwnOutputQuiescence(except)         # crossing wait; throws rather than stamp
+    channels.foldAcknowledgedOutputs()                # then fold the acks the wait settled
     return record + header(channels.stamp())          # completeness ∪ ownOutputs ∪ highestDelivered
 ```
 
@@ -110,15 +110,16 @@ waiting on that coordinate are not permanently stalled.
 Every outbound record — a delegate's business forward and a protocol null message alike — passes
 through `broadcast()`, so the two cannot diverge. In order:
 
-1. Fold pending producer acknowledgements into the own-outputs clock, so no coordinate
-   acknowledged before this stamp can be missing from it.
-2. Run the crossing wait (`awaitOwnOutputQuiescence`): block until no own-sink send outside the
+1. Run the crossing wait (`awaitOwnOutputQuiescence`): block until no own-sink send outside the
    excluded destination set is unacknowledged. A business forward excludes nothing — its
    destination partition is unknowable at stamp time (the sink partitioner runs downstream of
    `forward()`), and over-waiting only ever folds more acknowledged positions, which is sound. A
    null message excludes its exact destination set (each sink at the task's own partition), which
    same-partition FIFO already covers. On timeout or an observed send failure the wait throws and
    the EOS transaction dies — never stamp-and-proceed.
+2. Fold pending producer acknowledgements into the own-outputs clock. The fold runs after the wait
+   so it captures exactly the acknowledgements the wait was blocking for. Folding first would drain
+   only the acks that already existed and miss those, under-claiming the stamp.
 3. Attach the stamp: `completeness ∪ ownOutputs ∪ highestDelivered`, the node's total knowledge.
    The merge is unconditional over everything the node has delivered, carried, or heard
    advertised — including coordinates on channels it does not consume, which is the custody chain

@@ -84,7 +84,7 @@ onto outgoing records.
 **`forward(Record<K,V>)`:**
 
 1. Increment the business-forward counter (read by `ParsleyProcessor` after each `delegate.process(...)`; a count of zero means the delegate emitted nothing and triggers null message emission).
-2. Route the record through `ParsleyCausalBroadcast.broadcast()` — the single stamping site, shared with null messages — which folds pending producer acknowledgements, runs the crossing wait (a business forward excludes no destinations), and attaches the `parsley-causal-clock` header from `ParsleyChannels.stamp()`, replacing any existing header.
+2. Route the record through `ParsleyCausalBroadcast.broadcast()` — the single stamping site, shared with null messages — which runs the crossing wait (a business forward excludes no destinations), then folds pending producer acknowledgements, and attaches the `parsley-causal-clock` header from `ParsleyChannels.stamp()`, replacing any existing header.
 3. Call `delegate.forward(stamped)` — addressed to each declared sink node by name when the stage has incompatibly-typed sibling children, otherwise the plain forward.
 
 The original record object is never mutated. The stamp is read live at forward time. A `forward()` during admit sees the post-admit stamp, and a `forward()` from a punctuator sees the stamp at punctuator fire time (punctuator forwards also fail fast if the topic-identity watch has detected a mid-run recreation). The processor resets the forward counter before each delivered record via `resetForwardCount()`.

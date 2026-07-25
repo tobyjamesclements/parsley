@@ -1649,6 +1649,13 @@ All notable changes to this project are documented in this file. The format is b
   branch's business record (not only by a watermark) without either record waiting on the other.
 
 ### Documentation
+- **The causal-broadcast page's stamping-order description is corrected to match the code.** The
+  `broadcast()` pseudocode, its numbered walkthrough, the module-box overview, and the processor
+  reference all had the crossing wait and the acknowledgement fold in the wrong order (fold then
+  wait). The code and the `broadcast` Javadoc run the crossing wait first and fold second, which is
+  the correct order: the wait blocks precisely until the outstanding sends acknowledge, so folding
+  after captures the coordinates it was blocking for, where folding first would miss them and
+  under-claim the stamp. The walkthrough now states that reason.
 - **The minimum supported Kafka broker version is documented: 3.7.0.** The integration suite now
   runs against both the 3.7.0 minimum and the current stable broker line (4.3.1 at the time of
   writing) in a CI matrix; the broker image is centralized behind one test seam
