@@ -38,9 +38,10 @@ docs/api/
 hs_err_pid*
 replay_pid*
 # Claude Code: session-local state stays ignored; shared project instructions,
-# skills, and commands are tracked
+# skills, commands, and the permission allowlist are tracked
 /.claude/*
 !/.claude/CLAUDE.md
 !/.claude/skills/
 !/.claude/commands/
+!/.claude/settings.json
 /parsley.iml
