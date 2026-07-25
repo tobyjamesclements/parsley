@@ -1179,10 +1179,10 @@
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
-  <a href="#the-ns-frontier-f-value" class="md-nav__link">
+  <a href="#the-ns-frontier-value-key-frontier" class="md-nav__link">
     <span class="md-ellipsis">
       
-        The {ns}-frontier "f" value
+        The {ns}-frontier value (key "frontier")
       
     </span>
   </a>
@@ -1303,7 +1303,7 @@
 <p>This page specifies the binary layout of every header and state-store value the
 <a href="../../protocols/">three protocols</a> read and write. It is the ground truth for anyone
 decoding a <code>parsley-causal-clock</code> header, inspecting a buffer changelog, or reasoning about the
-<code>"f"</code> frontier blob.</p>
+<code>"frontier"</code> frontier-store value.</p>
 <p>All binary encodings are big-endian. All lengths are in bytes.</p>
 <h2 id="parsley-causal-clock-header"><code>parsley-causal-clock</code> header</h2>
 <p>The public <code>CausalClock</code> facade and the internal <code>ParsleyVectorClock</code> (node frontier) share this
@@ -1384,7 +1384,7 @@ once actually forwarded, via <code>ParsleySerializer.deserialize</code>.</p>
 <td><code>{ns}-frontier</code></td>
 <td><code>String</code></td>
 <td><code>byte[]</code></td>
-<td>Single entry at key <code>"f"</code>: the combined <code>ParsleyChannels</code> blob — the node's contiguous delivered frontier clock, the per-input-channel clocks, the highest-received offsets, the carried-ancestry clock, the declared input set, the own-outputs clock, and the declared sink set (see below)</td>
+<td>Single entry at key <code>"frontier"</code>: the whole <code>ParsleyFrontierState</code> — the node's contiguous delivered frontier clock, the per-input-channel clocks, the highest-received offsets, the carried-ancestry clock, the declared input set, the own-outputs clock, and the declared sink set (see below)</td>
 </tr>
 <tr>
 <td><code>{ns}-buffer</code></td>
@@ -1407,24 +1407,26 @@ once actually forwarded, via <code>ParsleySerializer.deserialize</code>.</p>
 </tbody>
 </table>
 <p>All four stores are persistent and changelog-backed. Changelog topic names follow the Kafka Streams pattern: <code>{applicationId}-{storeName}-changelog</code>.</p>
-<h3 id="the-ns-frontier-f-value">The <code>{ns}-frontier</code> <code>"f"</code> value</h3>
-<p><code>ParsleyChannels</code> folds its persisted structures into the single <code>"f"</code> value (loaded once at init,
-rewritten on change; the changelog dedups repeated puts by key per commit):</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a>[frontier-clock-len:4][frontier ParsleyVectorClock bytes]
-<a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a>[channel-count:4]
-<a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a>  per channel:
-<a id="__codelineno-4-4" name="__codelineno-4-4" href="#__codelineno-4-4"></a>  [topicId MSB:8][topicId LSB:8][partition:4][channel-clock-len:4][channel ParsleyVectorClock bytes]
-<a id="__codelineno-4-5" name="__codelineno-4-5" href="#__codelineno-4-5"></a>[highest-received-count:4]
-<a id="__codelineno-4-6" name="__codelineno-4-6" href="#__codelineno-4-6"></a>  per channel:
-<a id="__codelineno-4-7" name="__codelineno-4-7" href="#__codelineno-4-7"></a>  [topicId MSB:8][topicId LSB:8][partition:4][offset:8]
-<a id="__codelineno-4-8" name="__codelineno-4-8" href="#__codelineno-4-8"></a>[carried-ancestry-len:4][carried-ancestry ParsleyVectorClock bytes]
-<a id="__codelineno-4-9" name="__codelineno-4-9" href="#__codelineno-4-9"></a>[input-count:4]
-<a id="__codelineno-4-10" name="__codelineno-4-10" href="#__codelineno-4-10"></a>  per declared input:
-<a id="__codelineno-4-11" name="__codelineno-4-11" href="#__codelineno-4-11"></a>  [name UTF][topicId MSB:8][topicId LSB:8]
-<a id="__codelineno-4-12" name="__codelineno-4-12" href="#__codelineno-4-12"></a>[own-outputs-len:4][own-outputs ParsleyVectorClock bytes]
-<a id="__codelineno-4-13" name="__codelineno-4-13" href="#__codelineno-4-13"></a>[sink-count:4]
-<a id="__codelineno-4-14" name="__codelineno-4-14" href="#__codelineno-4-14"></a>  per declared sink:
-<a id="__codelineno-4-15" name="__codelineno-4-15" href="#__codelineno-4-15"></a>  [name UTF][topicId MSB:8][topicId LSB:8]
+<h3 id="the-ns-frontier-value-key-frontier">The <code>{ns}-frontier</code> value (key <code>"frontier"</code>)</h3>
+<p><code>ParsleyChannels</code> folds its persisted structures into the single <code>"frontier"</code> value, a
+<code>ParsleyFrontierState</code> (loaded once at init, rewritten on change; the changelog dedups repeated
+puts by key per commit):</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a>[version:1]
+<a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a>[frontier-clock-len:4][frontier ParsleyVectorClock bytes]
+<a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a>[channel-count:4]
+<a id="__codelineno-4-4" name="__codelineno-4-4" href="#__codelineno-4-4"></a>  per channel:
+<a id="__codelineno-4-5" name="__codelineno-4-5" href="#__codelineno-4-5"></a>  [topicId MSB:8][topicId LSB:8][partition:4][channel-clock-len:4][channel ParsleyVectorClock bytes]
+<a id="__codelineno-4-6" name="__codelineno-4-6" href="#__codelineno-4-6"></a>[highest-received-count:4]
+<a id="__codelineno-4-7" name="__codelineno-4-7" href="#__codelineno-4-7"></a>  per channel:
+<a id="__codelineno-4-8" name="__codelineno-4-8" href="#__codelineno-4-8"></a>  [topicId MSB:8][topicId LSB:8][partition:4][offset:8]
+<a id="__codelineno-4-9" name="__codelineno-4-9" href="#__codelineno-4-9"></a>[carried-ancestry-len:4][carried-ancestry ParsleyVectorClock bytes]
+<a id="__codelineno-4-10" name="__codelineno-4-10" href="#__codelineno-4-10"></a>[input-count:4]
+<a id="__codelineno-4-11" name="__codelineno-4-11" href="#__codelineno-4-11"></a>  per declared input:
+<a id="__codelineno-4-12" name="__codelineno-4-12" href="#__codelineno-4-12"></a>  [name UTF][topicId MSB:8][topicId LSB:8]
+<a id="__codelineno-4-13" name="__codelineno-4-13" href="#__codelineno-4-13"></a>[own-outputs-len:4][own-outputs ParsleyVectorClock bytes]
+<a id="__codelineno-4-14" name="__codelineno-4-14" href="#__codelineno-4-14"></a>[sink-count:4]
+<a id="__codelineno-4-15" name="__codelineno-4-15" href="#__codelineno-4-15"></a>  per declared sink:
+<a id="__codelineno-4-16" name="__codelineno-4-16" href="#__codelineno-4-16"></a>  [name UTF][topicId MSB:8][topicId LSB:8]
 </code></pre></div>
 <p>The sections, in order:</p>
 <ul>
@@ -1448,10 +1450,14 @@ rewritten on change; the changelog dedups repeated puts by key per commit):</p>
   which is what lets the next init heal the trailing acknowledgements of a topic that is no longer
   a sink.</li>
 </ul>
-<p>Each section past the channel clocks is trailing and optional on read, so a blob written by an
-older layout loads with that section empty. There is no cross-version compatibility beyond that.</p>
+<p>The value carries a leading wire-version byte (currently <code>0x01</code>), and deserialization throws
+<code>IllegalStateException</code> on a mismatch, exactly as the <code>parsley-causal-clock</code> header does. Every
+section is always written and always read under a given version. Adding a field bumps the version
+rather than appending a trailing-optional section. There is no cross-version upgrade path before
+1.0, so a value written by an older layout (which had no version byte) is rejected at init rather
+than reinterpreted.</p>
 <p>The forwarded-offset index stays its own keyed store (<code>{ns}-forwarded-index</code>): it is growable and
-order-sensitive, so folding it into <code>"f"</code> would increase Rocks I/O.</p>
+order-sensitive, so folding it into the <code>"frontier"</code> value would increase Rocks I/O.</p>
 <h2 id="topic-uuids">Topic UUIDs</h2>
 <p>Topic UUIDs are not derived or guessed. They are resolved from the broker through <code>AdminClient</code>. The
 processor resolves them at <code>init()</code> from the task's <code>appConfigs()</code> for every topic registered as a

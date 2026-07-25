@@ -1411,6 +1411,11 @@ but waits for a change that touches the name.</p>
 <td>Channels (topics) are <code>c&lt;n&gt;</code> — sound for tests because a single-partition test topic is the channel; messages are <code>m&lt;n&gt;</code>; processor nodes are <code>p&lt;n&gt;</code>. Scenario-encoding names stay in complex broker ITs (funnel, diamond, prereq, and similar). Role-bearing record variables (<code>stamped</code>, <code>nullMessage</code>, <code>consumed</code>) keep their roles: the literature writes m′ for a transformed m rather than renumbering. <code>p&lt;n&gt;</code> is deliberately not clock vocabulary — Parsley clocks are channel-indexed, so process names never appear in clock positions</td>
 <td>Messages m, m′, m₁..mₖ (Lamport 1978; BSS 1991; Schwarz–Mattern 1994 VT(m)); channels c (CSP; Chandy–Misra–Bryant); processes p₁..pₙ (Fidge; Mattern)</td>
 </tr>
+<tr>
+<td><code>ParsleyFrontierState</code> (frontier store key <code>"f"</code> → <code>"frontier"</code>)</td>
+<td>Rule 3: Kafka-specific coinage for the <code>{ns}-frontier</code> store's durable value, the serialised union of the node's persisted causal metadata. No literature term names a state-store envelope; the name leads with the grounded <code>frontier</code> and stays consistent with the store name. The opaque single-letter key was renamed in the same break that gave the value a wire-version byte</td>
+<td>—</td>
+</tr>
 </tbody>
 </table>
 <h2 id="renames-of-record">Renames of record</h2>

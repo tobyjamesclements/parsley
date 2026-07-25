@@ -1363,7 +1363,7 @@ changelog-backed state store, so it spills to disk rather than growing in memory
 <a id="__codelineno-1-11" name="__codelineno-1-11" href="#__codelineno-1-11"></a>    if frontier.dominates(deps):                      # the gate: this node has ITSELF delivered
 <a id="__codelineno-1-12" name="__codelineno-1-12" href="#__codelineno-1-12"></a>                                                      #   every consumed dependency — a peer&#39;s
 <a id="__codelineno-1-13" name="__codelineno-1-13" href="#__codelineno-1-13"></a>                                                      #   claim never substitutes for local delivery
-<a id="__codelineno-1-14" name="__codelineno-1-14" href="#__codelineno-1-14"></a>        channels.delivered(record.coordinate)         # advance the frontier, self-persist &quot;f&quot;
+<a id="__codelineno-1-14" name="__codelineno-1-14" href="#__codelineno-1-14"></a>        channels.delivered(record.coordinate)         # advance the frontier, self-persist &quot;frontier&quot;
 <a id="__codelineno-1-15" name="__codelineno-1-15" href="#__codelineno-1-15"></a>        channelUpdate(record.channel, rawDeps)        # stamp-only fold of the WHOLE clock
 <a id="__codelineno-1-16" name="__codelineno-1-16" href="#__codelineno-1-16"></a>        out.add(record)
 <a id="__codelineno-1-17" name="__codelineno-1-17" href="#__codelineno-1-17"></a>        propagate(record.coordinate)                  # cascade releases (see below)
@@ -1398,7 +1398,7 @@ and why ignoring unconsumed coordinates is sound.</p>
 <tr>
 <td><code>channels</code></td>
 <td><code>ParsleyChannels</code></td>
-<td>The <a href="../channels/">channels module</a>: all persisted causal state — contiguous frontier, channel clocks, carried ancestry, own outputs, highest received — self-persisting as the single <code>"f"</code> value</td>
+<td>The <a href="../channels/">channels module</a>: all persisted causal state — contiguous frontier, channel clocks, carried ancestry, own outputs, highest received — self-persisting as the single <code>"frontier"</code> value</td>
 </tr>
 <tr>
 <td><code>buffer</code></td>
@@ -1516,7 +1516,7 @@ node does not consume is <em>not</em> a failure: it falls to the gate's ignore b
 <p>Both are logged with metadata only — coordinate, dependency clock, header keys, payload lengths —
 never the payload bytes themselves.</p>
 <h2 id="frontier-persistence-ordering">Frontier persistence ordering</h2>
-<p><code>ParsleyChannels</code> self-persists its single <code>"f"</code> value inside <code>delivered()</code> (and
+<p><code>ParsleyChannels</code> self-persists its single <code>"frontier"</code> value inside <code>delivered()</code> (and
 <code>seedIfFirstSeen()</code>), before control returns to this module and the record is added to the output
 list. This ordering guarantees that the changelog write for the frontier advance is durable before
 the record reaches the user processor. There is no separate callback: the channels module owns its

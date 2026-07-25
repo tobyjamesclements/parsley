@@ -1436,8 +1436,8 @@ coordinate has, by being delivered, met that dependency). That is the entire ste
 function of the clock and the source coordinate — view-only, never rewriting recorded state — so
 the gate may re-evaluate a held record as often as it likes with the same result.</p>
 <h2 id="scope-changes">Scope changes</h2>
-<p>A redeploy can change a stage's declared input set while its state survives. The persisted <code>"f"</code>
-blob records the input set it was written under, so <code>rescope</code> can diff it against the current
+<p>A redeploy can change a stage's declared input set while its state survives. The persisted
+<code>"frontier"</code> value records the input set it was written under, so <code>rescope</code> can diff it against the current
 declaration at initialisation. The governing principle: <strong>the causal past a node has delivered or
 carried may be skipped, but never dropped and never re-entered.</strong> Four cases:</p>
 <ol>
@@ -1480,7 +1480,7 @@ disposition, applied in the causal-broadcast constructor immediately after the r
 </tbody>
 </table>
 <h2 id="persistence">Persistence</h2>
-<p>The module self-persists the single <code>"f"</code> value inside every mutating request, before control
+<p>The module self-persists the single <code>"frontier"</code> value inside every mutating request, before control
 returns to the caller — the frontier advance is durable before a delivered record reaches the user
 processor. All Parsley stores commit in one Kafka transaction (<code>exactly_once_v2</code> is required), so
 the frontier, forwarded index, and buffer cannot tear against each other. The full binary layout
