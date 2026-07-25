@@ -43,6 +43,17 @@ All notable changes to this project are documented in this file. The format is b
   `ParsleyOwnOutputRegistry` between two phases, which is both what `foldAcknowledgedOutputs()`
   later drains and the reason an outbound stamp cannot carry its own coordinate. Documentation
   only, with no protocol or production-code change.
+- **A tracked permission allowlist at `.claude/settings.json`.** Coding-agent sessions previously
+  accumulated permission rules in the untracked `.claude/settings.local.json`, one narrow rule per
+  approved invocation, so `mvn clean verify` was never allowlisted even though it is the commit
+  gate, and an unattended session stalled on it. The tracked file carries patterns derived from
+  actual session history: the Maven build and its wrapper, the local-write git subcommands that
+  Claude Code does not already auto-allow (`add`, `commit`, `mv`, `rm`, `checkout`, `switch`,
+  `fetch`, `worktree`), the `gh` issue and pull-request-creation subcommands, and the two Docker
+  calls the Testcontainers ITs need. Read-only commands that are auto-allowed are deliberately
+  absent, as are interpreters and package runners (`python3`, `perl`, `npx`), which would amount to
+  arbitrary code execution. `.gitignore` gains the matching exception. No production or test code
+  change.
 
 ### Changed
 - **The frontier store value is now a named `ParsleyFrontierState` carrying a wire-version byte,
