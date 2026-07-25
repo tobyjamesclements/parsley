@@ -7,6 +7,17 @@ All notable changes to this project are documented in this file. The format is b
 ## [Unreleased]
 
 ### Added
+- **A "Why the stamp is four clocks and not one" section in the channels module page.** The page
+  described what each persisted clock holds without stating why each has to exist, leaving the
+  outbound stamp's shape to be inferred from the field notes. The new section gives the rationale
+  layer: the stamp must dominate everything that happened-before the record being stamped, the
+  contiguous frontier covers most of that past, and the channel clocks, carried ancestry, own
+  outputs, and highest-delivered clocks each close one disjoint route by which a real cause escapes
+  it. Each subsection states the failure that removing that clock would produce, including the
+  dependency of the delivery gate's ignore branch on the channel fold (I2 and I9), the stamp
+  regression a scope change would cause without carried ancestry (I3), the cross-partition and
+  cross-sink-topic gap own outputs closes, and the unclaimed immediate cause an above-gap delivery
+  would leave without the highest-delivered projection.
 - **A `diagram-walkthrough` skill that reads the sequence diagram against the source.** The diagram
   numbers every arrow, but turning a step number into the method it stands for was manual. The skill
   asks where the reader wants to start, then walks the calls one at a time, giving the declaration's
@@ -32,6 +43,21 @@ All notable changes to this project are documented in this file. The format is b
   `ParsleyOwnOutputRegistry` between two phases, which is both what `foldAcknowledgedOutputs()`
   later drains and the reason an outbound stamp cannot carry its own coordinate. Documentation
   only, with no protocol or production-code change.
+
+### Changed
+- **The frontier store value is now a named `ParsleyFrontierState` carrying a wire-version byte,
+  and its key was renamed `"f"` to `"frontier"` (breaking; state reset required on upgrade).** The
+  monolithic hand-serialised `"f"` blob in `ParsleyChannels` is extracted into a
+  `ParsleyFrontierState` record that owns the byte layout. A single leading version byte that
+  hard-fails on a mismatch replaces the former trailing-optional section scheme, matching
+  `ParsleyVectorClock` and `ParsleySerializer`. This drops the implicit cross-layout truncation
+  tolerance (relied on only by test helpers) in favour of an explicit fault at init, consistent
+  with the pre-1.0 no-upgrade-path stance (O6): a value written by an older layout is rejected
+  rather than reinterpreted. Because both the key and the value bytes change, an existing
+  `{ns}-frontier` store and its changelog must be reset on upgrade. No protocol or causal-semantics
+  change: the seven persisted sections and their contents are unchanged. `docs/reference/wire-format.md`,
+  the naming register, and the channels module page are updated (the last carried three stale `"f"`
+  references, two of them a link to the renamed wire-format heading).
 
 ### Fixed
 - **The topology simulator's two liveness guards no longer disagree on what a storm is (#32,

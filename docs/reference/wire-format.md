@@ -3,7 +3,7 @@
 This page specifies the binary layout of every header and state-store value the
 [three protocols](../protocols/index.md) read and write. It is the ground truth for anyone
 decoding a `parsley-causal-clock` header, inspecting a buffer changelog, or reasoning about the
-`"f"` frontier blob.
+`"frontier"` frontier-store value.
 
 All binary encodings are big-endian. All lengths are in bytes.
 
@@ -98,19 +98,21 @@ The namespace is the stage name `CausalTopology#assemble` derives (or an explici
 
 | Store | Key serde | Value serde | Purpose |
 |---|---|---|---|
-| `{ns}-frontier` | `String` | `byte[]` | Single entry at key `"f"`: the combined `ParsleyChannels` blob — the node's contiguous delivered frontier clock, the per-input-channel clocks, the highest-received offsets, the carried-ancestry clock, the declared input set, the own-outputs clock, and the declared sink set (see below) |
+| `{ns}-frontier` | `String` | `byte[]` | Single entry at key `"frontier"`: the whole `ParsleyFrontierState` — the node's contiguous delivered frontier clock, the per-input-channel clocks, the highest-received offsets, the carried-ancestry clock, the declared input set, the own-outputs clock, and the declared sink set (see below) |
 | `{ns}-buffer` | `Long` | `byte[]` | Insertion sequence -> `bufferedAt` + serialised `ParsleyMessage` |
 | `{ns}-candidate-index` | `byte[]` | `byte[]` (empty) | 36-byte composite key -> presence marker |
 | `{ns}-forwarded-index` | `byte[]` | `byte[]` (empty) | 28-byte `(topicId, partition, offset)` key -> presence marker: offsets forwarded ahead of the contiguous frontier |
 
 All four stores are persistent and changelog-backed. Changelog topic names follow the Kafka Streams pattern: `{applicationId}-{storeName}-changelog`.
 
-### The `{ns}-frontier` `"f"` value
+### The `{ns}-frontier` value (key `"frontier"`)
 
-`ParsleyChannels` folds its persisted structures into the single `"f"` value (loaded once at init,
-rewritten on change; the changelog dedups repeated puts by key per commit):
+`ParsleyChannels` folds its persisted structures into the single `"frontier"` value, a
+`ParsleyFrontierState` (loaded once at init, rewritten on change; the changelog dedups repeated
+puts by key per commit):
 
 ```
+[version:1]
 [frontier-clock-len:4][frontier ParsleyVectorClock bytes]
 [channel-count:4]
   per channel:
@@ -150,11 +152,15 @@ The sections, in order:
   which is what lets the next init heal the trailing acknowledgements of a topic that is no longer
   a sink.
 
-Each section past the channel clocks is trailing and optional on read, so a blob written by an
-older layout loads with that section empty. There is no cross-version compatibility beyond that.
+The value carries a leading wire-version byte (currently `0x01`), and deserialization throws
+`IllegalStateException` on a mismatch, exactly as the `parsley-causal-clock` header does. Every
+section is always written and always read under a given version. Adding a field bumps the version
+rather than appending a trailing-optional section. There is no cross-version upgrade path before
+1.0, so a value written by an older layout (which had no version byte) is rejected at init rather
+than reinterpreted.
 
 The forwarded-offset index stays its own keyed store (`{ns}-forwarded-index`): it is growable and
-order-sensitive, so folding it into `"f"` would increase Rocks I/O.
+order-sensitive, so folding it into the `"frontier"` value would increase Rocks I/O.
 
 ## Topic UUIDs
 

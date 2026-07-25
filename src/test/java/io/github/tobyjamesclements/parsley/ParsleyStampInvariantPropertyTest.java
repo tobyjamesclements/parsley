@@ -229,7 +229,7 @@ class ParsleyStampInvariantPropertyTest {
 
     /**
      * All of the above under in-place restarts: nodes are torn down mid-schedule and rebuilt from
-     * their durable stores (the {@code "f"} blob, buffer, candidate and forwarded-index stores,
+     * their durable stores (the {@code "frontier"} value, buffer, candidate and forwarded-index stores,
      * the sink end-offset {@code ownOutputs} seed, and the forwarded-index reconstruction of
      * {@code highestDelivered}), and every continuous invariant — including I3's monotonicity
      * <em>across</em> the restart boundary — must hold exactly as in an uninterrupted run.

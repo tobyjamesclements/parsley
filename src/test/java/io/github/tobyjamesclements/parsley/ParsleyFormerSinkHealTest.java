@@ -26,7 +26,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
  * Tests the init-time former-sink heal of the restored {@code ownOutputs} clock (T3.4). The
- * persisted {@code "f"} blob always trails the final transaction's own-output acks (store caches
+ * persisted {@code "frontier"} value always trails the final transaction's own-output acks (store caches
  * flush before the producer flush completes acks — O1), and the ordinary end-offset seed heals
  * only the <em>currently</em> declared sinks — so a redeploy that turns a sink into an input, or
  * drops it while a third party still consumes it, would otherwise restart with stamps
