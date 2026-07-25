@@ -353,6 +353,16 @@ final class ParsleyTopologySim {
 
     private enum Mode { GENERATE, REPLAY }
 
+    /**
+     * Liveness deadline for a single run's settle {@link #drain}. A drain that neither quiesces nor
+     * trips {@link #guardRunaway} within this wall-clock budget is a non-quiescing relay — the I6
+     * knowledge-based relay failing to stop — caught here rather than left to spin for minutes.
+     * Generous by default: a healthy run settles in milliseconds even at deep scale, so a real
+     * schedule never approaches it and is never perturbed. Tune with {@code -Dparsley.sim.run.timeoutMs}
+     * (the random-topology sweep lowers it to fail fast on a pathological seed).
+     */
+    private static final long RUN_TIMEOUT_MS = Long.getLong("parsley.sim.run.timeoutMs", 300_000L);
+
     private final Map<String, SimTopic> topics = new LinkedHashMap<>();
     private final Map<Uuid, String> topicNamesById = new HashMap<>();
     private final Map<String, SimNode> nodes = new LinkedHashMap<>();
@@ -431,8 +441,9 @@ final class ParsleyTopologySim {
     }
 
     /**
-     * Disables trace recording — for soak-length runs, where holding millions of actions would
-     * dominate the heap and a failure is reproduced from its seed rather than a shrunken trace.
+     * Disables trace recording. Used where holding a per-step action list would dominate the heap —
+     * soak-length runs and the deep random-topology sweep — with a failure reproduced from its seed
+     * (re-run with tracing on) rather than from a retained trace.
      */
     ParsleyTopologySim withNoTrace() {
         this.traceRecording = false;
@@ -651,6 +662,8 @@ final class ParsleyTopologySim {
      * it explores.)
      */
     void drain() {
+        long deadlineNanos = System.nanoTime() + RUN_TIMEOUT_MS * 1_000_000L;
+        long polls = 0;
         boolean progressed = true;
         while (progressed) {
             progressed = false;
@@ -665,6 +678,14 @@ final class ParsleyTopologySim {
                         ackAll(node);
                     }
                     progressed = true;
+                    // Liveness guard: a settle that will not terminate (a non-quiescing relay) is
+                    // failed fast, with the seed, rather than left to spin. The counter only gates
+                    // the clock read; it draws nothing, so a settling run's schedule is untouched.
+                    if ((++polls & 0xFF) == 0L && System.nanoTime() > deadlineNanos) {
+                        throw new AssertionError(runLabel + "drain did not settle within "
+                                + RUN_TIMEOUT_MS + " ms (" + polls + " polls): a non-quiescing "
+                                + "relay. The I6 knowledge-based relay must quiesce (cf. guardRunaway).");
+                    }
                 }
             }
         }

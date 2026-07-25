@@ -1708,6 +1708,23 @@ All notable changes to this project are documented in this file. The format is b
   fresh starts).
 
 ### Tests
+- **The random-topology sweep (`ParsleyRandomTopologyPropertyTest`) runs without a recorded trace,
+  so it no longer exhausts the heap at deep scale.** Each run previously retained a per-run trace of
+  every scheduler step, which is needed only to shrink a failure; across the deep tier's thousands
+  of runs this dominated the heap and the sweep died with `OutOfMemoryError` (the weekly deep job's
+  documented `5000 × 2000` size never actually fit). The sweep now builds every run with
+  `withNoTrace()` — as the soak already did — and, because runs are seed-deterministic, recovers the
+  trace on the rare failure by re-executing that one seed with tracing on before delta-debugging it.
+  Per-run memory is now flat regardless of step count, so the deep tier fits an ordinary heap. A
+  shared `buildSim` helper keeps the sweep loop and the failure re-run from drifting on how a run is
+  constructed.
+- **`ParsleyTopologySim.drain()` gained a liveness guard: a settle that will not quiesce fails fast
+  with the seed rather than spinning.** A non-quiescing I6 relay previously left the drain looping
+  until it exhausted the heap; it now throws once the settle exceeds `RUN_TIMEOUT_MS` (default 300s,
+  tunable with `-Dparsley.sim.run.timeoutMs`). The counter only gates the clock read and draws
+  nothing, so a settling run's schedule is untouched. Running the deep tier with the memory fix
+  surfaced the first such case, captured as the `@Disabled` repro `ParsleySharedSinkCycleNonQuiescenceTest`
+  (deep-sweep seed 92672, a 3-producer shared-sink cycle) and tracked in #32 pending root-cause.
 - Added two `ParsleyEngineTest` cases verifying that a contiguous-frontier jump releases every
   buffered record whose dependency falls anywhere in the jumped range — not just records waiting on
   the final boundary offset. One test covers five records each waiting on a distinct intermediate

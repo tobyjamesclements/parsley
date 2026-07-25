@@ -12,9 +12,11 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * The random-topology explorer: every run draws a generated topology
  * ({@link ParsleyTopologyGen}), a seeded schedule, and a fault profile, with the sim's continuous
  * invariants (I1 ground-truth delivery order, I2 both forms, I3, I9, D2, no duplicate delegate
- * delivery) armed throughout and drain-to-empty asserted at the end of every run. On a failure
- * the recorded trace is delta-debugged ({@link ParsleySimShrinker}) and the minimised repro is
- * printed in {@link ParsleySimTrace} text form, ready for {@code parse} + {@code replay}.
+ * delivery) armed throughout and drain-to-empty asserted at the end of every run. Runs record no
+ * trace, so a per-run action list cannot dominate the heap at deep scale; on a failure the one
+ * failing seed is re-run with tracing on, delta-debugged ({@link ParsleySimShrinker}), and the
+ * minimised repro is printed in {@link ParsleySimTrace} text form, ready for {@code parse} +
+ * {@code replay}.
  *
  * <p>Scale is system-property-tunable so one test serves two tiers: the CI defaults keep it in
  * seconds; a deep sweep passes {@code -Dparsley.sim.topologies=5000 -Dparsley.sim.steps=2000}
@@ -58,14 +60,13 @@ class ParsleyRandomTopologyPropertyTest {
             ParsleySimTrace.SimSpec spec = ParsleyTopologyGen.generate(TOPOLOGY_SEED_BASE + t);
             seen.addAll(ParsleyTopologyGen.classify(spec));
             for (int s = 0; s < SEEDS_PER_TOPOLOGY; s++) {
+                int runIndex = t * SEEDS_PER_TOPOLOGY + s;
                 long runSeed = RUN_SEED_BASE + (long) t * SEEDS_PER_TOPOLOGY + s;
-                ParsleyTopologySim sim = withProfile(ParsleyTopologySim.fromSpec(spec, runSeed),
-                        t * SEEDS_PER_TOPOLOGY + s);
-                if (spec.partitions() > 1) {
-                    // The cross-partition claim source (T10): only multi-partition specs have a
-                    // partitioner with work to do, so the flag never perturbs legacy schedules.
-                    sim.withEdgeProducers();
-                }
+                // Trace recording off: at deep scale a per-run trace of STEPS actions dominates the
+                // heap (as the soak found). The trace is needed only to shrink a failure, and the
+                // run is seed-deterministic, so reproFromSeed re-runs the one failing seed with
+                // tracing on to recover it.
+                ParsleyTopologySim sim = buildSim(spec, runIndex, runSeed, false);
                 try {
                     sim.run(STEPS);
                     assertDrained(sim, spec, "[seed " + runSeed + "] ");
@@ -73,7 +74,7 @@ class ParsleyRandomTopologyPropertyTest {
                     supercriticalSkips++;
                     continue;
                 } catch (Throwable failure) {
-                    throw shrunkRepro(spec, sim.trace(), runSeed, failure);
+                    throw reproFromSeed(spec, runIndex, runSeed, failure);
                 }
                 held += sim.recordsHeld;
                 outOfOrder += sim.outOfOrderDeliveries;
@@ -124,6 +125,26 @@ class ParsleyRandomTopologyPropertyTest {
     }
 
     /**
+     * Constructs one run's sim: the rotating fault profile, the T10 edge-producer source on
+     * multi-partition specs, and — unless {@code recordTrace} — trace recording disabled to keep
+     * per-run memory flat at deep scale. Shared by the sweep loop (no trace) and the failure re-run
+     * (trace on) so the two cannot drift on how a run is built.
+     */
+    private static ParsleyTopologySim buildSim(ParsleySimTrace.SimSpec spec, int runIndex,
+                                               long runSeed, boolean recordTrace) {
+        ParsleyTopologySim sim = withProfile(ParsleyTopologySim.fromSpec(spec, runSeed), runIndex);
+        if (!recordTrace) {
+            sim.withNoTrace();
+        }
+        if (spec.partitions() > 1) {
+            // The cross-partition claim source (T10): only multi-partition specs have a
+            // partitioner with work to do, so the flag never perturbs legacy schedules.
+            sim.withEdgeProducers();
+        }
+        return sim;
+    }
+
+    /**
      * Liveness at the end of a drained run: no node still holds a buffered record — a record
      * held forever means a stamped claim nothing appended can satisfy.
      */
@@ -132,6 +153,27 @@ class ParsleyRandomTopologyPropertyTest {
             assertEquals(0, sim.nodeNamed(node.name()).bufferSize(),
                     label + "node " + node.name() + " must end fully drained");
         }
+    }
+
+    /**
+     * The failure path. The sweep runs without a recorded trace (see {@link #buildSim}), so the one
+     * failing seed is re-executed deterministically with tracing on to recover its trace, which
+     * {@link #shrunkRepro} then delta-debugs and prints. If the traced re-run drains cleanly — the
+     * failure not reproducing, which the sim's determinism forbids — the seed is reported plainly
+     * rather than masking the discrepancy.
+     */
+    private static AssertionError reproFromSeed(ParsleySimTrace.SimSpec spec, int runIndex,
+                                                long runSeed, Throwable failure) {
+        ParsleyTopologySim traced = buildSim(spec, runIndex, runSeed, true);
+        try {
+            traced.run(STEPS);
+            assertDrained(traced, spec, "[seed " + runSeed + "] ");
+        } catch (Throwable reproduced) {
+            return shrunkRepro(spec, traced.trace(), runSeed, reproduced);
+        }
+        return new AssertionError("[seed " + runSeed + "] random-topology sweep failure did not "
+                + "reproduce under a traced re-run from the same seed, which the sim's determinism "
+                + "forbids: " + failure.getMessage(), failure);
     }
 
     /**
