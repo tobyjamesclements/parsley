@@ -19,19 +19,26 @@ observable through inputs that produce no business output.
 
 ## Reading the arrows
 
-Everything in this topology runs on one Kafka Streams task thread, so every call is synchronous and
-returns before the next one begins. The diagram shows that explicitly.
+Every arrow in this diagram is a call, and every call returns. That holds for the ones that touch
+Kafka as well: `producer.send()` returns as soon as the record is queued, and a record arriving from
+a source channel is the task thread invoking `process()` with something `poll()` has already
+returned. Nothing here is a fire-and-forget message.
 
-- A **solid arrow with an activation bar** is a method call. The bar spans the callee's work,
-  including any nested calls it makes.
+- A **solid arrow with an activation bar** is a call. The bar spans the callee's work, including any
+  nested calls it makes.
 - A **dashed arrow** is the matching return. A method that returns nothing is labelled `void`, so
   the point at which control comes back is still visible.
 - A **self-directed arrow** is a call a participant makes on itself, including the work it does
   inside its own state stores. These return too.
-- A **plain solid arrow to or from a channel** is a Kafka record crossing the wire, not a call, so
-  it has no return. This is the one genuine asynchrony in the picture: a produce to `c3` is
-  acknowledged later and off this thread, which is exactly why the stamping path has to call
-  `foldAcknowledgedOutputs()` to pick up the acks that landed since the last stamp.
+
+The asynchrony in this design is end to end, not per call. A send returns without the record's
+offset, because the broker is what assigns it. The node learns its own coordinate later, when the
+producer's network thread hands the acknowledgement to `ParsleyOwnOutputInterceptor`, long after the
+`send()` call returned on the task thread. Those deferred acks are drawn as their own arrows into
+`ParsleyOwnOutputRegistry`, landing between the phases rather than beneath the send that caused
+them, because that is when they actually arrive. They are the entire reason
+`foldAcknowledgedOutputs()` and the crossing wait exist, and the reason an outbound stamp can never
+carry the coordinate of the record it is stamping.
 
 ## The scenario
 
@@ -54,6 +61,9 @@ store. Four things then happen in order, and each one demonstrates a different p
    ahead of this node's knowledge, so the I6 relay rule fires. The other claim folds into the
    outbound stamp without obliging a relay.
 
+Between phases 2 and 3 the broker acknowledges the null message phase 2 sent, which is what lets
+phase 3's stamp name `c3-0 @42`. The stamp taken in phase 2 could not have.
+
 ## The diagram
 
 ```mermaid
@@ -67,6 +77,7 @@ sequenceDiagram
     participant l3 as L3 ParsleyGossip
     participant l2 as L2 ParsleyCausalBroadcast
     participant l1 as L1 ParsleyChannels
+    participant reg as ParsleyOwnOutputRegistry
     participant c3 as c3-0 sink channel
 
     Note over p1,l1: 1. init. The stack is built bottom up, each layer over the one below.
@@ -85,6 +96,7 @@ sequenceDiagram
     l1-->>-p1: void
     p1->>+l1: bindOwnOutputSource(registry, pendingSends, {c3}, deliveryTimeoutMs)
     l1-->>-p1: void
+    Note right of l1: L1 now has a handle on the registry the producer<br/>interceptor writes acks into.
     p1->>+l1: declareSinks({c3})
     l1-->>-p1: void
     p1->>+l2: new ParsleyCausalBroadcast(channels, buffer, candidateIndex, forwardedIndex)
@@ -99,9 +111,8 @@ sequenceDiagram
 
     Note over c2,c3: 2. m1 arrives on c2-0 @11 and is held. Its cause on c1-0 has not been delivered.
 
-    c2->>p1: record m1 at c2-0 @11, deps {c1-0: 7}
-    activate p1
-    Note right of p1: Streams calls process(m1) on the task thread.<br/>Every call below returns before the next begins.
+    c2->>+p1: process(m1), record at c2-0 @11, deps {c1-0: 7}
+    Note right of p1: The task thread calls process with a record poll()<br/>already returned. Every call below returns before<br/>the next begins.
     p1->>+p1: ensureTopicIdentityIntact()
     p1-->>-p1: void
     p1->>+p1: classify(m1)
@@ -142,27 +153,39 @@ sequenceDiagram
     p1->>+l3: advertise(m1.key, m1.timestamp)
     l3->>+l2: broadcast(nullMessage, {c3-0})
     l2->>+l1: awaitOwnOutputQuiescence({c3-0})
-    l1-->>-l2: void, no unacked send outside {c3-0}
+    l1->>+reg: awaitQuiescentExcept({c3-0}, deliveryTimeoutMs)
+    reg-->>-l1: void, nothing pending outside {c3-0}
+    l1-->>-l2: void
     Note right of l1: The crossing wait. It throws rather than<br/>stamp while an own-sink send is outstanding.
     l2->>+l1: foldAcknowledgedOutputs()
-    l1->>+l1: acknowledge(c3, 0, offset) per acked send
-    l1-->>-l1: void
+    l1->>+reg: forEachAcked(consumer)
+    reg-->>-l1: nothing acked yet
     l1-->>-l2: void
     l2->>+l1: stamp()
     l1->>+l1: completeness().merge(ownOutputs).merge(highestDelivered)
-    l1-->>-l1: outbound clock
+    l1-->>-l1: outbound clock, no c3-0 entry
     l1-->>-l2: outbound clock
     l2-->>-l3: record with the _parsley_causal_clock header
     l3-->>-p1: null message, value null, marked _parsley_null_message
     p1->>+p1: forwardToSinks(record)
-    p1->>c3: produce null message, ParsleyMarkerPartition set
+    p1->>+c3: send(null message), ParsleyMarkerPartition set
+    c3->>+reg: onSend, tracker.sent(c3, 0)
+    reg-->>-c3: void
+    c3-->>-p1: queued, no offset assigned yet
     p1-->>-p1: void
-    deactivate p1
+    p1-->>-c2: void, process returns
+
+    Note over l1,c3: The broker acknowledges that null message.<br/>This runs on the producer network thread, after process() already returned.
+
+    c3->>+reg: onAcknowledgement(c3-0 @42)
+    reg->>+reg: fold(c3, 0, 42) then tracker.acknowledged
+    reg-->>-reg: void
+    reg-->>-c3: void
+    Note right of reg: The offset is the broker's. Nothing blocked waiting<br/>for it, and the phase 2 stamp above could not have<br/>named it. This is where the asynchrony actually sits.
 
     Note over c1,c3: 3. m2 arrives on c1-0 @7. It is delivered, and the cascade releases m1 behind it.
 
-    c1->>p1: record m2 at c1-0 @7, deps {c4-0: 31}
-    activate p1
+    c1->>+p1: process(m2), record at c1-0 @7, deps {c4-0: 31}
     p1->>+p1: ensureTopicIdentityIntact() then classify(m2) then ingest(m2)
     p1-->>-p1: ParsleyMessage m2
     p1->>+l2: receive(m2)
@@ -209,15 +232,25 @@ sequenceDiagram
     ctx->>+ctx: stamp(record)
     ctx->>+l2: broadcast(record)
     l2->>+l1: awaitOwnOutputQuiescence({})
+    l1->>+reg: awaitQuiescentExcept({}, deliveryTimeoutMs)
+    reg-->>-l1: void, the phase 2 send is already acked
     l1-->>-l2: void
     Note right of l1: A business forward gets no exemption. Its destination<br/>partition is unknowable at stamp time, so the wait is<br/>full quiescence over every own sink.
     l2->>+l1: foldAcknowledgedOutputs()
+    l1->>+reg: forEachAcked(consumer)
+    reg-->>-l1: c3-0 @42
+    l1->>+l1: acknowledge(c3, 0, 42)
+    l1-->>-l1: void
     l1-->>-l2: void
     l2->>+l1: stamp()
-    l1-->>-l2: {c1-0: 7, c2-0: 11, c3-0: acked, c4-0: 31}
+    l1-->>-l2: {c1-0: 7, c2-0: 11, c3-0: 42, c4-0: 31}
+    Note right of l1: c3-0 @42 is in the stamp only because the ack<br/>arrived between the phases. Its own coordinate<br/>still is not, and cannot be.
     l2-->>-ctx: record with the _parsley_causal_clock header
     ctx-->>-ctx: stamped record
-    ctx->>c3: produce stamped business record
+    ctx->>+c3: send(stamped business record)
+    c3->>+reg: onSend, tracker.sent(c3, 0)
+    reg-->>-c3: void
+    c3-->>-ctx: queued, no offset assigned yet
     ctx-->>-user: void
     user-->>-p1: void
     p1->>+ctx: forwardCount()
@@ -234,17 +267,24 @@ sequenceDiagram
     p1->>+l3: advertise(m1.key, m1.timestamp)
     Note right of l3: A silent input would otherwise stall downstream<br/>completeness, which breaks the inductive correctness<br/>of a multi-layer topology. L3 stands in for it.
     l3->>+l2: broadcast(nullMessage, {c3-0})
+    l2->>+l1: awaitOwnOutputQuiescence({c3-0})
+    l1->>+reg: awaitQuiescentExcept({c3-0}, deliveryTimeoutMs)
+    reg-->>-l1: void, the pending business send is to c3-0 and is exempt
+    l1-->>-l2: void
+    Note right of l1: The exemption is why this does not deadlock behind<br/>the record pass 1 just sent. Same coordinate, so<br/>partition FIFO and I3 already order them.
     l2->>+l1: stamp()
-    l1-->>-l2: outbound clock
+    l1-->>-l2: outbound clock, still c3-0 @42
     l2-->>-l3: stamped null message
     l3-->>-p1: null message
-    p1->>c3: produce null message
-    deactivate p1
+    p1->>+c3: send(null message)
+    c3->>+reg: onSend, tracker.sent(c3, 0)
+    reg-->>-c3: void
+    c3-->>-p1: queued, no offset assigned yet
+    p1-->>-c1: void, process returns
 
     Note over c1,c3: 4. A null message arrives on c1-0 @8 from an upstream node.
 
-    c1->>p1: null message at c1-0 @8, carried {c2-0: 14, c6-0: 3}
-    activate p1
+    c1->>+p1: process(nullMessage), record at c1-0 @8, carried {c2-0: 14, c6-0: 3}
     p1->>+p1: classify(record)
     p1-->>-p1: NULL_MESSAGE
     p1->>+p1: handleNullMessage(record)
@@ -254,6 +294,8 @@ sequenceDiagram
     l3->>+l2: recordReflectedClaims(carried)
     l2-->>-l3: void
     l3->>+l1: foldAcknowledgedOutputs()
+    l1->>+reg: forEachAcked(consumer)
+    reg-->>-l1: no new acks
     l1-->>-l3: void
     l3->>+l1: stamp()
     l1-->>-l3: this node's total knowledge
@@ -275,9 +317,10 @@ sequenceDiagram
     l1-->>-l2: outbound clock
     l2-->>-l3: stamped null message
     l3-->>-p1: null message
-    p1->>c3: produce relayed null message
+    p1->>+c3: send(relayed null message)
+    c3-->>-p1: queued, no offset assigned yet
     p1-->>-p1: void
-    deactivate p1
+    p1-->>-c1: void, process returns
 ```
 
 ## What each layer is responsible for
@@ -297,6 +340,10 @@ of stamp cannot diverge.
 cascade, folds the carried clock into L1 for the outbound stamp only, and decides whether to relay.
 Steps 2 and 3 show it standing in for a business output that did not happen, and step 4 shows it
 carrying a peer's progress onward.
+
+`ParsleyOwnOutputRegistry` is not a protocol layer. It is the seam through which the node learns
+what the broker did with its own sends, and it is the only participant here written from a thread
+other than the task thread.
 
 ## Rendering
 

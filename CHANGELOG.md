@@ -12,10 +12,13 @@ All notable changes to this project are documented in this file. The format is b
   task's actual calls end to end. The diagram walks a two-source, one-processor, one-sink topology
   through init, a held record, the release cascade behind its cause, and an inbound null message,
   naming the real methods on `ParsleyChannels`, `ParsleyCausalBroadcast`, and `ParsleyGossip` at
-  each step. Every call carries an activation bar and an explicit return, so the synchronous call
-  stack on the single task thread is visible and a void method's return point is not left implicit;
-  the only one-way arrows are records crossing the wire, which is where the real asynchrony sits.
-  Documentation only, with no protocol or production-code change.
+  each step. Every call carries an activation bar and an explicit return, the calls into Kafka
+  included, so the synchronous call stack on the single task thread is visible and a void method's
+  return point is not left implicit. The asynchrony in the design is end to end rather than per
+  call, so the deferred producer acknowledgement is drawn as its own arrow into
+  `ParsleyOwnOutputRegistry` between two phases, which is both what `foldAcknowledgedOutputs()`
+  later drains and the reason an outbound stamp cannot carry its own coordinate. Documentation
+  only, with no protocol or production-code change.
 
 ### Fixed
 - **The topology simulator's two liveness guards no longer disagree on what a storm is (#32,
