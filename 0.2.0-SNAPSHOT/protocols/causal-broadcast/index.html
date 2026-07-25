@@ -1336,7 +1336,7 @@ outbound record at a single site. The module box:</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>requests:   broadcast(record) → stamped record   attach the outbound vector timestamp (the
 <a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>                                                 timestamp-assignment half of BSS; the underlying
 <a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a>                                                 send is Kafka&#39;s produce), after the
-<a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a>                                                 acknowledgement fold and the crossing wait
+<a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a>                                                 crossing wait and the acknowledgement fold
 <a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a>            receive(message) → Outcome           the BSS receive: gate → deliver-or-hold →
 <a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a>                                                 cascade; the returned ordered list is the
 <a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a>                                                 deliver indication, in pull style
@@ -1373,9 +1373,9 @@ changelog-backed state store, so it spills to disk rather than growing in memory
 <a id="__codelineno-1-21" name="__codelineno-1-21" href="#__codelineno-1-21"></a>
 <a id="__codelineno-1-22" name="__codelineno-1-22" href="#__codelineno-1-22"></a>    return out
 <a id="__codelineno-1-23" name="__codelineno-1-23" href="#__codelineno-1-23"></a>
-<a id="__codelineno-1-24" name="__codelineno-1-24" href="#__codelineno-1-24"></a>broadcast(record):                                    # the single stamping site — business
-<a id="__codelineno-1-25" name="__codelineno-1-25" href="#__codelineno-1-25"></a>    channels.foldAcknowledgedOutputs()                #   forwards and null messages alike
-<a id="__codelineno-1-26" name="__codelineno-1-26" href="#__codelineno-1-26"></a>    channels.awaitOwnOutputQuiescence(except)         # crossing wait; throws rather than stamp
+<a id="__codelineno-1-24" name="__codelineno-1-24" href="#__codelineno-1-24"></a>broadcast(record):                                    # single stamping site: forwards + null msgs
+<a id="__codelineno-1-25" name="__codelineno-1-25" href="#__codelineno-1-25"></a>    channels.awaitOwnOutputQuiescence(except)         # crossing wait; throws rather than stamp
+<a id="__codelineno-1-26" name="__codelineno-1-26" href="#__codelineno-1-26"></a>    channels.foldAcknowledgedOutputs()                # then fold the acks the wait settled
 <a id="__codelineno-1-27" name="__codelineno-1-27" href="#__codelineno-1-27"></a>    return record + header(channels.stamp())          # completeness ∪ ownOutputs ∪ highestDelivered
 </code></pre></div>
 <p>The gate is <code>frontier.dominates(consumedDependencies)</code>: this node's own contiguous delivered
@@ -1454,8 +1454,6 @@ waiting on that coordinate are not permanently stalled.</p>
 <p>Every outbound record — a delegate's business forward and a protocol null message alike — passes
 through <code>broadcast()</code>, so the two cannot diverge. In order:</p>
 <ol>
-<li>Fold pending producer acknowledgements into the own-outputs clock, so no coordinate
-   acknowledged before this stamp can be missing from it.</li>
 <li>Run the crossing wait (<code>awaitOwnOutputQuiescence</code>): block until no own-sink send outside the
    excluded destination set is unacknowledged. A business forward excludes nothing — its
    destination partition is unknowable at stamp time (the sink partitioner runs downstream of
@@ -1463,6 +1461,9 @@ through <code>broadcast()</code>, so the two cannot diverge. In order:</p>
    null message excludes its exact destination set (each sink at the task's own partition), which
    same-partition FIFO already covers. On timeout or an observed send failure the wait throws and
    the EOS transaction dies — never stamp-and-proceed.</li>
+<li>Fold pending producer acknowledgements into the own-outputs clock. The fold runs after the wait
+   so it captures exactly the acknowledgements the wait was blocking for. Folding first would drain
+   only the acks that already existed and miss those, under-claiming the stamp.</li>
 <li>Attach the stamp: <code>completeness ∪ ownOutputs ∪ highestDelivered</code>, the node's total knowledge.
    The merge is unconditional over everything the node has delivered, carried, or heard
    advertised — including coordinates on channels it does not consume, which is the custody chain
