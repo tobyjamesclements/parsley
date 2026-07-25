@@ -103,5 +103,8 @@ and re-renders on change. To produce a one-off image instead:
 npx -y @mermaid-js/mermaid-cli -i two-channel-topology.mmd -o two-channel-topology.svg
 ```
 
-Mermaid rejects unbalanced activations, so a successful render is also a check that every call in
-the diagram has a matching return.
+A successful render is only half a check on the call and return pairing. Mermaid rejects a return
+with no matching call, failing with `Trying to inactivate an inactive participant`, but it tolerates
+a call whose activation is never closed and simply draws the bar to the end of the diagram. If you
+edit the diagram, count the two directions: every `->>+` needs a later `-->>-` on the same
+participant, and the running depth of each participant must end at zero.
