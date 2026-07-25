@@ -139,8 +139,8 @@ the gate may re-evaluate a held record as often as it likes with the same result
 
 ## Scope changes
 
-A redeploy can change a stage's declared input set while its state survives. The persisted `"f"`
-blob records the input set it was written under, so `rescope` can diff it against the current
+A redeploy can change a stage's declared input set while its state survives. The persisted
+`"frontier"` value records the input set it was written under, so `rescope` can diff it against the current
 declaration at initialisation. The governing principle: **the causal past a node has delivered or
 carried may be skipped, but never dropped and never re-entered.** Four cases:
 
@@ -169,7 +169,7 @@ disposition, applied in the causal-broadcast constructor immediately after the r
 
 ## Persistence
 
-The module self-persists the single `"f"` value inside every mutating request, before control
+The module self-persists the single `"frontier"` value inside every mutating request, before control
 returns to the caller — the frontier advance is durable before a delivered record reaches the user
 processor. All Parsley stores commit in one Kafka transaction (`exactly_once_v2` is required), so
 the frontier, forwarded index, and buffer cannot tear against each other. The full binary layout

@@ -24,13 +24,13 @@ Implements `ProcessorSupplier<KIn,VIn,KOut,VOut>`.
 | `{ns}-candidate-index` | `byte[]` | `byte[]` |
 | `{ns}-forwarded-index` | `byte[]` | `byte[]` |
 
-All four are created with `Stores.persistentKeyValueStore(...)`, so they are changelog-backed and durable across restarts. The `{ns}-frontier` store's single `"f"` value holds both the contiguous frontier clock and the per-input-channel clocks (see [Wire format](wire-format.md#the-ns-frontier-f-value)).
+All four are created with `Stores.persistentKeyValueStore(...)`, so they are changelog-backed and durable across restarts. The `{ns}-frontier` store's single `"frontier"` value holds both the contiguous frontier clock and the per-input-channel clocks (see [Wire format](wire-format.md#the-ns-frontier-value-key-frontier)).
 
 ## `ParsleyProcessor` init sequence
 
 0. Resolve each registered `ParsleySource` topic's stable UUID from the broker via a `ParsleyTopicAdmin` built from `context.appConfigs()` (the topology decorator has no broker config until init), populating the `topicUuids` map. Closed immediately after.
 1. Retrieve the state stores from the processor context by name.
-2. Construct the task's one `ParsleyCausalBroadcast` (`buildCausalBroadcast()`, cached for the processor's lifetime — exactly one processor instance ever touches these stores within a task). Its `ParsleyChannels` loads the frontier clock and channel clocks from the single `"f"` value (empty if absent) and self-persists that value on every change. The restored state is rescoped to the current declared inputs, then a channel entry is seeded for every consumed input topic-partition.
+2. Construct the task's one `ParsleyCausalBroadcast` (`buildCausalBroadcast()`, cached for the processor's lifetime — exactly one processor instance ever touches these stores within a task). Its `ParsleyChannels` loads the frontier clock and channel clocks from the single `"frontier"` value (empty if absent) and self-persists that value on every change. The restored state is rescoped to the current declared inputs, then a channel entry is seeded for every consumed input topic-partition.
 3. Construct `ParsleyCausalBroadcast` with the `ParsleyChannels` (which owns the forwarded index and self-persists), a `StoreBackedBufferStore` wrapping the buffer store and a `ParsleySerializer`, and a `StoreBackedCandidateIndex` wrapping the candidate-index store. Build the task's `ParsleyGossip` over the same pair.
 4. Wrap the real context in a `ParsleyProcessorContext` (stamping proxy). Call `delegate.init(wrappedContext)`.
 5. Schedule a self-cancelling, one-shot `WALL_CLOCK_TIME` punctuation that drains any record satisfiable between the last committed frontier and the last committed buffer-removal (`drainAfterRestore()`), run once against the buffer restored from a changelog. Must run as a punctuation, not inline: Kafka Streams has not finished wiring the task's `RecordCollector` until every processor in the topology returns from `init()`, so `forward()` during `init()` throws.

@@ -251,8 +251,8 @@ class CausalScopeChangeIT {
         // A closed instance's group membership lingers until session timeout; keep it short so the
         // between-deployment group-settle waits stay fast.
         props.put(StreamsConfig.consumerPrefix(ConsumerConfig.SESSION_TIMEOUT_MS_CONFIG), 6000);
-        // A fresh state directory per deployment forces a changelog restore, so the persisted "f"
-        // blob's new trailing sections (carried ancestry + declared inputs) are what carries the
+        // A fresh state directory per deployment forces a changelog restore, so the persisted
+        // frontier value's carried-ancestry and declared-input sections are what carries the
         // scope knowledge across deployments — the exact mechanism under test.
         props.put(StreamsConfig.STATE_DIR_CONFIG, stateDir.toAbsolutePath().toString());
         return props;

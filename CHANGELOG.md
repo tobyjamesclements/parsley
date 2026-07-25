@@ -6,6 +6,20 @@ All notable changes to this project are documented in this file. The format is b
 
 ## [Unreleased]
 
+### Changed
+- **The frontier store value is now a named `ParsleyFrontierState` carrying a wire-version byte,
+  and its key was renamed `"f"` to `"frontier"` (breaking; state reset required on upgrade).** The
+  monolithic hand-serialised `"f"` blob in `ParsleyChannels` is extracted into a
+  `ParsleyFrontierState` record that owns the byte layout. A single leading version byte that
+  hard-fails on a mismatch replaces the former trailing-optional section scheme, matching
+  `ParsleyVectorClock` and `ParsleySerializer`. This drops the implicit cross-layout truncation
+  tolerance (relied on only by test helpers) in favour of an explicit fault at init, consistent
+  with the pre-1.0 no-upgrade-path stance (O6): a value written by an older layout is rejected
+  rather than reinterpreted. Because both the key and the value bytes change, an existing
+  `{ns}-frontier` store and its changelog must be reset on upgrade. No protocol or causal-semantics
+  change: the seven persisted sections and their contents are unchanged. `docs/reference/wire-format.md`
+  and the naming register are updated.
+
 ### Fixed
 - **The topology simulator's two liveness guards no longer disagree on what a storm is (#32,
   test-side).** The deep random-topology sweep surfaced a shared-sink cycle whose settle `drain()`
