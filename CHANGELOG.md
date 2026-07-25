@@ -7,6 +7,15 @@ All notable changes to this project are documented in this file. The format is b
 ## [Unreleased]
 
 ### Added
+- **A `diagram-walkthrough` skill that reads the sequence diagram against the source.** The diagram
+  numbers every arrow, but turning a step number into the method it stands for was manual. The skill
+  asks where the reader wants to start, then walks the calls one at a time, giving the declaration's
+  `file:line`, its real signature, where each argument came from earlier in the diagram, the step
+  number that carries the return, and the rationale the Javadoc already records. Its `steps.py`
+  reproduces mermaid's `autonumber` by counting message lines in the `.mmd`, so step N in the script
+  is step N in the render, and it pairs each call with its matching return rather than treating the
+  two as unrelated arrows. The skill treats the code as authoritative and instructs that a diagram
+  label contradicting the source be reported as a diagram defect.
 - **A sequence diagram of the three-layer call path, in `mermaid/two-channel-topology/`.** The
   diagram source is a standalone `two-channel-topology.mmd` so a renderer can watch it directly,
   with the prose alongside it in `README.md`. The
