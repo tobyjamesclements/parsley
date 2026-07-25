@@ -37,8 +37,8 @@ properties: per-producer stamp monotonicity; contiguous frontier; normalised clo
 
 The module is the single owner of all causal metadata a node persists: the contiguous frontier
 clock, the per-input-channel clocks, the carried-ancestry clock, the own-outputs clock, and the
-highest-received offsets, all folded into the single `"f"` value of the frontier store (see
-[Wire format](../reference/wire-format.md#the-ns-frontier-f-value)); plus the forwarded-offset index, which
+highest-received offsets, all folded into the single `"frontier"` value of the frontier store (see
+[Wire format](../reference/wire-format.md#the-ns-frontier-value-key-frontier)); plus the forwarded-offset index, which
 keeps its own keyed store. The [causal-broadcast module](causal-broadcast.md) runs the delivery
 gate and the buffer over these operations.
 
@@ -139,8 +139,8 @@ the gate may re-evaluate a held record as often as it likes with the same result
 
 ## Scope changes
 
-A redeploy can change a stage's declared input set while its state survives. The persisted `"f"`
-blob records the input set it was written under, so `rescope` can diff it against the current
+A redeploy can change a stage's declared input set while its state survives. The persisted
+`"frontier"` value records the input set it was written under, so `rescope` can diff it against the current
 declaration at initialisation. The governing principle: **the causal past a node has delivered or
 carried may be skipped, but never dropped and never re-entered.** Four cases:
 
@@ -232,11 +232,11 @@ requires two.
 
 ## Persistence
 
-The module self-persists the single `"f"` value inside every mutating request, before control
+The module self-persists the single `"frontier"` value inside every mutating request, before control
 returns to the caller — the frontier advance is durable before a delivered record reaches the user
 processor. All Parsley stores commit in one Kafka transaction (`exactly_once_v2` is required), so
 the frontier, forwarded index, and buffer cannot tear against each other. The full binary layout
-is in [Wire format](../reference/wire-format.md#the-ns-frontier-f-value).
+is in [Wire format](../reference/wire-format.md#the-ns-frontier-value-key-frontier).
 
 ## Cost
 
@@ -246,7 +246,7 @@ together.
 
 - **State persistence, O(C · w).** All of the node's causal metadata (the frontier, the per-channel
   advertised clocks, the carried ancestry, the own-output positions, and the highest-received
-  offsets) persists as the single `"f"` value, and the module rewrites that whole value on every
+  offsets) persists as the single `"frontier"` value, and the module rewrites that whole value on every
   advance: every delivered record, every producer acknowledgement, and every gossip fold. Each
   rewrite serialises the full channel state and issues one state-store put, so the cost scales with
   the total channel state rather than with the incoming header alone, and a store write costs far

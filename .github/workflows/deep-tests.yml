@@ -5,8 +5,10 @@ name: Deep tests
 
 on:
   schedule:
-    # Mondays 03:00 UTC.
-    - cron: '0 3 * * 1'
+    # Mondays 04:37 UTC. Deliberately off the top of the hour: GitHub runs scheduled
+    # workflows on a best-effort basis and drops or delays them most at round times under
+    # peak load, so an odd minute is more likely to fire on time.
+    - cron: '37 4 * * 1'
   workflow_dispatch:
 
 jobs:

@@ -29,7 +29,7 @@ import static java.util.Objects.requireNonNull;
  * <em>task per partition</em> (the production task model: a task owns partition p of every
  * co-partitioned input), and each task is a real {@link ParsleyChannels} +
  * {@link ParsleyCausalBroadcast} pair over store-backed persistence (restarts are genuine
- * reconstructions from the {@code "f"} blob and the durable buffer / candidate / forwarded-index
+ * reconstructions from the {@code "frontier"} value and the durable buffer / candidate / forwarded-index
  * stores), driven through the production entry points: {@code receive} for business records,
  * {@code ParsleyGossip.receive} for null messages, {@code broadcast} for every stamped emission,
  * {@code rescope} at every (re)start, and the {@code bindOwnOutputSource} seams for producer acks
@@ -353,6 +353,16 @@ final class ParsleyTopologySim {
 
     private enum Mode { GENERATE, REPLAY }
 
+    /**
+     * Liveness deadline for a single run's settle {@link #drain}. A drain that neither quiesces nor
+     * trips {@link #guardRunaway} within this wall-clock budget is a non-quiescing relay — the I6
+     * knowledge-based relay failing to stop — caught here rather than left to spin for minutes.
+     * Generous by default: a healthy run settles in milliseconds even at deep scale, so a real
+     * schedule never approaches it and is never perturbed. Tune with {@code -Dparsley.sim.run.timeoutMs}
+     * (the random-topology sweep lowers it to fail fast on a pathological seed).
+     */
+    private static final long RUN_TIMEOUT_MS = Long.getLong("parsley.sim.run.timeoutMs", 300_000L);
+
     private final Map<String, SimTopic> topics = new LinkedHashMap<>();
     private final Map<Uuid, String> topicNamesById = new HashMap<>();
     private final Map<String, SimNode> nodes = new LinkedHashMap<>();
@@ -431,8 +441,9 @@ final class ParsleyTopologySim {
     }
 
     /**
-     * Disables trace recording — for soak-length runs, where holding millions of actions would
-     * dominate the heap and a failure is reproduced from its seed rather than a shrunken trace.
+     * Disables trace recording. Used where holding a per-step action list would dominate the heap —
+     * soak-length runs and the deep random-topology sweep — with a failure reproduced from its seed
+     * (re-run with tracing on) rather than from a retained trace.
      */
     ParsleyTopologySim withNoTrace() {
         this.traceRecording = false;
@@ -557,12 +568,13 @@ final class ParsleyTopologySim {
     }
 
     /**
-     * Fails fast (with the seed) on a runaway emission loop, classifying it: a log tail of
-     * almost entirely null messages means the gossip relay itself is looping — I6's
-     * knowledge-based relay must quiesce, so that is a genuine protocol failure — while a tail
-     * with substantial business traffic means the topology's feedback amplification is
-     * supercritical (every consumer-with-sinks appends ~one record per delivered record), which
-     * is a misconfigured-run signal the explorer may skip, never a defect.
+     * Fails fast (with the seed) on a runaway emission loop once a sink's log crosses the count
+     * cap, deferring the verdict to {@link #classifyStorm}: a log tail of almost entirely null
+     * messages means the gossip relay itself is looping (a genuine protocol failure), while a
+     * tail with substantial business traffic means the topology's feedback amplification is
+     * supercritical, a misconfigured-run signal the explorer may skip. This is the record-count
+     * tripwire; the drain wall-clock tripwire ({@link #drain}) shares the same classifier so the
+     * two can never disagree on what a storm is.
      */
     private void guardRunaway(SimTopic sink, int partition) {
         // Legitimate volume is linear in external input (each external record cascades a
@@ -570,20 +582,44 @@ final class ParsleyTopologySim {
         // thousand healthy record is not a runaway. Pathological growth is decoupled from
         // externals (a storm appends unboundedly while externals stand still, e.g. during a
         // drain), so it crosses any linear-in-externals bound almost as fast as a fixed one.
-        List<SimRecord> log = sink.log(partition);
-        if (log.size() <= 20_000 + 50 * externalSequence) {
+        long threshold = 20_000 + 50 * externalSequence;
+        if (sink.log(partition).size() <= threshold) {
             return;
         }
-        long nullTail = log.subList(log.size() - 1_000, log.size()).stream()
+        throw classifyStorm(sink, partition, "grew past " + threshold + " records");
+    }
+
+    /**
+     * The single verdict both runaway tripwires defer to, so the record-count guard
+     * ({@link #guardRunaway}) and the drain wall-clock guard ({@link #drain}) can never disagree
+     * on what a storm IS — only on which noticed it first. The distinction is by log composition
+     * alone: a tail of almost entirely null messages is the gossip relay looping (I6 must
+     * quiesce, a genuine protocol defect the explorer must NOT skip — an {@link AssertionError});
+     * a tail carrying substantial business traffic is feedback amplification too hot (loop
+     * gain &gt; 1), a configuration problem the explorer skips and counts (a
+     * {@link SupercriticalTopologyException}). The sampling window is the last 1000 records, or
+     * the whole log when shorter — the wall-clock guard can trip below 1000.
+     *
+     * <p>The relay-loop verdict is an {@link AssertionError} (an {@link Error}, so it is thrown
+     * directly here — it needs no return channel and must not be catchable as the skippable
+     * supercritical case); the supercritical verdict is a {@link RuntimeException} returned for the
+     * caller to throw. Either way the caller writes {@code throw classifyStorm(...)}.
+     */
+    private RuntimeException classifyStorm(SimTopic sink, int partition, String trigger) {
+        List<SimRecord> log = sink.log(partition);
+        int window = Math.min(1_000, log.size());
+        long nullTail = log.subList(log.size() - window, log.size()).stream()
                 .filter(SimRecord::nullMessage)
                 .count();
-        if (nullTail >= 950) {
-            throw new AssertionError(runLabel + "relay loop: topic " + sink.name + " grew past "
-                    + "20000 records of almost entirely null messages — the I6 knowledge-based "
-                    + "relay must quiesce");
+        if (nullTail >= window * 95L / 100L) {
+            throw new AssertionError(runLabel + "relay loop: topic " + sink.name + " " + trigger
+                    + ", a tail of almost entirely null messages — the I6 knowledge-based relay "
+                    + "must quiesce.");
         }
-        throw new SupercriticalTopologyException(runLabel + "supercritical topology: topic "
-                + sink.name + " exceeded 20000 records under business amplification");
+        return new SupercriticalTopologyException(runLabel + "supercritical topology: topic "
+                + sink.name + " " + trigger + " carrying substantial business traffic — feedback "
+                + "amplification too hot (loop gain > 1), a configuration problem, not a protocol "
+                + "defect.");
     }
 
     // --- the scheduler -------------------------------------------------------------------------
@@ -651,6 +687,8 @@ final class ParsleyTopologySim {
      * it explores.)
      */
     void drain() {
+        long deadlineNanos = System.nanoTime() + RUN_TIMEOUT_MS * 1_000_000L;
+        long polls = 0;
         boolean progressed = true;
         while (progressed) {
             progressed = false;
@@ -665,9 +703,49 @@ final class ParsleyTopologySim {
                         ackAll(node);
                     }
                     progressed = true;
+                    // Liveness guard: a settle that will not terminate is failed fast, with the
+                    // seed, rather than left to spin — and its verdict (relay loop vs supercritical
+                    // topology) defers to the same classifier the record-count guard uses, so a
+                    // tight timeout can no longer mislabel a supercritical topology as a relay bug.
+                    // The counter only gates the clock read; it draws nothing, so a settling run's
+                    // schedule is untouched.
+                    if ((++polls & 0xFF) == 0L && System.nanoTime() > deadlineNanos) {
+                        throw stormAtDeadline(polls);
+                    }
                 }
             }
         }
+    }
+
+    /**
+     * The drain wall-clock guard's verdict. The deadline itself says only "this did not settle in
+     * time"; WHAT it is — a relay loop (protocol defect) or supercritical business amplification
+     * (config problem) — is the same log-composition question {@link #classifyStorm} answers, so
+     * this defers to it on whichever sink grew largest. A deadline that trips with nothing
+     * appended is not a runaway at all (a starved machine): that reports plainly and points at the
+     * timeout knob rather than smearing a false relay-loop or supercritical verdict onto an empty
+     * log.
+     */
+    private RuntimeException stormAtDeadline(long polls) {
+        SimTopic worst = null;
+        int worstPartition = 0;
+        int worstSize = 0;
+        for (SimTopic topic : topics.values()) {
+            for (int p = 0; p < partitions; p++) {
+                if (topic.log(p).size() > worstSize) {
+                    worst = topic;
+                    worstPartition = p;
+                    worstSize = topic.log(p).size();
+                }
+            }
+        }
+        if (worst == null) {
+            throw new AssertionError(runLabel + "drain did not settle within " + RUN_TIMEOUT_MS
+                    + " ms (" + polls + " polls) yet no sink grew — not a runaway. On a starved "
+                    + "machine, raise -Dparsley.sim.run.timeoutMs.");
+        }
+        return classifyStorm(worst, worstPartition, "did not let the drain settle within "
+                + RUN_TIMEOUT_MS + " ms (" + polls + " polls)");
     }
 
     private void ackAll(SimNode node) {
@@ -805,7 +883,7 @@ final class ParsleyTopologySim {
     /**
      * A dirty restart: the process dies with unfolded acks and un-awaited pending sends — no
      * {@code ackAllExcept}, no {@code foldAcknowledgedOutputs}. Sends already appended stay in
-     * the topic logs (committed, just never folded into the "f" blob); the init-time sink
+     * the topic logs (committed, just never folded into the frontier value); the init-time sink
      * end-offset seed (I8) must re-cover them so post-crash stamps still claim them. The sim's
      * stores commit instantly, so this is exactly the crash-after-commit-before-fold shape — the
      * store-rewinding transaction tear is a documented non-goal (class Javadoc).

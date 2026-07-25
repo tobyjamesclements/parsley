@@ -39,7 +39,7 @@ import java.util.function.LongSupplier;
  * forwarded (via {@link ParsleyChannels#delivered} and a {@link ParsleyForwardedIndex}), never past
  * a gap. {@link ParsleyChannels#seedIfFirstSeen} folds history below the first observed offset into
  * the frontier, since a coordinate's first offset need not be 0. Every release advances the frontier
- * and persists the {@code "f"} value before removing the record from {@link #buffer}, so a crash can
+ * and persists the {@code "frontier"} value before removing the record from {@link #buffer}, so a crash can
  * only tear toward a harmless at-least-once redelivery. The drain uses a {@link ParsleyCandidateIndex}
  * to check only records waiting on the advanced coordinate, cascading per released record.
  * Invariants: I1, I2, I9.

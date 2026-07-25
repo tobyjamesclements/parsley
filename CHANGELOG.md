@@ -19,6 +19,37 @@ All notable changes to this project are documented in this file. The format is b
   cross-sink-topic gap own outputs closes, and the unclaimed immediate cause an above-gap delivery
   would leave without the highest-delivered projection.
 
+### Changed
+- **The frontier store value is now a named `ParsleyFrontierState` carrying a wire-version byte,
+  and its key was renamed `"f"` to `"frontier"` (breaking; state reset required on upgrade).** The
+  monolithic hand-serialised `"f"` blob in `ParsleyChannels` is extracted into a
+  `ParsleyFrontierState` record that owns the byte layout. A single leading version byte that
+  hard-fails on a mismatch replaces the former trailing-optional section scheme, matching
+  `ParsleyVectorClock` and `ParsleySerializer`. This drops the implicit cross-layout truncation
+  tolerance (relied on only by test helpers) in favour of an explicit fault at init, consistent
+  with the pre-1.0 no-upgrade-path stance (O6): a value written by an older layout is rejected
+  rather than reinterpreted. Because both the key and the value bytes change, an existing
+  `{ns}-frontier` store and its changelog must be reset on upgrade. No protocol or causal-semantics
+  change: the seven persisted sections and their contents are unchanged. `docs/reference/wire-format.md`,
+  the naming register, and the channels module page are updated (the last carried three stale `"f"`
+  references, two of them a link to the renamed wire-format heading).
+
+### Fixed
+- **The topology simulator's two liveness guards no longer disagree on what a storm is (#32,
+  test-side).** The deep random-topology sweep surfaced a shared-sink cycle whose settle `drain()`
+  never terminates, reported as a non-quiescing I6 relay. It is not one: the null-message relay
+  quiesces on that shape (a `p = 0.0` pin now proves it), and the storm is business feedback
+  amplification with a loop gain above one, a configuration pathology the explorer is meant to skip
+  as supercritical. The `drain()` wall-clock liveness guard threw a generic "non-quiescing relay"
+  error that a tight run timeout let pre-empt the record-count guard, so a supercritical topology
+  was escalated to a hard relay-bug failure instead of being skipped. Both guards now defer to one
+  classifier keyed on the storm's log composition (null-heavy is a relay loop and fails, business-
+  heavy is supercritical and is skipped), so the verdict no longer depends on which guard trips
+  first or on the timeout. The mis-premised `@Disabled` repro is replaced by two pins: a
+  `p = 0.0` shared-sink-cycle relay-quiescence pin and a minimal supercritical-classification pin.
+  The gossip module docs gain a note that relay quiescence is distinct from business feedback
+  amplification. No protocol or production-code change.
+
 ## [0.2.0] - 2026-07-24
 
 ### Added
@@ -1662,6 +1693,13 @@ All notable changes to this project are documented in this file. The format is b
   branch's business record (not only by a watermark) without either record waiting on the other.
 
 ### Documentation
+- **The causal-broadcast page's stamping-order description is corrected to match the code.** The
+  `broadcast()` pseudocode, its numbered walkthrough, the module-box overview, and the processor
+  reference all had the crossing wait and the acknowledgement fold in the wrong order (fold then
+  wait). The code and the `broadcast` Javadoc run the crossing wait first and fold second, which is
+  the correct order: the wait blocks precisely until the outstanding sends acknowledge, so folding
+  after captures the coordinates it was blocking for, where folding first would miss them and
+  under-claim the stamp. The walkthrough now states that reason.
 - **The minimum supported Kafka broker version is documented: 3.7.0.** The integration suite now
   runs against both the 3.7.0 minimum and the current stable broker line (4.3.1 at the time of
   writing) in a CI matrix; the broker image is centralized behind one test seam
@@ -1714,6 +1752,23 @@ All notable changes to this project are documented in this file. The format is b
   fresh starts).
 
 ### Tests
+- **The random-topology sweep (`ParsleyRandomTopologyPropertyTest`) runs without a recorded trace,
+  so it no longer exhausts the heap at deep scale.** Each run previously retained a per-run trace of
+  every scheduler step, which is needed only to shrink a failure; across the deep tier's thousands
+  of runs this dominated the heap and the sweep died with `OutOfMemoryError` (the weekly deep job's
+  documented `5000 × 2000` size never actually fit). The sweep now builds every run with
+  `withNoTrace()` — as the soak already did — and, because runs are seed-deterministic, recovers the
+  trace on the rare failure by re-executing that one seed with tracing on before delta-debugging it.
+  Per-run memory is now flat regardless of step count, so the deep tier fits an ordinary heap. A
+  shared `buildSim` helper keeps the sweep loop and the failure re-run from drifting on how a run is
+  constructed.
+- **`ParsleyTopologySim.drain()` gained a liveness guard: a settle that will not quiesce fails fast
+  with the seed rather than spinning.** A non-quiescing I6 relay previously left the drain looping
+  until it exhausted the heap; it now throws once the settle exceeds `RUN_TIMEOUT_MS` (default 300s,
+  tunable with `-Dparsley.sim.run.timeoutMs`). The counter only gates the clock read and draws
+  nothing, so a settling run's schedule is untouched. Running the deep tier with the memory fix
+  surfaced the first such case, captured as the `@Disabled` repro `ParsleySharedSinkCycleNonQuiescenceTest`
+  (deep-sweep seed 92672, a 3-producer shared-sink cycle) and tracked in #32 pending root-cause.
 - Added two `ParsleyEngineTest` cases verifying that a contiguous-frontier jump releases every
   buffered record whose dependency falls anywhere in the jumped range — not just records waiting on
   the final boundary offset. One test covers five records each waiting on a distinct intermediate

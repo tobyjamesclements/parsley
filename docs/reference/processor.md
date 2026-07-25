@@ -24,13 +24,13 @@ Implements `ProcessorSupplier<KIn,VIn,KOut,VOut>`.
 | `{ns}-candidate-index` | `byte[]` | `byte[]` |
 | `{ns}-forwarded-index` | `byte[]` | `byte[]` |
 
-All four are created with `Stores.persistentKeyValueStore(...)`, so they are changelog-backed and durable across restarts. The `{ns}-frontier` store's single `"f"` value holds both the contiguous frontier clock and the per-input-channel clocks (see [Wire format](wire-format.md#the-ns-frontier-f-value)).
+All four are created with `Stores.persistentKeyValueStore(...)`, so they are changelog-backed and durable across restarts. The `{ns}-frontier` store's single `"frontier"` value holds both the contiguous frontier clock and the per-input-channel clocks (see [Wire format](wire-format.md#the-ns-frontier-value-key-frontier)).
 
 ## `ParsleyProcessor` init sequence
 
 0. Resolve each registered `ParsleySource` topic's stable UUID from the broker via a `ParsleyTopicAdmin` built from `context.appConfigs()` (the topology decorator has no broker config until init), populating the `topicUuids` map. Closed immediately after.
 1. Retrieve the state stores from the processor context by name.
-2. Construct the task's one `ParsleyCausalBroadcast` (`buildCausalBroadcast()`, cached for the processor's lifetime — exactly one processor instance ever touches these stores within a task). Its `ParsleyChannels` loads the frontier clock and channel clocks from the single `"f"` value (empty if absent) and self-persists that value on every change. The restored state is rescoped to the current declared inputs, then a channel entry is seeded for every consumed input topic-partition.
+2. Construct the task's one `ParsleyCausalBroadcast` (`buildCausalBroadcast()`, cached for the processor's lifetime — exactly one processor instance ever touches these stores within a task). Its `ParsleyChannels` loads the frontier clock and channel clocks from the single `"frontier"` value (empty if absent) and self-persists that value on every change. The restored state is rescoped to the current declared inputs, then a channel entry is seeded for every consumed input topic-partition.
 3. Construct `ParsleyCausalBroadcast` with the `ParsleyChannels` (which owns the forwarded index and self-persists), a `StoreBackedBufferStore` wrapping the buffer store and a `ParsleySerializer`, and a `StoreBackedCandidateIndex` wrapping the candidate-index store. Build the task's `ParsleyGossip` over the same pair.
 4. Wrap the real context in a `ParsleyProcessorContext` (stamping proxy). Call `delegate.init(wrappedContext)`.
 5. Schedule a self-cancelling, one-shot `WALL_CLOCK_TIME` punctuation that drains any record satisfiable between the last committed frontier and the last committed buffer-removal (`drainAfterRestore()`), run once against the buffer restored from a changelog. Must run as a punctuation, not inline: Kafka Streams has not finished wiring the task's `RecordCollector` until every processor in the topology returns from `init()`, so `forward()` during `init()` throws.
@@ -84,7 +84,7 @@ onto outgoing records.
 **`forward(Record<K,V>)`:**
 
 1. Increment the business-forward counter (read by `ParsleyProcessor` after each `delegate.process(...)`; a count of zero means the delegate emitted nothing and triggers null message emission).
-2. Route the record through `ParsleyCausalBroadcast.broadcast()` — the single stamping site, shared with null messages — which folds pending producer acknowledgements, runs the crossing wait (a business forward excludes no destinations), and attaches the `parsley-causal-clock` header from `ParsleyChannels.stamp()`, replacing any existing header.
+2. Route the record through `ParsleyCausalBroadcast.broadcast()` — the single stamping site, shared with null messages — which runs the crossing wait (a business forward excludes no destinations), then folds pending producer acknowledgements, and attaches the `parsley-causal-clock` header from `ParsleyChannels.stamp()`, replacing any existing header.
 3. Call `delegate.forward(stamped)` — addressed to each declared sink node by name when the stage has incompatibly-typed sibling children, otherwise the plain forward.
 
 The original record object is never mutated. The stamp is read live at forward time. A `forward()` during admit sees the post-admit stamp, and a `forward()` from a punctuator sees the stamp at punctuator fire time (punctuator forwards also fail fast if the topic-identity watch has detected a mid-run recreation). The processor resets the forward counter before each delivered record via `resetForwardCount()`.

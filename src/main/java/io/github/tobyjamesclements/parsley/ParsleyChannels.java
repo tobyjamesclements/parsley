@@ -5,11 +5,6 @@ import org.apache.kafka.common.Uuid;
 import org.apache.kafka.streams.state.KeyValueStore;
 import org.jspecify.annotations.Nullable;
 
-import java.io.ByteArrayInputStream;
-import java.io.ByteArrayOutputStream;
-import java.io.DataInputStream;
-import java.io.DataOutputStream;
-import java.io.IOException;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -25,7 +20,7 @@ import java.util.Set;
  * assumption lives here.
  *
  * <p>This class is the single owner of every piece of causal metadata a node persists. Four vector
- * clocks and the highest-received offsets fold into one durable {@code "f"} value in the frontier
+ * clocks and the highest-received offsets fold into one durable {@code "frontier"} value in the frontier
  * store (loaded once at construction, rewritten on change, otherwise read from memory):
  * <ul>
  *   <li>the <strong>contiguous frontier</strong>, the highest offset delivered without a gap on each
@@ -43,7 +38,7 @@ import java.util.Set;
  *       cross the former without stalling the contiguous walk.
  * </ul>
  *
- * <p>The forwarded-offset index is not in the {@code "f"} blob: it is a growable, order-sensitive set
+ * <p>The forwarded-offset index is not in the {@code "frontier"} value: it is a growable, order-sensitive set
  * of offsets delivered above the contiguous frontier, so it keeps its own keyed store. The delivery
  * gate, the buffer, and the release cascade run in {@link ParsleyCausalBroadcast} over these
  * operations, which also strips an inbound clock's self-cycle before the gate sees it (I5).
@@ -59,7 +54,7 @@ final class ParsleyChannels {
     // carried ancestry may be skipped, never dropped — T3.0 A6). The term is this project's coinage
     // (from the redesign doc); the nearest literature concept is the vector time of the node's causal
     // past, restricted to retired channels. Stamp-side only: merged into completeness(), never
-    // consulted by the delivery gate, never advanced by deliveries. Persisted in the "f" blob.
+    // consulted by the delivery gate, never advanced by deliveries. Persisted in the frontier value.
     private ParsleyVectorClock carriedAncestry = ParsleyVectorClock.empty();
     // The node's own acked output positions per sink coordinate (D2) — the clock that recovers
     // CBCAST's own-slot semantics (the broker performs the sender's clock increment; acknowledge()
@@ -67,7 +62,7 @@ final class ParsleyChannels {
     // this once T2.3 folds it into the stamp) and stamp-side only: never consulted by the delivery
     // gate. Fed three ways, every one an at-or-below-a-real-appended-offset claim (I8): the
     // interceptor registry drained by foldAcknowledgedOutputs(), the init-time sink end-offset
-    // seed (ParsleyProcessor), and the restored "f" blob — which may trail the last transaction's
+    // seed (ParsleyProcessor), and the restored frontier value — which may trail the last transaction's
     // acks (store caches flush before the producer flush completes acks); the seed heals that.
     private ParsleyVectorClock ownOutputs = ParsleyVectorClock.empty();
     // The acknowledged-outputs source foldAcknowledgedOutputs() drains (the interceptor registry in
@@ -82,14 +77,14 @@ final class ParsleyChannels {
     private long crossingWaitTimeoutMs;
     private Map<String, Uuid> ownOutputTopicIds = Map.of();
     // The input-topic set (name -> UUID) this node's persisted state was written under, updated by
-    // rescope() and persisted in the "f" blob. Comparing it against the currently declared inputs is
+    // rescope() and persisted in the frontier value. Comparing it against the currently declared inputs is
     // what makes a scope change detectable at init (the #21 fix: restart-vs-scope-change keys on
     // "input set unchanged since the blob", not on blob presence alone). Names are recorded alongside
     // UUIDs so a recreated topic (same name, new UUID) is provably destroyed rather than merely
     // out of scope.
     private final Map<String, Uuid> declaredInputs = new HashMap<>();
     // The sink-topic set (name -> UUID) the persisted ownOutputs clock was written under, updated by
-    // declareSinks() at init and persisted in the "f" blob. This is the heal set for the restored
+    // declareSinks() at init and persisted in the frontier value. This is the heal set for the restored
     // ownOutputs clock (T3.4): the blob always trails the final transaction's own acks (store caches
     // flush before the producer flush completes acks — O1), and the init-time end-offset seed heals
     // only the CURRENTLY declared sinks — so a topic that was a sink in the previous run but is not
@@ -100,7 +95,7 @@ final class ParsleyChannels {
     // the UUID is provably destroyed) before the first post-restart stamp.
     private final Map<String, Uuid> declaredSinks = new HashMap<>();
     // Per input channel (topicId, partition) -> the highest offset ever physically received on it. Persisted
-    // in the "f" blob (part of the EOS transaction, so exact across restart) and consulted by bridge(): the
+    // in the frontier value (part of the EOS transaction, so exact across restart) and consulted by bridge(): the
     // open interval between the previous highest and a newly-received offset was skipped by the
     // read_committed consumer, so it can only hold transaction markers or aborted-transaction records, never
     // an in-flight or held business record. An absent entry means the channel has never been received on —
@@ -124,13 +119,13 @@ final class ParsleyChannels {
     // Coordinates observed at least once; guards the one-time baseline seed in seedIfFirstSeen.
     private final Set<CoordKey> seenCoordinates = new HashSet<>();
     private final ParsleyForwardedIndex forwardedIndex;
-    // The frontier state store, holding this frontier+channels blob at key "f". Production always
+    // The frontier state store, holding the whole ParsleyFrontierState at key "frontier". Production always
     // passes the task's changelog-backed store; tests pass an in-memory KeyValueStore double
     // (see the test fixture factory) — there is no store-less mode.
     private final KeyValueStore<String, byte[]> store;
 
     /**
-     * Durable instance: loads the frontier clock and channel clocks from key {@code "f"} of
+     * Durable instance: loads the frontier clock and channel clocks from key {@code "frontier"} of
      * {@code store} (empty if absent), and rewrites that single value on every subsequent change.
      *
      * <p>On a restored (non-empty) load, also sweeps {@code forwardedIndex} once for every coordinate
@@ -575,7 +570,7 @@ final class ParsleyChannels {
 
         // 2 — shrink: fold everything else leaving scope into the carried ancestry, then prune it.
         // A retired/recreated coordinate must also leave the highest-received map, or its dead
-        // CoordKey would be re-serialised into the "f" blob on every persist forever.
+        // CoordKey would be re-serialised into the frontier value on every persist forever.
         Set<Uuid> currentUuids = new HashSet<>(currentInputs.values());
         ParsleyVectorClock.CoordinatePredicate inScope = (topicId, partition) ->
                 partition == taskPartition && currentUuids.contains(topicId);
@@ -639,112 +634,36 @@ final class ParsleyChannels {
     }
 
     /**
-     * Serialises the persisted {@code "f"} value: the frontier clock, then the per-channel advertised
-     * clocks, then the per-channel highest-received offsets (persisted so {@link #bridge}'s skip
-     * detection is exact across a restart, in the same EOS transaction as the frontier). Then optional
-     * trailing sections: the {@link #carriedAncestry} clock and the {@link #ownOutputs} clock (both
-     * stamp-feeding, so dropping them on restart would under-claim later stamps, I9/I8), and the
-     * {@link #declaredInputs} and {@link #declaredSinks} sets, which make a scope change detectable at
-     * the next init ({@link #rescope}) and let it heal a former sink's trailing acks. Own outputs are
-     * best-effort: acks arriving after this transaction's last persist are missing from the committed
-     * blob, so a restored clock can trail by one transaction, which the init-time sink end-offset seed
-     * re-covers. A trailing section is optional on read, so a blob from an older layout loads with that
-     * section empty; there is no cross-version upgrade path before 1.0.
+     * Serialises this node's persisted causal metadata into the {@code "frontier"} value, delegating
+     * the byte layout and wire version to {@link ParsleyFrontierState}. The {@link #highestDelivered}
+     * clock is deliberately excluded: it is reconstructed at load from the forwarded index, which
+     * commits in the same EOS transaction (see the constructor).
      */
     private byte[] toBytes() {
-        try (ByteArrayOutputStream baos = new ByteArrayOutputStream();
-             DataOutputStream dos = new DataOutputStream(baos)) {
-            ParsleyByteUtils.writeBytes(dos, frontier.toBytes());
-            dos.writeInt(channels.size());
-            for (Map.Entry<CoordKey, ParsleyVectorClock> entry : channels.entrySet()) {
-                ParsleyByteUtils.writeUuid(dos, entry.getKey().topicId());
-                dos.writeInt(entry.getKey().partition());
-                ParsleyByteUtils.writeBytes(dos, entry.getValue().toBytes());
-            }
-            dos.writeInt(highestReceived.size());
-            for (Map.Entry<CoordKey, Long> entry : highestReceived.entrySet()) {
-                ParsleyByteUtils.writeUuid(dos, entry.getKey().topicId());
-                dos.writeInt(entry.getKey().partition());
-                dos.writeLong(entry.getValue());
-            }
-            ParsleyByteUtils.writeBytes(dos, carriedAncestry.toBytes());
-            dos.writeInt(declaredInputs.size());
-            for (Map.Entry<String, Uuid> entry : declaredInputs.entrySet()) {
-                dos.writeUTF(entry.getKey());
-                ParsleyByteUtils.writeUuid(dos, entry.getValue());
-            }
-            ParsleyByteUtils.writeBytes(dos, ownOutputs.toBytes());
-            dos.writeInt(declaredSinks.size());
-            for (Map.Entry<String, Uuid> entry : declaredSinks.entrySet()) {
-                dos.writeUTF(entry.getKey());
-                ParsleyByteUtils.writeUuid(dos, entry.getValue());
-            }
-            dos.flush();
-            return baos.toByteArray();
-        } catch (IOException e) {
-            throw new IllegalStateException("ParsleyChannels serialisation failed", e);
-        }
+        return new ParsleyFrontierState(frontier, channels, highestReceived, carriedAncestry,
+                declaredInputs, ownOutputs, declaredSinks).toBytes();
     }
 
+    /**
+     * Restores every persisted section from {@code blob} into this instance's live state, in the one
+     * pass {@link ParsleyFrontierState#fromBytes} performs. A blob whose wire version this build does
+     * not recognise faults here rather than loading partially (O6: there is no cross-version upgrade
+     * path before 1.0). The restored {@link #ownOutputs} clock may trail the last transaction's acks
+     * (store caches flush before the producer flush completes acks); the init-time sink end-offset
+     * seed re-covers that, an I8-sound direction. Called once, at construction, over empty maps.
+     */
     private void load(byte[] blob) {
-        try (DataInputStream dis = new DataInputStream(new ByteArrayInputStream(blob))) {
-            frontier = ParsleyVectorClock.fromBytes(ParsleyByteUtils.readBytes(dis));
-            int count = dis.readInt();
-            for (int i = 0; i < count; i++) {
-                Uuid topicId = ParsleyByteUtils.readUuid(dis);
-                int partition = dis.readInt();
-                ParsleyVectorClock clock = ParsleyVectorClock.fromBytes(ParsleyByteUtils.readBytes(dis));
-                channels.put(new CoordKey(topicId, partition), clock);
-            }
-            // The highest-received section is optional and trailing: a blob written before it existed
-            // simply ends after the channels, leaving the map empty — every channel then reads as
-            // a first sighting on its next record (no bridge, records the offset), which self-heals on the
-            // following gap. A live blob carries the exact per-channel highest received. available() is
-            // exact over the backing ByteArrayInputStream.
-            if (dis.available() > 0) {
-                int highestReceivedCount = dis.readInt();
-                for (int i = 0; i < highestReceivedCount; i++) {
-                    Uuid topicId = ParsleyByteUtils.readUuid(dis);
-                    int partition = dis.readInt();
-                    long offset = dis.readLong();
-                    highestReceived.put(new CoordKey(topicId, partition), offset);
-                }
-            }
-            // The carried-ancestry and declared-input sections are trailing and optional as one unit
-            // (always written together since they exist): a pre-T1.3 blob simply ends before them,
-            // loading an empty carried ancestry (nothing was ever re-homed) and an empty declared
-            // input set (rescope then has nothing to diff and just records the current declaration).
-            if (dis.available() > 0) {
-                carriedAncestry = ParsleyVectorClock.fromBytes(ParsleyByteUtils.readBytes(dis));
-                int inputCount = dis.readInt();
-                for (int i = 0; i < inputCount; i++) {
-                    String name = dis.readUTF();
-                    declaredInputs.put(name, ParsleyByteUtils.readUuid(dis));
-                }
-            }
-            // The own-outputs section is trailing and optional (T2.2): a pre-T2.2 blob ends before
-            // it, loading an empty clock — under-stated but never wrong, and the init-time sink
-            // end-offset seed immediately re-covers it (the same heal as the blob trailing the
-            // last transaction's acks; both are I8-sound directions).
-            if (dis.available() > 0) {
-                ownOutputs = ParsleyVectorClock.fromBytes(ParsleyByteUtils.readBytes(dis));
-            }
-            // The declared-sink section is trailing and optional (T3.4): a pre-T3.4 blob ends
-            // before it, loading an empty set — the init-time heal then has nothing to heal, which
-            // matches the pre-1.0 no-upgrade-path stance (O6).
-            if (dis.available() > 0) {
-                int sinkCount = dis.readInt();
-                for (int i = 0; i < sinkCount; i++) {
-                    String name = dis.readUTF();
-                    declaredSinks.put(name, ParsleyByteUtils.readUuid(dis));
-                }
-            }
-        } catch (IOException e) {
-            throw new IllegalStateException("ParsleyChannels deserialisation failed", e);
-        }
+        ParsleyFrontierState state = ParsleyFrontierState.fromBytes(blob);
+        frontier = state.frontier();
+        channels.putAll(state.channels());
+        highestReceived.putAll(state.highestReceived());
+        carriedAncestry = state.carriedAncestry();
+        declaredInputs.putAll(state.declaredInputs());
+        ownOutputs = state.ownOutputs();
+        declaredSinks.putAll(state.declaredSinks());
     }
 
-    private record CoordKey(Uuid topicId, int partition) {}
+    record CoordKey(Uuid topicId, int partition) {}
 
     /**
      * The narrow seam {@link #foldAcknowledgedOutputs()} drains: a snapshot view of the highest

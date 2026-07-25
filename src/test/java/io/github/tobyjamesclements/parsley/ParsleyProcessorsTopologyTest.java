@@ -1684,18 +1684,11 @@ class ParsleyProcessorsTopologyTest {
 
     private static ParsleyVectorClock frontierIn(TopologyTestDriver driver, String frontierStoreName) {
         KeyValueStore<String, byte[]> store = driver.getKeyValueStore(frontierStoreName);
-        byte[] blob = store.get("f");
+        byte[] blob = store.get(ParsleyStores.FRONTIER_KEY);
         if (blob == null) {
             return ParsleyVectorClock.empty();
         }
-        // The "f" value holds the combined ParsleyChannels blob: [frontier-len:4][frontier bytes]
-        // [channel-count:4]... — extract just the leading frontier clock.
-        try (java.io.DataInputStream dis =
-                     new java.io.DataInputStream(new java.io.ByteArrayInputStream(blob))) {
-            return ParsleyVectorClock.fromBytes(dis.readNBytes(dis.readInt()));
-        } catch (java.io.IOException e) {
-            throw new IllegalStateException(e);
-        }
+        return ParsleyFrontierState.fromBytes(blob).frontier();
     }
 
     private static int storeSize(KeyValueStore<String, byte[]> store) {

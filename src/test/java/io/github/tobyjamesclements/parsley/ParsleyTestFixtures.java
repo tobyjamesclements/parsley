@@ -1,9 +1,7 @@
 package io.github.tobyjamesclements.parsley;
 
-import java.io.ByteArrayOutputStream;
-import java.io.DataOutputStream;
-import java.io.IOException;
 import java.util.Comparator;
+import java.util.Map;
 import java.util.Set;
 import java.util.function.LongSupplier;
 
@@ -23,8 +21,8 @@ final class ParsleyTestFixtures {
 
     /**
      * A {@link ParsleyChannels} over a fresh in-memory {@link TestKeyValueStore}, seeded with
-     * {@code initialFrontier} (written as a minimal {@code "f"} blob — frontier only, no channel
-     * clocks or trailing sections — which the store constructor restores).
+     * {@code initialFrontier} (written as a minimal {@code "frontier"} value — frontier only, every
+     * other section empty — which the store constructor restores).
      */
     static ParsleyChannels channels(ParsleyVectorClock initialFrontier, ParsleyForwardedIndex forwardedIndex) {
         TestKeyValueStore<String, byte[]> store =
@@ -89,20 +87,12 @@ final class ParsleyTestFixtures {
                 consumed, ownSinkTopics, Set.of());
     }
 
-    // The minimal combined "f" blob: [frontier-len:4][frontier bytes][channel-count:4 = 0].
-    // Mirrors ParsleyChannels#toBytes' leading sections; the trailing sections are optional on load.
+    // The minimal frontier-store value: a ParsleyFrontierState carrying only the frontier clock,
+    // every other section empty. Delegates to the production serialiser so the fixture cannot drift
+    // from the wire format (it always carries the current wire-version byte and full section layout).
     private static byte[] frontierBlob(ParsleyVectorClock frontier) {
-        try (ByteArrayOutputStream baos = new ByteArrayOutputStream();
-             DataOutputStream dos = new DataOutputStream(baos)) {
-            byte[] f = frontier.toBytes();
-            dos.writeInt(f.length);
-            dos.write(f);
-            dos.writeInt(0);
-            dos.flush();
-            return baos.toByteArray();
-        } catch (IOException e) {
-            throw new IllegalStateException(e);
-        }
+        return new ParsleyFrontierState(frontier, Map.of(), Map.of(), ParsleyVectorClock.empty(),
+                Map.of(), ParsleyVectorClock.empty(), Map.of()).toBytes();
     }
 
     /** The throwable's message, asserted non-null, for assertions that inspect it. */

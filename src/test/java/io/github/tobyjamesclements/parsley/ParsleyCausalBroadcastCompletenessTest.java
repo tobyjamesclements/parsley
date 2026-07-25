@@ -146,7 +146,7 @@ class ParsleyCausalBroadcastCompletenessTest {
     /**
      * After a simulated restart — a new {@link ParsleyChannels} over the same changelog-backed store —
      * {@code completeness()} returns an identical result to the pre-restart value, without replaying
-     * any records: the frontier clock and the per-channel clocks both restore from the single "f" blob.
+     * any records: the frontier clock and the per-channel clocks both restore from the single frontier value.
      *
      * Asserts that the completeness clock is identical after restart.
      */
@@ -163,7 +163,7 @@ class ParsleyCausalBroadcastCompletenessTest {
 
         ParsleyVectorClock completenessBeforeRestart = first.completeness();
 
-        // Simulate restart: a fresh ParsleyChannels over the same store reloads the "f" blob (frontier
+        // Simulate restart: a fresh ParsleyChannels over the same store reloads the frontier value (frontier
         // clock + channel clocks). A fresh forwarded index is fine — it only affects future deliveries.
         ParsleyChannels restartedFrontier = new ParsleyChannels(sharedStore, new MockForwardedIndex());
 
