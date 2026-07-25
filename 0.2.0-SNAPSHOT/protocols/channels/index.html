@@ -796,6 +796,67 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#why-the-stamp-is-four-clocks-and-not-one" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Why the stamp is four clocks and not one
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Why the stamp is four clocks and not one">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#channel-clocks" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Channel clocks
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#carried-ancestry" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Carried ancestry
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#own-outputs_1" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Own outputs
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#highest-delivered" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Highest delivered
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#persistence" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1345,8 +1406,8 @@ style the source Javadoc uses:</p>
 </code></pre></div>
 <p>The module is the single owner of all causal metadata a node persists: the contiguous frontier
 clock, the per-input-channel clocks, the carried-ancestry clock, the own-outputs clock, and the
-highest-received offsets, all folded into the single <code>"f"</code> value of the frontier store (see
-<a href="../../reference/wire-format/#the-ns-frontier-f-value">Wire format</a>); plus the forwarded-offset index, which
+highest-received offsets, all folded into the single <code>"frontier"</code> value of the frontier store (see
+<a href="../../reference/wire-format/#the-ns-frontier-value-key-frontier">Wire format</a>); plus the forwarded-offset index, which
 keeps its own keyed store. The <a href="../causal-broadcast/">causal-broadcast module</a> runs the delivery
 gate and the buffer over these operations.</p>
 <h2 id="coordinates-and-identity">Coordinates and identity</h2>
@@ -1479,12 +1540,85 @@ disposition, applied in the causal-broadcast constructor immediately after the r
 </tr>
 </tbody>
 </table>
+<h2 id="why-the-stamp-is-four-clocks-and-not-one">Why the stamp is four clocks and not one</h2>
+<p>The preceding sections describe what each persisted clock holds. This section states why each one
+has to exist. The outbound stamp must dominate every event that happened-before the record being
+stamped. The contiguous frontier covers most of that past, and each of the other four clocks closes
+one specific route by which a real cause escapes it. The four cover disjoint routes, which is why
+the union has exactly these terms and not fewer.</p>
+<table>
+<thead>
+<tr>
+<th>Clock</th>
+<th>The causal past it covers</th>
+<th>Without it</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Channel clocks</td>
+<td>Ancestry arriving through channels this node does not consume</td>
+<td>The gate's ignore branch becomes unsound</td>
+</tr>
+<tr>
+<td>Carried ancestry</td>
+<td>This node's delivered past on channels it no longer consumes</td>
+<td>A redeploy silently un-claims that past</td>
+</tr>
+<tr>
+<td>Own outputs</td>
+<td>This node's own earlier emissions</td>
+<td>Its outputs carry no order across partitions or sink topics</td>
+</tr>
+<tr>
+<td>Highest delivered</td>
+<td>The processed record itself, when delivered above a frontier gap</td>
+<td>An effect fails to claim its immediate cause</td>
+</tr>
+</tbody>
+</table>
+<h3 id="channel-clocks">Channel clocks</h3>
+<p>Without the channel fold a node's stamp would name only coordinates it delivered itself, so
+ancestry that reached it through a channel it does not consume would not survive the hop. Suppose
+<code>p1</code> consumes <code>c2</code> but not <code>c4</code>, and a record on <code>c2</code> depends on <code>c4</code> partition 0 at offset 12.
+<code>p1</code> delivers that record and forwards an effect. If the stamp carried no <code>c4</code> entry, a downstream
+<code>p2</code> consuming both <code>p1</code>'s sink and <code>c4</code> would deliver the effect without waiting for that offset.</p>
+<p>This clock is what makes the <a href="../../foundations/delivery-gate/">delivery gate</a>'s ignore branch sound
+rather than merely convenient. An unconsumed coordinate may be ignored only because the consumed
+ancestry behind it is claimed directly in the same clock (I2 and I9). Removing the fold would turn
+the ignore branch from a theorem into a hole.</p>
+<h3 id="carried-ancestry">Carried ancestry</h3>
+<p>Without it, entries leave the stamp when a coordinate leaves the node's consumption scope. Suppose
+<code>p1</code> consumed <code>c3</code> and delivered <code>c3</code> partition 0 at offset 50, and a redeploy then drops <code>c3</code> from
+its declared inputs. Its next stamp would no longer name that offset, so a downstream <code>p2</code> consuming
+both <code>p1</code>'s sink and <code>c3</code> would stop gating on a dependency it previously honoured.</p>
+<p>Two properties fail together. An effect can precede its cause, and the stamp regresses across the
+restart, which per-producer stamp monotonicity (I3) forbids. A configuration change would
+retroactively weaken every stamp the node emits afterwards.</p>
+<h3 id="own-outputs_1">Own outputs</h3>
+<p>Without it a node's outputs carry no ordering relative to each other. The failure does not appear on
+a single sink partition, where the remaining clocks already make each stamp dominate the previous
+one, so a held earlier record holds every later one (I3). It appears across partitions and across
+sink topics. If <code>p1</code> forwards <code>m1</code> to <code>c2</code> and then <code>m2</code> to <code>c5</code>, Kafka's FIFO guarantee relates
+neither pair, so nothing would make <code>m2</code> claim <code>m1</code>, and a downstream consumer of both topics could
+deliver <code>m2</code> first.</p>
+<p>This clock is also why the crossing wait exists. A node cannot claim its own previous output until
+the broker has reported that output's offset.</p>
+<h3 id="highest-delivered">Highest delivered</h3>
+<p>Without it an effect emitted from an above-gap delivery names its cause's causes but not the cause.
+Suppose <code>p1</code> delivers <code>c1</code> partition 0 at offset 40 while offset 38 is still held, leaving the
+contiguous frontier at 37. A stamp built from the frontier alone would claim offset 37, so a
+downstream <code>p2</code> consuming both <code>p1</code>'s sink and <code>c1</code> could deliver the effect without having
+delivered offset 40, the record the effect came from.</p>
+<p>The clock exists only because delivery within a partition is not head-of-line blocking. A classical
+FIFO channel needs one projection of the delivered vector, and splitting delivery from contiguity
+requires two.</p>
 <h2 id="persistence">Persistence</h2>
 <p>The module self-persists the single <code>"frontier"</code> value inside every mutating request, before control
 returns to the caller — the frontier advance is durable before a delivered record reaches the user
 processor. All Parsley stores commit in one Kafka transaction (<code>exactly_once_v2</code> is required), so
 the frontier, forwarded index, and buffer cannot tear against each other. The full binary layout
-is in <a href="../../reference/wire-format/#the-ns-frontier-f-value">Wire format</a>.</p>
+is in <a href="../../reference/wire-format/#the-ns-frontier-value-key-frontier">Wire format</a>.</p>
 <h2 id="cost">Cost</h2>
 <p>This module carries the term that usually dominates Parsley's per-record cost, because it owns the
 persisted state. See the <a href="../#cost-model">consolidated cost model</a> for how the rows fit
@@ -1492,7 +1626,7 @@ together.</p>
 <ul>
 <li><strong>State persistence, O(C · w).</strong> All of the node's causal metadata (the frontier, the per-channel
   advertised clocks, the carried ancestry, the own-output positions, and the highest-received
-  offsets) persists as the single <code>"f"</code> value, and the module rewrites that whole value on every
+  offsets) persists as the single <code>"frontier"</code> value, and the module rewrites that whole value on every
   advance: every delivered record, every producer acknowledgement, and every gossip fold. Each
   rewrite serialises the full channel state and issues one state-store put, so the cost scales with
   the total channel state rather than with the incoming header alone, and a store write costs far
