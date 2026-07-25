@@ -16,7 +16,9 @@ All notable changes to this project are documented in this file. The format is b
   naming the real methods on `ParsleyChannels`, `ParsleyCausalBroadcast`, and `ParsleyGossip` at
   each step. Every call carries an activation bar and an explicit return, the calls into Kafka
   included, so the synchronous call stack on the single task thread is visible and a void method's
-  return point is not left implicit. The asynchrony in the design is end to end rather than per
+  return point is not left implicit. The Kafka Streams task thread is itself a participant, since it
+  is the caller behind `init()` and every `process()`, without which the processor would run the
+  init sequence with no activation bar of its own. The asynchrony in the design is end to end rather than per
   call, so the deferred producer acknowledgement is drawn as its own arrow into
   `ParsleyOwnOutputRegistry` between two phases, which is both what `foldAcknowledgedOutputs()`
   later drains and the reason an outbound stamp cannot carry its own coordinate. Documentation

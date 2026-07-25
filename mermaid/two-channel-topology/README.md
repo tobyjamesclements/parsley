@@ -24,9 +24,13 @@ observable through inputs that produce no business output.
 ## Reading the arrows
 
 Every arrow in the diagram is a call, and every call returns. That holds for the ones that touch
-Kafka as well: `producer.send()` returns as soon as the record is queued, and a record arriving from
-a source channel is the task thread invoking `process()` with something `poll()` has already
-returned. Nothing there is a fire-and-forget message.
+Kafka as well: `producer.send()` returns as soon as the record is queued, and `poll()` returns the
+records the task thread then hands to `process()`. Nothing there is a fire-and-forget message.
+
+The Kafka Streams task thread is drawn as a participant because it is the caller that starts every
+top-level entry into the processor, `init()` and each `process()` alike. Without it `p1` would be
+the diagram's unmoved mover, running the whole init sequence with no activation bar of its own while
+every collaborator it calls has one.
 
 - A **solid arrow with an activation bar** is a call. The bar spans the callee's work, including any
   nested calls it makes.
