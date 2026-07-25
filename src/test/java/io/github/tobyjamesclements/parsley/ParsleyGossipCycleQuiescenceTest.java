@@ -138,4 +138,40 @@ class ParsleyGossipCycleQuiescenceTest {
                 "no one relays: every claim B and C receive is custody (c4 blind; sibling shared-"
                         + "sink appends covered only by hearsay), which must never oblige a relay");
     }
+
+    /**
+     * The issue #32 shape, with the null-message relay isolated. Six nodes form a chorded cycle on
+     * two shared sinks with <em>three</em> producers each — c2 from p1, p2, p3 and c3 from p1, p5,
+     * p6 — and every cycle member (p2, p4, p5, p6) consumes both, one more producer per sink than
+     * {@link #sharedSinkThreeNodeCycleQuiescesWithoutSiblingEcho}. The random-topology sweep
+     * flagged this shape as non-quiescing, and the suspicion was a 3-producer I6 relay the
+     * consumed-channel trigger did not cover. It is not: with the delegates silent
+     * ({@code p = 0.0}) so nothing but null messages ever reaches c2 and c3, a single external
+     * record on c1 settles after a handful of advertisements. Each carried claim on a chord
+     * (c3 news arriving on c2, or c2 news on c3) obliges at most one bounded relay before the
+     * consumed channel's own frontier catches up — the chorded-cycle bound of the relay rule,
+     * holding here with three siblings per sink exactly as with one. The sweep's storm was a
+     * separate concern, business feedback amplification when the delegates <em>do</em> forward
+     * (loop gain &gt; 1); that is pinned as a supercritical-topology classification in
+     * {@link ParsleySupercriticalTopologyClassificationTest}, not a relay defect.
+     */
+    @Test
+    void threeProducerSharedSinkChordedCycleQuiescesWithSilentDelegates() {
+        ParsleySimTrace.SimSpec spec = new ParsleySimTrace.SimSpec(List.of("c1"), List.of(
+                new ParsleySimTrace.SimSpec.NodeSpec("p1", List.of("c1"), List.of("c2", "c3"), 0.0),
+                new ParsleySimTrace.SimSpec.NodeSpec("p2", List.of("c1", "c2", "c3"), List.of("c2"), 0.0),
+                new ParsleySimTrace.SimSpec.NodeSpec("p3", List.of("c3"), List.of("c2"), 0.0),
+                new ParsleySimTrace.SimSpec.NodeSpec("p4", List.of("c2", "c3"), List.of(), 0.0),
+                new ParsleySimTrace.SimSpec.NodeSpec("p5", List.of("c1", "c2", "c3"), List.of("c3"), 0.0),
+                new ParsleySimTrace.SimSpec.NodeSpec("p6", List.of("c1", "c2", "c3"), List.of("c3"), 0.0)));
+        ParsleyTopologySim sim = ParsleyTopologySim.fromSpec(spec, 1);
+        sim.produceExternal("c1");
+        sim.drain();
+        assertEquals(2, sim.logSize("c2"),
+                "the 3-producer shared sink c2 must quiesce after a bounded burst of null messages — "
+                        + "the I6 relay covers the chorded 3-producer shape, not just the 2-producer one");
+        assertEquals(3, sim.logSize("c3"),
+                "the 3-producer shared sink c3 must quiesce after a bounded burst of null messages, "
+                        + "no sustained relay");
+    }
 }

@@ -146,6 +146,16 @@ partition starved by at least a full gossip lap indefinitely — an operational 
 (broker or network degradation), not a protocol state, and one that self-quenches at the first
 successful fetch.
 
+This quiescence guarantee is about the relay itself. The null messages this layer emits stop once
+knowledge has converged, and that is independent of the topology's business traffic. A topology
+whose delegates forward business records back onto their own upstream cycle with a loop gain above
+one amplifies without bound from any finite input, the way a microphone pointed at its own speaker
+does, and no delivery-order layer can damp that without dropping records. Parsley delivers every
+such record in causal order. Keeping the loop gain below one is a property of how the topology is
+configured, which this layer neither creates nor prevents, and it is distinct from relay
+quiescence. The relay can be perfectly quiet while the business feedback is unbounded, and the two
+are told apart by whether the growing traffic is null messages or business records.
+
 ## Consuming null messages outside Parsley
 
 Parsley's own processors handle null messages internally. A plain Kafka client consuming a topic

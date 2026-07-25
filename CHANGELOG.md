@@ -6,6 +6,22 @@ All notable changes to this project are documented in this file. The format is b
 
 ## [Unreleased]
 
+### Fixed
+- **The topology simulator's two liveness guards no longer disagree on what a storm is (#32,
+  test-side).** The deep random-topology sweep surfaced a shared-sink cycle whose settle `drain()`
+  never terminates, reported as a non-quiescing I6 relay. It is not one: the null-message relay
+  quiesces on that shape (a `p = 0.0` pin now proves it), and the storm is business feedback
+  amplification with a loop gain above one, a configuration pathology the explorer is meant to skip
+  as supercritical. The `drain()` wall-clock liveness guard threw a generic "non-quiescing relay"
+  error that a tight run timeout let pre-empt the record-count guard, so a supercritical topology
+  was escalated to a hard relay-bug failure instead of being skipped. Both guards now defer to one
+  classifier keyed on the storm's log composition (null-heavy is a relay loop and fails, business-
+  heavy is supercritical and is skipped), so the verdict no longer depends on which guard trips
+  first or on the timeout. The mis-premised `@Disabled` repro is replaced by two pins: a
+  `p = 0.0` shared-sink-cycle relay-quiescence pin and a minimal supercritical-classification pin.
+  The gossip module docs gain a note that relay quiescence is distinct from business feedback
+  amplification. No protocol or production-code change.
+
 ## [0.2.0] - 2026-07-24
 
 ### Added
