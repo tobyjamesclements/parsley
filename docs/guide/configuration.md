@@ -35,9 +35,9 @@ guarantee. Keep the relevant-partition count within your record-size budget.
 ## Parsley has no configuration keys
 
 Parsley's configuration surface is empty: there is no `parsley.*` key, and the `Properties` passed
-to `CausalStreams` carry only standard Kafka Streams configuration. Every behaviour that once had a
-key is unconditional, because each one guards causal safety and no viable deployment opts out of
-it. Startup fails with `IllegalStateException`, naming every offending key, if any `parsley.*` key
+to `CausalStreams` carry only standard Kafka Streams configuration. Every Parsley behaviour is
+unconditional, because each one guards causal safety and no viable deployment opts out of it.
+Startup fails with `IllegalStateException`, naming every offending key, if any `parsley.*` key
 is present in the `Properties` or in a `parsley.properties` classpath resource — a key that wires
 nothing must not parse quietly.
 

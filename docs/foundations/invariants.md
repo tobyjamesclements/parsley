@@ -1,12 +1,11 @@
 # Named invariants
 
 The implementation preserves a fixed set of named invariants: the properties the three protocols
-guarantee, in the module style's sense. Javadoc, tests, and commit messages cite them by number
-(I1, I2, and so on), and this page is the definitive statement of each. The numbering is stable: a
-retired invariant keeps its number so historical citations stay readable. The
-[delivery gate](delivery-gate.md) and the [causal consistency](causal-consistency.md) model give
-the arguments these invariants encode; the environmental assumptions E1–E3 they rest on are stated
-under [environmental assumptions](assumptions.md).
+guarantee, in the module style's sense. This page is the definitive statement of each, and the
+numbering is stable: numbers are never reused. The [delivery gate](delivery-gate.md) and the
+[causal consistency](causal-consistency.md) model give the arguments these invariants encode; the
+environmental assumptions E1–E3 they rest on are stated under
+[environmental assumptions](assumptions.md).
 
 ## I1 — causal delivery
 
@@ -46,21 +45,14 @@ self-reference. Normalisation happens once, at receive time, in `ParsleyChannels
 
 A null message is relayed if and only if its carried clock advanced this node's knowledge on a
 channel the task consumes at its own partition. Carried custody folds unconditionally (I9) and
-rides every later emission, but custody never obliges a relay. The original whole-clock trigger
-(relay whenever the carried clock was not dominated) provably never quiesced on topic cycles of
-three or more nodes; the analysis and the current rule are in
-[the gossip module](../protocols/gossip.md#the-relay-rule).
+rides every later emission, but custody never obliges a relay. The trigger is restricted to
+consumed-scope advances because a whole-clock trigger (relay whenever the carried clock is not
+dominated) provably does not quiesce on topic cycles of three or more nodes; the analysis and the
+rule are in [the gossip module](../protocols/gossip.md#the-relay-rule).
 
-## I7 — retired
+## I7 — not in use
 
-I7 was "fail closed outside certification": a coordinate on a channel the node had no
-certified knowledge of failed the task fast. The certification concept was removed together
-with membership. Under the fault model, an unconsumed coordinate in a clock was stamped by a
-compliant participant and its consumed ancestry rides in the same clock (I2 and I9), so it is
-safely ignorable; the fail-fast added no safety and made joins require coordination. The
-replacement observability is the out-of-scope-ignored metric and the always-on startup topology
-checks.
-The number stays retired in place so later invariants keep theirs.
+Reserved. Invariant numbers are never reused.
 
 ## I8 — stamp over-claim soundness
 

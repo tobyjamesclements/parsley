@@ -195,6 +195,16 @@ order, and its truthful stamps make its outputs correctly gated everywhere from 
 There is no join barrier, no admission wait, and nothing to configure. Parsley has no
 configuration keys at all; startup fails if any `parsley.*` key is present.
 
+Two properties carry that. **Stamps are truthful.** A record's clock names the exact coordinates it
+depends on, whenever they were written, so an incumbent's frontier trivially dominates a joiner's
+historical dependencies, and a joiner replaying both an input topic and its derived topic orders
+every pair cause-first on its own gate. A scheme that repositioned replay-era stamps onto a join
+origin would erase that derived ancestry, and every node would have to agree on the origin, which
+is coordination reintroduced for no gain in safety. **A joiner is causally low, not retroactive.**
+Its first emissions carry dependencies far below what the incumbents have already delivered, but
+nothing can be delivered before it exists, so no incumbent has mis-delivered against it and there
+is nothing to admit it into.
+
 ## Operating notes
 
 - **Parsley creates no topics of its own.** All causal metadata travels in record headers on the

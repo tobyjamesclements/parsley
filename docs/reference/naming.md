@@ -36,7 +36,8 @@ At every class, method, or variable a change touches:
    Javadoc.
 2. **Near miss.** If the concept only approximately matches the academic term, do not borrow
    it. A misappropriated term imports a specification the code does not honour (Dataflow
-   watermarks are heuristic where ours were exact; partitions are not point-to-point links).
+   watermarks are heuristic where Parsley's null messages are exact; partitions are not
+   point-to-point links).
    Keep our name and document the nearest term and the delta.
 3. **Kafka-specific.** If the mechanism is genuinely Kafka-specific with no literature analog,
    keep the coinage and say so explicitly in Javadoc ("no literature analog; Kafka-specific"),
@@ -61,18 +62,13 @@ but waits for a change that touches the name.
 | `ParsleyTopologySim` ground truth | Adopted with citation, restricted to delegate-visible information flow | Causal histories (Schwarz–Mattern 1994) |
 | `ParsleyOwnOutputRegistry`, `ParsleyOwnOutputInterceptor` | Rule 3: Kafka-specific coinage (exists only because the broker performs the sender's clock increment and reports it via producer acks); marked in Javadoc | — |
 | crossing wait, `awaitQuiescentExcept` | Coinage; "quiescence" in its plain concurrent-programming sense, no specific-algorithm borrowing | — |
-| `CausalClock` (renamed from `CausalDependencies`) | Renamed: the type plays both vector-clock roles (attached = VT(m), accumulated = VT(p)) and "dependencies" misdescribed the accumulating role. Wire header `parsley-causal-dependencies` → `parsley-causal-clock` | Vector clock (Fidge 1988; Mattern 1988); the Javadoc states the VT(m)/VT(p) duality and the indexed-by-channel variant |
+| `CausalClock` (wire header `parsley-causal-clock`) | Grounded: the type plays both vector-clock roles (attached = VT(m), accumulated = VT(p)), so a "dependencies" name misdescribes the accumulating role | Vector clock (Fidge 1988; Mattern 1988); the Javadoc states the VT(m)/VT(p) duality and the indexed-by-channel variant |
 | `ParsleyGossip.Reception` | Coinage: the (deliveries, advancedConsumedChannel) pair the gossip receive returns; no single academic term. The deliveries list is the module-style deliver indication in pull form, stated in Javadoc | — |
-| `advancedConsumedChannel` | Descriptive coinage for the CMB input-channel-clock advance; replaced `learnedSomethingNew`, which over-claimed once custody stopped obliging relays. Near-miss borrowings ("EIT advance", "channel time") refused | CMB trigger discipline (Bryant 1977; Chandy–Misra 1979: null-message sends obliged by input channel clock advances); null-message reduction precedent DeVries 1990; cycle-echo precedent Cai–Turner 1990 and Wood–Turner PADS '94 — CMB cited on the class |
+| `advancedConsumedChannel` | Descriptive coinage for the CMB input-channel-clock advance. Only an advance on a consumed channel obliges a relay, so a name claiming any new knowledge over-claims: custody advances knowledge without obliging anything. Near-miss borrowings ("EIT advance", "channel time") refused | CMB trigger discipline (Bryant 1977; Chandy–Misra 1979: null-message sends obliged by input channel clock advances); null-message reduction precedent DeVries 1990; cycle-echo precedent Cai–Turner 1990 and Wood–Turner PADS '94 — CMB cited on the class |
 | `advertise` | Plain-English epidemic vocabulary (make the clock observable), consistent with "advertised clocks" | Demers et al. 1987 (epidemic dissemination), cited on the class |
-| null message (header `_parsley_null_message`, `isNullMessage()`) | Grounded; renamed from the "watermark" vocabulary, which was a rule 2 near miss | Chandy–Misra–Bryant null messages (timestamp-only, value null) |
+| null message (header `_parsley_null_message`, `isNullMessage()`) | Grounded; the "watermark" vocabulary is a rule 2 near miss and is not used | Chandy–Misra–Bryant null messages (timestamp-only, value null) |
 | Test and docs sample identifiers `c1..cN`, `m1..mN`, `p1..pN` | Channels (topics) are `c<n>` — sound for tests because a single-partition test topic is the channel; messages are `m<n>`; processor nodes are `p<n>`. Scenario-encoding names stay in complex broker ITs (funnel, diamond, prereq, and similar). Role-bearing record variables (`stamped`, `nullMessage`, `consumed`) keep their roles: the literature writes m′ for a transformed m rather than renumbering. `p<n>` is deliberately not clock vocabulary — Parsley clocks are channel-indexed, so process names never appear in clock positions | Messages m, m′, m₁..mₖ (Lamport 1978; BSS 1991; Schwarz–Mattern 1994 VT(m)); channels c (CSP; Chandy–Misra–Bryant); processes p₁..pₙ (Fidge; Mattern) |
-| `ParsleyFrontierState` (frontier store key `"f"` → `"frontier"`) | Rule 3: Kafka-specific coinage for the `{ns}-frontier` store's durable value, the serialised union of the node's persisted causal metadata. No literature term names a state-store envelope; the name leads with the grounded `frontier` and stays consistent with the store name. The opaque single-letter key was renamed in the same break that gave the value a wire-version byte | — |
-
-## Renames of record
-
-Carried by the decisions above, pre-release with no deprecation aliases: `ParsleyClock` →
-`ParsleyVectorClock` (it is one, indexed by channel rather than process — a stated variant);
-`ParsleyEngine` → `ParsleyCausalBroadcast`; `ParsleyFrontier` folded into `ParsleyChannels`;
-`CausalDependencies` → `CausalClock`; the "watermark" vocabulary → "null message".
-`ParsleyMessage` keeps its name: BSS delivers messages.
+| `ParsleyFrontierState` (frontier store key `"frontier"`) | Rule 3: Kafka-specific coinage for the `{ns}-frontier` store's durable value, the serialised union of the node's persisted causal metadata. No literature term names a state-store envelope; the name leads with the grounded `frontier` and stays consistent with the store name. The key spells out the same word rather than an opaque single letter, and the value carries a wire-version byte | — |
+| `ParsleyVectorClock` | Adopted with citation: it is a vector clock, indexed by channel rather than by process, and the variant is stated on the class | Vector clock (Fidge 1988; Mattern 1988) |
+| `ParsleyCausalBroadcast` | Adopted with citation: the class is the causal-broadcast module of the stack, named for the abstraction it implements rather than for its role in the process | Causal broadcast (Birman–Schiper–Stephenson 1991; Cachin–Guerraoui–Rodrigues module style) |
+| `ParsleyMessage` | Grounded; kept with citation: BSS delivers messages | Message (Birman–Schiper–Stephenson 1991) |

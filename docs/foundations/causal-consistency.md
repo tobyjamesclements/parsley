@@ -103,31 +103,6 @@ guarantees of the one below it and offers a clean assumption set to the one abov
 The [protocols overview](../protocols/index.md) gives the module boxes and the class map;
 [named invariants](invariants.md) catalogues the properties I1–I9 the layers preserve.
 
-## Rejected designs
-
-Two earlier designs are recorded here so they are not re-derived. Both were removed after the
-soundness argument on the [delivery gate](delivery-gate.md) page showed they added coordination
-without adding safety.
-
-**Epochs as consistent cuts.** Earlier versions took a domain-wide cut (an epoch) whenever the
-topology changed and stamped replay-era emissions at the epoch origin, so that nothing a joiner
-replayed appeared to happen before the cut. The intent was reasonable in the era of the
-fail-closed gate: a joiner consuming from offset 0 stamps outputs whose dependencies predate
-everything the topology had delivered. But the mechanism amounts to causal repositioning: the
-stamps are made to lie, and the lie must be agreed domain-wide (floors, transition windows,
-publication rounds) or gates wedge on it. Truthful historical stamps need no agreement at all. An
-incumbent's frontier trivially dominates historical dependencies, and a joiner's replay is
-self-gating, because the hold-back queue converts arbitrary cross-partition arrival order into
-causal delivery order. Truthful stamps are also more correct: a later joiner replaying both an
-input and its derived topic orders them properly, which floored stamps erase.
-
-**Hold-until-admitted joins.** A corollary of epochs was that a fresh joiner must not consume
-until the epoch computed with it commits and admits it. With no epochs there is no admission to
-wait for, and none is needed: a fresh message carrying old dependencies is causally low, not
-retroactive, because nothing can be delivered before it exists. No incumbent mis-delivered in the
-past. Joins therefore need zero coordination (see
-[Streams integration](../guide/streams.md#evolving-a-running-topology)).
-
 [^lamport]: Leslie Lamport, "Time, Clocks, and the Ordering of Events in a Distributed System",
     *Communications of the ACM*, 1978. See the [bibliography](../reference/bibliography.md).
 [^vectorclocks]: Colin Fidge, "Timestamps in Message-Passing Systems That Preserve the Partial
