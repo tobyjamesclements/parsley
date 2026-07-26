@@ -71,6 +71,9 @@
         <errorprone.version>2.50.0</errorprone.version>
         <nullaway.version>0.13.8</nullaway.version>
         <pitest.version>1.25.7</pitest.version>
+        <!-- Overridable so a run can be timed at other thread counts; see the mutation
+             profile for why the default is 1. -->
+        <pitest.threads>1</pitest.threads>
         <pitest.junit5.version>1.2.3</pitest.junit5.version>
         <jacoco.version>0.8.15</jacoco.version>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
@@ -211,6 +214,29 @@
                             <!-- Mutation-score floor: the build fails if killed-mutant percentage
                                  drops below this. Baseline was 73% when the floor was set. -->
                             <mutationThreshold>71</mutationThreshold>
+                            <!-- Mutant-execution parallelism. Held at 1, which costs about half an
+                                 hour a run against roughly five minutes at 8 threads. A parallel
+                                 run is not a faster way to get the same answer: it scores several
+                                 points higher and does not reproduce (two runs gave 80% and 78%,
+                                 where serial gives 74% every time). ParsleyProcessorsTopologyTest
+                                 pins a fixed Streams application id and takes the default
+                                 state.dir, so concurrent minions contend on one RocksDB lock and
+                                 its tests error on store open. PIT reads an erroring test as a
+                                 killed mutant, so the contention reads as detection: every mutant
+                                 whose verdict moves survives serially and dies in parallel, and
+                                 all of them are attributed to that class. See issue #43; raising
+                                 this above 1 depends on it. -->
+                            <threads>${pitest.threads}</threads>
+                            <!-- Quieten the minions. simplelogger.properties puts the parsley
+                                 package at debug so a failing test prints its causal trace, but
+                                 PIT reruns the covering tests once per mutant and pipes every
+                                 minion's stderr through its own log. slf4j-simple reads system
+                                 properties ahead of the file, so this pins the level for the
+                                 mutant JVMs only. Surviving mutants are listed in the HTML
+                                 report either way; rerun the class with debug on to trace one. -->
+                            <jvmArgs>
+                                <jvmArg>-Dorg.slf4j.simpleLogger.log.io.github.tobyjamesclements.parsley=error</jvmArg>
+                            </jvmArgs>
                         </configuration>
                         <executions>
                             <execution>

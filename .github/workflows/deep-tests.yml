@@ -12,20 +12,6 @@ on:
   workflow_dispatch:
 
 jobs:
-  # Mutation testing with the score floor enforced by <mutationThreshold> in the pom's
-  # mutation profile: the build fails if killed-mutant percentage regresses below it.
-  mutation:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-java@v5
-        with:
-          java-version: '25'
-          distribution: 'temurin'
-          cache: 'maven'
-      - name: Mutation coverage (floor enforced)
-        run: ./mvnw -Pmutation test --no-transfer-progress
-
   # The sim soak tier: one long run (500k scheduler steps) with every fault mode armed.
   # The seed is derived from the date so successive weekly runs explore different schedules;
   # local runs keep the fixed default seed. Assertion messages embed the seed, and the echo

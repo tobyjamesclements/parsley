@@ -45,6 +45,25 @@ jobs:
           path: target/site/jacoco/
           if-no-files-found: ignore
 
+  # The mutation floor, enforced by <mutationThreshold> in the pom's mutation profile: the build
+  # fails if the killed-mutant percentage regresses below it. No `needs`, so this runs alongside
+  # the other jobs rather than extending the chain; it re-runs surefire itself because PIT binds
+  # to the test phase. Mutants run serially (pitest.threads=1) on purpose. Executing them in
+  # parallel scores several points higher and does not reproduce run to run, because tests that
+  # pass in a quiet run fail under CPU contention and a failing test reads as a killed mutant.
+  mutation:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-java@v5
+        with:
+          java-version: '25'
+          distribution: 'temurin'
+          cache: 'maven'
+      - name: Mutation coverage (floor enforced)
+        run: ./mvnw -Pmutation test --no-transfer-progress
+
   integration-tests:
     runs-on: ubuntu-latest
     needs: unit-tests

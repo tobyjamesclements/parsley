@@ -22,21 +22,28 @@ import org.apache.kafka.streams.processor.api.ProcessorSupplier;
 import org.apache.kafka.streams.processor.api.Record;
 import org.apache.kafka.streams.state.KeyValueStore;
 import org.apache.kafka.streams.test.TestRecord;
+import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.Test;
 
 import java.io.File;
 import java.io.IOException;
+import java.io.UncheckedIOException;
 import java.nio.file.Files;
+import java.nio.file.Path;
 import java.time.Duration;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Properties;
+import java.util.Queue;
 import java.util.HashSet;
 import java.util.Set;
+import java.util.concurrent.ConcurrentLinkedQueue;
+import java.util.stream.Stream;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -46,7 +53,6 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static io.github.tobyjamesclements.parsley.ParsleyTestFixtures.cause;
 import static io.github.tobyjamesclements.parsley.ParsleyTestFixtures.message;
-import org.jspecify.annotations.Nullable;
 
 /**
  * Exercises {@link CausalStreamsBuilder}/{@link CausalTopology} — the topology-owning causal API —
@@ -69,22 +75,42 @@ class CausalStreamsTopologyTest {
 
     private final List<String> processed = new ArrayList<>();
 
+    /** Every directory {@link #tempStateDir()} has handed out, removed once the class has run. */
+    private static final Queue<Path> STATE_DIRS = new ConcurrentLinkedQueue<>();
+
+    /**
+     * Removes the state directories the drivers were given. RocksDB leaves files behind, so an
+     * unswept run accumulates a directory tree per driver under the OS temp directory.
+     */
+    @AfterAll
+    static void removeStateDirectories() throws IOException {
+        for (Path dir : STATE_DIRS) {
+            if (!Files.exists(dir)) {
+                continue;
+            }
+            try (Stream<Path> tree = Files.walk(dir)) {
+                for (Path path : tree.sorted(Comparator.reverseOrder()).toList()) {
+                    Files.deleteIfExists(path);
+                }
+            }
+        }
+        STATE_DIRS.clear();
+    }
+
     // --- helpers -------------------------------------------------------------------------------
 
     private static Properties config() {
-        return config(null);
+        return config(tempStateDir());
     }
 
-    private static Properties config(@Nullable File stateDir) {
+    private static Properties config(File stateDir) {
         Properties props = new Properties();
         props.put(StreamsConfig.APPLICATION_ID_CONFIG, "causal-streams-test");
         props.put(StreamsConfig.BOOTSTRAP_SERVERS_CONFIG, "dummy:1234");
         props.put(StreamsConfig.DEFAULT_KEY_SERDE_CLASS_CONFIG, Serdes.String().getClass());
         props.put(StreamsConfig.DEFAULT_VALUE_SERDE_CLASS_CONFIG, Serdes.String().getClass());
         props.put(StreamsConfig.PROCESSING_GUARANTEE_CONFIG, StreamsConfig.EXACTLY_ONCE_V2);
-        if (stateDir != null) {
-            props.put(StreamsConfig.STATE_DIR_CONFIG, stateDir.getAbsolutePath());
-        }
+        props.put(StreamsConfig.STATE_DIR_CONFIG, stateDir.getAbsolutePath());
         return props;
     }
 
@@ -1095,10 +1121,21 @@ class CausalStreamsTopologyTest {
                 "the message must name the required setting: " + message(thrown));
     }
 
-    /** A fresh, unique state directory — required when a test expects driver construction itself to
-     * fail, since a failed construction cannot be closed to release its RocksDB locks. */
-    private static File tempStateDir() throws IOException {
-        return Files.createTempDirectory("causal-streams-test-").toFile();
+    /**
+     * A fresh, unique state directory for one driver. Every driver gets its own: the application id
+     * is fixed, so leaving {@code state.dir} at its default puts every driver on one path under the
+     * OS temp directory, and concurrent drivers then contend on a single RocksDB lock. A test that
+     * expects driver construction itself to fail needs this too, since a failed construction cannot
+     * be closed to release its locks.
+     */
+    private static File tempStateDir() {
+        try {
+            Path dir = Files.createTempDirectory("causal-streams-test-");
+            STATE_DIRS.add(dir);
+            return dir.toFile();
+        } catch (IOException e) {
+            throw new UncheckedIOException("could not create a state directory for the test driver", e);
+        }
     }
 
     /** Records every {@code (topic, key)} pair it is asked to partition, for asserting uniform wiring. */
