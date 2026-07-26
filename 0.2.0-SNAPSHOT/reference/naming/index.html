@@ -1194,17 +1194,6 @@
   
 </li>
       
-        <li class="md-nav__item">
-  <a href="#renames-of-record" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Renames of record
-      
-    </span>
-  </a>
-  
-</li>
-      
     </ul>
   
 </nav>
@@ -1303,7 +1292,8 @@ stated once in the package Javadoc so an academic reader is oriented immediately
    Javadoc.</li>
 <li><strong>Near miss.</strong> If the concept only approximately matches the academic term, do not borrow
    it. A misappropriated term imports a specification the code does not honour (Dataflow
-   watermarks are heuristic where ours were exact; partitions are not point-to-point links).
+   watermarks are heuristic where Parsley's null messages are exact; partitions are not
+   point-to-point links).
    Keep our name and document the nearest term and the delta.</li>
 <li><strong>Kafka-specific.</strong> If the mechanism is genuinely Kafka-specific with no literature analog,
    keep the coinage and say so explicitly in Javadoc ("no literature analog; Kafka-specific"),
@@ -1382,8 +1372,8 @@ but waits for a change that touches the name.</p>
 <td>—</td>
 </tr>
 <tr>
-<td><code>CausalClock</code> (renamed from <code>CausalDependencies</code>)</td>
-<td>Renamed: the type plays both vector-clock roles (attached = VT(m), accumulated = VT(p)) and "dependencies" misdescribed the accumulating role. Wire header <code>parsley-causal-dependencies</code> → <code>parsley-causal-clock</code></td>
+<td><code>CausalClock</code> (wire header <code>parsley-causal-clock</code>)</td>
+<td>Grounded: the type plays both vector-clock roles (attached = VT(m), accumulated = VT(p)), so a "dependencies" name misdescribes the accumulating role</td>
 <td>Vector clock (Fidge 1988; Mattern 1988); the Javadoc states the VT(m)/VT(p) duality and the indexed-by-channel variant</td>
 </tr>
 <tr>
@@ -1393,7 +1383,7 @@ but waits for a change that touches the name.</p>
 </tr>
 <tr>
 <td><code>advancedConsumedChannel</code></td>
-<td>Descriptive coinage for the CMB input-channel-clock advance; replaced <code>learnedSomethingNew</code>, which over-claimed once custody stopped obliging relays. Near-miss borrowings ("EIT advance", "channel time") refused</td>
+<td>Descriptive coinage for the CMB input-channel-clock advance. Only an advance on a consumed channel obliges a relay, so a name claiming any new knowledge over-claims: custody advances knowledge without obliging anything. Near-miss borrowings ("EIT advance", "channel time") refused</td>
 <td>CMB trigger discipline (Bryant 1977; Chandy–Misra 1979: null-message sends obliged by input channel clock advances); null-message reduction precedent DeVries 1990; cycle-echo precedent Cai–Turner 1990 and Wood–Turner PADS '94 — CMB cited on the class</td>
 </tr>
 <tr>
@@ -1403,7 +1393,7 @@ but waits for a change that touches the name.</p>
 </tr>
 <tr>
 <td>null message (header <code>_parsley_null_message</code>, <code>isNullMessage()</code>)</td>
-<td>Grounded; renamed from the "watermark" vocabulary, which was a rule 2 near miss</td>
+<td>Grounded; the "watermark" vocabulary is a rule 2 near miss and is not used</td>
 <td>Chandy–Misra–Bryant null messages (timestamp-only, value null)</td>
 </tr>
 <tr>
@@ -1412,18 +1402,27 @@ but waits for a change that touches the name.</p>
 <td>Messages m, m′, m₁..mₖ (Lamport 1978; BSS 1991; Schwarz–Mattern 1994 VT(m)); channels c (CSP; Chandy–Misra–Bryant); processes p₁..pₙ (Fidge; Mattern)</td>
 </tr>
 <tr>
-<td><code>ParsleyFrontierState</code> (frontier store key <code>"f"</code> → <code>"frontier"</code>)</td>
-<td>Rule 3: Kafka-specific coinage for the <code>{ns}-frontier</code> store's durable value, the serialised union of the node's persisted causal metadata. No literature term names a state-store envelope; the name leads with the grounded <code>frontier</code> and stays consistent with the store name. The opaque single-letter key was renamed in the same break that gave the value a wire-version byte</td>
+<td><code>ParsleyFrontierState</code> (frontier store key <code>"frontier"</code>)</td>
+<td>Rule 3: Kafka-specific coinage for the <code>{ns}-frontier</code> store's durable value, the serialised union of the node's persisted causal metadata. No literature term names a state-store envelope; the name leads with the grounded <code>frontier</code> and stays consistent with the store name. The key spells out the same word rather than an opaque single letter, and the value carries a wire-version byte</td>
 <td>—</td>
+</tr>
+<tr>
+<td><code>ParsleyVectorClock</code></td>
+<td>Adopted with citation: it is a vector clock, indexed by channel rather than by process, and the variant is stated on the class</td>
+<td>Vector clock (Fidge 1988; Mattern 1988)</td>
+</tr>
+<tr>
+<td><code>ParsleyCausalBroadcast</code></td>
+<td>Adopted with citation: the class is the causal-broadcast module of the stack, named for the abstraction it implements rather than for its role in the process</td>
+<td>Causal broadcast (Birman–Schiper–Stephenson 1991; Cachin–Guerraoui–Rodrigues module style)</td>
+</tr>
+<tr>
+<td><code>ParsleyMessage</code></td>
+<td>Grounded; kept with citation: BSS delivers messages</td>
+<td>Message (Birman–Schiper–Stephenson 1991)</td>
 </tr>
 </tbody>
 </table>
-<h2 id="renames-of-record">Renames of record</h2>
-<p>Carried by the decisions above, pre-release with no deprecation aliases: <code>ParsleyClock</code> →
-<code>ParsleyVectorClock</code> (it is one, indexed by channel rather than process — a stated variant);
-<code>ParsleyEngine</code> → <code>ParsleyCausalBroadcast</code>; <code>ParsleyFrontier</code> folded into <code>ParsleyChannels</code>;
-<code>CausalDependencies</code> → <code>CausalClock</code>; the "watermark" vocabulary → "null message".
-<code>ParsleyMessage</code> keeps its name: BSS delivers messages.</p>
 
 
 

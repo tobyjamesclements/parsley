@@ -1300,9 +1300,9 @@ guarantee. Keep the relevant-partition count within your record-size budget.</p>
 <hr />
 <h2 id="parsley-has-no-configuration-keys">Parsley has no configuration keys</h2>
 <p>Parsley's configuration surface is empty: there is no <code>parsley.*</code> key, and the <code>Properties</code> passed
-to <code>CausalStreams</code> carry only standard Kafka Streams configuration. Every behaviour that once had a
-key is unconditional, because each one guards causal safety and no viable deployment opts out of
-it. Startup fails with <code>IllegalStateException</code>, naming every offending key, if any <code>parsley.*</code> key
+to <code>CausalStreams</code> carry only standard Kafka Streams configuration. Every Parsley behaviour is
+unconditional, because each one guards causal safety and no viable deployment opts out of it.
+Startup fails with <code>IllegalStateException</code>, naming every offending key, if any <code>parsley.*</code> key
 is present in the <code>Properties</code> or in a <code>parsley.properties</code> classpath resource — a key that wires
 nothing must not parse quietly.</p>
 <p>The always-on startup checks, run once per task at init:</p>

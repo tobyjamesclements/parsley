@@ -684,10 +684,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#i7-retired" class="md-nav__link">
+  <a href="#i7-not-in-use" class="md-nav__link">
     <span class="md-ellipsis">
       
-        I7 — retired
+        I7 — not in use
       
     </span>
   </a>
@@ -1317,12 +1317,11 @@
 
 <h1 id="named-invariants">Named invariants</h1>
 <p>The implementation preserves a fixed set of named invariants: the properties the three protocols
-guarantee, in the module style's sense. Javadoc, tests, and commit messages cite them by number
-(I1, I2, and so on), and this page is the definitive statement of each. The numbering is stable: a
-retired invariant keeps its number so historical citations stay readable. The
-<a href="../delivery-gate/">delivery gate</a> and the <a href="../causal-consistency/">causal consistency</a> model give
-the arguments these invariants encode; the environmental assumptions E1–E3 they rest on are stated
-under <a href="../assumptions/">environmental assumptions</a>.</p>
+guarantee, in the module style's sense. This page is the definitive statement of each, and the
+numbering is stable: numbers are never reused. The <a href="../delivery-gate/">delivery gate</a> and the
+<a href="../causal-consistency/">causal consistency</a> model give the arguments these invariants encode; the
+environmental assumptions E1–E3 they rest on are stated under
+<a href="../assumptions/">environmental assumptions</a>.</p>
 <h2 id="i1-causal-delivery">I1 — causal delivery</h2>
 <p>A record reaches the delegate only after every consumed-coordinate dependency has been locally
 and contiguously delivered. There is no timeout, no eviction, and no configuration that trades
@@ -1350,19 +1349,12 @@ self-reference. Normalisation happens once, at receive time, in <code>ParsleyCha
 <h2 id="i6-relay-on-consumed-channel-advance">I6 — relay on consumed-channel advance</h2>
 <p>A null message is relayed if and only if its carried clock advanced this node's knowledge on a
 channel the task consumes at its own partition. Carried custody folds unconditionally (I9) and
-rides every later emission, but custody never obliges a relay. The original whole-clock trigger
-(relay whenever the carried clock was not dominated) provably never quiesced on topic cycles of
-three or more nodes; the analysis and the current rule are in
-<a href="../../protocols/gossip/#the-relay-rule">the gossip module</a>.</p>
-<h2 id="i7-retired">I7 — retired</h2>
-<p>I7 was "fail closed outside certification": a coordinate on a channel the node had no
-certified knowledge of failed the task fast. The certification concept was removed together
-with membership. Under the fault model, an unconsumed coordinate in a clock was stamped by a
-compliant participant and its consumed ancestry rides in the same clock (I2 and I9), so it is
-safely ignorable; the fail-fast added no safety and made joins require coordination. The
-replacement observability is the out-of-scope-ignored metric and the always-on startup topology
-checks.
-The number stays retired in place so later invariants keep theirs.</p>
+rides every later emission, but custody never obliges a relay. The trigger is restricted to
+consumed-scope advances because a whole-clock trigger (relay whenever the carried clock is not
+dominated) provably does not quiesce on topic cycles of three or more nodes; the analysis and the
+rule are in <a href="../../protocols/gossip/#the-relay-rule">the gossip module</a>.</p>
+<h2 id="i7-not-in-use">I7 — not in use</h2>
+<p>Reserved. Invariant numbers are never reused.</p>
 <h2 id="i8-stamp-over-claim-soundness">I8 — stamp over-claim soundness</h2>
 <p>A stamp entry naming a real log position this node has not verified — an end-offset seed, an
 aborted-transaction acknowledgement, another producer's record on a shared sink, or the gap

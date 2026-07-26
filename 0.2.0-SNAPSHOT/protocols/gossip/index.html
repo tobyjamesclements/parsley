@@ -1368,8 +1368,9 @@ stamp, so treating an undecodable one as empty would permanently drop that peer'
 from this node's channel fold — a later stamp here would under-claim them, and a downstream
 consumer could deliver an effect before its cause. Failing the task instead leaves the offset
 uncommitted, so the message is refetched and retried on restart; a successful retry delivers the
-offset normally. The historical frontier-gap bug — a corrupt message permanently stalling its
-channel — was a skip-and-commit, not a fail-and-retry, and does not return under this rule. Only
+offset normally. The alternative disposition, skipping the message and committing its offset, is
+what would leave a permanent frontier gap and stall the channel on a single corrupt message; a
+fail-and-retry leaves the offset available to a later, successful decode. Only
 an <em>absent</em> header reads as an empty clock whose offset is still delivered: a producer that stamps
 nothing claims nothing.</p>
 <h2 id="the-relay-rule">The relay rule</h2>
