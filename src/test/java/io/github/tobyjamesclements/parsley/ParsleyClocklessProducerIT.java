@@ -39,12 +39,11 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import static java.util.Objects.requireNonNull;
 
 /**
- * A plain, clockless Kafka producer on a consumed topic (T3.1 IT d): a producer that stamps
- * nothing claims nothing, so its records are causally minimal by definition and deliver
- * immediately — no declaration, no "external source" registration, no coordination (E3; the v5
- * declared-external-source concept dissolved with D7). The member stamps the clockless records'
- * coordinates on consumption, so causal custody begins at the first Parsley hop exactly as if
- * the source had participated from the start.
+ * A plain, clockless Kafka producer on a consumed topic, against a real broker: a producer that
+ * stamps nothing claims nothing, so its records are causally minimal by definition and deliver
+ * immediately. No declaration, no registration and no coordination are needed. The member stamps
+ * the clockless records' coordinates on consumption, so causal custody begins at the first Parsley
+ * hop exactly as if the source had participated from the start.
  */
 @Testcontainers(disabledWithoutDocker = true)
 class ParsleyClocklessProducerIT {

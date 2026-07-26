@@ -38,15 +38,14 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import static java.util.Objects.requireNonNull;
 
 /**
- * The two-branch gate's ignore branch across a chain with an unconsumed intermediate topic (T3.1
- * IT a): observer app Z consumes the chain's root ({@code c1}) and its terminus ({@code c3}) but
+ * The two-branch gate's ignore branch across a chain with an unconsumed intermediate topic,
+ * against a real broker: observer app Z consumes the chain's root ({@code c1}) and its terminus
+ * ({@code c3}) but
  * not the intermediate ({@code mid}), so every {@code c3} record's clock names {@code mid}
- * coordinates Z has no channel for. Before T3.1 that was a hard {@code
- * ParsleyUnreachableDependencyException} at Z's gate, and joining such a topology needed the
- * {@code domain-topics} passthrough; under the two-branch gate (D1) the {@code mid} entries fall
+ * coordinates Z has no channel for. The {@code mid} entries fall
  * to the ignore branch while the same clock's {@code c1} entries — the transitively complete
- * custody the ignore's soundness rests on (I2/I9) — are genuinely gated, so Z still delivers the
- * root cause before the terminus effect.
+ * custody the ignore's soundness rests on — are genuinely gated, so Z still delivers the
+ * root cause before the terminus effect, and joining such a topology needs no coordination.
  *
  * <p>Topology: {@code c1} → app A → {@code mid} → app B → {@code c3}; observer Z consumes
  * {@code c1} and {@code c3} only and tags every delivery to {@code observed}.
@@ -107,7 +106,7 @@ class ParsleyUnconsumedIntermediateIT {
             }
 
             // The wire evidence: the terminus record's clock names the unconsumed intermediate
-            // (what Z ignores) AND the root coordinate (what Z gates on — the I9 custody chain
+            // (what Z ignores) AND the root coordinate (what Z gates on — the custody chain
             // through B, which never consumes c1 itself).
             List<ConsumerRecord<String, String>> c3Records = new ArrayList<>();
             try (KafkaConsumer<String, String> consumer = new KafkaConsumer<>(consumerConfig(bootstrap))) {
@@ -127,7 +126,7 @@ class ParsleyUnconsumedIntermediateIT {
                             + "coordinate Z's ignore branch handles");
             assertTrue(c3Clock.offsetFor(c1Id, 0) >= 0,
                     "the terminus record's clock must claim the root c1 coordinate directly "
-                            + "(I2/I9 custody through B) — the entry Z's consumed branch gates on");
+                            + "(custody through B) — the entry Z's consumed branch gates on");
 
             // The delivery evidence: Z ignores the mid claims and still delivers cause first.
             try (KafkaConsumer<String, String> consumer = new KafkaConsumer<>(consumerConfig(bootstrap))) {

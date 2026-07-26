@@ -99,7 +99,7 @@ class ParsleyOffsetSeederTest {
     /**
      * An added input topic — surviving state, but the uncommitted partitions all belong to a topic
      * this group has never committed on while another source topic is fully committed — is seeded to
-     * log-start rather than refused. This is the redeploy-with-added-input case (#21 / T3.0 A5): the
+     * log-start rather than refused. This is the redeploy-with-added-input case (#21): the
      * processor's rescope seeds the added channel's frontier at the carried ancestry and the receive
      * path skips already-delivered offsets, so the log-start replay is fetched but never redelivered.
      */

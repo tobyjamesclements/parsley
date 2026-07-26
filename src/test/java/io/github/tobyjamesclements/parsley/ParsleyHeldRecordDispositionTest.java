@@ -31,7 +31,7 @@ import static io.github.tobyjamesclements.parsley.ParsleyTestFixtures.message;
  * rescope explicitly supports input removal and recreation, but a held record from a departed
  * source can be neither delivered (a removed topic has no registered serde) nor silently dropped
  * (fail-closed), so the L2 constructor classifies every restored entry: a current input's record
- * restores unchanged; a recreated input's old-incarnation record is purged (E1 — the incarnation
+ * restores unchanged; a recreated input's old-incarnation record is purged (the incarnation
  * is deleted, its history can never be delivered anywhere); a removed-but-alive input's records
  * fail init loudly with the redeclare-or-reset remedies. Before this rule, the removed-input case
  * was an unrecoverable crash loop: the restore pass proved the record deliverable, and the fetch
@@ -91,7 +91,7 @@ class ParsleyHeldRecordDispositionTest {
     /**
      * A held record from a recreated input's old incarnation (same topic name, new UUID) is purged
      * at init and the task starts cleanly: the incarnation that produced it is deleted, so no
-     * receiver can ever deliver it (E1) — delivering it here would forward a record from a dead
+     * receiver can ever deliver it — delivering it here would forward a record from a dead
      * incarnation and re-enter its destroyed coordinate into the frontier rescope just purged.
      * Recreation across a restart stays self-healing: history loss, never reordering.
      *

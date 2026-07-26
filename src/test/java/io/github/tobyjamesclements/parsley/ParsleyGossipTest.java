@@ -14,7 +14,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 /**
  * Tests for {@link ParsleyGossip#receive}: a null message's carried clock feeds the outbound stamp
  * ({@link ParsleyCausalBroadcast#completeness()}) and the {@code advancedConsumedChannel} relay
- * signal (I6 — only an advance of a channel this node consumes obliges a relay; custody folds but
+ * signal (only an advance of a channel this node consumes obliges a relay; custody folds but
  * never obliges), but never the delivery gate — a peer's claim that a coordinate was delivered <em>there</em>
  * is not proof it was delivered <em>here</em>, so a held record releases only once this node's own
  * contiguous frontier genuinely reaches its dependencies. Gating on the max-merged completeness
@@ -126,13 +126,13 @@ class ParsleyGossipTest {
     }
 
     /**
-     * The I6 relay rule with own outputs, in the one shape where {@code ownOutputs} is
+     * The relay rule with own outputs, in the one shape where {@code ownOutputs} is
      * load-bearing for the trigger: a <em>consumed own sink</em> (the self-cycle). A null message
      * reflecting this node's own produced coordinate back at it — on a channel inside the consumed
      * trigger scope, while the append itself is still above the frontier — at or below the
      * {@code ownOutputs} clock teaches nothing (this node produced that position), so the relay
      * signal settles {@code false} on first sight, without the old stamp-side own-sink strip. The
-     * unstripped claim still folds into the channel clock and rides the outbound stamp (I9). A
+     * unstripped claim still folds into the channel clock and rides the outbound stamp. A
      * claim on a non-consumed sink would be filtered by the trigger scope before ownOutputs even
      * mattered; this test pins the domination itself.
      */
@@ -152,16 +152,16 @@ class ParsleyGossipTest {
 
         assertFalse(reflected.advancedConsumedChannel(),
                 "a consumed-own-sink claim at or below ownOutputs is this node's own knowledge — "
-                        + "relaying it would ping-pong forever around a self-cycle (I6: the "
+                        + "relaying it would ping-pong forever around a self-cycle (the "
                         + "comparison is against total knowledge, ownOutputs included)");
         assertEquals(7L, causalBroadcast.completeness().offsetFor(C2_ID, 0),
-                "the reflected claim must still fold into the channel clock unstripped (I9) — "
+                "the reflected claim must still fold into the channel clock unstripped — "
                         + "only the relay is suppressed, never the merge");
     }
 
     /**
      * The trigger scope split, both directions. A claim on foreign ancestor C3 — a channel this
-     * node neither consumes nor produces — folds into the stamp (I9) but never obliges a relay,
+     * node neither consumes nor produces — folds into the stamp but never obliges a relay,
      * first sight included: custody coverage is hearsay that structurally lags its source, and
      * relaying on it is what let ≥3-node topic cycles storm forever (each relay's own offset was
      * the next blind member's news). A claim on consumed channel C2 obliges a relay on first
@@ -179,7 +179,7 @@ class ParsleyGossipTest {
                 "a custody claim (C3 is neither consumed nor produced) must never oblige a relay, "
                         + "even on first sight — relaying hearsay is the ≥3-cycle storm");
         assertEquals(5L, causalBroadcast.completeness().offsetFor(C3_ID, 0),
-                "the custody claim still folds into the channel clock and the stamp (I9) — only "
+                "the custody claim still folds into the channel clock and the stamp — only "
                         + "the relay obligation is scoped, never the merge");
         assertTrue(gossip.receive(C1_ID, 0, 1, clock(C2_ID, 3)).advancedConsumedChannel(),
                 "first sight of a consumed-channel claim (C2@3 above this node's knowledge) is "
@@ -188,7 +188,7 @@ class ParsleyGossipTest {
                 "the identical consumed-channel claim taught nothing the second time — it must "
                         + "settle, not ping-pong");
         assertFalse(gossip.receive(C2_ID, 0, 0, clock(C2_ID, 3)).advancedConsumedChannel(),
-                "the same claim arriving on a DIFFERENT channel is still already-known — I6 "
+                "the same claim arriving on a DIFFERENT channel is still already-known — the relay rule "
                         + "compares against total knowledge, never a single channel's clock");
     }
 

@@ -39,11 +39,12 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import static java.util.Objects.requireNonNull;
 
 /**
- * The #22 scenario, end to end against a real broker (T2.3 IT a): a stage that consumes its own
+ * The #22 scenario, end to end against a real broker: a stage that consumes its own
  * sink topic must stamp that sink's coordinates onto its <em>other</em> outputs, so a distinct
  * third-party app consuming both topics sees the true ancestry and delivers cause before effect.
- * Before T2.3 the stamp-side own-sink strip erased exactly that ancestor: app A's derived output
- * carried no claim on the shared topic, and the third party could deliver the effect first.
+ * Stripping own-sink coordinates from the stamp would erase exactly that ancestor: app A's derived
+ * output would carry no claim on the shared topic, and the third party could deliver the effect
+ * first.
  *
  * <p>Topology: app A consumes {@code C1} and {@code shared} and produces {@code shared} (from C1
  * records) and {@code derived} (from shared records) — {@code shared} is both A's sink and A's

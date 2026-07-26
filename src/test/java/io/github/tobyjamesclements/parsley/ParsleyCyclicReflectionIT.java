@@ -42,15 +42,14 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import static java.util.Objects.requireNonNull;
 
 /**
- * A genuine two-app topology cycle under the two-branch gate, with zero coordination (T3.1 IT c):
+ * A genuine two-app topology cycle under the two-branch gate, with zero coordination (against a real broker):
  * app A consumes {@code c1} and {@code tb} and produces {@code ta}; app B consumes {@code ta} and
  * produces {@code tb}. Each app's own produced coordinates reflect back at it around the cycle in
- * the other app's stamps — {@code ta} claims arrive at A (its own unconsumed sink → the ignore
- * branch, where the retired gate-side strip used to sit and the retired I7 fail-fast would
- * otherwise fire), {@code tb} claims arrive at B likewise — while the carried root ancestry
- * ({@code c1}) is genuinely gated at A's consumed branch. Before D7 this shape needed the
- * coordination subsystem's {@code domain-topics} passthrough to avoid the fail-fast; here both
- * apps run with no coordination configuration at all, and the cycle both delivers and quiesces.
+ * the other app's stamps — {@code ta} claims arrive at A (its own unconsumed sink, so the ignore
+ * branch), {@code tb} claims arrive at B likewise — while the carried root ancestry
+ * ({@code c1}) is genuinely gated at A's consumed branch. A cycle like this needs no coordination
+ * of any kind: both apps run with no coordination configuration at all, and the cycle both
+ * delivers and quiesces.
  */
 @Testcontainers(disabledWithoutDocker = true)
 class ParsleyCyclicReflectionIT {
@@ -124,13 +123,12 @@ class ParsleyCyclicReflectionIT {
                     "the looped-back record must reflect A's own ta coordinate — the claim the "
                             + "ignore branch (not a strip, not a fail-fast) handles at A");
             assertTrue(tbClock.offsetFor(c1Id, 0) >= 0,
-                    "the looped-back record must claim the c1 root (I2/I9 custody around the "
+                    "the looped-back record must claim the c1 root (custody around the "
                             + "cycle) — the claim A's consumed branch genuinely gates");
 
             // The delivery evidence: A's delegate genuinely delivers the looped-back tb record —
             // its reflected ta claim lands in the ignore branch, its c1 claim in the consumed
-            // branch — after the c1 cause. Under the retired I7 fail-fast this delivery crashed
-            // the task instead.
+            // branch — after the c1 cause.
             try (KafkaConsumer<String, String> consumer = new KafkaConsumer<>(consumerConfig(bootstrap))) {
                 consumer.subscribe(List.of(OBSERVED));
                 List<String> observed = new ArrayList<>();
@@ -147,7 +145,7 @@ class ParsleyCyclicReflectionIT {
             }
 
             // Quiescence: after the input stops, the cycle's topics stop growing for a sustained
-            // window — the I6 knowledge-based relay settles (a reflected own claim teaches
+            // window — the knowledge-based relay settles (a reflected own claim teaches
             // nothing) instead of ping-ponging null messages around the cycle forever.
             await().atMost(Duration.ofSeconds(120)).until(() -> {
                 long taBefore = endOffset(bootstrap, TA, 0);

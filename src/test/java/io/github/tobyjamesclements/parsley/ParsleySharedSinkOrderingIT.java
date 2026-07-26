@@ -38,7 +38,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import static java.util.Objects.requireNonNull;
 
 /**
- * The finding-(iii) shared-sink scenario, closed by the two-branch gate (T3.1 IT b): app A both
+ * The finding-(iii) shared-sink scenario, closed by the two-branch gate : app A both
  * produces to and consumes the {@code shared} topic, which app B also produces to. A claim about
  * <em>B's</em> record on the shared topic — a genuine cause A may not have delivered yet — used to
  * be vacuously satisfied by the gate-side own-sink strip ("it's my sink, strip the claim"), the

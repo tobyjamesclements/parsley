@@ -32,7 +32,7 @@ class ParsleySimSoakTest {
 
     /** The standing six-node topology plus a self-loop — every structural feature in one spec. */
     private static ParsleySimTrace.SimSpec soakSpec() {
-        // parsley.sim.soak.partitions widens the soak to the T10 multi-partition dimension
+        // parsley.sim.soak.partitions widens the soak to the multi-partition dimension
         // (per-partition tasks + stamped-external cross-partition claims); the default keeps the
         // historical single-partition spec so existing soak seeds stay replayable.
         return new ParsleySimTrace.SimSpec(List.of("c1"), List.of(

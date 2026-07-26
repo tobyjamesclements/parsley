@@ -39,8 +39,8 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import static java.util.Objects.requireNonNull;
 
 /**
- * The two-output diamond, end to end against a real broker (T2.3 IT b): one invocation of app P's
- * delegate forwards to two sink topics in one EOS transaction. The crossing wait (O1) blocks the
+ * The two-output diamond, end to end against a real broker: one invocation of app P's
+ * delegate forwards to two sink topics in one EOS transaction. The crossing wait blocks the
  * second forward's stamp until the first send's ack arrives, so the second output's wire clock
  * claims the first output's exact coordinate — and consumer app C, gating on both topics, can
  * therefore never deliver the second output before the first, however the two arrive.

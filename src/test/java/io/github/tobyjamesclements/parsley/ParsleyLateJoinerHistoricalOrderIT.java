@@ -33,14 +33,13 @@ import static org.awaitility.Awaitility.await;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * The historical-pairs ordering hole floors used to open, now closed by truthful stamps (D4, T3.2
- * IT b): a late joiner consuming both an input topic and its derived topic replays fully-written
- * history and must deliver every (cause, effect) pair in causal order. Under the retired epoch
- * floors, a coordinated joiner's replay-era view repositioned historical stamps at the epoch origin
- * — erasing the derived records' {@code c1} ancestry, so nothing ordered a historical {@code c2}
- * record after its {@code c1} cause. With truthful stamps the derived record's clock claims its
- * exact {@code c1} coordinate, and the joiner's own gate orders the pair — no floors, no
- * coordination, no barrier.
+ * Historical-pairs ordering for a late joiner, against a real broker: a joiner consuming both an
+ * input topic and its derived topic replays fully-written history and must deliver every
+ * (cause, effect) pair in causal order. This works because every stamp is truthful — a derived
+ * record's clock claims its exact {@code c1} coordinate, whenever it was written — so the joiner's
+ * own gate orders the pair with no floors, no coordination and no barrier. A scheme that
+ * repositioned historical stamps at a replay origin instead would erase the derived records'
+ * {@code c1} ancestry, leaving nothing to order a historical {@code c2} record after its cause.
  *
  * <p>App A ({@code c1} → {@code c2}) processes a batch and shuts down; only then does joiner Z
  * (consuming {@code c1} and {@code c2}) start, against complete, closed history.

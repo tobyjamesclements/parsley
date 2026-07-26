@@ -25,12 +25,12 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * Tests the init-time former-sink heal of the restored {@code ownOutputs} clock (T3.4). The
+ * Tests the init-time former-sink heal of the restored {@code ownOutputs} clock. The
  * persisted {@code "frontier"} value always trails the final transaction's own-output acks (store caches
- * flush before the producer flush completes acks — O1), and the ordinary end-offset seed heals
+ * flush before the producer flush completes acks), and the ordinary end-offset seed heals
  * only the <em>currently</em> declared sinks — so a redeploy that turns a sink into an input, or
  * drops it while a third party still consumes it, would otherwise restart with stamps
- * under-claiming this node's own final-transaction outputs: an I2 under-claim, which a downstream
+ * under-claiming this node's own final-transaction outputs: an under-claim, which a downstream
  * consumer of that topic plus another of this node's sinks could reorder around.
  *
  * <p>Driven as two {@link ParsleyProcessor} lifetimes over the same physical stores (the
@@ -85,7 +85,7 @@ class ParsleyFormerSinkHealTest {
         assertEquals(8L, stamp.offsetFor(C3_ID, 0),
                 "the first post-redeploy stamp must claim the former sink at its last appended "
                         + "offset — the end-offset heal must cover the acks the blob's final "
-                        + "transaction never persisted (I2; without the heal this reads the stale 5)");
+                        + "transaction never persisted (without the heal this reads the stale 5)");
     }
 
     /**
@@ -110,7 +110,7 @@ class ParsleyFormerSinkHealTest {
 
         ParsleyVectorClock stamp = firstStampOf(v2, context);
         assertEquals(-1L, stamp.offsetFor(C3_ID, 0),
-                "a recreated former sink's old-UUID claims are provably destroyed (E1) and must "
+                "a recreated former sink's old-UUID claims are provably destroyed and must "
                         + "leave the stamp, not be healed to the new topic's offsets");
     }
 

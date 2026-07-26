@@ -61,8 +61,8 @@ final class ParsleyFrontierStateTest {
 
     /**
      * {@code fromBytes} hard-fails on a value whose leading wire-version byte is not
-     * {@link ParsleyFrontierState#WIRE_VERSION}, rather than mis-parsing it. This is the O6 stance
-     * that there is no cross-version upgrade path before 1.0: an unreadable value faults at init.
+     * {@link ParsleyFrontierState#WIRE_VERSION}, rather than mis-parsing it. There is no
+     * cross-version upgrade path before 1.0: an unreadable value faults at init.
      */
     @Test
     void fromBytesRejectsAnUnknownWireVersion() {

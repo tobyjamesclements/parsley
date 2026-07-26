@@ -33,7 +33,7 @@ import static org.awaitility.Awaitility.await;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * A joiner needs zero coordination (D7, T3.2 IT a): a fresh app joins an established, still-running
+ * A joiner needs zero coordination (against a real broker): a fresh app joins an established, still-running
  * topology by simply starting to consume — no barrier, no admission, no join wait — and its
  * multi-partition replay lands in causal delivery order. App A ({@code c1} → {@code c2},
  * key-preserving, both topics two partitions) builds derived history while running; joiner Z then

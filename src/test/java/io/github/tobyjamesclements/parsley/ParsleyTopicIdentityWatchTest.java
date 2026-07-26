@@ -25,7 +25,8 @@ import static io.github.tobyjamesclements.parsley.ParsleyTestFixtures.cause;
 import static io.github.tobyjamesclements.parsley.ParsleyTestFixtures.message;
 
 /**
- * Tests for {@link ParsleyTopicIdentityWatch} — the mid-run E1 enforcement (T3.0 A13): tasks
+ * Tests for {@link ParsleyTopicIdentityWatch} — the mid-run enforcement of stable channel
+ * identity: tasks
  * register the topic name → UUID bindings they resolved at init, a poll compares them against the
  * broker's current view, and once a recreation or deletion is detected every
  * {@link ParsleyTopicIdentityWatch#ensureIntact} call fails the caller fast.
@@ -101,7 +102,7 @@ class ParsleyTopicIdentityWatchTest {
     }
 
     /**
-     * The A13 core: a topic whose broker-current UUID differs from the init-time resolution was
+     * The core of the watch: a topic whose broker-current UUID differs from the init-time resolution was
      * deleted and recreated mid-run; the poll marks the watch broken and every subsequent
      * {@code ensureIntact} throws, naming the topic and both UUIDs.
      */

@@ -7,7 +7,7 @@ import java.util.List;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 
 /**
- * Null-message relay quiescence on topic cycles. The I6 relay rule — relay iff the carried clock
+ * Null-message relay quiescence on topic cycles. The relay rule — relay iff the carried clock
  * advanced this node's total knowledge on a channel it <em>consumes</em>
  * ({@code !stamp().dominates(carried.retaining(consumedScope))}, acks folded first;
  * {@code ParsleyGossip.receive}) — reaches knowledge closure on every cycle shape because only
@@ -16,7 +16,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
  *
  * <ul>
  *   <li>Custody — a claim on a channel the node neither consumes nor produces — folds into the
- *       stamp (I9) but never obliges a relay. Under the previous rule (relay on <em>any</em>
+ *       stamp but never obliges a relay. Under the previous rule (relay on <em>any</em>
  *       new knowledge) custody was always one gossip lap stale on a cycle of length ≥ 3, so
  *       every lap obliged a relay whose own fresh offset was the next blind member's news:
  *       an idle deployment emitted null messages forever, at one message per loop latency per
@@ -56,7 +56,7 @@ class ParsleyGossipCycleQuiescenceTest {
                 "one business delivery at A must advertise exactly one null message on c1");
         assertEquals(0, sim.logSize("c2"),
                 "B must not echo A's advertisement — its only news (c4@0) is custody for B, "
-                        + "which folds into the stamp but never obliges a relay (I6 trigger scope)");
+                        + "which folds into the stamp but never obliges a relay (the relay trigger scope)");
     }
 
     /**
@@ -144,7 +144,7 @@ class ParsleyGossipCycleQuiescenceTest {
      * two shared sinks with <em>three</em> producers each — c2 from p1, p2, p3 and c3 from p1, p5,
      * p6 — and every cycle member (p2, p4, p5, p6) consumes both, one more producer per sink than
      * {@link #sharedSinkThreeNodeCycleQuiescesWithoutSiblingEcho}. The random-topology sweep
-     * flagged this shape as non-quiescing, and the suspicion was a 3-producer I6 relay the
+     * flagged this shape as non-quiescing, and the suspicion was a 3-producer relay the
      * consumed-channel trigger did not cover. It is not: with the delegates silent
      * ({@code p = 0.0}) so nothing but null messages ever reaches c2 and c3, a single external
      * record on c1 settles after a handful of advertisements. Each carried claim on a chord
@@ -169,7 +169,7 @@ class ParsleyGossipCycleQuiescenceTest {
         sim.drain();
         assertEquals(2, sim.logSize("c2"),
                 "the 3-producer shared sink c2 must quiesce after a bounded burst of null messages — "
-                        + "the I6 relay covers the chorded 3-producer shape, not just the 2-producer one");
+                        + "the relay covers the chorded 3-producer shape, not just the 2-producer one");
         assertEquals(3, sim.logSize("c3"),
                 "the 3-producer shared sink c3 must quiesce after a bounded burst of null messages, "
                         + "no sustained relay");

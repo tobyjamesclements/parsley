@@ -40,7 +40,7 @@ import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * Proves the mid-run enforcement of E1 — stable channel identity (T3.0 A13, closed in T3.4).
+ * Proves the mid-run enforcement of stable channel identity.
  * Topic name → UUID resolution is bound once per task lifetime at {@code init()}, so a causal
  * topic deleted and recreated <em>while a member runs</em> would silently rebind coordinates:
  * once the recreated topic's offsets re-pass the member's committed position, its records are
@@ -49,7 +49,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * the broker's current topic IDs, and the tasks' per-record checks fail the member fast once a
  * recreation is detected — the violation can never continue silently. (Records fetched inside one
  * poll interval remain the documented residual window; recreating causal topics under running
- * members is an operational constraint of the same kind as E2's retention rule.)
+ * members is an operational constraint of the same kind as the retention rule.)
  */
 @Testcontainers(disabledWithoutDocker = true)
 class ParsleyTopicRecreationIT {
@@ -65,7 +65,7 @@ class ParsleyTopicRecreationIT {
      * An <em>input</em> topic deleted and recreated mid-run, with enough new records appended that
      * the member's committed offset is back in range — the dangerous window, where the consumer
      * can resume fetching the recreated topic's records under the stale UUID with no fetch error
-     * at all. The member must reach {@code ERROR}, and the failure must be one of E1's fail-fast
+     * at all. The member must reach {@code ERROR}, and the failure must be one of the identity
      * paths — which one wins is a race the environment decides: the identity watch's recreation
      * detection (the guaranteed backstop), the out-of-range failure under {@code none()} (when
      * the consumer's position check beats the refill), or Streams' own
@@ -114,7 +114,7 @@ class ParsleyTopicRecreationIT {
             Throwable failure = uncaught.get();
             assertNotNull(failure, "the member must die with an uncaught exception, not stall silently");
             assertTrue(isRecreationFailFast(failure),
-                    "the failure must be an E1 fail-fast path — the identity watch's recreation "
+                    "the failure must be an identity fail-fast path — the identity watch's recreation "
                             + "detection or the out-of-range failure under none() — not an incidental "
                             + "error: " + failure);
         }
@@ -124,7 +124,7 @@ class ParsleyTopicRecreationIT {
      * A <em>sink</em> topic deleted and recreated mid-run is as unsafe as an input's: the ack
      * registry folds by topic name through the stale UUID map, and the recreated topic's restarted
      * offsets make every fold a monotone no-op, so stamps silently stop claiming this node's own
-     * new outputs (an I2 under-claim at any downstream consumer). With no traffic in flight, only
+     * new outputs, so downstream stamps under-claim. With no traffic in flight, only
      * the identity watch can detect it — the poll marks the watch broken, and the next record's
      * pre-ingest check fails the member with the watch's own exception, naming the sink, before
      * anything is stamped under the stale identity.
@@ -172,7 +172,7 @@ class ParsleyTopicRecreationIT {
     }
 
     /**
-     * Any of E1's fail-fast paths for a recreated input: the identity watch, out-of-range under
+     * Any of the fail-fast paths for a recreated input: the identity watch, out-of-range under
      * none(), or Streams' own missing-source-topic rebalance failure (the deletion window itself).
      */
     private static boolean isRecreationFailFast(Throwable failure) {

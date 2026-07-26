@@ -50,9 +50,9 @@ import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * T2.1 prototype (redesign doc, O1 and task T2.1): validates the residual mechanics of the
- * own-output acknowledgement design against a real broker, before T2.2 builds the production
- * registry. Three claims from the design need empirical confirmation:
+ * Pins the producer-side mechanics the own-output acknowledgement design rests on, against a real
+ * broker, independently of the production registry that builds on them. Three claims from the
+ * design need empirical confirmation:
  *
  * <ol>
  *   <li>a {@link ProducerInterceptor} named through the public {@code producer.} Streams config
@@ -64,7 +64,8 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  *       flush can never miss an own-output coordinate from before it;</li>
  *   <li>aborting a transaction while sends are unacknowledged fails each of them with exactly one
  *       callback, releasing a latch fed by the callbacks — the crossing wait cannot hang across an
- *       abort, and the failure outcome is visible so the wait dies with the transaction (T3.0 A8).</li>
+ *       abort, and the failure outcome is visible so the wait dies with the transaction rather
+ *       than stamping and proceeding.</li>
  * </ol>
  */
 @Testcontainers(disabledWithoutDocker = true)
@@ -98,9 +99,9 @@ class ParsleyProducerAckMechanicsIT {
                        @Nullable Exception exception, String threadName) {}
 
     /**
-     * The prototype of the D2 registry seam: installed purely through producer configuration (no
+     * A stand-in for the registry seam: installed purely through producer configuration (no
      * {@code *.internals.*} types), it publishes every acknowledgement into the static registry
-     * above. The production version (T2.2) folds these into the {@code ownOutputs} clock instead.
+     * above. The production version folds these into the {@code ownOutputs} clock instead.
      */
     public static final class AckRegistryInterceptor implements ProducerInterceptor<Object, Object> {
         @Override
@@ -142,7 +143,7 @@ class ParsleyProducerAckMechanicsIT {
      * class named via the public {@code producer.} config prefix is instantiated by the EOS stream
      * producer, its acknowledgement for a stamped business forward names the exact committed
      * (topic, partition, offset) coordinate, and the callback runs on the producer's network
-     * thread rather than the stream thread, so the T2.2 registry must be concurrent.
+     * thread rather than the stream thread, so the production registry must be concurrent.
      *
      * Asserts the C2 ack matches the delivered record's coordinate, arrived off the stream thread
      * on a producer network thread, and that configure() exposed a client.id usable for routing.
@@ -231,7 +232,7 @@ class ParsleyProducerAckMechanicsIT {
 
     /**
      * Validates latch behaviour when a transaction aborts while acks are outstanding (the
-     * crossing-wait scenario, T3.0 A8): records parked in the accumulator by a long linger are
+     * crossing-wait scenario): records parked in the accumulator by a long linger are
      * failed by abortTransaction() with exactly one callback each, so a latch fed by the
      * callbacks is released rather than left hanging — and the failure outcome is visible, which
      * is what lets the production crossing wait die with the transaction instead of stamping.

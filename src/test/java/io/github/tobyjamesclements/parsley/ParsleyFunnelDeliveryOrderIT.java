@@ -40,13 +40,12 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import static java.util.Objects.requireNonNull;
 
 /**
- * The delivery-order half of the T3.0 A7 funnel, deferred from T2.3 to T3.1: one invocation of
+ * The delivery-order half of the funnel, against a real broker: one invocation of
  * app A's delegate sends to TWO partitions of one sink in one EOS transaction, and the crossing
  * wait puts the first send's cross-partition coordinate into the second send's clock (the wire
- * half, already proven by {@link ParsleyFunnelCrossingWaitIT}). This test runs the half the
- * interim I7 fail-fast made impossible: app B's task that owns only partition 1 receives the
- * second output's cross-partition claim — under the retired fail-fast that was an unreachable
- * coordinate and a crash; under the two-branch gate it is ignored (D1) and carried (I9) — and
+ * half, already proven by {@link ParsleyFunnelCrossingWaitIT}). App B's task that owns only
+ * partition 1 receives the second output's cross-partition claim, which the two-branch gate
+ * ignores and carries, and
  * app C, consuming both the funnel topic and B's re-keyed derivative on the SAME task, gates the
  * second output's descendant on the first output through its consumed branch.
  *
@@ -69,8 +68,8 @@ class ParsleyFunnelDeliveryOrderIT {
     /**
      * The descendant B derives from the funnel's second (partition-1) output must carry the first
      * (partition-0) output's coordinate — custody through B's partition-1 task, which itself can
-     * only IGNORE that cross-partition claim (it owns partition 1 alone; the retired I7 fail-fast
-     * crashed exactly here) — and C's partition-0 task, which CONSUMES the funnel's partition 0,
+     * only IGNORE that cross-partition claim, since it owns partition 1 alone — and C's
+     * partition-0 task, which CONSUMES the funnel's partition 0,
      * must deliver the first output before that descendant.
      *
      * Asserts the descendant's wire clock names the first output's exact coordinate, and C's
@@ -114,7 +113,7 @@ class ParsleyFunnelDeliveryOrderIT {
 
             // The custody evidence: the descendant of the SECOND output (derived by B's
             // partition-1 task, which could only ignore the cross-partition claim) still carries
-            // the FIRST output's exact partition-0 coordinate (I9 — the merge may not strip).
+            // the FIRST output's exact partition-0 coordinate (the merge may not strip).
             List<ConsumerRecord<String, String>> firstOutputs = new ArrayList<>();
             List<ConsumerRecord<String, String>> secondDescendants = new ArrayList<>();
             try (KafkaConsumer<String, String> consumer = new KafkaConsumer<>(consumerConfig(bootstrap))) {
@@ -137,7 +136,7 @@ class ParsleyFunnelDeliveryOrderIT {
             assertTrue(wireClock(secondDescendants.get(0)).offsetFor(funnelId, 0) >= firstOutputs.get(0).offset(),
                     "the second output's descendant must claim the first output's partition-0 "
                             + "coordinate — carried through B's partition-1 task, which ignores "
-                            + "but never strips it (D1 + I9)");
+                            + "but never strips it (the gate ignores it, the merge keeps it)");
 
             // The delivery evidence: C's partition-0 task consumes both the funnel's partition 0
             // and the re-keyed partition 0, so the descendant's claim is genuinely gated there —
@@ -157,7 +156,7 @@ class ParsleyFunnelDeliveryOrderIT {
                 assertTrue(observedP0.indexOf(FUNNEL + ":first:hello")
                                 < observedP0.indexOf(REKEYED + ":d:second:hello"),
                         "C must deliver the funnel's first output before the second output's "
-                                + "descendant — the A7 delivery-order guarantee; observed p0: " + observedP0);
+                                + "descendant — the funnel delivery-order guarantee; observed p0: " + observedP0);
             }
         }
     }

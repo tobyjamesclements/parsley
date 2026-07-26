@@ -664,12 +664,11 @@ class ParsleyProcessorsTopologyTest {
     }
 
     /**
-     * The gate's ignore branch (D1) at the processor level, at width: a dependency clock spanning
+     * The gate's ignore branch at the processor level, at width: a dependency clock spanning
      * many partitions of an entirely unconsumed topic ({@code ghost}) is ignored coordinate by
-     * coordinate — with transitively complete stamps (I2) carried by unconditional merges (I9),
+     * coordinate — with transitively complete stamps carried by unconditional merges,
      * any consumed causal ancestor is claimed directly in the same clock, so the unconsumed
-     * entries only proxy ancestry the clock already states. The retired I7 fail-fast (D7) used to
-     * crash the task here.
+     * entries only proxy ancestry the clock already states.
      *
      * Asserts the record delivers to the delegate immediately and every ignored coordinate is
      * counted by the {@code deps-out-of-scope-ignored} sensor.
@@ -696,19 +695,19 @@ class ParsleyProcessorsTopologyTest {
 
             assertEquals(List.of("v"), processed,
                     "a record whose only dependencies are unconsumed coordinates must deliver "
-                            + "immediately — the ignore branch, not a failure (D1)");
+                            + "immediately — the ignore branch, not a failure");
             assertEquals(500.0, parsleyMetric(driver, "deps-out-of-scope-ignored-total"), 0.001,
                     "every ignored coordinate must count the out-of-scope-ignored sensor");
         }
     }
 
     /**
-     * The two-branch dispatch is per coordinate (D1): a clock naming an unconsumed topic
+     * The two-branch dispatch is per coordinate: a clock naming an unconsumed topic
      * ({@code ghost}) and a partition of a consumed topic this task does not own ({@code c1}
      * partition 7) sends both to the ignore branch — producers stamp a clock spanning everything
      * they consume, so a downstream processor routinely sees coordinates it can never observe
      * directly, and ignoring them is sound because the same clock claims every consumed ancestor
-     * directly (I2/I9). The retired I7 fail-fast (D7) used to crash the task on either entry.
+     * directly, by transitive completeness and unconditional merge.
      *
      * Asserts the record delivers to the delegate and both ignored coordinates count the
      * {@code deps-out-of-scope-ignored} sensor.
@@ -733,7 +732,7 @@ class ParsleyProcessorsTopologyTest {
             c1.pipeInput(new TestRecord<>("k", "hello", depsHeader(deps)));
 
             assertEquals(List.of("hello"), processed,
-                    "unconsumed-coordinate dependencies must be ignored and the record delivered (D1)");
+                    "unconsumed-coordinate dependencies must be ignored and the record delivered");
             assertEquals(2.0, parsleyMetric(driver, "deps-out-of-scope-ignored-total"), 0.001,
                     "both the unconsumed topic and the unowned partition must count the sensor");
         }
@@ -1500,7 +1499,7 @@ class ParsleyProcessorsTopologyTest {
                     driver.createOutputTopic("c6", new StringDeserializer(), new StringDeserializer());
 
             // Carries news on the consumed channel itself (a c1 claim above anything this node
-            // has received — offsets 1..3 still in flight), so the I6 trigger fires and it
+            // has received — offsets 1..3 still in flight), so the relay trigger fires and it
             // relays. A claim on an unconsumed coordinate would be custody: folded, never
             // relayed.
             Headers newsworthy = ParsleyHeader.mutableHeaders();

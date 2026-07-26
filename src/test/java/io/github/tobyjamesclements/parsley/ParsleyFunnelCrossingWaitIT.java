@@ -40,7 +40,7 @@ import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static java.util.Objects.requireNonNull;
 
 /**
- * The T3.0 A7 funnel against a real broker (T2.3 IT d): one invocation of the delegate sends to
+ * The funnel against a real broker: one invocation of the delegate sends to
  * TWO partitions of ONE sink topic in one EOS transaction. Process-order edges cross partitions of
  * a single sink too, and Kafka's FIFO covers only same-partition sends — so the crossing wait must
  * hold the second forward's stamp until the first send's ack arrives, at (topic, partition)
@@ -48,10 +48,10 @@ import static java.util.Objects.requireNonNull;
  * evidence: the second output's clock claims the first output's exact coordinate on the other
  * partition.
  *
- * <p>The downstream half of the A7 scenario — a Parsley consumer of the funnel sink gating the
+ * <p>The downstream half of the funnel scenario — a Parsley consumer of the funnel sink gating the
  * second output's descendants on the first output — is proven by
  * {@link ParsleyFunnelDeliveryOrderIT}: the cross-partition claim this test puts on the wire is
- * ignored (D1) and carried (I9) at a task that owns only the other partition, and genuinely gated
+ * ignored and carried at a task that owns only the other partition, and genuinely gated
  * where both partitions' derivatives converge.
  */
 @Testcontainers(disabledWithoutDocker = true)
@@ -115,10 +115,10 @@ class ParsleyFunnelCrossingWaitIT {
             assertEquals(first.offset(), wireClock(second).offsetFor(funnelId, 0),
                     "the second send's stamp must claim the first send's exact coordinate on the "
                             + "OTHER partition of the same sink — knowable only through the first "
-                            + "send's ack (the per-partition crossing wait, T3.0 A7)");
+                            + "send's ack (the per-partition crossing wait)");
             assertEquals(-1L, wireClock(first).offsetFor(funnelId, 1),
                     "the first send's stamp must claim nothing on partition 1 — its sibling had "
-                            + "not been sent, let alone acked, when this stamp was taken (I3)");
+                            + "not been sent, let alone acked, when this stamp was taken");
         }
     }
 

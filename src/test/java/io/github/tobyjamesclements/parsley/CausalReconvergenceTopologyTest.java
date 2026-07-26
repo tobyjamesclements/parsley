@@ -294,11 +294,11 @@ class CausalReconvergenceTopologyTest {
      * <p>This is tested at the {@link ParsleyGossip} level over a channel-tracking {@link
      * ParsleyChannels}: after {@link ParsleyGossip#receive} is called with a frontier carrying an
      * ancestor coordinate, {@link ParsleyCausalBroadcast#completeness()} must reflect it. This proves the
-     * channel clock is updated by the null-message receipt, which is the custody mechanism (I9)
+     * channel clock is updated by the null-message receipt, which is the custody mechanism
      * behind propagation through non-subscribing layers. Also asserts {@link
      * ParsleyGossip.Reception#advancedConsumedChannel()} reports {@code false} — the ancestor is a
      * channel this node neither consumes nor produces, so the claim is custody: it folds into the
-     * stamp and rides every later emission, but it must not itself oblige a relay (the I6 trigger
+     * stamp and rides every later emission, but it must not itself oblige a relay (the relay trigger
      * scope on {@link ParsleyGossip} — relaying hearsay is what let topic cycles storm).
      *
      * Asserts that completeness rises to include the null message's ancestor coordinate immediately
@@ -332,7 +332,7 @@ class CausalReconvergenceTopologyTest {
                 "no records buffered, so the null-message receive must return an empty release list");
         assertFalse(reception.advancedConsumedChannel(),
                 "ANC is a channel this node neither consumes nor produces — the claim is custody, "
-                        + "which folds into the stamp but must not oblige a relay (I6 trigger scope)");
+                        + "which folds into the stamp but must not oblige a relay (the relay trigger scope)");
 
         // The channel clock for C1/0 now knows ANC@5, which must appear in completeness().
         assertEquals(5L, causalBroadcast.completeness().offsetFor(ANC_ID, 0),

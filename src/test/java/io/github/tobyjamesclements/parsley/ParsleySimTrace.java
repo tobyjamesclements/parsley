@@ -19,9 +19,9 @@ import java.util.stream.Collectors;
  * so the text format assumes topic and node names contain no spaces or commas — true of every
  * name the harness and generator produce.
  *
- * <p><strong>Partition fields (T10).</strong> Actions carry the partition dimension, printed only
+ * <p><strong>Partition fields.</strong> Actions carry the partition dimension, printed only
  * when it is informative (a nonzero partition, a nonzero key index): a single-partition run
- * prints exactly the pre-T10 text, and pre-T10 trace texts parse with the partition fields
+ * prints exactly the partition-free text, and partition-free trace texts parse with the partition fields
  * defaulting to 0.
  */
 final class ParsleySimTrace {
@@ -31,7 +31,7 @@ final class ParsleySimTrace {
     /** A topology by value — enough to rebuild a sim for replay without the builder calls. */
     record SimSpec(List<String> externalTopics, List<NodeSpec> nodes, int partitions) {
 
-        /** Single-partition compatibility shape — the pre-T10 constructor. */
+        /** Single-partition compatibility shape — the partition-free constructor. */
         SimSpec(List<String> externalTopics, List<NodeSpec> nodes) {
             this(externalTopics, nodes, 1);
         }
@@ -65,21 +65,21 @@ final class ParsleySimTrace {
 
     /**
      * {@code node} restarts from its durable stores with the given declared inputs — both the
-     * clean in-place restart (same inputs) and the A5/A6 scope-change restart (different inputs).
+     * clean in-place restart (same inputs) and the scope-change restart (different inputs).
      */
     record Rescope(String node, List<String> inputs) implements Action {}
 
     /**
      * {@code node} dies and rebuilds from its durable stores WITHOUT the clean shutdown: no final
      * ack wait, no {@code foldAcknowledgedOutputs}. Sends already appended stay in the logs; the
-     * init-time sink end-offset seed (I8) must re-cover them.
+     * init-time sink end-offset seed must re-cover them.
      */
     record Crash(String node) implements Action {}
 
     /**
      * {@code node}'s consumer position on {@code input} at task {@code partition} rewinds to
      * {@code toCursor} — at-least-once redelivery (a rebalance re-fetch); the protocol must
-     * absorb the replay (A11).
+     * absorb the replay.
      */
     record Rollback(String node, String input, int partition, int toCursor) implements Action {}
 

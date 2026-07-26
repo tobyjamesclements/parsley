@@ -59,8 +59,8 @@ import static java.util.Objects.requireNonNull;
  *
  * <p>Every topic is single-partition, so source offsets are deterministic and the records are chained
  * by dependency, which makes each processor's admission frontier — and therefore each stamp's
- * input-topic entries — exact rather than racy. A stamp's own-OUTPUT-topic entry (present since
- * T2.3: the stamp is {@code completeness ∪ ownOutputs}, D2) is asserted structurally instead, since
+ * input-topic entries — exact rather than racy. A stamp's own-OUTPUT-topic entry, which it carries
+ * because the stamp is {@code completeness ∪ ownOutputs}, is asserted structurally instead, since
  * its exact offset depends on where EOS commit markers land in the output log.
  */
 @Testcontainers(disabledWithoutDocker = true)
@@ -194,9 +194,9 @@ class CausalFanOutScopedFrontierIT {
 
             // SHARED@1's delivery and the cascade release of the held unique-topic record happen in
             // the same receive call, so both are stamped with the same post-cascade input frontier:
-            // SHARED@1 plus this processor's own unique-topic coordinate. Since T2.3 a stamp is
+            // SHARED@1 plus this processor's own unique-topic coordinate. A stamp is
             // completeness ∪ ownOutputs, so every stamp after a processor's first emission also
-            // carries its OWN OUTPUT topic's acked position (D2) — asserted structurally rather than
+            // carries its OWN OUTPUT topic's acked position — asserted structurally rather than
             // by exact value, because the claimed offset depends on where EOS commit markers land.
             try (KafkaConsumer<String, byte[]> aConsumer = new KafkaConsumer<>(stampConsumerConfig(bootstrap));
                  KafkaConsumer<String, byte[]> bConsumer = new KafkaConsumer<>(stampConsumerConfig(bootstrap))) {
@@ -230,7 +230,7 @@ class CausalFanOutScopedFrontierIT {
                                     + "scoped-frontier guarantee");
                 }
 
-                // The D2 addition: each processor's stamps carry its own output topic's acked
+                // Each processor's stamps carry its own output topic's acked
                 // position, and the record forwarded LATER in the cascade (A0, after S1's output was
                 // sent and acked) claims a strictly higher own-output position than S1's stamp did —
                 // process order made provable by the crossing wait.
@@ -238,7 +238,7 @@ class CausalFanOutScopedFrontierIT {
                 long aOutClaimAtA0 = clockOf(requireNonNull(aStamps.get("A0"))).offsetFor(topics.topicId(A_OUT), 0);
                 assertTrue(aOutClaimAtS1 >= 0,
                         "processor A's S1 stamp must claim its own output topic's acked position "
-                                + "(completeness ∪ ownOutputs, D2) but claimed nothing");
+                                + "(completeness ∪ ownOutputs) but claimed nothing");
                 assertTrue(aOutClaimAtA0 > aOutClaimAtS1,
                         "the cascade's second forward (A0) must claim a strictly higher own-output "
                                 + "position than the first (S1): the crossing wait folds the first "

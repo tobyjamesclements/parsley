@@ -39,10 +39,10 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  *
  * <p>This also exercises relay convergence on a self-loop: a node observing its own null message
  * reflected back at it must not relay it onward again (an infinite loop this test caught during
- * development, historically closed by an own-coordinate strip). Convergence now rests on the I6
+ * development, historically closed by an own-coordinate strip). Convergence now rests on the
  * knowledge-based relay rule — a reflected marker's carried clock is this node's own past stamp,
  * dominated by its current {@code stamp()}, so it teaches nothing and the relay settles — and the
- * self-consumed sink's claims are genuinely gated by the two-branch gate's consumed branch (T3.1).
+ * self-consumed sink's claims are genuinely gated by the two-branch gate's consumed branch.
  * Under max-merge this works because a node's own registered channel for the looped-back topic
  * directly advertises the ancestor coordinate it needs ({@link ParsleyChannels#channelUpdate}) — no
  * cross-channel unanimity, and no third-party relay, is required.
@@ -102,8 +102,8 @@ class CausalCyclicTopologyTest {
                         .addSource(new ParsleySource<>("c1", Serdes.String(), Serdes.String()))
                         .addSource(new ParsleySource<>("c2", Serdes.String(), Serdes.String()))
                         // Declares c2 as P's own produced topic: feeds the ownOutputs clock the
-                        // I6 knowledge-based relay compares against (a reflected own claim teaches
-                        // nothing, so the loop settles) and the I8 reflected-claim diagnostic.
+                        // knowledge-based relay compares against (a reflected own claim teaches
+                        // nothing, so the loop settles) and the reflected-claim diagnostic.
                         .sinkTopics(Set.of("c2"))
                         .topicAdmin(ADMIN)
                         .build())

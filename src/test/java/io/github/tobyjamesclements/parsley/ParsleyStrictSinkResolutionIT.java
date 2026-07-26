@@ -41,7 +41,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * Proves the strict sink-resolution rule end to end against a real broker: a causal sink must
  * exist before the stage starts. A declared sink that cannot be resolved to a UUID at init fails
  * the member loudly — never a warn-and-continue that would silently disable own-output stamping
- * (an I2 under-claim downstream) for the task's whole lifetime — and once the operator creates
+ * (an under-claim downstream) for the task's whole lifetime — and once the operator creates
  * the topic, the same application starts cleanly and processes normally.
  */
 @Testcontainers(disabledWithoutDocker = true)

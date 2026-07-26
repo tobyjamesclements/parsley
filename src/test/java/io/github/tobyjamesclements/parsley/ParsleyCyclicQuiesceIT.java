@@ -36,8 +36,8 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * The tightest topology cycle against a real broker (T2.3 IT c): an app that consumes its own sink.
- * With the stamp-side own-sink strip gone (T2.3), relay settling rests entirely on the I6
+ * The tightest topology cycle against a real broker: an app that consumes its own sink.
+ * With the stamp-side own-sink strip gone, relay settling rests entirely on the
  * knowledge-based rule — a null message is relayed only when its carried clock teaches the node
  * something outside {@code frontier ∪ channel clocks ∪ ownOutputs}. A reflected own coordinate is
  * dominated by {@code ownOutputs}, so the cycle must quiesce: after the input stops, the sink topic
@@ -55,7 +55,7 @@ class ParsleyCyclicQuiesceIT {
 
     /**
      * After one input record flows through the cycle (C1 → loop → the app's own gate again), the
-     * loop topic's end offset must stabilise — the I6 relay settles once nothing new is being
+     * loop topic's end offset must stabilise — the relay settles once nothing new is being
      * learned — and the app must still be running (the cycle neither crashes nor spins).
      *
      * Asserts the business record traverses the loop, the loop end offset then holds still for a
@@ -109,7 +109,7 @@ class ParsleyCyclicQuiesceIT {
 
             assertTrue(streams.state() == KafkaStreams.State.RUNNING,
                     "the cyclic app must still be RUNNING after quiescing — settling must come "
-                            + "from the I6 relay rule, never from a crash");
+                            + "from the relay rule, never from a crash");
         }
     }
 

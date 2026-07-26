@@ -9,10 +9,10 @@ import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * Deterministic pins for the sim's multi-partition model (T10), via PRNG-free {@code replay}
+ * Deterministic pins for the sim's multi-partition model, via PRNG-free {@code replay}
  * over hand-built traces: the two-branch gate's <em>partition dimension</em> — a dependency on a
  * consumed topic's other partition is ignored, a dependency on the task's own partition gates —
- * and I9 custody of foreign-partition ancestry in stamps. The randomized coverage of the same
+ * and custody of foreign-partition ancestry in stamps. The randomized coverage of the same
  * machinery lives in {@code ParsleyRandomTopologyPropertyTest}'s sweep (the
  * {@code MULTI_PARTITION} population feature and its vacuity guards); these tests pin the exact
  * semantics on the smallest topologies that can express them.
@@ -41,7 +41,7 @@ class ParsleyMultiPartitionSimTest {
      * topic. The receiving task owns only partition 1, so the claim is out of its scope: the
      * two-branch gate's partition dimension must ignore it and deliver immediately — a gate that
      * conflated partitions would hold the record forever against a coordinate this task can never
-     * deliver. The task's stamp must still carry the foreign-partition coordinate (I9 custody
+     * deliver. The task's stamp must still carry the foreign-partition coordinate (custody
      * spans partitions), and its business output must land on its own partition (co-partitioning
      * by key preservation).
      *
@@ -75,7 +75,7 @@ class ParsleyMultiPartitionSimTest {
                 "the foreign-partition cause must be counted through the ignore branch");
         assertTrue(task1.channels.stamp().offsetFor(sim.topicId("c1"), 0) >= 0,
                 "the task's stamp must still claim the foreign-partition ancestry it can never "
-                        + "deliver — custody spans partitions (I9)");
+                        + "deliver — custody spans partitions");
         // Partition 1 carries task 1's completeness-advert null message (the first, silent
         // delivery) plus the derived business record; partition 0 must stay untouched.
         assertEquals(2, sim.logSize("c2", 1),
@@ -169,7 +169,7 @@ class ParsleyMultiPartitionSimTest {
                         + "survive print/parse");
     }
 
-    /** A pre-T10 (partition-free) trace text parses with partition fields defaulting to zero. */
+    /** A partition-free trace text parses with partition fields defaulting to zero. */
     @Test
     void legacyTraceTextParsesWithPartitionZeroDefaults() {
         String legacy = """

@@ -11,7 +11,8 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 /**
  * The random-topology explorer: every run draws a generated topology
  * ({@link ParsleyTopologyGen}), a seeded schedule, and a fault profile, with the sim's continuous
- * invariants (I1 ground-truth delivery order, I2 both forms, I3, I9, D2, no duplicate delegate
+ * invariants (ground-truth delivery order, stamp dominance in both forms, stamp monotonicity,
+ * custody, own-output coverage, no duplicate delegate
  * delivery) armed throughout and drain-to-empty asserted at the end of every run. Runs record no
  * trace, so a per-run action list cannot dominate the heap at deep scale; on a failure the one
  * failing seed is re-run with tracing on, delta-debugged ({@link ParsleySimShrinker}), and the
@@ -108,7 +109,7 @@ class ParsleyRandomTopologyPropertyTest {
         assertTrue(rescopes > 0, "vacuity guard: the sweep must include scope-change restarts");
         assertTrue(stampedExternals > 0,
                 "vacuity guard: the sweep must produce stamped externals — the cross-partition "
-                        + "claim source (T10) never ran");
+                        + "claim source never ran");
         assertTrue(crossPartitionIgnores > 0,
                 "vacuity guard: no delivery ever carried a foreign-partition cause — the gate's "
                         + "partition dimension (ignore branch) was never genuinely exercised");
@@ -125,7 +126,7 @@ class ParsleyRandomTopologyPropertyTest {
     }
 
     /**
-     * Constructs one run's sim: the rotating fault profile, the T10 edge-producer source on
+     * Constructs one run's sim: the rotating fault profile, the edge-producer source on
      * multi-partition specs, and — unless {@code recordTrace} — trace recording disabled to keep
      * per-run memory flat at deep scale. Shared by the sweep loop (no trace) and the failure re-run
      * (trace on) so the two cannot drift on how a run is built.
@@ -137,7 +138,7 @@ class ParsleyRandomTopologyPropertyTest {
             sim.withNoTrace();
         }
         if (spec.partitions() > 1) {
-            // The cross-partition claim source (T10): only multi-partition specs have a
+            // The cross-partition claim source: only multi-partition specs have a
             // partitioner with work to do, so the flag never perturbs legacy schedules.
             sim.withEdgeProducers();
         }

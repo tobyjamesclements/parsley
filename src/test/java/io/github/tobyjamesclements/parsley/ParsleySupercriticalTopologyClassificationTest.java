@@ -17,13 +17,13 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * streaming equivalent of acoustic feedback), not a Parsley defect — every record is still
  * delivered in causal order — so the sim classifies it as a {@link
  * ParsleyTopologySim.SupercriticalTopologyException} the random-topology explorer skips and counts,
- * distinct from a relay loop (an {@link AssertionError}, a genuine I6 non-quiescence). This pins
+ * distinct from a relay loop (an {@link AssertionError}, a genuine non-quiescence). This pins
  * that classification: both the record-count guard and the drain wall-clock guard reach the same
  * verdict from the log's composition, so a tight run timeout can never relabel a supercritical
  * topology as a relay bug (issue #32).
  *
  * <p>The shape is minimal: p1 injects one record onto both cycle channels; p2 relays c2 to c3;
- * p3 re-emits c3 onto both c2 and c3 (the self-loop that pushes the loop gain above 1). The I6
+ * p3 re-emits c3 onto both c2 and c3 (the self-loop that pushes the loop gain above 1). The
  * relay itself is quiescent on shared-sink cycles — that is pinned separately in
  * {@link ParsleyGossipCycleQuiescenceTest#threeProducerSharedSinkChordedCycleQuiescesWithSilentDelegates}.
  */

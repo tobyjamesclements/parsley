@@ -1113,14 +1113,14 @@ class CausalStreamsTopologyTest {
         }
     }
 
-    // --- own outputs (D2, T2.2) ----------------------------------------------------------------
+    // --- own outputs ----------------------------------------------------------------
 
     /**
      * Task init seeds the {@code ownOutputs} clock from each resolved sink's end offsets: with the
      * sink's end offset at 5, the clock claims the last appended position 4 — whether or not this
-     * task produced it (I8's over-claim path; it heals the persisted blob trailing the crashed
+     * task produced it (the over-claim path; it heals the persisted blob trailing the crashed
      * transaction's acks). The seed is persisted in the {@code "frontier"} value and rides the
-     * outbound stamp — {@code completeness ∪ ownOutputs} (D2, T2.3) — so a downstream consumer of
+     * outbound stamp — {@code completeness ∪ ownOutputs} — so a downstream consumer of
      * the sink gates a derived record behind this node's whole appended prefix.
      *
      * Asserts the persisted own-output clock holds end offset - 1 for the sink and the emitted
@@ -1149,7 +1149,7 @@ class CausalStreamsTopologyTest {
                     emitted.headers().lastHeader(ParsleyHeader.CAUSAL_CLOCK).value());
             assertEquals(4L, stamp.offsetFor(c3Id, 0),
                     "the seeded own-output coordinate must ride the stamp (completeness ∪ "
-                            + "ownOutputs — D2, T2.3)");
+                            + "ownOutputs)");
 
             KeyValueStore<String, byte[]> frontierStore =
                     driver.getKeyValueStore("causal-streams-test-stage-1-frontier");
@@ -1182,7 +1182,7 @@ class CausalStreamsTopologyTest {
 
     /**
      * {@link CausalStreams#registerOwnOutputTracking} wires the own-output ack machinery through
-     * public configuration alone (O1): it appends {@link ParsleyOwnOutputInterceptor} to the
+     * public configuration alone: it appends {@link ParsleyOwnOutputInterceptor} to the
      * user-configured {@code producer.interceptor.classes} — never replacing them — injects the
      * minted registry id under the {@code producer.} prefix, and registers a registry tracking
      * exactly the declared sink topics. Unit-covered directly because the construction path now

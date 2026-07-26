@@ -44,7 +44,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import static java.util.Objects.requireNonNull;
 
 /**
- * End-to-end proof of the T1.3 scope-change rules (#21, T3.0 A5/A6) against a real broker: a
+ * End-to-end proof of the scope-change rules (#21) against a real broker: a
  * redeploy that changes the input-topic set while causal state survives must neither replay an
  * added input's already-carried prefix into the surviving state (growth — "skip what you already
  * ignored") nor stop stamping the ancestry a removed input contributed (shrink — carried ancestry
@@ -63,7 +63,7 @@ class CausalScopeChangeIT {
     private static final String C2 = "c2";
 
     /**
-     * Growth (A5): an input consumed and delivered in deployment 1, removed in deployment 2, and
+     * Growth: an input consumed and delivered in deployment 1, removed in deployment 2, and
      * re-added in deployment 3 after its committed offsets were deleted (modelling offset expiry on
      * a re-added input) is re-fetched from log-start — the offset seeder's added-input branch permits
      * the start — but the already-delivered prefix is skipped at delivery, never forwarded to the
@@ -121,7 +121,7 @@ class CausalScopeChangeIT {
             outputs.forEach(record -> values.add(record.value()));
             assertEquals(1, values.stream().filter("X1"::equals).count(),
                     "the re-added input's already-delivered record must be skipped on replay, not "
-                            + "delivered a second time into the surviving state (A5): " + values);
+                            + "delivered a second time into the surviving state: " + values);
             assertEquals(1, values.stream().filter("X2"::equals).count(),
                     "a fresh record on the re-added input must deliver normally: " + values);
             assertEquals(4, values.size(),
@@ -130,7 +130,7 @@ class CausalScopeChangeIT {
     }
 
     /**
-     * Shrink (A6): after a redeploy that removes an input, the survivor's outbound stamps must still
+     * Shrink: after a redeploy that removes an input, the survivor's outbound stamps must still
      * dominate every coordinate the removed input contributed — the retired channel's delivered
      * ancestry re-homes into the carried-ancestry clock the stamp keeps merging. Dropping it (the old
      * {@code pruneToScope} behaviour) would let a third party downstream deliver this node's new
@@ -175,7 +175,7 @@ class CausalScopeChangeIT {
             ParsleyVectorClock clock = ParsleyVectorClock.fromBytes(stamp.value());
             assertEquals(0L, clock.offsetFor(c3Id, 0),
                     "the post-shrink stamp must still dominate the removed input's delivered "
-                            + "ancestry (C3@0) — carried ancestry re-homes, never drops (A6): " + clock);
+                            + "ancestry (C3@0) — carried ancestry re-homes, never drops: " + clock);
             assertTrue(clock.offsetFor(c1Id, 0) >= 1L,
                     "the post-shrink stamp must also cover the surviving input's frontier through "
                             + "the record that produced it: " + clock);

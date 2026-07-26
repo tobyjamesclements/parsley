@@ -23,8 +23,9 @@ import static java.util.Objects.requireNonNull;
  * shared sink onto a topic an earlier node already consumes (a produces→consumes edge pointing
  * backward), and at most one <em>back-edge</em> (a later-produced topic added to an earlier
  * node's inputs, the node's own sink included). Cycles of any length are generated, including
- * the ≥ 3-node shapes on which the pre-fix I6 relay stormed (custody obliged relays; pinned
- * quiescent by {@code ParsleyGossipCycleQuiescenceTest} since the consumed-channel trigger).
+ * the ≥ 3-node shapes where a relay obliged by any carried-clock advance would not quiesce,
+ * because custody is always a lap stale around such a cycle. The consumed-scope trigger is what
+ * closes that, and {@code ParsleyGossipCycleQuiescenceTest} pins these shapes quiescent.
  * When the finished spec contains a cycle every forward probability is capped subcritical: on a
  * feedback loop each consumer-with-sinks appends roughly one record per
  * delivered record (a business forward or a completeness-advert null message), so amplification
@@ -44,8 +45,8 @@ final class ParsleyTopologyGen {
         CYCLE,
         /**
          * Two or more distinct nodes sit on one directed cycle — the shape whose blind channels
-         * stormed the pre-fix I6 relay (custody obliged relays), excluded from generation until
-         * the consumed-channel trigger closed the defect. Guarded separately from {@link #CYCLE}
+         * would storm a relay obliged by custody rather than by a consumed-scope advance. Guarded
+         * separately from {@link #CYCLE}
          * so a population of nothing but self-loops cannot satisfy the cycle guard vacuously.
          */
         MULTI_NODE_CYCLE,
@@ -58,7 +59,7 @@ final class ParsleyTopologyGen {
         /**
          * The topology runs more than one partition — per-partition tasks, keyed externals, and
          * (in the sweep) stamped-external cross-partition claims. Guarded so a population of
-         * nothing but single-partition topologies cannot claim the T10 dimension vacuously.
+         * nothing but single-partition topologies cannot claim the multi-partition dimension vacuously.
          */
         MULTI_PARTITION
     }
@@ -101,8 +102,8 @@ final class ParsleyTopologyGen {
                 // Mostly fresh topics; sometimes an existing internal one — the shared-sink
                 // shape. Internals an earlier node already consumes are candidates too: that
                 // points a produces→consumes edge backward and closes a multi-node cycle, the
-                // shape the pre-fix I6 relay stormed on (re-enabled since the consumed-channel
-                // trigger; the cycle cap below keeps the loop subcritical).
+                // shape a custody-obliged relay would storm on and the consumed-scope trigger
+                // makes safe to generate (the cycle cap below keeps the loop subcritical).
                 if (random.nextInt(10) < 3) {
                     List<String> shareable = internals.stream()
                             .filter(topic -> !nodeSinks.contains(topic))
@@ -125,10 +126,10 @@ final class ParsleyTopologyGen {
         // One optional back-edge: a node additionally consumes any internal topic not already
         // among its inputs — its own sink (the self-loop) or any other node's (closing a
         // multi-node cycle of arbitrary length). Cycles of length >= 3 contain channels some
-        // cycle member neither produces nor consumes ("blind"): the pre-fix I6 relay stormed on
-        // exactly those (custody obliged relays), so they were excluded here until the
-        // consumed-channel trigger closed the defect — pinned quiescent by
-        // ParsleyGossipCycleQuiescenceTest.
+        // cycle member neither produces nor consumes ("blind"), and a relay obliged by custody
+        // rather than by a consumed-scope advance would storm on exactly those. The
+        // consumed-scope trigger is what makes them safe to generate, and
+        // ParsleyGossipCycleQuiescenceTest pins them quiescent.
         if (random.nextInt(10) < 4) {
             int grower = random.nextInt(nodeCount);
             List<String> candidates = internals.stream()
@@ -148,8 +149,8 @@ final class ParsleyTopologyGen {
         }
         // Drawn LAST so the topology shape for a given generator seed is unchanged from the
         // single-partition era — the count is the only new draw and nothing draws after it.
-        // Single-partition keeps the majority so the pre-T10 population stays the baseline;
-        // 2 or 3 partitions open the T10 dimension (per-partition tasks, keyed externals,
+        // Single-partition keeps the majority so the single-partition population stays the baseline;
+        // 2 or 3 partitions open the multi-partition dimension (per-partition tasks, keyed externals,
         // stamped-external cross-partition claims in the sweep).
         int partitions = random.nextInt(10) < 6 ? 1 : 2 + random.nextInt(2);
         ParsleySimTrace.SimSpec spec = new ParsleySimTrace.SimSpec(
