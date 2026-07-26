@@ -34,7 +34,7 @@ class ParsleySimSoakTest {
     private static ParsleySimTrace.SimSpec soakSpec() {
         // parsley.sim.soak.partitions widens the soak to the multi-partition dimension
         // (per-partition tasks + stamped-external cross-partition claims); the default keeps the
-        // historical single-partition spec so existing soak seeds stay replayable.
+        // single-partition spec so recorded soak seeds stay replayable.
         return new ParsleySimTrace.SimSpec(List.of("c1"), List.of(
                 new ParsleySimTrace.SimSpec.NodeSpec("A", List.of("c1"), List.of("c2"), 0.4),
                 new ParsleySimTrace.SimSpec.NodeSpec("D", List.of("c1"), List.of("c2"), 0.4),

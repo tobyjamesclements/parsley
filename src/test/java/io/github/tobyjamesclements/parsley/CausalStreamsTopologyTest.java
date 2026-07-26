@@ -951,7 +951,7 @@ class CausalStreamsTopologyTest {
                 "the failure must name the offending key: " + message(thrown));
     }
 
-    // --- strict sink resolution at init (R1: sinks must exist at startup) ----------------------
+    // --- strict sink resolution at init: sinks must exist at startup ---------------------------
 
     /**
      * A declared sink whose UUID lookup fails at init — the topic does not exist, or the admin

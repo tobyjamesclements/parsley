@@ -88,7 +88,7 @@ class ParsleyProcessorCloseTest {
         assertFalse(delegateInitialised.get(),
                 "init failed before it reached delegate.init(), so the delegate is un-initialised");
 
-        // The state that makes B5 a bug: close() must tear down only what init() set up.
+        // The state that makes this a hazard: close() must tear down only what init() set up.
         assertDoesNotThrow(processor::close,
                 "close() after a failed init must not NPE on the never-wired metrics — that would mask "
                         + "the real init failure");

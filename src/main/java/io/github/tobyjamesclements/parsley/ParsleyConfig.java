@@ -8,9 +8,9 @@ import java.util.Set;
 
 /**
  * Enforces Parsley's empty configuration surface: there are no {@code parsley.*} keys. The startup
- * topology checks always run and always fail fast (see {@link ParsleyProcessor}), and topology-epoch
- * coordination was removed from the causal protocol outright (joins need zero coordination), so every
- * behaviour that once had a key is now unconditional.
+ * topology checks always run and always fail fast (see {@link ParsleyProcessor}), and the causal
+ * protocol carries no topology-epoch coordination at all (joins need zero coordination), so every
+ * behaviour is unconditional.
  *
  * <p>Causal delivery has exactly two dispositions, never a third: a record is <strong>forwarded</strong>
  * once its consumed dependencies are satisfied (a dependency on a coordinate this node does not
@@ -28,7 +28,7 @@ import java.util.Set;
  */
 final class ParsleyConfig {
 
-    /** The classpath resource earlier releases read configuration from, now scanned only to reject. */
+    /** The classpath resource a deployment can supply properties in; scanned only to reject. */
     static final String RESOURCE = "parsley.properties";
 
     /** The reserved key prefix; any key under it fails startup. */
@@ -39,12 +39,10 @@ final class ParsleyConfig {
 
     /**
      * Fails startup when any {@code parsley.*} key is present in {@code runtimeProps} or in a
-     * {@code parsley.properties} classpath resource. Both layers are scanned so a stale deployment
-     * learns about the removal at startup, whichever way it used to supply the key. There is no
-     * migration path because there is nothing left to configure: the startup topology checks (the
-     * former {@code parsley.topology.validation}) are always on, and topology-epoch coordination
-     * (the former {@code parsley.coordination.*} keys) was removed — behaviour is strictly more
-     * available without it.
+     * {@code parsley.properties} classpath resource. Both layers are scanned so a deployment
+     * carrying such a key learns at startup, whichever way it supplies the key. There is nothing to
+     * configure: the startup topology checks are always on, and the causal protocol runs no
+     * topology-epoch coordination, which makes it strictly more available.
      *
      * @param runtimeProps the configuration handed to {@code CausalStreams}
      * @throws IllegalStateException naming every {@code parsley.*} key found
@@ -54,11 +52,10 @@ final class ParsleyConfig {
         collectParsleyKeys(loadClasspathProperties(), offending);
         collectParsleyKeys(runtimeProps, offending);
         if (!offending.isEmpty()) {
-            throw new IllegalStateException("removed configuration " + offending + ": Parsley has no "
-                    + "configuration keys. The startup topology checks are always on and always fail "
-                    + "fast (the former parsley.topology.validation), and topology-epoch coordination "
-                    + "was removed from the causal protocol (the former parsley.coordination.* keys — "
-                    + "joins need zero coordination). Delete every parsley.* key; no replacement "
+            throw new IllegalStateException("unsupported configuration " + offending + ": Parsley has "
+                    + "no configuration keys. The startup topology checks are always on and always "
+                    + "fail fast, and the causal protocol carries no topology-epoch coordination "
+                    + "(joins need zero coordination). Delete every parsley.* key; no replacement "
                     + "configuration is needed.");
         }
     }

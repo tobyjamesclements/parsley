@@ -238,8 +238,8 @@ class CausalReconvergenceTopologyTest {
      * A null message carrying no business record still genuinely advances completeness — visible in a
      * later, unrelated record's own outgoing stamp, not merely in admission.
      *
-     * <p>A record's own dependency claim always self-satisfies (see the previous test), so a null message
-     * can no longer be demonstrated by "releasing a held record". What remains real and testable: a
+     * <p>A record's own dependency claim always self-satisfies (see the preceding test), so a null
+     * message cannot be demonstrated by "releasing a held record". What is testable instead: a
      * completely unrelated record — one whose own declared deps say nothing about {@code ANC} at all —
      * still has {@code ANC} appear in its own outgoing stamp, because completeness max-merges every
      * channel's knowledge, including a channel that has only ever received a null message, never a

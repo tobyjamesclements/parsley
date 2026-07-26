@@ -14,8 +14,8 @@ final class ParsleyStores {
     /**
      * Key under which the frontier state is stored in the processor's frontier state store: a single
      * value holding the whole {@link ParsleyFrontierState} (the contiguous frontier clock, the
-     * per-channel clocks, and the rest of the node's persisted causal metadata). Renamed from the
-     * former opaque {@code "f"} in the same break that gave the value a wire-version byte.
+     * per-channel clocks, and the rest of the node's persisted causal metadata). The key spells out
+     * the word rather than abbreviating it; the value it addresses carries a wire-version byte.
      */
     static final String FRONTIER_KEY = "frontier";
 

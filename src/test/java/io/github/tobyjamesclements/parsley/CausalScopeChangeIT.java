@@ -102,8 +102,9 @@ class CausalScopeChangeIT {
         awaitGroupEmpty(bootstrap, appId);
 
         // The re-added input's committed offsets are gone (offset expiry / manual delete while the
-        // causal state survives) — the exact shape that previously either refused to start or, keyed
-        // on blob presence alone, replayed C3's history as live (#21).
+        // causal state survives) — the shape that a start-up refusing an un-committed input, or a
+        // first-start test keyed on blob presence alone, gets wrong: the latter replays C3's
+        // history as live.
         try (Admin admin = Admin.create(Map.of("bootstrap.servers", bootstrap))) {
             admin.deleteConsumerGroupOffsets(appId, Set.of(new TopicPartition(C3, 0))).all().get();
         }

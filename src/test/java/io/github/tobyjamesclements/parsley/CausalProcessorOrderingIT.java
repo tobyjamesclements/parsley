@@ -45,8 +45,8 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
  * {@link CausalClock#from}) must not reach the output topic before the {@code PREREQ} record
  * it depends on — even when it is produced first.
  *
- * <p>This replaces the deleted standalone producer/consumer round-trip ITs: ordering is now a
- * property of the Streams processor, exercised here through the stateless edge operations.
+ * <p>Ordering is a property of the Streams processor rather than of the edge API, so it is proved
+ * here at the processor, driven through the stateless edge operations a plain client uses.
  */
 @Testcontainers(disabledWithoutDocker = true)
 class CausalProcessorOrderingIT {

@@ -38,13 +38,13 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import static java.util.Objects.requireNonNull;
 
 /**
- * The finding-(iii) shared-sink scenario, closed by the two-branch gate : app A both
- * produces to and consumes the {@code shared} topic, which app B also produces to. A claim about
- * <em>B's</em> record on the shared topic — a genuine cause A may not have delivered yet — used to
- * be vacuously satisfied by the gate-side own-sink strip ("it's my sink, strip the claim"), the
- * exact blindspot that made the strip unsound. Under the two-branch gate the shared topic is
- * simply one of A's consumed channels: the claim gates on A's own frontier like any other
- * dependency, so A delivers B's record before any effect derived from it.
+ * The shared-sink scenario the two-branch gate closes: app A both produces to and consumes the
+ * {@code shared} topic, which app B also produces to. A gate-side own-sink strip ("it's my sink,
+ * strip the claim") would satisfy a claim about <em>B's</em> record on that topic vacuously, even
+ * though it is a genuine cause A may not have delivered yet — the blindspot that makes such a strip
+ * unsound. Under the two-branch gate the shared topic is simply one of A's consumed channels: the
+ * claim gates on A's own frontier like any other dependency, so A delivers B's record before any
+ * effect derived from it.
  *
  * <p>Topology: {@code ty} → app B → {@code shared}; app C consumes {@code shared} and re-keys
  * B-derived records to {@code c1}; app A consumes {@code c1} and {@code shared}, produces

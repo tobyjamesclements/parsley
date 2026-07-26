@@ -41,7 +41,7 @@ class CausalStreamsCloseTest {
     }
 
     /**
-     * B2 regression: an instance that owns no tasks (more instances than partitions, or every task
+     * An instance that owns no tasks (more instances than partitions, or every task
      * migrated away — each unregisters on its own close) sits {@code RUNNING}, so the dead-instance
      * escape never fires, yet has no registered task that could ever report drained. It must still close
      * at once: there is nothing buffered to strand.
@@ -50,7 +50,8 @@ class CausalStreamsCloseTest {
     void drainWaitReturnsImmediatelyOnARunningInstanceWithZeroRegisteredTasks() {
         ParsleyQuiesce quiesce = new ParsleyQuiesce();
         quiesce.requestQuiesce();
-        // No task ever registered, and the instance is healthy (RUNNING) — the pre-fix hang.
+        // No task ever registered, and the instance is healthy (RUNNING) — the shape that would
+        // hang a drain wait that insisted on a registered task reporting drained.
 
         assertTimeoutPreemptively(TEST_TIMEOUT,
                 () -> CausalStreams.awaitDrain(quiesce, () -> KafkaStreams.State.RUNNING),

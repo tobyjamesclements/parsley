@@ -98,8 +98,8 @@ class ParsleyOwnSinkAncestryIT {
                 input.send(CausalClock.empty().stamp(new ProducerRecord<>(C1, "k", "hello"))).get();
             }
 
-            // The wire evidence (#22): the derived business record's stamp claims the shared
-            // record's coordinate — the ancestor the old stamp-side strip erased.
+            // The wire evidence: the derived business record's stamp claims the shared record's
+            // coordinate — the ancestor a stamp-side own-sink strip would erase.
             List<ConsumerRecord<String, String>> sharedRecords = new ArrayList<>();
             List<ConsumerRecord<String, String>> derivedRecords = new ArrayList<>();
             try (KafkaConsumer<String, String> consumer = new KafkaConsumer<>(consumerConfig(bootstrap))) {

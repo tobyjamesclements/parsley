@@ -31,16 +31,16 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * Proves the headline capability the max-merge redesign exists to enable: a node directly consuming both
- * an ancestor topic and its own descendant delivers correctly, where the old {@code
- * ParsleyVectorClock#intersectMin} gate made this a documented, permanent deadlock (retired restriction: "no
- * ancestor with its own descendant", {@code docs/internals/causal-consistency.md}) — the tightest possible
- * shape of it: a single node directly self-consuming its own sink.
+ * Proves the headline capability max-merge exists to enable: a node directly consuming both an
+ * ancestor topic and its own descendant delivers correctly, in the tightest possible shape of it —
+ * a single node directly self-consuming its own sink. A gate folding channel clocks at an
+ * intersection minimum, admitting a coordinate only once every channel confirms it, deadlocks
+ * permanently on this shape, because the descendant channel can never confirm the ancestor
+ * coordinate the descendant is derived from.
  *
  * <p>This also exercises relay convergence on a self-loop: a node observing its own null message
- * reflected back at it must not relay it onward again (an infinite loop this test caught during
- * development, historically closed by an own-coordinate strip). Convergence now rests on the
- * knowledge-based relay rule — a reflected marker's carried clock is this node's own past stamp,
+ * reflected back at it must not relay it onward again, or it loops forever. Convergence rests on
+ * the knowledge-based relay rule — a reflected marker's carried clock is this node's own past stamp,
  * dominated by its current {@code stamp()}, so it teaches nothing and the relay settles — and the
  * self-consumed sink's claims are genuinely gated by the two-branch gate's consumed branch.
  * Under max-merge this works because a node's own registered channel for the looped-back topic

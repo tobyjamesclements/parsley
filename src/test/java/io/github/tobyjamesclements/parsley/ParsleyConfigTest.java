@@ -15,8 +15,8 @@ import static io.github.tobyjamesclements.parsley.ParsleyTestFixtures.message;
  * Tests {@link ParsleyConfig}'s enforcement of the empty configuration surface: Parsley has no
  * {@code parsley.*} keys at all (causal delivery is strictly fail-closed and the startup topology
  * checks are always on, so there is nothing to configure), and
- * {@link ParsleyConfig#requireNoParsleyKeys(Properties)} fails startup loudly when a stale
- * deployment still carries one.
+ * {@link ParsleyConfig#requireNoParsleyKeys(Properties)} fails startup loudly when a deployment
+ * carries one.
  */
 class ParsleyConfigTest {
 
@@ -38,14 +38,15 @@ class ParsleyConfigTest {
     }
 
     /**
-     * Every removed {@code parsley.*} key fails loudly at startup: the removed
-     * {@code parsley.topology.validation} modes (the checks are now always on), the removed
-     * {@code parsley.coordination.*} subsystem (joins need zero coordination), and any unknown
-     * {@code parsley.*} key alike wire nothing — and a key that wires nothing must not be accepted
-     * quietly, or an operator who believes it took effect would never learn otherwise.
+     * Every {@code parsley.*} key fails loudly at startup, whatever it looks like: a
+     * {@code parsley.topology.validation} mode (the checks are unconditionally on), a
+     * {@code parsley.coordination.*} key (joins need zero coordination, so the protocol runs
+     * none), and any unrecognised {@code parsley.*} key alike wire nothing — and a key that wires
+     * nothing must not be accepted quietly, or an operator who believes it took effect would never
+     * learn otherwise.
      *
-     * Asserts each key alone throws {@code IllegalStateException} naming both the key and the
-     * removal.
+     * Asserts each key alone throws {@code IllegalStateException} naming both the key and the empty
+     * configuration surface.
      */
     @Test
     void rejectsEveryParsleyKey() {
@@ -62,9 +63,9 @@ class ParsleyConfigTest {
                     "the key " + key + " must fail startup loudly");
             assertTrue(message(thrown).contains(key),
                     "the failure must name the offending key: " + message(thrown));
-            assertTrue(message(thrown).contains("removed"),
-                    "the failure must present the empty surface as a removal, not an unknown-key "
-                            + "typo: " + message(thrown));
+            assertTrue(message(thrown).contains("no configuration keys"),
+                    "the failure must state that the configuration surface is empty, not read as an "
+                            + "unknown-key typo: " + message(thrown));
         }
     }
 

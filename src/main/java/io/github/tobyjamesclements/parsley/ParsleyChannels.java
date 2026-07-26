@@ -465,10 +465,11 @@ final class ParsleyChannels {
      * (monotonic: the stored clock never decreases) and persists. A first call for a channel
      * initialises it from {@code clock}.
      *
-     * <p>A channel's entry no longer holds {@link #completeness()} down to an intersection minimum —
-     * {@link #completeness()} is a plain max-merge now, so a channel with nothing advertised simply
-     * contributes nothing rather than excluding a coordinate every other channel has confirmed. What a
-     * seeded-but-silent channel entry still does is give {@link #rescope} something to check against.
+     * <p>A channel's entry never holds {@link #completeness()} down: {@link #completeness()} is a
+     * plain max-merge, so a channel with nothing advertised contributes nothing rather than
+     * excluding a coordinate every other channel has confirmed, as an intersection minimum would.
+     * What a seeded-but-silent channel entry does is give {@link #rescope} something to check
+     * against.
      */
     void channelUpdate(Uuid topicId, int partition, ParsleyVectorClock clock) {
         CoordKey key = new CoordKey(topicId, partition);

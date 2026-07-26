@@ -34,7 +34,8 @@ final class StoreBackedBufferStore<K, V> implements ParsleyBufferStore<K, V> {
         this.store = store;
         this.serializer = serializer;
         // Seed the sequence past anything that survived a previous run, and count what is held, in a
-        // single pass — this replaces the old explicit "restore held records" step.
+        // single pass — the restored changelog contents are the held set, so no separate restore
+        // step is needed.
         long maxSequence = -1;
         int count = 0;
         try (KeyValueIterator<Long, byte[]> all = store.all()) {

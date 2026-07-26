@@ -33,9 +33,9 @@ import static io.github.tobyjamesclements.parsley.ParsleyTestFixtures.message;
  * (fail-closed), so the L2 constructor classifies every restored entry: a current input's record
  * restores unchanged; a recreated input's old-incarnation record is purged (the incarnation
  * is deleted, its history can never be delivered anywhere); a removed-but-alive input's records
- * fail init loudly with the redeclare-or-reset remedies. Before this rule, the removed-input case
- * was an unrecoverable crash loop: the restore pass proved the record deliverable, and the fetch
- * died on the missing serde with an untyped exception, every restart, forever.
+ * fail init loudly with the redeclare-or-reset remedies. Restoring the removed-input case without
+ * classifying it is an unrecoverable crash loop: the restore pass proves the record deliverable,
+ * and the fetch then dies on the missing serde with an untyped exception, every restart, forever.
  *
  * <p>Driven as two {@link ParsleyProcessor} lifetimes over the same physical stores (the
  * {@link MockProcessorContext} + {@link TestKeyValueStore} restart harness of
@@ -61,12 +61,12 @@ class ParsleyHeldRecordDispositionTest {
 
     /**
      * A held record whose source input was removed from the declared set fails init loudly, naming
-     * the topic, the per-topic count, and both remedies (redeclare the input, or full reset) —
-     * replacing the pre-disposition behaviour, where init succeeded and the drain then died
+     * the topic, the per-topic count, and both remedies (redeclare the input, or full reset).
+     * Without the init-time disposition check init would succeed and the drain would then die
      * fetching the record through the missing serde ("no ParsleySource registered"), an untyped
-     * crash loop only a full reset could clear.
+     * crash loop only a full reset clears.
      *
-     * Asserts init throws the actionable {@link IllegalStateException}, not the old serde failure.
+     * Asserts init throws the actionable {@link IllegalStateException}, not the serde failure.
      */
     @Test
     void aHeldRecordFromARemovedInputFailsInitWithTheRemedies() {
@@ -84,7 +84,7 @@ class ParsleyHeldRecordDispositionTest {
         assertTrue(message(thrown).contains("redeclare") && message(thrown).contains("reset"),
                 "the failure must state both remedies: " + message(thrown));
         assertFalse(message(thrown).contains("no ParsleySource registered"),
-                "the failure must be the disposition's actionable message, not the old untyped "
+                "the failure must be the disposition's actionable message, not the untyped "
                         + "serde crash: " + message(thrown));
     }
 

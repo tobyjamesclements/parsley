@@ -367,14 +367,12 @@ class ParsleyProcessorsTopologyTest {
      * actually handling — verified here across two independently-delivered records on different
      * source topics, each of which must report its own coordinate, never the other's.
      *
-     * <p>An earlier version of this test constructed a record that declared a dependency on another
-     * (to prove metadata is correct even when delivery is deferred and later cascade-released). That
-     * construction no longer holds a record at all: a record's own declared dependency is folded into
-     * its own channel before its own gate check runs, so under single-witness merge it always proves
-     * itself immediately — there is no longer a "held, then cascade-released" case reachable from a
-     * normal record's own dependency at this level. The metadata-correctness property itself is
-     * unaffected by that change and is still verified here, just via two records that each deliver on
-     * their own.
+     * <p>The two records each deliver on their own rather than one deferring on the other, because a
+     * record declaring a dependency on another cannot be held at this level: a record's own declared
+     * dependency is folded into its own channel before its own gate check runs, so under
+     * single-witness merge it always proves itself immediately. There is no "held, then
+     * cascade-released" case reachable from a normal record's own dependency here, and the
+     * metadata-correctness property does not need one.
      */
     @Test
     void recordMetadataDuringDeliveryReportsEachRecordsOwnSource() {
@@ -564,14 +562,11 @@ class ParsleyProcessorsTopologyTest {
         }
     }
 
-    // bufferSerdesAreResolvedAndInvokedWithTheSourceTopic formerly forced buffering via an unmet
-    // declared dependency to verify the buffer value serde resolves using the record's source topic.
-    // That construction is no longer possible: a record's own declared dependency is folded into its
-    // own channel before its own gate check runs, so under single-witness merge it always proves
-    // itself immediately — there is no longer a way to force genuine buffering via a normal record's
-    // own dependency at this level. The property itself (serde resolved by source topic, not the
-    // changelog name) is still real and still matters (schema-registry Avro subjects depend on it);
-    // it now has a direct, lower-level test that doesn't depend on genuine core-level buffering:
+    // The buffer value serde resolves using the record's source topic rather than the changelog
+    // name, which schema-registry Avro subjects depend on. That property is not tested at this
+    // level, because genuine buffering cannot be forced here: a record's own declared dependency is
+    // folded into its own channel before its own gate check runs, so under single-witness merge it
+    // always proves itself immediately. The direct, lower-level test is
     // StoreBackedBufferStoreTest.addResolvesTheValueSerdeUsingTheRecordsSourceTopic.
 
     /**
@@ -1370,8 +1365,7 @@ class ParsleyProcessorsTopologyTest {
      * A non-emitting delegate produces one protocol null message per delivered input, and that null message
      * reuses the triggering record's key so it routes, through whatever partitioner the business
      * records use, to the same partition the record's output would have landed on. With a null key
-     * (the previous behaviour) a sink partitioner would send it to an arbitrary partition and a
-     * downstream task could starve.
+     * a sink partitioner would send it to an arbitrary partition and a downstream task could starve.
      *
      * Asserts the emitted null message carries the triggering key ("alpha"), a null value, and the
      * null message marker header.

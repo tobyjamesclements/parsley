@@ -18,9 +18,9 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * never obliges), but never the delivery gate — a peer's claim that a coordinate was delivered <em>there</em>
  * is not proof it was delivered <em>here</em>, so a held record releases only once this node's own
  * contiguous frontier genuinely reaches its dependencies. Gating on the max-merged completeness
- * used to let a null message claiming a sibling channel's coordinate release a held record before
- * this node had itself delivered that cause — an effect-before-cause delivery to the delegate,
- * violating the causal-order guarantee for a processor subscribing to both topics.
+ * instead would let a null message claiming a sibling channel's coordinate release a held record
+ * before this node had itself delivered that cause — an effect-before-cause delivery to the
+ * delegate, violating the causal-order guarantee for a processor subscribing to both topics.
  */
 class ParsleyGossipTest {
 
@@ -131,7 +131,7 @@ class ParsleyGossipTest {
      * reflecting this node's own produced coordinate back at it — on a channel inside the consumed
      * trigger scope, while the append itself is still above the frontier — at or below the
      * {@code ownOutputs} clock teaches nothing (this node produced that position), so the relay
-     * signal settles {@code false} on first sight, without the old stamp-side own-sink strip. The
+     * signal settles {@code false} on first sight with no stamp-side own-sink strip involved. The
      * unstripped claim still folds into the channel clock and rides the outbound stamp. A
      * claim on a non-consumed sink would be filtered by the trigger scope before ownOutputs even
      * mattered; this test pins the domination itself.

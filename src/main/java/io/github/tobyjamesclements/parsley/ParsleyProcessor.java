@@ -254,10 +254,10 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
      * cached for the processor's whole lifetime.
      *
      * <p>Caching is sound because exactly one {@link Processor} instance ever touches this task's
-     * causal state stores — there is no other processor node sharing them. (An earlier design
-     * anticipated such a sharer and rebuilt the core — a full buffer scan, candidate re-index, and
-     * frontier-blob re-persist — at the top of every operation to keep two hypothetical instances
-     * coherent; that made every operation O(buffer-depth) for a sharer that was never built.)
+     * causal state stores — there is no other processor node sharing them. Rebuilding the core at
+     * the top of every operation to keep hypothetical sharers coherent — a full buffer scan,
+     * candidate re-index, and frontier-blob re-persist each time — would make every operation
+     * O(buffer-depth) for a sharer that cannot exist.
      */
     private ParsleyCausalBroadcast<KIn, VIn> causalBroadcast() {
         return causalBroadcast;

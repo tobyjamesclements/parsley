@@ -112,7 +112,7 @@ class ParsleyCausalBroadcastTest {
     }
 
     /**
-     * Regression guard for the opposite case the fix must preserve: a dependency on a coordinate this
+     * Guards the opposite case from the ignore branch: a dependency on a coordinate this
      * core <em>does</em> consume but has not yet observed still blocks. Scoping must not collapse
      * "behind on a coordinate I own" into "vacuously satisfied".
      *

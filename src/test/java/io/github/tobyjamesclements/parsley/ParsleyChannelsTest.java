@@ -61,8 +61,9 @@ class ParsleyChannelsTest {
      * delivery: a later offset forwards while an earlier one is still held) must be claimed by the
      * outbound stamp even though the frontier cannot reach it: an output emitted from that delivery
      * is causally after it, and a downstream consumer of both topics gates only on what the stamp
-     * claims. The frontier (the gate's view) and completeness (the interim floor-publication view)
-     * must both stay below the gap — only {@code stamp()} carries the above-gap claim, exactly the
+     * claims. The frontier (the gate's view) and completeness (the transitive-ancestry view the
+     * stamp merges) must both stay below the gap — only {@code stamp()} carries the above-gap
+     * claim, exactly the
      * split the stamp draws for {@code ownOutputs}.
      *
      * Asserts the stamp claims the above-gap offset while frontier and completeness stay at the

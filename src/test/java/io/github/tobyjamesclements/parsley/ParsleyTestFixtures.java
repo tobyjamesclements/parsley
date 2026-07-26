@@ -8,8 +8,8 @@ import java.util.function.LongSupplier;
 import static java.util.Objects.requireNonNull;
 
 /**
- * The test fixture factory for the two protocol classes whose convenience constructors used to
- * live in main: {@link ParsleyChannels} instances over an in-memory store double, and
+ * The test fixture factory for the two protocol classes' convenience construction shapes:
+ * {@link ParsleyChannels} instances over an in-memory store double, and
  * {@link ParsleyCausalBroadcast} instances with the predicate/destroyed-set parameters defaulted.
  * Production code always uses the full constructors directly (the task's changelog-backed store,
  * every parameter explicit); these shapes exist only for tests, so they live here.

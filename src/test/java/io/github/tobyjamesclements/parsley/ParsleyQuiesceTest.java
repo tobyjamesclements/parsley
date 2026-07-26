@@ -19,7 +19,7 @@ class ParsleyQuiesceTest {
      * requested, true once requested. An instance that owns no tasks (more instances than partitions, or
      * every task migrated away) holds nothing that could be stranded, so it is trivially safe to close —
      * requiring a registered task here would hang {@link CausalStreams#close()} forever on such an
-     * instance (the B2 regression).
+     * instance.
      *
      * Asserts {@code isSafeToClose} is false before requesting quiesce and true after, with no task
      * registered.

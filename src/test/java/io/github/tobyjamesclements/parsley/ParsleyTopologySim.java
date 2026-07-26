@@ -658,7 +658,8 @@ final class ParsleyTopologySim {
             return;
         }
         // Fault-mode slots: when a mode is off its slot falls through to the poll below, drawing
-        // exactly what the pre-fault-mode scheduler drew — legacy seeds keep their schedules.
+        // exactly what a scheduler with no fault modes at all draws, so a seed recorded without
+        // them keeps its schedule.
         if (action == 3 && crashesEnabled) {
             crash(randomNode().name);
             return;
@@ -709,7 +710,7 @@ final class ParsleyTopologySim {
                     // Liveness guard: a settle that will not terminate is failed fast, with the
                     // seed, rather than left to spin — and its verdict (relay loop vs supercritical
                     // topology) defers to the same classifier the record-count guard uses, so a
-                    // tight timeout can no longer mislabel a supercritical topology as a relay bug.
+                    // tight timeout cannot mislabel a supercritical topology as a relay bug.
                     // The counter only gates the clock read; it draws nothing, so a settling run's
                     // schedule is untouched.
                     if ((++polls & 0xFF) == 0L && System.nanoTime() > deadlineNanos) {
@@ -772,7 +773,7 @@ final class ParsleyTopologySim {
                 "ext-" + externalSequence++, ParsleyVectorClock.empty(), false, Set.of()));
     }
 
-    /** The single-partition legacy key is the historical constant {@code "k"}. */
+    /** At one partition the key is the fixed constant {@code "k"}, which keeps recorded traces stable. */
     private String keyOf(int keyIndex) {
         return partitions == 1 ? "k" : "k" + keyIndex;
     }
