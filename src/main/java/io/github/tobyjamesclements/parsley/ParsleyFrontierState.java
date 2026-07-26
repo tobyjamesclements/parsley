@@ -20,23 +20,23 @@ import java.util.Map;
  * <p>The seven components, in wire order:
  * <ul>
  *   <li>{@link #frontier} — the node's contiguous delivered frontier clock, the only clock the
- *       delivery gate consults (I4);
+ *       delivery gate consults;
  *   <li>{@link #channels} — per input channel {@code (topicId, partition)}, the dependencies
  *       advertised on it, max-merged into the outbound stamp by {@code completeness()};
  *   <li>{@link #highestReceived} — per input channel, the highest offset ever physically received,
  *       making {@code bridge()}'s consumer-skip detection exact across a restart;
  *   <li>{@link #carriedAncestry} — causal past re-homed from coordinates that have left the node's
- *       scope, kept so the stamp keeps dominating it (I9); stamp-side only;
+ *       scope, kept so the stamp keeps dominating it; stamp-side only;
  *   <li>{@link #declaredInputs} — the input topics (name to UUID) this state was written under,
  *       which makes a scope change detectable at the next init;
- *   <li>{@link #ownOutputs} — the node's own acknowledged sink positions (I3, I8); stamp-side only;
+ *   <li>{@link #ownOutputs} — the node's own acknowledged sink positions; stamp-side only;
  *   <li>{@link #declaredSinks} — the sink topics (name to UUID) the own-outputs clock was written
  *       under, the heal set for a topic that is no longer a sink.
  * </ul>
  *
  * <p>The layout carries a leading {@link #WIRE_VERSION} byte and hard-fails on a mismatch, exactly
  * as {@link ParsleyVectorClock} and {@link ParsleySerializer} do. There is no cross-version upgrade
- * path before 1.0 (O6): an unreadable version faults at init rather than being reinterpreted, and a
+ * path before 1.0: an unreadable version faults at init rather than being reinterpreted, and a
  * blob written by an older layout (which had no version byte) is rejected rather than mis-parsed.
  * Every section is always written and always read under a given version; a new field bumps the
  * version rather than appending a trailing-optional section. The forwarded-offset index is

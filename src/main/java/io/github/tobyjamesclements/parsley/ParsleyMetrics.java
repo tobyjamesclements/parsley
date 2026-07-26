@@ -42,11 +42,11 @@ interface ParsleyMetrics {
 
     /**
      * A received record's dependency clock named {@code coordinates} coordinate(s) this node does
-     * not consume — the gate's ignore branch (D1). Ignoring is unconditional and sound: with
-     * transitively complete stamps (I2) carried by unconditional merges (I9), any consumed causal
+     * not consume — the gate's ignore branch. Ignoring is unconditional and sound: with
+     * transitively complete stamps carried by unconditional merges, any consumed causal
      * ancestor of the record is claimed directly in the same clock, so an unconsumed entry only
-     * ever proxies ancestry the clock already states. Counted for observability — this replaces
-     * the retired I7 fail-fast (D7). Sustained counts are routine in topologies whose consumers
+     * ever proxies ancestry the clock already states. Counted for observability rather than
+     * treated as a fault. Sustained counts are routine in topologies whose consumers
      * have narrower scopes than their ancestors' stamps; the sensor exists so a genuinely
      * unexpected out-of-scope flow (a cross-wired deployment, a co-partitioning mistake a strict
      * startup validation would also flag) is visible without log-scraping.
@@ -66,17 +66,17 @@ interface ParsleyMetrics {
 
     /**
      * An inbound clock claimed one of this node's own sink coordinates above the {@code ownOutputs}
-     * clock, with pending producer acks already folded (I8). A truthful reflected claim can only name
+     * clock, with pending producer acks already folded. A truthful reflected claim can only name
      * a position this node itself produced, so a claim above the own-output view means that view is
      * stale beyond what the init-time end-offset seed healed, or a peer's stamp is not truthful.
-     * Diagnostic only — never a failure (O3 dissolved): the gate treats the claim like any other,
+     * Diagnostic only, never a failure: the gate treats the claim like any other,
      * and a stale view only ever delays delivery, never reorders it.
      */
     void recordReflectedClaimAboveOwnOutputs();
 
     /**
      * Reports how many held records have waited beyond the stall threshold on a consumed-channel
-     * dependency above that channel's highest physically received offset (T3.0 A9) — the signature
+     * dependency above that channel's highest physically received offset — the signature
      * of a claim nothing received so far can satisfy, whose delay is unbounded if the claimed
      * channel stays silent. Fail-safe, never unsafe; reported as a gauge so a persistent stall is
      * visible without log-scraping.

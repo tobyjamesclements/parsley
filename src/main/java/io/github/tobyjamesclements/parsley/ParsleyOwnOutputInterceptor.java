@@ -63,7 +63,7 @@ public final class ParsleyOwnOutputInterceptor implements ProducerInterceptor<Ob
 
     /**
      * Resolves a tracked send: folds a successful ack's committed coordinate into the registry's
-     * per-coordinate max, then clears its pending count (T2.1 — exactly one callback per send,
+     * per-coordinate max, then clears its pending count (exactly one callback per send,
      * abort included, failures carrying a non-null exception). Runs on the producer network
      * thread; everything it touches is the registry's concurrent state. A null {@code metadata}
      * (no coordinate to resolve) is counted as a failure so a crossing wait releases loudly

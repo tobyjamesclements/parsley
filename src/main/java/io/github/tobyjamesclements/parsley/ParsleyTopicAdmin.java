@@ -53,7 +53,8 @@ interface ParsleyTopicAdmin extends AutoCloseable {
     /**
      * Returns each partition's end offset (the next offset to be appended) for {@code topic} —
      * the init-time seed for the {@code ownOutputs} clock claims {@code endOffset - 1}, the last
-     * appended position, per sink partition (D2/O1; sound by I8).
+     * appended position, per sink partition. Naming a real appended position is what makes the seed
+     * safe: it can only delay a downstream delivery, never reorder one.
      *
      * @param topic the topic to look up
      * @return partition → end offset; must include every partition of the topic

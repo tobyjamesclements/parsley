@@ -28,7 +28,7 @@ import java.util.function.LongSupplier;
  * node <em>consumes</em> must be covered by this node's own contiguous frontier, never by a position
  * a peer merely claims (see {@link #isDeliverable}). A dependency on any other coordinate is ignored,
  * unconditionally, and counted by a metric rather than treated as a failure; this is sound because
- * transitively complete stamps (I2) carried by unconditional merges (I9) claim every consumed
+ * transitively complete stamps carried by unconditional merges claim every consumed
  * ancestor directly in the same clock. There is no eviction, no buffer limit, and no timeout: an
  * unsatisfied record stays in the changelog-backed buffer, and a record that can be proven
  * impossible to evaluate (an undecodable payload or header) fails the task fast rather than being
@@ -42,7 +42,6 @@ import java.util.function.LongSupplier;
  * and persists the {@code "frontier"} value before removing the record from {@link #buffer}, so a crash can
  * only tear toward a harmless at-least-once redelivery. The drain uses a {@link ParsleyCandidateIndex}
  * to check only records waiting on the advanced coordinate, cascading per released record.
- * Invariants: I1, I2, I9.
  *
  * @param <K> the record key type
  * @param <V> the record value type
@@ -55,39 +54,41 @@ final class ParsleyCausalBroadcast<K, V> {
     private final ParsleyCandidateIndex candidateIndex;
     private final ParsleyMetrics metrics;
     private final LongSupplier clock;
-    // The stalled-dependency count last reported by reportHeldDependencyStalls (A9), so the WARN log
+    // The stalled-dependency count last reported by reportHeldDependencyStalls, so the WARN log
     // fires on change rather than repeating every tick while a stall persists.
     private int lastReportedStalls;
 
     // The single owner of all persisted causal metadata: the contiguous frontier clock, the channel
     // clocks, and the forwarded-offset index. completeness() and channel state live here;
     // channels.normalize strips the self-cycle from every inbound dependency clock before the gate
-    // sees it (I5).
+    // sees it.
     private final ParsleyChannels channels;
 
-    // The consumed(c) predicate of the two-branch gate (D1): a registered input channel of this
+    // The consumed(c) predicate of the two-branch gate: a registered input channel of this
     // task, on the partition this task owns. A dependency on a consumed coordinate must be
     // satisfied by this node's own contiguous frontier (local delivery, never hearsay); a
     // dependency on any other coordinate falls to the gate's IGNORE branch — counted by the
-    // out-of-scope-ignored metric, never a failure (the I7 fail-fast is retired, D7). The ignore
-    // is unconditional and sound by the transitivity theorem: I2 + I9 guarantee any consumed
-    // causal ancestor of a record is claimed directly in that record's own clock, so an unconsumed
-    // entry only ever proxies ancestry the clock already states. Defaults to "everything is
+    // out-of-scope-ignored metric, never a failure. The ignore is unconditional and sound by the
+    // transitivity theorem: because every stamp is transitively complete and every merge is
+    // unconditional, any consumed causal ancestor of a record is claimed directly in that record's
+    // own clock, so an unconsumed entry only ever proxies ancestry the clock already states.
+    // Ignoring therefore costs no ordering that is observable here. Defaults to "everything is
     // consumed" so existing callers/tests that never construct with an explicit predicate are
     // unaffected; ParsleyProcessor passes its real per-task predicate.
     private final ParsleyVectorClock.CoordinatePredicate consumed;
 
-    // Coordinates for a topic THIS NODE ITSELF produces (a registered sink). Feeds only the I8
+    // Coordinates for a topic THIS NODE ITSELF produces (a registered sink). Feeds only the
     // reflected-claim diagnostic (recordReflectedClaims): an inbound claim on an own-sink
     // coordinate ABOVE the ownOutputs clock means the own-output view is stale or a peer's stamp
     // untruthful — worth seeing, never worth failing over. The gate treats a reflected claim like
-    // any other dependency (consumed → gated on local delivery; unconsumed → ignored): the
-    // historical gate-side strip this predicate used to drive died at T3.1 with the two-branch
-    // dispatch — its vacuous satisfaction of claims about OTHER producers' records on a shared
-    // sink topic was finding (iii) — and the stamp-side strip died at T2.3 (#22); relay settling
-    // rests on the I6 knowledge-based rule (ParsleyGossip), where a reflected own claim is
-    // dominated by ownOutputs and so teaches nothing. Defaults to "nothing is ever this node's
-    // own sink"; ParsleyProcessor passes its real per-stage sink-topic predicate.
+    // any other dependency (consumed → gated on local delivery; unconsumed → ignored). Stripping
+    // own-sink coordinates instead, on either the gate side or the stamp side, is unsafe: a shared
+    // sink topic carries other producers' records too, so a gate-side strip would vacuously satisfy
+    // claims about those, and a stamp-side strip would erase a real ancestor for a third party
+    // consuming that sink (#22). Relay settling rests on the knowledge-based relay rule
+    // (ParsleyGossip), where a reflected own claim is dominated by ownOutputs and so teaches
+    // nothing. Defaults to "nothing is ever this node's own sink"; ParsleyProcessor passes its
+    // real per-stage sink-topic predicate.
     private final ParsleyVectorClock.CoordinatePredicate ownSinkTopics;
 
     /**
@@ -97,14 +98,15 @@ final class ParsleyCausalBroadcast<K, V> {
      * on this task's partition is restored unchanged (seed replay, candidate re-index); a
      * <strong>destroyed</strong> source (a recreated input's old UUID, in {@code destroyedSources}) is
      * purged with an INFO log, since delivering it would re-enter a coordinate
-     * {@link ParsleyChannels#rescope} just purged (history loss, never reordering, the one removal I9
-     * permits); an <strong>out-of-scope but alive</strong> source (a removed input's records) fails
-     * init loudly, since it can neither be delivered (no registered serde) nor silently dropped
+     * {@link ParsleyChannels#rescope} just purged (history loss, never reordering, the one removal
+     * the unconditional merge permits); an <strong>out-of-scope but alive</strong> source (a removed
+     * input's records) fails init loudly, since it can neither be delivered (no registered serde)
+     * nor silently dropped
      * (fail-closed), with redeclare-or-reset remedies in the message.
      *
      * @param consumed         the consumed(c) gate predicate: an input channel of this task on the
      *                         partition it owns; a dependency elsewhere is ignored with a metric
-     * @param ownSinkTopics    coordinates this node produces; feeds only the I8 reflected-claim
+     * @param ownSinkTopics    coordinates this node produces; feeds only the reflected-claim
      *                         diagnostic, never the gate or the folds
      * @param destroyedSources old UUIDs of inputs recreated across the restart, driving the disposition
      */
@@ -151,7 +153,7 @@ final class ParsleyCausalBroadcast<K, V> {
         }
         if (!purgedCoordinates.isEmpty()) {
             log.info("Purged {} held record(s) produced by destroyed source incarnation(s) — the "
-                    + "recreated input's old records are deleted history, never delivered (E1): {}",
+                    + "recreated input's old records are deleted history, never delivered: {}",
                     purgedCoordinates.size(), purgedCoordinates);
         }
         // Replay receive()'s first-sighting seed for every restored held record's source coordinate,
@@ -208,8 +210,8 @@ final class ParsleyCausalBroadcast<K, V> {
         // Replay skip guard: a record this node has already delivered (at or below the contiguous
         // frontier, or still marked in the forwarded index) must not reach the delegate a second
         // time. Routine while an added input's re-fetched prefix replays past the carried-ancestry
-        // seed (ParsleyChannels#rescope — "skip what you already ignored", T3.0 A5); otherwise the
-        // fail-safe net for a redelivery exactly_once_v2 should make impossible (A11). Checked
+        // seed (ParsleyChannels#rescope — "skip what you already ignored"); otherwise the
+        // fail-safe net for a redelivery exactly_once_v2 should make impossible. Checked
         // first: an already-delivered record must skip before any of the ordinary receive
         // bookkeeping below re-evaluates it. The L1 receive bookkeeping still runs (it keeps
         // highestReceived exact for bridge()'s skip detection; on an already-delivered offset it
@@ -239,11 +241,11 @@ final class ParsleyCausalBroadcast<K, V> {
             propagate(out, message.topicId(), message.partition());
         }
 
-        // The gate's ignore branch (D1), counted once per received record: every normalised
-        // dependency coordinate this node does not consume is ignored — sound by I2 + I9 (a
+        // The gate's ignore branch, counted once per received record: every normalised
+        // dependency coordinate this node does not consume is ignored — sound because a
         // consumed causal ancestor is always claimed directly in this same clock, so the entry is
-        // a proxy for ancestry the clock already states) — and surfaces only as a metric, never a
-        // failure (the I7 fail-fast is retired, D7).
+        // a proxy for ancestry the clock already states — and surfaces only as a metric, never a
+        // failure.
         ParsleyVectorClock normalized = channels.normalize(message.dependencies(),
                 message.topicId(), message.partition(), message.offset());
         ParsleyVectorClock deps = normalized.retaining(consumed);
@@ -251,7 +253,7 @@ final class ParsleyCausalBroadcast<K, V> {
         if (ignored > 0) {
             metrics.recordOutOfScopeIgnored(ignored);
             log.debug("Ignoring {} out-of-scope dependency coordinate(s) on {}-{} @{} — consumed "
-                    + "ancestry is claimed directly by the same clock (I2/I9)",
+                    + "ancestry is claimed directly by the same clock",
                     ignored, message.topic(), message.partition(), message.offset());
         }
 
@@ -267,8 +269,9 @@ final class ParsleyCausalBroadcast<K, V> {
             // ancestry a downstream node's own gate will verify for itself — never this node's own
             // delivery gate. It happens only at genuine gated delivery, so the stamp never carries
             // a claim sourced from a record that has not actually been forwarded. The WHOLE clock is
-            // folded — own-sink coordinates included (I9: the merge may not strip; the old stamp-side
-            // strip erased real ancestors for third parties sharing the sink, #22).
+            // folded — own-sink coordinates included: the gate may ignore, the merge may not.
+            // Stripping own-sink coordinates here would erase a real ancestor for a third party
+            // consuming the same sink (#22).
             channels.channelUpdate(message.topicId(), message.partition(), message.dependencies());
             out.add(message);
             propagate(out, message.topicId(), message.partition());
@@ -306,7 +309,7 @@ final class ParsleyCausalBroadcast<K, V> {
     private void drainSatisfied(List<ParsleyMessage<K, V>> out) {
         for (ParsleyBufferStore.IndexEntry meta : orderedIndex()) {
             // The delivery gate, on metadata only: every consumed declared coordinate (self-cycle
-            // stripped, unconsumed coordinates ignored per D1) is within this node's own
+            // stripped, unconsumed coordinates ignored) is within this node's own
             // contiguous frontier.
             if (!isDeliverable(meta.dependencies(), meta.topicId(), meta.partition(), meta.offset())) {
                 continue;
@@ -349,7 +352,7 @@ final class ParsleyCausalBroadcast<K, V> {
     /**
      * The L1 module this core runs over — the L3 seam: {@link ParsleyGossip} folds a received null
      * message's offset and carried clock into the same channel state this core gates and stamps
-     * from, and takes the I6 comparison against {@link ParsleyChannels#stamp()}.
+     * from, and takes the relay-rule comparison against {@link ParsleyChannels#stamp()}.
      */
     ParsleyChannels channels() {
         return channels;
@@ -397,9 +400,10 @@ final class ParsleyCausalBroadcast<K, V> {
      * The causal broadcast <em>broadcast</em> request over an unknowable destination — the form every
      * business forward takes ({@link ParsleyProcessorContext#forward}): the sink's partitioner runs
      * downstream of {@code forward()}, so the record's destination coordinate cannot be named at
-     * stamp time and the crossing wait conservatively excludes nothing (full quiescence). Over-waiting
-     * only ever folds <em>more</em> acked positions into the stamp — monotone-sound (I8) — where a
-     * mispredicted same-partition exemption would silently under-claim. See
+     * stamp time and the crossing wait conservatively excludes nothing (full quiescence).
+     * Over-waiting only ever folds <em>more</em> acked positions into the stamp, which can only
+     * delay a downstream delivery rather than reorder one, where a mispredicted same-partition
+     * exemption would silently under-claim. See
      * {@link #broadcast(Record, Set)}.
      *
      * @param record the outbound record to stamp; its headers are not mutated (a fresh header set is
@@ -430,7 +434,8 @@ final class ParsleyCausalBroadcast<K, V> {
      *
      * @param record       the outbound record to stamp; its headers are not mutated
      * @param destinations the coordinates this record will be sent to, excluded from the crossing wait
-     *                     (a send to the record's own destination is covered by partition FIFO and I3);
+     *                     (a send to the record's own destination is covered by partition FIFO and
+     *                     per-producer stamp monotonicity);
      *                     empty when the destination is unknowable, the conservative full-quiescence wait
      * @param <KOut>       the outbound key type
      * @param <VOut>       the outbound value type
@@ -529,7 +534,7 @@ final class ParsleyCausalBroadcast<K, V> {
     }
 
     /**
-     * The causal delivery gate — the two-branch dispatch of D1: every coordinate {@code record}
+     * The causal delivery gate — a two-branch dispatch: every coordinate {@code record}
      * depends on is either <em>consumed</em> here (an input channel of this task, on the partition
      * this task owns), in which case it must be within this node's <em>own</em> contiguous
      * delivered frontier, or it is not, in which case it is ignored
@@ -556,16 +561,16 @@ final class ParsleyCausalBroadcast<K, V> {
     }
 
     /**
-     * The dependency clock actually checked by the gate — the two-branch dispatch of D1 in one
+     * The dependency clock actually checked by the gate — the two-branch dispatch in one
      * expression: L1's normalisation ({@link ParsleyChannels#normalize} — self-cycle removal, a
-     * pure function; I5), then restriction to the coordinates
-     * this node consumes ({@link #consumed}). Every other coordinate falls to the ignore branch:
-     * unconditionally ignored — sound by the transitivity theorem (I2 + I9: a consumed causal
+     * pure function), then restriction to the coordinates this node consumes
+     * ({@link #consumed}). Every other coordinate falls to the ignore branch:
+     * unconditionally ignored — sound by the transitivity theorem, since a consumed causal
      * ancestor is always claimed directly in the record's own clock, so an unconsumed entry only
-     * ever proxies ancestry the clock already states) — and counted once per received record via
-     * the out-of-scope-ignored metric ({@link #receive}), never a failure (the I7 fail-fast is
-     * retired, D7). Neither step ever rewrites recorded state or the outbound stamp (the stamp is
-     * {@link ParsleyChannels#stamp()}, computed from the unstripped channel folds — I9: the gate
+     * ever proxies ancestry the clock already states — and counted once per received record via
+     * the out-of-scope-ignored metric ({@link #receive}), never a failure. Neither step ever
+     * rewrites recorded state or the outbound stamp (the stamp is
+     * {@link ParsleyChannels#stamp()}, computed from the unstripped channel folds: the gate
      * may ignore; the merge may not).
      */
     private ParsleyVectorClock consumedDependencies(ParsleyVectorClock deps, Uuid topicId, int partition, long offset) {
@@ -573,13 +578,14 @@ final class ParsleyCausalBroadcast<K, V> {
     }
 
     /**
-     * The I8 diagnostic: counts an inbound clock that claims one of this node's own sink coordinates
-     * <em>above</em> the {@code ownOutputs} clock. A truthful reflected claim can only ever name a
-     * position this node itself produced, so it should sit at or below {@code ownOutputs} once the
+     * The over-claim diagnostic: counts an inbound clock that claims one of this node's own sink
+     * coordinates <em>above</em> the {@code ownOutputs} clock. A truthful reflected claim can only
+     * ever name a position this node itself produced, so it should sit at or below
+     * {@code ownOutputs} once the
      * pending acks are folded; a claim above it means the own-output view is stale (a torn restore
      * beyond what the end-offset seed healed) or a peer's clock is not truthful — worth seeing,
-     * never worth failing over (O3 dissolved: the gate treats the claim like any other, and a stale
-     * view only ever delays). Checked once per inbound record ({@link #receive}) and once per null
+     * never worth failing over, because the gate treats the claim like any other and a stale
+     * view only ever delays. Checked once per inbound record ({@link #receive}) and once per null
      * message ({@link ParsleyGossip#receive} — the package-private access); the cheap first pass
      * avoids the ack fold unless a candidate is actually above the current view.
      */
@@ -608,7 +614,7 @@ final class ParsleyCausalBroadcast<K, V> {
     }
 
     /**
-     * The stalled-dependency observability scan (T3.0 A9): counts the held records waiting, for
+     * The stalled-dependency observability scan: counts the held records waiting, for
      * longer than {@code thresholdMs}, on a consumed-channel dependency <em>above</em> that
      * channel's highest physically received offset — the exact signature of "nothing received so
      * far can satisfy this claim". Such a hold is fail-safe, never unsafe, but its delay is

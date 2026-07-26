@@ -202,7 +202,7 @@ public final class CausalTopology {
 
     /**
      * Every sink topic any stage declares — the topics whose producer acks the own-output registry
-     * tracks (D2). Read by {@link CausalStreams} at construction, before {@link #assemble}.
+     * tracks. Read by {@link CausalStreams} at construction, before {@link #assemble}.
      */
     Set<String> sinkTopics() {
         Set<String> topics = new LinkedHashSet<>();

@@ -21,11 +21,11 @@ import java.util.Set;
  *
  * <p>A received null message's own offset is delivered normally, advancing the contiguous frontier
  * that releases held records; its carried clock feeds the channel's advertised view and the stamp
- * only, never the gate. The relay rule (I6) is the single home of this decision: relay onward iff
+ * only, never the gate. The relay rule is the single home of this decision: relay onward iff
  * the carried clock advanced this node's total knowledge on a channel it consumes,
  * {@code !stamp().dominates(carried.retaining(consumedScope))}, with pending acks folded first. This
  * is the CMB trigger discipline, where only an advance of the node's own input channels obliges a
- * relay. Everything else the clock carries is custody: it folds into the stamp unconditionally (I9)
+ * relay. Everything else the clock carries is custody: it folds into the stamp unconditionally
  * and rides every later emission but never obliges a relay, because custody hearsay lags its source
  * by a gossip lap and relaying on it would never quiesce on a cycle. Withholding a relay starves
  * nobody, since a suppressed relay also suppresses the claim it would have stamped.
@@ -44,13 +44,14 @@ final class ParsleyGossip<K, V> {
     private final ParsleyCausalBroadcast<K, V> broadcast;
     // Every declared sink at this task's own partition — a null message's exact destination set
     // (ParsleyMarkerPartition routes it there), excluded from the stamp's crossing wait:
-    // same-coordinate pending sends are covered by partition FIFO + I3, and the cross-sink
-    // exemption is O4's recorded null-message exemption. Business forwards never get an exclusion
+    // same-coordinate pending sends are covered by partition FIFO and per-producer stamp
+    // monotonicity, and the cross-sink exemption is safe only because a null message's destination
+    // set is known exactly at stamp time. Business forwards never get an exclusion
     // (their destination partition is unknowable at stamp time; see ParsleyCausalBroadcast#broadcast).
     private final Set<TopicPartition> destinations;
-    // The I6 trigger scope: this node's declared input topics at its own task partition — the
+    // The relay trigger scope: this node's declared input topics at its own task partition — the
     // coordinates whose first-hand state catches up to every appended offset (see the class
-    // Javadoc). Never a filter on what folds (I9's merge is unconditional), only on what obliges
+    // Javadoc). Never a filter on what folds (the merge is unconditional), only on what obliges
     // a relay. The own-partition restriction is load-bearing in production: a foreign partition
     // of a consumed topic is a sibling task's scope, never fetched here, so its coverage would
     // lag forever and re-open the storm on any cycle crossing a multi-partition topic.
@@ -61,7 +62,7 @@ final class ParsleyGossip<K, V> {
      *                      message's own delivered offset, the reflected-claim diagnostic, the
      *                      single stamping site {@link ParsleyCausalBroadcast#broadcast}, and (via
      *                      {@link ParsleyCausalBroadcast#channels()}) the L1 module: the
-     *                      total-knowledge clock ({@code stamp()}) the I6 relay rule compares
+     *                      total-knowledge clock ({@code stamp()}) the relay rule compares
      *                      against, and the frontier/channel state a received null message's offset
      *                      and carried clock fold into
      * @param destinations  every declared sink at this task's own partition — a null message's exact
@@ -81,7 +82,7 @@ final class ParsleyGossip<K, V> {
     /**
      * The per-receive result: every record the null message's own offset released for delivery, in
      * order, plus whether its carried clock advanced this node's total knowledge on a channel it
-     * consumes — the I6 relay signal (see the class Javadoc; the caller relays a downstream null
+     * consumes — the relay signal (see the class Javadoc; the caller relays a downstream null
      * message only when it is {@code true}). The name is the CMB input-channel-clock advance;
      * custody-only news (a claim on a channel outside the consumed scope) folds into the stamp but
      * leaves this {@code false}.
@@ -98,10 +99,10 @@ final class ParsleyGossip<K, V> {
      * offset)} into its channel's contiguous frontier, exactly like a business record (seed/bridge,
      * {@link ParsleyChannels#delivered}, release cascade), so a channel carrying only null messages
      * still advances and the gap-free walk does not stall below it. Separately, it folds the carried
-     * clock into the channel's advertised view, the outbound-stamp input (I9, the whole clock), never
+     * clock into the channel's advertised view, the outbound-stamp input (the whole clock), never
      * the gate: a peer's claim that a coordinate was delivered there is not proof it was delivered
      * here, so releases on this path come only from the null message's own offset advancing the
-     * frontier. The I6 relay comparison is taken between the two, after the producer-ack fold and
+     * frontier. The relay comparison is taken between the two, after the producer-ack fold and
      * before the carried clock folds.
      *
      * @param channelId the topic UUID of the null message's source channel
@@ -109,7 +110,7 @@ final class ParsleyGossip<K, V> {
      * @param offset    the null message's own offset on its source channel
      * @param carried   the completeness clock the null message carried (empty when the header was
      *                  absent; an undecodable header fails the task upstream, before this call)
-     * @return the records released in the process, plus the I6 relay signal
+     * @return the records released in the process, plus the relay signal
      */
     Reception<K, V> receive(Uuid channelId, int partition, long offset, ParsleyVectorClock carried) {
         List<ParsleyMessage<K, V>> out = new ArrayList<>();
@@ -122,11 +123,11 @@ final class ParsleyGossip<K, V> {
         }
 
         broadcast.recordReflectedClaims(carried);
-        // The I6 comparison, taken BEFORE the carried clock is folded below (afterwards it is
+        // The relay comparison, taken BEFORE the carried clock is folded below (afterwards it is
         // dominated by construction). Fold pending acks first so ownOutputs is current — a carried
         // clock reflecting this node's own recent output must read as already known. Only the
         // carried clock's consumed-scope coordinates can oblige a relay; the whole clock still
-        // folds below (I9) — see the class Javadoc for why hearsay must not oblige.
+        // folds below — see the class Javadoc for why hearsay must not oblige.
         channels.foldAcknowledgedOutputs();
         boolean advancedConsumedChannel = !channels.stamp().dominates(carried.retaining(consumedScope));
         channels.channelUpdate(channelId, partition, carried);
@@ -148,7 +149,7 @@ final class ParsleyGossip<K, V> {
      * advances downstream stream time from every polled record's timestamp, so a wall-clock stamp
      * during a reprocessing run would yank downstream windows and grace periods to now. A sink segment
      * of only null messages then looks old to retention exactly when its triggers are old (a backfill),
-     * so retention on causal topics must cover the backfill depth (E2's constraint restated); an
+     * so retention on causal topics must cover the backfill depth; an
      * undersized retention fails safely into {@code AutoOffsetReset.none()}'s loud stall.
      *
      * @param key       the triggering record's key, or {@code null} when none has been observed

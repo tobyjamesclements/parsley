@@ -20,7 +20,8 @@ import java.util.concurrent.ConcurrentHashMap;
  * no {@code *.internals.*} type is touched and unrelated instances in one JVM cannot cross-talk. It
  * holds two structures at different granularity: acked offsets as a global max per
  * {@code (topic, partition)} across the instance's producers (folding a sibling task's max on a shared
- * sink is an I8-sound over-claim, and a task's own sends never exceed the max), and pending sends
+ * sink is an over-claim that still names a real appended position, so it can only delay a
+ * downstream delivery, and a task's own sends never exceed the max), and pending sends
  * tracked per producer, which under {@code exactly_once_v2} is per StreamThread, so
  * {@link #awaitQuiescentExcept} resolves the caller's pending sends from the current thread alone.
  *
@@ -105,15 +106,15 @@ final class ParsleyOwnOutputRegistry implements ParsleyChannels.AckedOutputs, Pa
     /**
      * The crossing-wait primitive: blocks until the calling thread's producer has no
      * unacknowledged send to any tracked coordinate outside {@code exceptDestinations} (a pending
-     * send to the record's own destination coordinate needs no wait — partition FIFO plus I3 cover
-     * it; O1). An empty set waits for full quiescence. A thread with no bound tracker (it has
-     * never sent) returns immediately.
+     * send to the record's own destination coordinate needs no wait — partition FIFO plus
+     * per-producer stamp monotonicity cover it). An empty set waits for full quiescence. A thread
+     * with no bound tracker (it has never sent) returns immediately.
      *
-     * <p><strong>Never stamp-and-proceed</strong> (T3.0 A8): this method returns normally only on
+     * <p><strong>Never stamp-and-proceed</strong>: this method returns normally only on
      * genuine quiescence. It throws {@link CausalPendingAckException} when {@code timeoutMs}
      * elapses first — the unacked send has effectively failed, so the potentially under-claiming
      * stamp must die with the transaction — and when any acknowledgement failure is observed during
-     * the wait, since T2.1 confirmed an aborting transaction fails each pending send with exactly
+     * the wait, since an aborting transaction fails each pending send with exactly
      * one exception-carrying callback: the wait releases, and the failure outcome makes it die loud.
      */
     @Override
@@ -155,7 +156,7 @@ final class ParsleyOwnOutputRegistry implements ParsleyChannels.AckedOutputs, Pa
         }
 
         /**
-         * Records an acknowledgement (success or failure — T2.1: exactly one callback per send,
+         * Records an acknowledgement (success or failure — exactly one callback per send,
          * abort included). Decrements the coordinate's explicit-partition count when one is
          * outstanding, else the topic's unresolved count — with per-partition FIFO
          * acknowledgement order this pairing is exact, and a stray unmatched callback (never
@@ -189,7 +190,7 @@ final class ParsleyOwnOutputRegistry implements ParsleyChannels.AckedOutputs, Pa
                 if (failures > failuresAtStart) {
                     throw new CausalPendingAckException("a pending own-output send failed while "
                             + "waiting to stamp a send (destinations " + exceptDestinations
-                            + "); failing the transaction rather than stamping (T3.0 A8)");
+                            + "); failing the transaction rather than stamping");
                 }
                 if (pendingOutside(exceptDestinations) == 0) {
                     return;
@@ -200,7 +201,7 @@ final class ParsleyOwnOutputRegistry implements ParsleyChannels.AckedOutputs, Pa
                             + "on a coordinate outside the stamped send's destinations "
                             + exceptDestinations + " after " + timeoutMs + " ms; failing the "
                             + "transaction rather than stamping with a potentially incomplete "
-                            + "own-output clock (T3.0 A8)");
+                            + "own-output clock");
                 }
                 try {
                     wait(remainingNanos / 1_000_000L + 1);

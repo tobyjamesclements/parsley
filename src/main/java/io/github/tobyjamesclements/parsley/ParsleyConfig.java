@@ -14,7 +14,8 @@ import java.util.Set;
  *
  * <p>Causal delivery has exactly two dispositions, never a third: a record is <strong>forwarded</strong>
  * once its consumed dependencies are satisfied (a dependency on a coordinate this node does not
- * consume is unconditionally ignored, with a metric — sound by I2/I9, never a failure); while
+ * consume is unconditionally ignored, with a metric, because any consumed ancestor behind it is
+ * claimed directly in the same clock, never a failure); while
  * unsatisfied it stays <strong>buffered</strong>, unbounded, changelog-backed. A record whose
  * dependencies are proven impossible to evaluate (an undecodable payload or clock header)
  * unconditionally fails the task. There is no configuration that trades causal safety for liveness,

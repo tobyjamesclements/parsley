@@ -24,15 +24,14 @@ import java.util.Set;
  * store (loaded once at construction, rewritten on change, otherwise read from memory):
  * <ul>
  *   <li>the <strong>contiguous frontier</strong>, the highest offset delivered without a gap on each
- *       consumed coordinate; the only clock the delivery gate consults (I4);
+ *       consumed coordinate; the only clock the delivery gate consults;
  *   <li>the <strong>channel clocks</strong>, per input channel, the dependencies advertised on it;
  *       {@link #completeness()} max-merges these with the frontier into the outbound stamp, which
  *       carries transitive ancestry downstream but never substitutes for local delivery;
  *   <li>the <strong>carried ancestry</strong>, causal past re-homed from coordinates that have left
- *       the node's scope, kept so the stamp keeps dominating it (I9); stamp-side only;
+ *       the node's scope, kept so the stamp keeps dominating it; stamp-side only;
  *   <li>the <strong>own outputs</strong>, the node's own acknowledged sink positions, recovering
- *       CBCAST's own-slot semantics since the broker assigns the sender's offsets (I3, I8);
- *       stamp-side only;
+ *       CBCAST's own-slot semantics since the broker assigns the sender's offsets; stamp-side only;
  *   <li>the <strong>highest-received offsets</strong>, so {@link #bridge} can distinguish a
  *       consumer-skipped offset (a transaction marker or aborted record) from one still to arrive and
  *       cross the former without stalling the contiguous walk.
@@ -41,8 +40,7 @@ import java.util.Set;
  * <p>The forwarded-offset index is not in the {@code "frontier"} value: it is a growable, order-sensitive set
  * of offsets delivered above the contiguous frontier, so it keeps its own keyed store. The delivery
  * gate, the buffer, and the release cascade run in {@link ParsleyCausalBroadcast} over these
- * operations, which also strips an inbound clock's self-cycle before the gate sees it (I5).
- * Invariants preserved here: I3, I4, I5, I8, I9.
+ * operations, which also strips an inbound clock's self-cycle before the gate sees it.
  */
 final class ParsleyChannels {
 
@@ -50,20 +48,23 @@ final class ParsleyChannels {
     // Per input channel (topicId, partition) -> the dependencies advertised on it (max-merged).
     private final Map<CoordKey, ParsleyVectorClock> channels = new HashMap<>();
     // Causal ancestry this node once delivered or carried on coordinates that have since left its
-    // consumption scope, re-homed here by rescope() so the outbound stamp keeps dominating it (I2/I9:
-    // carried ancestry may be skipped, never dropped — T3.0 A6). The term is this project's coinage
-    // (from the redesign doc); the nearest literature concept is the vector time of the node's causal
-    // past, restricted to retired channels. Stamp-side only: merged into completeness(), never
-    // consulted by the delivery gate, never advanced by deliveries. Persisted in the frontier value.
+    // consumption scope, re-homed here by rescope() so the outbound stamp keeps dominating it:
+    // carried ancestry may be skipped, never dropped, or the stamp would under-claim a causal past
+    // this node really has. The term is this project's coinage. The nearest literature concept is
+    // the vector time of the node's causal past, restricted to retired channels. Stamp-side only:
+    // merged into completeness(), never consulted by the delivery gate, never advanced by
+    // deliveries. Persisted in the frontier value.
     private ParsleyVectorClock carriedAncestry = ParsleyVectorClock.empty();
-    // The node's own acked output positions per sink coordinate (D2) — the clock that recovers
-    // CBCAST's own-slot semantics (the broker performs the sender's clock increment; acknowledge()
-    // learns it). Monotone by construction (acknowledge only ever raises entries — I3 depends on
-    // this once T2.3 folds it into the stamp) and stamp-side only: never consulted by the delivery
-    // gate. Fed three ways, every one an at-or-below-a-real-appended-offset claim (I8): the
-    // interceptor registry drained by foldAcknowledgedOutputs(), the init-time sink end-offset
-    // seed (ParsleyProcessor), and the restored frontier value — which may trail the last transaction's
-    // acks (store caches flush before the producer flush completes acks); the seed heals that.
+    // The node's own acked output positions per sink coordinate — the clock that recovers CBCAST's
+    // own-slot semantics (the broker performs the sender's clock increment; acknowledge() learns
+    // it). Monotone by construction (acknowledge only ever raises entries), which is what keeps a
+    // producer's successive stamps onto one partition non-decreasing once this clock folds into the
+    // stamp. Stamp-side only: never consulted by the delivery gate. Fed three ways, every one a
+    // claim at or below a real appended offset, so every one can only ever delay a downstream
+    // delivery, never reorder it: the interceptor registry drained by foldAcknowledgedOutputs(), the
+    // init-time sink end-offset seed (ParsleyProcessor), and the restored frontier value — which may
+    // trail the last transaction's acks (store caches flush before the producer flush completes
+    // acks); the seed heals that.
     private ParsleyVectorClock ownOutputs = ParsleyVectorClock.empty();
     // The acknowledged-outputs source foldAcknowledgedOutputs() drains (the interceptor registry in
     // production), with the sink-name → UUID resolution fixed at bind time; null until
@@ -85,12 +86,13 @@ final class ParsleyChannels {
     private final Map<String, Uuid> declaredInputs = new HashMap<>();
     // The sink-topic set (name -> UUID) the persisted ownOutputs clock was written under, updated by
     // declareSinks() at init and persisted in the frontier value. This is the heal set for the restored
-    // ownOutputs clock (T3.4): the blob always trails the final transaction's own acks (store caches
-    // flush before the producer flush completes acks — O1), and the init-time end-offset seed heals
+    // ownOutputs clock: the blob always trails the final transaction's own acks (store caches
+    // flush before the producer flush completes acks), and the init-time end-offset seed heals
     // only the CURRENTLY declared sinks — so a topic that was a sink in the previous run but is not
     // one now (dropped, or turned into an input) would otherwise restart with stamps under-claiming
-    // this node's own final-transaction outputs, an I2 hole in the dangerous direction. The previous
-    // run's declaration is exactly the set of topics whose acks can have trailed; ParsleyProcessor
+    // this node's own final-transaction outputs, a transitive-completeness hole in the dangerous
+    // direction. The previous run's declaration is exactly the set of topics whose acks can have
+    // trailed; ParsleyProcessor
     // heals each of them (end-offset acknowledge when the topic survives with its UUID, purge when
     // the UUID is provably destroyed) before the first post-restart stamp.
     private final Map<String, Uuid> declaredSinks = new HashMap<>();
@@ -107,13 +109,14 @@ final class ParsleyChannels {
     // a partition splits apart: the gate consults the contiguous projection (frontier — "everything
     // up to n"), the stamp must carry the max projection, because an output emitted from an
     // above-gap delivery is causally after that record even though the frontier has not reached it
-    // (the input-side sibling of the own-output gap D2 closed: the stamp otherwise carries the
-    // delivered record's causes but not the record itself, and a downstream consumer of both topics
-    // can deliver the effect before the cause). Stamping it over-claims the gap offsets below it —
-    // real appended offsets, so delay-only (I8), exactly like ownOutputs' seeds. Stamp-side only:
-    // never consulted by the delivery gate; monotone by construction (observe only ever raises —
-    // I3). Deliberately NOT persisted: above-frontier delivered offsets are exactly the forwarded
-    // index's marks, which commit in the same EOS transaction as the frontier blob, so the store
+    // (the input-side sibling of the own-output gap that folding own outputs into the stamp closes:
+    // the stamp otherwise carries the delivered record's causes but not the record itself, and a
+    // downstream consumer of both topics can deliver the effect before the cause). Stamping it
+    // over-claims the gap offsets below it — real appended offsets, so delay-only, exactly like
+    // ownOutputs' seeds. Stamp-side only: never consulted by the delivery gate; monotone by
+    // construction (observe only ever raises). Deliberately NOT persisted: above-frontier delivered
+    // offsets are exactly the forwarded index's marks, which commit in the same EOS transaction as
+    // the frontier blob, so the store
     // constructor reconstructs this clock from them losslessly.
     private ParsleyVectorClock highestDelivered = ParsleyVectorClock.empty();
     // Coordinates observed at least once; guards the one-time baseline seed in seedIfFirstSeen.
@@ -191,7 +194,7 @@ final class ParsleyChannels {
 
     /**
      * The <em>normalize</em> request: turns a raw inbound dependency clock into the clock L2's gate
-     * evaluates (I5 — after this step, no clock inside L2 carries a self-reference). One step:
+     * evaluates. After this step, no clock inside L2 carries a self-reference. One step:
      * <strong>self-cycle removal</strong>. A record depending on its own {@code (topicId,
      * partition, offset)} has, by being delivered, met that dependency, so it must not wait on
      * itself (this keeps a self-referential stamp on a fused chain from deadlocking). Only the
@@ -211,11 +214,12 @@ final class ParsleyChannels {
 
     /**
      * The <em>acknowledge</em> request: the producer acked this node's own send to sink coordinate
-     * {@code (topicId, partition)} at {@code offset} — or an equally I8-sound stand-in for one (the
-     * init-time end-offset seed, which claims the sink's last appended position whether or not this
+     * {@code (topicId, partition)} at {@code offset} — or a stand-in for one that is equally safe
+     * because it also names a real appended position (the init-time end-offset seed, which claims
+     * the sink's last appended position whether or not this
      * task produced it). Folds into the {@link #ownOutputs()} clock (max, monotone — a lower or
      * equal offset is a no-op, so replaying acks costs nothing) and persists on advance. Keyed by
-     * the topic's UUID, like every other request here: L1 owns coordinate identity (E1), and the
+     * the topic's UUID, like every other request here: L1 owns coordinate identity, and the
      * name → UUID translation happens once, where sinks are resolved at init.
      */
     void acknowledge(Uuid topicId, int partition, long offset) {
@@ -228,8 +232,8 @@ final class ParsleyChannels {
 
     /**
      * The node's own acked output positions per sink coordinate — the clock that recovers CBCAST's
-     * own-slot semantics (D2: the broker performs the sender's clock increment, learned via
-     * {@link #acknowledge}). Stamp-side only, never consulted by the delivery gate; {@link #stamp()}
+     * own-slot semantics: the broker performs the sender's clock increment, learned via
+     * {@link #acknowledge}. Stamp-side only, never consulted by the delivery gate; {@link #stamp()}
      * carries it on every outbound record.
      */
     ParsleyVectorClock ownOutputs() {
@@ -239,7 +243,7 @@ final class ParsleyChannels {
     /**
      * The outbound vector timestamp, {@code completeness ∪ ownOutputs ∪ highestDelivered}: the clock
      * {@link ParsleyCausalBroadcast#broadcast} attaches to every outbound record, and equally the
-     * node's total knowledge that the I6 relay rule compares a carried clock against. The own-outputs
+     * node's total knowledge that the relay rule compares a carried clock against. The own-outputs
      * and highest-delivered clocks are merged here and only here; neither feeds {@link #completeness()}
      * or the delivery gate.
      */
@@ -273,9 +277,9 @@ final class ParsleyChannels {
      * coordinate outside {@code exceptDestinations}, so the ack fold before the next {@link #stamp()}
      * cannot miss a send that process-order-precedes the record being stamped. An empty set waits for
      * full quiescence, the conservative form used before a business forward, whose destination
-     * partition is unknowable at stamp time; over-waiting only folds more acked positions, which is
-     * sound (I8). A marker stamp passes its exact destination set, which same-partition FIFO and I3
-     * already cover.
+     * partition is unknowable at stamp time; over-waiting only folds more acked positions, which can
+     * only delay a downstream delivery, never reorder one. A marker stamp passes its exact
+     * destination set, which same-partition FIFO and per-producer stamp monotonicity already cover.
      *
      * <p>The wait never stamps-and-proceeds: it throws {@link CausalPendingAckException} on timeout or
      * an observed acknowledgement failure, so the caller's EOS transaction dies rather than emit a
@@ -291,7 +295,7 @@ final class ParsleyChannels {
     /**
      * Drains the bound acknowledged-outputs source into {@link #ownOutputs()} — called by
      * {@link ParsleyCausalBroadcast#broadcast} before every stamp, so no coordinate acked before
-     * this stamp can be missing from the clock the stamp (from T2.3) carries. Idempotent and
+     * this stamp can be missing from the clock the stamp carries. Idempotent and
      * cheap: the source exposes max acked offsets per coordinate and {@link #acknowledge} is a
      * monotone no-op below the current entry, so re-draining persists nothing new. A no-op until
      * {@link #bindOwnOutputSource} is called.
@@ -312,7 +316,7 @@ final class ParsleyChannels {
     /**
      * The causal completeness clock: this node's contiguous frontier max-merged with every input
      * channel's advertised dependencies and with the {@link #carriedAncestry} re-homed from retired
-     * coordinates (I9). It is the delivered/advertised boundary the node carries downstream for each
+     * coordinates. It is the delivered/advertised boundary the node carries downstream for each
      * receiver's own gate to verify, not the delivery gate itself: the gate checks {@link #frontier()}
      * alone, so an advertised claim never releases a record ahead of local delivery of its cause.
      */
@@ -446,7 +450,7 @@ final class ParsleyChannels {
     /**
      * The highest offset ever physically received on channel {@code (topicId, partition)}, or
      * {@code -1} if the channel has never been received on. This is {@link #bridge}'s skip-detection
-     * baseline, exposed for the stalled-dependency observability scan (T3.0 A9): a record held on a
+     * baseline, exposed for the stalled-dependency observability scan: a record held on a
      * dependency <em>above</em> this value is waiting on an offset nothing received so far can
      * satisfy — the exact signature of a claim whose producer's send failed or whose channel went
      * permanently silent (fail-safe, never unsafe; the delay is unbounded, so it must be visible).
@@ -475,7 +479,7 @@ final class ParsleyChannels {
 
     /**
      * The input-topic set (name → UUID) the persisted state was written under — the previous run's
-     * declaration, empty on a fresh store or a pre-T1.3 blob. Read it <em>before</em> {@link #rescope}
+     * declaration, empty on a fresh store. Read it <em>before</em> {@link #rescope}
      * (which overwrites it with the current set) to report the scope diff at init.
      */
     Map<String, Uuid> declaredInputs() {
@@ -484,7 +488,7 @@ final class ParsleyChannels {
 
     /**
      * The sink-topic set (name → UUID) the persisted {@link #ownOutputs()} clock was written under —
-     * the previous run's declaration, empty on a fresh store or a pre-T3.4 blob. Read it at init to
+     * the previous run's declaration, empty on a fresh store. Read it at init to
      * heal the restored clock's trailing acks (see the field note), <em>before</em>
      * {@link #declareSinks} overwrites it with the current declaration.
      */
@@ -506,10 +510,10 @@ final class ParsleyChannels {
 
     /**
      * Removes every {@code topicId} coordinate from the {@link #ownOutputs()} clock and persists —
-     * I9's one permitted removal from stamp-feeding state, for a provably destroyed topic (deleted,
-     * or recreated under a new UUID): its records can never be delivered by any receiver (E1), so a
-     * claim on them can gate nothing and heal nothing. Called by the init-time former-sink heal;
-     * {@link #rescope} performs the same purge for recreated <em>input</em> topics.
+     * the one removal from stamp-feeding state the unconditional merge permits, for a provably
+     * destroyed topic (deleted, or recreated under a new UUID): its records can never be delivered by
+     * any receiver, so a claim on them can gate nothing and heal nothing. Called by the init-time
+     * former-sink heal; {@link #rescope} performs the same purge for recreated <em>input</em> topics.
      */
     void destroyOwnOutput(Uuid topicId) {
         ownOutputs = ownOutputs.retaining((id, partition) -> !id.equals(topicId));
@@ -524,11 +528,11 @@ final class ParsleyChannels {
      *
      * <ol>
      *   <li><strong>Destroyed coordinates:</strong> a declared topic whose UUID changed was deleted
-     *       and recreated, so the old UUID's entries can never be delivered (E1) and are removed
+     *       and recreated, so the old UUID's entries can never be delivered and are removed
      *       outright, the one removal permitted; the new UUID starts as an added channel.</li>
      *   <li><strong>Shrink:</strong> every other entry leaving scope max-merges into
      *       {@link #carriedAncestry} before it is pruned, so {@link #completeness()} is unchanged
-     *       except at destroyed coordinates (I9); dropping it would let a downstream receiver reorder
+     *       except at destroyed coordinates; dropping it would let a downstream receiver reorder
      *       an effect against its retired-channel cause.</li>
      *   <li><strong>Growth:</strong> an input declared now but not before seeds its frontier at this
      *       node's carried-ancestry value for the coordinate, never at log-start, so what was already
@@ -561,9 +565,9 @@ final class ParsleyChannels {
             highestReceived.keySet().removeIf(key -> destroyed.contains(key.topicId()));
             // A destroyed topic this node also produced (an input that is its own sink — a cycle)
             // leaves ownOutputs too: its old-UUID coordinates can never be delivered by any
-            // receiver (E1), which is I9's one permitted removal from stamp-feeding state.
+            // receiver, the one removal from stamp-feeding state the unconditional merge permits.
             // Everything else about the input-set diff leaves ownOutputs alone below — it is
-            // keyed by sink coordinates, not input channels, and it only ever grows (I3).
+            // keyed by sink coordinates, not input channels, and it only ever grows.
             ownOutputs = ownOutputs.retaining(notDestroyed);
             highestDelivered = highestDelivered.retaining(notDestroyed);
         }
@@ -583,7 +587,7 @@ final class ParsleyChannels {
                     channelRetired ? channel.getValue() : channel.getValue().retaining(outOfScope));
         }
         // An above-gap delivered offset on a retiring channel is delivered causal past like any
-        // frontier entry — re-homed, never dropped (A6).
+        // frontier entry — re-homed, never dropped.
         carriedAncestry = carriedAncestry.merge(highestDelivered.retaining(outOfScope));
         frontier = frontier.retaining(inScope);
         channels.keySet().removeIf(key -> outOfScope.test(key.topicId(), key.partition()));
@@ -594,7 +598,7 @@ final class ParsleyChannels {
         // 3 — growth: an added channel skips the prefix this node already carried. The seed reads
         // stamp(), not completeness(): an added input that is this node's own former sink would
         // otherwise under-skip the prefix its stamps already claimed via ownOutputs — "skip what
-        // you already claimed" extends A5's "skip what you already ignored" (T2.2 carry-forward).
+        // you already claimed" extends "skip what you already ignored".
         if (!declaredInputs.isEmpty()) {
             for (Map.Entry<String, Uuid> current : currentInputs.entrySet()) {
                 if (declaredInputs.containsKey(current.getKey())) {
@@ -622,7 +626,7 @@ final class ParsleyChannels {
      * routine after {@link #rescope}'s growth seeding (the consumer re-fetches an added input from
      * log-start while the seeded frontier already covers the carried prefix), and otherwise the
      * fail-safe net for an at-or-below-watermark arrival that {@code exactly_once_v2} should make
-     * impossible (T3.0 A11).
+     * impossible.
      */
     boolean alreadyDelivered(Uuid topicId, int partition, long offset) {
         return offset <= frontier.offsetFor(topicId, partition)
@@ -647,10 +651,11 @@ final class ParsleyChannels {
     /**
      * Restores every persisted section from {@code blob} into this instance's live state, in the one
      * pass {@link ParsleyFrontierState#fromBytes} performs. A blob whose wire version this build does
-     * not recognise faults here rather than loading partially (O6: there is no cross-version upgrade
-     * path before 1.0). The restored {@link #ownOutputs} clock may trail the last transaction's acks
+     * not recognise faults here rather than loading partially: there is no cross-version upgrade
+     * path before 1.0. The restored {@link #ownOutputs} clock may trail the last transaction's acks
      * (store caches flush before the producer flush completes acks); the init-time sink end-offset
-     * seed re-covers that, an I8-sound direction. Called once, at construction, over empty maps.
+     * seed re-covers that, and only ever raises entries, so it can delay a downstream delivery but
+     * never reorder one. Called once, at construction, over empty maps.
      */
     private void load(byte[] blob) {
         ParsleyFrontierState state = ParsleyFrontierState.fromBytes(blob);
@@ -698,7 +703,7 @@ final class ParsleyChannels {
         /**
          * Blocks until no send to any tracked coordinate outside {@code exceptDestinations} is
          * unacknowledged; empty means full quiescence. Throws {@link CausalPendingAckException}
-         * on timeout or on an acknowledgement failure observed while waiting (T3.0 A8) — never
+         * on timeout or on an acknowledgement failure observed while waiting — never
          * returns normally without genuine quiescence.
          */
         void awaitQuiescentExcept(Set<TopicPartition> exceptDestinations, long timeoutMs);

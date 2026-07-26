@@ -60,17 +60,17 @@ public final class CausalStreams implements AutoCloseable {
 
     private static final Duration QUIESCE_POLL_INTERVAL = Duration.ofMillis(100);
     // How often the topic-identity watch compares the broker's current topic IDs against what the
-    // tasks resolved at init (E1 / T3.0 A13). Also the bound on the mislabelling window a mid-run
+    // tasks resolved at init. Also the bound on the mislabelling window a mid-run
     // delete+recreate can open before the member fails fast — see ParsleyTopicIdentityWatch.
     private static final Duration TOPIC_IDENTITY_POLL_INTERVAL = Duration.ofSeconds(5);
 
     private final KafkaStreams kafkaStreams;
     private final ParsleyQuiesce quiesce;
-    // The minted id under which this instance's producer-ack registry is registered JVM-wide (D2):
+    // The minted id under which this instance's producer-ack registry is registered JVM-wide:
     // injected into props as producer.<CONFIG_KEY> so the interceptor (producer side) and each
     // task's init (via appConfigs) resolve the same registry; unregistered at close().
     private final String ownOutputRegistryId;
-    // The minted id and instance of this application's topic-identity watch (E1 / T3.0 A13): tasks
+    // The minted id and instance of this application's topic-identity watch: tasks
     // register their init-time name → UUID resolutions and check intactness per record; start()
     // spins the poll loop below and close() tears it down + unregisters.
     private final String topicIdentityWatchId;
@@ -170,11 +170,11 @@ public final class CausalStreams implements AutoCloseable {
 
     /**
      * Creates and registers this instance's producer-ack registry (the {@code ownOutputs} clock's
-     * feed, D2) and injects the wiring into {@code props} before the {@code KafkaStreams} instance
+     * feed) and injects the wiring into {@code props} before the {@code KafkaStreams} instance
      * is built from them: {@link ParsleyOwnOutputInterceptor} is appended to any user-configured
      * {@code producer.interceptor.classes} (never replacing them), and the minted registry id rides
      * the same public {@code producer.} prefix so every stream producer's interceptor and every
-     * task's init resolve the same registry — no {@code *.internals.*} type is touched (O1).
+     * task's init resolve the same registry — no {@code *.internals.*} type is touched.
      *
      * @return the minted registry id, for {@link #close()} to unregister
      */
@@ -212,7 +212,7 @@ public final class CausalStreams implements AutoCloseable {
     }
 
     /**
-     * Starts the topic-identity poll loop (E1 / T3.0 A13): a single daemon thread comparing the
+     * Starts the topic-identity poll loop: a single daemon thread comparing the
      * broker's current topic IDs against every binding the tasks resolved at init, on a fixed
      * interval. A detected delete or delete+recreate marks the watch broken; the tasks' per-record
      * checks then fail the member fast (see {@link ParsleyTopicIdentityWatch}). The poll itself

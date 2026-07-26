@@ -57,8 +57,8 @@ final class ParsleyProcessorContext<KOut, VOut> implements ProcessorContext<KOut
     // Counts business forward() calls since the last resetForwardCount(); read by ParsleyProcessor
     // to detect non-emitting delegate invocations and emit a null message in their place.
     private int forwardCount = 0;
-    // Fails the forward fast if the topic-identity watch has detected a mid-run recreation (E1 /
-    // T3.0 A13) — a punctuator-driven forward is the one stamped path that does not pass through
+    // Fails the forward fast if the topic-identity watch has detected a mid-run recreation —
+    // a punctuator-driven forward is the one stamped path that does not pass through
     // ParsleyProcessor.process()'s own check first.
     private final Runnable identityCheck;
 

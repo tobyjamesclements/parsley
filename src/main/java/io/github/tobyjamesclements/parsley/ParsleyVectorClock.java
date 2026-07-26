@@ -118,10 +118,10 @@ final class ParsleyVectorClock {
      * narrowing ({@link ParsleyChannels#rescope}, which re-homes what it prunes into the
      * carried-ancestry clock rather than dropping it) — and the gate's view of an inbound
      * dependency clock ({@code ParsleyCausalBroadcast#consumedDependencies}), whose restriction to
-     * consumed coordinates <em>is</em> the D1 ignore branch: sound by I2 + I9 (a consumed causal
-     * ancestor is always claimed directly in the same clock), counted by the out-of-scope-ignored
+     * consumed coordinates <em>is</em> the gate's ignore branch: sound because a consumed causal
+     * ancestor is always claimed directly in the same clock, counted by the out-of-scope-ignored
      * metric, and never applied to the clock that is folded into channel state or the outbound
-     * stamp (I9: the gate may ignore; the merge may not).
+     * stamp (the gate may ignore; the merge may not).
      */
     ParsleyVectorClock retaining(CoordinatePredicate inScope) {
         boolean anyDropped = false;

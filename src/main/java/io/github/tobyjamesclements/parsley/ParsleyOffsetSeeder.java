@@ -88,7 +88,8 @@ final class ParsleyOffsetSeeder {
             // already-delivered offsets, so the re-fetched prefix is skipped, never redelivered. The
             // residual exposure — an operator manually deleting one previously-consumed topic's offsets
             // while retention has also destroyed records above that topic's surviving frontier — is
-            // operator tampering plus an E2 violation, outside the fault model.
+            // operator tampering plus retention destroying causally-live history, outside the
+            // fault model.
             Set<String> committedTopics = new HashSet<>();
             for (TopicPartition partition : sourcePartitions) {
                 if (fresh.containsKey(partition)) {

@@ -11,10 +11,11 @@ import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 
 /**
- * The mid-run enforcement of E1, stable channel identity. Topic name → UUID is bound once per task
+ * The mid-run enforcement of stable channel identity. Topic name → UUID is bound once per task
  * lifetime at {@code init()}; if a causal topic is deleted and recreated while a member runs, its
- * records would be ingested under the old UUID, the coordinate rebinding E1 exists to prevent. Since
- * the Streams API exposes no per-record identity signal, {@link CausalStreams} polls the broker's
+ * records would be ingested under the old UUID, the coordinate rebinding this watch exists to
+ * prevent. Since the Streams API exposes no per-record identity signal, {@link CausalStreams} polls
+ * the broker's
  * current topic IDs on a fixed interval and every task checks {@link #ensureIntact} before ingesting
  * or stamping; once a recreation is detected the member fails fast and stays down until an operator
  * intervenes (a restart re-resolves identity, where recreation degrades to history loss, never
@@ -119,10 +120,10 @@ final class ParsleyTopicIdentityWatch {
         String detail = broken;
         if (detail != null) {
             throw new CausalTopicRecreatedException(detail + ". Channel identity is bound per "
-                    + "process lifetime (E1): records of a recreated topic would be ingested and "
+                    + "process lifetime: records of a recreated topic would be ingested and "
                     + "stamped under the old UUID, rebinding causal coordinates. Failing fast; "
                     + "restarting re-resolves identity (the recreated topic's lost history is an "
-                    + "E2-style loss, never a reorder). Do not delete and recreate causal topics "
+                    + "history loss, never a reorder). Do not delete and recreate causal topics "
                     + "while members are running.");
         }
     }

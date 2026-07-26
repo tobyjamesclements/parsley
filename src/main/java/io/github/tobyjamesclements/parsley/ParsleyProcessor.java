@@ -40,7 +40,7 @@ import java.util.function.Function;
  * paths.
  *
  * <p>A received null message ({@link #handleNullMessage}) is relayed downstream only when its carried
- * clock advanced this node's knowledge of a channel it consumes (the I6 relay rule on
+ * clock advanced this node's knowledge of a channel it consumes (the relay rule on
  * {@link ParsleyGossip}), never merely because a record was delivered. A delivered business record,
  * by contrast, always causes this node to emit on its own sink (see {@link #deliver}). That is what
  * lets a topology cycle quiesce.
@@ -84,22 +84,22 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
     // resolveSinkTopicUuids: an unresolvable sink fails init, so every declared sink is present) —
     // the UUIDs feed causalBroadcast() so ParsleyCausalBroadcast can strip a node's own
     // produced coordinates from any inbound dependency/marker clock, and the name keys translate the
-    // producer-ack registry's topic names into UUID identity for the ownOutputs fold (D2). Never used
+    // producer-ack registry's topic names into UUID identity for the ownOutputs fold. Never used
     // to route or gate an inbound record by itself.
     private Map<String, Uuid> sinkTopicUuids = Map.of();
     // Each declared sink topic's per-partition end offsets, captured at init() alongside the UUID
     // resolution (same admin session, same strictness: an unreadable sink fails init) — the
     // ownOutputs seed claims endOffset - 1, the sink's last appended position, per partition
-    // (D2/O1; an over-claim that is I8-sound and heals the frontier value trailing the last
-    // transaction's acks).
+    // (an over-claim that names a real appended position, so it can only delay a downstream
+    // delivery, and it heals the frontier value trailing the last transaction's acks).
     private Map<String, Map<Integer, Long>> sinkEndOffsets = Map.of();
     // The effective producer delivery.timeout.ms, resolved at init(). Bounds the crossing wait (a
-    // send unacked past it has failed — the wait must throw, A8) and doubles as the A9 stall
+    // send unacked past it has failed — the wait must throw) and doubles as the stall
     // threshold (past it, no in-flight upstream send can still land at the claimed position, so a
     // hold above highestReceived is a genuine stall, not latency). Leaning on the existing producer
     // config rather than a new knob — its deadline is exactly the boundary both uses care about.
     private long deliveryTimeoutMs = DEFAULT_DELIVERY_TIMEOUT_MS;
-    // The instance-wide topic-identity watch (E1 / T3.0 A13), resolved from config at init() like
+    // The instance-wide topic-identity watch, resolved from config at init() like
     // the own-output registry; null when no CausalStreams instance minted one (TopologyTestDriver
     // runs, low-level supplier wirings) — every check is then a no-op. Consulted before ingesting
     // each record and before every stamped forward, so a detected mid-run topic recreation fails
@@ -112,7 +112,7 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
     // in-memory copy of the persisted state cannot diverge from a concurrent writer — there is none.
     private ParsleyCausalBroadcast<KIn, VIn> causalBroadcast;
     // The task's L3 gossip module, built at init() over the same core: receives null messages
-    // (handleNullMessage) and builds this node's own (advertise). Owns the I6 relay rule and the
+    // (handleNullMessage) and builds this node's own (advertise). Owns the relay rule and the
     // null-message destination set (every declared sink at this task's own partition).
     private ParsleyGossip<KIn, VIn> gossip;
     private KeyValueStore<String, byte[]> frontierStore;
@@ -172,12 +172,13 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
 
         this.wiredMetrics = ParsleyMetrics.wire(context);
 
-        // The crossing-wait bound / A9 stall threshold, and every null-message forward's destination
+        // The crossing-wait bound and stall threshold, and every null-message forward's destination
         // set — both fixed for the task's lifetime, resolved before the causal-broadcast core binds
         // them. The destination set — every declared sink at this task's own partition
         // (ParsleyMarkerPartition routes every null message there) — is excluded from the null
         // message's stamp crossing wait: same-coordinate pending sends are covered by partition FIFO
-        // + I3, and the cross-sink exemption is O4's recorded null-message exemption. Business
+        // and per-producer stamp monotonicity, and the cross-sink exemption is safe only because a
+        // null message's destination set is known exactly at stamp time. Business
         // forwards never get an exclusion (their destination partition is unknowable at stamp time;
         // see ParsleyCausalBroadcast#broadcast).
         this.deliveryTimeoutMs = deliveryTimeoutMs(context.appConfigs());
@@ -192,7 +193,7 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
         // the same core and channel state.
         this.causalBroadcast = buildCausalBroadcast();
         ParsleyCausalBroadcast<KIn, VIn> causalBroadcast = this.causalBroadcast;
-        // The consumed scope doubles as the I6 relay trigger: only a carried-clock advance on a
+        // The consumed scope doubles as the relay trigger: only a carried-clock advance on a
         // coordinate this task consumes obliges a relay (ParsleyGossip's class Javadoc, single
         // home of the rule).
         this.gossip = new ParsleyGossip<>(causalBroadcast, destinations, consumedScope());
@@ -231,7 +232,7 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
         context.schedule(METRICS_REFRESH_INTERVAL, PunctuationType.WALL_CLOCK_TIME,
                 timestamp -> {
                     causalBroadcast().reportBufferState();
-                    // The A9 stalled-dependency scan (O(buffer × deps)) rides the same tick, never
+                    // The stalled-dependency scan (O(buffer × deps)) rides the same tick, never
                     // the hot delivery path; the threshold is the producer delivery timeout — past
                     // it, no in-flight send can still land at a claimed-but-never-received position.
                     causalBroadcast().reportHeldDependencyStalls(deliveryTimeoutMs);
@@ -268,7 +269,7 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
      * {@code taskId().partition()} of every input). Derived, never persisted, so it is recomputed
      * identically after a rebalance. Two consumers, deliberately the same predicate: restore-time
      * pruning in {@link #buildCausalBroadcast()} (not a delivery filter — the gate waits for every
-     * channel; see {@code completeness()}), and the I6 relay trigger scope handed to
+     * channel; see {@code completeness()}), and the relay trigger scope handed to
      * {@link ParsleyGossip} — a foreign partition of a consumed topic is a sibling task's scope,
      * never fetched here, so a carried claim on it must fold without obliging a relay.
      */
@@ -299,12 +300,12 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
 
         // Reconcile restored causal state with the currently declared input set (the #21 fix: the
         // scope decision keys on "input set unchanged since the persisted blob", not blob presence
-        // alone). Retired ancestry re-homes into the carried-ancestry clock the stamp keeps merging
-        // (A6); an added input's frontier seeds at the carried-ancestry value so its already-carried
-        // prefix is skipped, never replayed as live (A5); a recreated input's old UUID is destroyed.
+        // alone). Retired ancestry re-homes into the carried-ancestry clock the stamp keeps merging;
+        // an added input's frontier seeds at the carried-ancestry value so its already-carried
+        // prefix is skipped, never replayed as live; a recreated input's old UUID is destroyed.
         // Then seed an (empty) entry for every consumed input channel so rescope has a recorded
         // channel to diff against on the next scope change; the entry contributes nothing to
-        // completeness() (a plain max-merge since D1 retired the intersection minimum). Idempotent
+        // completeness(), which is a plain max-merge. Idempotent
         // against an already-rescoped/seeded store (the
         // common case, every call after the first), so this costs a redundant write, never a wrong one.
         Map<String, Uuid> previousInputs = channels.declaredInputs();
@@ -325,18 +326,19 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
             channels.channelUpdate(topicId, taskPartition, ParsleyVectorClock.empty());
         }
 
-        // Wire the ownOutputs clock (D2): bind the producer-ack registry (when this task runs under
-        // a CausalStreams instance — a TopologyTestDriver run has none) so every stamp's preceding
+        // Wire the ownOutputs clock: bind the producer-ack registry (when this task runs under a
+        // CausalStreams instance — a TopologyTestDriver run has none) so every stamp's preceding
         // fold can translate acked sink names to UUID identity — the registry is also the
-        // pending-send view the crossing wait blocks on before each stamp (O1/A7), bounded by the
-        // producer's delivery.timeout.ms (past it the unacked send has failed, so the wait throws
-        // and the transaction dies with it, A8) — then seed each declared sink partition (sink
-        // resolution is strict at init, so every declared sink is resolved and read) at its end
-        // offset - 1 — the sink's last appended position. The seed is an
-        // over-claim (it covers siblings' records on a shared sink, aborted tails, and markers) and
-        // is I8-sound for exactly that reason; it also heals the restored blob trailing the last
-        // transaction's acks. Runs after rescope so a recreated input-sink's destroyed UUID is
-        // already purged before its successor seeds.
+        // pending-send view the crossing wait blocks on before each stamp, per sink partition,
+        // bounded by the producer's delivery.timeout.ms (past it the unacked send has failed, so
+        // the wait throws and the transaction dies with it, never stamping and proceeding) — then
+        // seed each declared sink partition (sink resolution is strict at init, so every declared
+        // sink is resolved and read) at its end offset - 1, the sink's last appended position. The
+        // seed is an over-claim (it covers siblings' records on a shared sink, aborted tails, and
+        // markers), and safe for exactly that reason: every position it names is a real appended
+        // one, so it can only delay a downstream delivery, never reorder it. It also heals the
+        // restored blob trailing the last transaction's acks. Runs after rescope so a recreated
+        // input-sink's destroyed UUID is already purged before its successor seeds.
         Object registryId = context.appConfigs().get("producer." + ParsleyOwnOutputRegistry.CONFIG_KEY);
         ParsleyOwnOutputRegistry registry = registryId == null
                 ? null
@@ -362,11 +364,11 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
             }
         }
         // Heal the restored ownOutputs clock for the PREVIOUS run's sinks that are no longer sinks
-        // (T3.4): the frontier value always trails the final transaction's own acks, and the end-offset
+        // the frontier value always trails the final transaction's own acks, and the end-offset
         // seed above covers only the currently declared sinks — without this, a redeploy that drops
         // a sink (or turns it into an input) would stamp under-claims of this node's own
         // final-transaction outputs, and a downstream consumer of that topic plus another of this
-        // node's sinks could deliver an effect before its cause (an I2 hole). Runs after rescope
+        // node's sinks could deliver an effect before its cause. Runs after rescope
         // deliberately: an added former-own-sink input's frontier seed must keep the carried
         // (pre-heal) cut, so the node's own final-transaction outputs are delivered as ordinary
         // input records above it, while the stamp is healed to cover them from the first emission.
@@ -374,10 +376,10 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
         channels.declareSinks(sinkTopicUuids);
 
         // This stage's own sink topics — never a delivery-scope concern (inScope, above), but fed
-        // to the core for the I8 reflected-claim diagnostic: an inbound claim on an own-sink
+        // to the core for the reflected-claim diagnostic: an inbound claim on an own-sink
         // coordinate above the ownOutputs clock is worth seeing (a stale own-output view or an
         // untruthful peer stamp), never worth failing over. The gate treats reflected claims like
-        // any other dependency (consumed → gated on local delivery; unconsumed → ignored, D1).
+        // any other dependency (consumed → gated on local delivery; unconsumed → ignored).
         Set<Uuid> ownSinkTopicIds = Set.copyOf(sinkTopicUuids.values());
         ParsleyVectorClock.CoordinatePredicate ownSinkTopics = (topicId, partition) -> ownSinkTopicIds.contains(topicId);
 
@@ -394,7 +396,7 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
      * included because a mid-run <em>sink</em> recreation is as unsafe as an input's: the ack
      * registry folds by topic name through a stale UUID map, and the recreated topic's restarted
      * offsets make every fold a monotone no-op, so stamps silently stop claiming this node's own
-     * new outputs (an I2 under-claim downstream).
+     * new outputs, so downstream stamps under-claim this node's causal past.
      */
     private void registerIdentityExpectations() {
         Object watchId = context.appConfigs().get("producer." + ParsleyTopicIdentityWatch.CONFIG_KEY);
@@ -427,9 +429,10 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
      * but this run does not ({@link ParsleyChannels#declaredSinks}), since only a declared sink's acks
      * can trail the persisted blob. Per former sink, resolved through a fresh admin session: if the
      * topic survives under its recorded UUID, acknowledge each partition's {@code endOffset - 1} (the
-     * same I8-sound over-claim the current-sink seed makes); if it was deleted or recreated under a new
-     * UUID, purge the recorded UUID's claims ({@link ParsleyChannels#destroyOwnOutput}, I9's one
-     * permitted removal from stamp-feeding state), since no receiver can deliver them (E1); if
+     * same over-claim the current-sink seed makes, safe because it names a real appended position);
+     * if it was deleted or recreated under a new UUID, purge the recorded UUID's claims
+     * ({@link ParsleyChannels#destroyOwnOutput}, the one removal from stamp-feeding state the
+     * unconditional merge permits), since no receiver can deliver them; if
      * resolution fails otherwise, fail init loudly, because proceeding would stamp under-claims and
      * purging without proof would manufacture them. A still-declared sink is skipped, and an unchanged
      * sink set opens no admin session.
@@ -538,7 +541,7 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
     public void process(Record<KIn, VIn> record) {
         // Before anything ingests or advances state under a possibly stale name → UUID binding:
         // once the watch has detected a mid-run topic recreation, every record from here on could
-        // be mislabelled, so the task must die now (E1 / T3.0 A13).
+        // be mislabelled, so the task must die now.
         ensureTopicIdentityIntact();
         switch (classify(record)) {
             case NULL_MESSAGE -> {
@@ -651,12 +654,13 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
     /**
      * Handles a received null message: decodes its carried completeness clock, folds it through
      * {@link ParsleyGossip#receive}, and relays this node's own null message downstream iff the
-     * received one advanced this node's knowledge of a consumed channel (the I6 relay rule). The null
+     * received one advanced this node's knowledge of a consumed channel (the relay rule). The null
      * message is never delivered to the delegate and never buffered. Two guards mirror the business
      * path: a null message on an unregistered topic fails the task, as {@link #ingest} does, and a
      * present-but-undecodable {@link ParsleyHeader#CAUSAL_CLOCK} header fails it via
      * {@link #onUnresolvableClock} rather than folding nothing and dropping the peer's progress claims
-     * (an I2 hole downstream); an absent header stays an empty clock whose offset is still delivered.
+     * (which would leave downstream stamps under-claiming); an absent header stays an empty clock
+     * whose offset is still delivered.
      *
      * <p>The {@link ParsleyGossip#receive} call and the delivery of its released records run outside
      * the decode catch: past that point a failure is a delivery failure, not a decode failure, and
@@ -687,7 +691,7 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
         ParsleyGossip.Reception<KIn, VIn> reception = gossip.receive(topicId, partition, offset, carried);
         deliver(reception.delivered());
         // Relay only when this null message advanced this node's knowledge of a channel it
-        // consumes (the I6 trigger scope on ParsleyGossip): the completeness boundary still
+        // consumes (the relay trigger scope on ParsleyGossip): the completeness boundary still
         // propagates through non-subscribing layers when a node's own inputs genuinely moved,
         // while custody-only news folds into the stamp without obliging a message — the relay
         // discipline that lets topology cycles quiesce. Reuse the incoming message's own key:
@@ -857,8 +861,9 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
      * end offsets ({@link #sinkEndOffsets}) in the same admin session for the {@code ownOutputs}
      * init-time seed. It feeds the ack fold's name → UUID translation and the reflected-claim
      * diagnostic, so a declared sink that cannot be resolved (a missing topic, or a failed describe or
-     * end-offset read) fails init loudly rather than skipping: the seed is load-bearing for I2, and a
-     * skipped sink would silently stamp under-claims for the task's whole lifetime (the same reasoning
+     * end-offset read) fails init loudly rather than skipping: the seed is what keeps this node's
+     * stamps transitively complete, and a skipped sink would silently stamp under-claims for the
+     * task's whole lifetime (the same reasoning
      * as {@link #healFormerSinkOwnOutputs}). A causal sink must therefore exist before the stage
      * starts; auto-creation on first produce is not supported.
      */
@@ -940,9 +945,10 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
      * not share a partition count. Co-partitioning requires an equal partition count across all
      * causally-related source topics so that a single task owns the complete partition set for a
      * related group; unequal counts make that impossible and let the completeness frontier evaluate
-     * against an incomplete partition set — a causal-safety hole (I2/I9's out-of-scope soundness
-     * argument assumes proper sharding), not a topology lint, so there is no opt-down. A single
-     * source topic is always vacuously fine. Sink topics are deliberately not part of this parity
+     * against an incomplete partition set — a causal-safety hole, since the argument that makes an
+     * out-of-scope coordinate safe to ignore assumes proper sharding, not a topology lint, so there
+     * is no opt-down. A single source topic is always vacuously fine. Sink topics are deliberately
+     * not part of this parity
      * check: a sink may legitimately be <em>wider</em> than the sources (a funnel fanning into a
      * re-keyed sink) — see {@link #validateSinkPartitionWidth} for the sink-side constraint.
      */
@@ -984,7 +990,7 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
     /**
      * The effective producer {@code delivery.timeout.ms}: the {@code producer.}-prefixed override
      * wins, then the un-prefixed client config Streams also passes through, then Kafka's default.
-     * See the {@link #deliveryTimeoutMs} field for the two uses (crossing-wait bound, A9
+     * See the {@link #deliveryTimeoutMs} field for the two uses (crossing-wait bound, stall
      * threshold). Package-private so the resolution branches are pinned directly.
      */
     static long deliveryTimeoutMs(Map<String, Object> appConfigs) {
@@ -998,7 +1004,7 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
                 try {
                     yield Long.parseLong(text.trim());
                 } catch (NumberFormatException e) {
-                    // Never silently defaulted: this value bounds the crossing wait and is the A9
+                    // Never silently defaulted: this value bounds the crossing wait and is the
                     // stall threshold — a typo that quietly became 120 s would misconfigure both.
                     throw new IllegalStateException("malformed " + ProducerConfig.DELIVERY_TIMEOUT_MS_CONFIG
                             + " value '" + text + "'; it bounds the crossing wait and the stall "
