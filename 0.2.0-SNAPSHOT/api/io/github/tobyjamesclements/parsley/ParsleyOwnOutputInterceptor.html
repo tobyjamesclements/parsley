@@ -137,7 +137,7 @@ callback is a no-op.</div>
  @Nullable <a href="https://docs.oracle.com/en/java/javase/21/docs/api/java.base/java/lang/Exception.html" title="class or interface in java.lang" class="external-link">Exception</a>&nbsp;exception)</code></div>
 <div class="col-last even-row-color method-summary-table method-summary-table-tab2 method-summary-table-tab4">
 <div class="block">Resolves a tracked send: folds a successful ack's committed coordinate into the registry's
-per-coordinate max, then clears its pending count (T2.1 — exactly one callback per send,
+per-coordinate max, then clears its pending count (exactly one callback per send,
 abort included, failures carrying a non-null exception).</div>
 </div>
 <div class="col-first odd-row-color method-summary-table method-summary-table-tab2 method-summary-table-tab4"><code>org.apache.kafka.clients.producer.ProducerRecord<wbr>&lt;<a href="https://docs.oracle.com/en/java/javase/21/docs/api/java.base/java/lang/Object.html" title="class or interface in java.lang" class="external-link">Object</a>,<wbr><a href="https://docs.oracle.com/en/java/javase/21/docs/api/java.base/java/lang/Object.html" title="class or interface in java.lang" class="external-link">Object</a>&gt;</code></div>
@@ -218,7 +218,7 @@ mutating it here would alter what the broker appends.</div>
 <div class="member-signature"><span class="modifiers">public</span>&nbsp;<span class="return-type">void</span>&nbsp;<span class="element-name">onAcknowledgement</span><wbr><span class="parameters">(@Nullable org.apache.kafka.clients.producer.RecordMetadata&nbsp;metadata,
  @Nullable <a href="https://docs.oracle.com/en/java/javase/21/docs/api/java.base/java/lang/Exception.html" title="class or interface in java.lang" class="external-link">Exception</a>&nbsp;exception)</span></div>
 <div class="block">Resolves a tracked send: folds a successful ack's committed coordinate into the registry's
-per-coordinate max, then clears its pending count (T2.1 — exactly one callback per send,
+per-coordinate max, then clears its pending count (exactly one callback per send,
 abort included, failures carrying a non-null exception). Runs on the producer network
 thread; everything it touches is the registry's concurrent state. A null <code>metadata</code>
 (no coordinate to resolve) is counted as a failure so a crossing wait releases loudly

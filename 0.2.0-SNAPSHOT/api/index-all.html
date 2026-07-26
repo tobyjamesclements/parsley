@@ -269,7 +269,7 @@ clock <code>record</code> carried, and, for a business record, <code>record</cod
 <dt><a href="io/github/tobyjamesclements/parsley/ParsleyOwnOutputInterceptor.html#onAcknowledgement(org.apache.kafka.clients.producer.RecordMetadata,java.lang.Exception)" class="member-name-link">onAcknowledgement(RecordMetadata, Exception)</a> - Method in class io.github.tobyjamesclements.parsley.<a href="io/github/tobyjamesclements/parsley/ParsleyOwnOutputInterceptor.html" title="class in io.github.tobyjamesclements.parsley">ParsleyOwnOutputInterceptor</a></dt>
 <dd>
 <div class="block">Resolves a tracked send: folds a successful ack's committed coordinate into the registry's
-per-coordinate max, then clears its pending count (T2.1 — exactly one callback per send,
+per-coordinate max, then clears its pending count (exactly one callback per send,
 abort included, failures carrying a non-null exception).</div>
 </dd>
 <dt><a href="io/github/tobyjamesclements/parsley/ParsleyOwnOutputInterceptor.html#onSend(org.apache.kafka.clients.producer.ProducerRecord)" class="member-name-link">onSend(ProducerRecord)</a> - Method in class io.github.tobyjamesclements.parsley.<a href="io/github/tobyjamesclements/parsley/ParsleyOwnOutputInterceptor.html" title="class in io.github.tobyjamesclements.parsley">ParsleyOwnOutputInterceptor</a></dt>
