@@ -59,6 +59,9 @@ The counterfactual is deliberately a note rather than a crossed arrow. `steps.py
 `->>` and `-->>`, but mermaid's `autonumber` counts `--x` as well, so drawing the broken path
 would desync the script's numbering from the rendered diagram.
 
+Message labels avoid `>` outside an arrow. Writing `>=` in message text is accepted by some
+mermaid front ends and not others, and the wording reads better without it.
+
 ## How this diagram differs from the others
 
 `two-channel-topology` is a **call-level** diagram: every arrow is a real Java method call with a

@@ -33,7 +33,7 @@ sequenceDiagram
 
     c2-->>p4: poll returns m3 at c2-0 @9, deps {c1-0: 7, c4-0: 4}
     p4->>p4: gate c4-0: not consumed, ignore, count the metric
-    p4->>p4: gate c1-0: consumed, require frontier >= 7
+    p4->>p4: gate c1-0: consumed, require frontier to have reached 7
     Note right of p4: p4's contiguous delivered frontier stands at c1-0 @6.<br/>The direct claim is unsatisfied, so m3 is held. Only<br/>p4's own delivery can satisfy it, never a claim carried<br/>on a sibling channel. Local delivery, never hearsay.
     p4->>p4: hold m3 in the buffer, no timeout, no eviction
 
@@ -42,7 +42,7 @@ sequenceDiagram
     c1-->>p4: poll returns m1 at c1-0 @7
     p4->>p4: gate: no dependencies, deliver m1
     p4->>p4: merge m1, frontier advances to {c1-0: 7}
-    p4->>p4: re-evaluate held records, 7 >= 7 satisfied
+    p4->>p4: re-evaluate held records, frontier 7 satisfies the required 7
     p4->>p4: deliver m3, after m1, causal order preserved
     Note right of p4: Ignoring c4-0 lost no ordering observable at p4.<br/>The ordering that ran through c4 was already stated<br/>explicitly by c1-0 @7, which I9 guaranteed would<br/>be present. Sound, not vacuously satisfied.
 
