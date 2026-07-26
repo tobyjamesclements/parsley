@@ -1338,11 +1338,19 @@ guarantees of the one below it and offers a clean assumption set to the one abov
 </code></pre></div>
 <ul>
 <li>The <strong><a href="../../protocols/channels/">channels module</a></strong> repairs the transport assumption. Kafka
-  partitions are not classical channels: topic recreation rebinds names, EOS commit markers and
-  aborted records occupy offsets a consumer never sees, retention truncates history, the broker
-  assigns the sender's own sequence numbers asynchronously, and Parsley itself delivers within a
-  partition out of order. UUID-keyed coordinates, seeding, bridging, the contiguous frontier, and
-  own-output tracking each repair one of these, so the layer above sees dense, stable channels.</li>
+  partitions are not classical channels, and each way they fall short has one mechanism that
+  answers it, so that the layer above sees dense, stable channels:</li>
+<li>Topic recreation rebinds a name to a fresh partition history. <strong>UUID-keyed coordinates</strong>
+    identify a channel by the topic's stable Kafka UUID, so a coordinate never silently rebinds.</li>
+<li>EOS commit markers and aborted records occupy offsets a consumer never returns. <strong>Bridging</strong>
+    folds a permanently skipped run of offsets into the contiguous walk, so a marker cannot wedge
+    the frontier forever.</li>
+<li>Retention truncates history below the first offset a node ever observes. <strong>Seeding</strong> folds
+    everything below that first sighting into the frontier as a density baseline.</li>
+<li>The broker assigns the sender's own sequence numbers asynchronously. <strong>Own-output tracking</strong>
+    reconstructs the node's own clock entry from produce acknowledgements.</li>
+<li>Parsley itself delivers within a partition out of order. <strong>The contiguous frontier</strong> advertises
+    only the gap-free prefix of what a node has delivered.</li>
 <li>The <strong><a href="../../protocols/causal-broadcast/">causal-broadcast module</a></strong> repairs the visibility
   assumption, not by restoring total visibility but by making the delivery predicate sound without
   it, with the two-branch <a href="../delivery-gate/">delivery gate</a>.</li>
