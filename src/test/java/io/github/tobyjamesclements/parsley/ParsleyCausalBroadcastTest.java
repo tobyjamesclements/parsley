@@ -214,8 +214,8 @@ class ParsleyCausalBroadcastTest {
      * A replayed record whose offset is at or below the contiguous frontier — an offset this node
      * has already delivered — is skipped, never forwarded to the delegate a second time. This is the
      * receive path's replay skip guard: routine while an added input's re-fetched prefix replays
-     * past the carried-ancestry seed ({@code ParsleyChannels#rescope}, T3.0 A5), and otherwise the
-     * fail-safe net for a redelivery {@code exactly_once_v2} should make impossible (A11). The skip
+     * past the carried-ancestry seed ({@code ParsleyChannels#rescope}), and otherwise the
+     * fail-safe net for a redelivery {@code exactly_once_v2} should make impossible. The skip
      * is checked first, so a replayed record whose clock names a coordinate now out of scope skips
      * without even counting the ignore metric.
      *
@@ -803,12 +803,13 @@ class ParsleyCausalBroadcastTest {
     }
 
     /**
-     * The two-branch gate's ignore branch (D1): a dependency on a coordinate this node does not
+     * The two-branch gate's ignore branch: a dependency on a coordinate this node does not
      * consume — an undeclared topic, or a partition another task owns — is ignored,
-     * unconditionally. With transitively complete stamps (I2) carried by unconditional merges
-     * (I9), any consumed causal ancestor of the record is claimed directly in the record's own
-     * clock, so the unconsumed entry only proxies ancestry the clock already states; the retired
-     * I7 fail-fast added no safety and manufactured the join-coordination problem (D7).
+     * unconditionally. With transitively complete stamps carried by unconditional merges,
+     * any consumed causal ancestor of the record is claimed directly in the record's own
+     * clock, so the unconsumed entry only proxies ancestry the clock already states. Failing the
+     * task on such a coordinate instead would add no safety and would make a join require
+     * coordination.
      *
      * Asserts the record delivers immediately, is never buffered, and each ignored coordinate is
      * counted by the out-of-scope-ignored metric.
@@ -841,7 +842,7 @@ class ParsleyCausalBroadcastTest {
 
         assertEquals(1, outcome.delivered().size(),
                 "dependencies on unconsumed coordinates must fall to the ignore branch, not gate "
-                        + "or fail the record (D1)");
+                        + "or fail the record");
         assertEquals(0, localBuffer.size(), "a record held back by nothing consumed must never be buffered");
         assertEquals(List.of(2), ignoredCounts,
                 "every ignored coordinate must count the out-of-scope-ignored metric, once per received record");
@@ -888,8 +889,8 @@ class ParsleyCausalBroadcastTest {
 
     /**
      * {@code broadcast()} — the single stamping site — runs the crossing wait, drains the bound
-     * acknowledged-outputs source into the {@code ownOutputs} clock ("folded before each stamp",
-     * D2/O1), and attaches the T2.3 stamp {@code completeness ∪ ownOutputs}: the acked sink
+     * acknowledged-outputs source into the {@code ownOutputs} clock ("folded before each stamp"),
+     * and attaches the stamp {@code completeness ∪ ownOutputs}: the acked sink
      * coordinate must appear both in {@code ownOutputs()} and in the attached dependency header,
      * and the crossing wait must have been invoked before the stamp was read.
      */
@@ -916,13 +917,14 @@ class ParsleyCausalBroadcastTest {
         byte[] stampBytes = stamped.headers().lastHeader(ParsleyHeader.CAUSAL_CLOCK).value();
         ParsleyVectorClock stamp = ParsleyVectorClock.fromBytes(stampBytes);
         assertEquals(causalBroadcast.completeness().merge(channels.ownOutputs()), stamp,
-                "the stamp must be completeness ∪ ownOutputs (D2, T2.3)");
+                "the stamp must be completeness ∪ ownOutputs");
         assertEquals(11L, stamp.offsetFor(sinkId, 0),
                 "the acked own-output coordinate must ride the stamp — the #22 fix");
     }
 
     /**
-     * The A8 invariant at the stamping site: a crossing wait that throws (timeout or observed ack
+     * The never-stamp-and-proceed rule at the stamping site: a crossing wait that throws (timeout
+     * or observed ack
      * failure) propagates out of {@code broadcast()} — the record is never stamped, so the EOS
      * transaction dies rather than carry a potentially under-claiming clock.
      */
@@ -939,15 +941,15 @@ class ParsleyCausalBroadcastTest {
 
         assertThrows(CausalPendingAckException.class,
                 () -> causalBroadcast.broadcast(new Record<>("k", "v", 0L, ParsleyHeader.mutableHeaders())),
-                "a failed crossing wait must fail the broadcast — never stamp-and-proceed (A8)");
+                "a failed crossing wait must fail the broadcast — never stamp-and-proceed");
     }
 
     /**
      * A marker broadcast passes its exact destination set to the crossing wait — every sink at the
      * task's own partition — where a business broadcast passes the conservative empty set (see
      * {@code broadcastWaitsFoldsAndStampsCompletenessUnionOwnOutputs}): same-coordinate pending
-     * sends are covered by partition FIFO plus I3, and the cross-sink exemption for a fanned-out
-     * marker is O4's recorded null-message exemption.
+     * sends are covered by partition FIFO plus per-producer stamp monotonicity, and the cross-sink
+     * exemption for a fanned-out marker is safe because its destinations are known exactly.
      */
     @Test
     void markerBroadcastExcludesItsDestinationsFromTheCrossingWait() {
@@ -967,11 +969,11 @@ class ParsleyCausalBroadcastTest {
     }
 
     /**
-     * A reflected own-sink claim is ordinary ancestry under the two-branch gate (T3.1): when the
+     * A reflected own-sink claim is ordinary ancestry under the two-branch gate: when the
      * sink is not consumed here it falls to the ignore branch — the record delivers — while the
-     * claim still folds into the delivered record's channel clock unstripped (I9) and rides the
+     * claim still folds into the delivered record's channel clock unstripped and rides the
      * outbound completeness, the custody chain a third party consuming the shared sink gates on
-     * (#22; the stamp-side strip died at T2.3, the gate-side strip at T3.1).
+     * (#22).
      */
     @Test
     void ownSinkClaimInADeliveredRecordsClockRidesTheStampUnstripped() {
@@ -988,17 +990,18 @@ class ParsleyCausalBroadcastTest {
 
         assertEquals(1, outcome.delivered().size(),
                 "the reflected claim on an unconsumed own sink must fall to the ignore branch and "
-                        + "deliver the record (D1)");
+                        + "deliver the record");
         assertEquals(5L, causalBroadcast.completeness().offsetFor(sinkId, 0),
                 "the own-sink claim must fold into the advertised channel clock and ride the "
                         + "stamp — stripping it erased a real ancestor for third parties (#22)");
     }
 
     /**
-     * Finding (iii), the shared-sink blindspot, closed by the gate-side strip's deletion (T3.1): a
+     * The shared-sink blindspot: a
      * node that <em>consumes</em> its own sink topic genuinely gates a claim about that sink —
-     * another producer's record on the shared topic is a real, possibly unseen cause, and the old
-     * strip vacuously satisfied exactly this claim. The record must hold until this node has
+     * another producer's record on the shared topic is a real, possibly unseen cause, so stripping
+     * own-sink coordinates at the gate would satisfy exactly this claim vacuously. The record must
+     * hold until this node has
      * itself delivered the claimed sink offset, then release.
      */
     @Test
@@ -1028,7 +1031,8 @@ class ParsleyCausalBroadcastTest {
     }
 
     /**
-     * The I8 diagnostic: an inbound clock claiming one of this node's own sink coordinates ABOVE
+     * The over-claim diagnostic: an inbound clock claiming one of this node's own sink coordinates
+     * ABOVE
      * the ownOutputs clock counts the reflected-claim metric — the own-output view is stale or the
      * peer's stamp untruthful; worth seeing, never a failure — while a claim at or below it (the
      * truthful reflection) counts nothing.
@@ -1061,11 +1065,11 @@ class ParsleyCausalBroadcastTest {
 
         causalBroadcast.receive(incomingRecord(C1, 1, ParsleyVectorClock.empty().observe(sinkId, 0, 9)));
         assertEquals(List.of(1), reflectedCounts,
-                "a reflected claim above ownOutputs must count the I8 diagnostic metric");
+                "a reflected claim above ownOutputs must count the diagnostic metric");
     }
 
     /**
-     * The A9 stalled-dependency scan: a record held past the threshold on a dependency ABOVE its
+     * The stalled-dependency scan: a record held past the threshold on a dependency ABOVE its
      * channel's highest physically received offset (nothing received so far can satisfy the claim
      * — an aborted tail, a dead producer) is counted; a record held on a dependency at or below
      * the highest received (its cause arrived and is merely still held) is not; and nothing counts
@@ -1113,7 +1117,8 @@ class ParsleyCausalBroadcastTest {
     }
 
     /**
-     * The input-side sibling of the own-output gap D2 closed: a record delivered out of order above
+     * The input-side sibling of the own-output gap that folding own outputs into the stamp closes:
+     * a record delivered out of order above
      * a contiguous-frontier gap (c1:3 held on an unseen c2 dependency; c1:4 from another producer
      * delivers past it) must be claimed by the stamp {@code broadcast()} attaches — the delegate
      * has seen c1:4, so any output emitted now is causally after it, and a downstream consumer of

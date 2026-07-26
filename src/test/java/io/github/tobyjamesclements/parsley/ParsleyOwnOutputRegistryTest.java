@@ -20,9 +20,9 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
  * Tests for {@link ParsleyOwnOutputRegistry} and {@link ParsleyOwnOutputInterceptor} — the
- * producer-ack machinery behind the {@code ownOutputs} clock (D2, T2.2): the max-per-coordinate
- * ack fold, the config-key registry hand-off T2.1 validated the transport for, and the
- * crossing-wait primitive whose A8 contract is that it returns normally only on quiescence and
+ * producer-ack machinery behind the {@code ownOutputs} clock: the max-per-coordinate
+ * ack fold, the config-key registry hand-off, and the
+ * crossing-wait primitive whose contract is that it returns normally only on quiescence and
  * throws — failing the caller's EOS transaction — on timeout or on an acknowledgement failure.
  */
 class ParsleyOwnOutputRegistryTest {
@@ -99,7 +99,7 @@ class ParsleyOwnOutputRegistryTest {
 
     /**
      * The interceptor publishes a committed ack's exact coordinate into the registry it resolved
-     * from its configuration — the production hand-off T2.1 validated the transport for — and a
+     * from its configuration — the production hand-off — and a
      * failed ack (non-null exception) folds nothing.
      */
     @Test
@@ -162,8 +162,8 @@ class ParsleyOwnOutputRegistryTest {
 
     /**
      * A thread that has never sent has no bound tracker, and a thread whose only pending send is
-     * to the very coordinate being stamped needs no wait (partition FIFO plus I3 cover
-     * same-partition ordering — O1): both return immediately.
+     * to the very coordinate being stamped needs no wait (partition FIFO plus per-producer stamp
+     * monotonicity cover same-partition ordering): both return immediately.
      */
     @Test
     void crossingWaitReturnsImmediatelyWithNothingPendingElsewhere() {
@@ -180,7 +180,7 @@ class ParsleyOwnOutputRegistryTest {
      * The business-forward form of the wait — an <em>empty</em> exclusion set — waits for full
      * quiescence: even a pending send to a coordinate a marker stamp could have excluded holds it,
      * because a business forward's destination partition is unknowable at stamp time and
-     * over-waiting is the sound direction (I8). The pending send's ack releases it.
+     * over-waiting is the safe direction, since it can only delay. The pending send's ack releases it.
      */
     @Test
     void emptyExclusionWaitsOnEveryPendingCoordinate() {
@@ -199,7 +199,7 @@ class ParsleyOwnOutputRegistryTest {
 
     /**
      * The crossing wait blocks on a pending send to a different partition of the same sink topic
-     * (the T3.0 A7 funnel case) and is released by that send's committed ack arriving from the
+     * (the funnel case) and is released by that send's committed ack arriving from the
      * producer network thread.
      */
     @Test
@@ -227,7 +227,7 @@ class ParsleyOwnOutputRegistryTest {
     }
 
     /**
-     * The A8 implementation invariant, timeout side: a crossing wait that runs out of time must
+     * The never-stamp-and-proceed rule, timeout side: a crossing wait that runs out of time must
      * throw — failing the caller's EOS transaction — never return normally to a stamp that could
      * under-claim the still-unacknowledged coordinate.
      */
@@ -244,7 +244,7 @@ class ParsleyOwnOutputRegistryTest {
     }
 
     /**
-     * The A8 invariant, abort side (T2.1's latch finding): aborting a transaction fails each
+     * The never-stamp-and-proceed rule, abort side: aborting a transaction fails each
      * pending send with exactly one exception-carrying callback, so the wait releases — and must
      * release by THROWING, dying with the transaction instead of stamping over a failed send.
      */

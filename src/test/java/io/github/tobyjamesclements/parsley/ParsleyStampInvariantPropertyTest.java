@@ -9,9 +9,9 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * The T2.4 property tests for I2 (stamp transitive completeness), I3 (per-producer stamp
- * monotonicity), and I9 (unconditional merge — stamps carry unconsumed-channel ancestry): the
- * certification the D1 unconditional-ignore gate leans on before Phase 3 switches it on. Every
+ * The property tests for stamp transitive completeness, per-producer stamp
+ * monotonicity, and unconditional merge (stamps carry unconsumed-channel ancestry): the
+ * certification the gate's unconditional ignore branch leans on. Every
  * invariant is asserted <em>continuously inside</em> {@link ParsleyTopologySim} — at every
  * emission and every delivery, under seeded-random interleavings — so each test here is one
  * topology + a seed sweep + vacuity guards proving the interesting paths (holds, out-of-order
@@ -29,12 +29,12 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  *   C {c1,c2,c3} → c4
  *   W {c1,c2,c3,c4} → c5 (silent delegate: c5 carries only null messages)
  *   N {c5} → c6          (consumes only null messages — its stamps must still carry c1..c5
- *                          ancestry it never consumed: the I9 custody chain, gate-free)
+ *                          ancestry it never consumed: the custody chain, gate-free)
  * </pre>
  *
  * <p>The chain topology (see {@link #differingScopeChain}) adds business consumers whose scopes do
  * <em>not</em> cover the coordinates their records' clocks claim — each hop consumes only its
- * predecessor's sink, so upstream claims land in the gate's ignore branch (D1) at every node, and
+ * predecessor's sink, so upstream claims land in the gate's ignore branch at every node, and
  * the same continuous properties then certify the ignore branch end to end.
  */
 class ParsleyStampInvariantPropertyTest {
@@ -55,7 +55,8 @@ class ParsleyStampInvariantPropertyTest {
     }
 
     /**
-     * I2, both forms, plus the ground-truth causal delivery order, across random interleavings:
+     * Stamp transitive completeness, both forms, plus the ground-truth causal delivery order,
+     * across random interleavings:
      * at every emission the stamp dominates (a) the dependency clocks and coordinates of every
      * event the node has delivered and (b) the node's exact delegate-visible causal past; at every
      * delivery, every consumed cause in the record's true history was already delivered locally.
@@ -94,7 +95,8 @@ class ParsleyStampInvariantPropertyTest {
     }
 
     /**
-     * I3 across random interleavings: a node's successive stamps are vector-monotone (asserted in
+     * Per-producer stamp monotonicity across random interleavings: a node's successive stamps are
+     * vector-monotone (asserted in
      * the sim at every single emission), which is what makes non-head-of-line delivery preserve
      * FIFO-per-producer downstream — if an earlier record from a producer is held, every later one
      * is held too. The shared sink c2 is the load-bearing case: A's and D's interleaved records on
@@ -115,9 +117,9 @@ class ParsleyStampInvariantPropertyTest {
     }
 
     /**
-     * I9's transitive-chain scenario: the origin record c1@0's coordinate must be claimed directly
+     * The transitive-chain scenario: the origin record c1@0's coordinate must be claimed directly
      * by the stamp of every node whose true causal past contains it, however many hops from c1 it
-     * sits — the custody chain that makes the D1 ignore branch sound (a consumed ancestor is
+     * sits — the custody chain that makes the gate's ignore branch sound (a consumed ancestor is
      * always claimed <em>in the record's own clock</em>, never only via intermediaries).
      *
      * Asserts, per seed, that the chain genuinely propagated (C's ground-truth past contains the
@@ -136,15 +138,16 @@ class ParsleyStampInvariantPropertyTest {
                             + "through the chain (drain() delivers all backlog)");
             assertTrue(c.channels.stamp().offsetFor(sim.topicId("c1"), 0) >= 0,
                     "[seed " + seed + "] C's stamp must claim the origin coordinate c1@0 directly "
-                            + "(I2/I9: transitively complete, unconditionally merged)");
+                            + "(transitively complete, unconditionally merged)");
         }
     }
 
     /**
-     * I9's gate-free custody path: node N consumes only c5 — null messages from W — yet its
+     * The gate-free custody path: node N consumes only c5 — null messages from W — yet its
      * outbound stamps must carry the c1..c4 ancestry those carried clocks name, none of which N
-     * consumes. This is the unconditional merge working across differing consumption sets today
-     * (business-record custody across differing scopes joins at T3.1 with the two-branch gate).
+     * consumes. This is the unconditional merge working across differing consumption sets, the
+     * null-message half of the same custody chain the two-branch gate relies on for business
+     * records.
      *
      * Asserts N genuinely folded carried clocks, never consumed c1, and still stamps a c1 claim.
      */
@@ -161,14 +164,14 @@ class ParsleyStampInvariantPropertyTest {
                     "topology self-check: N must not consume c1 for this property to mean anything");
             assertTrue(n.channels.stamp().offsetFor(sim.topicId("c1"), 0) >= 0,
                     "[seed " + seed + "] N's stamp must claim c1 ancestry it learned only from "
-                            + "carried clocks on c5 — the merge may never strip unconsumed channels (I9)");
+                            + "carried clocks on c5 — the merge may never strip unconsumed channels");
         }
     }
 
     /**
-     * The T3.1 differing-scope chain: no consumer past A consumes c1, so every record's clock
-     * claims coordinates its receiver has no channel for — exactly the shape the retired I7
-     * fail-fast rejected. K's two consumed channels keep the consumed branch genuinely exercised
+     * The differing-scope chain: no consumer past A consumes c1, so every record's clock
+     * claims coordinates its receiver has no channel for — the shape the ignore branch exists to
+     * handle. K's two consumed channels keep the consumed branch genuinely exercised
      * beside the ignore branch: a c3 record (from A2, whose stamps claim c2 ancestry) can arrive
      * at K before its c2 cause, so K holds it — while the same clock's c1 claims are ignored. L
      * consumes only c7 and ignores everything upstream (claims on c1, c2, c3 alike).
@@ -184,16 +187,17 @@ class ParsleyStampInvariantPropertyTest {
     }
 
     /**
-     * The two-branch gate's ignore branch under the full property sweep (T3.1, D1): a chain whose
+     * The two-branch gate's ignore branch under the full property sweep: a chain whose
      * business consumers do not consume their ancestors' topics. Every upstream claim a record
      * carries lands in the ignore branch at its consumer, yet all of the sim's continuous
-     * invariants — I2 both forms, I3, I9's custody chain, and the ground-truth causal delivery
+     * invariants — stamp dominance in both forms, stamp monotonicity, the custody chain, and the
+     * ground-truth causal delivery
      * order — must hold exactly as in a fully-covering topology, and every seed must still drain
      * to empty hold-back queues (an ignore that wrongly gated would strand records; one that
      * wrongly satisfied a consumed dependency would break the order check at K).
      *
      * Asserts every seed drains, the origin c1@0 genuinely traverses the chain to L in the sweep,
-     * L's stamp then claims the origin it never consumed (I9 through ignoring consumers), and
+     * L's stamp then claims the origin it never consumed (custody through ignoring consumers), and
      * records were genuinely held at K (the consumed branch ran beside the ignore branch).
      */
     @Test
@@ -215,7 +219,7 @@ class ParsleyStampInvariantPropertyTest {
                 originsReachedL++;
                 assertTrue(l.channels.stamp().offsetFor(sim.topicId("c1"), 0) >= 0,
                         "[seed " + seed + "] L's stamp must claim the origin c1@0 it never consumed "
-                                + "— the I9 custody chain through ignoring consumers");
+                                + "— the custody chain through ignoring consumers");
             }
             held += sim.recordsHeld;
         }
@@ -231,7 +235,7 @@ class ParsleyStampInvariantPropertyTest {
      * All of the above under in-place restarts: nodes are torn down mid-schedule and rebuilt from
      * their durable stores (the {@code "frontier"} value, buffer, candidate and forwarded-index stores,
      * the sink end-offset {@code ownOutputs} seed, and the forwarded-index reconstruction of
-     * {@code highestDelivered}), and every continuous invariant — including I3's monotonicity
+     * {@code highestDelivered}), and every continuous invariant — including stamp monotonicity
      * <em>across</em> the restart boundary — must hold exactly as in an uninterrupted run.
      *
      * Asserts restarts genuinely occurred and every seed still drains to empty hold-back queues.

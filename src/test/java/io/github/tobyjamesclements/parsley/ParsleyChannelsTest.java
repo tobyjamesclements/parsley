@@ -63,7 +63,7 @@ class ParsleyChannelsTest {
      * is causally after it, and a downstream consumer of both topics gates only on what the stamp
      * claims. The frontier (the gate's view) and completeness (the interim floor-publication view)
      * must both stay below the gap — only {@code stamp()} carries the above-gap claim, exactly the
-     * split T2.3 established for {@code ownOutputs}.
+     * split the stamp draws for {@code ownOutputs}.
      *
      * Asserts the stamp claims the above-gap offset while frontier and completeness stay at the
      * contiguous prefix.
@@ -125,7 +125,7 @@ class ParsleyChannelsTest {
 
     /**
      * A scope shrink re-homes an above-gap delivered offset on the retiring channel into the
-     * carried-ancestry clock, like any other delivered causal past (T3.0 A6: skipped, never
+     * carried-ancestry clock, like any other delivered causal past (skipped, never
      * dropped). Without this, a restart that removes an input would erase the stamp's claim to a
      * record the node genuinely delivered — the same under-claim the re-homing rule exists to
      * prevent for frontier entries.
@@ -146,7 +146,7 @@ class ParsleyChannelsTest {
         original.receive(C2_ID, 0, 2);
         original.delivered(C2_ID, 0, 2); // delivered above the gap at offset 1
 
-        // Restart with C2 removed from the declared inputs — the A6 shrink path.
+        // Restart with C2 removed from the declared inputs — the shrink path.
         ParsleyChannels restored = new ParsleyChannels(store, forwardedIndex);
         restored.rescope(Map.of("C1", C1_ID), 0);
 
@@ -157,8 +157,8 @@ class ParsleyChannelsTest {
 
     /**
      * A recreated input's old UUID leaves the above-gap delivered claim with everything else: the
-     * old coordinates can never be delivered by any receiver again (E1), which is I9's one
-     * permitted removal from stamp-feeding state.
+     * old coordinates can never be delivered by any receiver again, which is the one
+     * removal from stamp-feeding state the unconditional merge permits.
      *
      * Asserts the stamp carries no claim at all for the destroyed UUID after the rescope.
      */
@@ -182,15 +182,15 @@ class ParsleyChannelsTest {
 
         assertEquals(-1L, restored.stamp().offsetFor(C2_ID, 0),
                 "a destroyed (recreated) UUID's above-gap claim must leave the stamp outright — "
-                        + "no receiver can ever deliver the old coordinates (E1)");
+                        + "no receiver can ever deliver the old coordinates");
     }
 
     /**
-     * {@code rescope} re-homes — never drops — the ancestry a scope shrink retires (T3.0 A6). A
+     * {@code rescope} re-homes — never drops — the ancestry a scope shrink retires. A
      * channel-clock entry for a topic that has left the input set folds into the carried-ancestry
-     * clock, so completeness (the outbound stamp) is unchanged by the prune: dropping it, as the old
-     * {@code pruneToScope} did, would under-claim every subsequent stamp (I2) and let a third party
-     * downstream reorder the retired channel's causes against their effects (I9).
+     * clock, so completeness (the outbound stamp) is unchanged by the prune. Dropping it instead
+     * would under-claim every subsequent stamp and let a third party
+     * downstream reorder the retired channel's causes against their effects.
      *
      * Asserts that after rescoping to an input set without the retired ancestor's channel,
      * completeness still carries the ancestor at its full value, the frontier no longer gates on the
@@ -219,7 +219,7 @@ class ParsleyChannelsTest {
 
         assertEquals(9L, channels.completeness().offsetFor(ANC_ID, 0),
                 "the retired coordinate must re-home into the carried ancestry at its full delivered "
-                        + "value — dropping it would under-claim the stamp (I2/I9, T3.0 A6)");
+                        + "value — dropping it would under-claim the stamp");
         assertEquals(-1L, channels.frontier().offsetFor(ANC_ID, 0),
                 "the retired coordinate must leave the frontier — the gate view — even as the stamp "
                         + "keeps carrying it");
@@ -236,7 +236,7 @@ class ParsleyChannelsTest {
     /**
      * {@code rescope} treats a recreated input — the same topic name declared with a different UUID —
      * as provably destroyed: the old UUID's entries leave the frontier, the channel clocks, and the
-     * carried ancestry outright (E1: a recreated topic's offsets rebind to different records, so no
+     * carried ancestry outright (a recreated topic's offsets rebind to different records, so no
      * receiver can ever deliver them), while everything else re-homes as usual.
      *
      * Asserts the old UUID vanishes from completeness after the rescope and the new UUID starts
@@ -261,7 +261,7 @@ class ParsleyChannelsTest {
 
         assertEquals(-1L, channels.completeness().offsetFor(C1_ID, 0),
                 "the destroyed UUID must leave every stamp-feeding structure — it can never be "
-                        + "delivered by any receiver (E1), so re-homing it would carry a dead claim forever");
+                        + "delivered by any receiver, so re-homing it would carry a dead claim forever");
         assertEquals(-1L, channels.frontier().offsetFor(recreatedC1, 0),
                 "the recreated topic's new UUID has no carried ancestry, so it starts unseeded");
 
@@ -272,7 +272,7 @@ class ParsleyChannelsTest {
 
     /**
      * {@code rescope} seeds an added input's frontier at the node's carried-ancestry value for that
-     * coordinate (T3.0 A5 — "skip what you already ignored"): an input removed in one deployment and
+     * coordinate ("skip what you already ignored"): an input removed in one deployment and
      * re-added in a later one must not re-deliver the prefix this node already delivered or carried,
      * and the forwarded index is pruned at or below the seed to match. A genuinely new input with no
      * carried entry seeds nothing and starts like any first sighting.
@@ -305,12 +305,12 @@ class ParsleyChannelsTest {
 
         assertEquals(7L, channels.frontier().offsetFor(C2_ID, 0),
                 "the re-added input must seed at the carried-ancestry value 7 — replaying the prefix "
-                        + "at or below what this node already delivered would be cause-after-effect (A5)");
+                        + "at or below what this node already delivered would be cause-after-effect");
         assertFalse(forwardedIndex.contains(C2_ID, 0, 5),
                 "the forwarded index must be pruned at or below the seed, mirroring the restore-time sweep");
         assertEquals(-1L, channels.frontier().offsetFor(ANC_ID, 0),
                 "a genuinely new input with no carried ancestry seeds nothing — its history has no "
-                        + "delivered descendants here (I2), so replaying it is ordinary delivery");
+                        + "delivered descendants here, so replaying it is ordinary delivery");
         assertTrue(channels.alreadyDelivered(C2_ID, 0, 7),
                 "the seeded prefix must read as already delivered, so the receive path skips its replay");
         assertFalse(channels.alreadyDelivered(C2_ID, 0, 8),
@@ -319,8 +319,8 @@ class ParsleyChannelsTest {
 
     /**
      * {@code rescope}'s growth seed reads {@link ParsleyChannels#stamp()}, not
-     * {@code completeness()} ("skip what you already claimed" extends A5's "skip what you already
-     * ignored", T2.2 → T2.3): an added input that is this node's own former sink seeds at the
+     * {@code completeness()} ("skip what you already claimed" extends "skip what you already
+     * ignored"): an added input that is this node's own former sink seeds at the
      * ownOutputs position its stamps already claimed — delivering that prefix into surviving state
      * would replay records every downstream gate already treats as this node's causal past.
      *
@@ -350,9 +350,9 @@ class ParsleyChannelsTest {
     }
 
     /**
-     * {@link ParsleyChannels#stamp()} is {@code completeness ∪ ownOutputs} (D2): the outbound
+     * {@link ParsleyChannels#stamp()} is {@code completeness ∪ ownOutputs}: the outbound
      * vector timestamp carries the acked own-output positions, and equally serves as the node's
-     * total knowledge (the I6 relay bound), while {@code completeness()} itself stays free of
+     * total knowledge (the relay bound), while {@code completeness()} itself stays free of
      * {@code ownOutputs} (it reports what this node has delivered, never what it produced).
      *
      * Asserts stamp = completeness merged with ownOutputs and completeness excludes ownOutputs.
@@ -368,7 +368,7 @@ class ParsleyChannelsTest {
         assertEquals(3L, channels.stamp().offsetFor(C1_ID, 0),
                 "the stamp must carry the delivered frontier");
         assertEquals(6L, channels.stamp().offsetFor(C4_ID, 0),
-                "the stamp must carry the acked own-output position (D2)");
+                "the stamp must carry the acked own-output position");
         assertEquals(-1L, channels.completeness().offsetFor(C4_ID, 0),
                 "completeness must stay free of ownOutputs — only the stamp unions them");
     }
@@ -405,19 +405,19 @@ class ParsleyChannelsTest {
                 "the rescope must record the current declaration for the next init to diff against");
     }
 
-    // --- Own outputs (D2, T2.2) -----------------------------------------------------------------
+    // --- Own outputs ----------------------------------------------------------------------------
     //
     // The ownOutputs clock is stamp-side state only: acknowledge() folds producer acks (and the
-    // init-time end-offset seed) monotonically, and nothing here may leak into completeness() until
-    // T2.3 changes the stamp to completeness ∪ ownOutputs.
+    // init-time end-offset seed) monotonically, and nothing here may leak into completeness().
+    // stamp() merges the two; completeness() stays the delivered/advertised boundary alone.
 
     private static final Uuid C4_ID = Uuid.randomUuid();
 
     /**
      * {@code acknowledge} folds monotonically into the {@code ownOutputs} clock: entries only ever
      * rise (a lower or equal offset is a no-op, a negative offset is ignored), which is the
-     * property I3 leans on once T2.3 folds this clock into the stamp — and which makes re-draining
-     * the interceptor registry idempotent.
+     * property per-producer stamp monotonicity leans on, since this clock folds into the stamp —
+     * and which makes re-draining the interceptor registry idempotent.
      */
     @Test
     void acknowledgeFoldsMonotonicallyIntoOwnOutputs() {
@@ -439,16 +439,16 @@ class ParsleyChannelsTest {
         assertEquals(9L, channels.ownOutputs().offsetFor(C4_ID, 0),
                 "a higher ack must raise the entry");
         assertEquals(2L, channels.ownOutputs().offsetFor(C4_ID, 1),
-                "partitions of one sink are independent own-output coordinates (T3.0 A7)");
+                "partitions of one sink are independent own-output coordinates");
     }
 
     /**
-     * {@code ownOutputs} is stamp-side only and, until T2.3, not part of the stamp at all:
-     * {@link ParsleyChannels#completeness()} must not carry an acknowledged own-output coordinate —
-     * T2.2 lands the tracking with the outbound stamp byte-identical to before.
+     * {@code ownOutputs} is stamp-side only and separate from the delivered/advertised boundary:
+     * {@link ParsleyChannels#completeness()} must not carry an acknowledged own-output coordinate.
+     * {@link ParsleyChannels#stamp()} is where the two are merged, and only there.
      */
     @Test
-    void ownOutputsDoesNotLeakIntoCompletenessBeforeStampIntegration() {
+    void ownOutputsDoesNotLeakIntoCompleteness() {
         ParsleyChannels channels =
                 ParsleyTestFixtures.channels(ParsleyVectorClock.empty(), new MockForwardedIndex());
         channels.delivered(C1_ID, 0, 0);
@@ -457,9 +457,9 @@ class ParsleyChannelsTest {
         channels.acknowledge(C4_ID, 0, 41);
 
         assertEquals(before, channels.completeness(),
-                "acknowledging own outputs must leave the outbound stamp unchanged until T2.3");
+                "acknowledging own outputs must leave completeness unchanged");
         assertEquals(-1L, channels.completeness().offsetFor(C4_ID, 0),
-                "the acked sink coordinate must not appear in completeness yet");
+                "the acked sink coordinate must not appear in completeness");
     }
 
     /**
@@ -486,11 +486,11 @@ class ParsleyChannelsTest {
     }
 
     /**
-     * The abort/restart tear the design tolerates (O1): the persisted blob can trail the last
+     * The abort/restart tear the design tolerates: the persisted blob can trail the last
      * transaction's acks, because store caches flush before the producer flush completes acks — and
      * the init-time end-offset seed heals exactly that window. A restored clock missing the final
      * acks is raised by the seed (an {@code acknowledge} at the sink's last appended position), and
-     * a late replayed ack below the healed value is a no-op (I8: entries only ever rise).
+     * a late replayed ack below the healed value is a no-op, since entries only ever rise.
      */
     @Test
     void restoredOwnOutputsTrailingTheLastTransactionIsHealedByTheEndOffsetSeed() {
@@ -511,11 +511,11 @@ class ParsleyChannelsTest {
 
         restored.acknowledge(C4_ID, 0, 11);
         assertEquals(12L, restored.ownOutputs().offsetFor(C4_ID, 0),
-                "a replayed ack below the healed value must never lower the clock (I8)");
+                "a replayed ack below the healed value must never lower the clock");
     }
 
     /**
-     * The end-offset seed's over-claim path (I8): the seed claims the sink's last appended position
+     * The end-offset seed's over-claim path: the seed claims the sink's last appended position
      * even when this task produced none of it — a sibling's records on a shared sink, an aborted
      * tail, or a transaction marker may sit there. The claim can only delay downstream delivery,
      * never reorder it, and the clock never recedes toward the "truthful" lower value afterwards.
@@ -533,7 +533,7 @@ class ParsleyChannelsTest {
         // This task's first real ack lands far below the seed: the over-claim must stand.
         channels.acknowledge(C4_ID, 0, 7);
         assertEquals(41L, channels.ownOutputs().offsetFor(C4_ID, 0),
-                "a real ack below the seed must not lower the entry — I8 mechanisms only ever raise");
+                "a real ack below the seed must not lower the entry — these mechanisms only ever raise");
     }
 
     /**
@@ -563,10 +563,10 @@ class ParsleyChannelsTest {
     }
 
     /**
-     * {@code rescope}'s destroyed-coordinate rule reaches {@code ownOutputs} (I9's one permitted
+     * {@code rescope}'s destroyed-coordinate rule reaches {@code ownOutputs} (the one permitted
      * removal from stamp-feeding state): an input topic this node also produces (a cycle) that was
      * deleted and recreated purges its old UUID from the own-output clock — no receiver can ever
-     * deliver the old UUID's coordinates (E1) — while entries for unrelated sinks survive, and an
+     * deliver the old UUID's coordinates — while entries for unrelated sinks survive, and an
      * ordinary input-set shrink or growth never touches the clock at all (it is sink-keyed).
      */
     @Test
@@ -597,7 +597,7 @@ class ParsleyChannelsTest {
     }
 
     /**
-     * The declared-sink set (name → UUID) round-trips through the frontier value (T3.4): the next
+     * The declared-sink set (name → UUID) round-trips through the frontier value: the next
      * init reads it to heal the restored {@code ownOutputs} clock's trailing acks for topics that are
      * no longer sinks then. A value written before any declaration carries an empty set.
      *
@@ -624,8 +624,9 @@ class ParsleyChannelsTest {
 
     /**
      * {@code destroyOwnOutput} removes every entry of a provably destroyed sink topic from the
-     * {@code ownOutputs} clock and persists — I9's one permitted removal from stamp-feeding state
-     * (a deleted or recreated topic's records can never be delivered by any receiver, E1). Used by
+     * {@code ownOutputs} clock and persists — the one removal from stamp-feeding state the
+     * unconditional merge permits, since a deleted or recreated topic's records can never be
+     * delivered by any receiver. Used by
      * the init-time former-sink heal.
      *
      * Asserts the destroyed topic's entries leave the clock (all partitions), unrelated entries

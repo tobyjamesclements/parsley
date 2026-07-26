@@ -25,7 +25,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import static java.util.Objects.requireNonNull;
 
 /**
- * An in-memory multi-node topology simulator — the T2.4 property harness. Each node is one
+ * An in-memory multi-node topology simulator — the property harness. Each node is one
  * <em>task per partition</em> (the production task model: a task owns partition p of every
  * co-partitioned input), and each task is a real {@link ParsleyChannels} +
  * {@link ParsleyCausalBroadcast} pair over store-backed persistence (restarts are genuine
@@ -37,7 +37,7 @@ import static java.util.Objects.requireNonNull;
  * channel polls, ack arrivals, external production, and restarts under a seeded {@link Random}, so
  * each seed is one deterministic, reproducible interleaving.
  *
- * <p><strong>Partitions (T10).</strong> A spec carries one topology-wide partition count
+ * <p><strong>Partitions.</strong> A spec carries one topology-wide partition count
  * (co-partitioning parity holds by construction — the precondition, not a variable under test).
  * External records carry a key; the deterministic partitioner is {@code keyIndex % partitions}.
  * Derived business emissions inherit the parent record's key (the key-preservation
@@ -49,7 +49,7 @@ import static java.util.Objects.requireNonNull;
  * {@code CausalClock.using(...).observe(...)} producer that observed several partitions of one
  * upstream topic and stamps a record whose clock spans them. The gate must ignore coordinates on
  * partitions the receiving task does not own (the two-branch gate's partition dimension) while
- * stamps must still carry them (I9 custody).
+ * stamps must still carry them, as custody.
  *
  * <p><strong>Ground truth.</strong> Alongside the protocol state the sim tracks, per record, the
  * exact <em>delegate-visible causal history</em> as a set of business coordinates (Schwarz–Mattern
@@ -61,35 +61,36 @@ import static java.util.Objects.requireNonNull;
  * continuously:
  *
  * <ul>
- *   <li><strong>I2 (both forms).</strong> At every emission the attached stamp dominates (a) the
- *       merge of the raw dependency clocks and coordinates of everything this task has delivered —
- *       the doc's literal I2 — and (b) the task's ground-truth causal past, which is the form the
- *       D1/D7 transitivity proof actually quantifies over. The ground-truth form includes
- *       foreign-partition ancestry — custody spans partitions.</li>
- *   <li><strong>I3.</strong> A task's successive stamps are vector-monotone (which implies
- *       per-partition monotonicity for every destination).</li>
- *   <li><strong>I9.</strong> Ground-truth dominance is asserted at tasks whose consumption sets
+ *   <li><strong>Stamp transitive completeness (both forms).</strong> At every emission the attached
+ *       stamp dominates (a) the merge of the raw dependency clocks and coordinates of everything
+ *       this task has delivered — the literal form — and (b) the task's ground-truth causal past,
+ *       which is the form the transitivity argument behind the ignore branch actually quantifies
+ *       over. The ground-truth form includes foreign-partition ancestry — custody spans
+ *       partitions.</li>
+ *   <li><strong>Per-producer stamp monotonicity.</strong> A task's successive stamps are
+ *       vector-monotone (which implies per-partition monotonicity for every destination).</li>
+ *   <li><strong>Unconditional merge.</strong> Ground-truth dominance is asserted at tasks whose
+ *       consumption sets
  *       differ — ancestry on channels a task does not consume (other topics AND other partitions)
  *       must still be claimed by its stamps (the custody chain), fed to it either by carried
  *       clocks or by carried ancestry.</li>
- *   <li><strong>Causal delivery order (I1 over ground truth).</strong> At every business delivery,
+ *   <li><strong>Causal delivery order (over ground truth).</strong> At every business delivery,
  *       every coordinate of the record's true history on a channel this task owns — consumed
  *       topic, the task's own partition — has already been delivered at this task: the
  *       end-to-end no-effect-before-cause check. History coordinates on partitions the task does
  *       not own are the documented ignore branch: never required, only counted
  *       ({@link #crossPartitionIgnoredCauses}), with the drain-to-empty liveness of the property
  *       sweeps proving they never gate.</li>
- *   <li><strong>Own-output coverage (D2).</strong> A business emission's stamp claims every one of
+ *   <li><strong>Own-output coverage.</strong> A business emission's stamp claims every one of
  *       the task's prior business sends (the crossing wait forces their acks); any emission's
  *       stamp claims at least all acked sends.</li>
  * </ul>
  *
- * <p>Business consumers' scopes may genuinely differ (T3.1, D1): a record whose clock names
+ * <p>Business consumers' scopes may genuinely differ: a record whose clock names
  * topics outside the receiving task's consumption scope is handled by the two-branch gate —
  * consumed coordinates gate on the task's own frontier, everything else is ignored — so
  * differing-scope chains exercise the ignore branch end to end, and unconsumed-channel custody
- * (I9) is additionally exercised through null-message carried clocks and rescope carried
- * ancestry.
+ * is additionally exercised through null-message carried clocks and rescope carried ancestry.
  *
  * <p><strong>Trace and replay.</strong> In generate mode (the seeded constructors) every scheduler
  * step is recorded into a {@link ParsleySimTrace} action list as it executes — including the
@@ -104,19 +105,19 @@ import static java.util.Objects.requireNonNull;
  * pollable-input list is sorted: {@code Set} iteration order is salted per JVM and must never
  * reach the schedule.
  *
- * <p><strong>Legacy-seed compatibility.</strong> The partition dimension makes a PRNG draw only
+ * <p><strong>Seed compatibility.</strong> The partition dimension makes a PRNG draw only
  * where a multi-partition topology is actually involved: at one partition the pollable list, the
- * external produce, and the scheduler layout draw exactly the pre-T10 stream, so pre-T10 seeds
- * keep byte-identical schedules and digests, and pre-T10 trace texts parse (absent partition
- * fields default to 0).
+ * external produce, and the scheduler layout draw exactly the stream a partition-free sim would,
+ * so a single-partition seed keeps byte-identical schedules and digests, and a trace text carrying
+ * no partition fields parses (they default to 0).
  *
- * <p><strong>Fault modes</strong>, each off by default (legacy seeds keep their exact schedules —
+ * <p><strong>Fault modes</strong>, each off by default (an existing seed keeps its exact schedule —
  * a disabled mode's scheduler slot falls through to a poll, drawing identically): restarts
  * ({@link #withRestarts()}, clean rebuilds), crashes ({@link #withCrashes()} — no final ack, no
- * {@code foldAcknowledgedOutputs}; the I8 end-offset seed must re-cover appended-but-unfolded
+ * {@code foldAcknowledgedOutputs}; the end-offset seed must re-cover appended-but-unfolded
  * sends), consumer rollbacks ({@link #withRollbacks()} — at-least-once redelivery, which the
- * protocol must absorb without a duplicate delegate delivery, A11), random scope changes
- * ({@link #withScopeChanges()} — A5/A6 grow/shrink restarts mid-schedule; a shrink that would
+ * protocol must absorb without a duplicate delegate delivery), random scope changes
+ * ({@link #withScopeChanges()} — grow/shrink restarts mid-schedule; a shrink that would
  * orphan held records is skipped, its loud-failure contract being pinned in
  * {@code ParsleyScopeChangePropertyTest}), and stamped-external edge producers
  * ({@link #withEdgeProducers()} — the cross-partition claim source; meaningful only on
@@ -127,7 +128,7 @@ import static java.util.Objects.requireNonNull;
  * the aborted-transaction tear that rewinds stores to an earlier commit is broker-IT territory,
  * {@code ParsleyProducerAckMechanicsIT}); violated co-partitioning is never generated (the parity
  * lint's contract is pinned elsewhere); there is no retention, so {@code seedIfFirstSeen}'s
- * expired-prefix path is out of scope (E2 is enforced elsewhere).
+ * expired-prefix path is out of scope.
  */
 final class ParsleyTopologySim {
 
@@ -223,7 +224,7 @@ final class ParsleyTopologySim {
         ParsleyVectorClock lastStamp = ParsleyVectorClock.empty();
         // The frontier as of the most recent (re)start: everything at or below it is causal past
         // this task has either genuinely delivered (also in `delivered`) or deliberately skipped —
-        // a scope-growth seed's prefix (A5, "skip what you already ignored/claimed"). The
+        // a scope-growth seed's prefix ("skip what you already ignored/claimed"). The
         // ground-truth order check exempts causes at or below it: skipped past is never
         // re-entered, so its absence from `delivered` is by design, not a reorder.
         ParsleyVectorClock frontierAtStart = ParsleyVectorClock.empty();
@@ -267,7 +268,7 @@ final class ParsleyTopologySim {
                     ParsleyMetrics.NOOP, () -> ++simTimeMs,
                     consumedScope,
                     (topicId, part) -> sinkUuids.contains(topicId));
-            // The same consumed scope is the I6 relay trigger (ParsleyGossip's class Javadoc):
+            // The same consumed scope is the relay trigger (ParsleyGossip's class Javadoc):
             // only a carried-clock advance on a channel this task consumes obliges a relay.
             gossip = new ParsleyGossip<>(core, Set.of(), consumedScope);
             frontierAtStart = channels.frontier();
@@ -355,7 +356,7 @@ final class ParsleyTopologySim {
 
     /**
      * Liveness deadline for a single run's settle {@link #drain}. A drain that neither quiesces nor
-     * trips {@link #guardRunaway} within this wall-clock budget is a non-quiescing relay — the I6
+     * trips {@link #guardRunaway} within this wall-clock budget is a non-quiescing relay — the
      * knowledge-based relay failing to stop — caught here rather than left to spin for minutes.
      * Generous by default: a healthy run settles in milliseconds even at deep scale, so a real
      * schedule never approaches it and is never perturbed. Tune with {@code -Dparsley.sim.run.timeoutMs}
@@ -452,10 +453,12 @@ final class ParsleyTopologySim {
 
     /**
      * Disables the O(causal-past)-per-event ground-truth machinery — per-record history
-     * snapshots and the invariant checks that walk them (ground-truth I2 dominance, the
-     * causal-delivery-order check, D2 over the full own-send set) — whose cost is quadratic in
+     * snapshots and the invariant checks that walk them (ground-truth stamp dominance, the
+     * causal-delivery-order check, own-output coverage over the full own-send set) — whose cost is
+     * quadratic in
      * run length and makes soak-scale runs impractical. Everything with bounded per-event cost
-     * stays armed: doc-form I2 (obligation dominance), I3 monotonicity, acked-send coverage,
+     * stays armed: the literal-form stamp dominance (obligation dominance), stamp monotonicity,
+     * acked-send coverage,
      * the duplicate-delivery check, and the runaway guard. Those exhaustive invariants are the
      * CI and deep tiers' job, on run lengths where they are affordable; the soak hunts leaks
      * and stalls.
@@ -517,13 +520,13 @@ final class ParsleyTopologySim {
         return this;
     }
 
-    /** Enables random consumer-position rollbacks — at-least-once redelivery (A11). */
+    /** Enables random consumer-position rollbacks — at-least-once redelivery. */
     ParsleyTopologySim withRollbacks() {
         this.rollbacksEnabled = true;
         return this;
     }
 
-    /** Enables random A5/A6 scope-change restarts (grow or shrink by one input). */
+    /** Enables random scope-change restarts (grow or shrink by one input). */
     ParsleyTopologySim withScopeChanges() {
         this.scopeChangesEnabled = true;
         return this;
@@ -593,7 +596,7 @@ final class ParsleyTopologySim {
      * The single verdict both runaway tripwires defer to, so the record-count guard
      * ({@link #guardRunaway}) and the drain wall-clock guard ({@link #drain}) can never disagree
      * on what a storm IS — only on which noticed it first. The distinction is by log composition
-     * alone: a tail of almost entirely null messages is the gossip relay looping (I6 must
+     * alone: a tail of almost entirely null messages is the gossip relay looping (the relay must
      * quiesce, a genuine protocol defect the explorer must NOT skip — an {@link AssertionError});
      * a tail carrying substantial business traffic is feedback amplification too hot (loop
      * gain &gt; 1), a configuration problem the explorer skips and counts (a
@@ -613,7 +616,7 @@ final class ParsleyTopologySim {
                 .count();
         if (nullTail >= window * 95L / 100L) {
             throw new AssertionError(runLabel + "relay loop: topic " + sink.name + " " + trigger
-                    + ", a tail of almost entirely null messages — the I6 knowledge-based relay "
+                    + ", a tail of almost entirely null messages — the knowledge-based relay "
                     + "must quiesce.");
         }
         return new SupercriticalTopologyException(runLabel + "supercritical topology: topic "
@@ -679,7 +682,7 @@ final class ParsleyTopologySim {
      * Polls every task until no channel has undelivered backlog — lets every seed end settled.
      * Acks are folded promptly after every poll that left sends pending: in production a broker
      * ack lands well inside a produce→consume→relay round-trip, and it is that ack (folding the
-     * send into {@code ownOutputs}, hence the stamp) that quenches the I6 relay — two nodes
+     * send into {@code ownOutputs}, hence the stamp) that quenches the relay — two nodes
      * gossiping across a topic cycle otherwise keep "teaching" each other about the receiver's
      * own not-yet-acked relays, each relay appending the coordinate that sustains the next: an
      * ack-starvation artifact of lazy modelling, not a protocol loop. (The stepped phase keeps
@@ -847,7 +850,7 @@ final class ParsleyTopologySim {
     }
 
     /**
-     * Restarts a node with a (possibly different) declared input set — the A5/A6 scope-change
+     * Restarts a node with a (possibly different) declared input set — the scope-change
      * path. A newly added input's cursor starts at log-start, exactly like a consumer group with
      * no committed offset for it; the receive-path skip guard is what must keep the carried
      * prefix out of the delegate.
@@ -866,7 +869,7 @@ final class ParsleyTopologySim {
             task.producer.ackAllExcept(Set.of());
             task.channels.foldAcknowledgedOutputs();
             // A fresh producer: in-memory ack state does not survive a restart; the init-time
-            // sink end-offset seed re-covers everything previously acked (I8).
+            // sink end-offset seed re-covers everything previously acked.
             task.producer = new SimProducer();
             // An added input has no committed consumer offset — it re-fetches from log-start, and
             // the receive-path skip guard (not the cursor) must keep the carried prefix from the
@@ -884,7 +887,7 @@ final class ParsleyTopologySim {
      * A dirty restart: the process dies with unfolded acks and un-awaited pending sends — no
      * {@code ackAllExcept}, no {@code foldAcknowledgedOutputs}. Sends already appended stay in
      * the topic logs (committed, just never folded into the frontier value); the init-time sink
-     * end-offset seed (I8) must re-cover them so post-crash stamps still claim them. The sim's
+     * end-offset seed must re-cover them so post-crash stamps still claim them. The sim's
      * stores commit instantly, so this is exactly the crash-after-commit-before-fold shape — the
      * store-rewinding transaction tear is a documented non-goal (class Javadoc).
      */
@@ -902,7 +905,8 @@ final class ParsleyTopologySim {
      * Rewinds one consumed channel's cursor to a random earlier position inside the
      * <em>already-delivered region</em> — the redelivery shape reachable under the library's
      * unconditional {@code exactly_once_v2} requirement (an operator offset reset, a stale
-     * committed offset: exactly the arrival A11's fail-safe net exists for). Every re-polled
+     * committed offset: exactly the arrival the redelivery fail-safe net exists for). Every
+     * re-polled
      * record must then be absorbed: skipped by {@code alreadyDelivered} (frontier or forwarded
      * mark), with the duplicate-delivery assertion in {@code processDeliveries} catching any
      * that reach the delegate twice. The rewind never enters the held-record region: a cursor
@@ -965,7 +969,7 @@ final class ParsleyTopologySim {
     }
 
     /**
-     * A random A5/A6 scope-change restart: grow by one topic from the pool, or shrink by one
+     * A random scope-change restart: grow by one topic from the pool, or shrink by one
      * input (never below one). A shrink that would orphan held records from the removed input is
      * skipped — the loud init failure it would (correctly) raise is the disposition rule's own
      * contract, pinned in {@code ParsleyScopeChangePropertyTest}, not schedule noise.
@@ -1135,8 +1139,8 @@ final class ParsleyTopologySim {
         ParsleyCausalBroadcast.Outcome<String, String> outcome = task.core.receive(new ParsleyMessage<>(
                 record.topic(), record.topicId(), record.partition(), record.offset(), 0L,
                 record.key(), record.value(), List.of(), record.stamp()));
-        // Buffer growth, not an empty delivered list: an absorbed redelivery (rollback replay,
-        // A11) and a skipped scope-growth prefix (A5) also return empty, and neither is a hold.
+        // Buffer growth, not an empty delivered list: an absorbed redelivery (a rollback replay)
+        // and a skipped scope-growth prefix also return empty, and neither is a hold.
         if (task.core.bufferSize() > bufferedBefore) {
             recordsHeld++;
         }
@@ -1157,7 +1161,7 @@ final class ParsleyTopologySim {
         // now on — but it creates no delegate-visible obligation (no truePast contribution).
         task.obligation = task.obligation.merge(record.stamp());
         boolean anyBusinessOutput = processDeliveries(task, outcome.delivered(), false);
-        // The I6 relay (a consumed-channel advance propagates onward), and the silent-delegate
+        // The relay (a consumed-channel advance propagates onward), and the silent-delegate
         // advertisement for any released records — at most one null message per poll.
         if (outcome.advancedConsumedChannel() || (!anyBusinessOutput && !outcome.delivered().isEmpty())) {
             emitNullMessage(task);
@@ -1177,8 +1181,8 @@ final class ParsleyTopologySim {
             assertTrue(task.delivered.add(coord),
                     runLabel + task.node.name + "[" + task.partition + "]: " + record.topic()
                             + "@" + record.offset()
-                            + " delivered to the delegate twice — a redelivery (rollback replay, "
-                            + "A11) must be absorbed by the protocol, never re-released");
+                            + " delivered to the delegate twice — a redelivery (rollback replay) "
+                            + "must be absorbed by the protocol, never re-released");
             task.truePast.add(coord);
             if (groundTruthHistories) {
                 task.truePast.addAll(record.causalHistory());
@@ -1227,13 +1231,13 @@ final class ParsleyTopologySim {
      * The end-to-end no-effect-before-cause check: every coordinate in the true history of a
      * record being delivered that lies on a channel this task owns — consumed topic, the task's
      * own partition — must already have been delivered here; own-sink topics this node also
-     * consumes included (the two-branch gate genuinely gates a self-consumer's claims about its
-     * own sink; the interim strip that once vacuously satisfied them died at T3.1). History
+     * consumes included, since the two-branch gate genuinely gates a self-consumer's claims about
+     * its own sink rather than satisfying them vacuously. History
      * coordinates on partitions the task does not own are the documented ignore branch of the
      * gate's partition dimension — never required, only counted. Causes at or below the task's
      * frontier as of its most recent (re)start are exempt: that prefix is causal past the task
      * either delivered in an earlier incarnation (then it is in {@code delivered} anyway) or
-     * deliberately skipped at a scope-growth seed (A5) — skipped past is never re-entered, so
+     * deliberately skipped at a scope-growth seed — skipped past is never re-entered, so
      * its absence from {@code delivered} is by design.
      */
     private void assertCausalDeliveryOrder(SimTask task, SimRecord record) {
@@ -1270,7 +1274,7 @@ final class ParsleyTopologySim {
             stamp = stampThrough(task, Set.of());
             assertTrue(stamp.dominates(ownSendsBefore),
                     runLabel + task.node.name + ": a business emission's stamp must claim every prior own "
-                            + "business send — the crossing wait forces their acks before the stamp (D2/O1)");
+                            + "business send — the crossing wait forces their acks before the stamp");
         } else {
             stamp = stampThrough(task, Set.of());
         }
@@ -1301,7 +1305,8 @@ final class ParsleyTopologySim {
             return;
         }
         // Production fans a marker out to every sink at the task's own partition, excluding that
-        // exact destination set from the crossing wait (O4's recorded null-message exemption).
+        // exact destination set from the crossing wait, which is safe only because a null
+        // message's destinations are known exactly at stamp time.
         Set<TopicPartition> destinations = new HashSet<>();
         node.sinks.forEach(sink -> destinations.add(new TopicPartition(sink, task.partition)));
         ParsleyVectorClock stamp = stampThrough(task, destinations);
@@ -1314,8 +1319,8 @@ final class ParsleyTopologySim {
                     stamp, true, Set.of()));
             // A null message's own coordinate is protocol bookkeeping, never a delegate-visible
             // cause — it enters neither ownBusinessSends nor any causal history. Its SEND is
-            // still a real produced record whose ack folds into ownOutputs like any other (O4
-            // exempts null destinations from the crossing WAIT, not from acking): without this
+            // still a real produced record whose ack folds into ownOutputs like any other (the
+            // exemption covers the crossing WAIT, not acking): without this
             // pending entry a node's stamp never claims its own null sends, a peer's echo of
             // them always reads as news, and every two-node gossip cycle spins forever — a sim
             // infidelity the explorer's first sweep surfaced.
@@ -1323,7 +1328,10 @@ final class ParsleyTopologySim {
         }
     }
 
-    /** Routes an emission through {@code broadcast()} — the single stamping site — and checks I2/I3/I9. */
+    /**
+     * Routes an emission through {@code broadcast()} — the single stamping site — and checks stamp
+     * dominance, monotonicity and custody.
+     */
     private ParsleyVectorClock stampThrough(SimTask task, Set<TopicPartition> destinations) {
         Record<String, String> stamped = task.core.broadcast(new Record<>("k", "v", 0L), destinations);
         ParsleyVectorClock stamp = ParsleyVectorClock.fromBytes(
@@ -1331,16 +1339,17 @@ final class ParsleyTopologySim {
         emissions++;
         assertTrue(stamp.dominates(task.obligation),
                 runLabel + task.node.name + ": stamp must dominate the dependency clocks and coordinates "
-                        + "of everything this task has delivered (I2, doc form)");
+                        + "of everything this task has delivered (the literal form)");
         if (groundTruthHistories) {
             assertClockCovers(stamp, task.truePast, task.node.name
-                    + ": stamp must dominate the task's ground-truth causal past (I2 as the D1/D7 proof "
-                    + "uses it, including unconsumed-channel and cross-partition ancestry — I9)");
+                    + ": stamp must dominate the task's ground-truth causal past (the form the "
+                    + "transitivity argument uses, including unconsumed-channel and cross-partition "
+                    + "ancestry, which custody carries)");
         }
         assertClockCovers(stamp, ackedCoords(task), task.node.name
-                + ": stamp must claim every acknowledged own send (the pre-stamp ack fold, D2)");
+                + ": stamp must claim every acknowledged own send (the pre-stamp ack fold)");
         assertTrue(stamp.dominates(task.lastStamp),
-                runLabel + task.node.name + ": successive stamps must be vector-monotone (I3)");
+                runLabel + task.node.name + ": successive stamps must be vector-monotone");
         task.lastStamp = stamp;
         return stamp;
     }
@@ -1384,8 +1393,8 @@ final class ParsleyTopologySim {
      * histories), per-task protocol and ground-truth state, and every counter — with topic UUIDs
      * projected back to names, since UUIDs are freshly random per sim instance. Two runs of the
      * same schedule over the same spec must produce byte-identical digests; this is the equality
-     * witness the replay-fidelity test stands on. At one partition the rendering is the pre-T10
-     * format byte for byte — the legacy-seed guard's witness.
+     * witness the replay-fidelity test stands on. At one partition the rendering is the
+     * partition-free format byte for byte — the seed-compatibility guard's witness.
      */
     String stateDigest() {
         StringBuilder digest = new StringBuilder();
@@ -1430,8 +1439,8 @@ final class ParsleyTopologySim {
                 .append(" rollbacks=").append(rollbacks)
                 .append(" rescopes=").append(rescopes);
         if (partitions > 1 || stampedExternals > 0 || crossPartitionIgnoredCauses > 0) {
-            // New counters only surface on runs that can move them — the pre-T10 digest text
-            // stays byte-identical for single-partition, edge-producer-free runs.
+            // Partition-dimension counters only surface on runs that can move them, so the digest
+            // text stays byte-identical for single-partition, edge-producer-free runs.
             digest.append(" stampedExternals=").append(stampedExternals)
                     .append(" crossPartitionIgnores=").append(crossPartitionIgnoredCauses);
         }

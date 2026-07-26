@@ -12,23 +12,24 @@ import static io.github.tobyjamesclements.parsley.ParsleyTestFixtures.cause;
 import static io.github.tobyjamesclements.parsley.ParsleyTestFixtures.message;
 
 /**
- * The T2.4 scope-change property tests (T3.0 A5/A6, over {@link ParsleyTopologySim}): I2 must
+ * The scope-change property tests (over {@link ParsleyTopologySim}): stamp transitive completeness
+ * must
  * survive a restart that shrinks or grows the declared input set, under randomised pre- and
  * post-restart interleavings. The one principle both directions share — <em>the causal past a node
  * has delivered or carried may be skipped, but never dropped and never re-entered</em> — splits
  * into: shrink re-homes every retired channel's ancestry into the carried-ancestry clock the
- * stamp keeps merging (A6); growth seeds an added channel at the node's already-claimed value, so
+ * stamp keeps merging; growth seeds an added channel at the node's already-claimed value, so
  * the prefix it previously ignored (or itself produced) is skipped, never delivered into
- * surviving state (A5, extended to "skip what you already claimed" for a former own sink).
- * The sim's continuous invariants (I2/I3/I9, ground-truth delivery order, own-output coverage)
- * stay armed throughout every run here.
+ * surviving state (extended to "skip what you already claimed" for a former own sink).
+ * The sim's continuous invariants (stamp dominance, monotonicity, custody, ground-truth delivery
+ * order, own-output coverage) stay armed throughout every run here.
  */
 class ParsleyScopeChangePropertyTest {
 
     private static final int SEEDS = 10;
 
     /**
-     * A6 — scope shrink re-homes, never drops. Node X consumes c1 and c2 and produces c3; after a
+     * Scope shrink re-homes, never drops. Node X consumes c1 and c2 and produces c3; after a
      * random schedule it restarts with c2 removed. Its post-restart stamp must dominate its
      * pre-restart stamp (retired-channel values re-homed into carried ancestry) and every
      * coordinate of its ground-truth causal past — including all c2 ancestry it can no longer
@@ -58,7 +59,7 @@ class ParsleyScopeChangePropertyTest {
             ParsleyVectorClock stampAfter = x.channels.stamp();
             assertTrue(stampAfter.dominates(stampBefore),
                     "[seed " + seed + "] the post-shrink stamp must dominate the pre-shrink stamp — "
-                            + "retired-channel values are re-homed into carried ancestry, never dropped (A6)");
+                            + "retired-channel values are re-homed into carried ancestry, never dropped");
             for (ParsleyTopologySim.SimCoord coord : truePastBefore) {
                 assertTrue(stampAfter.offsetFor(coord.topicId(), 0) >= coord.offset(),
                         "[seed " + seed + "] the post-shrink stamp must still claim delivered "
@@ -69,9 +70,9 @@ class ParsleyScopeChangePropertyTest {
     }
 
     /**
-     * A5 — scope growth seeds the added channel from carried ancestry, never log-start. Node X
+     * Scope growth seeds the added channel from carried ancestry, never log-start. Node X
      * consumes only c2, which carries nothing but null messages from the silent node P — so X's
-     * stamp comes to claim c1 ancestry X has never consumed (the I9 custody chain). X then
+     * stamp comes to claim c1 ancestry X has never consumed (the custody chain). X then
      * restarts with c1 added as an input. The added channel must seed at exactly the value X
      * already claimed ("skip what you already ignored"): the prefix at or below it must never
      * reach the delegate — X's own earlier stamps told the world that history was in its past, so
@@ -100,7 +101,7 @@ class ParsleyScopeChangePropertyTest {
 
             assertEquals(claimedBefore, x.channels.frontier().offsetFor(sim.topicId("c1"), 0),
                     "[seed " + seed + "] the added channel must seed at exactly the node's carried "
-                            + "claim — never log-start (A5)");
+                            + "claim — never log-start");
             for (int i = 0; i < 5; i++) {
                 sim.produceExternal("c1");
             }
@@ -117,7 +118,7 @@ class ParsleyScopeChangePropertyTest {
     }
 
     /**
-     * A5's own-former-sink extension — "skip what you already claimed". Node X produces c2 and
+     * The own-former-sink extension — "skip what you already claimed". Node X produces c2 and
      * later restarts with c2 added as an <em>input</em> (a cycle onto its own former sink). The
      * growth seed reads the ownOutputs-inclusive {@code stamp()}, so X must never be re-delivered
      * its own pre-restart outputs (their positions were already claimed by its stamps via
@@ -161,7 +162,7 @@ class ParsleyScopeChangePropertyTest {
      * The held-record disposition rule at a scope shrink: a restart that removes an input while
      * records from that input are still held must fail init loudly (they can be neither delivered
      * — no registered source — nor silently discarded), and a restart with no such held records
-     * proceeds cleanly with the A6 re-homing intact. Runs the random schedule WITHOUT the settle
+     * proceeds cleanly with the re-homing intact. Runs the random schedule WITHOUT the settle
      * drain, so seeds genuinely reach the restart with records still held.
      *
      * Asserts, per seed, whichever branch the interleaving produced — with a vacuity guard that
@@ -195,7 +196,7 @@ class ParsleyScopeChangePropertyTest {
                 ParsleyVectorClock stampBefore = x.channels.stamp();
                 sim.restartWithInputs("X", Set.of("c1"));
                 assertTrue(x.channels.stamp().dominates(stampBefore),
-                        "[seed " + seed + "] a legal shrink (no held c2 records) must keep the A6 "
+                        "[seed " + seed + "] a legal shrink (no held c2 records) must keep the "
                                 + "re-homing: the post-shrink stamp dominates the pre-shrink stamp");
             }
         }
