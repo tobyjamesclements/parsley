@@ -80,11 +80,19 @@ guarantees of the one below it and offers a clean assumption set to the one abov
 ```
 
 - The **[channels module](../protocols/channels.md)** repairs the transport assumption. Kafka
-  partitions are not classical channels: topic recreation rebinds names, EOS commit markers and
-  aborted records occupy offsets a consumer never sees, retention truncates history, the broker
-  assigns the sender's own sequence numbers asynchronously, and Parsley itself delivers within a
-  partition out of order. UUID-keyed coordinates, seeding, bridging, the contiguous frontier, and
-  own-output tracking each repair one of these, so the layer above sees dense, stable channels.
+  partitions are not classical channels, and each way they fall short has one mechanism that
+  answers it, so that the layer above sees dense, stable channels:
+  - Topic recreation rebinds a name to a fresh partition history. **UUID-keyed coordinates**
+    identify a channel by the topic's stable Kafka UUID, so a coordinate never silently rebinds.
+  - EOS commit markers and aborted records occupy offsets a consumer never returns. **Bridging**
+    folds a permanently skipped run of offsets into the contiguous walk, so a marker cannot wedge
+    the frontier forever.
+  - Retention truncates history below the first offset a node ever observes. **Seeding** folds
+    everything below that first sighting into the frontier as a density baseline.
+  - The broker assigns the sender's own sequence numbers asynchronously. **Own-output tracking**
+    reconstructs the node's own clock entry from produce acknowledgements.
+  - Parsley itself delivers within a partition out of order. **The contiguous frontier** advertises
+    only the gap-free prefix of what a node has delivered.
 - The **[causal-broadcast module](../protocols/causal-broadcast.md)** repairs the visibility
   assumption, not by restoring total visibility but by making the delivery predicate sound without
   it, with the two-branch [delivery gate](delivery-gate.md).
