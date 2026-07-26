@@ -22,28 +22,19 @@ import org.apache.kafka.streams.processor.api.ProcessorSupplier;
 import org.apache.kafka.streams.processor.api.Record;
 import org.apache.kafka.streams.state.KeyValueStore;
 import org.apache.kafka.streams.test.TestRecord;
-import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.RegisterExtension;
 
-import java.io.File;
-import java.io.IOException;
-import java.io.UncheckedIOException;
-import java.nio.file.Files;
-import java.nio.file.Path;
 import java.time.Duration;
 import java.util.ArrayList;
-import java.util.Comparator;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Properties;
-import java.util.Queue;
 import java.util.HashSet;
 import java.util.Set;
-import java.util.concurrent.ConcurrentLinkedQueue;
-import java.util.stream.Stream;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -75,42 +66,20 @@ class CausalStreamsTopologyTest {
 
     private final List<String> processed = new ArrayList<>();
 
-    /** Every directory {@link #tempStateDir()} has handed out, removed once the class has run. */
-    private static final Queue<Path> STATE_DIRS = new ConcurrentLinkedQueue<>();
-
-    /**
-     * Removes the state directories the drivers were given. RocksDB leaves files behind, so an
-     * unswept run accumulates a directory tree per driver under the OS temp directory.
-     */
-    @AfterAll
-    static void removeStateDirectories() throws IOException {
-        for (Path dir : STATE_DIRS) {
-            if (!Files.exists(dir)) {
-                continue;
-            }
-            try (Stream<Path> tree = Files.walk(dir)) {
-                for (Path path : tree.sorted(Comparator.reverseOrder()).toList()) {
-                    Files.deleteIfExists(path);
-                }
-            }
-        }
-        STATE_DIRS.clear();
-    }
+    /** A state directory per instance: the application id is fixed, so a shared one would collide. */
+    @RegisterExtension
+    static final TestStateDirectories STATE_DIRS = new TestStateDirectories("causal-streams-test-");
 
     // --- helpers -------------------------------------------------------------------------------
 
     private static Properties config() {
-        return config(tempStateDir());
-    }
-
-    private static Properties config(File stateDir) {
         Properties props = new Properties();
         props.put(StreamsConfig.APPLICATION_ID_CONFIG, "causal-streams-test");
         props.put(StreamsConfig.BOOTSTRAP_SERVERS_CONFIG, "dummy:1234");
         props.put(StreamsConfig.DEFAULT_KEY_SERDE_CLASS_CONFIG, Serdes.String().getClass());
         props.put(StreamsConfig.DEFAULT_VALUE_SERDE_CLASS_CONFIG, Serdes.String().getClass());
         props.put(StreamsConfig.PROCESSING_GUARANTEE_CONFIG, StreamsConfig.EXACTLY_ONCE_V2);
-        props.put(StreamsConfig.STATE_DIR_CONFIG, stateDir.getAbsolutePath());
+        props.put(StreamsConfig.STATE_DIR_CONFIG, STATE_DIRS.create().toAbsolutePath().toString());
         return props;
     }
 
@@ -725,7 +694,7 @@ class CausalStreamsTopologyTest {
      * narrow sink.
      */
     @Test
-    void sinkNarrowerThanItsSourceFailsStartup() throws IOException {
+    void sinkNarrowerThanItsSourceFailsStartup() {
         ParsleyTopicAdmin mismatched = TestTopicAdmin.of(
                 Map.of("c1", C1_ID, "c3", C3_ID), Map.of("c1", 2, "c3", 1));
         CausalStreamsBuilder builder = new CausalStreamsBuilder();
@@ -735,7 +704,7 @@ class CausalStreamsTopologyTest {
         Topology topology = assemble(builder, mismatched, config());
 
         StreamsException thrown = assertThrows(StreamsException.class,
-                () -> new TopologyTestDriver(topology, config(tempStateDir())),
+                () -> new TopologyTestDriver(topology, config()),
                 "startup must fail when a sink is narrower than its source");
         assertEquals(IllegalStateException.class, cause(thrown).getClass(),
                 "the wrapped cause must be the sink-width check's failure");
@@ -807,7 +776,7 @@ class CausalStreamsTopologyTest {
      * sink and its cleanup.policy.
      */
     @Test
-    void compactedSinkCleanupPolicyFailsStartup() throws IOException {
+    void compactedSinkCleanupPolicyFailsStartup() {
         ParsleyTopicAdmin compacted = TestTopicAdmin.of(
                 Map.of("c1", C1_ID, "c3", C3_ID), Map.of(), Map.of("c3", "compact"));
         CausalStreamsBuilder builder = new CausalStreamsBuilder();
@@ -817,7 +786,7 @@ class CausalStreamsTopologyTest {
         Topology topology = assemble(builder, compacted, config());
 
         StreamsException thrown = assertThrows(StreamsException.class,
-                () -> new TopologyTestDriver(topology, config(tempStateDir())),
+                () -> new TopologyTestDriver(topology, config()),
                 "startup must fail when a sink's cleanup.policy includes compact");
         assertEquals(IllegalStateException.class, cause(thrown).getClass(),
                 "the wrapped cause must be the compacted-sink check's failure");
@@ -833,7 +802,7 @@ class CausalStreamsTopologyTest {
      * Asserts driver construction throws for a {@code compact,delete} sink.
      */
     @Test
-    void compactAndDeleteSinkCleanupPolicyFailsStartup() throws IOException {
+    void compactAndDeleteSinkCleanupPolicyFailsStartup() {
         ParsleyTopicAdmin compacted = TestTopicAdmin.of(
                 Map.of("c1", C1_ID, "c3", C3_ID), Map.of(), Map.of("c3", "compact,delete"));
         CausalStreamsBuilder builder = new CausalStreamsBuilder();
@@ -843,7 +812,7 @@ class CausalStreamsTopologyTest {
         Topology topology = assemble(builder, compacted, config());
 
         StreamsException thrown = assertThrows(StreamsException.class,
-                () -> new TopologyTestDriver(topology, config(tempStateDir())),
+                () -> new TopologyTestDriver(topology, config()),
                 "startup must fail for compact,delete too — compaction still runs");
         assertEquals(IllegalStateException.class, cause(thrown).getClass(),
                 "the wrapped cause must be the compacted-sink check's failure");
@@ -881,7 +850,7 @@ class CausalStreamsTopologyTest {
      * source and its cleanup.policy.
      */
     @Test
-    void compactedSourceCleanupPolicyFailsStartup() throws IOException {
+    void compactedSourceCleanupPolicyFailsStartup() {
         ParsleyTopicAdmin compactedSource = TestTopicAdmin.of(
                 Map.of("c1", C1_ID, "c3", C3_ID), Map.of(), Map.of("c1", "compact"));
         CausalStreamsBuilder builder = new CausalStreamsBuilder();
@@ -891,7 +860,7 @@ class CausalStreamsTopologyTest {
         Topology topology = assemble(builder, compactedSource, config());
 
         StreamsException thrown = assertThrows(StreamsException.class,
-                () -> new TopologyTestDriver(topology, config(tempStateDir())),
+                () -> new TopologyTestDriver(topology, config()),
                 "a compacted source must fail startup — the guard is unconditional");
         assertEquals(IllegalStateException.class, cause(thrown).getClass(),
                 "the wrapped cause must be the unconditional source-compaction guard");
@@ -908,7 +877,7 @@ class CausalStreamsTopologyTest {
      * being undescribable.
      */
     @Test
-    void undescribableSinkDoesNotMaskANarrowerSink() throws IOException {
+    void undescribableSinkDoesNotMaskANarrowerSink() {
         ParsleyTopicAdmin admin = new FlakySinkAdmin(
                 Map.of("c1", C1_ID, "c4", C4_ID, "c5", C5_ID),
                 Map.of("c1", 2, "c4", 1), Map.of(), Set.of("c5"));
@@ -920,7 +889,7 @@ class CausalStreamsTopologyTest {
         Topology topology = assemble(builder, admin, config());
 
         StreamsException thrown = assertThrows(StreamsException.class,
-                () -> new TopologyTestDriver(topology, config(tempStateDir())),
+                () -> new TopologyTestDriver(topology, config()),
                 "the sink-width check must still catch c4's narrowness despite c5 being undescribable");
         assertTrue(message(cause(thrown)).contains("declared sink topic 'c4'"),
                 "the message must name the narrow sink: " + message(cause(thrown)));
@@ -935,7 +904,7 @@ class CausalStreamsTopologyTest {
      * {@code c5} being undescribable.
      */
     @Test
-    void undescribableSinkDoesNotMaskACompactPolicyOnAnotherSink() throws IOException {
+    void undescribableSinkDoesNotMaskACompactPolicyOnAnotherSink() {
         ParsleyTopicAdmin admin = new FlakySinkAdmin(
                 Map.of("c1", C1_ID, "c4", C4_ID, "c5", C5_ID),
                 Map.of(), Map.of("c4", "compact"), Set.of("c5"));
@@ -947,7 +916,7 @@ class CausalStreamsTopologyTest {
         Topology topology = assemble(builder, admin, config());
 
         StreamsException thrown = assertThrows(StreamsException.class,
-                () -> new TopologyTestDriver(topology, config(tempStateDir())),
+                () -> new TopologyTestDriver(topology, config()),
                 "the compacted-sink check must still catch c4's policy despite c5 being undescribable");
         assertTrue(message(cause(thrown)).contains("cleanup.policy=compact"),
                 "the message must name c4's policy: " + message(cause(thrown)));
@@ -990,7 +959,7 @@ class CausalStreamsTopologyTest {
      * naming the sink and the sinks-must-exist remedy.
      */
     @Test
-    void aSinkWhoseUuidLookupFailsFailsInitNamingTheSink() throws IOException {
+    void aSinkWhoseUuidLookupFailsFailsInitNamingTheSink() {
         ParsleyTopicAdmin admin = TestTopicAdmin.of(Map.of("c1", C1_ID));
         CausalStreamsBuilder builder = new CausalStreamsBuilder();
         builder.stream("c1", Serdes.String(), Serdes.String())
@@ -999,7 +968,7 @@ class CausalStreamsTopologyTest {
         Topology topology = assemble(builder, admin);
 
         StreamsException thrown = assertThrows(StreamsException.class,
-                () -> new TopologyTestDriver(topology, config(tempStateDir())),
+                () -> new TopologyTestDriver(topology, config()),
                 "a declared sink that cannot be resolved must fail init, not start with own-output "
                         + "tracking silently off");
         assertTrue(message(cause(thrown)).contains("declared sink topic 'c3'"),
@@ -1016,7 +985,7 @@ class CausalStreamsTopologyTest {
      * Asserts driver construction throws naming the sink.
      */
     @Test
-    void aSinkResolvedWithoutAUuidFailsInitNamingTheSink() throws IOException {
+    void aSinkResolvedWithoutAUuidFailsInitNamingTheSink() {
         ParsleyTopicAdmin admin = FlakySinkAdmin.withUndescribable(Map.of("c1", C1_ID), Set.of());
         CausalStreamsBuilder builder = new CausalStreamsBuilder();
         builder.stream("c1", Serdes.String(), Serdes.String())
@@ -1025,7 +994,7 @@ class CausalStreamsTopologyTest {
         Topology topology = assemble(builder, admin);
 
         StreamsException thrown = assertThrows(StreamsException.class,
-                () -> new TopologyTestDriver(topology, config(tempStateDir())),
+                () -> new TopologyTestDriver(topology, config()),
                 "a sink the broker answered without a UUID must fail init like a thrown lookup");
         assertTrue(message(cause(thrown)).contains("declared sink topic 'c3'"),
                 "the failure must name the unresolved sink: " + message(cause(thrown)));
@@ -1042,7 +1011,7 @@ class CausalStreamsTopologyTest {
      * naming the sink and the seed.
      */
     @Test
-    void aSinkWhoseEndOffsetsCannotBeReadFailsInit() throws IOException {
+    void aSinkWhoseEndOffsetsCannotBeReadFailsInit() {
         ParsleyTopicAdmin admin = TestTopicAdmin.of(Map.of("c1", C1_ID, "c3", C3_ID))
                 .withFailingEndOffsets(Set.of("c3"));
         CausalStreamsBuilder builder = new CausalStreamsBuilder();
@@ -1052,7 +1021,7 @@ class CausalStreamsTopologyTest {
         Topology topology = assemble(builder, admin);
 
         StreamsException thrown = assertThrows(StreamsException.class,
-                () -> new TopologyTestDriver(topology, config(tempStateDir())),
+                () -> new TopologyTestDriver(topology, config()),
                 "a failed sink end-offset read must fail init — the ownOutputs seed cannot be skipped");
         assertTrue(message(cause(thrown)).contains("end offsets for declared sink topic 'c3'"),
                 "the failure must name the sink whose end offsets failed: "
@@ -1119,23 +1088,6 @@ class CausalStreamsTopologyTest {
                 "assemble() must fail fast without exactly_once_v2");
         assertTrue(message(thrown).contains("exactly_once_v2"),
                 "the message must name the required setting: " + message(thrown));
-    }
-
-    /**
-     * A fresh, unique state directory for one driver. Every driver gets its own: the application id
-     * is fixed, so leaving {@code state.dir} at its default puts every driver on one path under the
-     * OS temp directory, and concurrent drivers then contend on a single RocksDB lock. A test that
-     * expects driver construction itself to fail needs this too, since a failed construction cannot
-     * be closed to release its locks.
-     */
-    private static File tempStateDir() {
-        try {
-            Path dir = Files.createTempDirectory("causal-streams-test-");
-            STATE_DIRS.add(dir);
-            return dir.toFile();
-        } catch (IOException e) {
-            throw new UncheckedIOException("could not create a state directory for the test driver", e);
-        }
     }
 
     /** Records every {@code (topic, key)} pair it is asked to partition, for asserting uniform wiring. */
@@ -1264,7 +1216,7 @@ class CausalStreamsTopologyTest {
      * registries each tracking the sink, and {@code close()} unregisters each.
      */
     @Test
-    void causalStreamsCopiesTheCallersPropertiesAndManagesTheRegistryLifecycle() throws IOException {
+    void causalStreamsCopiesTheCallersPropertiesAndManagesTheRegistryLifecycle() {
         CausalStreamsBuilder firstBuilder = new CausalStreamsBuilder();
         firstBuilder.stream("c1", Serdes.String(), Serdes.String())
                 .process(upperCaser())
@@ -1273,7 +1225,7 @@ class CausalStreamsTopologyTest {
         secondBuilder.stream("c1", Serdes.String(), Serdes.String())
                 .process(upperCaser())
                 .to("c3-sink", "c3", Serdes.String(), Serdes.String());
-        Properties props = config(tempStateDir());
+        Properties props = config();
         // KafkaStreams construction creates (but never connects) real clients, and client creation
         // resolves the bootstrap hostname eagerly — so unlike the TopologyTestDriver tests' "dummy",
         // this needs a resolvable (if dead) address.

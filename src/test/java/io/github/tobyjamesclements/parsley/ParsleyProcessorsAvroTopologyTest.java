@@ -26,11 +26,13 @@ import org.apache.kafka.streams.state.KeyValueStore;
 import org.apache.kafka.streams.test.TestRecord;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.RegisterExtension;
 
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Properties;
+import java.util.UUID;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -48,10 +50,6 @@ import org.jspecify.annotations.Nullable;
  */
 class ParsleyProcessorsAvroTopologyTest {
 
-    // The scope is the part after mock:// — MockSchemaRegistry keys its in-JVM client by it.
-    private static final String SCOPE = "parsley-avro-topology";
-    private static final String REGISTRY_URL = "mock://" + SCOPE;
-
     private static final String C1 = "c1";
     private static final String C2 = "c2";
     private static final Uuid PRICES_ID = Uuid.randomUuid();
@@ -60,10 +58,15 @@ class ParsleyProcessorsAvroTopologyTest {
 
     private final List<SpecificRecord> processed = new ArrayList<>();
 
+    // The scope is the part after mock:// — MockSchemaRegistry keys its in-JVM client by it. One
+    // scope per test, since the registry is a JVM-wide map and the teardown drops a whole scope:
+    // on a shared one, a test finishing drops the subjects a concurrent test is still asserting on.
+    private final String scope = "parsley-avro-topology-" + UUID.randomUUID();
+    private final String registryUrl = "mock://" + scope;
+
     @AfterEach
     void dropRegistryScope() {
-        // Keep the shared in-JVM registry isolated between tests.
-        MockSchemaRegistry.dropScope(SCOPE);
+        MockSchemaRegistry.dropScope(scope);
     }
 
     /**
@@ -223,21 +226,25 @@ class ParsleyProcessorsAvroTopologyTest {
         };
     }
 
-    private static SpecificAvroSerde<SpecificRecord> specificAvroSerde() {
+    private SpecificAvroSerde<SpecificRecord> specificAvroSerde() {
         SpecificAvroSerde<SpecificRecord> serde = new SpecificAvroSerde<>();
         serde.configure(Map.of(
-                AbstractKafkaSchemaSerDeConfig.SCHEMA_REGISTRY_URL_CONFIG, REGISTRY_URL,
+                AbstractKafkaSchemaSerDeConfig.SCHEMA_REGISTRY_URL_CONFIG, registryUrl,
                 KafkaAvroDeserializerConfig.SPECIFIC_AVRO_READER_CONFIG, true), false);
         return serde;
     }
 
-    private static List<String> registeredSubjects() {
+    private List<String> registeredSubjects() {
         try {
-            return new ArrayList<>(MockSchemaRegistry.getClientForScope(SCOPE).getAllSubjects());
+            return new ArrayList<>(MockSchemaRegistry.getClientForScope(scope).getAllSubjects());
         } catch (Exception e) {
             throw new IllegalStateException("could not read mock registry subjects", e);
         }
     }
+
+    /** A state directory per driver: the application id is fixed, so a shared one would collide. */
+    @RegisterExtension
+    static final TestStateDirectories STATE_DIRS = new TestStateDirectories("avro-decorator-test-");
 
     private static Properties config() {
         Properties props = new Properties();
@@ -245,6 +252,7 @@ class ParsleyProcessorsAvroTopologyTest {
         props.put(StreamsConfig.BOOTSTRAP_SERVERS_CONFIG, "dummy:1234");
         props.put(StreamsConfig.DEFAULT_KEY_SERDE_CLASS_CONFIG, Serdes.String().getClass());
         props.put(StreamsConfig.DEFAULT_VALUE_SERDE_CLASS_CONFIG, Serdes.String().getClass());
+        props.put(StreamsConfig.STATE_DIR_CONFIG, STATE_DIRS.create().toAbsolutePath().toString());
         return props;
     }
 

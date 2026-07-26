@@ -215,17 +215,17 @@
                                  drops below this. Baseline was 73% when the floor was set. -->
                             <mutationThreshold>71</mutationThreshold>
                             <!-- Mutant-execution parallelism. Held at 1, which costs about half an
-                                 hour a run against roughly five minutes at 8 threads. A parallel
-                                 run is not a faster way to get the same answer: it scores several
-                                 points higher and does not reproduce (two runs gave 80% and 78%,
-                                 where serial gives 74% every time). ParsleyProcessorsTopologyTest
-                                 pins a fixed Streams application id and takes the default
-                                 state.dir, so concurrent minions contend on one RocksDB lock and
-                                 its tests error on store open. PIT reads an erroring test as a
-                                 killed mutant, so the contention reads as detection: every mutant
-                                 whose verdict moves survives serially and dies in parallel, and
-                                 all of them are attributed to that class. See issue #43; raising
-                                 this above 1 depends on it. -->
+                                 hour a run against roughly a quarter of that at 8 threads. A
+                                 parallel run is not a faster way to get the same answer: it scores
+                                 higher, because a mutant whose covering tests run slowly under CPU
+                                 contention exceeds PIT's per-mutant timeout, and PIT counts a
+                                 timeout as a kill. Measured over the same tree, serial gives 719
+                                 detected of 974 (74%) and 8 threads gives 726 (75%) twice over,
+                                 with the whole gap in mutants moving SURVIVED to TIMED_OUT. The
+                                 individual verdicts also still churn between two parallel runs
+                                 even where the total does not. Serial is the reproducible number
+                                 a floor needs. Raising this above 1 depends on the timeout
+                                 sensitivity, tracked in issue #44. -->
                             <threads>${pitest.threads}</threads>
                             <!-- Quieten the minions. simplelogger.properties puts the parsley
                                  package at debug so a failing test prints its causal trace, but

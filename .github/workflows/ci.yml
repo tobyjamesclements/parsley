@@ -49,8 +49,8 @@ jobs:
   # fails if the killed-mutant percentage regresses below it. No `needs`, so this runs alongside
   # the other jobs rather than extending the chain; it re-runs surefire itself because PIT binds
   # to the test phase. Mutants run serially (pitest.threads=1) on purpose. Executing them in
-  # parallel scores several points higher and does not reproduce run to run, because tests that
-  # pass in a quiet run fail under CPU contention and a failing test reads as a killed mutant.
+  # parallel scores about a point higher, because a mutant whose covering tests run slowly under
+  # CPU contention exceeds PIT's per-mutant timeout and PIT counts a timeout as a kill. See #44.
   mutation:
     runs-on: ubuntu-latest
     timeout-minutes: 90

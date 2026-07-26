@@ -31,10 +31,8 @@ import org.apache.kafka.streams.state.StoreBuilder;
 import org.apache.kafka.streams.state.Stores;
 import org.apache.kafka.streams.test.TestRecord;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.RegisterExtension;
 
-import java.io.File;
-import java.io.IOException;
-import java.nio.file.Files;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -51,7 +49,6 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static io.github.tobyjamesclements.parsley.ParsleyTestFixtures.cause;
 import static io.github.tobyjamesclements.parsley.ParsleyTestFixtures.message;
-import org.jspecify.annotations.Nullable;
 
 /**
  * Exercises {@link ParsleyProcessorSupplier} — the decorating causal processor — through a real Kafka Streams
@@ -80,17 +77,19 @@ class ParsleyProcessorsTopologyTest {
 
     private final List<String> processed = new ArrayList<>();
 
+    /** A state directory per driver: the application id is fixed, so a shared one would collide. */
+    @RegisterExtension
+    static final TestStateDirectories STATE_DIRS = new TestStateDirectories("decorator-test-");
+
     // --- helpers -------------------------------------------------------------------------------
 
-    private static Properties config(@Nullable File stateDir) {
+    private static Properties config() {
         Properties props = new Properties();
         props.put(StreamsConfig.APPLICATION_ID_CONFIG, "decorator-test");
         props.put(StreamsConfig.BOOTSTRAP_SERVERS_CONFIG, "dummy:1234");
         props.put(StreamsConfig.DEFAULT_KEY_SERDE_CLASS_CONFIG, Serdes.String().getClass());
         props.put(StreamsConfig.DEFAULT_VALUE_SERDE_CLASS_CONFIG, Serdes.String().getClass());
-        if (stateDir != null) {
-            props.put(StreamsConfig.STATE_DIR_CONFIG, stateDir.getAbsolutePath());
-        }
+        props.put(StreamsConfig.STATE_DIR_CONFIG, STATE_DIRS.create().toAbsolutePath().toString());
         return props;
     }
 
@@ -157,7 +156,7 @@ class ParsleyProcessorsTopologyTest {
                         .addSource(new ParsleySource<>("c1", Serdes.String(), Serdes.String())).topicAdmin(ADMIN).build(),
                 List.of("c1"));
 
-        try (TopologyTestDriver driver = new TopologyTestDriver(topology, config(null))) {
+        try (TopologyTestDriver driver = new TopologyTestDriver(topology, config())) {
             TestInputTopic<String, String> c1 =
                     driver.createInputTopic("c1", new StringSerializer(), new StringSerializer());
             TestOutputTopic<String, String> out =
@@ -191,7 +190,7 @@ class ParsleyProcessorsTopologyTest {
                         .addSource(new ParsleySource<>("c1", Serdes.String(), Serdes.String())).topicAdmin(ADMIN).build(),
                 List.of("c1"));
 
-        try (TopologyTestDriver driver = new TopologyTestDriver(topology, config(null))) {
+        try (TopologyTestDriver driver = new TopologyTestDriver(topology, config())) {
             TestInputTopic<String, String> c1 =
                     driver.createInputTopic("c1", new StringSerializer(), new StringSerializer());
             TestOutputTopic<String, String> out =
@@ -235,7 +234,7 @@ class ParsleyProcessorsTopologyTest {
                         .topicAdmin(ADMIN).build(),
                 List.of("c1", "c2"));
 
-        try (TopologyTestDriver driver = new TopologyTestDriver(topology, config(null))) {
+        try (TopologyTestDriver driver = new TopologyTestDriver(topology, config())) {
             TestInputTopic<String, String> c1 =
                     driver.createInputTopic("c1", new StringSerializer(), new StringSerializer());
             TestInputTopic<String, String> c2 =
@@ -269,7 +268,7 @@ class ParsleyProcessorsTopologyTest {
                         .addSources(List.of("c2", "c3"), Serdes.String(), Serdes.String()).topicAdmin(ADMIN).build(),
                 List.of("c2", "c3"));
 
-        try (TopologyTestDriver driver = new TopologyTestDriver(topology, config(null))) {
+        try (TopologyTestDriver driver = new TopologyTestDriver(topology, config())) {
             TestInputTopic<String, String> c2 =
                     driver.createInputTopic("c2", new StringSerializer(), new StringSerializer());
             TestInputTopic<String, String> c3 =
@@ -314,7 +313,7 @@ class ParsleyProcessorsTopologyTest {
                         .topicAdmin(ADMIN).build(),
                 List.of("c2", "c3"));
 
-        try (TopologyTestDriver driver = new TopologyTestDriver(topology, config(null))) {
+        try (TopologyTestDriver driver = new TopologyTestDriver(topology, config())) {
             TestInputTopic<String, String> c2 =
                     driver.createInputTopic("c2", new StringSerializer(), new StringSerializer());
             TestInputTopic<String, String> c3 =
@@ -348,7 +347,7 @@ class ParsleyProcessorsTopologyTest {
                         .addSource(new ParsleySource<>("c1", Serdes.String(), Serdes.String())).topicAdmin(ADMIN).build(),
                 List.of("c1"));
 
-        TopologyTestDriver driver = new TopologyTestDriver(topology, config(null));
+        TopologyTestDriver driver = new TopologyTestDriver(topology, config());
         // Sanity: a Parsley sensor is registered while the driver is open.
         assertEquals(0.0, parsleyMetric(driver, "buffer-depth"), 0.001,
                 "a parsley sensor must be registered while the driver is open");
@@ -392,7 +391,7 @@ class ParsleyProcessorsTopologyTest {
                         .topicAdmin(ADMIN).build(),
                 List.of("c1", "c2"));
 
-        try (TopologyTestDriver driver = new TopologyTestDriver(topology, config(null))) {
+        try (TopologyTestDriver driver = new TopologyTestDriver(topology, config())) {
             TestInputTopic<String, String> c1 =
                     driver.createInputTopic("c1", new StringSerializer(), new StringSerializer());
             TestInputTopic<String, String> c2 =
@@ -440,7 +439,7 @@ class ParsleyProcessorsTopologyTest {
                         .addSource(new ParsleySource<>("c1", Serdes.String(), Serdes.String())).topicAdmin(ADMIN).build(),
                 List.of("c1"));
 
-        try (TopologyTestDriver driver = new TopologyTestDriver(topology, config(null))) {
+        try (TopologyTestDriver driver = new TopologyTestDriver(topology, config())) {
             TestInputTopic<String, String> c1 =
                     driver.createInputTopic("c1", new StringSerializer(), new StringSerializer());
             TestOutputTopic<String, String> out =
@@ -487,7 +486,7 @@ class ParsleyProcessorsTopologyTest {
                         .addSource(new ParsleySource<>("c1", Serdes.String(), Serdes.String())).topicAdmin(ADMIN).build(),
                 List.of("c1"));
 
-        try (TopologyTestDriver driver = new TopologyTestDriver(topology, config(null))) {
+        try (TopologyTestDriver driver = new TopologyTestDriver(topology, config())) {
             TestInputTopic<String, String> c1 =
                     driver.createInputTopic("c1", new StringSerializer(), new StringSerializer());
             TestOutputTopic<String, String> out =
@@ -547,7 +546,7 @@ class ParsleyProcessorsTopologyTest {
                         .addSource(new ParsleySource<>("c1", Serdes.String(), Serdes.String())).topicAdmin(ADMIN).build(),
                 List.of("c1"));
 
-        try (TopologyTestDriver driver = new TopologyTestDriver(topology, config(null))) {
+        try (TopologyTestDriver driver = new TopologyTestDriver(topology, config())) {
             TestInputTopic<String, String> c1 =
                     driver.createInputTopic("c1", new StringSerializer(), new StringSerializer());
             TestOutputTopic<String, String> out =
@@ -592,7 +591,7 @@ class ParsleyProcessorsTopologyTest {
                         .addSource(new ParsleySource<>("c2", Serdes.String(), Serdes.String())).topicAdmin(ADMIN).build())
                 .to("c2-out", Produced.with(Serdes.String(), Serdes.String()));
 
-        try (TopologyTestDriver driver = new TopologyTestDriver(builder.build(), config(null))) {
+        try (TopologyTestDriver driver = new TopologyTestDriver(builder.build(), config())) {
             TestInputTopic<String, String> c3 =
                     driver.createInputTopic("c3", new StringSerializer(), new StringSerializer());
             TestInputTopic<String, String> c2 =
@@ -638,7 +637,7 @@ class ParsleyProcessorsTopologyTest {
                         .build(),
                 List.of("c1", "c2", "c3"));
 
-        try (TopologyTestDriver driver = new TopologyTestDriver(topology, config(null))) {
+        try (TopologyTestDriver driver = new TopologyTestDriver(topology, config())) {
             TestInputTopic<String, String> c1 =
                     driver.createInputTopic("c1", new StringSerializer(), new StringSerializer());
             TestInputTopic<String, String> c2 =
@@ -682,7 +681,7 @@ class ParsleyProcessorsTopologyTest {
                         .topicAdmin(ADMIN).build(),
                 List.of("c1"));
 
-        try (TopologyTestDriver driver = new TopologyTestDriver(topology, config(null))) {
+        try (TopologyTestDriver driver = new TopologyTestDriver(topology, config())) {
             TestInputTopic<String, String> c1 =
                     driver.createInputTopic("c1", new StringSerializer(), new StringSerializer());
 
@@ -720,7 +719,7 @@ class ParsleyProcessorsTopologyTest {
                         .topicAdmin(ADMIN).build(),
                 List.of("c1"));
 
-        try (TopologyTestDriver driver = new TopologyTestDriver(topology, config(null))) {
+        try (TopologyTestDriver driver = new TopologyTestDriver(topology, config())) {
             TestInputTopic<String, String> c1 =
                     driver.createInputTopic("c1", new StringSerializer(), new StringSerializer());
 
@@ -747,7 +746,7 @@ class ParsleyProcessorsTopologyTest {
                         .addSources(List.of("c2", "c3"), Serdes.String(), Serdes.String()).topicAdmin(ADMIN).build(),
                 List.of("c2", "c3"));
 
-        try (TopologyTestDriver driver = new TopologyTestDriver(topology, config(null))) {
+        try (TopologyTestDriver driver = new TopologyTestDriver(topology, config())) {
             TestInputTopic<String, String> c2 =
                     driver.createInputTopic("c2", new StringSerializer(), new StringSerializer());
             TestInputTopic<String, String> c3 =
@@ -784,7 +783,7 @@ class ParsleyProcessorsTopologyTest {
                         .addSource(new ParsleySource<>("c1", Serdes.String(), Serdes.String())).topicAdmin(ADMIN).build(),
                 List.of("c1"));
 
-        try (TopologyTestDriver driver = new TopologyTestDriver(topology, config(null))) {
+        try (TopologyTestDriver driver = new TopologyTestDriver(topology, config())) {
             TestInputTopic<String, String> c1 =
                     driver.createInputTopic("c1", new StringSerializer(), new StringSerializer());
             TestOutputTopic<String, String> out =
@@ -834,7 +833,7 @@ class ParsleyProcessorsTopologyTest {
                         .addSource(new ParsleySource<>("c1", Serdes.String(), Serdes.String())).topicAdmin(ADMIN).build())
                 .to("c6", produced);
 
-        try (TopologyTestDriver driver = new TopologyTestDriver(builder.build(), config(null))) {
+        try (TopologyTestDriver driver = new TopologyTestDriver(builder.build(), config())) {
             TestInputTopic<String, String> c1 =
                     driver.createInputTopic("c1", new StringSerializer(), new StringSerializer());
             TestOutputTopic<String, String> out =
@@ -904,7 +903,7 @@ class ParsleyProcessorsTopologyTest {
                         .build())
                 .to("c6", produced);
 
-        try (TopologyTestDriver driver = new TopologyTestDriver(builder.build(), config(null))) {
+        try (TopologyTestDriver driver = new TopologyTestDriver(builder.build(), config())) {
             TestInputTopic<String, String> c2 =
                     driver.createInputTopic("c2", new StringSerializer(), new StringSerializer());
             TestInputTopic<String, String> c3 =
@@ -1000,7 +999,7 @@ class ParsleyProcessorsTopologyTest {
                         .build())
                 .to("c6", produced);
 
-        try (TopologyTestDriver driver = new TopologyTestDriver(builder.build(), config(null))) {
+        try (TopologyTestDriver driver = new TopologyTestDriver(builder.build(), config())) {
             TestInputTopic<String, String> c2 =
                     driver.createInputTopic("c2", new StringSerializer(), new StringSerializer());
             TestInputTopic<String, String> c3 =
@@ -1078,7 +1077,7 @@ class ParsleyProcessorsTopologyTest {
                         .addSources(List.of("c1", "c5"), Serdes.String(), Serdes.String()).topicAdmin(ADMIN).build())
                 .to("c6", produced);
 
-        try (TopologyTestDriver driver = new TopologyTestDriver(builder.build(), config(null))) {
+        try (TopologyTestDriver driver = new TopologyTestDriver(builder.build(), config())) {
             TestInputTopic<String, String> c1 =
                     driver.createInputTopic("c1", new StringSerializer(), new StringSerializer());
             TestInputTopic<String, String> c5 =
@@ -1128,7 +1127,7 @@ class ParsleyProcessorsTopologyTest {
                         .addSources(List.of("c1", "c5"), Serdes.String(), Serdes.String()).topicAdmin(ADMIN).build())
                 .to("c6", produced);
 
-        try (TopologyTestDriver driver = new TopologyTestDriver(builder.build(), config(null))) {
+        try (TopologyTestDriver driver = new TopologyTestDriver(builder.build(), config())) {
             TestInputTopic<String, String> c1 =
                     driver.createInputTopic("c1", new StringSerializer(), new StringSerializer());
             TestInputTopic<String, String> c5 =
@@ -1159,14 +1158,14 @@ class ParsleyProcessorsTopologyTest {
      * {@code StreamsException}) with a cause naming the unregistered topic.
      */
     @Test
-    void ingestThrowsForATopicWithNoRegisteredBuffer() throws IOException {
+    void ingestThrowsForATopicWithNoRegisteredBuffer() {
         Topology topology = topology(
                 ParsleyProcessorSupplier.builder(upperCaser()).addBufferStore("parsley")
                         .addSource(new ParsleySource<>("c1", Serdes.String(), Serdes.String()))
                         .topicAdmin(ADMIN).build(),
                 List.of("c1", "ghost"));
 
-        try (TopologyTestDriver driver = new TopologyTestDriver(topology, config(tempStateDir()))) {
+        try (TopologyTestDriver driver = new TopologyTestDriver(topology, config())) {
             TestInputTopic<String, String> ghost =
                     driver.createInputTopic("ghost", new StringSerializer(), new StringSerializer());
 
@@ -1193,14 +1192,14 @@ class ParsleyProcessorsTopologyTest {
      */
     @Test
     @SuppressWarnings("NullAway") // the null message TestRecord intentionally has null key/value
-    void corruptNullMessageClockHeaderFailsTheTask() throws IOException {
+    void corruptNullMessageClockHeaderFailsTheTask() {
         Topology topology = topology(
                 ParsleyProcessorSupplier.builder(upperCaser()).addBufferStore("parsley")
                         .addSource(new ParsleySource<>("c1", Serdes.String(), Serdes.String()))
                         .topicAdmin(ADMIN).build(),
                 List.of("c1"));
 
-        try (TopologyTestDriver driver = new TopologyTestDriver(topology, config(tempStateDir()))) {
+        try (TopologyTestDriver driver = new TopologyTestDriver(topology, config())) {
             TestInputTopic<String, String> c1 =
                     driver.createInputTopic("c1", new StringSerializer(), new StringSerializer());
 
@@ -1231,7 +1230,7 @@ class ParsleyProcessorsTopologyTest {
      */
     @Test
     @SuppressWarnings("NullAway") // the null message TestRecord intentionally has null key/value
-    void absentNullMessageClockHeaderStillDeliversTheOffset() throws IOException {
+    void absentNullMessageClockHeaderStillDeliversTheOffset() {
         Topology topology = topology(
                 ParsleyProcessorSupplier.builder(upperCaser()).addBufferStore("parsley")
                         .addSource(new ParsleySource<>("c1", Serdes.String(), Serdes.String()))
@@ -1239,7 +1238,7 @@ class ParsleyProcessorsTopologyTest {
                         .topicAdmin(ADMIN).build(),
                 List.of("c1", "c2"));
 
-        try (TopologyTestDriver driver = new TopologyTestDriver(topology, config(tempStateDir()))) {
+        try (TopologyTestDriver driver = new TopologyTestDriver(topology, config())) {
             TestInputTopic<String, String> c1 =
                     driver.createInputTopic("c1", new StringSerializer(), new StringSerializer());
             TestInputTopic<String, String> c2 =
@@ -1268,14 +1267,14 @@ class ParsleyProcessorsTopologyTest {
      */
     @Test
     @SuppressWarnings("NullAway") // the null message TestRecord intentionally has null key/value
-    void nullMessageOnAnUnregisteredTopicFailsTheTask() throws IOException {
+    void nullMessageOnAnUnregisteredTopicFailsTheTask() {
         Topology topology = topology(
                 ParsleyProcessorSupplier.builder(upperCaser()).addBufferStore("parsley")
                         .addSource(new ParsleySource<>("c1", Serdes.String(), Serdes.String()))
                         .topicAdmin(ADMIN).build(),
                 List.of("c1", "ghost"));
 
-        try (TopologyTestDriver driver = new TopologyTestDriver(topology, config(tempStateDir()))) {
+        try (TopologyTestDriver driver = new TopologyTestDriver(topology, config())) {
             TestInputTopic<String, String> ghost =
                     driver.createInputTopic("ghost", new StringSerializer(), new StringSerializer());
 
@@ -1301,7 +1300,7 @@ class ParsleyProcessorsTopologyTest {
      * cause naming the topic the broker did not resolve.
      */
     @Test
-    void resolveTopicUuidsThrowsWhenTheAdminOmitsARegisteredTopic() throws IOException {
+    void resolveTopicUuidsThrowsWhenTheAdminOmitsARegisteredTopic() {
         ParsleyTopicAdmin incomplete = new ParsleyTopicAdmin() {
             @Override public Map<String, Uuid> topicIds(List<String> topics) { return Map.of(); }
             @Override public Map<String, Integer> partitionCounts(List<String> topics) { return Map.of(); }
@@ -1316,7 +1315,7 @@ class ParsleyProcessorsTopologyTest {
                 List.of("c1"));
 
         StreamsException thrown = assertThrows(StreamsException.class,
-                () -> new TopologyTestDriver(topology, config(tempStateDir())),
+                () -> new TopologyTestDriver(topology, config()),
                 "startup must fail when the admin does not resolve every registered topic");
         Throwable guardFailure = cause(thrown);
         assertEquals(IllegalStateException.class, guardFailure.getClass(),
@@ -1334,7 +1333,7 @@ class ParsleyProcessorsTopologyTest {
      * cause chain of: the wrapping {@code IllegalStateException}, then the original admin failure.
      */
     @Test
-    void resolveTopicUuidsWrapsAnAdminFailure() throws IOException {
+    void resolveTopicUuidsWrapsAnAdminFailure() {
         ParsleyTopicAdmin throwing = new ParsleyTopicAdmin() {
             @Override public Map<String, Uuid> topicIds(List<String> topics) throws Exception {
                 throw new TimeoutException("no broker reachable");
@@ -1351,7 +1350,7 @@ class ParsleyProcessorsTopologyTest {
                 List.of("c1"));
 
         StreamsException thrown = assertThrows(StreamsException.class,
-                () -> new TopologyTestDriver(topology, config(tempStateDir())),
+                () -> new TopologyTestDriver(topology, config()),
                 "startup must fail when the admin itself throws");
         assertEquals(IllegalStateException.class, cause(thrown).getClass(),
                 "the wrapped cause must be the resolveTopicUuids catch-and-rethrow");
@@ -1377,7 +1376,7 @@ class ParsleyProcessorsTopologyTest {
                         .addSource(new ParsleySource<>("c1", Serdes.String(), Serdes.String())).topicAdmin(ADMIN).build(),
                 List.of("c1"));
 
-        try (TopologyTestDriver driver = new TopologyTestDriver(topology, config(null))) {
+        try (TopologyTestDriver driver = new TopologyTestDriver(topology, config())) {
             TestInputTopic<String, String> c1 =
                     driver.createInputTopic("c1", new StringSerializer(), new StringSerializer());
             TestOutputTopic<String, String> out =
@@ -1411,7 +1410,7 @@ class ParsleyProcessorsTopologyTest {
                         .addSource(new ParsleySource<>("c1", Serdes.String(), Serdes.String())).topicAdmin(ADMIN).build(),
                 List.of("c1"));
 
-        try (TopologyTestDriver driver = new TopologyTestDriver(topology, config(null))) {
+        try (TopologyTestDriver driver = new TopologyTestDriver(topology, config())) {
             TestInputTopic<String, String> c1 =
                     driver.createInputTopic("c1", new StringSerializer(), new StringSerializer());
             TestOutputTopic<String, String> out =
@@ -1486,7 +1485,7 @@ class ParsleyProcessorsTopologyTest {
                         .addSource(new ParsleySource<>("c1", Serdes.String(), Serdes.String())).topicAdmin(ADMIN).build(),
                 List.of("c1"));
 
-        try (TopologyTestDriver driver = new TopologyTestDriver(topology, config(null))) {
+        try (TopologyTestDriver driver = new TopologyTestDriver(topology, config())) {
             TestInputTopic<String, String> c1 =
                     driver.createInputTopic("c1", new StringSerializer(), new StringSerializer());
             TestOutputTopic<String, String> out =
@@ -1538,7 +1537,7 @@ class ParsleyProcessorsTopologyTest {
                     }
                 });
 
-        try (TopologyTestDriver driver = new TopologyTestDriver(builder.build(), config(null))) {
+        try (TopologyTestDriver driver = new TopologyTestDriver(builder.build(), config())) {
             TestInputTopic<String, String> c1 =
                     driver.createInputTopic("c1", new StringSerializer(), new StringSerializer());
 
@@ -1560,7 +1559,7 @@ class ParsleyProcessorsTopologyTest {
      * names the mismatch.
      */
     @Test
-    void mismatchedInputPartitionCountsFailStartup() throws IOException {
+    void mismatchedInputPartitionCountsFailStartup() {
         ParsleyTopicAdmin mismatched = TestTopicAdmin.of(
                 Map.of("c2", C2_ID, "c3", C3_ID), Map.of("c2", 2, "c3", 3));
         Topology topology = topology(
@@ -1571,7 +1570,7 @@ class ParsleyProcessorsTopologyTest {
                 List.of("c2", "c3"));
 
         StreamsException thrown = assertThrows(StreamsException.class,
-                () -> new TopologyTestDriver(topology, config(tempStateDir())),
+                () -> new TopologyTestDriver(topology, config()),
                 "a source partition-count mismatch must fail startup");
         assertEquals(IllegalStateException.class, cause(thrown).getClass(),
                 "the wrapped cause must be the parity check's failure");
@@ -1589,13 +1588,13 @@ class ParsleyProcessorsTopologyTest {
      * the malformed value.
      */
     @Test
-    void malformedDeliveryTimeoutFailsInitNamingTheKeyAndValue() throws IOException {
+    void malformedDeliveryTimeoutFailsInitNamingTheKeyAndValue() {
         Topology topology = topology(
                 ParsleyProcessorSupplier.builder(upperCaser()).addBufferStore("parsley")
                         .addSource(new ParsleySource<>("c1", Serdes.String(), Serdes.String()))
                         .topicAdmin(ADMIN).build(),
                 List.of("c1"));
-        Properties props = config(tempStateDir());
+        Properties props = config();
         props.put("producer.delivery.timeout.ms", "not-a-number");
 
         StreamsException thrown = assertThrows(StreamsException.class,
@@ -1649,18 +1648,12 @@ class ParsleyProcessorsTopologyTest {
                         .topicAdmin(equal).build(),
                 List.of("c2", "c3"));
 
-        try (TopologyTestDriver driver = new TopologyTestDriver(topology, config(null))) {
+        try (TopologyTestDriver driver = new TopologyTestDriver(topology, config())) {
             driver.createInputTopic("c2", new StringSerializer(), new StringSerializer())
                     .pipeInput(new TestRecord<>("k", "ok", depsHeader(CausalClock.empty())));
             assertEquals(List.of("ok"), processed,
                     "the parity check must pass when input partition counts match: the task processes normally");
         }
-    }
-
-    /** A fresh, unique state directory — required when a test expects driver construction itself to
-     * fail, since a failed construction cannot be closed to release its RocksDB locks. */
-    private static File tempStateDir() throws IOException {
-        return Files.createTempDirectory("parsley-topology-test-").toFile();
     }
 
     // --- small utilities -----------------------------------------------------------------------

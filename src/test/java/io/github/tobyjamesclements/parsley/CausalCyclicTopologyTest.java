@@ -20,6 +20,7 @@ import org.apache.kafka.streams.processor.api.Record;
 import org.apache.kafka.streams.processor.api.RecordMetadata;
 import org.apache.kafka.streams.test.TestRecord;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.RegisterExtension;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -157,12 +158,18 @@ class CausalCyclicTopologyTest {
         return ParsleyVectorClock.empty();
     }
 
+    /** A state directory per driver: the application id is fixed, so a shared one would collide. */
+    @RegisterExtension
+    static final TestStateDirectories STATE_DIRS =
+            new TestStateDirectories("causal-cyclic-topology-test-");
+
     private static Properties config() {
         Properties props = new Properties();
         props.put(StreamsConfig.APPLICATION_ID_CONFIG, "causal-cyclic-topology-test");
         props.put(StreamsConfig.BOOTSTRAP_SERVERS_CONFIG, "dummy:1234");
         props.put(StreamsConfig.DEFAULT_KEY_SERDE_CLASS_CONFIG, Serdes.String().getClass());
         props.put(StreamsConfig.DEFAULT_VALUE_SERDE_CLASS_CONFIG, Serdes.String().getClass());
+        props.put(StreamsConfig.STATE_DIR_CONFIG, STATE_DIRS.create().toAbsolutePath().toString());
         return props;
     }
 }

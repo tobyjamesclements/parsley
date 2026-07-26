@@ -4,6 +4,7 @@ import org.apache.kafka.common.Uuid;
 import org.apache.kafka.common.serialization.Serdes;
 import org.apache.kafka.streams.StreamsConfig;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.RegisterExtension;
 
 import java.util.Map;
 import java.util.Properties;
@@ -33,13 +34,17 @@ class CausalStreamsConstructionTest {
                 .build();
     }
 
+    /** A state directory per instance, so concurrent instances cannot collide on one path. */
+    @RegisterExtension
+    static final TestStateDirectories STATE_DIRS = new TestStateDirectories("construction-test-");
+
     /** A Streams configuration valid up to the point {@code new KafkaStreams} parses it. */
     private static Properties validProps(String applicationId) {
         Properties props = new Properties();
         props.put(StreamsConfig.APPLICATION_ID_CONFIG, applicationId);
         props.put(StreamsConfig.BOOTSTRAP_SERVERS_CONFIG, "localhost:9092");
         props.put(StreamsConfig.PROCESSING_GUARANTEE_CONFIG, StreamsConfig.EXACTLY_ONCE_V2);
-        props.put(StreamsConfig.STATE_DIR_CONFIG, System.getProperty("java.io.tmpdir"));
+        props.put(StreamsConfig.STATE_DIR_CONFIG, STATE_DIRS.create().toAbsolutePath().toString());
         return props;
     }
 
