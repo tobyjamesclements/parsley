@@ -37,11 +37,6 @@ docs/api/
 # virtual machine crash logs, see http://www.java.com/en/download/help/error_hotspot.xml
 hs_err_pid*
 replay_pid*
-# Claude Code: session-local state stays ignored; shared project instructions,
-# skills, commands, and the permission allowlist are tracked
-/.claude/*
-!/.claude/CLAUDE.md
-!/.claude/skills/
-!/.claude/commands/
-!/.claude/settings.json
+# Claude Code working directory: entirely untracked, no exceptions.
+/.claude/
 /parsley.iml
