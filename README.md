@@ -1,46 +1,72 @@
-# Parsley
+# Parsley (fresh start)
 
-Causal delivery order for Kafka Streams. Producers stamp each record with its causal dependencies,
-and Kafka Streams processors hold back any record whose dependencies have not yet been observed,
-releasing it once the frontier catches up. The guarantee is the causal-consistency model of the
-distributed-systems literature (Lamport's happened-before relation, realised with vector clocks),
-instantiated on Kafka coordinates: when the preconditions hold, if A causally precedes B, every
-processor that subscribes to both of their topics processes A before B.
+Causal delivery order for Kafka stream processing: a record reaches your processor only after
+every cause your processor consumes has been delivered locally. No membership, no admission
+barrier, no timeouts, no reordering — block or fail, never guess.
 
-Internally Parsley is a stack of three protocols, presented in the module style of Cachin,
-Guerraoui, and Rodrigues: a **channels** layer that adapts Kafka topic-partitions into reliable
-FIFO channels, a **causal broadcast** layer (Birman–Schiper–Stephenson) that delivers in causal
-order, and a **gossip** layer (Chandy–Misra–Bryant null messages) that keeps causal progress
-observable through non-emitting processors. The preconditions are co-partitioning by key, closed
-processor effects, and stamping by every processor between causally related topics.
+This branch is a ground-up rewrite. `DESIGN.md` is the specification; the deterministic
+simulator under `src/test/java/.../sim` is the primary correctness gate.
 
-Joining a running topology needs no coordination: a new application simply starts consuming, its
-replay self-gates into causal delivery order, and its truthful stamps make its outputs correctly
-gated everywhere from its first emission.
+## Architecture in five sentences
 
-## Install
+A **transport-agnostic core** (`parsley.core`) implements causal delivery with head-of-line
+blocking per channel: each `(topicId, partition)` channel has a FIFO hold queue, only queue
+heads are gated against the contiguous delivered frontier, and delivery cascades to fixpoint.
+Outbound records carry one header — a vector clock over channels — folded from the frontier,
+the per-channel advertised clocks, carried ancestry from scope changes, and the node's own
+acknowledged sends. Kafka's non-density (transaction markers, aborted records, retention) is
+repaired at receive time by seeding and bridging, and its trailing edge by **position-advance
+bridging**: the consumer's position moving past markers is the entire liveness mechanism, so
+there are **no protocol records on any topic**. Persistence is keyed and incremental,
+committing in the same EOS transaction as the delivery that mutated it. A Kafka Streams
+adapter (`parsley.kafka`) hosts the core behind a single-serialization-point processor;
+`EdgeClock` gives plain producers and consumers the same stamps.
 
-Parsley is published to [Maven Central](https://central.sonatype.com/artifact/io.github.tobyjamesclements/parsley).
+## Verification
 
-```xml
-<dependency>
-  <groupId>io.github.tobyjamesclements</groupId>
-  <artifactId>parsley</artifactId>
-  <version>0.2.0</version>
-</dependency>
+The simulator models partitions, EOS step-atomic transactions with real marker and aborted
+offsets, `read_committed` fetch, asynchronous acknowledgements, node crashes with
+transactional rollback, and seeded random interleavings. A **ground-truth oracle** tracks real
+happened-before ancestry entirely outside the protocol and checks every delivery for causal
+order, per-channel FIFO, and duplicates, plus completeness and drain at end of run. Scenarios
+carry anti-vacuity assertions (gate holds, crashes, and position advances must actually fire),
+and an oracle self-test proves the harness flags a deliberately broken protocol.
+
+```
+mvn verify
 ```
 
-0.2.0 is an early release. Pre-1.0 versions have no upgrade path between versions: upgrading is a
-fresh start (new state, new offsets), because wire formats and the public API change without
-compatibility aliases until 1.0.
+## Using it
 
-Requires Java 21 or later, and Kafka brokers version 3.7.0 or later — the minimum supported
-broker; the integration suite runs against both 3.7.0 and the current stable broker line.
-Building from source needs JDK 25; build with `./mvnw install`.
+```java
+CausalStage<String, String, String, String> stage = CausalStage.<String, String, String, String>builder()
+        .source("orders", Serdes.String(), Serdes.String())
+        .source("payments", Serdes.String(), Serdes.String())
+        .processor(MyProcessor::new)          // an ordinary Processor<K, V, KO, VO>
+        .sink("settlements", Serdes.String(), Serdes.String())
+        .build();
 
-## Docs
+try (CausalStreams app = CausalStreams.start(stage, props)) {   // enforces exactly_once_v2
+    // records reach MyProcessor in causal order; forwards are stamped automatically
+}
+```
 
-**[tobyjamesclements.github.io/parsley](https://tobyjamesclements.github.io/parsley)**
+Plain producers stamp with `EdgeClock`: `observe` consumed records, `recordProduced` your
+acknowledgements, `stamp` outbound headers. Plain consumers need nothing at all — business
+topics carry no protocol records, only a `parsley-clock` header they may ignore.
 
-Leads with the causal-consistency foundations and the three protocols, then covers getting
-started, Streams integration, configuration, and reference.
+## What changed from the original architecture
+
+| Original | Fresh start |
+|---|---|
+| Out-of-order intra-partition delivery: two delivered-vector projections, forwarded index, absorb walk, candidate index | Head-of-line blocking per channel: one frontier, a FIFO queue per channel, gate the head only |
+| Gossip layer: in-band null messages, relay rule, trigger timestamps, retention coupling | Deleted — position-advance bridging plus claims-name-real-offsets cover liveness; topics are protocol-silent |
+| One persisted frontier blob, rewritten O(C·w) per advance | Keyed incremental persistence; only changed entries written |
+| Persisted own-outputs clock plus former-sink heal machinery | Memory-only own outputs; the init end-offset seed re-covers every restart case |
+| Monotone-growing stamps forever | `truncate(stability)` hook drops entries below a global stability bound |
+| Unbounded hold buffer | `pauseWanted` backpressure: pause the flooding channel, causes arrive on other channels |
+| Broker integration tests as the correctness gate | Deterministic simulator with a ground-truth causal oracle, crashes and EOS faults included |
+
+Known limits of this cut: non-Parsley headers on held records are not carried through
+delivery; one causal stage per topology in the Streams adapter (the core itself has no such
+limit); the Streams adapter's crossing wait conservatively awaits all pending sends.

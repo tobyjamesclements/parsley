@@ -31,7 +31,9 @@ public interface DeliveryProtocol {
     /**
      * The single stamping site: the dependency clock to attach to an outbound send to
      * {@code destination}, with pending acknowledgements folded and the crossing wait applied
-     * (quiescence of unacknowledged own sends to channels other than the destination).
+     * (quiescence of unacknowledged own sends to channels other than the destination). A null
+     * destination waits for every pending send — for hosts that cannot know the partition at
+     * stamp time.
      */
     Clock stampForSend(Channel destination);
 

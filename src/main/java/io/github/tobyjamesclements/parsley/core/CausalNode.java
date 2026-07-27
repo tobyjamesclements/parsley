@@ -186,7 +186,9 @@ public final class CausalNode implements DeliveryProtocol {
     @Override
     public Clock stampForSend(Channel destination) {
         foldAcks();
-        sends.awaitQuiescence(Set.of(destination));
+        // A null destination (the Streams adapter, where the sink partitioner runs after
+        // stamping) waits for everything — conservative and sound.
+        sends.awaitQuiescence(destination == null ? Set.of() : Set.of(destination));
         foldAcks();
         Clock stamp = new Clock();
         frontier.forEach(stamp::advanceTo);
