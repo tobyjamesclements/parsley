@@ -13,11 +13,11 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
  * Tests for {@link ParsleyGossip#receive}: a null message's carried clock feeds the outbound stamp
- * ({@link ParsleyCausalBroadcast#completeness()}) and the {@code advancedConsumedChannel} relay
+ * ({@link ParsleyCausalBroadcast#vectorTime()}) and the {@code advancedConsumedChannel} relay
  * signal (only an advance of a channel this node consumes obliges a relay; custody folds but
  * never obliges), but never the delivery gate — a peer's claim that a coordinate was delivered <em>there</em>
  * is not proof it was delivered <em>here</em>, so a held record releases only once this node's own
- * contiguous frontier genuinely reaches its dependencies. Gating on the max-merged completeness
+ * contiguous frontier genuinely reaches its dependencies. Gating on the max-merged vector time
  * instead would let a null message claiming a sibling channel's coordinate release a held record
  * before this node had itself delivered that cause — an effect-before-cause delivery to the
  * delegate, violating the causal-order guarantee for a processor subscribing to both topics.
@@ -77,11 +77,11 @@ class ParsleyGossipTest {
 
     /**
      * The carried clock still feeds the outbound stamp: a null message claiming foreign ancestor
-     * C3@5 surfaces in {@link ParsleyCausalBroadcast#completeness()} (transitive ancestry a
+     * C3@5 surfaces in {@link ParsleyCausalBroadcast#vectorTime()} (transitive ancestry a
      * downstream node's own gate verifies for itself) without releasing anything here.
      */
     @Test
-    void carriedClaimStillEntersTheOutboundStampCompleteness() {
+    void carriedClaimStillEntersTheOutboundStamp() {
         ParsleyChannels frontier = newFrontier();
         frontier.channelUpdate(C1_ID, 0, ParsleyVectorClock.empty());
         frontier.channelUpdate(C2_ID, 0, ParsleyVectorClock.empty());
@@ -90,7 +90,7 @@ class ParsleyGossipTest {
 
         gossip.receive(C1_ID, 0, 0, clock(C3_ID, 5));
 
-        assertEquals(5L, causalBroadcast.completeness().offsetFor(C3_ID, 0),
+        assertEquals(5L, causalBroadcast.vectorTime().offsetFor(C3_ID, 0),
                 "the carried foreign-ancestor claim must surface in the outbound stamp for "
                         + "transitive downstream propagation");
         assertEquals(-1L, causalBroadcast.frontier().offsetFor(C3_ID, 0),
@@ -141,7 +141,7 @@ class ParsleyGossipTest {
         ParsleyChannels channels = newFrontier();
         // C2 is consumed (in SCOPE) and also this node's own sink — the self-cycle shape. The
         // acked append at C2@7 has not been delivered here (frontier C2 = -1), so only the
-        // ownOutputs side of stamp() can dominate the reflected claim.
+        // ownOutputs side of vectorTime() can dominate the reflected claim.
         channels.acknowledge(C2_ID, 0, 7);
         ParsleyCausalBroadcast<String, String> causalBroadcast = ParsleyTestFixtures.broadcast(
                 channels, buffer, new MockCandidateIndex(), ParsleyMetrics.NOOP,
@@ -154,7 +154,7 @@ class ParsleyGossipTest {
                 "a consumed-own-sink claim at or below ownOutputs is this node's own knowledge — "
                         + "relaying it would ping-pong forever around a self-cycle (the "
                         + "comparison is against total knowledge, ownOutputs included)");
-        assertEquals(7L, causalBroadcast.completeness().offsetFor(C2_ID, 0),
+        assertEquals(7L, causalBroadcast.vectorTime().offsetFor(C2_ID, 0),
                 "the reflected claim must still fold into the channel clock unstripped — "
                         + "only the relay is suppressed, never the merge");
     }
@@ -178,7 +178,7 @@ class ParsleyGossipTest {
         assertFalse(gossip.receive(C1_ID, 0, 0, clock(C3_ID, 5)).advancedConsumedChannel(),
                 "a custody claim (C3 is neither consumed nor produced) must never oblige a relay, "
                         + "even on first sight — relaying hearsay is the ≥3-cycle storm");
-        assertEquals(5L, causalBroadcast.completeness().offsetFor(C3_ID, 0),
+        assertEquals(5L, causalBroadcast.vectorTime().offsetFor(C3_ID, 0),
                 "the custody claim still folds into the channel clock and the stamp — only "
                         + "the relay obligation is scoped, never the merge");
         assertTrue(gossip.receive(C1_ID, 0, 1, clock(C2_ID, 3)).advancedConsumedChannel(),

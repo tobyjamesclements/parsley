@@ -269,7 +269,7 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
      * {@code taskId().partition()} of every input). Derived, never persisted, so it is recomputed
      * identically after a rebalance. Two consumers, deliberately the same predicate: restore-time
      * pruning in {@link #buildCausalBroadcast()} (not a delivery filter — the gate waits for every
-     * channel; see {@code completeness()}), and the relay trigger scope handed to
+     * channel; see {@code vectorTime()}), and the relay trigger scope handed to
      * {@link ParsleyGossip} — a foreign partition of a consumed topic is a sibling task's scope,
      * never fetched here, so a carried claim on it must fold without obliging a relay.
      */
@@ -305,7 +305,7 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
         // prefix is skipped, never replayed as live; a recreated input's old UUID is destroyed.
         // Then seed an (empty) entry for every consumed input channel so rescope has a recorded
         // channel to diff against on the next scope change; the entry contributes nothing to
-        // completeness(), which is a plain max-merge. Idempotent
+        // vectorTime(), which is a plain max-merge. Idempotent
         // against an already-rescoped/seeded store (the
         // common case, every call after the first), so this costs a redundant write, never a wrong one.
         Map<String, Uuid> previousInputs = channels.declaredInputs();
@@ -551,17 +551,18 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
             case BUSINESS -> { }
         }
         ParsleyMessage<KIn, VIn> ingested = ingest(record);
-        ParsleyVectorClock completenessBefore = causalBroadcast().completeness();
         ParsleyCausalBroadcast.Outcome<KIn, VIn> outcome = causalBroadcast().receive(ingested);
         deliver(outcome.delivered());
         // Advertise this node's progress so downstream channel clocks advance gap-free (L3's
-        // emission rule). A delivered record advertises through its business output's completeness
-        // stamp — or, if the delegate forwarded nothing, the null message emitted in deliver(). A
-        // consumed record that was buffered produces neither, so emit a heartbeat null message — but
-        // only when receiving it genuinely advanced completeness (a coordinate's first sighting
-        // seeds the frontier), so an unrelated held record does not flood downstream with no-op
-        // null messages.
-        if (outcome.delivered().isEmpty() && !causalBroadcast().completeness().equals(completenessBefore)) {
+        // emission rule). A delivered record advertises through its business output's stamp — or, if
+        // the delegate forwarded nothing, the null message emitted in deliver(). A consumed record
+        // that was buffered produces neither, so emit a heartbeat null message — but only when
+        // receiving it genuinely advanced a consumed channel's clock (a coordinate's first sighting
+        // seeds the frontier, a bridge crosses a marker gap), so an unrelated held record does not
+        // flood downstream with no-op null messages. This is the CMB trigger rule the relay half
+        // already applies to a received null message (ParsleyGossip), here applied to a record that
+        // was buffered rather than delivered.
+        if (outcome.delivered().isEmpty() && outcome.advancedConsumedChannel()) {
             // Key the heartbeat with the buffered record's own key so it routes to that record's
             // partition, matching where its eventual business output will land; carry the buffered
             // record's own timestamp so downstream stream time follows the data's time.
@@ -591,7 +592,7 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
     private void deliver(List<ParsleyMessage<KIn, VIn>> admitted) {
         for (ParsleyMessage<KIn, VIn> message : admitted) {
             // Every forward the delegate makes for this message is stamped live by
-            // causalBroadcast.broadcast() — the node's completeness at forward time, sound across all
+            // causalBroadcast.broadcast() — the node's vector time at forward time, sound across all
             // input branches (never a per-record frontier-snapshot merged with inbound deps, which was
             // correct only in single-layer topologies).
             deliveryMetadata = new ParsleyRecordMetadata(message.topic(), message.partition(), message.offset());
@@ -601,9 +602,9 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
             delegate.process(new Record<>(message.key(), message.value(), message.timestamp(),
                     message.headersWithDependencies()));
             // If the delegate did not forward any business record for this input, emit a null
-            // message carrying the current completeness frontier so that downstream nodes still
+            // message carrying the node's current vector time so that downstream nodes still
             // learn about this node's causal progress (L3's emission rule). Without this, a
-            // non-emitting processor silently stalls downstream completeness, breaking the inductive
+            // non-emitting processor silently stalls downstream causal progress, breaking the inductive
             // correctness of multi-layer topologies.
             if (stampingContext.forwardCount() == 0) {
                 // Reuse the delivered record's key so the stand-in null message routes to the same
@@ -620,7 +621,7 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
      * Reports this task's current buffer-drained state to {@link #quiesce} (if registered). Called
      * after every buffer-depth-changing event (every path that can
      * hold or release a record funnels through {@link #delivered}), so the signal reflects the
-     * current buffer depth without polling. Never fabricates completeness — it only observes the buffer
+     * current buffer depth without polling. Never fabricates progress — it only observes the buffer
      * depth the ordinary delivery path already produced. Quiesce additionally gates its drained flag on
      * {@link ParsleyQuiesce#isQuiesceRequested()}.
      */
@@ -639,7 +640,7 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
      * message ({@link ParsleyHeader#NULL_MESSAGE}) —
      * never by a record's key, which for a null message carries the triggering record's key for
      * routing. A null message carries no business payload and must never be forwarded to the user
-     * delegate or buffered — it exists only to propagate causal completeness progress through
+     * delegate or buffered — it exists only to propagate causal progress through
      * non-emitting layers ({@link ParsleyGossip}). Anything else is {@link RecordKind#BUSINESS}.
      */
     private RecordKind classify(Record<KIn, VIn> record) {
@@ -652,7 +653,7 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
     }
 
     /**
-     * Handles a received null message: decodes its carried completeness clock, folds it through
+     * Handles a received null message: decodes its carried clock, folds it through
      * {@link ParsleyGossip#receive}, and relays this node's own null message downstream iff the
      * received one advanced this node's knowledge of a consumed channel (the relay rule). The null
      * message is never delivered to the delegate and never buffered. Two guards mirror the business
@@ -691,7 +692,7 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
         ParsleyGossip.Reception<KIn, VIn> reception = gossip.receive(topicId, partition, offset, carried);
         deliver(reception.delivered());
         // Relay only when this null message advanced this node's knowledge of a channel it
-        // consumes (the relay trigger scope on ParsleyGossip): the completeness boundary still
+        // consumes (the relay trigger scope on ParsleyGossip): the delivered/advertised boundary still
         // propagates through non-subscribing layers when a node's own inputs genuinely moved,
         // while custody-only news folds into the stamp without obliging a message — the relay
         // discipline that lets topology cycles quiesce. Reuse the incoming message's own key:
@@ -944,7 +945,7 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
      * Fails the task at {@code init()}, unconditionally, when the causal <em>source</em> topics do
      * not share a partition count. Co-partitioning requires an equal partition count across all
      * causally-related source topics so that a single task owns the complete partition set for a
-     * related group; unequal counts make that impossible and let the completeness frontier evaluate
+     * related group; unequal counts make that impossible and let a task evaluate the causal frontier
      * against an incomplete partition set — a causal-safety hole, since the argument that makes an
      * out-of-scope coordinate safe to ignore assumes proper sharding, not a topology lint, so there
      * is no opt-down. A single source topic is always vacuously fine. Sink topics are deliberately
@@ -1051,8 +1052,8 @@ final class ParsleyProcessor<KIn, VIn, KOut, VOut> implements Processor<KIn, VIn
      * Fails the task at {@code init()}, unconditionally, when a {@link CausalStreams} sink topic's
      * {@code cleanup.policy} includes {@code compact}. A protocol null message is a null-value
      * record wire-indistinguishable from a compaction tombstone, so under compaction it can be
-     * removed from the log before a slow consumer reads it — silently losing the completeness
-     * frontier it carried (and read as a <em>delete</em> by any table-style consumer of the sink).
+     * removed from the log before a slow consumer reads it — silently losing the vector time it
+     * carried (and read as a <em>delete</em> by any table-style consumer of the sink).
      * {@code compact,delete} is equally unsafe: compaction still runs. No viable deployment
      * tolerates this, so there is no opt-down. Best-effort per sink, like
      * {@link #validateSinkPartitionWidth}: a sink whose describe failed is skipped here.

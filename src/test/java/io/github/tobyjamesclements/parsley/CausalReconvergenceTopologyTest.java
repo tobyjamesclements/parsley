@@ -52,8 +52,8 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  *   <li>A shared-ancestor dependency is held until the ancestor's own channel genuinely, contiguously
  *       reaches the required offset, then releases, stamped with the offset actually reached.</li>
  *   <li>Null message emission: a non-forwarding (filter) delegate still results in a protocol null message
- *       reaching downstream so completeness progress is not silently lost.</li>
- *   <li>A null message carrying no business record still advances completeness, visible in a later,
+ *       reaching downstream so causal progress is not silently lost.</li>
+ *   <li>A null message carrying no business record still advances the node's vector time, visible in a later,
  *       unrelated record's own outgoing stamp.</li>
  *   <li>Null message propagation through a non-subscribing relay layer.</li>
  * </ol>
@@ -195,7 +195,7 @@ class CausalReconvergenceTopologyTest {
      *
      * <p>A delegate that calls no {@code ctx.forward()} (a pure filter) causes the decorating
      * {@link ParsleyProcessor} to emit one {@code _parsley_null_message} record per delivered input.
-     * The null message carries the current completeness frontier in the
+     * The null message carries the node's current vector time in the
      * {@code parsley-causal-clock} header.
      *
      * <p>This test uses a {@link MockProcessorContext} rather than {@link TopologyTestDriver} so that
@@ -236,13 +236,13 @@ class CausalReconvergenceTopologyTest {
     }
 
     /**
-     * A null message carrying no business record still genuinely advances completeness — visible in a
-     * later, unrelated record's own outgoing stamp, not merely in admission.
+     * A null message carrying no business record still genuinely advances the node's vector time —
+     * visible in a later, unrelated record's own outgoing stamp, not merely in admission.
      *
      * <p>A record's own dependency claim always self-satisfies (see the preceding test), so a null
      * message cannot be demonstrated by "releasing a held record". What is testable instead: a
      * completely unrelated record — one whose own declared deps say nothing about {@code ANC} at all —
-     * still has {@code ANC} appear in its own outgoing stamp, because completeness max-merges every
+     * still has {@code ANC} appear in its own outgoing stamp, because the vector time max-merges every
      * channel's knowledge, including a channel that has only ever received a null message, never a
      * business record.
      *
@@ -289,12 +289,12 @@ class CausalReconvergenceTopologyTest {
 
     /**
      * Null-message custody — a non-subscribing layer folds a received null message's carried clock
-     * into its own outbound stamp, so a grandchild node's completeness advances with this node's
+     * into its own outbound stamp, so a grandchild node's vector time advances with this node's
      * next emission even when no business record flows on the path.
      *
      * <p>This is tested at the {@link ParsleyGossip} level over a channel-tracking {@link
      * ParsleyChannels}: after {@link ParsleyGossip#receive} is called with a frontier carrying an
-     * ancestor coordinate, {@link ParsleyCausalBroadcast#completeness()} must reflect it. This proves the
+     * ancestor coordinate, {@link ParsleyCausalBroadcast#vectorTime()} must reflect it. This proves the
      * channel clock is updated by the null-message receipt, which is the custody mechanism
      * behind propagation through non-subscribing layers. Also asserts {@link
      * ParsleyGossip.Reception#advancedConsumedChannel()} reports {@code false} — the ancestor is a
@@ -302,11 +302,11 @@ class CausalReconvergenceTopologyTest {
      * stamp and rides every later emission, but it must not itself oblige a relay (the relay trigger
      * scope on {@link ParsleyGossip} — relaying hearsay is what let topic cycles storm).
      *
-     * Asserts that completeness rises to include the null message's ancestor coordinate immediately
+     * Asserts that the vector time rises to include the null message's ancestor coordinate immediately
      * after {@code ParsleyGossip.receive} is called, even though no business record was delivered.
      */
     @Test
-    void nullMessageReceiveAdvancesChannelClockAndCompleteness() {
+    void nullMessageReceiveAdvancesChannelClockAndVectorTime() {
         // C1 is the only subscribed topic. ANC_ID is an out-of-scope ancestor.
         ParsleyVectorClock.CoordinatePredicate scope = (topicId, partition) ->
                 partition == 0 && topicId.equals(C1_ID);
@@ -318,9 +318,9 @@ class CausalReconvergenceTopologyTest {
                 System::currentTimeMillis);
         ParsleyGossip<String, String> gossip = new ParsleyGossip<>(causalBroadcast, Set.of(), scope);
 
-        // Before any null message, completeness has no ANC coordinate.
-        assertEquals(-1L, causalBroadcast.completeness().offsetFor(ANC_ID, 0),
-                "completeness must not know ANC before any null message arrives");
+        // Before any null message, the vector time has no ANC coordinate.
+        assertEquals(-1L, causalBroadcast.vectorTime().offsetFor(ANC_ID, 0),
+                "the vector time must not know ANC before any null message arrives");
 
         // Receive a null message at C1/0 offset 0, carrying {ANC@5}.
         ParsleyVectorClock carriedFrontier = ParsleyVectorClock.empty().observe(ANC_ID, 0, 5);
@@ -335,9 +335,9 @@ class CausalReconvergenceTopologyTest {
                 "ANC is a channel this node neither consumes nor produces — the claim is custody, "
                         + "which folds into the stamp but must not oblige a relay (the relay trigger scope)");
 
-        // The channel clock for C1/0 now knows ANC@5, which must appear in completeness().
-        assertEquals(5L, causalBroadcast.completeness().offsetFor(ANC_ID, 0),
-                "completeness must rise to ANC@5 after the null message advances the channel clock");
+        // The channel clock for C1/0 now knows ANC@5, which must appear in the vector time.
+        assertEquals(5L, causalBroadcast.vectorTime().offsetFor(ANC_ID, 0),
+                "the vector time must rise to ANC@5 after the null message advances the channel clock");
     }
 
     // --- helpers -----------------------------------------------------------------------------

@@ -50,7 +50,7 @@ import static java.util.Objects.requireNonNull;
  * sees offsets {@code 0,1,2,4,5,6} with a hole at 3 that no record ever fills.
  *
  * <p>The stage passes each record through, and {@link ParsleyProcessorContext} stamps every forward with
- * the node's completeness, whose {@code src} entry is the contiguous frontier. Reading the stamps back off
+ * the node's vector time, whose {@code src} entry is the contiguous frontier. Reading the stamps back off
  * {@code out} therefore reveals how far the frontier advanced. If the contiguous walk
  * ({@code ParsleyChannels.deliver}) stalls at the first marker hole, the highest {@code src} offset in any
  * stamp is capped at 2 even though all six records were delivered — confirming the frontier cannot track a

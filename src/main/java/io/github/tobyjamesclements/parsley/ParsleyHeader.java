@@ -31,7 +31,7 @@ record ParsleyHeader(String key, byte @Nullable [] value) {
     /**
      * Header marking a record as a Parsley null message (Chandy–Misra–Bryant sense: a
      * timestamp-carrying record whose value is literally null). A null message carries no business
-     * payload and exists solely to propagate the emitting node's completeness frontier to
+     * payload and exists solely to propagate the emitting node's vector time to
      * downstream processors when the user delegate did not forward any business record for the
      * delivered input ({@link ParsleyGossip}). The {@code _parsley_} prefix means it is stripped
      * from user view by {@code ParsleyMessage.userHeaders} and from any public header API.

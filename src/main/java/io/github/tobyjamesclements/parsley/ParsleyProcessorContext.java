@@ -21,13 +21,13 @@ import java.util.function.Supplier;
 
 /**
  * A Decorator over the real {@link ProcessorContext} handed to a causal processor's delegate,
- * stamping the current outbound timestamp ({@link ParsleyChannels#stamp()}) onto every forwarded
+ * stamping the current outbound timestamp ({@link ParsleyChannels#vectorTime()}) onto every forwarded
  * record's headers and delegating everything else verbatim. This is what stamps outgoing records
  * without the user doing anything by hand: Kafka Streams sinks propagate a {@link Record}'s headers
  * onto the produced {@code ProducerRecord}, so the dependencies ride to the output topic.
  *
  * <p>The stamp is attached by {@link ParsleyCausalBroadcast#broadcast}, the single stamping site,
- * which reads the completeness live at forward time, so a forward during admission sees the post-admit
+ * which reads the vector time live at forward time, so a forward during admission sees the post-admit
  * value and a forward from a punctuator sees it as of fire time. Stamping is idempotent (any existing
  * {@link ParsleyHeader#CAUSAL_CLOCK} header is replaced) and never mutates the incoming record.
  *
@@ -35,7 +35,7 @@ import java.util.function.Supplier;
  * rather than broadcasting, because the zero-arg {@code forward} reaches every child of the node,
  * which could send a business record to an incompatibly-typed sibling and throw
  * {@code ClassCastException} on its serializer. Punctuators forward through this same proxy and must
- * only read the completeness, never advance it, preserving the persist-frontier-before-forward
+ * only read the vector time, never advance it, preserving the persist-frontier-before-forward
  * ordering on the punctuator path.
  *
  * @param <KOut> the forwarded key type

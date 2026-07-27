@@ -28,7 +28,7 @@ import static java.util.Objects.requireNonNull;
  * closes that, and {@code ParsleyGossipCycleQuiescenceTest} pins these shapes quiescent.
  * When the finished spec contains a cycle every forward probability is capped subcritical: on a
  * feedback loop each consumer-with-sinks appends roughly one record per
- * delivered record (a business forward or a completeness-advert null message), so amplification
+ * delivered record (a business forward or a progress-advert null message), so amplification
  * is governed by loop membership, not probability alone, and the sim's runaway guard classifies
  * anything that still goes hot as {@link ParsleyTopologySim.SupercriticalTopologyException} for
  * the sweep to skip and count.

@@ -186,7 +186,7 @@ public final class CausalClock {
      * safe. Requires a resolver, bound via {@link #using(Properties)} or {@link #builder(Properties)}
      * or carried through a prior {@code observe} / {@code merge}.
      *
-     * <p>A null message (see {@link #isNullMessage(ConsumerRecord)}) folds in only the completeness
+     * <p>A null message (see {@link #isNullMessage(ConsumerRecord)}) folds in only the vector time
      * frontier it carries, never its own offset, since it delivers no business payload and gating on
      * that offset would stall downstream on a record that carries nothing.
      *
@@ -215,7 +215,7 @@ public final class CausalClock {
 
     /**
      * Returns {@code true} if {@code record} is a Parsley null message: a metadata record carrying a
-     * node's completeness frontier but no business payload. A plain Kafka client should still
+     * node's vector time but no business payload. A plain Kafka client should still
      * {@link #observe(ConsumerRecord) observe} one, so its frontier advances across a service that
      * emitted only null messages, but must not surface it as a business record. The usual loop is to
      * {@code observe} every record and {@code continue} past those this flags.

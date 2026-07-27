@@ -26,7 +26,7 @@ import java.util.Set;
  *   <li>the <strong>contiguous frontier</strong>, the highest offset delivered without a gap on each
  *       consumed coordinate; the only clock the delivery gate consults;
  *   <li>the <strong>channel clocks</strong>, per input channel, the dependencies advertised on it;
- *       {@link #completeness()} max-merges these with the frontier into the outbound stamp, which
+ *       {@link #vectorTime()} max-merges these with the frontier into the outbound stamp, which
  *       carries transitive ancestry downstream but never substitutes for local delivery;
  *   <li>the <strong>carried ancestry</strong>, causal past re-homed from coordinates that have left
  *       the node's scope, kept so the stamp keeps dominating it; stamp-side only;
@@ -52,7 +52,7 @@ final class ParsleyChannels {
     // carried ancestry may be skipped, never dropped, or the stamp would under-claim a causal past
     // this node really has. The term is this project's coinage. The nearest literature concept is
     // the vector time of the node's causal past, restricted to retired channels. Stamp-side only:
-    // merged into completeness(), never consulted by the delivery gate, never advanced by
+    // merged into vectorTime(), never consulted by the delivery gate, never advanced by
     // deliveries. Persisted in the frontier value.
     private ParsleyVectorClock carriedAncestry = ParsleyVectorClock.empty();
     // The node's own acked output positions per sink coordinate — the clock that recovers CBCAST's
@@ -151,7 +151,7 @@ final class ParsleyChannels {
             // offsets delivered above the contiguous frontier, committed in the same EOS transaction
             // as this blob, so the reconstruction is lossless. Entries at or below the frontier need
             // no reconstruction — the frontier itself dominates them wherever the two are merged
-            // (stamp()). Every delivered coordinate was received first, so highestReceived's keys
+            // (vectorTime()). Every delivered coordinate was received first, so highestReceived's keys
             // enumerate every channel that can carry a mark.
             for (Map.Entry<CoordKey, Long> received : highestReceived.entrySet()) {
                 Uuid topicId = received.getKey().topicId();
@@ -201,7 +201,7 @@ final class ParsleyChannels {
      * exact self-coordinate is removed; a backward same-partition dependency ({@code required
      * < offset}) is an intra-topic dependency like any other and flows through unchanged.
      *
-     * <p>View-only: never rewrites recorded state or the outbound stamp ({@link #completeness()} is
+     * <p>View-only: never rewrites recorded state or the outbound stamp ({@link #vectorTime()} is
      * computed separately). A pure function of the raw clock and the source coordinate, so the gate
      * may evaluate it as often as it likes — every evaluation of the same held record yields the
      * same result.
@@ -233,7 +233,7 @@ final class ParsleyChannels {
     /**
      * The node's own acked output positions per sink coordinate — the clock that recovers CBCAST's
      * own-slot semantics: the broker performs the sender's clock increment, learned via
-     * {@link #acknowledge}. Stamp-side only, never consulted by the delivery gate; {@link #stamp()}
+     * {@link #acknowledge}. Stamp-side only, never consulted by the delivery gate; {@link #vectorTime()}
      * carries it on every outbound record.
      */
     ParsleyVectorClock ownOutputs() {
@@ -241,14 +241,27 @@ final class ParsleyChannels {
     }
 
     /**
-     * The outbound vector timestamp, {@code completeness ∪ ownOutputs ∪ highestDelivered}: the clock
-     * {@link ParsleyCausalBroadcast#broadcast} attaches to every outbound record, and equally the
-     * node's total knowledge that the relay rule compares a carried clock against. The own-outputs
-     * and highest-delivered clocks are merged here and only here; neither feeds {@link #completeness()}
-     * or the delivery gate.
+     * This node's vector time, VT(p): everything it knows, in one clock. The contiguous frontier
+     * max-merged with every input channel's advertised dependencies, with the
+     * {@link #carriedAncestry} re-homed from retired coordinates, with the node's own acknowledged
+     * output positions, and with the offsets delivered above a gap. It plays both literature roles
+     * of a process's vector time (Mattern 1988; Fidge 1988): it is the timestamp
+     * {@link ParsleyCausalBroadcast#broadcast} attaches to every outbound record, VT(m) := VT(p) at
+     * send, and it is the total knowledge the relay rule compares a carried clock against.
+     *
+     * <p>This is the outbound stamp, not the delivery gate. It carries transitive ancestry —
+     * coordinates a channel has advertised, or an offset delivered above a gap, that this node's own
+     * contiguous frontier does not yet cover — downstream, where each receiver's own gate verifies
+     * them against its own delivery history. The gate reads {@link #frontier()} alone
+     * ({@link ParsleyCausalBroadcast#isDeliverable}), so an advertised claim never releases a record
+     * ahead of local delivery of its cause.
      */
-    ParsleyVectorClock stamp() {
-        return completeness().merge(ownOutputs).merge(highestDelivered);
+    ParsleyVectorClock vectorTime() {
+        ParsleyVectorClock result = frontier.merge(carriedAncestry).merge(ownOutputs).merge(highestDelivered);
+        for (ParsleyVectorClock advertised : channels.values()) {
+            result = result.merge(advertised);
+        }
+        return result;
     }
 
     /**
@@ -274,7 +287,7 @@ final class ParsleyChannels {
 
     /**
      * The crossing wait: blocks until the task's producer has no unacknowledged send to an own-sink
-     * coordinate outside {@code exceptDestinations}, so the ack fold before the next {@link #stamp()}
+     * coordinate outside {@code exceptDestinations}, so the ack fold before the next {@link #vectorTime()}
      * cannot miss a send that process-order-precedes the record being stamped. An empty set waits for
      * full quiescence, the conservative form used before a business forward, whose destination
      * partition is unknowable at stamp time; over-waiting only folds more acked positions, which can
@@ -311,21 +324,6 @@ final class ParsleyChannels {
                 acknowledge(topicId, partition, offset);
             }
         });
-    }
-
-    /**
-     * The causal completeness clock: this node's contiguous frontier max-merged with every input
-     * channel's advertised dependencies and with the {@link #carriedAncestry} re-homed from retired
-     * coordinates. It is the delivered/advertised boundary the node carries downstream for each
-     * receiver's own gate to verify, not the delivery gate itself: the gate checks {@link #frontier()}
-     * alone, so an advertised claim never releases a record ahead of local delivery of its cause.
-     */
-    ParsleyVectorClock completeness() {
-        ParsleyVectorClock result = frontier.merge(carriedAncestry);
-        for (ParsleyVectorClock advertised : channels.values()) {
-            result = result.merge(advertised);
-        }
-        return result;
     }
 
     /**
@@ -465,7 +463,7 @@ final class ParsleyChannels {
      * (monotonic: the stored clock never decreases) and persists. A first call for a channel
      * initialises it from {@code clock}.
      *
-     * <p>A channel's entry never holds {@link #completeness()} down: {@link #completeness()} is a
+     * <p>A channel's entry never holds {@link #vectorTime()} down: {@link #vectorTime()} is a
      * plain max-merge, so a channel with nothing advertised contributes nothing rather than
      * excluding a coordinate every other channel has confirmed, as an intersection minimum would.
      * What a seeded-but-silent channel entry does is give {@link #rescope} something to check
@@ -532,7 +530,7 @@ final class ParsleyChannels {
      *       and recreated, so the old UUID's entries can never be delivered and are removed
      *       outright, the one removal permitted; the new UUID starts as an added channel.</li>
      *   <li><strong>Shrink:</strong> every other entry leaving scope max-merges into
-     *       {@link #carriedAncestry} before it is pruned, so {@link #completeness()} is unchanged
+     *       {@link #carriedAncestry} before it is pruned, so {@link #vectorTime()} is unchanged
      *       except at destroyed coordinates; dropping it would let a downstream receiver reorder
      *       an effect against its retired-channel cause.</li>
      *   <li><strong>Growth:</strong> an input declared now but not before seeds its frontier at this
@@ -597,8 +595,8 @@ final class ParsleyChannels {
         highestReceived.keySet().removeIf(key -> outOfScope.test(key.topicId(), key.partition()));
 
         // 3 — growth: an added channel skips the prefix this node already carried. The seed reads
-        // stamp(), not completeness(): an added input that is this node's own former sink would
-        // otherwise under-skip the prefix its stamps already claimed via ownOutputs — "skip what
+        // the whole of vectorTime(), own outputs included: an added input that is this node's own
+        // former sink would otherwise under-skip the prefix its stamps already claimed — "skip what
         // you already claimed" extends "skip what you already ignored".
         if (!declaredInputs.isEmpty()) {
             for (Map.Entry<String, Uuid> current : currentInputs.entrySet()) {
@@ -606,7 +604,7 @@ final class ParsleyChannels {
                     continue;
                 }
                 Uuid topicId = current.getValue();
-                long carried = stamp().offsetFor(topicId, taskPartition);
+                long carried = vectorTime().offsetFor(topicId, taskPartition);
                 if (carried > frontier.offsetFor(topicId, taskPartition)) {
                     frontier = frontier.observe(topicId, taskPartition, carried);
                     forwardedIndex.pruneAtOrBelow(topicId, taskPartition, carried);

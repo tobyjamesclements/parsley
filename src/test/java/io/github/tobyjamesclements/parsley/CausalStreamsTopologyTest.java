@@ -1109,7 +1109,7 @@ class CausalStreamsTopologyTest {
      * sink's end offset at 5, the clock claims the last appended position 4 — whether or not this
      * task produced it (the over-claim path; it heals the persisted blob trailing the crashed
      * transaction's acks). The seed is persisted in the {@code "frontier"} value and rides the
-     * outbound stamp — {@code completeness ∪ ownOutputs} — so a downstream consumer of
+     * outbound stamp — the node's vector time, own outputs included — so a downstream consumer of
      * the sink gates a derived record behind this node's whole appended prefix.
      *
      * Asserts the persisted own-output clock holds end offset - 1 for the sink and the emitted
@@ -1137,8 +1137,8 @@ class CausalStreamsTopologyTest {
             ParsleyVectorClock stamp = ParsleyVectorClock.fromBytes(
                     emitted.headers().lastHeader(ParsleyHeader.CAUSAL_CLOCK).value());
             assertEquals(4L, stamp.offsetFor(c3Id, 0),
-                    "the seeded own-output coordinate must ride the stamp (completeness ∪ "
-                            + "ownOutputs)");
+                    "the seeded own-output coordinate must ride the stamp (the vector time, own "
+                            + "outputs included)");
 
             KeyValueStore<String, byte[]> frontierStore =
                     driver.getKeyValueStore("causal-streams-test-stage-1-frontier");

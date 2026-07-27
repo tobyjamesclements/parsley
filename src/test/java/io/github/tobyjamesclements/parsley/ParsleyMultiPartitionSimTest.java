@@ -73,13 +73,13 @@ class ParsleyMultiPartitionSimTest {
                 "the claiming record on the task's own partition must be delivered");
         assertTrue(sim.crossPartitionIgnoredCauses > 0,
                 "the foreign-partition cause must be counted through the ignore branch");
-        assertTrue(task1.channels.stamp().offsetFor(sim.topicId("c1"), 0) >= 0,
+        assertTrue(task1.channels.vectorTime().offsetFor(sim.topicId("c1"), 0) >= 0,
                 "the task's stamp must still claim the foreign-partition ancestry it can never "
                         + "deliver — custody spans partitions");
-        // Partition 1 carries task 1's completeness-advert null message (the first, silent
+        // Partition 1 carries task 1's progress-advert null message (the first, silent
         // delivery) plus the derived business record; partition 0 must stay untouched.
         assertEquals(2, sim.logSize("c2", 1),
-                "the derived record (and task 1's completeness advert) must land on the emitting "
+                "the derived record (and task 1's progress advert) must land on the emitting "
                         + "task's own sink partition — key preservation IS co-partitioning");
         assertEquals(0, sim.logSize("c2", 0),
                 "nothing may land on the sink partition the emitting task does not own");

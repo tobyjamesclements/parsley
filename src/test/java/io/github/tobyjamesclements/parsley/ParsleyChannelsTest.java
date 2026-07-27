@@ -24,7 +24,7 @@ class ParsleyChannelsTest {
 
     /**
      * The frontier clock and the channel clocks survive a reload from the same store — a fresh
-     * {@link ParsleyChannels} over the store reproduces both the delivered frontier and completeness,
+     * {@link ParsleyChannels} over the store reproduces both the delivered frontier and the vector time,
      * without replaying any records.
      */
     @Test
@@ -40,7 +40,7 @@ class ParsleyChannelsTest {
         original.channelUpdate(C2_ID, 0, ParsleyVectorClock.empty().observe(ANC_ID, 0, 7));
 
         ParsleyVectorClock frontierBefore = original.frontier();
-        ParsleyVectorClock completenessBefore = original.completeness();
+        ParsleyVectorClock vectorTimeBefore = original.vectorTime();
 
         // Reload: a fresh frontier over the same store restores from the frontier value alone.
         ParsleyChannels restored = new ParsleyChannels(store, new MockForwardedIndex());
@@ -49,9 +49,9 @@ class ParsleyChannelsTest {
                 "the contiguous frontier clock must round-trip through the \"f\" blob");
         assertEquals(1L, restored.frontier().offsetFor(C1_ID, 0),
                 "C1 must restore at its delivered offset 1");
-        assertEquals(completenessBefore, restored.completeness(),
-                "completeness must be identical after reload — both channel clocks restored");
-        assertEquals(7L, restored.completeness().offsetFor(ANC_ID, 0),
+        assertEquals(vectorTimeBefore, restored.vectorTime(),
+                "the vector time must be identical after reload — both channel clocks restored");
+        assertEquals(7L, restored.vectorTime().offsetFor(ANC_ID, 0),
                 "the shared ancestor must restore at the max across channels: max(4, 7) = 7 — a single "
                         + "genuine witness suffices, so the higher advertised value wins, not the lower one");
     }
@@ -61,16 +61,14 @@ class ParsleyChannelsTest {
      * delivery: a later offset forwards while an earlier one is still held) must be claimed by the
      * outbound stamp even though the frontier cannot reach it: an output emitted from that delivery
      * is causally after it, and a downstream consumer of both topics gates only on what the stamp
-     * claims. The frontier (the gate's view) and completeness (the transitive-ancestry view the
-     * stamp merges) must both stay below the gap — only {@code stamp()} carries the above-gap
-     * claim, exactly the
-     * split the stamp draws for {@code ownOutputs}.
+     * claims. The frontier (the gate's view) must stay below the gap — only {@code vectorTime()}
+     * carries the above-gap claim, exactly the split it draws for {@code ownOutputs}.
      *
-     * Asserts the stamp claims the above-gap offset while frontier and completeness stay at the
-     * contiguous prefix.
+     * Asserts the stamp claims the above-gap offset while the frontier stays at the contiguous
+     * prefix.
      */
     @Test
-    void stampClaimsADeliveryAboveTheContiguousFrontierGap() {
+    void vectorTimeClaimsADeliveryAboveTheContiguousFrontierGap() {
         TestKeyValueStore<String, byte[]> store =
                 new TestKeyValueStore<String, byte[]>(Comparator.naturalOrder(), "frontier");
         ParsleyChannels channels = new ParsleyChannels(store, new MockForwardedIndex());
@@ -85,9 +83,7 @@ class ParsleyChannelsTest {
 
         assertEquals(1L, channels.frontier().offsetFor(C1_ID, 0),
                 "the contiguous frontier must not advance past the held offset 2");
-        assertEquals(1L, channels.completeness().offsetFor(C1_ID, 0),
-                "completeness (the floor-publication view) must not claim above the gap either");
-        assertEquals(3L, channels.stamp().offsetFor(C1_ID, 0),
+        assertEquals(3L, channels.vectorTime().offsetFor(C1_ID, 0),
                 "the outbound stamp must claim the record delivered above the gap — its coordinate "
                         + "is real delivered causal past, and omitting it lets a downstream consumer "
                         + "deliver a derived output before this cause");
@@ -118,7 +114,7 @@ class ParsleyChannelsTest {
 
         assertEquals(0L, restored.frontier().offsetFor(C1_ID, 0),
                 "the restored frontier must still sit below the gap");
-        assertEquals(2L, restored.stamp().offsetFor(C1_ID, 0),
+        assertEquals(2L, restored.vectorTime().offsetFor(C1_ID, 0),
                 "the restored stamp must reconstruct the above-gap delivered claim from the "
                         + "forwarded index — losing it across a restart would let post-restart "
                         + "outputs under-claim delivered causal past");
@@ -151,7 +147,7 @@ class ParsleyChannelsTest {
         ParsleyChannels restored = new ParsleyChannels(store, forwardedIndex);
         restored.rescope(Map.of("C1", C1_ID), 0);
 
-        assertEquals(2L, restored.stamp().offsetFor(C2_ID, 0),
+        assertEquals(2L, restored.vectorTime().offsetFor(C2_ID, 0),
                 "the retired channel's above-gap delivered offset must survive the shrink in the "
                         + "carried ancestry — delivered causal past is re-homed, never dropped");
     }
@@ -181,7 +177,7 @@ class ParsleyChannelsTest {
         ParsleyChannels restored = new ParsleyChannels(store, forwardedIndex);
         restored.rescope(Map.of("C1", C1_ID, "C2", recreatedC2), 0);
 
-        assertEquals(-1L, restored.stamp().offsetFor(C2_ID, 0),
+        assertEquals(-1L, restored.vectorTime().offsetFor(C2_ID, 0),
                 "a destroyed (recreated) UUID's above-gap claim must leave the stamp outright — "
                         + "no receiver can ever deliver the old coordinates");
     }
@@ -189,13 +185,13 @@ class ParsleyChannelsTest {
     /**
      * {@code rescope} re-homes — never drops — the ancestry a scope shrink retires. A
      * channel-clock entry for a topic that has left the input set folds into the carried-ancestry
-     * clock, so completeness (the outbound stamp) is unchanged by the prune. Dropping it instead
+     * clock, so the vector time (the outbound stamp) is unchanged by the prune. Dropping it instead
      * would under-claim every subsequent stamp and let a third party
      * downstream reorder the retired channel's causes against their effects.
      *
      * Asserts that after rescoping to an input set without the retired ancestor's channel,
-     * completeness still carries the ancestor at its full value, the frontier no longer gates on the
-     * retired coordinate, and the re-homed value persists across a reload.
+     * the vector time still carries the ancestor at its full value, the frontier no longer gates on
+     * the retired coordinate, and the re-homed value persists across a reload.
      */
     @Test
     void rescopeReHomesRetiredAncestryIntoTheCarriedAncestryClock() {
@@ -212,25 +208,25 @@ class ParsleyChannelsTest {
         channels.delivered(ANC_ID, 0, 9);
         channels.channelUpdate(C1_ID, 0,
                 ParsleyVectorClock.empty().observe(ANC_ID, 0, 4).observe(C2_ID, 0, 2));
-        assertEquals(9L, channels.completeness().offsetFor(ANC_ID, 0),
+        assertEquals(9L, channels.vectorTime().offsetFor(ANC_ID, 0),
                 "precondition: the soon-retired ancestor is delivered and advertised before the rescope");
 
         // The new input set: C1 and C2 only — ANC has left the topology.
         channels.rescope(Map.of("C1", C1_ID, "C2", C2_ID), 0);
 
-        assertEquals(9L, channels.completeness().offsetFor(ANC_ID, 0),
+        assertEquals(9L, channels.vectorTime().offsetFor(ANC_ID, 0),
                 "the retired coordinate must re-home into the carried ancestry at its full delivered "
                         + "value — dropping it would under-claim the stamp");
         assertEquals(-1L, channels.frontier().offsetFor(ANC_ID, 0),
                 "the retired coordinate must leave the frontier — the gate view — even as the stamp "
                         + "keeps carrying it");
-        assertEquals(2L, channels.completeness().offsetFor(C2_ID, 0),
+        assertEquals(2L, channels.vectorTime().offsetFor(C2_ID, 0),
                 "live transitive ancestry inside the surviving channel clock must survive the rescope");
         assertEquals(1L, channels.frontier().offsetFor(C1_ID, 0),
                 "the in-scope frontier entry must survive the rescope");
 
         ParsleyChannels reloaded = new ParsleyChannels(store, new MockForwardedIndex());
-        assertEquals(9L, reloaded.completeness().offsetFor(ANC_ID, 0),
+        assertEquals(9L, reloaded.vectorTime().offsetFor(ANC_ID, 0),
                 "the carried ancestry must persist in the \"f\" blob: a reload must keep stamping it");
     }
 
@@ -240,7 +236,7 @@ class ParsleyChannelsTest {
      * carried ancestry outright (a recreated topic's offsets rebind to different records, so no
      * receiver can ever deliver them), while everything else re-homes as usual.
      *
-     * Asserts the old UUID vanishes from completeness after the rescope and the new UUID starts
+     * Asserts the old UUID vanishes from the vector time after the rescope and the new UUID starts
      * fresh, with the destruction persisted.
      */
     @Test
@@ -253,21 +249,21 @@ class ParsleyChannelsTest {
         channels.seedIfFirstSeen(C1_ID, 0, 5);
         channels.delivered(C1_ID, 0, 5);
         channels.channelUpdate(C2_ID, 0, ParsleyVectorClock.empty().observe(C1_ID, 0, 3));
-        assertEquals(5L, channels.completeness().offsetFor(C1_ID, 0),
+        assertEquals(5L, channels.vectorTime().offsetFor(C1_ID, 0),
                 "precondition: the soon-destroyed UUID is delivered and advertised before the rescope");
 
         // C1 is deleted and recreated: same name, new UUID.
         Uuid recreatedC1 = Uuid.randomUuid();
         channels.rescope(Map.of("C1", recreatedC1, "C2", C2_ID), 0);
 
-        assertEquals(-1L, channels.completeness().offsetFor(C1_ID, 0),
+        assertEquals(-1L, channels.vectorTime().offsetFor(C1_ID, 0),
                 "the destroyed UUID must leave every stamp-feeding structure — it can never be "
                         + "delivered by any receiver, so re-homing it would carry a dead claim forever");
         assertEquals(-1L, channels.frontier().offsetFor(recreatedC1, 0),
                 "the recreated topic's new UUID has no carried ancestry, so it starts unseeded");
 
         ParsleyChannels reloaded = new ParsleyChannels(store, new MockForwardedIndex());
-        assertEquals(-1L, reloaded.completeness().offsetFor(C1_ID, 0),
+        assertEquals(-1L, reloaded.vectorTime().offsetFor(C1_ID, 0),
                 "the destruction must persist: a reload must not resurrect the dead UUID");
     }
 
@@ -319,9 +315,9 @@ class ParsleyChannelsTest {
     }
 
     /**
-     * {@code rescope}'s growth seed reads {@link ParsleyChannels#stamp()}, not
-     * {@code completeness()} ("skip what you already claimed" extends "skip what you already
-     * ignored"): an added input that is this node's own former sink seeds at the
+     * {@code rescope}'s growth seed reads the whole of {@link ParsleyChannels#vectorTime()}, own
+     * outputs included, not merely the delivered frontier ("skip what you already claimed" extends
+     * "skip what you already ignored"): an added input that is this node's own former sink seeds at the
      * ownOutputs position its stamps already claimed — delivering that prefix into surviving state
      * would replay records every downstream gate already treats as this node's causal past.
      *
@@ -329,17 +325,17 @@ class ParsleyChannelsTest {
      * ever delivered or carried on it.
      */
     @Test
-    void rescopeSeedsAnAddedFormerSinkFromOwnOutputsNotJustCompleteness() {
+    void rescopeSeedsAnAddedFormerSinkFromOwnOutputsNotJustTheFrontier() {
         TestKeyValueStore<String, byte[]> store =
                 new TestKeyValueStore<String, byte[]>(Comparator.naturalOrder(), "frontier");
         ParsleyChannels channels = new ParsleyChannels(store, new MockForwardedIndex());
 
         // Deployment 1: only C1 consumed; C2 is a pure sink whose sends were acked up to 9 — it is
-        // claimed by every stamp (completeness ∪ ownOutputs) without ever being delivered here.
+        // claimed by every stamp (the vector time merges ownOutputs) without ever being delivered here.
         channels.rescope(Map.of("C1", C1_ID), 0);
         channels.acknowledge(C2_ID, 0, 9);
-        assertEquals(-1L, channels.completeness().offsetFor(C2_ID, 0),
-                "precondition: the sink coordinate is not in completeness — only ownOutputs claims it");
+        assertEquals(-1L, channels.frontier().offsetFor(C2_ID, 0),
+                "precondition: the sink coordinate is not in the frontier — only ownOutputs claims it");
 
         // Deployment 2: C2 added as an input (the node now consumes its own former sink).
         channels.rescope(Map.of("C1", C1_ID, "C2", C2_ID), 0);
@@ -351,27 +347,27 @@ class ParsleyChannelsTest {
     }
 
     /**
-     * {@link ParsleyChannels#stamp()} is {@code completeness ∪ ownOutputs}: the outbound
-     * vector timestamp carries the acked own-output positions, and equally serves as the node's
-     * total knowledge (the relay bound), while {@code completeness()} itself stays free of
+     * {@link ParsleyChannels#vectorTime()} merges the delivered frontier with {@code ownOutputs}:
+     * the outbound vector timestamp carries the acked own-output positions, and equally serves as
+     * the node's total knowledge (the relay bound), while the frontier the gate reads stays free of
      * {@code ownOutputs} (it reports what this node has delivered, never what it produced).
      *
-     * Asserts stamp = completeness merged with ownOutputs and completeness excludes ownOutputs.
+     * Asserts the vector time carries both clocks while the frontier excludes ownOutputs.
      */
     @Test
-    void stampIsCompletenessMergedWithOwnOutputs() {
+    void vectorTimeMergesTheDeliveredFrontierWithOwnOutputs() {
         ParsleyChannels channels =
                 ParsleyTestFixtures.channels(ParsleyVectorClock.empty(), new MockForwardedIndex());
         channels.seedIfFirstSeen(C1_ID, 0, 3);
         channels.delivered(C1_ID, 0, 3);
         channels.acknowledge(C4_ID, 0, 6);
 
-        assertEquals(3L, channels.stamp().offsetFor(C1_ID, 0),
+        assertEquals(3L, channels.vectorTime().offsetFor(C1_ID, 0),
                 "the stamp must carry the delivered frontier");
-        assertEquals(6L, channels.stamp().offsetFor(C4_ID, 0),
+        assertEquals(6L, channels.vectorTime().offsetFor(C4_ID, 0),
                 "the stamp must carry the acked own-output position");
-        assertEquals(-1L, channels.completeness().offsetFor(C4_ID, 0),
-                "completeness must stay free of ownOutputs — only the stamp unions them");
+        assertEquals(-1L, channels.frontier().offsetFor(C4_ID, 0),
+                "the frontier must stay free of ownOutputs — only the vector time unions them");
     }
 
     /**
@@ -409,8 +405,8 @@ class ParsleyChannelsTest {
     // --- Own outputs ----------------------------------------------------------------------------
     //
     // The ownOutputs clock is stamp-side state only: acknowledge() folds producer acks (and the
-    // init-time end-offset seed) monotonically, and nothing here may leak into completeness().
-    // stamp() merges the two; completeness() stays the delivered/advertised boundary alone.
+    // init-time end-offset seed) monotonically, and nothing here may leak into the frontier.
+    // vectorTime() merges the two; the frontier stays the gate's delivered-only view.
 
     private static final Uuid C4_ID = Uuid.randomUuid();
 
@@ -444,23 +440,26 @@ class ParsleyChannelsTest {
     }
 
     /**
-     * {@code ownOutputs} is stamp-side only and separate from the delivered/advertised boundary:
-     * {@link ParsleyChannels#completeness()} must not carry an acknowledged own-output coordinate.
-     * {@link ParsleyChannels#stamp()} is where the two are merged, and only there.
+     * {@code ownOutputs} is stamp-side only and never reaches the delivery gate:
+     * {@link ParsleyChannels#frontier()} must not carry an acknowledged own-output coordinate, or a
+     * node's own send would vacuously satisfy a dependency on it. {@link ParsleyChannels#vectorTime()}
+     * is where the two are merged, and only there.
      */
     @Test
-    void ownOutputsDoesNotLeakIntoCompleteness() {
+    void ownOutputsDoesNotLeakIntoTheFrontier() {
         ParsleyChannels channels =
                 ParsleyTestFixtures.channels(ParsleyVectorClock.empty(), new MockForwardedIndex());
         channels.delivered(C1_ID, 0, 0);
-        ParsleyVectorClock before = channels.completeness();
+        ParsleyVectorClock before = channels.frontier();
 
         channels.acknowledge(C4_ID, 0, 41);
 
-        assertEquals(before, channels.completeness(),
-                "acknowledging own outputs must leave completeness unchanged");
-        assertEquals(-1L, channels.completeness().offsetFor(C4_ID, 0),
-                "the acked sink coordinate must not appear in completeness");
+        assertEquals(before, channels.frontier(),
+                "acknowledging own outputs must leave the gate's frontier unchanged");
+        assertEquals(-1L, channels.frontier().offsetFor(C4_ID, 0),
+                "the acked sink coordinate must not appear in the frontier");
+        assertEquals(41L, channels.vectorTime().offsetFor(C4_ID, 0),
+                "the vector time is where the acked sink coordinate does appear");
     }
 
     /**

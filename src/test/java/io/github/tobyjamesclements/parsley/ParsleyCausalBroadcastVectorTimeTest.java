@@ -9,11 +9,11 @@ import java.util.List;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 
 /**
- * Tests for {@link ParsleyCausalBroadcast#completeness()}: this node's own frontier max-merged with every
+ * Tests for {@link ParsleyCausalBroadcast#vectorTime()}: this node's own frontier max-merged with every
  * input channel's advertised dependencies.
  *
  * <p>Each channel contributes the dependencies its records have advertised (the pairwise-max over
- * records on that channel). {@code completeness()} is {@link ParsleyVectorClock#merge}, not an
+ * records on that channel). {@code vectorTime()} is {@link ParsleyVectorClock#merge}, not an
  * intersection: a coordinate counts the moment <em>any</em> channel has genuinely advertised it —
  * there is no requirement that every one of a node's channels independently repeat the same
  * confirmation. A node's own directly-consumed coordinates (part of the frontier) are always present,
@@ -32,7 +32,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
  * advances; the cross-channel combination is also a max (not a min) so a single genuine witness is
  * never held back by a sibling channel that simply hasn't mentioned the same coordinate.
  */
-class ParsleyCausalBroadcastCompletenessTest {
+class ParsleyCausalBroadcastVectorTimeTest {
 
     private static final TopicPartition C1 = new TopicPartition("c1", 0);
     private static final TopicPartition C2 = new TopicPartition("c2", 0);
@@ -58,16 +58,16 @@ class ParsleyCausalBroadcastCompletenessTest {
      * genuinely delivered one advertising C3 at 3 (pre-established directly, standing in for genuine
      * prior delivery through each channel).
      *
-     * <p>{@code completeness()} reports C3 at the maximum (5) across the two branches — a single
+     * <p>{@code vectorTime()} reports C3 at the maximum (5) across the two branches — a single
      * genuine witness (C1's channel) is enough, the slower branch's silence does not hold it back.
      * C1 and C2 each appear at their own delivered offset (10 and 7 respectively): a node's own
-     * directly-consumed coordinates are always present in completeness, not dependent on any channel
-     * advertising them.
+     * directly-consumed coordinates are always present in the vector time, not dependent on any
+     * channel advertising them.
      *
      * Asserts C3 appears at max(5,3)=5, and C1/C2 appear at their own delivered offsets.
      */
     @Test
-    void fanInCompleteness_reportsSharedAncestorAtMaxAcrossBranches() {
+    void fanInVectorTime_reportsSharedAncestorAtMaxAcrossBranches() {
         ParsleyChannels frontier = newFrontier();
         deliverSequentially(frontier, C1_ID, 10);
         frontier.channelUpdate(C1_ID, 0, clock(C3_ID, 5));
@@ -75,20 +75,20 @@ class ParsleyCausalBroadcastCompletenessTest {
         frontier.channelUpdate(C2_ID, 0, clock(C3_ID, 3));
         ParsleyCausalBroadcast<String, String> causalBroadcast = causalBroadcastOver(frontier, SCOPE);
 
-        ParsleyVectorClock completeness = causalBroadcast.completeness();
+        ParsleyVectorClock vectorTime = causalBroadcast.vectorTime();
 
-        assertEquals(5L, completeness.offsetFor(C3_ID, 0),
+        assertEquals(5L, vectorTime.offsetFor(C3_ID, 0),
                 "C3 (shared ancestor) must appear at the maximum across branches: max(5,3)=5 — a "
                         + "single genuine witness suffices, the slower branch does not hold it back");
-        assertEquals(10L, completeness.offsetFor(C1_ID, 0),
+        assertEquals(10L, vectorTime.offsetFor(C1_ID, 0),
                 "C1 is this node's own directly-consumed coordinate, always present at its delivered offset");
-        assertEquals(7L, completeness.offsetFor(C2_ID, 0),
+        assertEquals(7L, vectorTime.offsetFor(C2_ID, 0),
                 "C2 is this node's own directly-consumed coordinate, always present at its delivered offset");
     }
 
     /**
      * A coordinate that a genuine delivery on one channel advertised, but the other never mentioned,
-     * is still <em>included</em> in completeness — a single genuine witness is enough, there is no
+     * is still <em>included</em> in the vector time — a single genuine witness is enough, there is no
      * cross-channel unanimity requirement.
      *
      * Asserts C4 is present at 2 (from C1's channel alone), while the shared ancestor C3 is present at the max.
@@ -102,29 +102,29 @@ class ParsleyCausalBroadcastCompletenessTest {
         frontier.channelUpdate(C2_ID, 0, clock(C3_ID, 3));
         ParsleyCausalBroadcast<String, String> causalBroadcast = causalBroadcastOver(frontier, SCOPE);
 
-        ParsleyVectorClock completeness = causalBroadcast.completeness();
+        ParsleyVectorClock vectorTime = causalBroadcast.vectorTime();
 
-        assertEquals(2L, completeness.offsetFor(C4_ID, 0),
+        assertEquals(2L, vectorTime.offsetFor(C4_ID, 0),
                 "C4 (advertised by only one channel) must still be included — a single genuine "
                         + "witness suffices, no cross-channel corroboration is required");
-        assertEquals(5L, completeness.offsetFor(C3_ID, 0),
+        assertEquals(5L, vectorTime.offsetFor(C3_ID, 0),
                 "C3 (shared ancestor) must still appear at max(5,3)=5");
     }
 
     /**
      * A channel's clock is a per-channel <em>max</em> across every record genuinely delivered through
      * it, not a running minimum — the guard against a running-min regression: if it were a minimum, the
-     * first genuine delivery's low C3 value would pin completeness there forever. Two genuine
+     * first genuine delivery's low C3 value would pin the vector time there forever. Two genuine
      * deliveries are pre-established directly via {@link ParsleyChannels#channelUpdate} (standing in
      * for two records having actually, gatedly delivered through the C1 channel in sequence, the second
      * carrying a higher C3 value than the first — see the class Javadoc on pre-establishing genuine
      * channel state directly).
      *
-     * Asserts completeness after the second genuine delivery rises to the higher C3 value, not the
-     * first.
+     * Asserts the vector time after the second genuine delivery rises to the higher C3 value, not
+     * the first.
      */
     @Test
-    void singleInputRelayCompletenessRisesToLatestDeps() {
+    void singleInputRelayVectorTimeRisesToLatestDeps() {
         ParsleyVectorClock.CoordinatePredicate singleScope =
                 (topicId, partition) -> partition == 0 && topicId.equals(C1_ID);
         ParsleyChannels frontier = newFrontier();
@@ -133,25 +133,25 @@ class ParsleyCausalBroadcastCompletenessTest {
 
         // First genuine delivery on the C1 channel advertises C3 at 3.
         frontier.channelUpdate(C1_ID, 0, clock(C3_ID, 3));
-        assertEquals(3L, causalBroadcast.completeness().offsetFor(C3_ID, 0),
-                "completeness after the first genuine delivery must report C3 at 3");
+        assertEquals(3L, causalBroadcast.vectorTime().offsetFor(C3_ID, 0),
+                "the vector time after the first genuine delivery must report C3 at 3");
 
         // A second genuine delivery on the same channel advertises a higher C3 value.
         frontier.channelUpdate(C1_ID, 0, clock(C3_ID, 7));
-        assertEquals(7L, causalBroadcast.completeness().offsetFor(C3_ID, 0),
-                "completeness after the second delivery must rise to C3=7, not remain pinned at 3 "
+        assertEquals(7L, causalBroadcast.vectorTime().offsetFor(C3_ID, 0),
+                "the vector time after the second delivery must rise to C3=7, not remain pinned at 3 "
                         + "(per-channel max ensures the channel clock advances, not a running min)");
     }
 
     /**
      * After a simulated restart — a new {@link ParsleyChannels} over the same changelog-backed store —
-     * {@code completeness()} returns an identical result to the pre-restart value, without replaying
+     * {@code vectorTime()} returns an identical result to the pre-restart value, without replaying
      * any records: the frontier clock and the per-channel clocks both restore from the single frontier value.
      *
-     * Asserts that the completeness clock is identical after restart.
+     * Asserts that the vector time is identical after restart.
      */
     @Test
-    void completenessRestoredIdenticallyAfterSimulatedRestart() {
+    void vectorTimeRestoredIdenticallyAfterSimulatedRestart() {
         TestKeyValueStore<String, byte[]> sharedStore =
                 new TestKeyValueStore<String, byte[]>(java.util.Comparator.naturalOrder());
         ParsleyChannels firstFrontier = new ParsleyChannels(sharedStore, new MockForwardedIndex());
@@ -161,29 +161,29 @@ class ParsleyCausalBroadcastCompletenessTest {
         firstFrontier.channelUpdate(C2_ID, 0, clock(C3_ID, 3));
         ParsleyCausalBroadcast<String, String> first = causalBroadcastOver(firstFrontier, SCOPE);
 
-        ParsleyVectorClock completenessBeforeRestart = first.completeness();
+        ParsleyVectorClock vectorTimeBeforeRestart = first.vectorTime();
 
         // Simulate restart: a fresh ParsleyChannels over the same store reloads the frontier value (frontier
         // clock + channel clocks). A fresh forwarded index is fine — it only affects future deliveries.
         ParsleyChannels restartedFrontier = new ParsleyChannels(sharedStore, new MockForwardedIndex());
 
-        assertEquals(completenessBeforeRestart, restartedFrontier.completeness(),
-                "completeness must be identical after restart when the frontier store is restored");
+        assertEquals(vectorTimeBeforeRestart, restartedFrontier.vectorTime(),
+                "the vector time must be identical after restart when the frontier store is restored");
     }
 
     /**
-     * With no channel clocks recorded yet (empty channel store), {@code completeness()} equals the
+     * With no channel clocks recorded yet (empty channel store), {@code vectorTime()} equals the
      * node's own delivered frontier — no ancestors have been observed, so no ancestor coordinates
      * narrow the boundary.
      *
-     * Asserts completeness equals frontier when no records have been delivered.
+     * Asserts the vector time equals the frontier when no records have been delivered.
      */
     @Test
-    void completenessEqualsOwnFrontierWhenNoChannelClocksRecorded() {
+    void vectorTimeEqualsOwnFrontierWhenNoChannelClocksRecorded() {
         ParsleyCausalBroadcast<String, String> causalBroadcast = fanInCausalBroadcast();
 
-        assertEquals(causalBroadcast.frontier(), causalBroadcast.completeness(),
-                "completeness must equal the node's own frontier when no channel clocks have been recorded");
+        assertEquals(causalBroadcast.frontier(), causalBroadcast.vectorTime(),
+                "the vector time must equal the node's own frontier when no channel clocks have been recorded");
     }
 
     /**

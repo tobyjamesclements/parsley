@@ -59,7 +59,7 @@ final class ParsleyCausalBroadcast<K, V> {
     private int lastReportedStalls;
 
     // The single owner of all persisted causal metadata: the contiguous frontier clock, the channel
-    // clocks, and the forwarded-offset index. completeness() and channel state live here;
+    // clocks, and the forwarded-offset index. vectorTime() and channel state live here;
     // channels.normalize strips the self-cycle from every inbound dependency clock before the gate
     // sees it.
     private final ParsleyChannels channels;
@@ -179,8 +179,8 @@ final class ParsleyCausalBroadcast<K, V> {
         // only the dependency clock (never the user-serde key/value), so a record whose value can no
         // longer be deserialised — e.g. an incompatible Schema Registry change while buffered — does
         // not block startup; that failure surfaces later, on the forward path. Indexed against the
-        // contiguous frontier — the same clock the delivery gate checks — never completeness: a
-        // coordinate a channel merely claims (satisfied by completeness but not by the frontier)
+        // contiguous frontier — the same clock the delivery gate checks — never the vector time: a
+        // coordinate a channel merely claims (satisfied by the vector time but not by the frontier)
         // must stay indexed, or the frontier advance that eventually genuinely proves it would find
         // no candidate to release.
         for (ParsleyBufferStore.IndexEntry entry : kept) {
@@ -191,12 +191,22 @@ final class ParsleyCausalBroadcast<K, V> {
     }
 
     /**
-     * The per-call receive result: every record released for delivery, in order.
+     * The per-call receive result: every record released for delivery, in order, plus whether the
+     * call advanced this node's knowledge of a channel it consumes. The advance is the seed or
+     * bridge {@link ParsleyChannels#receive} applies to the record's own channel — a consumed
+     * coordinate by construction — measured against the node's whole {@link ParsleyChannels#vectorTime()}
+     * beforehand, so a frontier advance onto a position the node's stamps already claim reads as
+     * {@code false}. That is the same comparison {@link ParsleyGossip.Reception} makes for a carried
+     * clock, and the same name: the CMB input-channel-clock advance, where only an advance of the
+     * node's own input channels obliges an onward advertisement. The record's own coordinate is not
+     * part of it — a held record is not delivered, so nothing may claim it yet, and a delivered one
+     * advertises through its own output. The caller reads the flag exactly when {@code delivered} is
+     * empty (the heartbeat null message in {@link ParsleyProcessor}).
      *
      * @param <K> the record key type
      * @param <V> the record value type
      */
-    record Outcome<K, V>(List<ParsleyMessage<K, V>> delivered) {
+    record Outcome<K, V>(List<ParsleyMessage<K, V>> delivered, boolean advancedConsumedChannel) {
     }
 
     /**
@@ -204,7 +214,7 @@ final class ParsleyCausalBroadcast<K, V> {
      * delivering it at once if its dependencies are already satisfied, buffering it otherwise.
      *
      * @param message the record to process
-     * @return the records to forward downstream, in order
+     * @return the records to forward downstream, in order, plus the consumed-channel advance signal
      */
     Outcome<K, V> receive(ParsleyMessage<K, V> message) {
         // Replay skip guard: a record this node has already delivered (at or below the contiguous
@@ -218,13 +228,16 @@ final class ParsleyCausalBroadcast<K, V> {
         // cannot advance the frontier past anything undelivered).
         if (channels.alreadyDelivered(message.topicId(), message.partition(), message.offset())) {
             List<ParsleyMessage<K, V>> out = new ArrayList<>();
+            ParsleyVectorClock knownBefore = channels.vectorTime();
+            boolean advancedConsumedChannel = false;
             if (channels.receive(message.topicId(), message.partition(), message.offset())) {
+                advancedConsumedChannel = !knownBefore.dominates(channels.frontier());
                 propagate(out, message.topicId(), message.partition());
             }
             metrics.recordReplaySkipped();
             log.debug("Skipping {}-{} @{} (already delivered; replay)",
                     message.topic(), message.partition(), message.offset());
-            return new Outcome<>(out);
+            return new Outcome<>(out, advancedConsumedChannel);
         }
 
         recordReflectedClaims(message.dependencies());
@@ -236,8 +249,14 @@ final class ParsleyCausalBroadcast<K, V> {
         // record no business record will ever fill — so the contiguous walk does not wedge at the hole
         // (ParsleyChannels.receive). If either advanced the frontier, cascade: a held record may have
         // been waiting on exactly a seeded or bridged offset, and this node's held branch below runs no
-        // propagate of its own.
+        // propagate of its own. The same advance is the consumed-channel signal the Outcome carries,
+        // taken against this node's whole vector time read before the seed or bridge lands — the
+        // comparison the relay rule makes against a carried clock. A frontier advance onto a position
+        // the node's stamps already claim teaches nothing it could advertise, so it obliges nothing.
+        ParsleyVectorClock knownBefore = channels.vectorTime();
+        boolean advancedConsumedChannel = false;
         if (channels.receive(message.topicId(), message.partition(), message.offset())) {
+            advancedConsumedChannel = !knownBefore.dominates(channels.frontier());
             propagate(out, message.topicId(), message.partition());
         }
 
@@ -265,7 +284,7 @@ final class ParsleyCausalBroadcast<K, V> {
             log.debug("Forwarding {}-{} @{} (satisfied immediately)",
                     message.topic(), message.partition(), message.offset());
             channels.delivered(message.topicId(), message.partition(), message.offset());
-            // The channel-clock fold feeds only the outbound stamp (completeness()) — transitive
+            // The channel-clock fold feeds only the outbound stamp (vectorTime()) — transitive
             // ancestry a downstream node's own gate will verify for itself — never this node's own
             // delivery gate. It happens only at genuine gated delivery, so the stamp never carries
             // a claim sourced from a record that has not actually been forwarded. The WHOLE clock is
@@ -287,7 +306,7 @@ final class ParsleyCausalBroadcast<K, V> {
             reportBufferState();
         }
 
-        return new Outcome<>(out);
+        return new Outcome<>(out, advancedConsumedChannel);
     }
 
     /**
@@ -346,13 +365,15 @@ final class ParsleyCausalBroadcast<K, V> {
     Outcome<K, V> drainAfterRestore() {
         List<ParsleyMessage<K, V>> out = new ArrayList<>();
         drainSatisfied(out);
-        return new Outcome<>(out);
+        // No record was received here, so no channel clock advanced: the drain only re-evaluates the
+        // gate over records already held, and every release it makes advertises through its own output.
+        return new Outcome<>(out, false);
     }
 
     /**
      * The L1 module this core runs over — the L3 seam: {@link ParsleyGossip} folds a received null
      * message's offset and carried clock into the same channel state this core gates and stamps
-     * from, and takes the relay-rule comparison against {@link ParsleyChannels#stamp()}.
+     * from, and takes the relay-rule comparison against {@link ParsleyChannels#vectorTime()}.
      */
     ParsleyChannels channels() {
         return channels;
@@ -375,8 +396,9 @@ final class ParsleyCausalBroadcast<K, V> {
     }
 
     /**
-     * Returns the causal completeness clock: this node's own delivered frontier, max-merged with every
-     * input channel's advertised dependencies.
+     * Returns this node's vector time, VT(p): its own delivered frontier max-merged with every input
+     * channel's advertised dependencies, its carried ancestry, its acknowledged own outputs, and the
+     * offsets it delivered above a gap.
      *
      * <p><strong>This is the outbound stamp, not the delivery gate.</strong> The merge carries
      * transitive ancestry — coordinates a channel has advertised that this node may not itself have
@@ -386,14 +408,14 @@ final class ParsleyCausalBroadcast<K, V> {
      * receiving process's own delivered vector, and a peer's claim is never a substitute for local
      * delivery of the cause.
      *
-     * <p>When no channel clocks have been recorded, this returns {@link #frontier()} unchanged. The
-     * computation lives on {@link ParsleyChannels}, which owns both the frontier clock and the channel
-     * clocks; this method delegates.
+     * <p>On a node with nothing recorded but its own deliveries, this returns {@link #frontier()}
+     * unchanged. The computation lives on {@link ParsleyChannels}, which owns every clock it merges;
+     * this method delegates.
      *
-     * @return the completeness clock; never {@code null}
+     * @return the vector time; never {@code null}
      */
-    ParsleyVectorClock completeness() {
-        return channels.completeness();
+    ParsleyVectorClock vectorTime() {
+        return channels.vectorTime();
     }
 
     /**
@@ -418,7 +440,7 @@ final class ParsleyCausalBroadcast<K, V> {
 
     /**
      * The broadcast request: stamps {@code record} with this node's current outbound timestamp
-     * ({@link ParsleyChannels#stamp()}, read live), replacing any {@link ParsleyHeader#CAUSAL_CLOCK}
+     * ({@link ParsleyChannels#vectorTime()}, read live), replacing any {@link ParsleyHeader#CAUSAL_CLOCK}
      * header present. The send itself is Kafka's produce via {@code context.forward()}; this is the
      * timestamp-assignment half of BSS {@code broadcast(m)}, and because the broker assigns the
      * sender's own offset the stamp cannot include the record's own coordinate. Two steps precede
@@ -445,7 +467,7 @@ final class ParsleyCausalBroadcast<K, V> {
         channels.awaitOwnOutputQuiescence(destinations);
         channels.foldAcknowledgedOutputs();
         return record.withHeaders(
-                ParsleyHeader.replacingClock(record.headers(), channels.stamp().toBytes()));
+                ParsleyHeader.replacingClock(record.headers(), channels.vectorTime().toBytes()));
     }
 
     /**
@@ -540,7 +562,7 @@ final class ParsleyCausalBroadcast<K, V> {
      * delivered frontier, or it is not, in which case it is ignored
      * ({@link #consumedDependencies}). A consumed dependency is satisfied only by this node having
      * itself delivered the cause — never by a channel's advertised claim that some peer delivered
-     * it ({@link #completeness()} is the outbound stamp, not this gate). This is the single source
+     * it ({@link #vectorTime()} is the outbound stamp, not this gate). This is the single source
      * of truth for "may this record be delivered now", used on every release path
      * ({@link #receive}, {@link #drainSatisfied}, {@link #propagate}).
      */
@@ -570,7 +592,7 @@ final class ParsleyCausalBroadcast<K, V> {
      * ever proxies ancestry the clock already states — and counted once per received record via
      * the out-of-scope-ignored metric ({@link #receive}), never a failure. Neither step ever
      * rewrites recorded state or the outbound stamp (the stamp is
-     * {@link ParsleyChannels#stamp()}, computed from the unstripped channel folds: the gate
+     * {@link ParsleyChannels#vectorTime()}, computed from the unstripped channel folds: the gate
      * may ignore; the merge may not).
      */
     private ParsleyVectorClock consumedDependencies(ParsleyVectorClock deps, Uuid topicId, int partition, long offset) {

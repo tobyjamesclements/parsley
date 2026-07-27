@@ -235,7 +235,7 @@ class CausalClockEdgeOpsTest {
     }
 
     /**
-     * {@code observe} folds a null message's carried completeness frontier into the accumulator but never
+     * {@code observe} folds a null message's carried vector time into the accumulator but never
      * its own position: a null message is protocol metadata occupying an offset with no business payload,
      * so counting that offset would force downstream to wait on a record that delivers nothing. This
      * mirrors how a Parsley causal-broadcast core folds a received null message.
@@ -256,7 +256,7 @@ class CausalClockEdgeOpsTest {
 
     /**
      * A running {@code observe} accumulator advances across a service that emitted only a null message on
-     * this path: the null message's carried frontier lifts the client's frontier to upstream completeness
+     * this path: the null message's carried clock lifts the client's frontier to the upstream progress
      * the client never saw a business record for, keeping the per-coordinate maximum.
      *
      * Asserts that after a business record on {@code c1@2} and then a null message carrying
@@ -273,7 +273,7 @@ class CausalClockEdgeOpsTest {
 
         CausalClock expected = CausalClock.builder(TOPICS).require("c1", 0, 6).build();
         assertEquals(expected, frontier,
-                "a null message must advance the running frontier to the upstream completeness it carries");
+                "a null message must advance the running frontier to the upstream progress it carries");
     }
 
     private static ConsumerRecord<String, String> nullMessageRecord(

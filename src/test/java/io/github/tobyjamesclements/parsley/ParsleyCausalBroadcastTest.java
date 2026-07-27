@@ -883,19 +883,19 @@ class ParsleyCausalBroadcastTest {
 
     // --- helpers --------------------------------------------------------------------------------
 
-    // These helpers build an core over an untracked in-memory frontier — completeness() is the node's
+    // These helpers build an core over an untracked in-memory frontier — vectorTime() is the node's
     // own frontier — exercising the frontier/buffer mechanics in isolation. The cross-channel
-    // completeness layer is covered by ParsleyCausalBroadcastCompletenessTest.
+    // merge layer is covered by ParsleyCausalBroadcastVectorTimeTest.
 
     /**
      * {@code broadcast()} — the single stamping site — runs the crossing wait, drains the bound
      * acknowledged-outputs source into the {@code ownOutputs} clock ("folded before each stamp"),
-     * and attaches the stamp {@code completeness ∪ ownOutputs}: the acked sink
+     * and attaches the node's vector time, own outputs included: the acked sink
      * coordinate must appear both in {@code ownOutputs()} and in the attached dependency header,
      * and the crossing wait must have been invoked before the stamp was read.
      */
     @Test
-    void broadcastWaitsFoldsAndStampsCompletenessUnionOwnOutputs() {
+    void broadcastWaitsFoldsAndStampsTheVectorTime() {
         Uuid sinkId = Uuid.randomUuid();
         List<Set<TopicPartition>> waits = new ArrayList<>();
         ParsleyChannels channels = ParsleyTestFixtures.channels(ParsleyVectorClock.empty(), forwardedIndex);
@@ -916,8 +916,8 @@ class ParsleyCausalBroadcastTest {
                 "broadcast must fold the pending ack into ownOutputs before stamping");
         byte[] stampBytes = stamped.headers().lastHeader(ParsleyHeader.CAUSAL_CLOCK).value();
         ParsleyVectorClock stamp = ParsleyVectorClock.fromBytes(stampBytes);
-        assertEquals(causalBroadcast.completeness().merge(channels.ownOutputs()), stamp,
-                "the stamp must be completeness ∪ ownOutputs");
+        assertEquals(causalBroadcast.vectorTime(), stamp,
+                "the stamp must be the node's vector time, own outputs included");
         assertEquals(11L, stamp.offsetFor(sinkId, 0),
                 "the acked own-output coordinate must ride the stamp — the #22 fix");
     }
@@ -972,7 +972,7 @@ class ParsleyCausalBroadcastTest {
      * A reflected own-sink claim is ordinary ancestry under the two-branch gate: when the
      * sink is not consumed here it falls to the ignore branch — the record delivers — while the
      * claim still folds into the delivered record's channel clock unstripped and rides the
-     * outbound completeness, the custody chain a third party consuming the shared sink gates on
+     * outbound vector time, the custody chain a third party consuming the shared sink gates on
      * (#22).
      */
     @Test
@@ -991,7 +991,7 @@ class ParsleyCausalBroadcastTest {
         assertEquals(1, outcome.delivered().size(),
                 "the reflected claim on an unconsumed own sink must fall to the ignore branch and "
                         + "deliver the record");
-        assertEquals(5L, causalBroadcast.completeness().offsetFor(sinkId, 0),
+        assertEquals(5L, causalBroadcast.vectorTime().offsetFor(sinkId, 0),
                 "the own-sink claim must fold into the advertised channel clock and ride the "
                         + "stamp — stripping it erased a real ancestor for third parties (#22)");
     }

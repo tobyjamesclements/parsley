@@ -49,14 +49,14 @@ class ParsleyScopeChangePropertyTest {
             sim.node("Y", Set.of("c1", "c2", "c3"), List.of(), 0.0);
             sim.run(250);
             ParsleyTopologySim.SimTask x = sim.nodeNamed("X").task(0);
-            ParsleyVectorClock stampBefore = x.channels.stamp();
+            ParsleyVectorClock stampBefore = x.channels.vectorTime();
             Set<ParsleyTopologySim.SimCoord> truePastBefore = Set.copyOf(x.truePast);
             assertTrue(stampBefore.offsetFor(sim.topicId("c2"), 0) >= 0,
                     "[seed " + seed + "] vacuity guard: X must have delivered c2 ancestry to retire");
 
             sim.restartWithInputs("X", Set.of("c1"));
 
-            ParsleyVectorClock stampAfter = x.channels.stamp();
+            ParsleyVectorClock stampAfter = x.channels.vectorTime();
             assertTrue(stampAfter.dominates(stampBefore),
                     "[seed " + seed + "] the post-shrink stamp must dominate the pre-shrink stamp — "
                             + "retired-channel values are re-homed into carried ancestry, never dropped");
@@ -92,7 +92,7 @@ class ParsleyScopeChangePropertyTest {
             sim.produceExternal("c1");
             sim.run(250);
             ParsleyTopologySim.SimTask x = sim.nodeNamed("X").task(0);
-            long claimedBefore = x.channels.stamp().offsetFor(sim.topicId("c1"), 0);
+            long claimedBefore = x.channels.vectorTime().offsetFor(sim.topicId("c1"), 0);
             assertTrue(claimedBefore >= 0,
                     "[seed " + seed + "] vacuity guard: X must have come to claim c1 ancestry "
                             + "through P's carried clocks before the growth means anything");
@@ -120,7 +120,7 @@ class ParsleyScopeChangePropertyTest {
     /**
      * The own-former-sink extension — "skip what you already claimed". Node X produces c2 and
      * later restarts with c2 added as an <em>input</em> (a cycle onto its own former sink). The
-     * growth seed reads the ownOutputs-inclusive {@code stamp()}, so X must never be re-delivered
+     * growth seed reads the ownOutputs-inclusive {@code vectorTime()}, so X must never be re-delivered
      * its own pre-restart outputs (their positions were already claimed by its stamps via
      * {@code ownOutputs}); outputs it produces after the restart flow back to it normally.
      *
@@ -193,9 +193,9 @@ class ParsleyScopeChangePropertyTest {
                                 + message(thrown));
                 loudFailures++;
             } else {
-                ParsleyVectorClock stampBefore = x.channels.stamp();
+                ParsleyVectorClock stampBefore = x.channels.vectorTime();
                 sim.restartWithInputs("X", Set.of("c1"));
-                assertTrue(x.channels.stamp().dominates(stampBefore),
+                assertTrue(x.channels.vectorTime().dominates(stampBefore),
                         "[seed " + seed + "] a legal shrink (no held c2 records) must keep the "
                                 + "re-homing: the post-shrink stamp dominates the pre-shrink stamp");
             }

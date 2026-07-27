@@ -65,7 +65,7 @@ class ParsleyOwnSinkAncestryIT {
 
     /**
      * App A's derived-topic record must carry a dependency claim on the shared-sink record it was
-     * derived from (the stamp is {@code completeness ∪ ownOutputs} — no own-sink strip), and app B
+     * derived from (the stamp is the node's vector time, own outputs included — no own-sink strip), and app B
      * must deliver the shared record before the derived record that depends on it.
      *
      * Asserts the derived record's wire clock names the shared record's coordinate, and B's

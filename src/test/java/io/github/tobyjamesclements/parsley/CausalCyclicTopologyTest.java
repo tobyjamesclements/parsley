@@ -42,7 +42,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * <p>This also exercises relay convergence on a self-loop: a node observing its own null message
  * reflected back at it must not relay it onward again, or it loops forever. Convergence rests on
  * the knowledge-based relay rule — a reflected marker's carried clock is this node's own past stamp,
- * dominated by its current {@code stamp()}, so it teaches nothing and the relay settles — and the
+ * dominated by its current {@code vectorTime()}, so it teaches nothing and the relay settles — and the
  * self-consumed sink's claims are genuinely gated by the two-branch gate's consumed branch.
  * Under max-merge this works because a node's own registered channel for the looped-back topic
  * directly advertises the ancestor coordinate it needs ({@link ParsleyChannels#channelUpdate}) — no

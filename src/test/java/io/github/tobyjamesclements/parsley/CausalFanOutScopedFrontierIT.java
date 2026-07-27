@@ -60,7 +60,7 @@ import static java.util.Objects.requireNonNull;
  * <p>Every topic is single-partition, so source offsets are deterministic and the records are chained
  * by dependency, which makes each processor's admission frontier — and therefore each stamp's
  * input-topic entries — exact rather than racy. A stamp's own-OUTPUT-topic entry, which it carries
- * because the stamp is {@code completeness ∪ ownOutputs}, is asserted structurally instead, since
+ * because the stamp is the node's vector time, own outputs included, is asserted structurally instead, since
  * its exact offset depends on where EOS commit markers land in the output log.
  */
 @Testcontainers(disabledWithoutDocker = true)
@@ -151,10 +151,10 @@ class CausalFanOutScopedFrontierIT {
      * {@code SHARED} actually, contiguously reaches offset 1.
      *
      * <p>Completeness is this processor's own frontier max-merged with every input channel's advertised
-     * dependencies ({@link ParsleyChannels#completeness()} / {@link ParsleyVectorClock#merge}). Once
+     * dependencies ({@link ParsleyChannels#vectorTime()} / {@link ParsleyVectorClock#merge}). Once
      * {@code SHARED@1} genuinely delivers, the same {@code receive} call's cascade
      * ({@link ParsleyCausalBroadcast#receive}'s {@code propagate()}) releases the held unique-topic record in
-     * the same pass — so both records are stamped with the same post-cascade completeness, and
+     * the same pass — so both records are stamped with the same post-cascade vector time, and
      * {@code SHARED@1}'s own stamp already carries the unique-topic coordinate too. Each processor's
      * own unique topic is that processor's own directly-consumed coordinate — part of its own
      * contiguous frontier — so once delivered, every subsequent stamp from that processor carries it.
@@ -195,7 +195,7 @@ class CausalFanOutScopedFrontierIT {
             // SHARED@1's delivery and the cascade release of the held unique-topic record happen in
             // the same receive call, so both are stamped with the same post-cascade input frontier:
             // SHARED@1 plus this processor's own unique-topic coordinate. A stamp is
-            // completeness ∪ ownOutputs, so every stamp after a processor's first emission also
+            // the whole vector time, own outputs included, so every stamp after a processor's first emission also
             // carries its OWN OUTPUT topic's acked position — asserted structurally rather than
             // by exact value, because the claimed offset depends on where EOS commit markers land.
             try (KafkaConsumer<String, byte[]> aConsumer = new KafkaConsumer<>(stampConsumerConfig(bootstrap));
@@ -238,7 +238,7 @@ class CausalFanOutScopedFrontierIT {
                 long aOutClaimAtA0 = clockOf(requireNonNull(aStamps.get("A0"))).offsetFor(topics.topicId(A_OUT), 0);
                 assertTrue(aOutClaimAtS1 >= 0,
                         "processor A's S1 stamp must claim its own output topic's acked position "
-                                + "(completeness ∪ ownOutputs) but claimed nothing");
+                                + "(the vector time, own outputs included) but claimed nothing");
                 assertTrue(aOutClaimAtA0 > aOutClaimAtS1,
                         "the cascade's second forward (A0) must claim a strictly higher own-output "
                                 + "position than the first (S1): the crossing wait folds the first "

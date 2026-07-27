@@ -22,7 +22,7 @@ import java.util.Map;
  *   <li>{@link #frontier} — the node's contiguous delivered frontier clock, the only clock the
  *       delivery gate consults;
  *   <li>{@link #channels} — per input channel {@code (topicId, partition)}, the dependencies
- *       advertised on it, max-merged into the outbound stamp by {@code completeness()};
+ *       advertised on it, max-merged into the outbound stamp by {@code vectorTime()};
  *   <li>{@link #highestReceived} — per input channel, the highest offset ever physically received,
  *       making {@code bridge()}'s consumer-skip detection exact across a restart;
  *   <li>{@link #carriedAncestry} — causal past re-homed from coordinates that have left the node's

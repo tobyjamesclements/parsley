@@ -1427,9 +1427,9 @@ class ParsleyProcessorsTopologyTest {
 
     /**
      * A heartbeat null message — emitted for a record that was buffered (nothing delivered) but
-     * whose receipt still advanced completeness — carries the buffered record's own timestamp,
+     * whose receipt still advanced a consumed channel — carries the buffered record's own timestamp,
      * the same trigger-timestamp rule as the non-emitting path. The heartbeat fires only when the
-     * receipt advanced completeness, i.e. a channel's first sighting at a nonzero offset (whose
+     * receipt advanced a consumed channel, i.e. a channel's first sighting at a nonzero offset (whose
      * baseline seed lifts the frontier below it); a {@code TopologyTestDriver} cannot skip
      * offsets, so this drives the processor directly through a {@link MockProcessorContext}.
      *
@@ -1452,7 +1452,7 @@ class ParsleyProcessorsTopologyTest {
         processor.init(context);
 
         // First sighting of c2 at offset 5: the baseline seed lifts the frontier to c2@4
-        // (completeness advances) while the unsatisfied c1 dependency holds the record.
+        // (the frontier advances) while the unsatisfied c1 dependency holds the record.
         context.setRecordMetadata("c2", 0, 5);
         Headers headers = ParsleyHeader.mutableHeaders();
         headers.add(ParsleyHeader.CAUSAL_CLOCK,
@@ -1462,7 +1462,7 @@ class ParsleyProcessorsTopologyTest {
         List<MockProcessorContext.CapturedForward<? extends String, ? extends String>> forwarded =
                 context.forwarded();
         assertEquals(1, forwarded.size(),
-                "a buffered record whose receipt advanced completeness must emit exactly one heartbeat");
+                "a buffered record whose receipt advanced a consumed channel must emit exactly one heartbeat");
         Record<? extends String, ? extends String> heartbeat = forwarded.get(0).record();
         assertTrue(heartbeat.headers().lastHeader(ParsleyHeader.NULL_MESSAGE) != null,
                 "the heartbeat must be a null message");
@@ -1552,7 +1552,7 @@ class ParsleyProcessorsTopologyTest {
 
     /**
      * Causal input topics with mismatched partition counts fail startup fast, unconditionally:
-     * co-partitioning is impossible, so the completeness frontier would evaluate against an
+     * co-partitioning is impossible, so the causal frontier would evaluate against an
      * incomplete partition set — a causal-safety hole with no opt-down.
      *
      * Asserts driver construction throws, wrapping an {@link IllegalStateException} whose message

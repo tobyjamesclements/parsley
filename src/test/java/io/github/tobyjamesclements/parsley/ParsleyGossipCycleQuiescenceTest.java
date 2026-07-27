@@ -9,7 +9,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 /**
  * Null-message relay quiescence on topic cycles. The relay rule — relay iff the carried clock
  * advanced this node's total knowledge on a channel it <em>consumes</em>
- * ({@code !stamp().dominates(carried.retaining(consumedScope))}, acks folded first;
+ * ({@code !vectorTime().dominates(carried.retaining(consumedScope))}, acks folded first;
  * {@code ParsleyGossip.receive}) — reaches knowledge closure on every cycle shape because only
  * coordinates with first-hand, physically-catching-up coverage (the contiguous frontier; plus
  * {@code ownOutputs} where an input is an own sink) can oblige a relay:
@@ -167,8 +167,10 @@ class ParsleyGossipCycleQuiescenceTest {
         assertEquals(2, sim.logSize("c2"),
                 "the 3-producer shared sink c2 must quiesce after a bounded burst of null messages — "
                         + "the relay covers the chorded 3-producer shape, not just the 2-producer one");
-        assertEquals(3, sim.logSize("c3"),
+        assertEquals(4, sim.logSize("c3"),
                 "the 3-producer shared sink c3 must quiesce after a bounded burst of null messages, "
-                        + "no sustained relay");
+                        + "no sustained relay — three of the four are the silent delegates of p1, p5 "
+                        + "and p6 advertising their own delivery of c1@0, which each owe whether or "
+                        + "not a peer's claim had already told them that offset was delivered");
     }
 }

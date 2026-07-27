@@ -23,7 +23,7 @@ import java.util.Set;
  * that releases held records; its carried clock feeds the channel's advertised view and the stamp
  * only, never the gate. The relay rule is the single home of this decision: relay onward iff
  * the carried clock advanced this node's total knowledge on a channel it consumes,
- * {@code !stamp().dominates(carried.retaining(consumedScope))}, with pending acks folded first. This
+ * {@code !vectorTime().dominates(carried.retaining(consumedScope))}, with pending acks folded first. This
  * is the CMB trigger discipline, where only an advance of the node's own input channels obliges a
  * relay. Everything else the clock carries is custody: it folds into the stamp unconditionally
  * and rides every later emission but never obliges a relay, because custody hearsay lags its source
@@ -31,7 +31,7 @@ import java.util.Set;
  * nobody, since a suppressed relay also suppresses the claim it would have stamped.
  *
  * <p>The emission half lives at the call sites in {@code ParsleyProcessor}: a delivery whose delegate
- * forwarded nothing, a held record whose receipt advanced completeness, and a received null message
+ * forwarded nothing, a held record whose receipt advanced a consumed channel, and a received null message
  * that advanced a consumed channel each emit an {@link #advertise} record, so downstream channel
  * clocks advance gap-free on every path.
  *
@@ -62,7 +62,7 @@ final class ParsleyGossip<K, V> {
      *                      message's own delivered offset, the reflected-claim diagnostic, the
      *                      single stamping site {@link ParsleyCausalBroadcast#broadcast}, and (via
      *                      {@link ParsleyCausalBroadcast#channels()}) the L1 module: the
-     *                      total-knowledge clock ({@code stamp()}) the relay rule compares
+     *                      total-knowledge clock ({@code vectorTime()}) the relay rule compares
      *                      against, and the frontier/channel state a received null message's offset
      *                      and carried clock fold into
      * @param destinations  every declared sink at this task's own partition — a null message's exact
@@ -108,7 +108,7 @@ final class ParsleyGossip<K, V> {
      * @param channelId the topic UUID of the null message's source channel
      * @param partition the partition of the null message's source channel
      * @param offset    the null message's own offset on its source channel
-     * @param carried   the completeness clock the null message carried (empty when the header was
+     * @param carried   the vector time the null message carried (empty when the header was
      *                  absent; an undecodable header fails the task upstream, before this call)
      * @return the records released in the process, plus the relay signal
      */
@@ -129,7 +129,7 @@ final class ParsleyGossip<K, V> {
         // carried clock's consumed-scope coordinates can oblige a relay; the whole clock still
         // folds below — see the class Javadoc for why hearsay must not oblige.
         channels.foldAcknowledgedOutputs();
-        boolean advancedConsumedChannel = !channels.stamp().dominates(carried.retaining(consumedScope));
+        boolean advancedConsumedChannel = !channels.vectorTime().dominates(carried.retaining(consumedScope));
         channels.channelUpdate(channelId, partition, carried);
         channels.delivered(channelId, partition, offset);
         broadcast.propagate(out, channelId, partition);

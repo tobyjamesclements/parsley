@@ -16,7 +16,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
  * {@link #requestQuiesce()} — nothing about how it delivers or forwards records changes. It only
  * reports itself drained once its causal buffer has emptied through the ordinary delivery path (a
  * held record's dependencies becoming satisfied by a later message, exactly as it would without
- * quiesce), so no synthetic completeness is ever fabricated to force this. {@link #isSafeToClose()}
+ * quiesce), so no synthetic progress is ever fabricated to force this. {@link #isSafeToClose()}
  * becomes {@code true} once quiesce has been requested and every currently registered task is
  * drained.
  *

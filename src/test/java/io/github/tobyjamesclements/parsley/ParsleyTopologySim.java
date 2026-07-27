@@ -979,7 +979,7 @@ final class ParsleyTopologySim {
         if (random.nextBoolean()) {
             // Cycle-closing growth is barred: a topic another node produces downstream of this
             // one would create a feedback loop whose amplification (every consumer-with-sinks
-            // appends ~one record per delivery, business forward or completeness advert) can go
+            // appends ~one record per delivery, business forward or progress advert) can go
             // supercritical regardless of the forward probability. Cyclic scope growth stays
             // covered where its parameters are controlled: the generator's capped static cycles
             // and ParsleyScopeChangePropertyTest's former-own-sink property.
@@ -1135,7 +1135,6 @@ final class ParsleyTopologySim {
     // --- the receive paths ---------------------------------------------------------------------
 
     private void deliverBusiness(SimTask task, SimRecord record) {
-        ParsleyVectorClock completenessBefore = task.core.completeness();
         int bufferedBefore = task.core.bufferSize();
         ParsleyCausalBroadcast.Outcome<String, String> outcome = task.core.receive(new ParsleyMessage<>(
                 record.topic(), record.topicId(), record.partition(), record.offset(), 0L,
@@ -1146,9 +1145,11 @@ final class ParsleyTopologySim {
             recordsHeld++;
         }
         boolean anyBusinessOutput = processDeliveries(task, outcome.delivered(), false);
-        // The production heartbeat: consumed-but-buffered (or delivered with a silent delegate)
-        // still advertises genuinely advanced completeness downstream via a null message.
-        if (!anyBusinessOutput && !task.core.completeness().equals(completenessBefore)) {
+        // Production's two emission rules for a business record, both in ParsleyProcessor: a delivery
+        // whose delegate forwarded nothing advertises through a null message, and a record that was
+        // buffered rather than delivered advertises only when receiving it advanced a consumed
+        // channel's clock (the CMB trigger rule).
+        if (!anyBusinessOutput && (!outcome.delivered().isEmpty() || outcome.advancedConsumedChannel())) {
             emitNullMessage(task);
         }
     }
@@ -1424,7 +1425,7 @@ final class ParsleyTopologySim {
                         .append(" delivered=").append(projectCoords(task.delivered))
                         .append(" truePast=").append(projectCoords(task.truePast))
                         .append(" ownSends=").append(projectCoords(task.ownBusinessSends))
-                        .append(" stamp=").append(projectClock(task.channels.stamp()))
+                        .append(" stamp=").append(projectClock(task.channels.vectorTime()))
                         .append(" frontier=").append(projectClock(task.channels.frontier()))
                         .append(" buffered=").append(task.core.bufferSize())
                         .append('\n');

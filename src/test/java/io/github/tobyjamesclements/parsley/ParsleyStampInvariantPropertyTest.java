@@ -136,7 +136,7 @@ class ParsleyStampInvariantPropertyTest {
             assertTrue(c.truePast.contains(origin),
                     "[seed " + seed + "] vacuity guard: the origin c1@0 must reach C's causal past "
                             + "through the chain (drain() delivers all backlog)");
-            assertTrue(c.channels.stamp().offsetFor(sim.topicId("c1"), 0) >= 0,
+            assertTrue(c.channels.vectorTime().offsetFor(sim.topicId("c1"), 0) >= 0,
                     "[seed " + seed + "] C's stamp must claim the origin coordinate c1@0 directly "
                             + "(transitively complete, unconditionally merged)");
         }
@@ -162,7 +162,7 @@ class ParsleyStampInvariantPropertyTest {
                     "[seed " + seed + "] vacuity guard: N must have folded at least one carried clock");
             assertTrue(!n.node.inputs.contains("c1"),
                     "topology self-check: N must not consume c1 for this property to mean anything");
-            assertTrue(n.channels.stamp().offsetFor(sim.topicId("c1"), 0) >= 0,
+            assertTrue(n.channels.vectorTime().offsetFor(sim.topicId("c1"), 0) >= 0,
                     "[seed " + seed + "] N's stamp must claim c1 ancestry it learned only from "
                             + "carried clocks on c5 — the merge may never strip unconsumed channels");
         }
@@ -217,7 +217,7 @@ class ParsleyStampInvariantPropertyTest {
             ParsleyTopologySim.SimTask l = sim.nodeNamed("L").task(0);
             if (l.truePast.contains(origin)) {
                 originsReachedL++;
-                assertTrue(l.channels.stamp().offsetFor(sim.topicId("c1"), 0) >= 0,
+                assertTrue(l.channels.vectorTime().offsetFor(sim.topicId("c1"), 0) >= 0,
                         "[seed " + seed + "] L's stamp must claim the origin c1@0 it never consumed "
                                 + "— the custody chain through ignoring consumers");
             }
