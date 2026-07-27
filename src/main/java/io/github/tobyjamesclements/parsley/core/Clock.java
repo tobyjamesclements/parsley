@@ -26,7 +26,7 @@ import java.util.function.BiConsumer;
 public final class Clock {
 
     public static final long NOTHING = -1L;
-    private static final byte WIRE_VERSION = 2;
+    private static final byte WIRE_VERSION = 1;
 
     /** A sequence-claim key: one sender's sends to one channel. */
     public record SeqKey(Channel channel, UUID sender) implements Comparable<SeqKey> {

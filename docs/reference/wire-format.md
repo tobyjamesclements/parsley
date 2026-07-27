@@ -10,7 +10,7 @@ The serialized form of a `Clock`, used both in the record header and inside stat
 Both sections are sorted, so equal clocks are byte-identical.
 
 ```
-byte     version        (currently 2)
+byte     version        (currently 1)
 int32    offsetEntryCount
 entry × offsetEntryCount:
     int64    topicId, most significant bits
