@@ -57,8 +57,8 @@ store. Four things then happen in order, and each one demonstrates a different p
    collaborator.
 2. **A held record.** `m1` arrives on `c2-0 @11` depending on `c1-0 @7`, an offset this node has not
    delivered. L1 bridges the transaction commit marker at `c2-0 @10`, L2's gate holds `m1` in the
-   buffer, and L3 emits a heartbeat null message because L1's bridge advanced completeness with no
-   business output to carry it.
+   buffer, and L3 emits a heartbeat null message because L1's bridge advanced this node's knowledge
+   of a channel it consumes, with no business output to carry it.
 3. **The cause, and the cascade.** `m2` arrives on `c1-0 @7`. Its dependency on `c4-0 @31` names a
    topic this node does not consume, so the gate ignores it. `m2` is delivered immediately, its
    delivery advances `c1-0` to `@7`, and the release cascade frees `m1` in the same pass. The

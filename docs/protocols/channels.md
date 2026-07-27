@@ -26,9 +26,9 @@ requests:   receive(topicId, partition, offset)      a record arrived on a chann
                                                      input set at init (scope changes)
 queries:    frontier()                               the contiguous delivered clock — the gate's view
             ownOutputs()                             the node's own acknowledged output positions
-            stamp()                                  the outbound vector timestamp:
-                                                     completeness ∪ ownOutputs ∪ highestDelivered
-            completeness()                           frontier ∪ carried ancestry ∪ channel clocks
+            vectorTime()                             this node's VT(p), the outbound vector
+                                                     timestamp: frontier ∪ carried ancestry ∪
+                                                     channel clocks ∪ ownOutputs ∪ highestDelivered
             alreadyDelivered(topicId, partition,     membership in the delivered set — the receive
                 offset)                              path's replay-skip guard
 properties: per-producer stamp monotonicity; contiguous frontier; normalised clocks;
@@ -152,7 +152,7 @@ carried may be skipped, but never dropped and never re-entered.** Four cases:
    merging forever. Dropping it instead would under-claim the stamp and let a third party reorder
    an effect against its retired-channel cause.
 3. **Growth.** An input declared now but not previously seeds its frontier at the node's carried
-   value for that coordinate (read from `stamp()`, so a former own sink skips what its stamps
+   value for that coordinate (read from `vectorTime()`, so a former own sink skips what its stamps
    already claimed), never at log-start: skip what you already ignored. An operator who wants the
    skipped history processed performs a full reset. The receive path's `alreadyDelivered` guard
    skips the re-fetched prefix during the replay (counted by the `replays-skipped` sensor).

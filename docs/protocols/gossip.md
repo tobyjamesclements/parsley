@@ -19,10 +19,10 @@ indications: advertise(key, timestamp)           a stamped, ready-to-forward nul
                → null message                    when a delivery produced no business output (or a
                                                  received null message advanced a consumed channel)
 relay rule:  relay iff the carried clock,        the comparison is against the node's total
-             restricted to channels this node    knowledge (the stamp: frontier ∪ channel clocks ∪
-             consumes, is not dominated by the   carried ancestry ∪ ownOutputs ∪ highestDelivered);
-             node's total knowledge              custody folds but never obliges a relay
-properties:  relay on consumed-channel advance; liveness of completeness propagation
+             restricted to channels this node    knowledge (its vector time: frontier ∪ channel
+             consumes, is not dominated by the   clocks ∪ carried ancestry ∪ ownOutputs ∪
+             node's total knowledge              highestDelivered); custody folds but never obliges
+properties:  relay on consumed-channel advance; liveness of causal-progress propagation
 ```
 
 The module sits on top of the [causal-broadcast module](causal-broadcast.md) as a liveness layer —
@@ -35,7 +35,7 @@ entirely would cost only progress visibility on non-emitting paths, never orderi
 The outbound stamp advances only as the node delivers records or hears its channels advertise
 progress, so a node must keep advertising even when it produces no business output. Without that,
 a filter that drops a record, a not-yet-emitting aggregate, or a held record would silently stall
-downstream completeness: consumers further down would never learn that progress happened above
+downstream progress: consumers further down would never learn that progress happened above
 them. The gossip layer keeps causal progress observable on every channel, converging on any
 topology shape including cycles.
 
@@ -47,8 +47,9 @@ causal-broadcast module's underlying send is Kafka's produce). Three situations 
 message via `advertise`:
 
 - a delivered record for which the delegate forwarded no business record;
-- a received record that was buffered (nothing delivered) but whose receipt still advanced
-  completeness, so the progress must propagate without flooding no-op messages;
+- a received record that was buffered (nothing delivered) but whose receipt still advanced this
+  node's knowledge of a consumed channel — a seed or a bridge, taken against the whole vector time,
+  so the progress propagates without flooding no-op messages;
 - a received null message that carried news (the relay rule below).
 
 `advertise` builds a record with a null value, the `_parsley_null_message` header, and the

@@ -55,15 +55,13 @@ sequenceDiagram
     p1-->>-p1: BUSINESS
     p1->>+p1: ingest(m1)
     p1-->>-p1: ParsleyMessage m1
-    p1->>+l2: completeness()
-    l2->>+l1: completeness()
-    l1-->>-l2: clock before receive
-    l2-->>-p1: clock before receive
     p1->>+l2: receive(m1)
     l2->>+l1: alreadyDelivered(c2, 0, 11)
     l1-->>-l2: false
     l2->>+l2: recordReflectedClaims(m1.dependencies())
     l2-->>-l2: void
+    l2->>+l1: vectorTime()
+    l1-->>-l2: total knowledge before the seed or bridge
     l2->>+l1: receive(c2, 0, 11)
     l1->>+l1: seedIfFirstSeen(c2, 0, 11)
     l1-->>-l1: false, the channel is already known
@@ -82,10 +80,8 @@ sequenceDiagram
     Note right of l2: The gate checks this node's own delivered frontier only.<br/>c1-0 stands at @6 and the record requires @7, so m1 waits.
     l2->>+l2: buffer.add(m1) then candidateIndex.index(seq, deps, frontier)
     l2-->>-l2: seq
-    l2-->>-p1: Outcome(delivered = [])
-    p1->>+l2: completeness()
-    l2-->>-p1: clock after receive, c2-0 moved 9 to 10
-    Note right of p1: Nothing was delivered, but the bridge moved completeness,<br/>so downstream must still learn about it. L3 emits a heartbeat.
+    l2-->>-p1: Outcome(delivered = [], advancedConsumedChannel = true)
+    Note right of p1: Nothing was delivered, but the bridge moved this node's<br/>knowledge of a channel it consumes past what its stamps<br/>already claimed, so downstream must still learn about it.<br/>L3 emits a heartbeat.
     p1->>+l3: advertise(m1.key, m1.timestamp)
     l3->>+l2: broadcast(nullMessage, {c3-0})
     l2->>+l1: awaitOwnOutputQuiescence({c3-0})
@@ -97,8 +93,8 @@ sequenceDiagram
     l1->>+reg: forEachAcked(consumer)
     reg-->>-l1: nothing acked yet
     l1-->>-l2: void
-    l2->>+l1: stamp()
-    l1->>+l1: completeness().merge(ownOutputs).merge(highestDelivered)
+    l2->>+l1: vectorTime()
+    l1->>+l1: frontier, carried ancestry, channel clocks, ownOutputs, highestDelivered, merged
     l1-->>-l1: outbound clock, no c3-0 entry
     l1-->>-l2: outbound clock
     l2-->>-l3: record with the _parsley_causal_clock header
@@ -180,7 +176,7 @@ sequenceDiagram
     l1->>+l1: acknowledge(c3, 0, 42)
     l1-->>-l1: void
     l1-->>-l2: void
-    l2->>+l1: stamp()
+    l2->>+l1: vectorTime()
     l1-->>-l2: {c1-0: 7, c2-0: 11, c3-0: 42, c4-0: 31}
     Note right of l1: c3-0 @42 is in the stamp only because the ack<br/>arrived between the phases. Its own coordinate<br/>still is not, and cannot be.
     l2-->>-ctx: record with the _parsley_causal_clock header
@@ -203,14 +199,14 @@ sequenceDiagram
     p1->>+ctx: forwardCount()
     ctx-->>-p1: 0
     p1->>+l3: advertise(m1.key, m1.timestamp)
-    Note right of l3: A silent input would otherwise stall downstream<br/>completeness, which breaks the inductive correctness<br/>of a multi-layer topology. L3 stands in for it.
+    Note right of l3: A silent input would otherwise stall downstream<br/>causal progress, which breaks the inductive correctness<br/>of a multi-layer topology. L3 stands in for it.
     l3->>+l2: broadcast(nullMessage, {c3-0})
     l2->>+l1: awaitOwnOutputQuiescence({c3-0})
     l1->>+reg: awaitQuiescentExcept({c3-0}, deliveryTimeoutMs)
     reg-->>-l1: void, the pending business send is to c3-0 and is exempt
     l1-->>-l2: void
     Note right of l1: The exemption is why this does not deadlock behind<br/>the record pass 1 just sent. Same coordinate, so<br/>partition FIFO and I3 already order them.
-    l2->>+l1: stamp()
+    l2->>+l1: vectorTime()
     l1-->>-l2: outbound clock, still c3-0 @42
     l2-->>-l3: stamped null message
     l3-->>-p1: null message
@@ -237,9 +233,9 @@ sequenceDiagram
     l1->>+reg: forEachAcked(consumer)
     reg-->>-l1: no new acks
     l1-->>-l3: void
-    l3->>+l1: stamp()
+    l3->>+l1: vectorTime()
     l1-->>-l3: this node's total knowledge
-    l3->>+l3: stamp.dominates(carried.retaining(consumedScope))
+    l3->>+l3: vectorTime.dominates(carried.retaining(consumedScope))
     l3-->>-l3: false, so a relay is obliged
     Note right of l3: The I6 relay rule, taken before the carried clock folds.<br/>Only the c2-0 claim is in consumed scope, and at @14<br/>it is ahead of this node's @11.
     l3->>+l1: channelUpdate(c1, 0, carried)
@@ -253,7 +249,7 @@ sequenceDiagram
     p1->>+l3: advertise(record.key, record.timestamp)
     Note right of p1: The relay reuses the incoming key and timestamp, so it<br/>stays co-partitioned downstream and carries the original<br/>trigger's event time rather than the wall clock.
     l3->>+l2: broadcast(nullMessage, {c3-0})
-    l2->>+l1: stamp()
+    l2->>+l1: vectorTime()
     l1-->>-l2: outbound clock
     l2-->>-l3: stamped null message
     l3-->>-p1: null message

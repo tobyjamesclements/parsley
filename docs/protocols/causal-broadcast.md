@@ -14,8 +14,9 @@ requests:   broadcast(record) → stamped record   attach the outbound vector ti
                                                  crossing wait and the acknowledgement fold
             receive(message) → Outcome           the BSS receive: gate → deliver-or-hold →
                                                  cascade; the returned ordered list is the
-                                                 deliver indication, in pull style
-queries:    completeness()                       the delivered/advertised boundary
+                                                 deliver indication, in pull style, paired with
+                                                 the consumed-channel advance signal
+queries:    vectorTime()                         this node's VT(p), the outbound stamp
             frontier()                           the contiguous delivered clock
 properties: causal delivery (a record reaches the delegate only after every consumed dependency
             has been locally, contiguously delivered; no timeout, no eviction); stamp transitive
@@ -55,15 +56,15 @@ receive(record):
 broadcast(record):                                    # single stamping site: forwards + null msgs
     channels.awaitOwnOutputQuiescence(except)         # crossing wait; throws rather than stamp
     channels.foldAcknowledgedOutputs()                # then fold the acks the wait settled
-    return record + header(channels.stamp())          # completeness ∪ ownOutputs ∪ highestDelivered
+    return record + header(channels.vectorTime())     # VT(m) := VT(p) at send
 ```
 
 The gate is `frontier.dominates(consumedDependencies)`: this node's own contiguous delivered
 frontier must cover every depended coordinate this node consumes; every other coordinate is
-ignored, unconditionally. `completeness()` — the frontier max-merged with the carried ancestry
-and every input channel's advertised clock — feeds the *outbound stamp*, which carries transitive
-ancestry downstream where each receiver's own gate verifies it locally; it never releases anything
-here. See the [delivery gate](../foundations/delivery-gate.md) for why local delivery is required
+ignored, unconditionally. `vectorTime()` — the frontier max-merged with the carried ancestry,
+every input channel's advertised clock, the own-outputs clock and the above-gap deliveries — is the
+*outbound stamp*, which carries transitive ancestry downstream where each receiver's own gate
+verifies it locally; it never releases anything here. See the [delivery gate](../foundations/delivery-gate.md) for why local delivery is required
 and why ignoring unconsumed coordinates is sound.
 
 ## Key state
@@ -120,7 +121,7 @@ through `broadcast()`, so the two cannot diverge. In order:
 2. Fold pending producer acknowledgements into the own-outputs clock. The fold runs after the wait
    so it captures exactly the acknowledgements the wait was blocking for. Folding first would drain
    only the acks that already existed and miss those, under-claiming the stamp.
-3. Attach the stamp: `completeness ∪ ownOutputs ∪ highestDelivered`, the node's total knowledge.
+3. Attach the stamp: `vectorTime()`, the node's total knowledge.
    The merge is unconditional over everything the node has delivered, carried, or heard
    advertised — including coordinates on channels it does not consume, which is the custody chain
    the ignore branch's soundness stands on.

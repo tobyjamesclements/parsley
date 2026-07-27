@@ -13,7 +13,7 @@ and [The three protocols](../protocols/index.md) cite these as footnotes, and th
   Ordering", *Proceedings of the 11th Australian Computer Science Conference*.
 - **Mattern, 1988.** Friedemann Mattern, "Virtual Time and Global States of Distributed Systems",
   *Proceedings of the International Workshop on Parallel and Distributed Algorithms*. With Fidge,
-  the vector-clock construction; the source of Parsley's `frontier` and `completeness` (VT(p))
+  the vector-clock construction; the source of Parsley's `frontier` and `vectorTime` (VT(p))
   vocabulary.
 - **Schwarz and Mattern, 1994.** Reinhard Schwarz and Friedemann Mattern, "Detecting Causal
   Relationships in Distributed Computations: In Search of the Holy Grail", *Distributed Computing*

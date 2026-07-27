@@ -53,7 +53,6 @@ process(Record<KIn,VIn>)
     resolves topicId from topicUuids map (broker-resolved at init for each registered ParsleySource; throws IllegalStateException if absent)
     returns ParsleyMessage.from(record, source, offset, topicId)
 
-  completenessBefore = causalBroadcast().completeness()
   outcome = causalBroadcast().receive(ingested)   # admitted records: delivered immediately or released from the buffer
 
   deliver(outcome.delivered())
@@ -66,15 +65,16 @@ process(Record<KIn,VIn>)
     clear deliveryMetadata
 
   # a consumed record that was buffered (nothing delivered) emits a heartbeat null message only if
-  # receiving it advanced completeness (a first sighting seeds the frontier), so progress still
-  # propagates downstream without flooding no-op null messages
-  if outcome.delivered().isEmpty() and completeness() advanced past completenessBefore:
+  # receiving it advanced this node's knowledge of a consumed channel (a first sighting seeds the
+  # frontier, a bridge crosses a marker gap), so progress still propagates downstream without
+  # flooding no-op null messages
+  if outcome.delivered().isEmpty() and outcome.advancedConsumedChannel():
     advertise(record.key())
 ```
 
-Each forwarded record is stamped live at forward time with the outbound stamp (`ParsleyChannels.stamp()`: completeness ∪ ownOutputs ∪ highestDelivered) — the max-merge of this node's own contiguous frontier, every input channel's advertised clock, and its own acked output positions, carrying transitive ancestry downstream (see [the delivery gate](../foundations/delivery-gate.md)). The delivery gate itself is the node's own contiguous frontier: a record is delivered only once this node has itself delivered every coordinate it depends on; an advertised claim feeds only the stamp. The same stamp value is attached to forwarded records and null messages.
+Each forwarded record is stamped live at forward time with the outbound stamp (`ParsleyChannels.vectorTime()`) — the max-merge of this node's own contiguous frontier, its carried ancestry, every input channel's advertised clock, its own acked output positions, and its above-gap deliveries, carrying transitive ancestry downstream (see [the delivery gate](../foundations/delivery-gate.md)). The delivery gate itself is the node's own contiguous frontier: a record is delivered only once this node has itself delivered every coordinate it depends on; an advertised claim feeds only the stamp. The same stamp value is attached to forwarded records and null messages.
 
-When the delegate forwards no business record for a delivered input (`forwardCount() == 0`), the processor emits a protocol null message in its place (`ParsleyGossip.advertise`): a null-value record carrying the triggering record's key (informational only — `ParsleyMarkerPartition` routes the message to the forwarding task's own partition on every sink, regardless of key), the outbound stamp, and the `_parsley_null_message` header, so a non-emitting node still advances downstream completeness. On the receiving side `handleNullMessage()` decodes the carried clock and calls `ParsleyGossip.receive(topicId, partition, offset, carried)`: the null message's own offset is genuinely delivered on its source channel (advancing that channel's contiguous frontier, which is what can release held records), and the carried clock updates the channel's advertised view — feeding the outbound stamp, never the gate. It then relays a null message downstream — but only when the carried clock advanced this node's total knowledge on a channel it consumes (the I6 relay rule on `ParsleyGossip`; custody claims fold into the stamp without obliging a relay), never unconditionally; otherwise a cyclic topology's null messages would circulate forever.
+When the delegate forwards no business record for a delivered input (`forwardCount() == 0`), the processor emits a protocol null message in its place (`ParsleyGossip.advertise`): a null-value record carrying the triggering record's key (informational only — `ParsleyMarkerPartition` routes the message to the forwarding task's own partition on every sink, regardless of key), the outbound stamp, and the `_parsley_null_message` header, so a non-emitting node still advances downstream causal progress. On the receiving side `handleNullMessage()` decodes the carried clock and calls `ParsleyGossip.receive(topicId, partition, offset, carried)`: the null message's own offset is genuinely delivered on its source channel (advancing that channel's contiguous frontier, which is what can release held records), and the carried clock updates the channel's advertised view — feeding the outbound stamp, never the gate. It then relays a null message downstream — but only when the carried clock advanced this node's total knowledge on a channel it consumes (the I6 relay rule on `ParsleyGossip`; custody claims fold into the stamp without obliging a relay), never unconditionally; otherwise a cyclic topology's null messages would circulate forever.
 
 ## `ParsleyProcessorContext`
 
@@ -84,7 +84,7 @@ onto outgoing records.
 **`forward(Record<K,V>)`:**
 
 1. Increment the business-forward counter (read by `ParsleyProcessor` after each `delegate.process(...)`; a count of zero means the delegate emitted nothing and triggers null message emission).
-2. Route the record through `ParsleyCausalBroadcast.broadcast()` — the single stamping site, shared with null messages — which runs the crossing wait (a business forward excludes no destinations), then folds pending producer acknowledgements, and attaches the `parsley-causal-clock` header from `ParsleyChannels.stamp()`, replacing any existing header.
+2. Route the record through `ParsleyCausalBroadcast.broadcast()` — the single stamping site, shared with null messages — which runs the crossing wait (a business forward excludes no destinations), then folds pending producer acknowledgements, and attaches the `parsley-causal-clock` header from `ParsleyChannels.vectorTime()`, replacing any existing header.
 3. Call `delegate.forward(stamped)` — addressed to each declared sink node by name when the stage has incompatibly-typed sibling children, otherwise the plain forward.
 
 The original record object is never mutated. The stamp is read live at forward time. A `forward()` during admit sees the post-admit stamp, and a `forward()` from a punctuator sees the stamp at punctuator fire time (punctuator forwards also fail fast if the topic-identity watch has detected a mid-run recreation). The processor resets the forward counter before each delivered record via `resetForwardCount()`.

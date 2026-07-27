@@ -19,8 +19,8 @@ The serialised `parsley-causal-clock` header is `5 + 28 × entries` bytes. It co
 Kafka's record-size limit (`message.max.bytes` and `max.request.size`, around 1 MB by default), and
 there is no separate header budget.
 
-- **Automatic Streams stamping** stamps the node's completeness frontier, which is bounded by the
-  number of source topics in the subtopology, at one partition per topic per task. This stays small
+- **Automatic Streams stamping** stamps the node's vector time, which is bounded by the number of
+  source and sink topics in the subtopology, at one partition per topic per task. This stays small
   under normal topologies.
 - **`CausalClock.fromRecord(trigger)`** carries only the partitions the upstream producer
   depended on. This is the recommended way to propagate causal context from a plain Kafka client.
@@ -44,7 +44,7 @@ nothing must not parse quietly.
 The always-on startup checks, run once per task at init:
 
 - The causal input topics must share a partition count. Unequal counts make co-partitioning
-  impossible, so a task would evaluate the completeness frontier against an incomplete partition
+  impossible, so a task would evaluate the causal frontier against an incomplete partition
   set.
 - A `CausalTopology`-assembled stage's sink topics must each have at least as many partitions as
   the widest source. Protocol markers route to the forwarding task's own partition, so a narrower

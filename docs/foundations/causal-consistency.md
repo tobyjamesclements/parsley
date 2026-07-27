@@ -97,7 +97,7 @@ guarantees of the one below it and offers a clean assumption set to the one abov
   assumption, not by restoring total visibility but by making the delivery predicate sound without
   it, with the two-branch [delivery gate](delivery-gate.md).
 - The **[gossip module](../protocols/gossip.md)** is a liveness layer: it keeps clock progress
-  observable through processors that produce no business output, so downstream completeness never
+  observable through processors that produce no business output, so downstream progress never
   stalls on a quiet path. It can never release a record the gate would hold.
 
 The [protocols overview](../protocols/index.md) gives the module boxes and the class map;

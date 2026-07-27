@@ -110,8 +110,8 @@ input; a stateful node keeps one instance and observes into it across records. T
 dependencies a record already carries, without folding in a new position, use
 `CausalClock.fromRecord(record)`.
 
-Some of those records are *protocol null messages*: a record with a null value, carrying a
-completeness frontier so causal progress flows through processors that produce no business output
+Some of those records are *protocol null messages*: a record with a null value, carrying the
+emitting node's vector time so causal progress flows through processors that produce no business output
 for a given input. Still `observe` them, so your frontier advances across a service that emitted
 only null messages on this path, but skip them as business records. Test with
 `CausalClock.isNullMessage(record)` and `continue` past those it flags. A downstream causal

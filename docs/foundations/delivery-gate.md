@@ -65,16 +65,16 @@ and no membership (see [Streams integration](../guide/streams.md#evolving-a-runn
 
 The gate consults the local frontier; the stamp is what carries a node's knowledge onward. The
 stamp attached to every outbound record, business forwards and protocol null messages alike, through
-one stamping site, is the max-merge of three clocks:
+one stamping site, is the node's vector time, the max-merge of:
 
-- **completeness**: the node's contiguous frontier, its carried ancestry from any retired channels,
-  and every input channel's advertised clock. This is transitive ancestry, carried downstream for
+- **the contiguous frontier, the carried ancestry** from any retired channels, **and every input
+  channel's advertised clock**. This is transitive ancestry, carried downstream for
   each receiver's own gate to verify locally.
 - **ownOutputs**: the node's own acknowledged output positions. The broker performs the sender's
   clock increment (offset assignment), learned via producer acknowledgements, so a node's second
   output provably claims its first, including across sink topics and partitions, which a pre-stamp
   crossing wait covers.
-- **highestDelivered**: the max projection of the delivered vector, so an output emitted from a
+- **highestDelivered**: the max projection of the delivered set, so an output emitted from a
   record delivered above a contiguous-frontier gap still claims that record.
 
 Some stamp entries deliberately over-claim: the init-time end-offset seed, an aborted transaction's

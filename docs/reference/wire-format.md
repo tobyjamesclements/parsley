@@ -29,12 +29,12 @@ Entries appear in no guaranteed order: an encoder may emit them however it likes
 Topic IDs are Kafka `Uuid` values stored as two `long` fields (most-significant bits, then least-significant bits).
 
 On a forwarded business record this header carries the producing node's **outbound stamp**
-(`ParsleyChannels.stamp()`: completeness ∪ ownOutputs ∪ highestDelivered), not just the record's
-own dependencies. The encoding is identical; only the value's meaning differs by context.
+(`ParsleyChannels.vectorTime()`: frontier ∪ carried ancestry ∪ channel clocks ∪ ownOutputs ∪
+highestDelivered), not just the record's own dependencies. The encoding is identical; only the value's meaning differs by context.
 
 ## `_parsley_null_message` header (protocol null message)
 
-A protocol null message is a record with a null value, carrying the triggering record's key and two headers: `_parsley_null_message` (an empty-byte marker) and `parsley-causal-clock` (the emitting node's completeness frontier, encoded exactly as above). A node emits one in place of a business record when a delivered input produced no downstream output, so completeness still propagates through non-emitting layers. The key is informational wire content only: routing does not depend on it, because `ParsleyMarkerPartition` directs every null message to the forwarding task's own partition on each sink. Consumers identify a null message by the presence of the `_parsley_null_message` header (`CausalClock.isNullMessage`), never by its key or null value; a non-Parsley consumer sees a tombstone-shaped record and should skip it as a business record while still observing it into any frontier it maintains.
+A protocol null message is a record with a null value, carrying the triggering record's key and two headers: `_parsley_null_message` (an empty-byte marker) and `parsley-causal-clock` (the emitting node's vector time, encoded exactly as above). A node emits one in place of a business record when a delivered input produced no downstream output, so causal progress still propagates through non-emitting layers. The key is informational wire content only: routing does not depend on it, because `ParsleyMarkerPartition` directs every null message to the forwarding task's own partition on each sink. Consumers identify a null message by the presence of the `_parsley_null_message` header (`CausalClock.isNullMessage`), never by its key or null value; a non-Parsley consumer sees a tombstone-shaped record and should skip it as a business record while still observing it into any frontier it maintains.
 
 ## Buffer record (`ParsleySerializer` v3)
 
@@ -134,9 +134,9 @@ The sections, in order:
 
 - **Frontier clock** — the node's contiguous delivered frontier.
 - **Channel clocks** — per input channel `(topicId, partition)`, the dependencies advertised on it,
-  max-merged over the records and null messages received. `completeness()` — the max-merge of the
-  frontier clock, the carried ancestry, and every channel's advertised clock, so a single genuine
-  witness to a coordinate is enough — is computed from this value in memory.
+  max-merged over the records and null messages received. `vectorTime()` — the max-merge of every
+  clock in this value, so a single genuine witness to a coordinate is enough — is computed from it
+  in memory.
 - **Highest-received offsets** — per input channel, the highest offset ever physically received,
   making the bridge's skip detection exact across a restart.
 - **Carried-ancestry clock** — causal ancestry re-homed from coordinates that have left the node's

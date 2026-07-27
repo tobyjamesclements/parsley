@@ -66,7 +66,7 @@ built. Parsley can check one part at startup; see [Startup validation](#startup-
 partition count on each, so that a single task instance owns the complete partition set for a related
 group. The key is the unit of causal locality: causally related records must share a key so they land
 on the same partition on every topic. Parsley evaluates dependencies only against the partitions a
-task owns, so a topology that is not partitioned this way evaluates the completeness frontier against
+task owns, so a topology that is not partitioned this way evaluates the causal frontier against
 an incomplete partition set. An advanced user may partition by a coarser function of the key with a
 custom `StreamPartitioner`, for example by hashing a `tenant` prefix out of a `tenant:order` key, as
 long as that partitioner reads the key rather than the value.
@@ -97,7 +97,7 @@ separately receive a null message, so keep a causal processor's forwarding unifo
 
 **Null-message-bearing topics must not be compacted.** A protocol null message has a null value, so log
 compaction treats it as a tombstone and may delete it before a slow consumer reads it, dropping the
-completeness signal. Set `cleanup.policy=delete` on any sink topic of a causal stage. `CausalTopology`
+causal-progress signal. Set `cleanup.policy=delete` on any sink topic of a causal stage. `CausalTopology`
 checks this for you at startup; see [Startup validation](#startup-validation).
 
 **Consumed dependencies gate; the rest are ignored.** A node is

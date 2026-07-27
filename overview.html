@@ -62,7 +62,7 @@ configuration keys at all; startup fails if any {@code parsley.*} key is present
 
   <dt><strong>Protocol null message</strong></dt>
   <dd>A record with a null value, carrying the triggering record's key and a
-  {@code _parsley_null_message} header, that carries a node's completeness frontier downstream when a
+  {@code _parsley_null_message} header, that carries a node's vector time downstream when a
   delivered input produced no business output. Parsley routes each null message to the emitting
   task's own partition on every sink; the key is informational only. It keeps causal progress
   flowing through filters and not-yet-emitting aggregates, and a received null message is relayed
