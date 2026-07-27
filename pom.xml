@@ -70,7 +70,7 @@
         <!-- NullAway 0.13.7 requires Error Prone >= 2.50.0; both run on JDK 25. -->
         <errorprone.version>2.50.0</errorprone.version>
         <nullaway.version>0.13.8</nullaway.version>
-        <pitest.version>1.25.7</pitest.version>
+        <pitest.version>1.25.8</pitest.version>
         <!-- Overridable so a run can be timed at other thread counts; see the mutation
              profile for why the default is 1. -->
         <pitest.threads>1</pitest.threads>
@@ -565,7 +565,7 @@
             <plugin>
                 <groupId>org.codehaus.mojo</groupId>
                 <artifactId>flatten-maven-plugin</artifactId>
-                <version>1.7.1</version>
+                <version>1.8.0</version>
                 <configuration>
                     <flattenMode>ossrh</flattenMode>
                     <pomElements>
@@ -598,7 +598,7 @@
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-enforcer-plugin</artifactId>
-                <version>3.5.0</version>
+                <version>3.6.3</version>
                 <executions>
                     <execution>
                         <id>enforce-build-environment</id>
@@ -682,7 +682,7 @@
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-jar-plugin</artifactId>
-                <version>3.5.0</version>
+                <version>3.5.1</version>
                 <configuration>
                     <archive>
                         <manifestEntries>
