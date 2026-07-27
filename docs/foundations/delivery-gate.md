@@ -9,12 +9,11 @@ Each consumed channel has a FIFO hold queue. Records enter in receive order — 
 order, because Kafka delivers a partition in order — and only the **head** of each queue is
 ever evaluated. A blocked head blocks its channel; it never blocks other channels.
 
-This is the fresh start's central structural choice. Delivering out of order within a
-partition would buy lower convoying latency, at the price of a second projection of the
-delivered vector, an index of ahead-of-frontier deliveries, and a gap-absorption walk on every
-advance. Head-of-line blocking collapses all of that: one frontier per channel, one queue per
-channel, and a gate that only ever looks at heads. Convoying within a channel is the accepted
-cost.
+This is the design's central structural choice. Delivering out of order within a partition
+would buy lower convoying latency, at the price of a second projection of the delivered
+vector, an index of ahead-of-frontier deliveries, and a gap-absorption walk on every advance.
+Head-of-line blocking collapses all of that: one frontier per channel, one queue per channel,
+and a gate that only ever looks at heads. Convoying within a channel is the accepted cost.
 
 Two consequences fall out for free:
 
