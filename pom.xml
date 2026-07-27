@@ -252,6 +252,62 @@
             </build>
         </profile>
 
+        <!-- The record classes the main mutation run cannot score: mvn -Pmutation-records test
+             (a few minutes, against half an hour for the full run).
+
+             PIT installs the first mutant for a class as it loads, then hot-swaps every later
+             mutant of that class into the same minion through Instrumentation.redefineClasses.
+             The JVM rejects any redefinition that would change a class's Record attribute, and a
+             record whose components carry annotations trips exactly that: the minion dies, and
+             PIT scores the in-flight mutant RUN_ERROR, which DetectionStatus declares as detected.
+             So those mutants are counted as killed without a test having run. The bug is
+             hcoles/pitest#1285, open and unreproduced by any release through 1.25.8; see #44.
+
+             One mutant per minion means no redefinition ever happens, so these verdicts are real.
+             The threshold is 100 because every mutant in these classes is killed today: this run
+             exists to prove that rather than assume it. A record whose components carry no
+             annotations (ParsleyFrontierState) mutates cleanly in the main run and does not
+             belong here. A new annotated record that is missing from this list shows up as
+             RUN_ERROR in the main report. -->
+        <profile>
+            <id>mutation-records</id>
+            <build>
+                <plugins>
+                    <plugin>
+                        <groupId>org.pitest</groupId>
+                        <artifactId>pitest-maven</artifactId>
+                        <configuration>
+                            <targetClasses>
+                                <param>io.github.tobyjamesclements.parsley.ParsleyMessage</param>
+                                <param>io.github.tobyjamesclements.parsley.ParsleyHeader</param>
+                            </targetClasses>
+                            <excludedTestClasses>
+                                <param>io.github.tobyjamesclements.parsley.*IT</param>
+                            </excludedTestClasses>
+                            <mutationUnitSize>1</mutationUnitSize>
+                            <mutationThreshold>100</mutationThreshold>
+                            <!-- Overrides the shared false: this run names its target classes
+                                 explicitly, so generating nothing means a class was renamed out
+                                 from under it and the gate is no longer covering anything. -->
+                            <failWhenNoMutations>true</failWhenNoMutations>
+                            <jvmArgs>
+                                <jvmArg>-Dorg.slf4j.simpleLogger.log.io.github.tobyjamesclements.parsley=error</jvmArg>
+                            </jvmArgs>
+                        </configuration>
+                        <executions>
+                            <execution>
+                                <id>mutation-coverage-records</id>
+                                <phase>test</phase>
+                                <goals>
+                                    <goal>mutationCoverage</goal>
+                                </goals>
+                            </execution>
+                        </executions>
+                    </plugin>
+                </plugins>
+            </build>
+        </profile>
+
         <!-- CI's verify job: the unit-tests job has already run surefire, so verify skips it and
              runs failsafe (the broker ITs) only. A profile rather than a property because surefire
              has no surefire-only skip property: -DskipTests and -Dmaven.test.skip both disable

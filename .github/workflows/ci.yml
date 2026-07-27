@@ -63,6 +63,12 @@ jobs:
           cache: 'maven'
       - name: Mutation coverage (floor enforced)
         run: ./mvnw -Pmutation test --no-transfer-progress
+      # The main run cannot score mutants in records with annotated components: PIT's hot swap
+      # cannot redefine them, and it counts the resulting RUN_ERROR as detected (#44). This run
+      # gives each mutant its own minion, so no redefinition happens and the verdicts are real.
+      # A few minutes, and it fails if any mutant in those classes stops being killed.
+      - name: Mutation coverage for records (verdicts the main run cannot produce)
+        run: ./mvnw -Pmutation-records test --no-transfer-progress
 
   integration-tests:
     runs-on: ubuntu-latest
