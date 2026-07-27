@@ -105,8 +105,9 @@ final class ParsleyChannels {
     private final Map<CoordKey, Long> highestReceived = new HashMap<>();
     // Per input channel (topicId, partition) -> the highest offset ever DELIVERED on it, including
     // deliveries above a contiguous-frontier gap (non-head-of-line delivery). The frontier and this
-    // clock are the two projections of the BSS delivered vector VT(p) that non-FIFO delivery within
-    // a partition splits apart: the gate consults the contiguous projection (frontier — "everything
+    // clock are the two projections of the delivered vector that non-FIFO delivery within a
+    // partition splits apart (in Birman-Schiper-Stephenson, where per-sender delivery is FIFO,
+    // the two coincide): the gate consults the contiguous projection (frontier — "everything
     // up to n"), the stamp must carry the max projection, because an output emitted from an
     // above-gap delivery is causally after that record even though the frontier has not reached it
     // (the input-side sibling of the own-output gap that folding own outputs into the stamp closes:
@@ -164,10 +165,23 @@ final class ParsleyChannels {
     }
 
     /**
-     * The current contiguous frontier clock — the delivered vector VT(p), in Mattern's sense (the
-     * <em>frontier</em> of a consistent cut; Mattern 1988, "Virtual Time and Global States of
-     * Distributed Systems"), indexed by channel rather than by process (see
-     * {@link ParsleyVectorClock}).
+     * The current contiguous frontier clock: per channel, the index of the highest contiguously
+     * delivered offset. This is a consistent cut of the node's computation, projected onto the
+     * channels it consumes, in a cut's canonical representation: a cut is specified by the tuple of
+     * last-event indices per process, and the set of those last events is the cut's
+     * <em>frontier</em> (Babaoğlu and Marzullo 1993, "Consistent Global States of Distributed
+     * Systems"; the cut and consistency notions are Mattern 1988, "Virtual Time and Global States
+     * of Distributed Systems"). The cut is consistent because the delivery gate maintains it as one
+     * (I1, I4): a record is delivered only after this clock dominates its consumed dependencies, so
+     * everything at or below the frontier has its consumed causal past at or below the frontier.
+     * Vector-clock entries carry prefix claims — a dependency on offset 5 claims the whole prefix
+     * up to 5 — which is why the gate reads this prefix-closed cut and never {@link #vectorTime()}:
+     * a delivery above a gap proves nothing about the offsets inside the gap. A frontier advance is
+     * also what triggers the release cascade, the advancing-boundary role the same term names in
+     * Timely Dataflow. Two folds put non-events into the cut, {@link #bridge} (consumer-skipped
+     * markers) and {@link #seedIfFirstSeen} (pre-baseline history), sound because nothing can
+     * causally depend on delivering either. Indexed by channel rather than by process, like every
+     * clock here (see {@link ParsleyVectorClock}).
      */
     ParsleyVectorClock frontier() {
         return frontier;

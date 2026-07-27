@@ -387,7 +387,8 @@ final class ParsleyCausalBroadcast<K, V> {
     }
 
     /**
-     * Returns the current causal frontier.
+     * Returns the contiguous delivered frontier, the delivery gate's clock. See
+     * {@link ParsleyChannels#frontier()} for the consistent-cut construction.
      *
      * @return the frontier
      */

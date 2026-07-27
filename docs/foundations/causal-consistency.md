@@ -37,8 +37,8 @@ attached snapshot, that is, until it has delivered everything the sender had obs
 Parsley's clocks are the indexed-by-channel variant. The keys are `(topicId, partition)`
 coordinates and the values are broker offsets, because in Kafka a partition, not a process, is the
 unit that carries a total order. A clock plays two roles, distinguished in the literature as VT(m)
-and VT(p): the dependencies attached to a record, and the accumulated frontier a node has
-delivered. `CausalClock` is the public facade over both.
+and VT(p): the dependencies attached to a record, and the knowledge a node accumulates as it
+delivers. `CausalClock` is the public facade over both.
 
 ## How traditional algorithms work
 

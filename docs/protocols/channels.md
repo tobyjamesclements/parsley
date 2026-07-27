@@ -79,7 +79,7 @@ mechanisms repair this:
 ### The two projections of the delivered vector
 
 Because delivery within a partition is not head-of-line blocking, the classical delivered vector
-VT(p) splits into two projections, and the module maintains both:
+splits into two projections, and the module maintains both:
 
 - The **frontier** — the contiguous projection, "everything up to n delivered". This is the only
   clock the delivery gate ever consults.
@@ -92,8 +92,8 @@ VT(p) splits into two projections, and the module maintains both:
   above-frontier delivered offsets and commit in the same EOS transaction as the frontier blob,
   so a restart reconstructs it losslessly.
 
-The split is Kafka-specific; the literature's VT(p) assumes FIFO delivery and needs only one
-projection.
+The split is Kafka-specific; the literature's delivered vector assumes FIFO delivery per sender,
+under which the two projections coincide and one suffices.
 
 ## Own outputs
 

@@ -15,6 +15,11 @@ and [The three protocols](../protocols/index.md) cite these as footnotes, and th
   *Proceedings of the International Workshop on Parallel and Distributed Algorithms*. With Fidge,
   the vector-clock construction; the source of Parsley's `frontier` and `vectorTime` (VT(p))
   vocabulary.
+- **Babaoğlu and Marzullo, 1993.** Özalp Babaoğlu and Keith Marzullo, "Consistent Global States of
+  Distributed Systems: Fundamental Concepts and Mechanisms", chapter 4 of *Distributed Systems*
+  (second edition, Sape Mullender, editor), ACM Press / Addison-Wesley. Specifies a cut by the tuple
+  of last-event indices per process, names that tuple's event set the frontier of the cut, and
+  states cut consistency in vector-clock terms; the construction `frontier()` returns.
 - **Schwarz and Mattern, 1994.** Reinhard Schwarz and Friedemann Mattern, "Detecting Causal
   Relationships in Distributed Computations: In Search of the Holy Grail", *Distributed Computing*
   7(3). Causal histories and the VT(m) message-timestamp role; the ground-truth model

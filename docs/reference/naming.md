@@ -55,7 +55,7 @@ but waits for a change that touches the name.
 | `ParsleyBufferStore` / "held records" | Coinage with an exact match; adopt "hold-back queue" when next touched | The ISIS/CBCAST papers' term for exactly this structure |
 | `merge()` | Grounded; kept with citation | CRDT merge / lattice join (component-wise max) |
 | channel clocks (the `channels` map) | Name kept; nearest term cited with the delta (per-channel, not per-process) | Row of a matrix clock (Sarin–Lynch; Wuu–Bernstein) |
-| `frontier` | Grounded; kept with citation | Frontier of a consistent cut (Mattern; also Naiad/Timely Dataflow) |
+| `frontier` | Grounded; kept with citation, and the construction is exact: a cut is specified by the tuple of last-event indices per process, its last-event set is the cut's frontier, and the method returns that tuple, per channel. The cut is consistent because the gate maintains it as one (I1). The gate must read this prefix-closed cut rather than `vectorTime()` because vector-clock entries carry prefix claims, and a delivery above a gap proves nothing about the gap. Kafka-specific delta, stated on `bridge` and `seedIfFirstSeen`: consumer-skipped markers and pre-baseline history fold into the cut as non-events nothing can causally depend on | Cut, frontier of a cut, and cut consistency in vector-clock terms (Babaoğlu–Marzullo 1993; cuts and consistency Mattern 1988); the advancing-boundary role (Naiad/Timely Dataflow) |
 | `dominates()` | Grounded; kept with citation | Vector-clock dominance (component-wise comparison) |
 | `bridge()`, `seedIfFirstSeen()` | Rule 3: Kafka-specific, no analog; marked in Javadoc | — |
 | `ownOutputs` | Coinage kept; cites the BSS own-entry it reconstructs | Nearest is VT(m)'s own-slot semantics (Birman–Schiper–Stephenson) |
