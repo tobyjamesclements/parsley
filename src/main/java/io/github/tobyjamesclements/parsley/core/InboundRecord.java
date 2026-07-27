@@ -9,16 +9,14 @@ package io.github.tobyjamesclements.parsley.core;
  * @param offset the record's broker offset
  * @param clock the record's dependency clock header, or null when the header is absent (a
  *     producer that stamps nothing claims nothing); undecodable bytes must have already thrown
- * @param nullMessage true when this is a protocol null message (no business payload)
  * @param key the record key bytes, or null
- * @param value the record value bytes, or null (always null for null messages)
+ * @param value the record value bytes, or null
  * @param timestamp the record timestamp
  */
 public record InboundRecord(
         Channel channel,
         long offset,
         Clock clock,
-        boolean nullMessage,
         byte[] key,
         byte[] value,
         long timestamp) {

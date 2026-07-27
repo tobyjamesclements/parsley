@@ -6,8 +6,6 @@ import io.github.tobyjamesclements.parsley.core.Delivery;
 import io.github.tobyjamesclements.parsley.core.DeliveryProtocol;
 import io.github.tobyjamesclements.parsley.core.InboundRecord;
 import io.github.tobyjamesclements.parsley.core.NodeConfig;
-import io.github.tobyjamesclements.parsley.core.NullEmission;
-import io.github.tobyjamesclements.parsley.core.ProcessResult;
 
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -19,9 +17,10 @@ import java.util.function.BiFunction;
 
 /**
  * Hosts one {@link DeliveryProtocol} instance the way the Kafka Streams adapter would: fetches
- * records in per-channel offset order, runs the user behavior on each delivery, performs sends
- * with protocol stamps, emits null messages on request, and commits everything step-atomically.
- * A step can be aborted mid-flight to model a crash inside an EOS transaction.
+ * records in per-channel offset order, reports consumer position advances past markers, runs
+ * the user behavior on each delivery, performs sends with protocol stamps, and commits
+ * everything step-atomically. A step can be aborted mid-flight to model a crash inside an EOS
+ * transaction.
  */
 final class SimNode {
 
@@ -38,7 +37,6 @@ final class SimNode {
 
     /** Committed consumer positions (next offset to fetch). */
     private final Map<Channel, Long> positions = new HashMap<>();
-    /** Appends made by the in-flight step, unwound to ABORTED on a crash. */
     private final List<Object[]> appendedCoords = new ArrayList<>(); // {Channel, Long offset}
     private final Set<Channel> touchedThisStep = new HashSet<>();
 
@@ -55,6 +53,7 @@ final class SimNode {
     /** (Re)constructs the protocol from committed state, as a process start does. */
     void start() {
         protocol = protocolFactory.apply(config, this);
+        store.commit(); // init-time writes (scope record, rescope) are idempotent re-runs
         up = true;
         Map<Channel, Long> resume = protocol.resumePositions();
         for (Channel c : config.consumed()) {
@@ -65,48 +64,71 @@ final class SimNode {
         }
     }
 
+    void reconfigure(NodeConfig newConfig) {
+        if (up) throw new IllegalStateException("reconfigure while up");
+        this.config = newConfig;
+    }
+
     void crashIdle() {
         up = false;
         sends.reset();
         store.discard();
     }
 
-    boolean hasWork(Channel c) {
+    boolean hasFetchWork(Channel c) {
         return up && world.broker.nextFetchable(c, positions.get(c)) >= 0 && !protocol.pauseWanted(c);
     }
 
     /**
-     * Runs one step: fetch the next record on {@code c}, process to fixpoint, then commit — or
-     * abort everything when {@code crash} is set, leaving aborted records at their offsets.
+     * True when the consumer would advance its position without records: nothing fetchable at
+     * the position but the log continues past it (trailing markers / aborted records).
      */
+    boolean hasPositionAdvance(Channel c) {
+        if (!up) return false;
+        long pos = positions.get(c);
+        return world.broker.nextFetchable(c, pos) < 0 && world.broker.endOffset(c) > pos;
+    }
+
+    /** Runs one fetch-process-commit step; {@code crash} aborts it mid-flight instead. */
     void step(Channel c, boolean crash) {
         long off = world.broker.nextFetchable(c, positions.get(c));
         if (off < 0) throw new IllegalStateException(name + ": no fetchable record on " + c);
         SimBroker.Entry e = world.broker.entry(c, off);
+        InboundRecord inbound = new InboundRecord(
+                c, off, e.clock() == null ? null : e.clock().copy(), e.key(), e.value(), e.timestamp());
+        boolean business = e.kind() == SimBroker.Kind.BUSINESS;
+        transactionalStep(c, off + 1, crash, () -> {
+            List<Delivery> out = protocol.onRecord(inbound);
+            if (business && out.stream().noneMatch(d -> d.channel().equals(c) && d.offset() == off)) {
+                world.totalHolds++;
+            }
+            return out;
+        });
+    }
 
+    /** Consumer position advances past trailing markers; may release held records. */
+    void stepPositionAdvance(Channel c, boolean crash) {
+        long newPosition = world.broker.endOffset(c);
+        transactionalStep(c, newPosition, crash, () -> protocol.positionAdvance(c, newPosition));
+    }
+
+    private void transactionalStep(Channel c, long newPosition, boolean crash,
+                                   java.util.function.Supplier<List<Delivery>> action) {
         world.oracle.snapshot(name);
         touchedThisStep.clear();
         appendedCoords.clear();
 
         boolean failed = false;
         try {
-            InboundRecord inbound = new InboundRecord(
-                    c, off, e.clock() == null ? null : e.clock().copy(),
-                    e.kind() == SimBroker.Kind.NULL_MESSAGE, e.key(), e.value(), e.timestamp());
-            ProcessResult result = protocol.onRecord(inbound);
-            List<NullEmission> emissions = new ArrayList<>(result.emissions());
-            for (Delivery d : result.deliveries()) {
+            for (Delivery d : action.get()) {
                 Long recordId = world.oracle.recordIdAt(d.channel(), d.offset());
                 if (recordId == null) {
                     throw new AssertionError(name + ": delivered a non-business coordinate "
                             + d.channel() + "@" + d.offset());
                 }
                 world.oracle.onDelivery(name, config.consumed(), recordId);
-                int forwards = behavior.process(this, d);
-                protocol.afterDelivery(d, forwards).ifPresent(emissions::add);
-            }
-            for (NullEmission em : emissions) {
-                sendNulls(em);
+                world.totalDeliveries++;
+                behavior.process(this, d);
             }
         } catch (AssertionError ae) {
             throw ae;
@@ -127,7 +149,7 @@ final class SimNode {
         } else {
             world.broker.appendMarkers(touchedThisStep);
             store.commit();
-            positions.put(c, off + 1);
+            positions.put(c, newPosition);
             world.oracle.commit(name);
         }
     }
@@ -144,18 +166,6 @@ final class SimNode {
         sends.sent(dest, offset);
         touchedThisStep.add(dest);
         appendedCoords.add(new Object[] {dest, offset});
-    }
-
-    private void sendNulls(NullEmission em) {
-        for (java.util.UUID sink : config.sinkTopics()) {
-            Channel dest = world.ownPartition(sink, config.taskPartition());
-            Clock stamp = protocol.stampForSend(dest);
-            long offset = world.broker.append(dest,
-                    new SimBroker.Entry(SimBroker.Kind.NULL_MESSAGE, -1, stamp, em.key(), null, em.timestamp()));
-            sends.sent(dest, offset);
-            touchedThisStep.add(dest);
-            appendedCoords.add(new Object[] {dest, offset});
-        }
     }
 
     long position(Channel c) {

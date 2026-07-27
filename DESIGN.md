@@ -48,8 +48,8 @@ the user processor at node `n`, every ancestor `a` of `m` with `a.channel ∈ co
 `a.offset > baseline(n, a.channel)` has already been delivered at `n`. The baseline is the seed
 point (below the node's first sighting is out of scope). **Liveness invariant**: when the
 simulation drains (no in-flight records, all nodes stepped to fixpoint, no crashes pending),
-every hold queue is empty. **Quiescence invariant**: an idle topology stops emitting null
-messages after a bounded number of steps (cycles included).
+every hold queue is empty. **Quiescence invariant**: the system emits no protocol records at
+all, so an idle topology is byte-idle; a world that cannot drain inside its step budget fails.
 
 ## The gate
 
@@ -78,8 +78,8 @@ Kafka partitions are not dense: EOS commit markers and aborted records occupy of
 - **Bridge**: Kafka delivers a partition in offset order, so a received offset above
   `highestReceived + 1` proves the gap was consumer-skipped (markers/aborts) — fold it.
   `highestReceived` persists per channel.
-- **Trailing markers**: a claim may name a marker offset (end-offset seeding, below). The gap is
-  bridged when any later record arrives; gossip null messages guarantee one eventually does.
+- **Trailing markers**: a claim may name a marker offset (end-offset seeding, below). The gap
+  is bridged when any later record arrives, or by a position advance when none ever does.
 
 ## The stamp
 
@@ -103,17 +103,32 @@ ack failure or timeout fails the task — a stamp must never under-claim own out
 each declared sink's end offset is folded in — an over-claim on real appended offsets, delay-only,
 therefore sound.
 
-## Gossip (liveness layer)
+## No gossip layer
 
-Null messages: value-less records carrying only a stamp, occupying real offsets.
+The original architecture carries a third protocol layer of in-band null messages for
+liveness. This design has none, because three properties make it unnecessary:
 
-- **Emit** when a delivery produced no business output, to every declared sink (routed to the
-  task's own partition).
-- **Reception**: the null's own offset is delivered normally (advances the frontier, cascades);
-  its carried clock folds into `channelClocks` (stamp side) and **never** feeds the gate.
-- **Relay rule** (Chandy–Misra–Bryant discipline): relay iff the carried clock, restricted to
-  channels this node consumes, is not dominated by the node's total knowledge (its full stamp),
-  evaluated before the fold. Custody folds but never obliges a relay. This quiesces on cycles.
+1. **Every claim names a really-appended offset** (frontiers, acknowledgement folds, and
+   end-offset seeds are all append-time facts), so every dependency eventually has its record —
+   or its skip — arrive at every consumer of its channel.
+2. **Custody propagates along business paths alone.** Causality itself only flows through
+   business records, and every stamp folds the full dependency clocks of everything received,
+   so any consumed ancestor behind an unconsumed coordinate is claimed by induction along the
+   same path the causality took. No side-channel dissemination is needed for the ignore
+   branch's soundness.
+3. **Position advances bridge trailing skips.** The one genuine liveness gap — a claim naming
+   a trailing transaction marker's offset, with no later record to trigger a bridge — is closed
+   by information Kafka already gives consumers for free: the consumer's position advances past
+   markers and aborted batches even when no records return. The host reports that through
+   {@code positionAdvance}, which is the entire liveness mechanism.
+
+The wait graph is acyclic — every wait edge (a dependency wait or a head-of-line wait) points
+from a later-appended record to an earlier-appended one, even under end-offset over-claims,
+whose watermarks are append-time snapshots taken before the claiming record's own append — so
+the system cannot deadlock, and V5's drain check enforces this empirically on every run.
+
+Consequences: business topics carry no protocol records at all, plain consumers have nothing
+to skip, retention never interacts with protocol traffic, and stream time is untouched.
 
 ## Own outputs and EOS
 
@@ -133,7 +148,7 @@ only outright removals.
 ## Package layout
 
 - `io.github.tobyjamesclements.parsley.core` — protocol: `Channel`, `Clock`, `CausalNode`
-  (gate + queues + stamp + gossip), SPIs (`StateStore`, `SendTracker`, `NodeTransport`).
+  (gate + queues + stamp + position-advance bridging), SPIs (`StateStore`, `SendTracker`).
 - `io.github.tobyjamesclements.parsley.kafka` — Kafka Streams processor adapter + edge ops.
 - test `...parsley.sim` — the simulator: `SimCluster` (brokers/partitions/EOS), `SimNode`
   hosting a `CausalNode`, `Oracle` (ground-truth ancestry + invariants), `SimRunner` (seeded
@@ -148,7 +163,7 @@ only outright removals.
 | V3 | Crash/restart preserves V1/V2 (EOS restore) | crash-injecting sim runs |
 | V4 | EOS markers/aborts never wedge the frontier | sim runs with aborted transactions |
 | V5 | Liveness: drained sim ⇒ empty hold queues | end-of-run assertion |
-| V6 | Gossip quiesces on cycles | bounded-step idle-cycle runs |
+| V6 | Cycles drain; trailing markers never wedge | damped-feedback and filter scenarios |
 | V7 | Truncation below a true stability bound preserves V1–V5 | truncating sim runs |
 | V8 | The oracle itself catches a broken implementation | mutation tests of the sim (a
       deliberately FIFO-only node must fail V1) |

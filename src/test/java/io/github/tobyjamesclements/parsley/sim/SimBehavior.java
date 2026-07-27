@@ -32,4 +32,18 @@ interface SimBehavior {
     static SimBehavior consumeOnly() {
         return (host, d) -> 0;
     }
+
+    /**
+     * Treats the value as an integer time-to-live: forwards {@code ttl - 1} while positive,
+     * drops at zero. Gives feedback cycles a loop gain below one so they terminate.
+     */
+    static SimBehavior ttlForward(String... topics) {
+        return (host, d) -> {
+            int ttl = Integer.parseInt(new String(d.value()));
+            if (ttl <= 0) return 0;
+            byte[] next = String.valueOf(ttl - 1).getBytes();
+            for (String t : topics) host.sendBusiness(t, d.key(), next, d.timestamp());
+            return topics.length;
+        };
+    }
 }

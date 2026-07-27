@@ -5,12 +5,9 @@ import io.github.tobyjamesclements.parsley.core.Clock;
 import io.github.tobyjamesclements.parsley.core.Delivery;
 import io.github.tobyjamesclements.parsley.core.DeliveryProtocol;
 import io.github.tobyjamesclements.parsley.core.InboundRecord;
-import io.github.tobyjamesclements.parsley.core.NullEmission;
-import io.github.tobyjamesclements.parsley.core.ProcessResult;
 
 import java.util.List;
 import java.util.Map;
-import java.util.Optional;
 
 /**
  * A deliberately broken protocol: delivers every business record the moment it arrives,
@@ -22,22 +19,19 @@ final class EagerProtocol implements DeliveryProtocol {
     private final Clock delivered = new Clock();
 
     @Override
-    public ProcessResult onRecord(InboundRecord r) {
+    public List<Delivery> onRecord(InboundRecord r) {
         delivered.advanceTo(r.channel(), r.offset());
-        if (r.nullMessage()) return ProcessResult.EMPTY;
-        return new ProcessResult(
-                List.of(new Delivery(r.channel(), r.offset(), r.key(), r.value(), r.timestamp())),
-                List.of());
+        return List.of(new Delivery(r.channel(), r.offset(), r.key(), r.value(), r.timestamp()));
+    }
+
+    @Override
+    public List<Delivery> positionAdvance(Channel channel, long position) {
+        return List.of();
     }
 
     @Override
     public Clock stampForSend(Channel destination) {
         return delivered.copy();
-    }
-
-    @Override
-    public Optional<NullEmission> afterDelivery(Delivery delivery, int businessForwards) {
-        return Optional.empty();
     }
 
     @Override

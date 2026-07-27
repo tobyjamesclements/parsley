@@ -28,12 +28,12 @@ import java.util.UUID;
  */
 final class SimBroker {
 
-    enum Kind { BUSINESS, NULL_MESSAGE, MARKER, ABORTED }
+    enum Kind { BUSINESS, MARKER, ABORTED }
 
     /** One slot in a partition log. {@code recordId} is the oracle's id, -1 for non-business. */
     record Entry(Kind kind, long recordId, Clock clock, byte[] key, byte[] value, long timestamp) {
         boolean fetchable() {
-            return kind == Kind.BUSINESS || kind == Kind.NULL_MESSAGE;
+            return kind == Kind.BUSINESS;
         }
     }
 

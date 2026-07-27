@@ -40,6 +40,11 @@ final class SimWorld {
     private boolean allowTaskFailures;
     private final List<String> taskFailures = new ArrayList<>();
     private long stepsTaken;
+    /** Diagnostics for anti-vacuity assertions: the interesting machinery must actually fire. */
+    long totalDeliveries;
+    long totalHolds;
+    long totalCrashes;
+    long totalPositionAdvances;
 
     SimWorld(long seed) {
         this.rng = new Random(seed);
@@ -61,9 +66,8 @@ final class SimWorld {
         return this;
     }
 
-    /** Adds a causal node consuming the given (topic, partition) channels. */
-    SimNode node(String name, int taskPartition, List<String> inputTopicPartitions, List<String> sinkTopics,
-                 SimBehavior behavior, BiFunction<NodeConfig, SimNode, DeliveryProtocol> factory) {
+    /** Builds a config for a node consuming the given {@code topic:partition} channels. */
+    NodeConfig config(String name, int taskPartition, List<String> inputTopicPartitions, List<String> sinkTopics) {
         Set<Channel> consumed = new HashSet<>();
         for (String tp : inputTopicPartitions) {
             int i = tp.lastIndexOf(':');
@@ -71,7 +75,13 @@ final class SimWorld {
         }
         Set<UUID> sinks = new HashSet<>();
         for (String t : sinkTopics) sinks.add(broker.topicId(t));
-        NodeConfig config = new NodeConfig(name, consumed, sinks, taskPartition, 64);
+        return new NodeConfig(name, consumed, sinks, taskPartition, 64);
+    }
+
+    /** Adds a causal node consuming the given (topic, partition) channels. */
+    SimNode node(String name, int taskPartition, List<String> inputTopicPartitions, List<String> sinkTopics,
+                 SimBehavior behavior, BiFunction<NodeConfig, SimNode, DeliveryProtocol> factory) {
+        NodeConfig config = config(name, taskPartition, inputTopicPartitions, sinkTopics);
         SimNode n = new SimNode(name, this, config, behavior, factory);
         nodes.add(n);
         n.start();
@@ -88,11 +98,6 @@ final class SimWorld {
         int parts = broker.partitions(topic);
         int p = key == null ? 0 : Math.floorMod(Arrays.hashCode(key), parts);
         return broker.channel(topic, p);
-    }
-
-    Channel ownPartition(UUID sinkTopic, int taskPartition) {
-        String name = topicNames.get(sinkTopic);
-        return broker.channel(name, taskPartition % broker.partitions(name));
     }
 
     void taskFailure(String node, RuntimeException ex) {
@@ -112,6 +117,7 @@ final class SimWorld {
 
     private sealed interface Action {
         record Process(SimNode node, Channel channel, boolean crash) implements Action {}
+        record PositionAdvance(SimNode node, Channel channel, boolean crash) implements Action {}
         record DeliverAck(SimNode node) implements Action {}
         record Restart(SimNode node) implements Action {}
         record CrashIdle(SimNode node) implements Action {}
@@ -125,9 +131,13 @@ final class SimWorld {
             for (SimNode n : nodes) {
                 if (n.up) {
                     for (Channel c : n.config.consumed()) {
-                        if (n.hasWork(c)) {
+                        if (n.hasFetchWork(c)) {
                             enabled.add(new Action.Process(n, c, false));
                             if (crashBudget > 0) enabled.add(new Action.Process(n, c, true));
+                        }
+                        if (n.hasPositionAdvance(c)) {
+                            enabled.add(new Action.PositionAdvance(n, c, false));
+                            if (crashBudget > 0) enabled.add(new Action.PositionAdvance(n, c, true));
                         }
                     }
                     if (n.sends.hasInFlight()) enabled.add(new Action.DeliverAck(n));
@@ -145,13 +155,25 @@ final class SimWorld {
             }
             switch (enabled.get(rng.nextInt(enabled.size()))) {
                 case Action.Process(SimNode n, Channel c, boolean crash) -> {
-                    if (crash) crashBudget--;
+                    if (crash) {
+                        crashBudget--;
+                        totalCrashes++;
+                    }
                     n.step(c, crash);
+                }
+                case Action.PositionAdvance(SimNode n, Channel c, boolean crash) -> {
+                    if (crash) {
+                        crashBudget--;
+                        totalCrashes++;
+                    }
+                    totalPositionAdvances++;
+                    n.stepPositionAdvance(c, crash);
                 }
                 case Action.DeliverAck(SimNode n) -> n.sends.deliverOneAck();
                 case Action.Restart(SimNode n) -> n.start();
                 case Action.CrashIdle(SimNode n) -> {
                     crashBudget--;
+                    totalCrashes++;
                     n.crashIdle();
                 }
                 case Action.ProducerStep(EdgeProducer p) -> p.step();

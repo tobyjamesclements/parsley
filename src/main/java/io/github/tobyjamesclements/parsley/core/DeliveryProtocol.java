@@ -1,6 +1,6 @@
 package io.github.tobyjamesclements.parsley.core;
 
-import java.util.Optional;
+import java.util.List;
 
 /**
  * The core protocol surface a host drives. The production implementation is
@@ -15,8 +15,18 @@ public interface DeliveryProtocol {
     /**
      * Hands the core one record fetched from a consumed channel, in per-channel offset order.
      * The core seeds and bridges density, enqueues or delivers, and cascades any releases.
+     * Returned deliveries are in causal delivery order.
      */
-    ProcessResult onRecord(InboundRecord record);
+    List<Delivery> onRecord(InboundRecord record);
+
+    /**
+     * Tells the core the host consumer's position on {@code channel} advanced to
+     * {@code position} without returning records: everything below is fetched or
+     * consumer-skipped (transaction markers, aborted records). This is the liveness signal that
+     * bridges trailing markers — the only thing the original architecture needed a gossip
+     * layer of in-band null messages for. May release held records, so it returns deliveries.
+     */
+    List<Delivery> positionAdvance(Channel channel, long position);
 
     /**
      * The single stamping site: the dependency clock to attach to an outbound send to
@@ -24,12 +34,6 @@ public interface DeliveryProtocol {
      * (quiescence of unacknowledged own sends to channels other than the destination).
      */
     Clock stampForSend(Channel destination);
-
-    /**
-     * Told after the user processor handled one delivery. When it forwarded no business
-     * record, the returned emission keeps causal progress observable downstream.
-     */
-    Optional<NullEmission> afterDelivery(Delivery delivery, int businessForwards);
 
     /** Backpressure signal: the host should pause fetching {@code channel} while true. */
     boolean pauseWanted(Channel channel);
