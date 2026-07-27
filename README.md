@@ -91,7 +91,8 @@ The docs site under `docs/` (mkdocs) covers the model and the design:
   [the edge ops](docs/guide/edge.md).
 - **Reference** — [wire format](docs/reference/wire-format.md).
 
-`DESIGN.md` is the compact specification the verification obligations are drawn from.
+The verification obligations the test suite enforces are catalogued in
+[verification](docs/design/verification.md).
 
 ## Current limitations
 

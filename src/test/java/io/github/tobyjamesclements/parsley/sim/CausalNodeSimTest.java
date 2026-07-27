@@ -14,8 +14,8 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 /**
  * The main verification suite: {@link CausalNode} under the oracle across seeded random
  * interleavings. Every scenario runs many seeds; the oracle checks causal order, FIFO, and
- * duplicates on every delivery, and completeness plus drain on every run (obligations V1-V7 of
- * DESIGN.md).
+ * duplicates on every delivery, and completeness plus drain on every run (obligations V1-V7
+ * of docs/design/verification.md).
  *
  * <p>Each scenario also asserts anti-vacuity: the machinery under test must actually have
  * fired (records held at the gate, crashes injected, position advances taken). A suite that
