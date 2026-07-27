@@ -72,6 +72,20 @@ final class SimSendTracker implements SendTracker {
         return out;
     }
 
+    @Override
+    public EarliestOffsets earliestOffsets(Set<Channel> channels) {
+        Map<Channel, Long> logStarts = new HashMap<>();
+        Set<Channel> absent = new java.util.HashSet<>();
+        for (Channel c : channels) {
+            if (broker.allChannels().contains(c)) {
+                logStarts.put(c, broker.logStart(c));
+            } else {
+                absent.add(c); // the sim broker knows its topics definitively
+            }
+        }
+        return new EarliestOffsets(logStarts, absent);
+    }
+
     /** Crash: in-flight and arrived acks are lost with the process. */
     void reset() {
         inFlight.clear();

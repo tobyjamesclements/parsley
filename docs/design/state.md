@@ -76,6 +76,9 @@ node has delivered or carried may be skipped, but never dropped and never re-ent
 `truncate(stability)` removes entries at or below the bound from carried ancestry and the
 advertised clocks — the two stamp-side clocks whose width otherwise grows monotonically with
 the node's transitive upstream. The frontier and `ownOutputs` stay: their width is bounded by
-the node's own channels. The bound must be globally stable (every node's frontier dominates
-it); supplying it is the caller's affair, and the simulator verifies that truncating below a
-true bound preserves every obligation for subsequent traffic.
+the node's own channels. The shipped stability source is the log-start offset
+([architecture](architecture.md#truncation-log-start-stability)): retention-deleted records
+are below every reachable baseline, so the bound needs no coordination and no membership. The
+simulator verifies both that full-retention truncation empties the stamp-side clocks with
+later traffic staying causal, and that a from-earliest joiner arriving after truncation is
+correctly ordered (its baseline is the log start).

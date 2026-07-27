@@ -50,6 +50,8 @@ import java.util.UUID;
  */
 public final class CausalStage<K, V, KO, VO> {
 
+    private static final org.slf4j.Logger LOG = org.slf4j.LoggerFactory.getLogger(CausalStage.class);
+
     static final String STORE_NAME = "parsley-causal-state";
     static final String SOURCE_NAME = "parsley-source";
     static final String PROCESSOR_NAME = "parsley-processor";
@@ -68,6 +70,7 @@ public final class CausalStage<K, V, KO, VO> {
     private final Map<String, SinkDef<KO, VO>> sinks;
     private final ProcessorSupplier<K, V, KO, VO> userSupplier;
     private final int maxHeldPerChannel;
+    private final Duration truncationInterval;
     private TopicIds topicIds;
     private SendTrackers sendTrackers;
 
@@ -76,6 +79,7 @@ public final class CausalStage<K, V, KO, VO> {
         this.sinks = b.sinks;
         this.userSupplier = b.userSupplier;
         this.maxHeldPerChannel = b.maxHeldPerChannel;
+        this.truncationInterval = b.truncationInterval;
         this.topicIds = b.topicIds;
         this.sendTrackers = b.sendTrackers;
     }
@@ -89,6 +93,7 @@ public final class CausalStage<K, V, KO, VO> {
         private final Map<String, SinkDef<KO, VO>> sinks = new LinkedHashMap<>();
         private ProcessorSupplier<K, V, KO, VO> userSupplier;
         private int maxHeldPerChannel = 10_000;
+        private Duration truncationInterval = Duration.ofMinutes(10);
         private TopicIds topicIds;
         private SendTrackers sendTrackers;
 
@@ -109,6 +114,12 @@ public final class CausalStage<K, V, KO, VO> {
 
         public Builder<K, V, KO, VO> maxHeldPerChannel(int max) {
             this.maxHeldPerChannel = max;
+            return this;
+        }
+
+        /** How often the log-start truncation sweep runs. Default ten minutes. */
+        public Builder<K, V, KO, VO> truncationInterval(Duration interval) {
+            this.truncationInterval = interval;
             return this;
         }
 
@@ -244,6 +255,18 @@ public final class CausalStage<K, V, KO, VO> {
 
             context.schedule(Duration.ofMillis(500), PunctuationType.WALL_CLOCK_TIME,
                     ts -> sweepPositions());
+            // The coordination-free truncation driver: log starts are a true global stability
+            // bound (retention-deleted records sit below every reachable baseline). A failed
+            // sweep skips a cycle; it must never fail the task for garbage collection.
+            SendTracker truncationTracker = tracker;
+            context.schedule(truncationInterval, PunctuationType.WALL_CLOCK_TIME, ts -> {
+                try {
+                    var earliest = truncationTracker.earliestOffsets(node.stampChannels());
+                    node.truncateToLogStarts(earliest.logStarts(), earliest.confirmedAbsent());
+                } catch (RuntimeException e) {
+                    LOG.warn("truncation sweep skipped: {}", e.toString());
+                }
+            });
         }
 
         @Override

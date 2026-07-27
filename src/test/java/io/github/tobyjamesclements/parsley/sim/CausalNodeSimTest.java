@@ -341,6 +341,81 @@ class CausalNodeSimTest {
         throw new IllegalStateException("no key found for partition " + partition);
     }
 
+    /**
+     * The log-start stability protocol: after retention deletes the consumed history, the
+     * log-start bound truncates every stamp-side clock to empty with zero coordination, and
+     * later traffic stays causal. The width assertion is the point of the whole mechanism.
+     */
+    @Test
+    void logStartStabilityTruncatesToEmpty() {
+        for (long seed = 0; seed < SEEDS; seed++) {
+            SimWorld w = new SimWorld(seed).topic("t1", 1).topic("t2", 1).topic("t3", 1);
+            SimNode a = w.node("A", 0, List.of("t1:0"), List.of("t2"), SimBehavior.forwardTo("t2"), real());
+            SimNode b = w.node("B", 0, List.of("t2:0", "t1:0"), List.of("t3"), SimBehavior.forwardTo("t3"), real());
+            SimNode c = w.node("C", 0, List.of("t3:0", "t2:0"), List.of(), SimBehavior.consumeOnly(), real());
+            EdgeProducer p = w.producer("edge");
+            for (int i = 0; i < 6; i++) p.produce("t1", 0, "k" + i, "v" + i, 1000 + i);
+            w.run(BUDGET);
+
+            int widthBefore = 0;
+            for (SimNode n : List.of(a, b, c)) widthBefore += n.protocol.stampChannels().size();
+            assertTrue(widthBefore > 0, "no stamp-side entries accumulated: nothing to truncate");
+
+            // Retention consumes the whole drained history; log starts are the stability bound.
+            for (String t : List.of("t1", "t2", "t3")) {
+                w.advanceLogStart(t, 0, w.broker.endOffset(w.broker.channel(t, 0)));
+            }
+            for (SimNode n : List.of(a, b, c)) truncateFromLogStarts(n);
+            for (SimNode n : List.of(a, b, c)) {
+                assertTrue(n.protocol.stampChannels().isEmpty(),
+                        n.name + " still carries stamp-side entries after full-retention truncation");
+            }
+
+            EdgeProducer p2 = w.producer("edge2");
+            for (int i = 0; i < 6; i++) p2.produce("t1", 0, "k2" + i, "v2" + i, 3000 + i);
+            w.run(BUDGET);
+        }
+    }
+
+    /**
+     * The soundness-critical joiner case a membership-based stability protocol gets wrong: a
+     * consumer joining from earliest after truncation. Its baseline is the log start
+     * (retention already deleted everything below), so the truncated claims are out of its
+     * scope by the same rule that exempts seeds — the oracle confirms causal order for
+     * everything it can see.
+     */
+    @Test
+    void fromEarliestJoinerAfterTruncationStaysCausal() {
+        for (long seed = 0; seed < SEEDS; seed++) {
+            SimWorld w = new SimWorld(seed).topic("t1", 1).topic("t2", 1).topic("t3", 1);
+            SimNode a = w.node("A", 0, List.of("t1:0"), List.of("t2"), SimBehavior.forwardTo("t2"), real());
+            SimNode b = w.node("B", 0, List.of("t2:0", "t1:0"), List.of("t3"), SimBehavior.forwardTo("t3"), real());
+            EdgeProducer p = w.producer("edge");
+            for (int i = 0; i < 6; i++) p.produce("t1", 0, "k" + i, "v" + i, 1000 + i);
+            w.run(BUDGET);
+
+            for (String t : List.of("t1", "t2", "t3")) {
+                w.advanceLogStart(t, 0, w.broker.endOffset(w.broker.channel(t, 0)));
+            }
+            for (SimNode n : List.of(a, b)) truncateFromLogStarts(n);
+
+            // Joins from earliest: position resets to the log start, which is its baseline.
+            w.node("L", 0, List.of("t3:0", "t1:0"), List.of(), SimBehavior.consumeOnly(), real());
+
+            EdgeProducer p2 = w.producer("edge2");
+            for (int i = 0; i < 6; i++) p2.produce("t1", 0, "k2" + i, "v2" + i, 3000 + i);
+            w.run(BUDGET);
+        }
+    }
+
+    /** Runs the coordination-free truncation driver: log starts in, truncation out. */
+    private static void truncateFromLogStarts(SimNode n) {
+        var node = (io.github.tobyjamesclements.parsley.core.CausalNode) n.protocol;
+        var earliest = n.sends.earliestOffsets(node.stampChannels());
+        node.truncateToLogStarts(earliest.logStarts(), earliest.confirmedAbsent());
+        n.store.commit();
+    }
+
     /** Scope shrink: a dropped input's causal past must survive in later stamps (carried). */
     @Test
     void rescopeShrinkCarriesAncestry() {

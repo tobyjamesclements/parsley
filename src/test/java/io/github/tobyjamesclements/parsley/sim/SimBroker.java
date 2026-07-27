@@ -45,6 +45,8 @@ final class SimBroker {
     private final Map<String, UUID> topicIds = new HashMap<>();
     private final Map<String, Integer> partitionCounts = new HashMap<>();
     private final Map<Channel, List<Entry>> logs = new HashMap<>();
+    /** First non-deleted offset per channel — retention's high-water mark. */
+    private final Map<Channel, Long> logStarts = new HashMap<>();
 
     void createTopic(String name, int partitions) {
         if (topicIds.containsKey(name)) throw new IllegalStateException("topic exists: " + name);
@@ -103,14 +105,25 @@ final class SimBroker {
 
     /**
      * The offset of the next fetchable entry at or above {@code from}, or -1 when none exists
-     * yet. A {@code read_committed} consumer never returns markers or aborted records.
+     * yet. A {@code read_committed} consumer never returns markers or aborted records, and
+     * retention-deleted offsets (below the log start) are gone for every consumer.
      */
     long nextFetchable(Channel c, long from) {
         List<Entry> log = log(c);
-        for (long o = Math.max(from, 0); o < log.size(); o++) {
+        for (long o = Math.max(Math.max(from, 0), logStart(c)); o < log.size(); o++) {
             if (log.get((int) o).fetchable()) return o;
         }
         return -1;
+    }
+
+    long logStart(Channel c) {
+        return logStarts.getOrDefault(c, 0L);
+    }
+
+    /** Retention deletes everything below {@code offset}. Never regresses. */
+    void advanceLogStart(Channel c, long offset) {
+        if (offset > endOffset(c)) throw new IllegalArgumentException("log start past end");
+        logStarts.merge(c, offset, Math::max);
     }
 
     Set<Channel> allChannels() {

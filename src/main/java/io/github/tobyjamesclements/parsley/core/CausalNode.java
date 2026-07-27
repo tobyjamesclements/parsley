@@ -319,6 +319,32 @@ public final class CausalNode implements DeliveryProtocol {
         });
     }
 
+    @Override
+    public Set<Channel> stampChannels() {
+        Set<Channel> out = new HashSet<>();
+        carriedAncestry.forEach((c, o) -> out.add(c));
+        channelClocks.values().forEach(cc -> cc.forEach((c, o) -> out.add(c)));
+        return out;
+    }
+
+    /**
+     * Builds the log-start stability bound and truncates with it: {@code logStart - 1} for
+     * each present channel, everything for a channel absent from {@code logStarts} whose
+     * topic is confirmed destroyed. Callers pass log starts for every channel in
+     * {@link #stampChannels()}; {@code confirmedAbsent} must carry only channels whose topic
+     * definitively no longer exists (never a transient resolution failure — fail closed).
+     */
+    public void truncateToLogStarts(Map<Channel, Long> logStarts, Set<Channel> confirmedAbsent) {
+        Clock stability = new Clock();
+        logStarts.forEach((c, logStart) -> {
+            if (logStart > 0) stability.advanceTo(c, logStart - 1);
+        });
+        for (Channel c : confirmedAbsent) {
+            stability.advanceTo(c, Long.MAX_VALUE);
+        }
+        if (!stability.isEmpty()) truncate(stability);
+    }
+
     // ------------------------------------------------------------------ state plumbing
 
     private long frontierOf(Channel c) {

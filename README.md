@@ -105,7 +105,9 @@ The verification obligations the test suite enforces are catalogued in
   than per task.
 - Sequence claims carry a late-joiner caveat: consumers joining at the log end should
   baseline at the last stable offset (see the liveness page).
-- Clock truncation ships as a verified hook (`truncate` below a globally stable bound); the
-  coordination protocol that computes such a bound is not included.
+- Clock truncation is driven by log-start stability: retention-deleted records sit below
+  every reachable baseline, so stamp width is garbage-collected as fast as retention
+  advances, with zero coordination. Faster-than-retention truncation would need a membership
+  protocol, which is deliberately not included.
 - Correctness under a live broker's rebalances and task migration is exercised only by the
   adapter's design, not yet by broker integration tests.

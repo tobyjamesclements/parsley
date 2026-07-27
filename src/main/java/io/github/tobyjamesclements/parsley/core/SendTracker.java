@@ -29,4 +29,17 @@ public interface SendTracker {
      * the task's whole lifetime.
      */
     Map<Channel, Long> endOffsets(Set<java.util.UUID> sinkTopics);
+
+    /** The log-start view of a set of channels, for the truncation driver. */
+    record EarliestOffsets(Map<Channel, Long> logStarts, Set<Channel> confirmedAbsent) {}
+
+    /**
+     * Log-start offsets for the given channels — the coordination-free stability source:
+     * records deleted by retention sit below every reachable baseline, so claims at or below
+     * {@code logStart - 1} are globally out of scope. {@code confirmedAbsent} carries only
+     * channels whose topic definitively no longer exists (a recreated topic is a different
+     * channel, so an absent topic's claims are unclaimable forever); a transient resolution
+     * failure must throw or omit the channel, never report absence (fail closed).
+     */
+    EarliestOffsets earliestOffsets(Set<Channel> channels);
 }

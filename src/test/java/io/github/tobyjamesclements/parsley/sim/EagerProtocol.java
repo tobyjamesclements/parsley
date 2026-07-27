@@ -50,5 +50,10 @@ final class EagerProtocol implements DeliveryProtocol {
     }
 
     @Override
+    public java.util.Set<Channel> stampChannels() {
+        return java.util.Set.of();
+    }
+
+    @Override
     public void truncate(Clock stability) {}
 }

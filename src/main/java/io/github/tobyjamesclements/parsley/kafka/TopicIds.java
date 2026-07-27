@@ -40,7 +40,9 @@ public interface TopicIds {
         return topic -> cache.computeIfAbsent(topic, t -> {
             try {
                 TopicDescription d = admin.describeTopics(Set.of(t)).allTopicNames().get().get(t);
-                UUID id = UUID.fromString(d.topicId().toString());
+                // Kafka's Uuid serializes as base64, not the dashed form — convert by bits.
+                UUID id = new UUID(d.topicId().getMostSignificantBits(),
+                        d.topicId().getLeastSignificantBits());
                 return new Resolved(id, d.partitions().size());
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();

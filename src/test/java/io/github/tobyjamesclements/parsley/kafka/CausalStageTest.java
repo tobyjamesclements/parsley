@@ -60,6 +60,11 @@ class CausalStageTest {
                 public Map<Channel, Long> endOffsets(Set<UUID> sinkTopics) {
                     return Map.of();
                 }
+
+                @Override
+                public EarliestOffsets earliestOffsets(Set<Channel> channels) {
+                    return new EarliestOffsets(Map.of(), Set.of());
+                }
             };
 
     @TempDir

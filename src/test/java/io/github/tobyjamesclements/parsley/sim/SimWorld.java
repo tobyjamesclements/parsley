@@ -120,6 +120,22 @@ final class SimWorld {
         return broker.channel(topic, p);
     }
 
+    /**
+     * Retention deletes everything below {@code offset} on the channel. Guarded: deleting
+     * records an active subscriber has not yet fetched models data loss, which is outside the
+     * guarantee ("retention covers consumer lag" is a documented precondition).
+     */
+    void advanceLogStart(String topic, int partition, long offset) {
+        Channel c = broker.channel(topic, partition);
+        for (SimNode n : nodes) {
+            if (n.config.consumed().contains(c) && n.position(c) < offset) {
+                throw new IllegalStateException("retention would delete records " + n.name
+                        + " has not fetched on " + c);
+            }
+        }
+        broker.advanceLogStart(c, offset);
+    }
+
     void taskFailure(String node, RuntimeException ex) {
         if (!allowTaskFailures) {
             throw new AssertionError("task failure at " + node + ": " + ex, ex);

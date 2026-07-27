@@ -50,8 +50,18 @@ public interface DeliveryProtocol {
 
     /**
      * Drops clock entries at or below {@code stability} from every stamp-feeding clock. Sound
-     * only when every node's frontier already dominates {@code stability}; supplying that bound
-     * is the caller's responsibility.
+     * only when the bound is truly globally stable — no present or future consumer's gate can
+     * still need the dropped entries. The one coordination-free source of such a bound is the
+     * log-start offset: records deleted by retention are below every reachable baseline, so
+     * {@code logStart - 1} per channel (and everything, for a channel whose topic no longer
+     * exists) qualifies unconditionally.
      */
     void truncate(Clock stability);
+
+    /**
+     * The channels currently appearing in the stamp-side clocks (carried ancestry and the
+     * per-channel advertised views) — the footprint a truncation driver queries log-start
+     * offsets for. Shrinks as truncation removes entries.
+     */
+    java.util.Set<Channel> stampChannels();
 }

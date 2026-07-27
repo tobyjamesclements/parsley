@@ -65,7 +65,10 @@ final class SimNode {
         Map<Channel, Long> resume = protocol.resumePositions();
         for (Channel c : config.consumed()) {
             long committed = positions.getOrDefault(c, 0L);
-            long position = Math.max(committed, resume.getOrDefault(c, 0L));
+            // A position below the log start cannot be fetched; the consumer resets to the
+            // first surviving offset (retention-deleted history is below every baseline).
+            long position = Math.max(Math.max(committed, resume.getOrDefault(c, 0L)),
+                    world.broker.logStart(c));
             positions.put(c, position);
             world.oracle.subscribed(name, c, position);
         }

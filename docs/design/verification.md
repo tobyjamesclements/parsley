@@ -76,8 +76,9 @@ through a hop that does not consume the origin, edge-producer cross-topic orderi
 causality from a plain consumer, crash-recovery chains, filter stages with quiet sinks and
 trailing markers, multi-partition sink ordering through sequence claims (including with
 acknowledgements never delivered), the late-joiner sequence-claim wedge probe, damped feedback
-cycles, truncation mid-history, scope shrink across a restart, and the wide soak combining
-most of the above.
+cycles, truncation mid-history, log-start stability (full-retention truncation emptying the
+stamp-side clocks, and a from-earliest joiner arriving after truncation), scope shrink across
+a restart, and the wide soak combining most of the above.
 
 ## What the simulator does not cover
 

@@ -74,13 +74,26 @@ host pauses fetching that channel; causes never arrive on the channel whose head
 so pausing it cannot starve the release. Records are never dropped — this bounds memory, not
 safety.
 
-## Truncation
+## Truncation: log-start stability
 
-`truncate(stability)` drops entries at or below a supplied bound from the stamp-feeding clocks
-(carried ancestry and channel clocks — the two whose width grows with the transitive
-upstream). Soundness is conditional and the caller's responsibility: the bound must be
-dominated by every node's frontier, so no gate anywhere still needs the dropped entries.
-Parsley ships the hook and a verified wire format, not a stability coordination protocol.
+Stamp-side clocks (carried ancestry and the advertised channel clocks) are the two whose
+width grows with the node's transitive upstream, and truncation is what bounds them. The
+required bound must be *globally* stable — no present or **future** consumer's gate may still
+need a dropped entry, because a missing claim at a gate is a causal violation, not a delay. A
+membership-based protocol (registered nodes publishing frontiers) cannot deliver that bound
+in Kafka's anonymous-consumer world: a from-earliest late joiner's baseline sits below any
+frontier minimum, and any gating consumer outside the registry breaks it silently.
+
+The coordination-free source that does qualify is **the log-start offset**. Records deleted
+by retention are below every reachable baseline, present or future — the same "below first
+sighting is out of scope" rule that makes seeding sound — so `logStart − 1` per channel is
+unconditionally stable, and a channel whose topic no longer exists truncates entirely (a
+recreated topic is a different channel, so an absent topic's claims are unclaimable forever).
+The driver is `truncateToLogStarts`: query earliest offsets for `stampChannels()`, truncate.
+The Streams adapter runs it on a punctuator (`truncationInterval`, default ten minutes); a
+failed sweep skips a cycle rather than failing the task. Truncation therefore advances
+exactly as fast as retention does — clock width is bounded by the causal history your
+retention actually keeps.
 
 ## The Kafka Streams adapter
 

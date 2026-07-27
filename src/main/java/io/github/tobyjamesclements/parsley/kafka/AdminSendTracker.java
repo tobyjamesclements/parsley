@@ -74,4 +74,62 @@ final class AdminSendTracker implements SendTracker {
             throw new IllegalStateException("cannot resolve sink end offsets", e.getCause());
         }
     }
+
+    @Override
+    public EarliestOffsets earliestOffsets(Set<Channel> channels) {
+        Map<UUID, List<Channel>> byTopic = new HashMap<>();
+        for (Channel c : channels) {
+            byTopic.computeIfAbsent(c.topicId(), k -> new java.util.ArrayList<>()).add(c);
+        }
+        Map<UUID, String> names = new HashMap<>();
+        Set<Channel> absent = new java.util.HashSet<>();
+        var described = admin.describeTopics(
+                org.apache.kafka.common.TopicCollection.ofTopicIds(
+                        byTopic.keySet().stream()
+                                .map(id -> new org.apache.kafka.common.Uuid(
+                                        id.getMostSignificantBits(), id.getLeastSignificantBits()))
+                                .toList()));
+        described.topicIdValues().forEach((kafkaId, future) -> {
+            UUID id = new UUID(kafkaId.getMostSignificantBits(), kafkaId.getLeastSignificantBits());
+            try {
+                names.put(id, future.get().name());
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                throw new IllegalStateException("interrupted resolving topic names", e);
+            } catch (ExecutionException e) {
+                if (e.getCause() instanceof org.apache.kafka.common.errors.UnknownTopicIdException) {
+                    // Definitive absence: a recreated topic is a different channel, so these
+                    // claims are unclaimable forever.
+                    absent.addAll(byTopic.get(id));
+                } else {
+                    throw new IllegalStateException("cannot resolve topic id " + id, e.getCause());
+                }
+            }
+        });
+
+        Map<TopicPartition, OffsetSpec> query = new HashMap<>();
+        Map<TopicPartition, Channel> tps = new HashMap<>();
+        byTopic.forEach((id, chans) -> {
+            String name = names.get(id);
+            if (name == null) return;
+            for (Channel c : chans) {
+                TopicPartition tp = new TopicPartition(name, c.partition());
+                query.put(tp, OffsetSpec.earliest());
+                tps.put(tp, c);
+            }
+        });
+        Map<Channel, Long> logStarts = new HashMap<>();
+        try {
+            var result = admin.listOffsets(query, new ListOffsetsOptions(IsolationLevel.READ_COMMITTED));
+            for (var e : result.all().get().entrySet()) {
+                logStarts.put(tps.get(e.getKey()), e.getValue().offset());
+            }
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new IllegalStateException("interrupted resolving log starts", e);
+        } catch (ExecutionException e) {
+            throw new IllegalStateException("cannot resolve log starts", e.getCause());
+        }
+        return new EarliestOffsets(logStarts, absent);
+    }
 }
