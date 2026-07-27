@@ -54,8 +54,8 @@ adaptation (seeding, bridging, position advance) repairs this at receive time �
 One further deviation from the textbook is Kafka-specific: the sender's clock increment is
 performed by the broker (offset assignment), learned asynchronously from producer
 acknowledgements. A record's own coordinate therefore cannot appear in its own stamp, and a
-node's claims over its own outputs are reconstructed from acknowledgements — the own-outputs
-clock and the crossing wait, developed in
+node claims its in-flight sends in its own send-sequence space, resolved by receivers from
+the sender tag every stamped record carries — developed in
 [architecture](../design/architecture.md#the-stamp).
 
 ## The delivery invariant

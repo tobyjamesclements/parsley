@@ -155,10 +155,30 @@ public final class CausalStage<K, V, KO, VO> {
                 sources.keySet().toArray(String[]::new));
         t.addProcessor(PROCESSOR_NAME, new AdapterSupplier(), SOURCE_NAME);
         for (String sink : sinks.keySet()) {
+            // The adapter partitions before stamping (sequence claims are per channel), so the
+            // sink must land each record on the partition the adapter chose. The partitioner
+            // recomputes the same deterministic function.
+            int partitions = topicIds.resolve(sink).partitions();
+            org.apache.kafka.streams.processor.StreamPartitioner<byte[], byte[]> partitioner =
+                    (topic, key, value, numPartitions) ->
+                            java.util.Optional.of(Set.of(partitionFor(key, partitions)));
             t.addSink(SINK_PREFIX + sink, sink, new ByteArraySerializer(), new ByteArraySerializer(),
-                    PROCESSOR_NAME);
+                    partitioner, PROCESSOR_NAME);
         }
         return t;
+    }
+
+    /**
+     * The deterministic partition function shared by the stamping site and the sink
+     * partitioner: producer-default murmur2 for keyed records, partition zero for null keys.
+     * The producer's sticky partitioning is nondeterministic, and the stamp must know the
+     * destination channel before the send, so both sites recompute this function — they must
+     * agree byte for byte.
+     */
+    static int partitionFor(byte[] key, int numPartitions) {
+        if (key == null) return 0;
+        return org.apache.kafka.common.utils.Utils.toPositive(
+                org.apache.kafka.common.utils.Utils.murmur2(key)) % numPartitions;
     }
 
     private final class AdapterSupplier implements ProcessorSupplier<byte[], byte[], byte[], byte[]> {
@@ -210,8 +230,13 @@ public final class CausalStage<K, V, KO, VO> {
             KeyValueStore<Bytes, byte[]> kv = context.getStateStore(STORE_NAME);
             SendTracker tracker = sendTrackers.create(
                     Thread.currentThread().getName() + "-producer", topicIds, sinks.keySet());
+            // The sender identity must be stable across restarts and rebalances: derive it
+            // from the application and task ids, which name this partition group durably.
+            UUID senderId = UUID.nameUUIDFromBytes(
+                    (context.applicationId() + "/" + context.taskId()).getBytes());
             node = new CausalNode(
-                    new NodeConfig("task-" + context.taskId(), consumed, sinkIds, taskPartition, maxHeldPerChannel),
+                    new NodeConfig("task-" + context.taskId(), senderId, consumed, sinkIds,
+                            taskPartition, maxHeldPerChannel),
                     new KafkaStateStore(kv), tracker);
 
             userProcessor = userSupplier.get();
@@ -231,8 +256,11 @@ public final class CausalStage<K, V, KO, VO> {
                         + meta.topic() + ":" + meta.partition());
             }
             Clock clock = CausalHeaders.read(r.headers());
+            UUID sender = CausalHeaders.readSender(r.headers());
+            long seq = CausalHeaders.readSeq(r.headers());
             deliverAll(node.onRecord(new InboundRecord(
-                    c, meta.offset(), clock, r.key(), r.value(), r.timestamp())));
+                    c, meta.offset(), clock, sender, sender == null ? -1 : seq,
+                    r.key(), r.value(), r.timestamp())));
             sweepPositions();
         }
 
@@ -294,8 +322,10 @@ public final class CausalStage<K, V, KO, VO> {
                 SinkDef<KO, VO> def = sinks.get(sink);
                 byte[] key = def.keySerde().serializer().serialize(sink, record.key());
                 byte[] value = def.valueSerde().serializer().serialize(sink, record.value());
+                var resolved = topicIds.resolve(sink);
+                Channel dest = new Channel(resolved.id(), partitionFor(key, resolved.partitions()));
                 var headers = new RecordHeaders(record.headers());
-                CausalHeaders.write(headers, node.stampForSend(null));
+                CausalHeaders.write(headers, node.prepareSend(dest));
                 inner.forward(new Record<>(key, value, record.timestamp(), headers), SINK_PREFIX + sink);
             }
 

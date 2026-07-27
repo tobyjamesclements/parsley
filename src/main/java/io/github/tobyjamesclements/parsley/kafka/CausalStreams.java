@@ -17,12 +17,11 @@ import java.util.Properties;
  *   <li>requires and enforces {@code processing.guarantee=exactly_once_v2} and
  *       {@code isolation.level=read_committed} — the protocol's transactional state and
  *       density adaptation are defined against them;</li>
- *   <li>registers {@link OwnOutputs.Interceptor} on the application's producers
- *       (acknowledgement capture for the own-outputs clock and the crossing wait);</li>
  *   <li>installs the position-capturing client supplier ({@link Positions}) — the consumer's
  *       position advance past transaction markers is the protocol's liveness signal;</li>
  *   <li>resolves topic identity and sink end offsets through an admin client built from the
- *       same properties.</li>
+ *       same properties. Own outputs are claimed in sequence space (see
+ *       {@link AdminSendTracker}), so no acknowledgement capture is wired.</li>
  * </ul>
  */
 public final class CausalStreams implements AutoCloseable {
@@ -44,7 +43,6 @@ public final class CausalStreams implements AutoCloseable {
         }
         p.put(StreamsConfig.PROCESSING_GUARANTEE_CONFIG, StreamsConfig.EXACTLY_ONCE_V2);
         p.put(StreamsConfig.consumerPrefix(ConsumerConfig.ISOLATION_LEVEL_CONFIG), "read_committed");
-        appendInterceptor(p);
 
         Map<String, Object> adminConfig = new HashMap<>();
         for (String name : p.stringPropertyNames()) {
@@ -55,19 +53,11 @@ public final class CausalStreams implements AutoCloseable {
 
         stage.wire(
                 TopicIds.fromAdmin(admin),
-                (clientId, ids, sinkTopics) -> new InterceptorSendTracker(
-                        clientId, ids, admin, sinkTopics, Duration.ofSeconds(30)));
+                (clientId, ids, sinkTopics) -> new AdminSendTracker(ids, admin, sinkTopics));
 
         KafkaStreams ks = new KafkaStreams(stage.topology(), p, Positions.capturingClientSupplier());
         ks.start();
         return new CausalStreams(ks, admin);
-    }
-
-    private static void appendInterceptor(Properties p) {
-        String key = StreamsConfig.producerPrefix("interceptor.classes");
-        String existing = p.getProperty(key);
-        String cls = OwnOutputs.Interceptor.class.getName();
-        p.put(key, existing == null || existing.isBlank() ? cls : existing + "," + cls);
     }
 
     public KafkaStreams streams() {

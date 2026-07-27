@@ -248,23 +248,97 @@ class CausalNodeSimTest {
         assertTrue(stats.positionAdvances > 0, "position advances never fired in the soak");
     }
 
-    /** Fail closed: an observed send failure kills the stamp and its transaction, then heals. */
+    /**
+     * The decisive sender-sequence test: acknowledgements are never delivered, so the node's
+     * own-output claims can never be upgraded to offset space — cross-partition ordering of
+     * its outputs must ride sequence claims alone. The stamping path never blocks (there is
+     * no crossing wait to resolve the acks), and the oracle still holds.
+     */
     @Test
-    void sendFailureFailsClosedAndRecovers() {
-        int failuresSeen = 0;
+    void droppedAcksOrderingRidesSequenceClaims() {
+        Stats stats = new Stats();
         for (long seed = 0; seed < SEEDS; seed++) {
-            SimWorld w = new SimWorld(seed).topic("t1", 1).topic("t2", 1).topic("t3", 1)
-                    .allowTaskFailures();
-            SimNode a = w.node("A", 0, List.of("t1:0"), List.of("t2", "t3"),
-                    SimBehavior.forwardTo("t2", "t3"), real());
-            w.node("C", 0, List.of("t2:0", "t3:0"), List.of(), SimBehavior.consumeOnly(), real());
-            a.sends.failNextAwait();
+            SimWorld w = new SimWorld(seed).topic("t1", 1).topic("t2", 2).dropAcks();
+            w.node("A", 0, List.of("t1:0"), List.of("t2"), SimBehavior.forwardTo("t2"), real());
+            w.node("C", 0, List.of("t2:0", "t2:1"), List.of(), SimBehavior.consumeOnly(), real());
             EdgeProducer p = w.producer("edge");
-            for (int i = 0; i < 6; i++) p.produce("t1", 0, "k" + i, "v" + i, 1000 + i);
+            for (int i = 0; i < 10; i++) p.produce("t1", 0, "k" + i, "v" + i, 1000 + i);
             w.run(BUDGET);
-            failuresSeen += w.taskFailures().size();
+            stats.add(w);
         }
-        assertTrue(failuresSeen > 0, "the armed send failure never surfaced as a task failure");
+        assertTrue(stats.deliveries > 0, "no deliveries at all");
+        assertTrue(stats.holds > 0,
+                "the gate never held a record: sequence claims never actually gated anything");
+    }
+
+    /**
+     * The documented caveat of sequence claims, demonstrated both ways: a sequence-form claim
+     * frozen in a non-consumer's custody clock wedges a late joiner whose baseline sits above
+     * the claimed record (the sender never acknowledged, so the claim never normalised, and
+     * the sender never writes that partition again). The same topology with a from-the-start
+     * joiner resolves and drains. An offset-claims design has no such window; late joiners
+     * under sequence claims must either baseline at the stable offset (LSO) before any live
+     * claim, or accept this wedge class.
+     */
+    @Test
+    void lateJoinerStaleSequenceClaimWedges() {
+        assertTrue(runStaleClaimTopology(7L, true), "expected the late joiner to wedge");
+        assertTrue(!runStaleClaimTopology(7L, false), "the from-the-start joiner must not wedge");
+    }
+
+    /** @return true when the world failed to satisfy completeness or drain (the wedge). */
+    private boolean runStaleClaimTopology(long seed, boolean joinAtLatest) {
+        SimWorld w = new SimWorld(seed).topic("t1", 1).topic("t2", 2).topic("t3", 1).dropAcks();
+        w.node("A", 0, List.of("t1:0"), List.of("t2"), SimBehavior.forwardTo("t2"), real());
+        w.node("B", 0, List.of("t2:0"), List.of("t3"), SimBehavior.forwardTo("t3"), real());
+        if (!joinAtLatest) {
+            w.node("L", 0, List.of("t3:0", "t2:1"), List.of(), SimBehavior.consumeOnly(), real());
+        }
+
+        // Phase 1: first a record A forwards to t2:1 — minting a sequence claim that, under
+        // dropped acks, never normalises — then t2:0 traffic whose stamps carry that claim
+        // into B's custody.
+        EdgeProducer p = w.producer("edge");
+        p.produce("t1", 0, keyForPartition(w, 1, "a"), "v0", 1000);
+        for (int i = 0, sent = 1; sent < 6; i++) {
+            String k = "b" + i;
+            if (w.routeByKey("t2", k.getBytes()).partition() != 0) continue;
+            p.produce("t1", 0, k, "v" + sent, 1000 + sent);
+            sent++;
+        }
+        w.run(BUDGET);
+
+        if (joinAtLatest) {
+            w.nodeAtLatest("L", 0, List.of("t3:0", "t2:1"), List.of(),
+                    SimBehavior.consumeOnly(), real());
+        }
+
+        // Phase 2: traffic that reaches L through t3 but never writes t2:1 again.
+        EdgeProducer p2 = w.producer("edge2");
+        for (int i = 0, sent = 0; sent < 6; i++) {
+            String k = "m" + i;
+            if (w.routeByKey("t2", k.getBytes()).partition() != 0) continue;
+            p2.produce("t1", 0, k, "w" + sent, 3000 + sent);
+            sent++;
+        }
+        try {
+            w.run(BUDGET);
+            return false;
+        } catch (AssertionError wedge) {
+            String msg = String.valueOf(wedge.getMessage());
+            assertTrue(msg.contains("never delivered") || msg.contains("did not drain"),
+                    "unexpected failure mode: " + wedge);
+            return true;
+        }
+    }
+
+    /** The first key with the given suffix family routing to the wanted t2 partition. */
+    private static String keyForPartition(SimWorld w, int partition, String family) {
+        for (int i = 0; i < 1000; i++) {
+            String k = family + i;
+            if (w.routeByKey("t2", k.getBytes()).partition() == partition) return k;
+        }
+        throw new IllegalStateException("no key found for partition " + partition);
     }
 
     /** Scope shrink: a dropped input's causal past must survive in later stamps (carried). */

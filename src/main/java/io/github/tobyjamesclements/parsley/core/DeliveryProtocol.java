@@ -29,13 +29,14 @@ public interface DeliveryProtocol {
     List<Delivery> positionAdvance(Channel channel, long position);
 
     /**
-     * The single stamping site: the dependency clock to attach to an outbound send to
-     * {@code destination}, with pending acknowledgements folded and the crossing wait applied
-     * (quiescence of unacknowledged own sends to channels other than the destination). A null
-     * destination waits for every pending send — for hosts that cannot know the partition at
-     * stamp time.
+     * The single stamping site: the clock and sender tag to attach to an outbound send to
+     * {@code destination}. The destination must be the concrete channel the record will be
+     * appended to — sequence claims are per channel, so the host partitions before stamping.
+     * Never blocks: the send's own sequence is assigned synchronously, prior sends are claimed
+     * in sequence space until their acknowledgements arrive, and acknowledged sends are
+     * claimed as offsets.
      */
-    Clock stampForSend(Channel destination);
+    SendStamp prepareSend(Channel destination);
 
     /** Backpressure signal: the host should pause fetching {@code channel} while true. */
     boolean pauseWanted(Channel channel);

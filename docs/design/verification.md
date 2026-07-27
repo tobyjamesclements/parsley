@@ -74,14 +74,15 @@ advances.
 Shared-input races (a stage's output racing its input at a shared consumer), transitive claims
 through a hop that does not consume the origin, edge-producer cross-topic ordering, observed
 causality from a plain consumer, crash-recovery chains, filter stages with quiet sinks and
-trailing markers, multi-partition sink ordering through the crossing wait, damped feedback
-cycles, truncation mid-history, scope shrink across a restart, an armed send failure that must
-fail closed and heal, and the wide soak combining most of the above.
+trailing markers, multi-partition sink ordering through sequence claims (including with
+acknowledgements never delivered), the late-joiner sequence-claim wedge probe, damped feedback
+cycles, truncation mid-history, scope shrink across a restart, and the wide soak combining
+most of the above.
 
 ## What the simulator does not cover
 
 Real broker behaviour outside the model: rebalances and task migration, consumer-group
-protocol edge cases, the adapter's interceptor and client-supplier wiring under a live
+protocol edge cases, the adapter's client-supplier wiring under a live
 cluster, and timing that depends on actual I/O. Those belong to broker integration tests,
 which this cut does not yet include; `TopologyTestDriver` smoke tests cover the adapter's
 plumbing (hold-and-release, stamp content, fail-closed corrupt headers) without a broker.

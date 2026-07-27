@@ -1,6 +1,5 @@
 package io.github.tobyjamesclements.parsley.sim;
 
-import io.github.tobyjamesclements.parsley.core.CausalSendException;
 import io.github.tobyjamesclements.parsley.core.Channel;
 import io.github.tobyjamesclements.parsley.core.SendTracker;
 
@@ -15,27 +14,34 @@ import java.util.UUID;
 
 /**
  * Simulator {@link SendTracker}: the broker assigns offsets at append, but the acknowledgement
- * only reaches the node when the scheduler delivers it (or when the crossing wait forces it —
- * modeling the producer flush a real await performs).
+ * only reaches the node when the scheduler delivers it. Per-channel acknowledgement order
+ * matches send order (Kafka's per-partition guarantee), which the core's own-claim
+ * normalisation relies on.
+ *
+ * <p>{@code dropAcks} mode discards every acknowledgement: the node's own-output claims can
+ * then never be upgraded to offset space, so cross-partition ordering of its outputs rests
+ * entirely on sequence claims — the decisive configuration for the sender-sequence
+ * experiment.
  */
 final class SimSendTracker implements SendTracker {
 
     private record Pending(Channel channel, long offset) {}
 
     private final SimBroker broker;
+    private final boolean dropAcks;
     /** Acks in flight: appended, not yet seen by the node. */
     private final Deque<Pending> inFlight = new ArrayDeque<>();
     /** Acks seen by the node, not yet drained by the core. */
     private final List<Ack> arrived = new ArrayList<>();
-    private boolean failNextAwait;
 
-    SimSendTracker(SimBroker broker) {
+    SimSendTracker(SimBroker broker, boolean dropAcks) {
         this.broker = broker;
+        this.dropAcks = dropAcks;
     }
 
     /** Called by the sim node when it appends an own send. */
     void sent(Channel c, long offset) {
-        inFlight.add(new Pending(c, offset));
+        if (!dropAcks) inFlight.add(new Pending(c, offset));
     }
 
     /** Scheduler action: one in-flight ack reaches the node. */
@@ -50,30 +56,11 @@ final class SimSendTracker implements SendTracker {
         return !inFlight.isEmpty();
     }
 
-    /** Arms a send-failure: the next crossing wait throws, as a failed produce would. */
-    void failNextAwait() {
-        failNextAwait = true;
-    }
-
     @Override
     public List<Ack> drainAcks() {
         List<Ack> out = List.copyOf(arrived);
         arrived.clear();
         return out;
-    }
-
-    @Override
-    public void awaitQuiescence(Set<Channel> except) {
-        if (failNextAwait) {
-            failNextAwait = false;
-            throw new CausalSendException("simulated send failure observed during crossing wait");
-        }
-        // The real implementation blocks on producer futures; the simulator resolves them.
-        inFlight.removeIf(p -> {
-            if (except.contains(p.channel)) return false;
-            arrived.add(new Ack(p.channel, p.offset));
-            return true;
-        });
     }
 
     @Override
@@ -89,6 +76,5 @@ final class SimSendTracker implements SendTracker {
     void reset() {
         inFlight.clear();
         arrived.clear();
-        failNextAwait = false;
     }
 }

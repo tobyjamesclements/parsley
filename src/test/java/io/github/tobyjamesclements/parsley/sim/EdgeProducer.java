@@ -66,7 +66,7 @@ final class EdgeProducer {
             long offset = world.broker.endOffset(dest);
             long id = world.oracle.emitted(name, dest, offset);
             world.broker.append(dest, new SimBroker.Entry(
-                    SimBroker.Kind.BUSINESS, id, observed.copy(), p.key(), p.value(), p.timestamp()));
+                    SimBroker.Kind.BUSINESS, id, observed.copy(), null, -1, p.key(), p.value(), p.timestamp()));
             // A sequential plain producer learns its own offset from the acknowledgement it
             // waits for; fold it so the next send claims this one.
             observed.advanceTo(dest, offset);

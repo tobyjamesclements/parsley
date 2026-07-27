@@ -41,8 +41,16 @@ public final class CausalNode implements DeliveryProtocol {
     private static final String PREFIX_FRONTIER = "f/";
     private static final String PREFIX_CHANNEL_CLOCK = "cc/";
     private static final String PREFIX_QUEUE = "q/";
+    /** Per sink channel: the last send sequence this node issued. */
+    private static final String PREFIX_SEND_SEQ = "sq/";
+    /** Per (consumed channel, sender): the highest delivered sequence and its offset. */
+    private static final String PREFIX_DELIVERED_SEQ = "ds/";
 
-    private record Held(long offset, Clock clock, byte[] key, byte[] value, long timestamp) {}
+    private record Held(long offset, Clock clock, UUID senderId, long senderSeq,
+                        byte[] key, byte[] value, long timestamp) {}
+
+    /** The resolution state for one (channel, sender): highest delivered seq and its offset. */
+    private record SeqMark(long seq, long offset) {}
 
     private static final class Queue {
         final ArrayDeque<Held> held = new ArrayDeque<>();
@@ -63,6 +71,16 @@ public final class CausalNode implements DeliveryProtocol {
     /** Memory-only: everything strictly below is known fetched-or-skipped (consumer position). */
     private final Map<Channel, Long> positionKnown = new HashMap<>();
     private final Map<Channel, Long> resumePositions = new HashMap<>();
+    /** Last issued send sequence per sink channel (persisted; -1 = none). */
+    private final Map<Channel, Long> sendSeq = new HashMap<>();
+    /**
+     * Last acknowledged send sequence per sink channel. Memory-only: per-channel ack order
+     * matches send order, and after a restart every committed send is appended (EOS commit
+     * awaits acknowledgements), so init sets it to the restored send counter.
+     */
+    private final Map<Channel, Long> ackedSeq = new HashMap<>();
+    /** Highest delivered sequence and its offset, per consumed channel and sender (persisted). */
+    private final Map<Channel, Map<UUID, SeqMark>> deliveredSeq = new HashMap<>();
 
     public CausalNode(NodeConfig config, StateStore store, SendTracker sends) {
         this.config = config;
@@ -120,7 +138,7 @@ public final class CausalNode implements DeliveryProtocol {
         }
 
         enqueue(c, new Held(r.offset(), r.clock() == null ? new Clock() : r.clock().copy(),
-                r.key(), r.value(), r.timestamp()));
+                r.senderId(), r.senderSeq(), r.key(), r.value(), r.timestamp()));
         notePosition(c, r.offset() + 1);
         return cascade();
     }
@@ -152,6 +170,9 @@ public final class CausalNode implements DeliveryProtocol {
                     q.headIndex++;
                     putQueueMeta(c, q);
                     advanceFrontier(c, h.offset());
+                    if (h.senderId() != null) {
+                        noteDeliveredSeq(c, h.senderId(), h.senderSeq(), h.offset());
+                    }
                     out.add(new Delivery(c, h.offset(), h.key(), h.value(), h.timestamp()));
                     changed = true;
                 }
@@ -178,29 +199,100 @@ public final class CausalNode implements DeliveryProtocol {
             if (!config.consumed().contains(ch)) return; // ignore branch
             if (frontierOf(ch) < off) blocked[0] = true;
         });
+        if (blocked[0]) return false;
+        deps.forEachSeq((key, seq) -> {
+            if (blocked[0]) return;
+            Channel ch = key.channel();
+            if (ch.equals(c)) return; // own-channel: FIFO satisfies or self-cycle
+            if (!config.consumed().contains(ch)) return; // ignore branch
+            SeqMark mark = seqMark(ch, key.sender());
+            if (mark == null || mark.seq() < seq) blocked[0] = true;
+        });
         return !blocked[0];
     }
 
     // ------------------------------------------------------------------ stamp path
 
     @Override
-    public Clock stampForSend(Channel destination) {
+    public SendStamp prepareSend(Channel destination) {
+        if (destination == null) throw new NullPointerException(
+                "destination: sequence claims are per channel, so the host partitions before stamping");
         foldAcks();
-        // A null destination (the Streams adapter, where the sink partitioner runs after
-        // stamping) waits for everything — conservative and sound.
-        sends.awaitQuiescence(destination == null ? Set.of() : Set.of(destination));
-        foldAcks();
+
         Clock stamp = new Clock();
         frontier.forEach(stamp::advanceTo);
         channelClocks.values().forEach(stamp::mergeMax);
         stamp.mergeMax(carriedAncestry);
         stamp.mergeMax(ownOutputs);
-        return stamp;
+        normalize(stamp);
+
+        // Claim own unacknowledged sends in sequence space — no waiting. Acknowledged sends
+        // are already covered by ownOutputs in offset space (per-channel ack order matches
+        // send order, so the acked prefix's last offset dominates every acked send).
+        for (Map.Entry<Channel, Long> e : sendSeq.entrySet()) {
+            Channel c = e.getKey();
+            long issued = e.getValue();
+            if (issued > ackedSeq.getOrDefault(c, Clock.NOTHING)) {
+                stamp.advanceSeq(c, config.senderId(), issued);
+            }
+        }
+
+        long seq = sendSeq.getOrDefault(destination, Clock.NOTHING) + 1;
+        sendSeq.put(destination, seq);
+        store.put(PREFIX_SEND_SEQ + destination.key(), longBytes(seq));
+        return new SendStamp(stamp, config.senderId(), seq);
+    }
+
+    /**
+     * Rewrites resolvable sequence claims into offset claims: a claim this node can vouch for
+     * (it delivered the sender's record at or past the claimed sequence) becomes a claim on
+     * the delivered record's offset — at or above the claimed record's own offset, an
+     * over-claim at worst, delay-only and therefore sound. Echoes of this node's own claims
+     * are dropped: the fresh self-claims and ownOutputs subsume them.
+     */
+    private void normalize(Clock stamp) {
+        List<Clock.SeqKey> subsumed = new ArrayList<>();
+        Map<Clock.SeqKey, Long> upgrades = new HashMap<>();
+        stamp.forEachSeq((key, seq) -> {
+            if (key.sender().equals(config.senderId())) {
+                long acked = ackedSeq.getOrDefault(key.channel(), Clock.NOTHING);
+                if (seq <= acked) {
+                    upgrades.put(key, ownOutputs.get(key.channel()));
+                } else {
+                    subsumed.add(key); // the fresh self-claim added afterwards dominates it
+                }
+                return;
+            }
+            SeqMark mark = seqMark(key.channel(), key.sender());
+            if (mark != null && mark.seq() >= seq) {
+                upgrades.put(key, mark.offset());
+            }
+        });
+        upgrades.forEach(stamp::normalizeSeq);
+        subsumed.forEach(stamp::removeSeq);
     }
 
     private void foldAcks() {
         for (SendTracker.Ack a : sends.drainAcks()) {
             ownOutputs.advanceTo(a.channel(), a.offset());
+            ackedSeq.merge(a.channel(), ackedSeq.getOrDefault(a.channel(), Clock.NOTHING) + 1, Math::max);
+        }
+    }
+
+    private SeqMark seqMark(Channel c, UUID sender) {
+        Map<UUID, SeqMark> m = deliveredSeq.get(c);
+        return m == null ? null : m.get(sender);
+    }
+
+    private void noteDeliveredSeq(Channel c, UUID sender, long seq, long offset) {
+        Map<UUID, SeqMark> m = deliveredSeq.computeIfAbsent(c, k -> new HashMap<>());
+        SeqMark cur = m.get(sender);
+        if (cur == null || seq > cur.seq()) {
+            m.put(sender, new SeqMark(seq, offset));
+            ByteBuffer b = ByteBuffer.allocate(16);
+            b.putLong(seq);
+            b.putLong(offset);
+            store.put(PREFIX_DELIVERED_SEQ + c.key() + "/" + sender, b.array());
         }
     }
 
@@ -291,6 +383,20 @@ public final class CausalNode implements DeliveryProtocol {
                 frontier.put(Channel.fromKey(k.substring(PREFIX_FRONTIER.length())), bytesLong(v)));
         store.forEachPrefix(PREFIX_CHANNEL_CLOCK, (k, v) ->
                 channelClocks.put(Channel.fromKey(k.substring(PREFIX_CHANNEL_CLOCK.length())), Clock.deserialize(v)));
+        store.forEachPrefix(PREFIX_SEND_SEQ, (k, v) ->
+                sendSeq.put(Channel.fromKey(k.substring(PREFIX_SEND_SEQ.length())), bytesLong(v)));
+        // Every committed send is appended and acknowledged (EOS commit awaits sends), so the
+        // restored counters are the acked watermark; end-offset seeding covers their offsets.
+        ackedSeq.putAll(sendSeq);
+        store.forEachPrefix(PREFIX_DELIVERED_SEQ, (k, v) -> {
+            String rest = k.substring(PREFIX_DELIVERED_SEQ.length());
+            int slash = rest.lastIndexOf('/');
+            Channel c = Channel.fromKey(rest.substring(0, slash));
+            UUID sender = UUID.fromString(rest.substring(slash + 1));
+            ByteBuffer b = ByteBuffer.wrap(v);
+            deliveredSeq.computeIfAbsent(c, x -> new HashMap<>())
+                    .put(sender, new SeqMark(b.getLong(), b.getLong()));
+        });
 
         // Hold queues: meta gives [head, tail); entries restore in index order.
         Map<Channel, TreeMap<Long, Held>> loose = new HashMap<>();
@@ -352,6 +458,12 @@ public final class CausalNode implements DeliveryProtocol {
             store.delete(PREFIX_FRONTIER + gone.key());
             store.delete(PREFIX_CHANNEL_CLOCK + gone.key());
             store.delete(PREFIX_QUEUE + gone.key() + "/m");
+            Map<UUID, SeqMark> goneMarks = deliveredSeq.remove(gone);
+            if (goneMarks != null) {
+                for (UUID sender : goneMarks.keySet()) {
+                    store.delete(PREFIX_DELIVERED_SEQ + gone.key() + "/" + sender);
+                }
+            }
             putClock(KEY_CARRIED, carriedAncestry);
         }
 
@@ -416,9 +528,14 @@ public final class CausalNode implements DeliveryProtocol {
         byte[] clock = h.clock().serialize();
         int keyLen = h.key() == null ? -1 : h.key().length;
         int valLen = h.value() == null ? -1 : h.value().length;
-        ByteBuffer b = ByteBuffer.allocate(8 + 8 + 4 + clock.length + 4 + Math.max(keyLen, 0) + 4 + Math.max(valLen, 0));
+        ByteBuffer b = ByteBuffer.allocate(8 + 8 + 1 + 16 + 8 + 4 + clock.length
+                + 4 + Math.max(keyLen, 0) + 4 + Math.max(valLen, 0));
         b.putLong(h.offset());
         b.putLong(h.timestamp());
+        b.put((byte) (h.senderId() == null ? 0 : 1));
+        b.putLong(h.senderId() == null ? 0 : h.senderId().getMostSignificantBits());
+        b.putLong(h.senderId() == null ? 0 : h.senderId().getLeastSignificantBits());
+        b.putLong(h.senderSeq());
         b.putInt(clock.length);
         b.put(clock);
         b.putInt(keyLen);
@@ -432,6 +549,10 @@ public final class CausalNode implements DeliveryProtocol {
         ByteBuffer b = ByteBuffer.wrap(bytes);
         long offset = b.getLong();
         long timestamp = b.getLong();
+        boolean tagged = b.get() != 0;
+        long msb = b.getLong();
+        long lsb = b.getLong();
+        long seq = b.getLong();
         byte[] clock = new byte[b.getInt()];
         b.get(clock);
         int keyLen = b.getInt();
@@ -440,6 +561,7 @@ public final class CausalNode implements DeliveryProtocol {
         int valLen = b.getInt();
         byte[] value = valLen < 0 ? null : new byte[valLen];
         if (valLen > 0) b.get(value);
-        return new Held(offset, Clock.deserialize(clock), key, value, timestamp);
+        return new Held(offset, Clock.deserialize(clock),
+                tagged ? new UUID(msb, lsb) : null, tagged ? seq : -1, key, value, timestamp);
     }
 }

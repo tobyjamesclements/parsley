@@ -30,8 +30,13 @@ final class SimBroker {
 
     enum Kind { BUSINESS, MARKER, ABORTED }
 
-    /** One slot in a partition log. {@code recordId} is the oracle's id, -1 for non-business. */
-    record Entry(Kind kind, long recordId, Clock clock, byte[] key, byte[] value, long timestamp) {
+    /**
+     * One slot in a partition log. {@code recordId} is the oracle's id, -1 for non-business;
+     * {@code senderId}/{@code senderSeq} are the sender tag (null / -1 for untagged
+     * producers and non-business entries).
+     */
+    record Entry(Kind kind, long recordId, Clock clock, java.util.UUID senderId, long senderSeq,
+                 byte[] key, byte[] value, long timestamp) {
         boolean fetchable() {
             return kind == Kind.BUSINESS;
         }
@@ -75,7 +80,7 @@ final class SimBroker {
     /** Appends one commit/abort marker to each of the given partitions. */
     void appendMarkers(Set<Channel> touched) {
         for (Channel c : touched) {
-            append(c, new Entry(Kind.MARKER, -1, null, null, null, -1));
+            append(c, new Entry(Kind.MARKER, -1, null, null, -1, null, null, -1));
         }
     }
 
@@ -87,7 +92,7 @@ final class SimBroker {
     void markAborted(Channel c, long offset) {
         List<Entry> log = log(c);
         Entry e = log.get((int) offset);
-        log.set((int) offset, new Entry(Kind.ABORTED, -1, null, null, null, -1));
+        log.set((int) offset, new Entry(Kind.ABORTED, -1, null, null, -1, null, null, -1));
         if (e.kind() == Kind.MARKER) throw new IllegalStateException("aborting a marker");
     }
 

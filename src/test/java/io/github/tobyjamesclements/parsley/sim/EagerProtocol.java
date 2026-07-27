@@ -5,9 +5,11 @@ import io.github.tobyjamesclements.parsley.core.Clock;
 import io.github.tobyjamesclements.parsley.core.Delivery;
 import io.github.tobyjamesclements.parsley.core.DeliveryProtocol;
 import io.github.tobyjamesclements.parsley.core.InboundRecord;
+import io.github.tobyjamesclements.parsley.core.SendStamp;
 
 import java.util.List;
 import java.util.Map;
+import java.util.UUID;
 
 /**
  * A deliberately broken protocol: delivers every business record the moment it arrives,
@@ -16,7 +18,10 @@ import java.util.Map;
  */
 final class EagerProtocol implements DeliveryProtocol {
 
+    private static final UUID SENDER = UUID.nameUUIDFromBytes("eager".getBytes());
+
     private final Clock delivered = new Clock();
+    private long seq = -1;
 
     @Override
     public List<Delivery> onRecord(InboundRecord r) {
@@ -30,8 +35,8 @@ final class EagerProtocol implements DeliveryProtocol {
     }
 
     @Override
-    public Clock stampForSend(Channel destination) {
-        return delivered.copy();
+    public SendStamp prepareSend(Channel destination) {
+        return new SendStamp(delivered.copy(), SENDER, ++seq);
     }
 
     @Override

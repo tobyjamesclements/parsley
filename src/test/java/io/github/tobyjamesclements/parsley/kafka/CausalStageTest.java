@@ -48,16 +48,13 @@ class CausalStageTest {
             "t2", new TopicIds.Resolved(T2, 1),
             "t3", new TopicIds.Resolved(T3, 1)));
 
-    /** No producer exists under TTD; sends are synchronous and never pending. */
+    /** No producer exists under TTD; acknowledgements never arrive and nothing needs them. */
     private static final CausalStage.SendTrackers NO_TRACKING = (clientId, ids, sinks) ->
             new SendTracker() {
                 @Override
                 public List<Ack> drainAcks() {
                     return List.of();
                 }
-
-                @Override
-                public void awaitQuiescence(Set<Channel> except) {}
 
                 @Override
                 public Map<Channel, Long> endOffsets(Set<UUID> sinkTopics) {

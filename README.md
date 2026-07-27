@@ -21,8 +21,10 @@ channels to fixpoint.
 
 Outbound records carry a single header, `parsley-clock` — a vector clock folded from the
 frontier, the per-channel advertised clocks, ancestry carried across scope changes, and the
-node's own acknowledged sends. Stamping happens at one site, after a crossing wait that
-guarantees a stamp never under-claims the node's own outputs.
+node's own sends. Stamping happens at one site and never blocks: a node claims its own
+in-flight sends in its own send-sequence space (assigned synchronously), and receivers resolve
+those claims from the sender tag each record carries — acknowledged sends upgrade to offset
+claims.
 
 Kafka's non-density under exactly-once — transaction markers and aborted records occupy
 offsets a `read_committed` consumer never returns — is repaired at receive time by seeding and
@@ -53,7 +55,7 @@ mvn verify
 ## Using it
 
 A stage declares sources, an ordinary Streams `Processor`, and sinks; the runtime enforces
-`exactly_once_v2` and wires acknowledgement capture, position capture, and topic identity:
+`exactly_once_v2` and wires position capture and topic identity:
 
 ```java
 CausalStage<String, String, String, String> stage =
@@ -98,8 +100,11 @@ The verification obligations the test suite enforces are catalogued in
 
 - One causal stage per Streams topology; the protocol core itself has no such limit.
 - Non-Parsley headers on held records are not carried through delivery.
-- The Streams adapter's crossing wait conservatively awaits all pending sends, because the
-  sink partitioner runs after stamping.
+- The Streams adapter runs without an acknowledgement feed (own-output claims stay in
+  sequence space), because Streams attributes producer acknowledgements per thread rather
+  than per task.
+- Sequence claims carry a late-joiner caveat: consumers joining at the log end should
+  baseline at the last stable offset (see the liveness page).
 - Clock truncation ships as a verified hook (`truncate` below a globally stable bound); the
   coordination protocol that computes such a bound is not included.
 - Correctness under a live broker's rebalances and task migration is exercised only by the

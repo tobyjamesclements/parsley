@@ -8,6 +8,8 @@ import java.util.UUID;
  * stage).
  *
  * @param nodeId stable identifier for logs and diagnostics
+ * @param senderId stable identity for this node's sequence claims; must survive restarts (a
+ *     changed sender identity orphans the claims of the previous one)
  * @param consumed the channels this node consumes (its declared input topics at its own task
  *     partition)
  * @param sinkTopics the topic UUIDs this node may produce to
@@ -18,12 +20,14 @@ import java.util.UUID;
  */
 public record NodeConfig(
         String nodeId,
+        UUID senderId,
         Set<Channel> consumed,
         Set<UUID> sinkTopics,
         int taskPartition,
         int maxHeldPerChannel) {
 
     public NodeConfig {
+        if (senderId == null) throw new NullPointerException("senderId");
         consumed = Set.copyOf(consumed);
         sinkTopics = Set.copyOf(sinkTopics);
         if (maxHeldPerChannel < 1) throw new IllegalArgumentException("maxHeldPerChannel " + maxHeldPerChannel);

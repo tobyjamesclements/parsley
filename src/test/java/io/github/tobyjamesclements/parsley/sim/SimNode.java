@@ -47,7 +47,14 @@ final class SimNode {
         this.config = config;
         this.behavior = behavior;
         this.protocolFactory = protocolFactory;
-        this.sends = new SimSendTracker(world.broker);
+        this.sends = new SimSendTracker(world.broker, world.dropAcks);
+    }
+
+    /** Joins at the current log end on every consumed channel (a `latest` consumer). */
+    void joinAtLatest() {
+        for (Channel c : config.consumed()) {
+            positions.put(c, world.broker.endOffset(c));
+        }
     }
 
     /** (Re)constructs the protocol from committed state, as a process start does. */
@@ -95,7 +102,8 @@ final class SimNode {
         if (off < 0) throw new IllegalStateException(name + ": no fetchable record on " + c);
         SimBroker.Entry e = world.broker.entry(c, off);
         InboundRecord inbound = new InboundRecord(
-                c, off, e.clock() == null ? null : e.clock().copy(), e.key(), e.value(), e.timestamp());
+                c, off, e.clock() == null ? null : e.clock().copy(),
+                e.senderId(), e.senderSeq(), e.key(), e.value(), e.timestamp());
         boolean business = e.kind() == SimBroker.Kind.BUSINESS;
         transactionalStep(c, off + 1, crash, () -> {
             List<Delivery> out = protocol.onRecord(inbound);
@@ -154,14 +162,15 @@ final class SimNode {
         }
     }
 
-    /** Called by behaviors: forward one business record, stamped by the protocol. */
+    /** Called by behaviors: forward one business record, stamped and tagged by the protocol. */
     void sendBusiness(String topic, byte[] key, byte[] value, long timestamp) {
         Channel dest = world.routeByKey(topic, key);
-        Clock stamp = protocol.stampForSend(dest);
+        var stamp = protocol.prepareSend(dest);
         long offset = world.broker.endOffset(dest);
         long id = world.oracle.emitted(name, dest, offset);
-        long assigned = world.broker.append(dest,
-                new SimBroker.Entry(SimBroker.Kind.BUSINESS, id, stamp, key, value, timestamp));
+        long assigned = world.broker.append(dest, new SimBroker.Entry(
+                SimBroker.Kind.BUSINESS, id, stamp.clock(), stamp.senderId(), stamp.senderSeq(),
+                key, value, timestamp));
         if (assigned != offset) throw new IllegalStateException("offset race in single-threaded sim");
         sends.sent(dest, offset);
         touchedThisStep.add(dest);

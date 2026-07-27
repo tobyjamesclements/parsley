@@ -13,15 +13,16 @@ host, the simulator, which is the primary correctness gate
 | Type | Role |
 |---|---|
 | `Channel`, `Clock` | `(topicId, partition)` identity; vector clocks with max-merge, dominance, restriction, truncation, and a sorted, versioned wire form |
-| `DeliveryProtocol` | The host-facing surface: `onRecord`, `positionAdvance`, `stampForSend`, `pauseWanted`, `resumePositions`, `truncate` |
+| `DeliveryProtocol` | The host-facing surface: `onRecord`, `positionAdvance`, `prepareSend`, `pauseWanted`, `resumePositions`, `truncate` |
 | `CausalNode` | The implementation: gate, hold queues, density adaptation, stamp, rescope, restore |
 | `StateStore` (SPI) | Keyed bytes, transactional with delivery — the host commits it atomically with consumed offsets and sends |
-| `SendTracker` (SPI) | Acknowledgements of own sends, the crossing wait, and sink end offsets |
+| `SendTracker` (SPI) | Acknowledgements of own sends (offset upgrades) and sink end offsets |
 | `InboundRecord`, `Delivery` | The envelope in (bytes, coordinate, clock), the release out (in causal order) |
 
 The host contract, in one paragraph: feed records per channel in offset order through
-`onRecord`; report consumer position advances through `positionAdvance`; stamp every outbound
-send with `stampForSend`; process the returned `Delivery` list in order; commit the store, the
+`onRecord`; report consumer position advances through `positionAdvance`; stamp and tag every
+outbound send with `prepareSend` (against its concrete destination channel — the host
+partitions before stamping); process the returned `Delivery` list in order; commit the store, the
 consumed offsets, and the sends atomically (EOS); honour `pauseWanted` for backpressure.
 Indications are pulled — deliveries come back as ordered return values — because both Kafka
 Streams processing and the simulator are synchronous.
@@ -48,11 +49,17 @@ escape the claim:
 | ownOutputs | The node's own acknowledged sends | Own outputs carry no order across partitions and sink topics |
 
 The broker performs the sender's clock increment (offset assignment), learned asynchronously
-from acknowledgements. Before stamping, the node folds every pending acknowledgement and
-performs the **crossing wait**: quiescence of unacknowledged own sends to channels other than
-the destination. Same-channel sends need no claim — per-channel FIFO delivers them in order
-everywhere. An observed send failure or a deadline fails the task; a stamp that might
-under-claim the node's own outputs must die with its transaction.
+from acknowledgements — but the stamping path never waits for it. Clocks carry a second claim
+kind, **sequence claims**: `(channel, sender, seq)` claims every record the sender sent to
+that channel up to its per-channel send sequence, assigned synchronously at
+`prepareSend`. Every outbound record carries its sender tag, and a receiver resolves a
+sequence claim the moment it has delivered that sender's record at or past the claimed
+sequence (per-partition send order equals offset order under EOS, so FIFO delivery decides it
+with one delivered-sequence mark per channel and sender). Acknowledged sends upgrade to offset
+claims; resolvable sequence claims in folded custody normalise to offset claims at the
+stamping site. A failed send cannot orphan a claim: the claiming record and the claimed send
+share a transaction, so they abort together. Same-channel sends need no claim at all —
+per-channel FIFO delivers them in order everywhere.
 
 `ownOutputs` lives in memory only. At init it is seeded from every declared sink's end offset
 — an over-claim on real appended offsets, delay-only and therefore sound — which dominates
@@ -86,8 +93,7 @@ stamping site, with an unnamed forward fanning out to every sink and a named for
 sink topic name.
 
 `CausalStreams.start` supplies the production wiring: it enforces `exactly_once_v2` and
-`read_committed`, registers the producer interceptor that captures acknowledgements (the
-own-outputs feed), installs a client supplier whose main consumers record their post-poll
+`read_committed`, installs a client supplier whose main consumers record their post-poll
 positions into a thread-local (the `positionAdvance` feed — `position()` read on the polling
 thread is the only sound source; see
 [liveness](../foundations/liveness.md#position-advance-bridging)), and resolves topic identity
@@ -95,5 +101,6 @@ and sink end offsets through an admin client. `TopicIds` and the send-tracker fa
 injectable seams, which is how the adapter runs under `TopologyTestDriver` without a broker.
 
 Current adapter limits: one causal stage per topology (the core has no such limit),
-non-Parsley headers on held records are not carried through delivery, and the crossing wait
-conservatively awaits all pending sends because the sink partitioner runs after stamping.
+non-Parsley headers on held records are not carried through delivery, and the adapter runs
+without an acknowledgement feed (own outputs stay in sequence space — see the stamp section —
+because Streams attributes producer acknowledgements per thread, not per task).

@@ -37,6 +37,7 @@ final class SimWorld {
     private final Map<UUID, String> topicNames = new HashMap<>();
 
     private int crashBudget;
+    boolean dropAcks;
     private boolean allowTaskFailures;
     private final List<String> taskFailures = new ArrayList<>();
     private long stepsTaken;
@@ -61,6 +62,12 @@ final class SimWorld {
         return this;
     }
 
+    /** Never deliver producer acknowledgements: own-output ordering must ride sequence claims. */
+    SimWorld dropAcks() {
+        this.dropAcks = true;
+        return this;
+    }
+
     SimWorld allowTaskFailures() {
         this.allowTaskFailures = true;
         return this;
@@ -75,7 +82,8 @@ final class SimWorld {
         }
         Set<UUID> sinks = new HashSet<>();
         for (String t : sinkTopics) sinks.add(broker.topicId(t));
-        return new NodeConfig(name, consumed, sinks, taskPartition, 64);
+        UUID senderId = UUID.nameUUIDFromBytes(("sender:" + name).getBytes());
+        return new NodeConfig(name, senderId, consumed, sinks, taskPartition, 64);
     }
 
     /** Adds a causal node consuming the given (topic, partition) channels. */
@@ -84,6 +92,18 @@ final class SimWorld {
         NodeConfig config = config(name, taskPartition, inputTopicPartitions, sinkTopics);
         SimNode n = new SimNode(name, this, config, behavior, factory);
         nodes.add(n);
+        n.start();
+        return n;
+    }
+
+    /** Adds a causal node joining at the current log end (a `latest` consumer). */
+    SimNode nodeAtLatest(String name, int taskPartition, List<String> inputTopicPartitions,
+                         List<String> sinkTopics, SimBehavior behavior,
+                         BiFunction<NodeConfig, SimNode, DeliveryProtocol> factory) {
+        NodeConfig config = config(name, taskPartition, inputTopicPartitions, sinkTopics);
+        SimNode n = new SimNode(name, this, config, behavior, factory);
+        nodes.add(n);
+        n.joinAtLatest();
         n.start();
         return n;
     }

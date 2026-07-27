@@ -59,9 +59,8 @@ exact bytes it claims.
 
 ## What the runtime wires for you
 
-`CausalStreams.start` registers a producer interceptor (acknowledgement capture for the
-own-outputs clock and the crossing wait), installs a client supplier that records consumer
-positions after each poll (the liveness signal — see
+`CausalStreams.start` installs a client supplier that records consumer positions after each
+poll (the liveness signal — see
 [liveness](../foundations/liveness.md#position-advance-bridging)), and resolves topic identity
 and sink end offsets through an admin client built from the same properties. A declared sink
 must exist before the application starts: init fails loudly rather than run with own-output
@@ -75,8 +74,8 @@ claims silently off.
 - **A blocked head blocks its channel** (head-of-line blocking, by design). If a producer
   stamps claims that are far ahead of what its consumers can fetch, convoying on that channel
   is the expected symptom.
-- **Fail closed**: a corrupt clock header, an observed send failure during the crossing wait,
-  or an unresolvable sink fails the task. The transaction aborts, and the retry refetches.
+- **Fail closed**: a corrupt clock header or an unresolvable sink fails the task; a failed
+  send aborts with its transaction, taking every claim on it along. The retry refetches.
 - **Testing your stage**: `TopologyTestDriver` works without a broker by injecting the two
   seams — fixed `TopicIds` and a no-op send tracker. See `CausalStageTest` in the repository
   for the pattern.

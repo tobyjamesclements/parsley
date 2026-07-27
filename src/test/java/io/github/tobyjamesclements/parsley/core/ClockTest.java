@@ -73,6 +73,29 @@ class ClockTest {
         assertEquals(2, r.get(C2));
     }
 
+    /** Sequence claims round-trip, merge as max per (channel, sender), and normalise away. */
+    @Test
+    void sequenceClaimsRoundTripAndNormalize() {
+        UUID sender = UUID.nameUUIDFromBytes("s1".getBytes());
+        Clock k = new Clock();
+        k.advanceTo(C1, 10);
+        k.advanceSeq(C2, sender, 4);
+        Clock back = Clock.deserialize(k.serialize());
+        assertEquals(k, back);
+        assertEquals(4, back.getSeq(new Clock.SeqKey(C2, sender)));
+
+        Clock other = new Clock();
+        other.advanceSeq(C2, sender, 2);
+        other.advanceSeq(C1, sender, 7);
+        k.mergeMax(other);
+        assertEquals(4, k.getSeq(new Clock.SeqKey(C2, sender)), "max-merge keeps the higher seq");
+        assertEquals(7, k.getSeq(new Clock.SeqKey(C1, sender)));
+
+        k.normalizeSeq(new Clock.SeqKey(C2, sender), 42);
+        assertEquals(Clock.NOTHING, k.getSeq(new Clock.SeqKey(C2, sender)));
+        assertEquals(42, k.get(C2), "normalisation upgrades the claim to offset space");
+    }
+
     /** A present but undecodable clock throws — it must never read as empty. */
     @Test
     void corruptBytesFailClosed() {

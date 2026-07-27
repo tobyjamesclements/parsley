@@ -73,6 +73,26 @@ A wait cycle would therefore require some record to be appended strictly before 
 wait graph is acyclic; a blocked record always has a wait chain ending at a record that is
 deliverable now, or at a skip the next position advance reveals.
 
+## The sequence-claim caveat: late joiners
+
+Sequence claims (a sender's synchronous claims over its own sends — see
+[the stamp](../design/architecture.md#the-stamp)) add one wait kind the append-order argument
+does not cover on its own: a sequence claim is resolved by *delivering* the claimed sender's
+record, and a consumer whose baseline sits **above** that record can never deliver it. For a
+from-the-start or committed-position consumer this cannot happen — the claimed record is
+always at or above its position. The exposed case is a **late joiner** baselining at the log
+end while a sequence-form claim still circulates in some custody clock and the claiming
+sender never writes that partition again. The verification suite demonstrates the wedge
+directly (an at-latest joiner against a never-normalised claim) and its absence for a
+from-the-start joiner.
+
+Operationally: baseline late joiners at the last stable offset (which
+`read_committed` offset listing provides) rather than the log end — every claim minted by an
+open transaction sits above the LSO, so it resolves — and treat a held record whose sequence
+claim names a sender with no post-baseline presence as the detectable signature of the
+remaining window (a retired sender's claim frozen in custody). Offset claims have no such
+window, which is why acknowledged sends upgrade to them.
+
 ## What enforces this empirically
 
 The argument above is prose; the simulator makes it load-bearing. Every simulated world must
