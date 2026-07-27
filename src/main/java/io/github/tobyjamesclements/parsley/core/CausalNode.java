@@ -217,6 +217,12 @@ public final class CausalNode implements DeliveryProtocol {
     public SendStamp prepareSend(Channel destination) {
         if (destination == null) throw new NullPointerException(
                 "destination: sequence claims are per channel, so the host partitions before stamping");
+        if (!config.sinkTopics().contains(destination.topicId())) {
+            // Fail closed: an undeclared sink's offsets are never end-offset seeded at init,
+            // so a restart would silently under-claim the node's own outputs there.
+            throw new IllegalStateException(config.nodeId() + ": send to undeclared sink topic "
+                    + destination.topicId());
+        }
         foldAcks();
 
         Clock stamp = new Clock();

@@ -58,12 +58,17 @@ class CausalNodeSimTest {
         assertTrue(stats.holds > 0, "the gate never held a record: the race never occurred");
     }
 
-    /** V1 transitively: claims must survive a hop through a node that does not consume t1. */
+    /**
+     * V1 transitively: claims must survive a hop through a node that does not consume t1 —
+     * including across that hop's crashes, which exercise the restore of the advertised
+     * clocks (custody lost at restore would silently under-claim every later stamp).
+     */
     @Test
     void transitiveClaimsThroughBlindHop() {
         Stats stats = new Stats();
         for (long seed = 0; seed < SEEDS; seed++) {
-            SimWorld w = new SimWorld(seed).topic("t1", 1).topic("t2", 1).topic("t3", 1);
+            SimWorld w = new SimWorld(seed).topic("t1", 1).topic("t2", 1).topic("t3", 1)
+                    .crashBudget(3);
             w.node("A", 0, List.of("t1:0"), List.of("t2"), SimBehavior.forwardTo("t2"), real());
             w.node("B", 0, List.of("t2:0"), List.of("t3"), SimBehavior.forwardTo("t3"), real());
             w.node("C", 0, List.of("t3:0", "t1:0"), List.of(), SimBehavior.consumeOnly(), real());
@@ -74,6 +79,7 @@ class CausalNodeSimTest {
         }
         assertTrue(stats.deliveries > 0, "no deliveries at all");
         assertTrue(stats.holds > 0, "the gate never held a record: transitive claims untested");
+        assertTrue(stats.crashes > 0, "no crash was ever injected on the blind hop");
     }
 
     /** V1 at the edge: a sequential plain producer's cross-topic sends stay ordered. */
@@ -416,7 +422,13 @@ class CausalNodeSimTest {
         n.store.commit();
     }
 
-    /** Scope shrink: a dropped input's causal past must survive in later stamps (carried). */
+    /**
+     * Scope shrink: a dropped input's causal past must survive in later stamps (carried
+     * ancestry). The consumer that makes the carried claims load-bearing joins fresh after
+     * the shrink: it must order A's post-shrink outputs after their t1b causes, which only
+     * the carried entries still claim. Afterwards, retention truncates the carried ancestry
+     * itself (the one stamp-side clock the plain truncation scenarios leave empty).
+     */
     @Test
     void rescopeShrinkCarriesAncestry() {
         Stats stats = new Stats();
@@ -424,7 +436,6 @@ class CausalNodeSimTest {
             SimWorld w = new SimWorld(seed).topic("t1a", 1).topic("t1b", 1).topic("t2", 1);
             SimNode a = w.node("A", 0, List.of("t1a:0", "t1b:0"), List.of("t2"),
                     SimBehavior.forwardTo("t2"), real());
-            w.node("C", 0, List.of("t2:0", "t1b:0"), List.of(), SimBehavior.consumeOnly(), real());
             EdgeProducer p = w.producer("edge");
             for (int i = 0; i < 6; i++) {
                 p.produce(i % 2 == 0 ? "t1a" : "t1b", 0, "k" + i, "v" + i, 1000 + i);
@@ -433,11 +444,62 @@ class CausalNodeSimTest {
 
             // Drop t1b from A's inputs across a restart; its delivered past must be carried.
             a.crashIdle();
-            a.reconfigure(w.config("A", 0, List.of("t1a:0"), List.of("t2")));
+            a.reconfigure(w.config("A", 0, List.of("t1a:0"), List.of("t2")),
+                    SimBehavior.forwardTo("t2"));
             a.start();
+
+            // A fresh consumer of t2 and t1b: A's post-shrink outputs reach it claiming the
+            // t1b past through carried ancestry alone.
+            w.node("C2", 0, List.of("t2:0", "t1b:0"), List.of(), SimBehavior.consumeOnly(), real());
 
             EdgeProducer p2 = w.producer("edge2");
             for (int i = 0; i < 6; i++) p2.produce("t1a", 0, "k2" + i, "v2" + i, 3000 + i);
+            w.run(BUDGET);
+            stats.add(w);
+
+            assertTrue(!a.protocol.stampChannels().isEmpty(),
+                    "carried ancestry never populated: the shrink carried nothing");
+            for (String t : List.of("t1a", "t1b", "t2")) {
+                w.advanceLogStart(t, 0, w.broker.endOffset(w.broker.channel(t, 0)));
+            }
+            truncateFromLogStarts(a);
+            assertTrue(a.protocol.stampChannels().isEmpty(),
+                    "carried ancestry survived a full-retention truncation");
+        }
+        assertTrue(stats.deliveries > 0, "no deliveries at all");
+        assertTrue(stats.holds > 0, "the carried claims never actually gated anything");
+    }
+
+    /**
+     * Scope growth seeded at carried knowledge: a former sink becomes an input. The heal
+     * folds the sink's end offsets into carried ancestry, the growth seed starts the frontier
+     * there, and the resume position skips the node's own outputs — it must not re-deliver
+     * what its stamps already claimed.
+     */
+    @Test
+    void rescopeGrowthSeedsAtCarriedKnowledge() {
+        Stats stats = new Stats();
+        for (long seed = 0; seed < SEEDS; seed++) {
+            SimWorld w = new SimWorld(seed).topic("t1a", 1).topic("t1b", 1).topic("t2", 1);
+            SimNode a = w.node("A", 0, List.of("t1a:0"), List.of("t1b"),
+                    SimBehavior.forwardTo("t1b"), real());
+            w.node("C", 0, List.of("t2:0", "t1b:0"), List.of(), SimBehavior.consumeOnly(), real());
+            EdgeProducer p = w.producer("edge");
+            for (int i = 0; i < 6; i++) p.produce("t1a", 0, "k" + i, "v" + i, 1000 + i);
+            w.run(BUDGET);
+
+            // t1b flips from sink to input across a restart.
+            a.crashIdle();
+            a.reconfigure(w.config("A", 0, List.of("t1a:0", "t1b:0"), List.of("t2")),
+                    SimBehavior.forwardTo("t2"));
+            a.start();
+            assertTrue(a.position(w.broker.channel("t1b", 0)) > 0,
+                    "growth did not seed at carried knowledge: A would re-deliver its own outputs");
+
+            EdgeProducer p2 = w.producer("edge2");
+            for (int i = 0; i < 6; i++) {
+                p2.produce(i % 2 == 0 ? "t1a" : "t1b", 0, "k2" + i, "v2" + i, 3000 + i);
+            }
             w.run(BUDGET);
             stats.add(w);
         }

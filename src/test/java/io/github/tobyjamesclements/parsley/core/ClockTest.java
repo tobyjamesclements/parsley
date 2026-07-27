@@ -62,17 +62,6 @@ class ClockTest {
         assertEquals(5, k.get(C2), "entry above/outside the bound survives");
     }
 
-    /** Restriction keeps only the given channels. */
-    @Test
-    void restrictionFilters() {
-        Clock k = new Clock();
-        k.advanceTo(C1, 1);
-        k.advanceTo(C2, 2);
-        Clock r = k.restrictedTo(Set.of(C2));
-        assertEquals(Clock.NOTHING, r.get(C1));
-        assertEquals(2, r.get(C2));
-    }
-
     /** Sequence claims round-trip, merge as max per (channel, sender), and normalise away. */
     @Test
     void sequenceClaimsRoundTripAndNormalize() {

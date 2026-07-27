@@ -26,7 +26,7 @@ final class SimNode {
 
     final String name;
     private final SimWorld world;
-    private final SimBehavior behavior;
+    private SimBehavior behavior;
     private final BiFunction<NodeConfig, SimNode, DeliveryProtocol> protocolFactory;
 
     NodeConfig config;
@@ -74,9 +74,10 @@ final class SimNode {
         }
     }
 
-    void reconfigure(NodeConfig newConfig) {
+    void reconfigure(NodeConfig newConfig, SimBehavior newBehavior) {
         if (up) throw new IllegalStateException("reconfigure while up");
         this.config = newConfig;
+        this.behavior = newBehavior;
     }
 
     void crashIdle() {
@@ -169,6 +170,14 @@ final class SimNode {
     void sendBusiness(String topic, byte[] key, byte[] value, long timestamp) {
         Channel dest = world.routeByKey(topic, key);
         var stamp = protocol.prepareSend(dest);
+        // Every offset claim must name a really-appended offset — the property the liveness
+        // argument rests on (an unappended claim can wedge a gate forever).
+        stamp.clock().forEach((ch, off) -> {
+            if (off >= world.broker.endOffset(ch)) {
+                throw new AssertionError(name + ": stamp claims unappended offset " + ch + "@" + off
+                        + " (end " + world.broker.endOffset(ch) + ")");
+            }
+        });
         long offset = world.broker.endOffset(dest);
         long id = world.oracle.emitted(name, dest, offset);
         long assigned = world.broker.append(dest, new SimBroker.Entry(

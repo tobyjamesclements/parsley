@@ -57,10 +57,6 @@ public final class Clock {
         return entries.isEmpty() && seqEntries.isEmpty();
     }
 
-    public int width() {
-        return entries.size() + seqEntries.size();
-    }
-
     /** Raises the watermark for {@code c} to at least {@code offset}; never lowers it. */
     public void advanceTo(Channel c, long offset) {
         if (offset < 0) throw new IllegalArgumentException("offset " + offset);
@@ -94,23 +90,6 @@ public final class Clock {
             if (get(e.getKey()) < e.getValue()) return false;
         }
         return true;
-    }
-
-    /** A new clock containing only entries (of both kinds) whose channel is in {@code channels}. */
-    public Clock restrictedTo(Set<Channel> channels) {
-        Clock k = new Clock();
-        entries.forEach((c, o) -> {
-            if (channels.contains(c)) k.entries.put(c, o);
-        });
-        seqEntries.forEach((key, s) -> {
-            if (channels.contains(key.channel())) k.seqEntries.put(key, s);
-        });
-        return k;
-    }
-
-    public void remove(Channel c) {
-        entries.remove(c);
-        seqEntries.keySet().removeIf(k -> k.channel().equals(c));
     }
 
     /** Replaces one sequence claim with an offset claim (normalisation). */

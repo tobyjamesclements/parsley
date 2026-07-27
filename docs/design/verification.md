@@ -80,6 +80,17 @@ cycles, truncation mid-history, log-start stability (full-retention truncation e
 stamp-side clocks, and a from-earliest joiner arriving after truncation), scope shrink across
 a restart, and the wide soak combining most of the above.
 
+## Mutation testing
+
+PIT runs over the core (`mvn org.pitest:pitest-maven:mutationCoverage`, serial mutants so a
+timeout cannot masquerade as a kill). The delivery gate itself has no surviving mutants; the
+survivors that remain cluster where randomized schedules structurally under-discriminate —
+persistence (killed instead by the directed `CausalNodePersistenceTest`), redundancy-masked
+paths (removing acknowledgement folding survives because sequence claims soundly cover it),
+and operational transitions like rescope, which dedicated scenarios now drive. One survivor
+class is accepted by design: mutants whose only effect is degrading an optimisation the
+protocol does not rely on for safety.
+
 ## What the simulator does not cover
 
 Real broker behaviour outside the model: rebalances and task migration, consumer-group
