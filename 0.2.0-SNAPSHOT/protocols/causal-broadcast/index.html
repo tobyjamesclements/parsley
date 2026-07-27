@@ -1339,12 +1339,13 @@ outbound record at a single site. The module box:</p>
 <a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a>                                                 crossing wait and the acknowledgement fold
 <a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a>            receive(message) → Outcome           the BSS receive: gate → deliver-or-hold →
 <a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a>                                                 cascade; the returned ordered list is the
-<a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a>                                                 deliver indication, in pull style
-<a id="__codelineno-0-8" name="__codelineno-0-8" href="#__codelineno-0-8"></a>queries:    completeness()                       the delivered/advertised boundary
-<a id="__codelineno-0-9" name="__codelineno-0-9" href="#__codelineno-0-9"></a>            frontier()                           the contiguous delivered clock
-<a id="__codelineno-0-10" name="__codelineno-0-10" href="#__codelineno-0-10"></a>properties: causal delivery (a record reaches the delegate only after every consumed dependency
-<a id="__codelineno-0-11" name="__codelineno-0-11" href="#__codelineno-0-11"></a>            has been locally, contiguously delivered; no timeout, no eviction); stamp transitive
-<a id="__codelineno-0-12" name="__codelineno-0-12" href="#__codelineno-0-12"></a>            completeness; unconditional merge (stamp side)
+<a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a>                                                 deliver indication, in pull style, paired with
+<a id="__codelineno-0-8" name="__codelineno-0-8" href="#__codelineno-0-8"></a>                                                 the consumed-channel advance signal
+<a id="__codelineno-0-9" name="__codelineno-0-9" href="#__codelineno-0-9"></a>queries:    vectorTime()                         this node&#39;s VT(p), the outbound stamp
+<a id="__codelineno-0-10" name="__codelineno-0-10" href="#__codelineno-0-10"></a>            frontier()                           the contiguous delivered clock
+<a id="__codelineno-0-11" name="__codelineno-0-11" href="#__codelineno-0-11"></a>properties: causal delivery (a record reaches the delegate only after every consumed dependency
+<a id="__codelineno-0-12" name="__codelineno-0-12" href="#__codelineno-0-12"></a>            has been locally, contiguously delivered; no timeout, no eviction); stamp transitive
+<a id="__codelineno-0-13" name="__codelineno-0-13" href="#__codelineno-0-13"></a>            completeness; unconditional merge (stamp side)
 </code></pre></div>
 <p>There is no eviction, no buffer limit, and no timeout: a record whose dependencies are not yet
 satisfied stays buffered until they are, however long that takes — the buffer is a
@@ -1376,14 +1377,14 @@ changelog-backed state store, so it spills to disk rather than growing in memory
 <a id="__codelineno-1-24" name="__codelineno-1-24" href="#__codelineno-1-24"></a>broadcast(record):                                    # single stamping site: forwards + null msgs
 <a id="__codelineno-1-25" name="__codelineno-1-25" href="#__codelineno-1-25"></a>    channels.awaitOwnOutputQuiescence(except)         # crossing wait; throws rather than stamp
 <a id="__codelineno-1-26" name="__codelineno-1-26" href="#__codelineno-1-26"></a>    channels.foldAcknowledgedOutputs()                # then fold the acks the wait settled
-<a id="__codelineno-1-27" name="__codelineno-1-27" href="#__codelineno-1-27"></a>    return record + header(channels.stamp())          # completeness ∪ ownOutputs ∪ highestDelivered
+<a id="__codelineno-1-27" name="__codelineno-1-27" href="#__codelineno-1-27"></a>    return record + header(channels.vectorTime())     # VT(m) := VT(p) at send
 </code></pre></div>
 <p>The gate is <code>frontier.dominates(consumedDependencies)</code>: this node's own contiguous delivered
 frontier must cover every depended coordinate this node consumes; every other coordinate is
-ignored, unconditionally. <code>completeness()</code> — the frontier max-merged with the carried ancestry
-and every input channel's advertised clock — feeds the <em>outbound stamp</em>, which carries transitive
-ancestry downstream where each receiver's own gate verifies it locally; it never releases anything
-here. See the <a href="../../foundations/delivery-gate/">delivery gate</a> for why local delivery is required
+ignored, unconditionally. <code>vectorTime()</code> — the frontier max-merged with the carried ancestry,
+every input channel's advertised clock, the own-outputs clock and the above-gap deliveries — is the
+<em>outbound stamp</em>, which carries transitive ancestry downstream where each receiver's own gate
+verifies it locally; it never releases anything here. See the <a href="../../foundations/delivery-gate/">delivery gate</a> for why local delivery is required
 and why ignoring unconsumed coordinates is sound.</p>
 <h2 id="key-state">Key state</h2>
 <table>
@@ -1464,7 +1465,7 @@ through <code>broadcast()</code>, so the two cannot diverge. In order:</p>
 <li>Fold pending producer acknowledgements into the own-outputs clock. The fold runs after the wait
    so it captures exactly the acknowledgements the wait was blocking for. Folding first would drain
    only the acks that already existed and miss those, under-claiming the stamp.</li>
-<li>Attach the stamp: <code>completeness ∪ ownOutputs ∪ highestDelivered</code>, the node's total knowledge.
+<li>Attach the stamp: <code>vectorTime()</code>, the node's total knowledge.
    The merge is unconditional over everything the node has delivered, carried, or heard
    advertised — including coordinates on channels it does not consume, which is the custody chain
    the ignore branch's soundness stands on.</li>

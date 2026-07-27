@@ -1287,8 +1287,8 @@ metric. This is the <a href="../../foundations/delivery-gate/">delivery gate</a>
 Kafka's record-size limit (<code>message.max.bytes</code> and <code>max.request.size</code>, around 1 MB by default), and
 there is no separate header budget.</p>
 <ul>
-<li><strong>Automatic Streams stamping</strong> stamps the node's completeness frontier, which is bounded by the
-  number of source topics in the subtopology, at one partition per topic per task. This stays small
+<li><strong>Automatic Streams stamping</strong> stamps the node's vector time, which is bounded by the number of
+  source and sink topics in the subtopology, at one partition per topic per task. This stays small
   under normal topologies.</li>
 <li><strong><code>CausalClock.fromRecord(trigger)</code></strong> carries only the partitions the upstream producer
   depended on. This is the recommended way to propagate causal context from a plain Kafka client.</li>
@@ -1308,7 +1308,7 @@ nothing must not parse quietly.</p>
 <p>The always-on startup checks, run once per task at init:</p>
 <ul>
 <li>The causal input topics must share a partition count. Unequal counts make co-partitioning
-  impossible, so a task would evaluate the completeness frontier against an incomplete partition
+  impossible, so a task would evaluate the causal frontier against an incomplete partition
   set.</li>
 <li>A <code>CausalTopology</code>-assembled stage's sink topics must each have at least as many partitions as
   the widest source. Protocol markers route to the forwarding task's own partition, so a narrower

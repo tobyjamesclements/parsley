@@ -1292,8 +1292,8 @@ attached snapshot, that is, until it has delivered everything the sender had obs
 <p>Parsley's clocks are the indexed-by-channel variant. The keys are <code>(topicId, partition)</code>
 coordinates and the values are broker offsets, because in Kafka a partition, not a process, is the
 unit that carries a total order. A clock plays two roles, distinguished in the literature as VT(m)
-and VT(p): the dependencies attached to a record, and the accumulated frontier a node has
-delivered. <code>CausalClock</code> is the public facade over both.</p>
+and VT(p): the dependencies attached to a record, and the knowledge a node accumulates as it
+delivers. <code>CausalClock</code> is the public facade over both.</p>
 <h2 id="how-traditional-algorithms-work">How traditional algorithms work</h2>
 <p>Systems such as COPS<sup id="fnref:cops"><a class="footnote-ref" href="#fn:cops">3</a></sup> and classical causal-broadcast protocols build on vector clocks under
 one shared assumption: every node that must enforce causal ordering receives every write. In COPS,
@@ -1344,7 +1344,7 @@ guarantees of the one below it and offers a clean assumption set to the one abov
   assumption, not by restoring total visibility but by making the delivery predicate sound without
   it, with the two-branch <a href="../delivery-gate/">delivery gate</a>.</li>
 <li>The <strong><a href="../../protocols/gossip/">gossip module</a></strong> is a liveness layer: it keeps clock progress
-  observable through processors that produce no business output, so downstream completeness never
+  observable through processors that produce no business output, so downstream progress never
   stalls on a quiet path. It can never release a record the gate would hold.</li>
 </ul>
 <p>The <a href="../../protocols/">protocols overview</a> gives the module boxes and the class map;

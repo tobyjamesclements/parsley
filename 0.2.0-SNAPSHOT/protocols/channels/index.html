@@ -1396,9 +1396,9 @@ style the source Javadoc uses:</p>
 <a id="__codelineno-0-15" name="__codelineno-0-15" href="#__codelineno-0-15"></a>                                                     input set at init (scope changes)
 <a id="__codelineno-0-16" name="__codelineno-0-16" href="#__codelineno-0-16"></a>queries:    frontier()                               the contiguous delivered clock — the gate&#39;s view
 <a id="__codelineno-0-17" name="__codelineno-0-17" href="#__codelineno-0-17"></a>            ownOutputs()                             the node&#39;s own acknowledged output positions
-<a id="__codelineno-0-18" name="__codelineno-0-18" href="#__codelineno-0-18"></a>            stamp()                                  the outbound vector timestamp:
-<a id="__codelineno-0-19" name="__codelineno-0-19" href="#__codelineno-0-19"></a>                                                     completeness ∪ ownOutputs ∪ highestDelivered
-<a id="__codelineno-0-20" name="__codelineno-0-20" href="#__codelineno-0-20"></a>            completeness()                           frontier ∪ carried ancestry ∪ channel clocks
+<a id="__codelineno-0-18" name="__codelineno-0-18" href="#__codelineno-0-18"></a>            vectorTime()                             this node&#39;s VT(p), the outbound vector
+<a id="__codelineno-0-19" name="__codelineno-0-19" href="#__codelineno-0-19"></a>                                                     timestamp: frontier ∪ carried ancestry ∪
+<a id="__codelineno-0-20" name="__codelineno-0-20" href="#__codelineno-0-20"></a>                                                     channel clocks ∪ ownOutputs ∪ highestDelivered
 <a id="__codelineno-0-21" name="__codelineno-0-21" href="#__codelineno-0-21"></a>            alreadyDelivered(topicId, partition,     membership in the delivered set — the receive
 <a id="__codelineno-0-22" name="__codelineno-0-22" href="#__codelineno-0-22"></a>                offset)                              path&#39;s replay-skip guard
 <a id="__codelineno-0-23" name="__codelineno-0-23" href="#__codelineno-0-23"></a>properties: per-producer stamp monotonicity; contiguous frontier; normalised clocks;
@@ -1443,7 +1443,7 @@ mechanisms repair this:</p>
 </ul>
 <h3 id="the-two-projections-of-the-delivered-vector">The two projections of the delivered vector</h3>
 <p>Because delivery within a partition is not head-of-line blocking, the classical delivered vector
-VT(p) splits into two projections, and the module maintains both:</p>
+splits into two projections, and the module maintains both:</p>
 <ul>
 <li>The <strong>frontier</strong> — the contiguous projection, "everything up to n delivered". This is the only
   clock the delivery gate ever consults.</li>
@@ -1456,8 +1456,8 @@ VT(p) splits into two projections, and the module maintains both:</p>
   above-frontier delivered offsets and commit in the same EOS transaction as the frontier blob,
   so a restart reconstructs it losslessly.</li>
 </ul>
-<p>The split is Kafka-specific; the literature's VT(p) assumes FIFO delivery and needs only one
-projection.</p>
+<p>The split is Kafka-specific; the literature's delivered vector assumes FIFO delivery per sender,
+under which the two projections coincide and one suffices.</p>
 <h2 id="own-outputs">Own outputs</h2>
 <p>In Birman–Schiper–Stephenson the sender increments its own vector entry at send. Here the
 increment is the broker's offset assignment, which the producer learns asynchronously from
@@ -1510,7 +1510,7 @@ carried may be skipped, but never dropped and never re-entered.</strong> Four ca
    merging forever. Dropping it instead would under-claim the stamp and let a third party reorder
    an effect against its retired-channel cause.</li>
 <li><strong>Growth.</strong> An input declared now but not previously seeds its frontier at the node's carried
-   value for that coordinate (read from <code>stamp()</code>, so a former own sink skips what its stamps
+   value for that coordinate (read from <code>vectorTime()</code>, so a former own sink skips what its stamps
    already claimed), never at log-start: skip what you already ignored. An operator who wants the
    skipped history processed performs a full reset. The receive path's <code>alreadyDelivered</code> guard
    skips the re-fetched prefix during the replay (counted by the <code>replays-skipped</code> sensor).</li>

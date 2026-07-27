@@ -184,7 +184,7 @@ name&rarr;UUID map — the broker-free path for tests or callers that already ho
 <div class="col-second even-row-color method-summary-table method-summary-table-tab1 method-summary-table-tab4"><code><a href="#isNullMessage(org.apache.kafka.clients.consumer.ConsumerRecord)" class="member-name-link">isNullMessage</a><wbr>(org.apache.kafka.clients.consumer.ConsumerRecord&lt;?,<wbr>?&gt;&nbsp;record)</code></div>
 <div class="col-last even-row-color method-summary-table method-summary-table-tab1 method-summary-table-tab4">
 <div class="block">Returns <code>true</code> if <code>record</code> is a Parsley null message: a metadata record carrying a
-node's completeness frontier but no business payload.</div>
+node's vector time but no business payload.</div>
 </div>
 <div class="col-first odd-row-color method-summary-table method-summary-table-tab2 method-summary-table-tab4"><code><a href="CausalClock.html" title="class in io.github.tobyjamesclements.parsley">CausalClock</a></code></div>
 <div class="col-second odd-row-color method-summary-table method-summary-table-tab2 method-summary-table-tab4"><code><a href="#merge(io.github.tobyjamesclements.parsley.CausalClock)" class="member-name-link">merge</a><wbr>(<a href="CausalClock.html" title="class in io.github.tobyjamesclements.parsley">CausalClock</a>&nbsp;other)</code></div>
@@ -354,7 +354,7 @@ clock <code>record</code> carried, and, for a business record, <code>record</cod
 safe. Requires a resolver, bound via <a href="#using(java.util.Properties)"><code>using(Properties)</code></a> or <a href="#builder(java.util.Properties)"><code>builder(Properties)</code></a>
 or carried through a prior <code>observe</code> / <code>merge</code>.
 
-<p>A null message (see <a href="#isNullMessage(org.apache.kafka.clients.consumer.ConsumerRecord)"><code>isNullMessage(ConsumerRecord)</code></a>) folds in only the completeness
+<p>A null message (see <a href="#isNullMessage(org.apache.kafka.clients.consumer.ConsumerRecord)"><code>isNullMessage(ConsumerRecord)</code></a>) folds in only the vector time
 frontier it carries, never its own offset, since it delivers no business payload and gating on
 that offset would stall downstream on a record that carries nothing.</div>
 <dl class="notes">
@@ -378,7 +378,7 @@ that offset would stall downstream on a record that carries nothing.</div>
 <div class="horizontal-scroll">
 <div class="member-signature"><span class="modifiers">public static</span>&nbsp;<span class="return-type">boolean</span>&nbsp;<span class="element-name">isNullMessage</span><wbr><span class="parameters">(org.apache.kafka.clients.consumer.ConsumerRecord&lt;?,<wbr>?&gt;&nbsp;record)</span></div>
 <div class="block">Returns <code>true</code> if <code>record</code> is a Parsley null message: a metadata record carrying a
-node's completeness frontier but no business payload. A plain Kafka client should still
+node's vector time but no business payload. A plain Kafka client should still
 <a href="#observe(org.apache.kafka.clients.consumer.ConsumerRecord)"><code>observe</code></a> one, so its frontier advances across a service that
 emitted only null messages, but must not surface it as a business record. The usual loop is to
 <code>observe</code> every record and <code>continue</code> past those this flags.</div>

@@ -1312,9 +1312,14 @@ but waits for a change that touches the name.</p>
 </thead>
 <tbody>
 <tr>
+<td><code>vectorTime()</code></td>
+<td>Rule 1, exact match, adopted: it is VT(p), the process's vector time, and <code>broadcast()</code> attaches it as VT(m) := VT(p) at send. One read serves both the outbound stamp and the relay comparison because those are the two literature roles of the same value</td>
+<td>Mattern 1988, "Virtual Time and Global States"; Fidge 1988</td>
+</tr>
+<tr>
 <td><code>completeness()</code></td>
-<td>Coinage with an exact match; adopt <code>vectorTime()</code> when next touched. It is VT(p) computed under partial visibility</td>
-<td>Mattern 1988, "Virtual Time and Global States"</td>
+<td>Dissolved rather than renamed. It named <code>frontier ⊔ carriedAncestry ⊔ advertised</code>, a value with one caller besides the stamp, and no term may be borrowed for it: "causal past" (Schwarz–Mattern 1994) includes all preceding events where this excludes own outputs, and EIT / "channel time" is a <strong>minimum</strong> over input channels where this is a max-merge, the opposite lattice operation. Its body folded into <code>vectorTime()</code>, and its one caller — the heartbeat — now reads the <code>advancedConsumedChannel</code> signal, the rule it was expressing by diffing a clock</td>
+<td>Near misses refused: Schwarz–Mattern 1994; Bryant 1977, Chandy–Misra 1979</td>
 </tr>
 <tr>
 <td><code>ParsleyBufferStore</code> / "held records"</td>
@@ -1333,8 +1338,8 @@ but waits for a change that touches the name.</p>
 </tr>
 <tr>
 <td><code>frontier</code></td>
-<td>Grounded; kept with citation</td>
-<td>Frontier of a consistent cut (Mattern; also Naiad/Timely Dataflow)</td>
+<td>Grounded; kept with citation, and the construction is exact: a cut is specified by the tuple of last-event indices per process, its last-event set is the cut's frontier, and the method returns that tuple, per channel. The cut is consistent because the gate maintains it as one (I1). The gate must read this prefix-closed cut rather than <code>vectorTime()</code> because vector-clock entries carry prefix claims, and a delivery above a gap proves nothing about the gap. Kafka-specific delta, stated on <code>bridge</code> and <code>seedIfFirstSeen</code>: consumer-skipped markers and pre-baseline history fold into the cut as non-events nothing can causally depend on</td>
+<td>Cut, frontier of a cut, and cut consistency in vector-clock terms (Babaoğlu–Marzullo 1993; cuts and consistency Mattern 1988); the advancing-boundary role (Naiad/Timely Dataflow)</td>
 </tr>
 <tr>
 <td><code>dominates()</code></td>
@@ -1353,7 +1358,7 @@ but waits for a change that touches the name.</p>
 </tr>
 <tr>
 <td><code>highestDelivered</code></td>
-<td>Coinage kept, symmetric with <code>highestReceived</code>: the max projection of the delivered vector VT(p). The split from the contiguous frontier is Kafka-specific (rule 3), stated on the field</td>
+<td>Coinage kept, symmetric with <code>highestReceived</code>: the max projection of this node's delivered set, a component <code>vectorTime()</code> merges rather than VT(p) itself. The split from the contiguous frontier is Kafka-specific (rule 3), stated on the field</td>
 <td>—</td>
 </tr>
 <tr>
@@ -1377,13 +1382,13 @@ but waits for a change that touches the name.</p>
 <td>Vector clock (Fidge 1988; Mattern 1988); the Javadoc states the VT(m)/VT(p) duality and the indexed-by-channel variant</td>
 </tr>
 <tr>
-<td><code>ParsleyGossip.Reception</code></td>
-<td>Coinage: the (deliveries, advancedConsumedChannel) pair the gossip receive returns; no single academic term. The deliveries list is the module-style deliver indication in pull form, stated in Javadoc</td>
+<td><code>ParsleyGossip.Reception</code>, <code>ParsleyCausalBroadcast.Outcome</code></td>
+<td>Coinage: the (deliveries, advancedConsumedChannel) pair each receive returns; no single academic term. The deliveries list is the module-style deliver indication in pull form, stated in Javadoc</td>
 <td>—</td>
 </tr>
 <tr>
 <td><code>advancedConsumedChannel</code></td>
-<td>Descriptive coinage for the CMB input-channel-clock advance. Only an advance on a consumed channel obliges a relay, so a name claiming any new knowledge over-claims: custody advances knowledge without obliging anything. Near-miss borrowings ("EIT advance", "channel time") refused</td>
+<td>Descriptive coinage for the CMB input-channel-clock advance, carried by both receives: a null message's carried clock on L3, a seed or bridge on the business path. Only an advance on a consumed channel obliges an advertisement, so a name claiming any new knowledge over-claims: custody advances knowledge without obliging anything. Near-miss borrowings ("EIT advance", "channel time") refused</td>
 <td>CMB trigger discipline (Bryant 1977; Chandy–Misra 1979: null-message sends obliged by input channel clock advances); null-message reduction precedent DeVries 1990; cycle-echo precedent Cai–Turner 1990 and Wood–Turner PADS '94 — CMB cited on the class</td>
 </tr>
 <tr>

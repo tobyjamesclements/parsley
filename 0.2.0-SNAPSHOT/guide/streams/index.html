@@ -1360,7 +1360,7 @@ built. Parsley can check one part at startup; see <a href="#startup-validation">
 partition count on each, so that a single task instance owns the complete partition set for a related
 group. The key is the unit of causal locality: causally related records must share a key so they land
 on the same partition on every topic. Parsley evaluates dependencies only against the partitions a
-task owns, so a topology that is not partitioned this way evaluates the completeness frontier against
+task owns, so a topology that is not partitioned this way evaluates the causal frontier against
 an incomplete partition set. An advanced user may partition by a coarser function of the key with a
 custom <code>StreamPartitioner</code>, for example by hashing a <code>tenant</code> prefix out of a <code>tenant:order</code> key, as
 long as that partitioner reads the key rather than the value.</p>
@@ -1386,7 +1386,7 @@ records selectively to some named children and not others, the children that rec
 separately receive a null message, so keep a causal processor's forwarding uniform across its children.</p>
 <p><strong>Null-message-bearing topics must not be compacted.</strong> A protocol null message has a null value, so log
 compaction treats it as a tombstone and may delete it before a slow consumer reads it, dropping the
-completeness signal. Set <code>cleanup.policy=delete</code> on any sink topic of a causal stage. <code>CausalTopology</code>
+causal-progress signal. Set <code>cleanup.policy=delete</code> on any sink topic of a causal stage. <code>CausalTopology</code>
 checks this for you at startup; see <a href="#startup-validation">Startup validation</a>.</p>
 <p><strong>Consumed dependencies gate; the rest are ignored.</strong> A node is
 delivered a record only once its own contiguous frontier — the positions it has itself delivered —
