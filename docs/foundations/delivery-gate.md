@@ -1,109 +1,75 @@
 # The delivery gate
 
-The delivery gate is the predicate Parsley delivers under. It is the point where the
-[causal-broadcast module](../protocols/causal-broadcast.md) decides whether a received record may
-reach the user's processor now or must wait. The whole guarantee rests on it being sound without
-the total-visibility assumption that [classical algorithms](causal-consistency.md) require.
+The gate is the predicate that decides whether a received record may reach the user processor.
+Everything else in the core exists to make this predicate sound and its inputs cheap.
 
-> A dependency on a coordinate this node consumes is satisfied only by this node's own contiguous
-> delivered frontier reaching it. A dependency on any other coordinate is ignored, unconditionally.
+## Head-of-line blocking
 
-Evaluated over the normalised dependency clock (the record's exact self-cycle stripped), the gate
-is two branches, and it is total:
+Each consumed channel has a FIFO hold queue. Records enter in receive order — which is offset
+order, because Kafka delivers a partition in order — and only the **head** of each queue is
+ever evaluated. A blocked head blocks its channel; it never blocks other channels.
 
-```
-for each coordinate c in deps:
-    if consumed(c):  require frontier(c) >= deps[c]   # local delivery, never hearsay
-    else:            ignore                            # counted by a metric, never a failure
-```
+This is the fresh start's central structural choice. Delivering out of order within a
+partition would buy lower convoying latency, at the price of a second projection of the
+delivered vector, an index of ahead-of-frontier deliveries, and a gap-absorption walk on every
+advance. Head-of-line blocking collapses all of that: one frontier per channel, one queue per
+channel, and a gate that only ever looks at heads. Convoying within a channel is the accepted
+cost.
 
-`consumed(c)` means an input channel of this task, on a partition this task owns. A record carrying
-no clock at all (a plain Kafka producer on a consumed topic) is causally minimal by definition, a
-producer that stamps nothing claims nothing, and is deliverable immediately.
+Two consequences fall out for free:
 
-## Why local delivery is required
+- **Per-channel FIFO delivery** at every consumer, so a record never needs to claim its own
+  channel's earlier offsets — same-channel order is structural.
+- **The frontier is contiguous by construction**: it advances only when the head delivers, or
+  when a known-clean prefix folds in (seed, bridge, position advance).
 
-This is the Birman–Schiper–Stephenson CBCAST delivery condition,[^bss] instantiated on Kafka's own
-`(topicId, partition)` coordinates. In BSS a process delivers a message only once *its own*
-delivered vector covers the message's timestamp. The condition is over the receiver's own delivery
-history, never over what a peer reports having delivered.
+## The predicate
 
-The distinction matters because the guarantee Parsley makes is about the *order this node's
-processor observes events in*, not merely about whether an event exists somewhere. "K reached
-offset k" being true at some peer does not mean this node's delegate has processed K@k yet. If a
-claim carried on a sibling channel could satisfy the gate, a record caused by K@k could reach the
-delegate before K@k itself does on this node's own K subscription, an effect delivered before its
-cause to a processor subscribed to both. So the gate checks the local frontier exclusively, and an
-advertised claim is only ever *carried* in the outbound stamp, for downstream nodes to verify
-against their own frontiers in turn.
+A record `m` arrives on consumed channel `c` carrying dependency clock `D` (absent header
+means the empty clock — a producer that stamps nothing claims nothing). When `m` reaches the
+head of `c`'s queue:
 
-## Why ignoring unconsumed coordinates is sound
+1. **Normalise**: ignore `D`'s entry for `c` itself. At or above `m`'s own offset it is a
+   self-cycle (an event cannot precede itself); below it, per-channel FIFO has already
+   delivered everything the entry could name. Either way the entry carries no information the
+   structure has not already enforced.
+2. **Restrict**: keep only entries whose channel this node consumes. Unconsumed entries are
+   **ignored** — the ignore branch, justified below.
+3. **Gate**: `m` is deliverable iff the frontier dominates the restricted clock pointwise —
+   for every entry `(ch, n)`, `frontier[ch] ≥ n`.
 
-A producer stamps a clock spanning everything it consumed, so a record routinely names coordinates
-a narrower downstream consumer has no subscription to. Ignoring them is sound, not vacuous
-satisfaction, and the argument is a transitivity theorem over two invariants of the stamp:
+Delivering `m` advances `frontier[c]` to `m`'s offset and re-evaluates every other head; the
+cascade runs to fixpoint. A delivery can release a chain of held heads across channels in one
+step.
 
-- **Transitive completeness.** Every node's outbound stamp dominates the dependency clocks *and the
-  coordinates* of every event it has delivered.
-- **Unconditional merge.** Every clock fold, the channel folds, the advertised state, every
-  outbound stamp, merges the entire inbound clock, including coordinates on channels the node does
-  not consume. The gate may ignore; the merge may not.
+Fail closed: a present but undecodable clock header fails the task. Treating it as empty would
+silently drop the sender's claims and let an effect precede its cause; failing leaves the
+offset uncommitted for a retried, successful decode.
 
-Together these mean that for any causal chain m₁ → m₂ → m₃ that passes through an unconsumed middle
-channel, every intermediate node delivered its predecessor and merged unconditionally, so m₃'s
-clock claims m₁ *directly*. An unconsumed entry in a clock only ever proxies ancestry the same
-clock already states explicitly, and ignoring it loses no ordering observable at this node. Each
-ignore is counted by the `deps-out-of-scope-ignored` metric. These two properties are the invariants
-[I2 and I9](invariants.md).
+## Why the ignore branch is sound
 
-The ignore branch is also what makes joins coordination-free. A new application's stamps routinely
-circulate coordinates that incumbent nodes have no channel for, and the gate ignores those soundly
-instead of treating them as an error, so joining a running topology needs no admission, no barrier,
-and no membership (see [Streams integration](../guide/streams.md#evolving-a-running-topology)).
+The gate ignores dependency entries on channels the node does not consume. This is safe only
+if every *consumed* ancestor hiding behind an unconsumed coordinate is claimed **directly** in
+the same clock — otherwise ignoring would open a hole exactly one hop wide.
 
-## The outbound stamp
+That directness is an induction along business paths. Consider any real ancestor `a` of `m`
+with `a` consumed here. Causality flows only through business records, so there is a chain
+`a → x₁ → … → m` of deliveries and emissions. The node that delivered `a` has `a` in its
+frontier; its stamp folds the frontier, so `x₁`'s clock claims `a`. Every downstream node
+folds the **full** clock of every record it receives into its per-channel advertised clocks,
+and its own stamps fold those — so the claim on `a` survives every hop to `m`'s clock,
+whether or not any intermediate node consumed `a`'s channel. The restricted comparison in step
+3 therefore sees `a` directly, and the unconsumed entries it skipped carried nothing the gate
+needed.
 
-The gate consults the local frontier; the stamp is what carries a node's knowledge onward. The
-stamp attached to every outbound record, business forwards and protocol null messages alike, through
-one stamping site, is the node's vector time, the max-merge of:
+This is also why the per-channel advertised clocks fold at **receive** rather than delivery:
+the stamp of any output emitted after delivering a record must dominate that record's entire
+clock, and folding early only ever over-claims real appended offsets — a delay, never a
+reorder (see [liveness](liveness.md#why-over-claims-cannot-deadlock)).
 
-- **the contiguous frontier, the carried ancestry** from any retired channels, **and every input
-  channel's advertised clock**. This is transitive ancestry, carried downstream for
-  each receiver's own gate to verify locally.
-- **ownOutputs**: the node's own acknowledged output positions. The broker performs the sender's
-  clock increment (offset assignment), learned via producer acknowledgements, so a node's second
-  output provably claims its first, including across sink topics and partitions, which a pre-stamp
-  crossing wait covers.
-- **highestDelivered**: the max projection of the delivered set, so an output emitted from a
-  record delivered above a contiguous-frontier gap still claims that record.
+## Replays
 
-Some stamp entries deliberately over-claim: the init-time end-offset seed, an aborted transaction's
-acknowledgements, the gap offsets below an above-gap claim. Every such entry names a position at or
-below a real appended offset, so an over-claim can only *delay* downstream delivery, until the
-position is delivered or bridged, never reorder it. The gate is monotone in the dependency clock and
-frontiers advance only on physically received offsets, so raising a stamp entry can only move
-outcomes toward holding, which is fail-safe, never unsafe (invariant [I8](invariants.md)). The delay
-is unbounded if the claimed channel goes permanently silent; a record held on a dependency above its
-channel's highest received offset beyond a threshold is surfaced by the
-`records-held-above-highest-received` gauge, since that is the exact signature of a claim nothing
-received so far can satisfy.
-
-## Violations
-
-There is no path that breaks Lamport's happened-before guarantee. Delivery is unconditionally
-fail-closed: there is no eviction and no configuration that trades causal order for availability. A
-record that can be proven impossible to evaluate, an undecodable payload or dependency header, fails
-the task fast rather than being delivered out of order or dropped; the task restarts, and the record
-stays in the buffer changelog for recovery. A dependency on a coordinate this node does not consume
-is not a violation and not a failure: it falls to the gate's ignore branch, which the transitivity
-theorem above makes sound.
-
-This takes the consistency side of the trade-off described in the CAP theorem and in the
-causal-consistency literature unconditionally: Parsley has no policy knob that spends causal order
-for liveness. A genuinely stuck dependency (a lagging partition, a co-partitioning gap, a producing
-topic that was deleted) shows up as unbounded buffer growth or a fail-closed task restart, never as
-a silent reordering. See [Troubleshooting](../guide/troubleshooting.md).
-
-[^bss]: Kenneth Birman, André Schiper, and Pat Stephenson, "Lightweight Causal and Atomic Group
-    Multicast", *ACM Transactions on Computer Systems*, 1991. The ISIS system's CBCAST protocol. See
-    the [bibliography](../reference/bibliography.md).
+A received offset at or below the channel's frontier is dropped without effect. Offsets only
+reach that state through a committed delivery, a seed, or a scope-growth resume, so the drop
+is a replay guard, not a filter — under exactly-once commits it fires only when a scope change
+deliberately re-reads a prefix the node has already accounted for.

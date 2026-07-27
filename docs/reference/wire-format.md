@@ -1,182 +1,70 @@
 # Wire format
 
-This page specifies the binary layout of every header and state-store value the
-[three protocols](../protocols/index.md) read and write. It is the ground truth for anyone
-decoding a `parsley-causal-clock` header, inspecting a buffer changelog, or reasoning about the
-`"frontier"` frontier-store value.
+Byte layouts for everything Parsley writes: the one record header, and the state-store
+entries. All integers are big-endian. Layouts are versioned where they travel between
+processes; pre-1.0, versions change without compatibility aliases.
 
-All binary encodings are big-endian. All lengths are in bytes.
+## The clock
 
-## `parsley-causal-clock` header
-
-The public `CausalClock` facade and the internal `ParsleyVectorClock` (node frontier) share this
-encoding.
+The serialized form of a `Clock`, used both in the record header and inside state values.
+Entries are sorted by channel, so equal clocks are byte-identical.
 
 ```
-[version    :1]   0x01
-[count      :4]   number of entries
-per entry:
-  [topicId MSB:8]
-  [topicId LSB:8]
-  [partition  :4]
-  [offset     :8]
+byte     version        (currently 1)
+int32    entryCount
+entry × entryCount:
+    int64    topicId, most significant bits
+    int64    topicId, least significant bits
+    int32    partition
+    int64    offsetWatermark
 ```
 
-Size: `5 + 28 × n` bytes. The wire version is `0x01`, and deserialization throws `IllegalStateException` on a mismatch.
+A malformed clock — unknown version, negative fields, length mismatch — throws
+`CorruptClockException`. A present but undecodable clock always fails the task; it never reads
+as empty ([fail closed](../foundations/delivery-gate.md#the-predicate)).
 
-Entries appear in no guaranteed order: an encoder may emit them however it likes, and a decoder must not assume any ordering.
+## Record headers
 
-Topic IDs are Kafka `Uuid` values stored as two `long` fields (most-significant bits, then least-significant bits).
+| Header | Value |
+|---|---|
+| `parsley-clock` | The record's dependency clock, serialized as above. Absent means the producer claims nothing. |
 
-On a forwarded business record this header carries the producing node's **outbound stamp**
-(`ParsleyChannels.vectorTime()`: frontier ∪ carried ancestry ∪ channel clocks ∪ ownOutputs ∪
-highestDelivered), not just the record's own dependencies. The encoding is identical; only the value's meaning differs by context.
+There are no other protocol headers and no protocol records.
 
-## `_parsley_null_message` header (protocol null message)
+## State-store keys
 
-A protocol null message is a record with a null value, carrying the triggering record's key and two headers: `_parsley_null_message` (an empty-byte marker) and `parsley-causal-clock` (the emitting node's vector time, encoded exactly as above). A node emits one in place of a business record when a delivered input produced no downstream output, so causal progress still propagates through non-emitting layers. The key is informational wire content only: routing does not depend on it, because `ParsleyMarkerPartition` directs every null message to the forwarding task's own partition on each sink. Consumers identify a null message by the presence of the `_parsley_null_message` header (`CausalClock.isNullMessage`), never by its key or null value; a non-Parsley consumer sees a tombstone-shaped record and should skip it as a business record while still observing it into any frontier it maintains.
+Keys are UTF-8 strings; `<channel>` is `<topicId-uuid>:<partition>`. Values:
 
-## Buffer record (`ParsleySerializer` v3)
+| Key | Value layout |
+|---|---|
+| `scope` | `int32 channelCount`, then per channel `int64 msb, int64 lsb, int32 partition`; `int32 sinkCount`, then per sink `int64 msb, int64 lsb` |
+| `f/<channel>` | `int64` frontier offset |
+| `cc/<channel>` | A serialized clock (the channel's advertised view) |
+| `ca` | A serialized clock (carried ancestry) |
+| `q/<channel>/m` | `int64 headIndex`, `int64 tailIndex` (one past the last held entry) |
+| `q/<channel>/e/<index>` | A held record (below); `<index>` is 16 lower-case hex digits, zero-padded so lexicographic order is numeric order |
 
-The `{ns}-buffer` state store value has two layers: `StoreBackedBufferStore` prepends the buffer-admission
-time to the `ParsleySerializer`-encoded record.
+## Held record
 
-```
-[bufferedAt    :8]   wall-clock time (epoch millis) the record was admitted to the buffer
-[ParsleySerializer v3 payload, below]
-```
-
-The `ParsleySerializer` payload is what is passed to and decoded from `serialize` and `deserialize`.
-The source coordinate and dependency clock are written as typed fields rather than headers, and only
-the user's headers are carried. The key and value bytes are produced by the Serde resolved from the
-typed source topic. The payload's own `[timestamp:8]` field is the record's original Kafka timestamp,
-which is distinct from the outer `bufferedAt` and written independently of it.
-
-```
-[version       :1]   0x03
-[timestamp     :8]   the record's original Kafka timestamp (not bufferedAt above)
-[topic-len     :2]
-[topic         :topic-len]   UTF-8 source topic
-[topicId       :16]          topicId.MSB then topicId.LSB
-[partition     :4]
-[offset        :8]
-[deps-len      :4]   -1 if absent (the empty clock still encodes as 5 bytes)
-[deps          :deps-len]    parsley-causal-clock encoding
-[header-count  :4]
-per user header:
-  [key-len     :2]
-  [key         :key-len]
-  [value-len   :4]   -1 if value is null
-  [value       :value-len]
-[key-len       :4]   -1 if key is null
-[key           :key-len]
-[value-len     :4]   -1 if value is null
-[value         :value-len]
-```
-
-`ParsleyCausalBroadcast`'s startup index rebuild decodes only the outer `bufferedAt` and the `deps` field,
-through `ParsleySerializer.deserializeIndexMetadata`, and never the key or value bytes. A record whose
-user serde can no longer decode it therefore does not block restore or the drain scan — it only fails
-once actually forwarded, via `ParsleySerializer.deserialize`.
-
-## Candidate-index key
-
-The `{ns}-candidate-index` store maps coordinate+offset+recordId to an empty presence marker. The 36-byte key uses big-endian encoding throughout so that RocksDB lexicographic ordering produces a range scan for all records waiting on a given coordinate up to a given offset.
+A record held in a channel's queue persists verbatim, so a restart restores exactly what was
+fetched:
 
 ```
-[topicId MSB    :8]
-[topicId LSB    :8]
-[partition      :4]
-[requiredOffset :8]
-[recordId       :8]   buffer insertion sequence
+int64    offset
+int64    timestamp
+int32    clockLength
+bytes    clock                    (serialized clock; empty clock when the header was absent)
+int32    keyLength                (-1 = null key)
+bytes    key
+int32    valueLength              (-1 = null value)
+bytes    value
 ```
 
-## State store names and serdes
+Non-Parsley headers are not yet part of the envelope; a held record is delivered with empty
+headers. This is a known limit of the current cut.
 
-The namespace is the stage name `CausalTopology#assemble` derives (or an explicit name from
-`CausalStream#process(name, supplier)`), used internally as `ParsleyProcessorSupplier.builder(...).addBufferStore(name)`.
+## Not persisted
 
-| Store | Key serde | Value serde | Purpose |
-|---|---|---|---|
-| `{ns}-frontier` | `String` | `byte[]` | Single entry at key `"frontier"`: the whole `ParsleyFrontierState` — the node's contiguous delivered frontier clock, the per-input-channel clocks, the highest-received offsets, the carried-ancestry clock, the declared input set, the own-outputs clock, and the declared sink set (see below) |
-| `{ns}-buffer` | `Long` | `byte[]` | Insertion sequence -> `bufferedAt` + serialised `ParsleyMessage` |
-| `{ns}-candidate-index` | `byte[]` | `byte[]` (empty) | 36-byte composite key -> presence marker |
-| `{ns}-forwarded-index` | `byte[]` | `byte[]` (empty) | 28-byte `(topicId, partition, offset)` key -> presence marker: offsets forwarded ahead of the contiguous frontier |
-
-All four stores are persistent and changelog-backed. Changelog topic names follow the Kafka Streams pattern: `{applicationId}-{storeName}-changelog`.
-
-### The `{ns}-frontier` value (key `"frontier"`)
-
-`ParsleyChannels` folds its persisted structures into the single `"frontier"` value, a
-`ParsleyFrontierState` (loaded once at init, rewritten on change; the changelog dedups repeated
-puts by key per commit):
-
-```
-[version:1]
-[frontier-clock-len:4][frontier ParsleyVectorClock bytes]
-[channel-count:4]
-  per channel:
-  [topicId MSB:8][topicId LSB:8][partition:4][channel-clock-len:4][channel ParsleyVectorClock bytes]
-[highest-received-count:4]
-  per channel:
-  [topicId MSB:8][topicId LSB:8][partition:4][offset:8]
-[carried-ancestry-len:4][carried-ancestry ParsleyVectorClock bytes]
-[input-count:4]
-  per declared input:
-  [name UTF][topicId MSB:8][topicId LSB:8]
-[own-outputs-len:4][own-outputs ParsleyVectorClock bytes]
-[sink-count:4]
-  per declared sink:
-  [name UTF][topicId MSB:8][topicId LSB:8]
-```
-
-The sections, in order:
-
-- **Frontier clock** — the node's contiguous delivered frontier.
-- **Channel clocks** — per input channel `(topicId, partition)`, the dependencies advertised on it,
-  max-merged over the records and null messages received. `vectorTime()` — the max-merge of every
-  clock in this value, so a single genuine witness to a coordinate is enough — is computed from it
-  in memory.
-- **Highest-received offsets** — per input channel, the highest offset ever physically received,
-  making the bridge's skip detection exact across a restart.
-- **Carried-ancestry clock** — causal ancestry re-homed from coordinates that have left the node's
-  consumption scope; stamp-feeding state, so dropping it on restart would under-claim every
-  subsequent stamp.
-- **Declared input set** — the input topics (name → UUID) this state was written under, which is
-  what makes a scope change detectable at the next init.
-- **Own-outputs clock** — the node's own acknowledged output positions. Best-effort by design:
-  acknowledgements arriving after the transaction's last persist are missing from the committed
-  blob (state store caches flush before the producer flush completes acks), so a restored clock
-  can trail by one transaction; the init-time sink end-offset seed re-covers it.
-- **Declared sink set** — the sink topics (name → UUID) the own-outputs clock was written under,
-  which is what lets the next init heal the trailing acknowledgements of a topic that is no longer
-  a sink.
-
-The value carries a leading wire-version byte (currently `0x01`), and deserialization throws
-`IllegalStateException` on a mismatch, exactly as the `parsley-causal-clock` header does. Every
-section is always written and always read under a given version. Adding a field bumps the version
-rather than appending a trailing-optional section. There is no cross-version upgrade path before
-1.0, so a value written by an older layout (which had no version byte) is rejected at init rather
-than reinterpreted.
-
-The forwarded-offset index stays its own keyed store (`{ns}-forwarded-index`): it is growable and
-order-sensitive, so folding it into the `"frontier"` value would increase Rocks I/O.
-
-## Topic UUIDs
-
-Topic UUIDs are not derived or guessed. They are resolved from the broker through `AdminClient`. The
-processor resolves them at `init()` from the task's `appConfigs()` for every topic registered as a
-`ParsleySource` on `ParsleyProcessorSupplier.builder(...)`. If a registered topic does not exist on the
-broker, resolution fails fast with `IllegalStateException` rather than falling back to a guess.
-
-The real UUID Kafka assigned to the topic is what's used. A topic deleted and recreated with the
-same name gets a new UUID, so records stamped against the old incarnation correctly fail to satisfy
-dependencies on the new one.
-
-When building `CausalClock` explicitly at the edge, topic names are resolved to UUIDs
-internally through `CausalClock.using(props)` / `.builder(props)`, which cache each lookup.
-The UUID names a coordinate in the dependency clock.
-
-Tests without a live broker (`TopologyTestDriver`, unit tests) may use any stable `Uuid`, e.g.
-`Uuid.randomUuid()` via `CausalClock.using(Map.of(...))`, as long as the same value is used
-consistently wherever that topic's identity is referenced.
+`ownOutputs` (re-seeded from sink end offsets at every init, which dominate any persisted
+copy) and the position-known watermark (re-reported by the host's position advances). Their
+absence from the store is deliberate; see [state and recovery](../design/state.md).

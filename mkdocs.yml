@@ -1,0 +1,55 @@
+site_name: Parsley
+site_description: Causal delivery order for Kafka stream processing
+repo_url: https://github.com/tobyjamesclements/parsley
+repo_name: tobyjamesclements/parsley
+
+theme:
+  name: material
+  palette:
+    - scheme: default
+      primary: green
+      accent: light green
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
+    - scheme: slate
+      primary: green
+      accent: light green
+      toggle:
+        icon: material/brightness-4
+        name: Switch to light mode
+  features:
+    - navigation.tabs
+    - navigation.indexes
+    - navigation.top
+    - navigation.footer
+    - toc.integrate
+    - search.highlight
+    - content.code.copy
+
+markdown_extensions:
+  - attr_list
+  - admonition
+  - footnotes
+  - pymdownx.details
+  - pymdownx.highlight:
+      anchor_linenums: true
+  - pymdownx.superfences
+  - pymdownx.inlinehilite
+  - tables
+
+nav:
+  - Home: index.md
+  - Foundations:
+    - The causal model: foundations/causal-model.md
+    - The delivery gate: foundations/delivery-gate.md
+    - Liveness without gossip: foundations/liveness.md
+  - Design:
+    - Architecture: design/architecture.md
+    - State and recovery: design/state.md
+    - Verification: design/verification.md
+  - Using Parsley:
+    - Getting started: guide/getting-started.md
+    - The edge ops: guide/edge.md
+  - Reference:
+    - Wire format: reference/wire-format.md
