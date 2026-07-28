@@ -6,7 +6,8 @@ processes; pre-1.0, versions change without compatibility aliases.
 
 ## The clock
 
-The serialized form of a `Clock`, used both in the record header and inside state values.
+The serialized form of the internal vector clock, used both in the record header and inside
+state values.
 Both sections are sorted, so equal clocks are byte-identical.
 
 ```

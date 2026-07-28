@@ -73,7 +73,7 @@ class CausalNodePersistenceTest {
                 Set.of(C1, C2), Set.of(SINK), 0);
     }
 
-    private static InboundRecord record(Channel c, long offset, Clock clock, UUID sender, long seq,
+    private static InboundRecord record(Channel c, long offset, VectorClock clock, UUID sender, long seq,
                                         byte[] key, byte[] value) {
         return new InboundRecord(c, offset, clock, sender, seq, key, value, 1000);
     }
@@ -100,12 +100,12 @@ class CausalNodePersistenceTest {
         assertEquals(1, delivered.size(), "an unstamped record delivers immediately");
 
         CausalNode restarted = new CausalNode(config(), store, NO_OFFSETS);
-        Clock resolved = new Clock();
+        VectorClock resolved = new VectorClock();
         resolved.advanceSeq(C1, UPSTREAM, 5);
         assertEquals(1, restarted.onRecord(record(C2, 0, resolved, null, -1, null, null)).size(),
                 "a claim at the delivered sequence must be resolved from restored state");
 
-        Clock unresolved = new Clock();
+        VectorClock unresolved = new VectorClock();
         unresolved.advanceSeq(C1, UPSTREAM, 6);
         assertEquals(0, restarted.onRecord(record(C2, 1, unresolved, null, -1, null, null)).size(),
                 "a claim past the delivered sequence must hold");
@@ -131,7 +131,7 @@ class CausalNodePersistenceTest {
     void heldRecordsSurviveRestartVerbatim() {
         MapStore store = new MapStore();
         CausalNode first = new CausalNode(config(), store, NO_OFFSETS);
-        Clock deps = Clock.of(C1, 0);
+        VectorClock deps = VectorClock.of(C1, 0);
         assertTrue(first.onRecord(record(C2, 0, deps, UPSTREAM, 7, null, new byte[0])).isEmpty(),
                 "the record must hold until its C1 cause is delivered");
 
@@ -142,7 +142,7 @@ class CausalNodePersistenceTest {
         assertNull(held.key(), "a null key must restore as null, not empty");
         assertArrayEquals(new byte[0], held.value(), "an empty value must restore as empty, not null");
 
-        Clock resolved = new Clock();
+        VectorClock resolved = new VectorClock();
         resolved.advanceSeq(C2, UPSTREAM, 7);
         assertEquals(1, restarted.onRecord(record(C1, 1, resolved, null, -1, null, null)).size(),
                 "the restored record's sender tag must have advanced the delivered sequence");
@@ -154,7 +154,7 @@ class CausalNodePersistenceTest {
         MapStore store = new MapStore();
         CausalNode first = new CausalNode(config(), store, NO_OFFSETS);
         Channel foreign = new Channel(UUID.nameUUIDFromBytes("foreign".getBytes()), 0);
-        Clock custody = Clock.of(foreign, 41);
+        VectorClock custody = VectorClock.of(foreign, 41);
         first.onRecord(record(C1, 0, custody, null, -1, null, null));
 
         CausalNode restarted = new CausalNode(config(), store, NO_OFFSETS);

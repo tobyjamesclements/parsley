@@ -50,6 +50,6 @@ nav:
     - Verification: design/verification.md
   - Using Parsley:
     - Getting started: guide/getting-started.md
-    - The edge ops: guide/edge.md
+    - Plain clients: guide/clients.md
   - Reference:
     - Wire format: reference/wire-format.md

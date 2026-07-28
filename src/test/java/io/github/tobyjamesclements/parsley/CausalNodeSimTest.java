@@ -205,7 +205,7 @@ class CausalNodeSimTest {
 
             // Drained: every appended offset is delivered everywhere it is consumed, so the
             // current end offsets are a true global stability bound.
-            Clock stability = new Clock();
+            VectorClock stability = new VectorClock();
             for (var ch : w.broker.allChannels()) {
                 long end = w.broker.endOffset(ch);
                 if (end > 0) stability.advanceTo(ch, end - 1);

@@ -34,7 +34,7 @@ suffices.
 The adapter ([getting started](guide/getting-started.md)) hosts the core behind an ordinary
 Streams `Processor`, with one serialization point on each side, and enforces
 `exactly_once_v2`. Plain producers and consumers use the same stamps through the
-[edge ops](guide/edge.md).
+[plain-client ops](guide/clients.md).
 
 ## How it is verified
 

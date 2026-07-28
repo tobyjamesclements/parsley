@@ -14,7 +14,7 @@ final class EagerProtocol implements DeliveryProtocol {
 
     private static final UUID SENDER = UUID.nameUUIDFromBytes("eager".getBytes());
 
-    private final Clock delivered = new Clock();
+    private final VectorClock delivered = new VectorClock();
     private long seq = -1;
 
     @Override
@@ -44,5 +44,5 @@ final class EagerProtocol implements DeliveryProtocol {
     }
 
     @Override
-    public void truncate(Clock stability) {}
+    public void truncate(VectorClock stability) {}
 }

@@ -77,9 +77,9 @@ The guarantee holds under these environmental conditions:
   Parsley's state commits in the task's transaction, which is what makes crash recovery a
   pure restore.
 - **Truthful stamps between causally related topics**: every processor on a causal path
-  stamps its outputs (Parsley stages do this automatically; plain producers use the
-  [edge ops](../guide/edge.md)). An absent stamp claims nothing — safe for the record itself,
-  invisible to downstream ordering.
+  stamps its outputs (Parsley stages do this automatically; plain producers use a
+  [`Clock`](../guide/clients.md)). An absent stamp claims nothing — safe for the record
+  itself, invisible to downstream ordering.
 - **Retention covers consumer lag** on causal topics: a consumer must be able to fetch, or
   observe the skip of, every offset a claim names. An undersized retention fails loudly at
   the consumer's position reset, never silently.

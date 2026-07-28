@@ -78,6 +78,6 @@ claims silently off.
 - **Fail closed**: a corrupt clock header or an unresolvable sink fails the task; a failed
   send aborts with its transaction, taking every claim on it along. The retry refetches.
 - **Testing your stage**: build the stage normally and drive `stage.testTopology()` with
-  `TopologyTestDriver` — broker-less wiring is built in, and `CausalStage.testChannel` gives
-  the channel identities for crafting or asserting on clock headers. See `CausalStageTest`
-  in the repository for the pattern.
+  `TopologyTestDriver` — broker-less wiring is built in, so pipe records and assert on your
+  processor's outputs. Stamp presence is observable via the `CausalHeaders` name constants;
+  gating behaviour itself is Parsley's contract, verified by Parsley's own suite.

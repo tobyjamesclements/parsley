@@ -1,15 +1,15 @@
-# The edge ops
+# Plain Kafka clients
 
-Topologies rarely begin and end at Streams applications. `EdgeClock` gives plain Kafka clients
+Topologies rarely begin and end at Streams applications. `Clock` gives plain Kafka producers
 the same stamps a causal stage produces, and plain consumers need nothing at all.
 
 ## Producing with causal claims
 
-An `EdgeClock` is a running clock owned by one producing thread. Fold what you observed, fold
-your own acknowledgements, and stamp:
+A `Clock` is a running view of one producing thread's causal past. Fold what you observed,
+fold your own acknowledgements, and stamp:
 
 ```java
-EdgeClock clock = new EdgeClock(TopicIds.fromAdmin(admin));
+Clock clock = new Clock(TopicIds.fromAdmin(admin));
 
 // Anything this producer's next records causally depend on:
 for (ConsumerRecord<String, String> rec : consumer.poll(timeout)) {
@@ -36,8 +36,9 @@ producers whose ordering matters, one at a time.
 ## Consuming
 
 Plain consumers need no Parsley awareness. Business topics carry no protocol records — the
-only trace of Parsley on the wire is the `parsley-clock` header, which a consumer may read
-(`CausalHeaders.read`) or ignore.
+only trace of Parsley on the wire is a few headers (`CausalHeaders.CLOCK` and the sender tag,
+readable via `CausalHeaders.readSender` / `readSeq` for observability), which a consumer may
+ignore entirely.
 
 A plain consumer that wants causal *observation* — so that records it later produces claim
 what it read — uses `observe` as above. A plain consumer that wants causal *delivery order*

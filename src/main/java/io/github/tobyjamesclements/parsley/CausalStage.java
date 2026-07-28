@@ -148,7 +148,7 @@ public final class CausalStage<K, V, KO, VO> {
     }
 
     /** The channel {@link #testTopology()} resolves for a topic-partition. */
-    public static Channel testChannel(String topic, int partition) {
+    static Channel testChannel(String topic, int partition) {
         return new Channel(UUID.nameUUIDFromBytes(topic.getBytes()), partition);
     }
 
@@ -272,7 +272,7 @@ public final class CausalStage<K, V, KO, VO> {
                 throw new IllegalStateException("record from unexpected source "
                         + meta.topic() + ":" + meta.partition());
             }
-            Clock clock = CausalHeaders.read(r.headers());
+            VectorClock clock = CausalHeaders.read(r.headers());
             UUID sender = CausalHeaders.readSender(r.headers());
             long seq = CausalHeaders.readSeq(r.headers());
             deliverAll(node.onRecord(new InboundRecord(

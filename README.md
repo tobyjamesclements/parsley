@@ -72,7 +72,7 @@ try (CausalStreams app = CausalStreams.start(stage, props)) {
 }
 ```
 
-Plain producers stamp with `EdgeClock` — `observe` consumed records, `recordProduced` your
+Plain producers stamp with a `Clock` — `observe` consumed records, `recordProduced` your
 acknowledgements, `stamp` outbound headers. Adoption is incremental: a producer that stamps
 nothing claims nothing, so you stamp the producers whose ordering matters, one at a time,
 with no flag day.
@@ -91,7 +91,7 @@ The docs site under `docs/` (mkdocs) covers the model and the design:
   [state and recovery](docs/design/state.md), and
   [verification](docs/design/verification.md).
 - **Guide** — [getting started](docs/guide/getting-started.md) and
-  [the edge ops](docs/guide/edge.md).
+  [plain clients](docs/guide/clients.md).
 - **Reference** — [wire format](docs/reference/wire-format.md).
 
 The verification obligations the test suite enforces are catalogued in

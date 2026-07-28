@@ -33,7 +33,7 @@ final class SimBroker {
      * {@code senderId}/{@code senderSeq} are the sender tag (null / -1 for untagged
      * producers and non-business entries).
      */
-    record Entry(Kind kind, long recordId, Clock clock, java.util.UUID senderId, long senderSeq,
+    record Entry(Kind kind, long recordId, VectorClock clock, java.util.UUID senderId, long senderSeq,
                  byte[] key, byte[] value, long timestamp) {
         boolean fetchable() {
             return kind == Kind.BUSINESS;

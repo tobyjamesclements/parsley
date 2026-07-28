@@ -8,4 +8,4 @@ import java.util.UUID;
  * record. The tag is assigned synchronously at {@link DeliveryProtocol#prepareSend}, which is
  * what removes the acknowledgement wait from the stamping path.
  */
-record SendStamp(Clock clock, UUID senderId, long senderSeq) {}
+record SendStamp(VectorClock clock, UUID senderId, long senderSeq) {}

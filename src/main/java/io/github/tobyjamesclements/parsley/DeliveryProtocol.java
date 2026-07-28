@@ -53,7 +53,7 @@ interface DeliveryProtocol {
      * {@code logStart - 1} per channel (and everything, for a channel whose topic no longer
      * exists) qualifies unconditionally.
      */
-    void truncate(Clock stability);
+    void truncate(VectorClock stability);
 
     /**
      * The channels currently appearing in the stamp-side clocks (carried ancestry and the

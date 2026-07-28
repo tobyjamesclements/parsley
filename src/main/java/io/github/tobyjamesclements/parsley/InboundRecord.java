@@ -20,7 +20,7 @@ package io.github.tobyjamesclements.parsley;
 record InboundRecord(
         Channel channel,
         long offset,
-        Clock clock,
+        VectorClock clock,
         java.util.UUID senderId,
         long senderSeq,
         byte[] key,

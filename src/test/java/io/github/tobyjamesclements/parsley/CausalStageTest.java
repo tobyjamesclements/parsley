@@ -88,7 +88,7 @@ class CausalStageTest {
         assertEquals(1, out.size(), "one delivery, one forward");
         assertEquals("out:a", out.get(0).value());
 
-        Clock stamp = CausalHeaders.read(out.get(0).headers());
+        VectorClock stamp = CausalHeaders.read(out.get(0).headers());
         assertNotNull(stamp, "output must carry a dependency clock");
         assertEquals(0L, stamp.get(CausalStage.testChannel("t1", 0)), "stamp must claim the delivered input");
     }
@@ -98,7 +98,7 @@ class CausalStageTest {
     void holdsUntilDependencyDelivered() {
         // A t2 record claiming t1@0 arrives before t1@0 itself: the gate must hold it.
         var headers = new RecordHeaders();
-        CausalHeaders.write(headers, Clock.of(CausalStage.testChannel("t1", 0), 0));
+        CausalHeaders.write(headers, VectorClock.of(CausalStage.testChannel("t1", 0), 0));
         t2.pipeInput(new TestRecord<>("k", "b", headers, 2000L));
         assertTrue(t3.readRecordsToList().isEmpty(), "held record must not produce output");
 
@@ -110,7 +110,7 @@ class CausalStageTest {
                 "cause delivers before effect");
 
         // The second output's stamp claims both inputs.
-        Clock stamp = CausalHeaders.read(out.get(1).headers());
+        VectorClock stamp = CausalHeaders.read(out.get(1).headers());
         assertEquals(0L, stamp.get(CausalStage.testChannel("t1", 0)));
         assertEquals(0L, stamp.get(CausalStage.testChannel("t2", 0)));
     }

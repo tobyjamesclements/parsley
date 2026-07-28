@@ -46,7 +46,7 @@ final class CausalNode implements DeliveryProtocol {
     /** Per (consumed channel, sender): the highest delivered sequence and its offset. */
     private static final String PREFIX_DELIVERED_SEQ = "ds/";
 
-    private record Held(long offset, Clock clock, UUID senderId, long senderSeq,
+    private record Held(long offset, VectorClock clock, UUID senderId, long senderSeq,
                         byte[] key, byte[] value, long timestamp) {}
 
     /** The resolution state for one (channel, sender): highest delivered seq and its offset. */
@@ -63,10 +63,10 @@ final class CausalNode implements DeliveryProtocol {
     private final BrokerOffsets broker;
 
     private final Map<Channel, Long> frontier = new HashMap<>();
-    private final Map<Channel, Clock> channelClocks = new HashMap<>();
-    private final Clock carriedAncestry;
+    private final Map<Channel, VectorClock> channelClocks = new HashMap<>();
+    private final VectorClock carriedAncestry;
     /** Memory-only: seeded from end offsets at init, so persistence would be redundant. */
-    private final Clock ownOutputs = new Clock();
+    private final VectorClock ownOutputs = new VectorClock();
     private final Map<Channel, Queue> queues = new HashMap<>();
     /** Memory-only: everything strictly below is known fetched-or-skipped (consumer position). */
     private final Map<Channel, Long> positionKnown = new HashMap<>();
@@ -132,12 +132,12 @@ final class CausalNode implements DeliveryProtocol {
         // required at or before delivery for the ignore branch's soundness, and safe now
         // (custody claims name really-appended offsets; over-claims are delay-only).
         if (r.clock() != null && !r.clock().isEmpty()) {
-            Clock cc = channelClocks.computeIfAbsent(c, k -> new Clock());
+            VectorClock cc = channelClocks.computeIfAbsent(c, k -> new VectorClock());
             cc.mergeMax(r.clock());
             putClock(PREFIX_CHANNEL_CLOCK + c.key(), cc);
         }
 
-        enqueue(c, new Held(r.offset(), r.clock() == null ? new Clock() : r.clock().copy(),
+        enqueue(c, new Held(r.offset(), r.clock() == null ? new VectorClock() : r.clock().copy(),
                 r.senderId(), r.senderSeq(), r.key(), r.value(), r.timestamp()));
         notePosition(c, r.offset() + 1);
         return cascade();
@@ -190,7 +190,7 @@ final class CausalNode implements DeliveryProtocol {
     }
 
     private boolean deliverable(Channel c, Held h) {
-        Clock deps = h.clock();
+        VectorClock deps = h.clock();
         if (deps.isEmpty()) return true;
         boolean[] blocked = {false};
         deps.forEach((ch, off) -> {
@@ -224,7 +224,7 @@ final class CausalNode implements DeliveryProtocol {
                     + destination.topicId());
         }
 
-        Clock stamp = new Clock();
+        VectorClock stamp = new VectorClock();
         frontier.forEach(stamp::advanceTo);
         channelClocks.values().forEach(stamp::mergeMax);
         stamp.mergeMax(carriedAncestry);
@@ -237,12 +237,12 @@ final class CausalNode implements DeliveryProtocol {
         for (Map.Entry<Channel, Long> e : sendSeq.entrySet()) {
             Channel c = e.getKey();
             long issued = e.getValue();
-            if (issued > baselineSeq.getOrDefault(c, Clock.NOTHING)) {
+            if (issued > baselineSeq.getOrDefault(c, VectorClock.NOTHING)) {
                 stamp.advanceSeq(c, config.senderId(), issued);
             }
         }
 
-        long seq = sendSeq.getOrDefault(destination, Clock.NOTHING) + 1;
+        long seq = sendSeq.getOrDefault(destination, VectorClock.NOTHING) + 1;
         sendSeq.put(destination, seq);
         store.put(PREFIX_SEND_SEQ + destination.key(), longBytes(seq));
         return new SendStamp(stamp, config.senderId(), seq);
@@ -255,12 +255,12 @@ final class CausalNode implements DeliveryProtocol {
      * over-claim at worst, delay-only and therefore sound. Echoes of this node's own claims
      * are dropped: the fresh self-claims and ownOutputs subsume them.
      */
-    private void normalize(Clock stamp) {
-        List<Clock.SeqKey> subsumed = new ArrayList<>();
-        Map<Clock.SeqKey, Long> upgrades = new HashMap<>();
+    private void normalize(VectorClock stamp) {
+        List<VectorClock.SeqKey> subsumed = new ArrayList<>();
+        Map<VectorClock.SeqKey, Long> upgrades = new HashMap<>();
         stamp.forEachSeq((key, seq) -> {
             if (key.sender().equals(config.senderId())) {
-                long baseline = baselineSeq.getOrDefault(key.channel(), Clock.NOTHING);
+                long baseline = baselineSeq.getOrDefault(key.channel(), VectorClock.NOTHING);
                 if (seq <= baseline) {
                     // A prior incarnation's echoed claim: its record is committed and covered
                     // by the end-offset seed, so it upgrades to offset space.
@@ -304,7 +304,7 @@ final class CausalNode implements DeliveryProtocol {
     }
 
     @Override
-    public void truncate(Clock stability) {
+    public void truncate(VectorClock stability) {
         carriedAncestry.truncateAtOrBelow(stability);
         putClock(KEY_CARRIED, carriedAncestry);
         channelClocks.forEach((c, cc) -> {
@@ -329,7 +329,7 @@ final class CausalNode implements DeliveryProtocol {
      * definitively no longer exists (never a transient resolution failure — fail closed).
      */
     public void truncateToLogStarts(Map<Channel, Long> logStarts, Set<Channel> confirmedAbsent) {
-        Clock stability = new Clock();
+        VectorClock stability = new VectorClock();
         logStarts.forEach((c, logStart) -> {
             if (logStart > 0) stability.advanceTo(c, logStart - 1);
         });
@@ -342,7 +342,7 @@ final class CausalNode implements DeliveryProtocol {
     // ------------------------------------------------------------------ state plumbing
 
     private long frontierOf(Channel c) {
-        return frontier.getOrDefault(c, Clock.NOTHING);
+        return frontier.getOrDefault(c, VectorClock.NOTHING);
     }
 
     private void advanceFrontier(Channel c, long offset) {
@@ -379,13 +379,13 @@ final class CausalNode implements DeliveryProtocol {
         store.put(PREFIX_QUEUE + c.key() + "/m", b.array());
     }
 
-    private void putClock(String key, Clock k) {
+    private void putClock(String key, VectorClock k) {
         store.put(key, k.serialize());
     }
 
-    private Clock readClock(String key) {
+    private VectorClock readClock(String key) {
         byte[] b = store.get(key);
-        return b == null ? new Clock() : Clock.deserialize(b);
+        return b == null ? new VectorClock() : VectorClock.deserialize(b);
     }
 
     private static byte[] longBytes(long v) {
@@ -402,7 +402,7 @@ final class CausalNode implements DeliveryProtocol {
         store.forEachPrefix(PREFIX_FRONTIER, (k, v) ->
                 frontier.put(Channel.fromKey(k.substring(PREFIX_FRONTIER.length())), bytesLong(v)));
         store.forEachPrefix(PREFIX_CHANNEL_CLOCK, (k, v) ->
-                channelClocks.put(Channel.fromKey(k.substring(PREFIX_CHANNEL_CLOCK.length())), Clock.deserialize(v)));
+                channelClocks.put(Channel.fromKey(k.substring(PREFIX_CHANNEL_CLOCK.length())), VectorClock.deserialize(v)));
         store.forEachPrefix(PREFIX_SEND_SEQ, (k, v) ->
                 sendSeq.put(Channel.fromKey(k.substring(PREFIX_SEND_SEQ.length())), bytesLong(v)));
         // Every committed send is appended (EOS commit awaits sends), and the end-offset seed
@@ -472,7 +472,7 @@ final class CausalNode implements DeliveryProtocol {
             }
             long f = frontierOf(gone);
             if (f >= 0) carriedAncestry.advanceTo(gone, f);
-            Clock cc = channelClocks.remove(gone);
+            VectorClock cc = channelClocks.remove(gone);
             if (cc != null) carriedAncestry.mergeMax(cc);
             frontier.remove(gone);
             store.delete(PREFIX_FRONTIER + gone.key());
@@ -491,7 +491,7 @@ final class CausalNode implements DeliveryProtocol {
         // never restart at log-start. The host starts fetching one past the seed.
         for (Channel grown : config.consumed()) {
             if (recorded.consumed().contains(grown)) continue;
-            Clock vt = vectorTime();
+            VectorClock vt = vectorTime();
             long seed = vt.get(grown);
             if (seed >= 0) {
                 advanceFrontier(grown, seed);
@@ -500,8 +500,8 @@ final class CausalNode implements DeliveryProtocol {
         }
     }
 
-    private Clock vectorTime() {
-        Clock vt = new Clock();
+    private VectorClock vectorTime() {
+        VectorClock vt = new VectorClock();
         frontier.forEach(vt::advanceTo);
         channelClocks.values().forEach(vt::mergeMax);
         vt.mergeMax(carriedAncestry);
@@ -581,7 +581,7 @@ final class CausalNode implements DeliveryProtocol {
         int valLen = b.getInt();
         byte[] value = valLen < 0 ? null : new byte[valLen];
         if (valLen > 0) b.get(value);
-        return new Held(offset, Clock.deserialize(clock),
+        return new Held(offset, VectorClock.deserialize(clock),
                 tagged ? new UUID(msb, lsb) : null, tagged ? seq : -1, key, value, timestamp);
     }
 }

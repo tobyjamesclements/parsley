@@ -8,7 +8,7 @@ import java.util.Map;
 
 /**
  * A scripted plain Kafka producer/consumer at the topology's edge. It stamps outbound records
- * the way the edge ops do: a running clock built from observed records ({@code observe}) plus
+ * the way the public {@link Clock} does: a running clock built from observed records plus
  * its own acknowledged sends, resolved before each send (a sequential producer waits for its
  * previous acknowledgement, so its own claims are always current).
  */
@@ -25,7 +25,7 @@ final class EdgeProducer {
     final String name;
     private final SimWorld world;
     private final Deque<Op> script = new ArrayDeque<>();
-    private final Clock observed = new Clock();
+    private final VectorClock observed = new VectorClock();
     private final Map<Channel, Long> positions = new HashMap<>();
 
     EdgeProducer(String name, SimWorld world) {

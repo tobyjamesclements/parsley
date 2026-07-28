@@ -7,7 +7,7 @@ import java.util.UUID;
  * than its name. A topic deleted and recreated under the same name is a different channel, so a
  * coordinate can never silently rebind to a different record history.
  */
-public record Channel(UUID topicId, int partition) implements Comparable<Channel> {
+record Channel(UUID topicId, int partition) implements Comparable<Channel> {
 
     public Channel {
         if (topicId == null) throw new NullPointerException("topicId");

@@ -21,9 +21,9 @@ public final class CausalHeaders {
     private CausalHeaders() {}
 
     /** Reads the clock header; null when absent. Undecodable bytes throw (fail closed). */
-    public static Clock read(Headers headers) {
+    static VectorClock read(Headers headers) {
         Header h = headers.lastHeader(CLOCK);
-        return h == null || h.value() == null ? null : Clock.deserialize(h.value());
+        return h == null || h.value() == null ? null : VectorClock.deserialize(h.value());
     }
 
     /** Reads the sender tag; null when untagged. Undecodable bytes throw (fail closed). */
@@ -56,8 +56,8 @@ public final class CausalHeaders {
         headers.add(SEQ, ByteBuffer.allocate(8).putLong(stamp.senderSeq()).array());
     }
 
-    /** Replaces only the clock header (edge producers, which carry no sender tag). */
-    public static void write(Headers headers, Clock clock) {
+    /** Replaces only the clock header (plain producers, which carry no sender tag). */
+    static void write(Headers headers, VectorClock clock) {
         headers.remove(CLOCK);
         headers.add(CLOCK, clock.serialize());
     }

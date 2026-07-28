@@ -4,13 +4,12 @@
  * <p>One package, two tiers. The public types are the entire supported surface:
  * {@link io.github.tobyjamesclements.parsley.CausalStage} /
  * {@link io.github.tobyjamesclements.parsley.CausalStreams} (the Kafka Streams runtime),
- * {@link io.github.tobyjamesclements.parsley.EdgeClock} and
- * {@link io.github.tobyjamesclements.parsley.CausalHeaders} (plain-client stamping and
- * inspection, with {@link io.github.tobyjamesclements.parsley.Clock} and
- * {@link io.github.tobyjamesclements.parsley.Channel} as their vocabulary), and
- * {@link io.github.tobyjamesclements.parsley.TopicIds} for the edge ops' identity
- * resolution, and {@link io.github.tobyjamesclements.parsley.CausalStage#testTopology()} for
- * broker-less {@code TopologyTestDriver} tests — no seam is injectable from outside.
+ * {@link io.github.tobyjamesclements.parsley.Clock} with
+ * {@link io.github.tobyjamesclements.parsley.TopicIds} (plain-client stamping),
+ * {@link io.github.tobyjamesclements.parsley.CausalHeaders} (header names and observability
+ * readers), and {@link io.github.tobyjamesclements.parsley.CausalStage#testTopology()} for
+ * broker-less {@code TopologyTestDriver} tests — no seam is injectable from outside, and no
+ * protocol vocabulary (the vector clock, channels, the node) escapes.
  *
  * <p>Everything else is package-private on purpose. The protocol core is only sound under a
  * host contract no API can enforce — per-channel offset order in, atomic commit of store,
