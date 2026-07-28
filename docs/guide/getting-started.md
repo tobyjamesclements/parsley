@@ -77,6 +77,7 @@ claims silently off.
   is the expected symptom.
 - **Fail closed**: a corrupt clock header or an unresolvable sink fails the task; a failed
   send aborts with its transaction, taking every claim on it along. The retry refetches.
-- **Testing your stage**: `TopologyTestDriver` works without a broker by injecting the two
-  seams — fixed `TopicIds` and a no-op send tracker. See `CausalStageTest` in the repository
-  for the pattern.
+- **Testing your stage**: build the stage normally and drive `stage.testTopology()` with
+  `TopologyTestDriver` — broker-less wiring is built in, and `CausalStage.testChannel` gives
+  the channel identities for crafting or asserting on clock headers. See `CausalStageTest`
+  in the repository for the pattern.

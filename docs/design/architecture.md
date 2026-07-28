@@ -4,9 +4,12 @@ Parsley is one package, `io.github.tobyjamesclements.parsley`, with two visibili
 
 The **public tier** is the entire supported surface: the Streams runtime (`CausalStage`,
 `CausalStreams`), the plain-client ops (`EdgeClock`, the read side of `CausalHeaders`, with
-`Clock` and `Channel` as their vocabulary), and the seams a `TopologyTestDriver` test injects
-(`TopicIds`, `BrokerOffsets`). The **package-private tier** is the protocol core and the
-adapter's plumbing. The core is hidden deliberately: it is only sound under a host contract
+`Clock` and `Channel` as their vocabulary), `TopicIds` for the edge ops' identity resolution,
+and `CausalStage.testTopology()` for broker-less `TopologyTestDriver` tests. The
+**package-private tier** is the protocol core, the adapter's plumbing, and every seam — the
+offset queries carry soundness obligations (strict end-offset resolution, definitive absence)
+that make them contracts users must not substitute, so tests get a pre-wired broker-less
+topology rather than an injection point. The core is hidden deliberately: it is only sound under a host contract
 no API can enforce — per-channel offset order in, atomic commit of store, offsets, and sends,
 position advances from the real consumer, partitioning before stamping — and the one host
 that upholds that contract ships in the same package.

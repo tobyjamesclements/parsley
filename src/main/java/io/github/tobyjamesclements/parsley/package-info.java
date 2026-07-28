@@ -8,9 +8,9 @@
  * {@link io.github.tobyjamesclements.parsley.CausalHeaders} (plain-client stamping and
  * inspection, with {@link io.github.tobyjamesclements.parsley.Clock} and
  * {@link io.github.tobyjamesclements.parsley.Channel} as their vocabulary), and
- * {@link io.github.tobyjamesclements.parsley.TopicIds} with
- * {@link io.github.tobyjamesclements.parsley.BrokerOffsets} as the seams a
- * {@code TopologyTestDriver} test injects.
+ * {@link io.github.tobyjamesclements.parsley.TopicIds} for the edge ops' identity
+ * resolution, and {@link io.github.tobyjamesclements.parsley.CausalStage#testTopology()} for
+ * broker-less {@code TopologyTestDriver} tests — no seam is injectable from outside.
  *
  * <p>Everything else is package-private on purpose. The protocol core is only sound under a
  * host contract no API can enforce — per-channel offset order in, atomic commit of store,

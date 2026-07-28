@@ -29,35 +29,12 @@ import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * Adapter smoke tests under TopologyTestDriver: topology wiring, header codec, the gate
- * holding and releasing across sources, and stamp content on outputs. Protocol correctness
- * under concurrency, crashes, and EOS lives in the simulator suite — TTD is single-threaded
- * and transactionless, so these tests only assert the adapter's plumbing.
+ * Adapter smoke tests under TopologyTestDriver, driven the way a user would: the broker-less
+ * {@code testTopology()} wiring and {@code testChannel} identities, with no seam injection.
+ * Protocol correctness under concurrency, crashes, and EOS lives in the simulator suite — TTD
+ * is single-threaded and transactionless, so these tests only assert the adapter's plumbing.
  */
 class CausalStageTest {
-
-    private static final UUID T1 = UUID.nameUUIDFromBytes("t1".getBytes());
-    private static final UUID T2 = UUID.nameUUIDFromBytes("t2".getBytes());
-    private static final UUID T3 = UUID.nameUUIDFromBytes("t3".getBytes());
-
-    private static final TopicIds IDS = TopicIds.fixed(Map.of(
-            "t1", new TopicIds.Resolved(T1, 1),
-            "t2", new TopicIds.Resolved(T2, 1),
-            "t3", new TopicIds.Resolved(T3, 1)));
-
-    /** No broker exists under TTD; both offset views are empty. */
-    private static final CausalStage.BrokerOffsetsProvider NO_OFFSETS = (ids, sinks) ->
-            new BrokerOffsets() {
-                @Override
-                public Map<Channel, Long> endOffsets(Set<UUID> sinkTopics) {
-                    return Map.of();
-                }
-
-                @Override
-                public BrokerOffsets.EarliestOffsets earliestOffsets(Set<Channel> channels) {
-                    return new BrokerOffsets.EarliestOffsets(Map.of(), Set.of());
-                }
-            };
 
     @TempDir
     Path stateDir;
@@ -86,15 +63,13 @@ class CausalStageTest {
                     }
                 })
                 .sink("t3", Serdes.String(), Serdes.String())
-                .topicIds(IDS)
-                .brokerOffsets(NO_OFFSETS)
                 .build();
 
         Properties props = new Properties();
         props.put(StreamsConfig.APPLICATION_ID_CONFIG, "parsley-ttd");
         props.put(StreamsConfig.BOOTSTRAP_SERVERS_CONFIG, "unused:9092");
         props.put(StreamsConfig.STATE_DIR_CONFIG, stateDir.toString());
-        driver = new TopologyTestDriver(stage.topology(), props);
+        driver = new TopologyTestDriver(stage.testTopology(), props);
         t1 = driver.createInputTopic("t1", new StringSerializer(), new StringSerializer());
         t2 = driver.createInputTopic("t2", new StringSerializer(), new StringSerializer());
         t3 = driver.createOutputTopic("t3", new StringDeserializer(), new StringDeserializer());
@@ -115,7 +90,7 @@ class CausalStageTest {
 
         Clock stamp = CausalHeaders.read(out.get(0).headers());
         assertNotNull(stamp, "output must carry a dependency clock");
-        assertEquals(0L, stamp.get(new Channel(T1, 0)), "stamp must claim the delivered input");
+        assertEquals(0L, stamp.get(CausalStage.testChannel("t1", 0)), "stamp must claim the delivered input");
     }
 
     /** A record whose dependency has not been delivered is held, then released in order. */
@@ -123,7 +98,7 @@ class CausalStageTest {
     void holdsUntilDependencyDelivered() {
         // A t2 record claiming t1@0 arrives before t1@0 itself: the gate must hold it.
         var headers = new RecordHeaders();
-        CausalHeaders.write(headers, Clock.of(new Channel(T1, 0), 0));
+        CausalHeaders.write(headers, Clock.of(CausalStage.testChannel("t1", 0), 0));
         t2.pipeInput(new TestRecord<>("k", "b", headers, 2000L));
         assertTrue(t3.readRecordsToList().isEmpty(), "held record must not produce output");
 
@@ -136,8 +111,8 @@ class CausalStageTest {
 
         // The second output's stamp claims both inputs.
         Clock stamp = CausalHeaders.read(out.get(1).headers());
-        assertEquals(0L, stamp.get(new Channel(T1, 0)));
-        assertEquals(0L, stamp.get(new Channel(T2, 0)));
+        assertEquals(0L, stamp.get(CausalStage.testChannel("t1", 0)));
+        assertEquals(0L, stamp.get(CausalStage.testChannel("t2", 0)));
     }
 
     /** An undecodable clock header fails the task rather than reading as empty. */

@@ -51,7 +51,7 @@ public final class CausalStage<K, V, KO, VO> {
     static final String SINK_PREFIX = "parsley-sink-";
 
     /** Creates the per-task {@link BrokerOffsets}; production uses an admin client. */
-    public interface BrokerOffsetsProvider {
+    interface BrokerOffsetsProvider {
         BrokerOffsets create(TopicIds topicIds, Set<String> sinkTopics);
     }
 
@@ -71,8 +71,6 @@ public final class CausalStage<K, V, KO, VO> {
         this.sinks = b.sinks;
         this.userSupplier = b.userSupplier;
         this.truncationInterval = b.truncationInterval;
-        this.topicIds = b.topicIds;
-        this.brokerOffsets = b.brokerOffsets;
     }
 
     public static <K, V, KO, VO> Builder<K, V, KO, VO> builder() {
@@ -84,8 +82,6 @@ public final class CausalStage<K, V, KO, VO> {
         private final Map<String, SinkDef<KO, VO>> sinks = new LinkedHashMap<>();
         private ProcessorSupplier<K, V, KO, VO> userSupplier;
         private Duration truncationInterval = Duration.ofMinutes(10);
-        private TopicIds topicIds;
-        private BrokerOffsetsProvider brokerOffsets;
 
         public Builder<K, V, KO, VO> source(String topic, Serde<K> keySerde, Serde<V> valueSerde) {
             sources.put(topic, new SourceDef<>(keySerde, valueSerde));
@@ -105,18 +101,6 @@ public final class CausalStage<K, V, KO, VO> {
         /** How often the log-start truncation sweep runs. Default ten minutes. */
         public Builder<K, V, KO, VO> truncationInterval(Duration interval) {
             this.truncationInterval = interval;
-            return this;
-        }
-
-        /** Test seam; production wiring is filled in by {@link CausalStreams#start}. */
-        public Builder<K, V, KO, VO> topicIds(TopicIds ids) {
-            this.topicIds = ids;
-            return this;
-        }
-
-        /** Test seam; production wiring is filled in by {@link CausalStreams#start}. */
-        public Builder<K, V, KO, VO> brokerOffsets(BrokerOffsetsProvider provider) {
-            this.brokerOffsets = provider;
             return this;
         }
 
@@ -140,11 +124,38 @@ public final class CausalStage<K, V, KO, VO> {
         this.brokerOffsets = provider;
     }
 
-    /** Assembles the Streams topology. Wiring (topic ids, send trackers) must be present. */
-    public Topology topology() {
+    /**
+     * A broker-less topology for {@code TopologyTestDriver}: topic identity is synthesized
+     * deterministically ({@link #testChannel} gives a test the same channels for crafting or
+     * asserting on clock headers), every topic has one partition (the driver's reality), and
+     * the offset queries answer empty — safe precisely because no broker means no prior
+     * incarnations to seed against and nothing to truncate.
+     */
+    public Topology testTopology() {
+        wire(topic -> new TopicIds.Resolved(testChannel(topic, 0).topicId(), 1),
+                (ids, sinkTopics) -> new BrokerOffsets() {
+                    @Override
+                    public Map<Channel, Long> endOffsets(Set<UUID> t) {
+                        return Map.of();
+                    }
+
+                    @Override
+                    public EarliestOffsets earliestOffsets(Set<Channel> channels) {
+                        return new EarliestOffsets(Map.of(), Set.of());
+                    }
+                });
+        return topology();
+    }
+
+    /** The channel {@link #testTopology()} resolves for a topic-partition. */
+    public static Channel testChannel(String topic, int partition) {
+        return new Channel(UUID.nameUUIDFromBytes(topic.getBytes()), partition);
+    }
+
+    /** Assembles the Streams topology. Wiring must be present ({@code CausalStreams.start}). */
+    Topology topology() {
         if (topicIds == null || brokerOffsets == null) {
-            throw new IllegalStateException(
-                    "unwired stage: start it with CausalStreams.start, or inject topicIds and brokerOffsets");
+            throw new IllegalStateException("unwired stage: start it with CausalStreams.start");
         }
         Topology t = new Topology();
         t.addSource(SOURCE_NAME, new ByteArrayDeserializer(), new ByteArrayDeserializer(),

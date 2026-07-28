@@ -12,8 +12,12 @@ import java.util.Set;
  * <p>Nothing here observes individual sends. The node's own in-flight outputs are claimed in
  * sequence space, assigned synchronously at the stamping site, and resolved by receivers from
  * the sender tag each record carries — no acknowledgement feed exists.
+ *
+ * <p>Package-private on purpose: both queries carry soundness obligations (strict end-offset
+ * resolution, definitive absence) that make this a seam users must not substitute. Tests use
+ * {@link CausalStage#testTopology()}, which wires a disconnected view internally.
  */
-public interface BrokerOffsets {
+interface BrokerOffsets {
 
     /**
      * Current end offsets (next offset to be assigned) for every partition of the given sink
