@@ -12,7 +12,7 @@ import java.util.TreeMap;
 import java.util.UUID;
 
 /**
- * The protocol core: causal delivery with head-of-line blocking per channel.
+ * The protocol implementation: causal delivery with head-of-line blocking per channel.
  *
  * <p>One instance is one causal node (one task). The host feeds records in per-channel offset
  * order through {@link #onRecord}, reports consumer position advances through

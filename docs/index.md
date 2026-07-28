@@ -14,12 +14,14 @@ correctly gated everywhere from its first emission.
 
 ## Shape of the system
 
-Parsley is a **protocol core** plus a **Kafka Streams adapter**. The core carries no Kafka
-dependency, but it is not transport-agnostic — Kafka's semantics (broker-assigned offsets,
-transactional visibility, consumer positions) are load-bearing throughout. The seam exists so
-the deterministic simulator can host the protocol, not so other transports can.
+Parsley is a small public API — pure user logic over typed topics, run by a Kafka Streams
+adapter — around a package-private causal delivery protocol. The protocol implementation
+carries no compile-time Kafka dependency, but it is not transport-agnostic — Kafka's
+semantics (broker-assigned offsets, transactional visibility, consumer positions) are
+load-bearing throughout. That freedom exists so the deterministic simulator can host the
+protocol, not so other transports can.
 
-The core ([architecture](design/architecture.md)) gates delivery with head-of-line blocking
+The protocol ([architecture](design/architecture.md)) gates delivery with head-of-line blocking
 per channel: each `(topicId, partition)` channel has a FIFO hold queue, only queue heads are
 evaluated against the contiguous delivered frontier, and a delivery cascades releases to
 fixpoint. Outbound records carry a single header — a vector clock over channels — computed at
@@ -31,7 +33,7 @@ traffic plays in other designs is covered by the consumer's own position advance
 transaction markers — see [liveness](foundations/liveness.md), which develops why this
 suffices.
 
-The adapter ([getting started](guide/getting-started.md)) hosts the core and runs user
+The adapter ([getting started](guide/getting-started.md)) hosts the protocol and runs user
 logic as pure functions — a `Message` in, `Emission` values out — with one serialization
 point on each side, and enforces `exactly_once_v2`. Plain producers and consumers use the same stamps through the
 [plain-client ops](guide/clients.md).

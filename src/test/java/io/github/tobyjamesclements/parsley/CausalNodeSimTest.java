@@ -37,7 +37,7 @@ class CausalNodeSimTest {
         return (config, host) -> new CausalNode(config, host.store, host.offsets);
     }
 
-    /** V1: the core race — a stage's output must never overtake its input at a shared consumer. */
+    /** V1: the fundamental race — a stage's output must never overtake its input at a shared consumer. */
     @Test
     void sharedInputDiamond() {
         Stats stats = new Stats();

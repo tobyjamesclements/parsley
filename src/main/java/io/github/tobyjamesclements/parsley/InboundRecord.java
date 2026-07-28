@@ -1,7 +1,7 @@
 package io.github.tobyjamesclements.parsley;
 
 /**
- * One record fetched from a consumed channel, as the host hands it to the core. Records on a
+ * One record fetched from a consumed channel, as the host hands it to the protocol. Records on a
  * channel must be handed over in strictly increasing offset order (Kafka's per-partition
  * delivery order through a {@code read_committed} consumer).
  *

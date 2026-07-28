@@ -1,7 +1,7 @@
 # The delivery gate
 
 The gate is the predicate that decides whether a received record may reach the user processor.
-Everything else in the core exists to make this predicate sound and its inputs cheap.
+Everything else in the protocol exists to make this predicate sound and its inputs cheap.
 
 ## Head-of-line blocking
 

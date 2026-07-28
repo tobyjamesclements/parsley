@@ -24,10 +24,11 @@
  * {@link io.github.tobyjamesclements.parsley.CausalClock} and
  * {@link io.github.tobyjamesclements.parsley.CausalHeaders}.
  *
- * <p>Everything else is package-private on purpose. The protocol core is only sound under a
- * host contract no API can enforce — per-channel offset order in, atomic commit of store,
- * offsets, and sends, position advances from the real consumer, partitioning before stamping —
- * and the one host that upholds it ships in this package. The deterministic simulator, the
- * protocol's primary verifier, reaches the internals from the test tree of this same package.
+ * <p>Everything else is package-private on purpose. The protocol implementation is only sound
+ * under a host contract no API can enforce — per-channel offset order in, atomic commit of
+ * store, offsets, and sends, position advances from the real consumer, partitioning before
+ * stamping — and the one host that upholds it ships in this package. The deterministic
+ * simulator, the protocol's primary verifier, reaches the internals from the test tree of
+ * this same package.
  */
 package io.github.tobyjamesclements.parsley;

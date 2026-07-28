@@ -15,22 +15,24 @@ instance), and the plain-client `CausalClock` (constructed from an `Admin`; obse
 own sends, stamp — fully opaque) with `CausalHeaders`' names and sender/seq readers for
 observability.
 No protocol vocabulary escapes: the vector clock and channel types are internal. The
-**package-private tier** is the protocol core, the adapter's plumbing, and every seam — the
-offset queries carry soundness obligations (strict end-offset resolution, definitive absence)
-that make them contracts users must not substitute, so tests get a pre-wired broker-less
-topology rather than an injection point. The core is hidden deliberately: it is only sound under a host contract
+**package-private tier** is the protocol implementation, the adapter's plumbing, and every
+seam — the offset queries carry soundness obligations (strict end-offset resolution,
+definitive absence) that make them contracts users must not substitute, so tests get a
+pre-wired broker-less topology rather than an injection point. The protocol is hidden
+deliberately: it is only sound under a host contract
 no API can enforce — per-channel offset order in, atomic commit of store, offsets, and sends,
 position advances from the real consumer, partitioning before stamping — and the one host
 that upholds that contract ships in the same package.
 
-Kafka's semantics are load-bearing throughout the core: offsets are broker-assigned (hence
-sequence claims), visibility is transactional (hence the density adaptation and step-atomic
-recovery), and liveness rides the consumer's position (hence position-advance bridging). The
-core's freedom from a compile-time Kafka dependency is a **simulator seam, not transport
-abstraction** — the deterministic simulator, the protocol's primary verifier
-([verification](verification.md)), hosts the core from the test tree of the same package.
+Kafka's semantics are load-bearing throughout the protocol: offsets are broker-assigned
+(hence sequence claims), visibility is transactional (hence the density adaptation and
+step-atomic recovery), and liveness rides the consumer's position (hence position-advance
+bridging). The implementation's freedom from a compile-time Kafka dependency is a
+**simulator seam, not transport abstraction** — the deterministic simulator, the protocol's
+primary verifier ([verification](verification.md)), hosts it from the test tree of the same
+package.
 
-## The core surface
+## The protocol surface
 
 | Type | Role |
 |---|---|

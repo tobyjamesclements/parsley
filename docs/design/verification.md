@@ -82,8 +82,11 @@ a restart, and the wide soak combining most of the above.
 
 ## Mutation testing
 
-PIT runs over the core (`mvn org.pitest:pitest-maven:mutationCoverage`, serial mutants so a
-timeout cannot masquerade as a kill). The delivery gate itself has no surviving mutants; the
+PIT runs over the whole package inside `mvn verify`, at four threads with a 60% floor. Four
+threads is measured verdict-identical to a serial run on this suite; the hazard being checked
+is that a timeout under CPU contention counts as a kill, so the comparison is repeated
+(one `-Dpitest.threads=1` run, diff `mutations.xml`) whenever the suite slows appreciably.
+The delivery gate itself has no surviving mutants; the
 survivors that remain cluster where randomized schedules structurally under-discriminate —
 persistence (killed instead by the directed `CausalNodePersistenceTest`), redundancy-masked
 paths (removing acknowledgement folding survives because sequence claims soundly cover it),

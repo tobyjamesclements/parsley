@@ -3,7 +3,7 @@ package io.github.tobyjamesclements.parsley;
 import java.util.List;
 
 /**
- * The core protocol surface a host drives. The production implementation is
+ * The protocol surface a host drives. The production implementation is
  * {@link CausalNode}; the simulator hosts it directly, and deliberately broken implementations
  * exist in tests to prove the oracle catches them.
  *
@@ -13,14 +13,15 @@ import java.util.List;
 interface DeliveryProtocol {
 
     /**
-     * Hands the core one record fetched from a consumed channel, in per-channel offset order.
-     * The core seeds and bridges density, enqueues or delivers, and cascades any releases.
+     * Hands the protocol one record fetched from a consumed channel, in per-channel offset
+     * order. The protocol seeds and bridges density, enqueues or delivers, and cascades any
+     * releases.
      * Returned deliveries are in causal delivery order.
      */
     List<Delivery> onRecord(InboundRecord record);
 
     /**
-     * Tells the core the host consumer's position on {@code channel} advanced to
+     * Tells the protocol the host consumer's position on {@code channel} advanced to
      * {@code position} without returning records: everything below is fetched or
      * consumer-skipped (transaction markers, aborted records). This is the liveness signal that
      * bridges trailing markers — the only thing the original architecture needed a gossip

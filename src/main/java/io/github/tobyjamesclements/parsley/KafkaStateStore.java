@@ -9,7 +9,7 @@ import java.util.function.BiConsumer;
 
 /**
  * {@link StateStore} over a Streams {@link KeyValueStore}. Under EOS the store's mutations
- * commit with the task's transaction, which is exactly the contract the core requires. Keys are
+ * commit with the task's transaction, which is exactly the contract the protocol requires. Keys are
  * UTF-8; prefix iteration uses byte-wise range semantics, which match UTF-8 lexicographic
  * ordering.
  */

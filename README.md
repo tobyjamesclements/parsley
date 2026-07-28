@@ -13,9 +13,8 @@ correctly gated everywhere from its first emission.
 
 ## How it works
 
-A **protocol core with no Kafka dependency** implements causal delivery with head-of-line
-blocking per channel; its host seam exists so the deterministic simulator can drive it, and
-Kafka's semantics remain load-bearing throughout. A channel is one partition of one topic, identified by the topic's stable UUID;
+Parsley implements causal delivery with head-of-line blocking per channel, riding Kafka's
+own semantics throughout. A channel is one partition of one topic, identified by the topic's stable UUID;
 each channel has a FIFO hold queue, and only queue heads are gated against the node's
 contiguous delivered frontier. A delivery advances the frontier and cascades releases across
 channels to fixpoint.

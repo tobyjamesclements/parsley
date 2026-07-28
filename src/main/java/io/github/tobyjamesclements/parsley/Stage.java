@@ -31,7 +31,7 @@ import java.util.function.Supplier;
 /**
  * One causal processing stage: typed source topics, each handled by pure user logic (a
  * {@link Handler} or, with per-key state, a {@link Fold}), and typed sink topics — with the
- * causal boundary in between. The protocol core gates and orders deliveries on the source
+ * causal boundary in between. The protocol gates and orders deliveries on the source
  * side; the single stamping site applies the returned emissions on the sink side.
  *
  * <p>The functional core is the user's half: logic is a pure function from a delivered

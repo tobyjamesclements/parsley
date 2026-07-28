@@ -4,7 +4,7 @@ import java.util.Map;
 import java.util.Set;
 
 /**
- * The core's window onto broker offset facts — the two append-time queries the protocol
+ * The protocol's window onto broker offset facts — the two append-time queries the protocol
  * needs. Both are about ranges, not records: what the broker has assigned (end offsets, for
  * the init-time own-outputs seed) and what retention has deleted (log starts, the
  * coordination-free stability bound for truncation).
