@@ -26,7 +26,8 @@ jobs:
           server-password: CENTRAL_TOKEN
 
       - name: Publish snapshot to Central
-        run: ./mvnw --batch-mode deploy -DskipTests -DaltSnapshotDeploymentRepository=central::https://central.sonatype.com/repository/maven-snapshots/
+        # CI already ran the full verify gate; this job only repackages and uploads.
+        run: ./mvnw --batch-mode deploy -DskipTests -DskipPitest=true -DaltSnapshotDeploymentRepository=central::https://central.sonatype.com/repository/maven-snapshots/
         env:
           CENTRAL_USERNAME: ${{ secrets.CENTRAL_USERNAME }}
           CENTRAL_TOKEN: ${{ secrets.CENTRAL_TOKEN }}
