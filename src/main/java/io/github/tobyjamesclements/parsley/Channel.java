@@ -9,7 +9,7 @@ import java.util.UUID;
  */
 record Channel(UUID topicId, int partition) implements Comparable<Channel> {
 
-    public Channel {
+    Channel {
         if (topicId == null) throw new NullPointerException("topicId");
         if (partition < 0) throw new IllegalArgumentException("partition " + partition);
     }
@@ -21,11 +21,11 @@ record Channel(UUID topicId, int partition) implements Comparable<Channel> {
     }
 
     /** Stable text form used in state-store keys: {@code <uuid>:<partition>}. */
-    public String key() {
+    String key() {
         return topicId + ":" + partition;
     }
 
-    public static Channel fromKey(String key) {
+    static Channel fromKey(String key) {
         int i = key.lastIndexOf(':');
         return new Channel(UUID.fromString(key.substring(0, i)), Integer.parseInt(key.substring(i + 1)));
     }

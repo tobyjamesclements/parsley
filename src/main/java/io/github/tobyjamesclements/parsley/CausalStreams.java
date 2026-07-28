@@ -60,10 +60,6 @@ public final class CausalStreams implements AutoCloseable {
         return new CausalStreams(ks, admin);
     }
 
-    public KafkaStreams streams() {
-        return streams;
-    }
-
     @Override
     public void close() {
         streams.close();

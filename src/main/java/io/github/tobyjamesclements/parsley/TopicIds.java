@@ -11,10 +11,9 @@ import java.util.concurrent.ExecutionException;
 
 /**
  * Resolves topic names to their stable Kafka UUIDs — the identity half of a causal channel.
- * Production code uses {@link #fromAdmin}; tests inject a fixed mapping (TopologyTestDriver has
- * no broker to ask).
+ * Production code uses {@link #fromAdmin}; {@code testTopology()} synthesizes a resolver.
  */
-public interface TopicIds {
+interface TopicIds {
 
     /**
      * @return the topic's UUID and partition count
@@ -24,15 +23,6 @@ public interface TopicIds {
     Resolved resolve(String topic);
 
     record Resolved(UUID id, int partitions) {}
-
-    static TopicIds fixed(Map<String, Resolved> mapping) {
-        Map<String, Resolved> copy = Map.copyOf(mapping);
-        return topic -> {
-            Resolved r = copy.get(topic);
-            if (r == null) throw new IllegalStateException("unresolvable topic: " + topic);
-            return r;
-        };
-    }
 
     /** Resolves through a Kafka admin client, caching per name for the resolver's lifetime. */
     static TopicIds fromAdmin(Admin admin) {

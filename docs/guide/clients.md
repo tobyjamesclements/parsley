@@ -9,7 +9,7 @@ A `Clock` is a running view of one producing thread's causal past. Fold what you
 fold your own acknowledgements, and stamp:
 
 ```java
-Clock clock = new Clock(TopicIds.fromAdmin(admin));
+Clock clock = new Clock(admin);   // an org.apache.kafka.clients.admin.Admin the caller owns
 
 // Anything this producer's next records causally depend on:
 for (ConsumerRecord<String, String> rec : consumer.poll(timeout)) {

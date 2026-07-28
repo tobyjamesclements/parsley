@@ -1,5 +1,6 @@
 package io.github.tobyjamesclements.parsley;
 
+import org.apache.kafka.clients.admin.Admin;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.apache.kafka.clients.producer.RecordMetadata;
 import org.apache.kafka.common.header.Headers;
@@ -23,7 +24,15 @@ public final class Clock {
     private final TopicIds topicIds;
     private final VectorClock clock = new VectorClock();
 
-    public Clock(TopicIds topicIds) {
+    /**
+     * @param admin resolves topic identity (names to stable UUIDs); owned and closed by the
+     *     caller, consulted lazily and cached per name
+     */
+    public Clock(Admin admin) {
+        this.topicIds = TopicIds.fromAdmin(admin);
+    }
+
+    Clock(TopicIds topicIds) {
         this.topicIds = topicIds;
     }
 

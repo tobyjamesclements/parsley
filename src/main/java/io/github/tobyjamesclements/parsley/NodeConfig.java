@@ -22,7 +22,7 @@ record NodeConfig(
         Set<UUID> sinkTopics,
         int taskPartition) {
 
-    public NodeConfig {
+    NodeConfig {
         if (senderId == null) throw new NullPointerException("senderId");
         consumed = Set.copyOf(consumed);
         sinkTopics = Set.copyOf(sinkTopics);

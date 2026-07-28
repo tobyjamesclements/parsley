@@ -27,7 +27,7 @@ record InboundRecord(
         byte[] value,
         long timestamp) {
 
-    public InboundRecord {
+    InboundRecord {
         if (offset < 0) throw new IllegalArgumentException("offset " + offset);
         if ((senderId == null) != (senderSeq < 0)) {
             throw new IllegalArgumentException("senderId and senderSeq must be tagged together");

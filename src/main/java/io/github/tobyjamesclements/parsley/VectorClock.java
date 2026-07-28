@@ -25,11 +25,11 @@ import java.util.function.BiConsumer;
  */
 final class VectorClock {
 
-    public static final long NOTHING = -1L;
+    static final long NOTHING = -1L;
     private static final byte WIRE_VERSION = 1;
 
     /** A sequence-claim key: one sender's sends to one channel. */
-    public record SeqKey(Channel channel, UUID sender) implements Comparable<SeqKey> {
+    record SeqKey(Channel channel, UUID sender) implements Comparable<SeqKey> {
         @Override
         public int compareTo(SeqKey o) {
             int c = channel.compareTo(o.channel);
@@ -40,42 +40,42 @@ final class VectorClock {
     private final TreeMap<Channel, Long> entries = new TreeMap<>();
     private final TreeMap<SeqKey, Long> seqEntries = new TreeMap<>();
 
-    public VectorClock() {}
+    VectorClock() {}
 
-    public static VectorClock of(Channel c, long offset) {
+    static VectorClock of(Channel c, long offset) {
         VectorClock k = new VectorClock();
         k.advanceTo(c, offset);
         return k;
     }
 
-    public long get(Channel c) {
+    long get(Channel c) {
         Long v = entries.get(c);
         return v == null ? NOTHING : v;
     }
 
-    public boolean isEmpty() {
+    boolean isEmpty() {
         return entries.isEmpty() && seqEntries.isEmpty();
     }
 
     /** Raises the watermark for {@code c} to at least {@code offset}; never lowers it. */
-    public void advanceTo(Channel c, long offset) {
+    void advanceTo(Channel c, long offset) {
         if (offset < 0) throw new IllegalArgumentException("offset " + offset);
         entries.merge(c, offset, Math::max);
     }
 
     /** Raises the sequence watermark for {@code (c, sender)}; never lowers it. */
-    public void advanceSeq(Channel c, UUID sender, long seq) {
+    void advanceSeq(Channel c, UUID sender, long seq) {
         if (seq < 0) throw new IllegalArgumentException("seq " + seq);
         seqEntries.merge(new SeqKey(c, sender), seq, Math::max);
     }
 
-    public long getSeq(SeqKey key) {
+    long getSeq(SeqKey key) {
         Long v = seqEntries.get(key);
         return v == null ? NOTHING : v;
     }
 
     /** Pointwise max-merge of {@code other} into this clock, both claim kinds. */
-    public void mergeMax(VectorClock other) {
+    void mergeMax(VectorClock other) {
         other.entries.forEach((c, o) -> entries.merge(c, o, Math::max));
         other.seqEntries.forEach((k, s) -> seqEntries.merge(k, s, Math::max));
     }
@@ -85,7 +85,7 @@ final class VectorClock {
      * entries are excluded: their satisfaction is a per-node question (delivered sequence),
      * answered by the gate, not by clock comparison.
      */
-    public boolean dominates(VectorClock other) {
+    boolean dominates(VectorClock other) {
         for (Map.Entry<Channel, Long> e : other.entries.entrySet()) {
             if (get(e.getKey()) < e.getValue()) return false;
         }
@@ -93,13 +93,13 @@ final class VectorClock {
     }
 
     /** Replaces one sequence claim with an offset claim (normalisation). */
-    public void normalizeSeq(SeqKey key, long offset) {
+    void normalizeSeq(SeqKey key, long offset) {
         seqEntries.remove(key);
         advanceTo(key.channel(), offset);
     }
 
     /** Drops one sequence claim (when a stronger claim subsumes it). */
-    public void removeSeq(SeqKey key) {
+    void removeSeq(SeqKey key) {
         seqEntries.remove(key);
     }
 
@@ -108,26 +108,26 @@ final class VectorClock {
      * Sequence entries are untouched: they are transient by design (normalised away as
      * deliveries resolve them) and carry no offset to compare against the bound.
      */
-    public void truncateAtOrBelow(VectorClock stability) {
+    void truncateAtOrBelow(VectorClock stability) {
         entries.entrySet().removeIf(e -> e.getValue() <= stability.get(e.getKey()));
     }
 
-    public void forEach(BiConsumer<Channel, Long> consumer) {
+    void forEach(BiConsumer<Channel, Long> consumer) {
         entries.forEach(consumer);
     }
 
-    public void forEachSeq(BiConsumer<SeqKey, Long> consumer) {
+    void forEachSeq(BiConsumer<SeqKey, Long> consumer) {
         seqEntries.forEach(consumer);
     }
 
-    public VectorClock copy() {
+    VectorClock copy() {
         VectorClock k = new VectorClock();
         k.entries.putAll(entries);
         k.seqEntries.putAll(seqEntries);
         return k;
     }
 
-    public byte[] serialize() {
+    byte[] serialize() {
         ByteBuffer buf = ByteBuffer.allocate(1 + 4 + entries.size() * 28 + 4 + seqEntries.size() * 44);
         buf.put(WIRE_VERSION);
         buf.putInt(entries.size());
@@ -153,7 +153,7 @@ final class VectorClock {
      * @throws CorruptClockException on any malformed input; a present but undecodable clock must
      *     fail the task, never read as empty (an empty read would silently drop claims).
      */
-    public static VectorClock deserialize(byte[] bytes) {
+    static VectorClock deserialize(byte[] bytes) {
         try {
             ByteBuffer buf = ByteBuffer.wrap(bytes);
             byte version = buf.get();

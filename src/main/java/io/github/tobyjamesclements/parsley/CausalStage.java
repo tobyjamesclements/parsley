@@ -50,7 +50,7 @@ public final class CausalStage<K, V, KO, VO> {
     static final String PROCESSOR_NAME = "parsley-processor";
     static final String SINK_PREFIX = "parsley-sink-";
 
-    /** Creates the per-task {@link BrokerOffsets}; production uses an admin client. */
+    /** Creates the per-task broker-offsets view; production uses an admin client. */
     interface BrokerOffsetsProvider {
         BrokerOffsets create(TopicIds topicIds, Set<String> sinkTopics);
     }

@@ -3,8 +3,8 @@
 Parsley is one package, `io.github.tobyjamesclements.parsley`, with two visibility tiers.
 
 The **public tier** is the entire supported surface: the Streams runtime (`CausalStage`,
-`CausalStreams`), the plain-client `Clock` (observe, record own sends, stamp — fully opaque),
-`TopicIds` for its identity resolution, `CausalHeaders`' names and sender/seq readers for
+`CausalStreams`), the plain-client `Clock` (constructed from an `Admin`; observe, record own
+sends, stamp — fully opaque), `CausalHeaders`' names and sender/seq readers for
 observability, and `CausalStage.testTopology()` for broker-less `TopologyTestDriver` tests.
 No protocol vocabulary escapes: the vector clock and channel types are internal. The
 **package-private tier** is the protocol core, the adapter's plumbing, and every seam — the
@@ -129,8 +129,8 @@ sink topic name.
 positions into a thread-local (the `positionAdvance` feed — `position()` read on the polling
 thread is the only sound source; see
 [liveness](../foundations/liveness.md#position-advance-bridging)), and resolves topic identity
-and sink end offsets through an admin client. `TopicIds` and the send-tracker factory are
-injectable seams, which is how the adapter runs under `TopologyTestDriver` without a broker.
+and broker offset facts through an admin client. `TopologyTestDriver` runs without a broker
+through `testTopology()`, which wires the internal seams itself.
 
 Current adapter limits: one causal stage per topology (the core has no such limit),
 non-Parsley headers on held records are not carried through delivery, and the adapter runs
