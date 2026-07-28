@@ -75,6 +75,10 @@ claims silently off.
 - **A blocked head blocks its channel** (head-of-line blocking, by design). If a producer
   stamps claims that are far ahead of what its consumers can fetch, convoying on that channel
   is the expected symptom.
+- **Co-partition your input topics by key.** A task consumes partition *p* of every source
+  topic, so causal order across topics holds within a partition slice — related keys must
+  route to the same slice, exactly as Kafka Streams itself requires for multi-topic
+  processing ([the causal model](../foundations/causal-model.md#preconditions)).
 - **Fail closed**: a corrupt clock header or an unresolvable sink fails the task; a failed
   send aborts with its transaction, taking every claim on it along. The retry refetches.
 - **Testing your stage**: build the stage normally and drive `stage.testTopology()` with

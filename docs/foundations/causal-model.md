@@ -80,6 +80,13 @@ The guarantee holds under these environmental conditions:
   stamps its outputs (Parsley stages do this automatically; plain producers use a
   [`Clock`](../guide/clients.md)). An absent stamp claims nothing — safe for the record
   itself, invisible to downstream ordering.
+- **Co-partitioning by key across a stage's input topics.** A task consumes partition *p* of
+  every source topic, and the guarantee is per task: every cause *this task* consumes is
+  delivered first. Causally related records keyed to different partition slices land in
+  different tasks, each of which correctly ignores the other slice's dependency — so a
+  processor reading its inputs as whole topics observes causal order only when related keys
+  route to the same slice. This is the same precondition Kafka Streams processors carry for
+  joins and aggregations, and like Streams, Parsley does not enforce it.
 - **Retention covers consumer lag** on causal topics: a consumer must be able to fetch, or
   observe the skip of, every offset a claim names. An undersized retention fails loudly at
   the consumer's position reset, never silently.
