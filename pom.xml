@@ -9,10 +9,10 @@
     <version>1.0.0-fresh-SNAPSHOT</version>
     <packaging>jar</packaging>
 
-    <name>Parsley (fresh start)</name>
-    <description>Causal delivery order for Kafka stream processing. Ground-up rewrite:
-        transport-agnostic protocol core, verified by a deterministic simulator with a
-        ground-truth causal oracle.</description>
+    <name>Parsley</name>
+    <description>Causal delivery order for Kafka stream processing. A functional core —
+        pure handlers and folds over typed topics — with imperative edges on Kafka Streams,
+        verified by a deterministic simulator with a ground-truth causal oracle.</description>
 
     <properties>
         <maven.compiler.release>21</maven.compiler.release>
