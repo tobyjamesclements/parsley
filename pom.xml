@@ -48,6 +48,10 @@
         <pitest.threads>4</pitest.threads>
         <junit.version>5.11.4</junit.version>
         <slf4j.version>2.0.18</slf4j.version>
+        <testcontainers.version>1.21.3</testcontainers.version>
+        <!-- The broker smoke suite (-Pbroker-it) runs against the minimum supported broker,
+             so the version floor stated in the docs is the one actually tested. -->
+        <broker.image>apache/kafka:3.7.2</broker.image>
     </properties>
 
     <dependencies>
@@ -88,6 +92,18 @@
             <version>${slf4j.version}</version>
             <scope>test</scope>
         </dependency>
+        <dependency>
+            <groupId>org.testcontainers</groupId>
+            <artifactId>kafka</artifactId>
+            <version>${testcontainers.version}</version>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.testcontainers</groupId>
+            <artifactId>junit-jupiter</artifactId>
+            <version>${testcontainers.version}</version>
+            <scope>test</scope>
+        </dependency>
     </dependencies>
 
     <build>
@@ -112,6 +128,11 @@
                     <targetClasses>
                         <param>io.github.tobyjamesclements.parsley.*</param>
                     </targetClasses>
+                    <!-- The broker smoke suite needs Docker and runs under failsafe in the
+                         broker-it profile only; PIT's coverage run must not start containers. -->
+                    <excludedTestClasses>
+                        <param>*IT</param>
+                    </excludedTestClasses>
                     <!-- Four threads is measured as verdict-identical to a serial run on this
                          suite (a timeout under CPU contention would count as a kill, so this
                          is re-checked when the suite slows: run once with -Dpitest.threads=1
@@ -141,6 +162,36 @@
     </build>
 
     <profiles>
+        <!-- The broker smoke suite: failsafe runs the *IT classes against a real broker in a
+             Docker container (Testcontainers). Kept out of the default gate so `mvn clean
+             verify` stays Docker-free; CI runs it as a separate non-gating workflow. -->
+        <profile>
+            <id>broker-it</id>
+            <build>
+                <plugins>
+                    <plugin>
+                        <groupId>org.apache.maven.plugins</groupId>
+                        <artifactId>maven-failsafe-plugin</artifactId>
+                        <version>3.5.2</version>
+                        <configuration>
+                            <systemPropertyVariables>
+                                <parsley.broker.image>${broker.image}</parsley.broker.image>
+                            </systemPropertyVariables>
+                        </configuration>
+                        <executions>
+                            <execution>
+                                <id>broker-smoke</id>
+                                <goals>
+                                    <goal>integration-test</goal>
+                                    <goal>verify</goal>
+                                </goals>
+                            </execution>
+                        </executions>
+                    </plugin>
+                </plugins>
+            </build>
+        </profile>
+
         <!-- Central-release artifacts and signatures; activated by the release workflow only. -->
         <profile>
             <id>release</id>

@@ -96,13 +96,37 @@ and operational transitions like rescope, which dedicated scenarios now drive. O
 class is accepted by design: mutants whose only effect is degrading an optimisation the
 protocol does not rely on for safety. The remaining uncovered mutants sit in the
 Admin-backed seam (`AdminBrokerOffsets`, the admin resolver in `TopicIds`), which runs only
-against a real cluster; the seam stays thin and the logic behind it is driven through
-`BrokerOffsets` by the simulator.
+against a real cluster and so falls outside PIT's measurement; the seam stays thin, the
+logic behind it is driven through `BrokerOffsets` by the simulator, and the broker smoke
+suite exercises it against a live broker.
+
+## The broker smoke suite
+
+The `broker-it` Maven profile runs the `*IT` test classes under failsafe against a real
+single-node broker in a Docker container (Testcontainers), pinned to the minimum supported
+broker version so the stated floor is the one actually tested. It carries the two
+obligations only a live cluster can discharge:
+
+- **The broker side of the seam contract.** `AdminBrokerOffsetsIT` asserts that a real
+  cluster answers the two `BrokerOffsets` queries as the protocol assumes: end offsets per
+  partition with empty partitions included, log starts advanced by record deletion, and
+  definitive absence by topic ID that survives recreating a topic under the same name.
+- **The assembled runtime on a live cluster.** `ParsleyStreamsIT` runs `Parsley.streams`
+  end to end under exactly-once: records flow from source to sink carrying parseable clock,
+  sender, and sequence headers on the wire, and a restart of the same application on the
+  same state directory resumes without loss or duplication.
+
+The suite is a smoke test of plumbing, not a correctness gate: a real broker offers no
+control over interleavings, so every causal-order obligation stays with the simulator. It
+sits outside the default `mvn clean verify` gate (it needs Docker) and outside PIT's
+measurement, and CI runs it as a separate workflow whose failure does not block a snapshot
+publish.
 
 ## What the simulator does not cover
 
 Real broker behaviour outside the model: rebalances and task migration, consumer-group
-protocol edge cases, the adapter's client-supplier wiring under a live
-cluster, and timing that depends on actual I/O. Those belong to broker integration tests,
-which this cut does not yet include; `TopologyTestDriver` smoke tests cover the adapter's
-plumbing (hold-and-release, stamp content, fail-closed corrupt headers) without a broker.
+protocol edge cases, and timing that depends on actual I/O. The broker smoke suite covers
+the seam contract and the assembled plumbing on a live cluster; `TopologyTestDriver` smoke
+tests cover the adapter's plumbing (hold-and-release, stamp content, fail-closed corrupt
+headers) without a broker. Rebalance and task-migration behaviour has no automated
+coverage.
