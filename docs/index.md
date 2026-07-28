@@ -39,7 +39,8 @@ point on each side, and enforces `exactly_once_v2`. Plain producers and consumer
 [plain-client ops](guide/clients.md). The guide continues with the common
 [topology shapes](guide/topologies.md), [codecs and Avro](guide/codecs.md), and
 [the contract](guide/expectations.md) — everything Parsley expects of you and everything it
-promises back.
+promises back. The [API reference](reference/api.md) carries the Javadoc built from this
+version's sources.
 
 ## How it is verified
 
